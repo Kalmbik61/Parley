@@ -291,6 +291,39 @@ describe('createLiveDelegation', () => {
   });
 });
 
+describe('createLiveDelegation: checking', () => {
+  it('true с подачи Request до его итога, затем false; подписчик слышит обе смены', async () => {
+    const h = setup({ phase: 'live' });
+    const listener = vi.fn();
+    h.delegation.subscribe(listener);
+    expect(h.delegation.checking()).toBe(false);
+    h.human('Check the rooms', 0, 1000);
+    h.emit({ type: 'delegationCreated', delegationId: 'd1', offsetMs: 1000 });
+    await h.flush();
+    await h.advance(1500);
+    expect(h.submitted).toHaveLength(1);
+    expect(h.delegation.checking()).toBe(true);
+    h.setList([view({ job: done() })]);
+    h.hostListeners.get('assistant.job.changed')?.();
+    await h.flush();
+    expect(h.delegation.checking()).toBe(false);
+    expect(listener).toHaveBeenCalled();
+  });
+
+  it('Request прошлых сессий и чужие не считаются; конец сессии снимает проверку', async () => {
+    const h = setup({ phase: 'live', list: [view({ requestId: 'old', job: { state: 'running' } })] });
+    await h.flush();
+    expect(h.delegation.checking()).toBe(false);
+    h.human('Check the rooms', 0, 1000);
+    h.emit({ type: 'delegationCreated', delegationId: 'd1', offsetMs: 1000 });
+    await h.flush();
+    await h.advance(1500);
+    expect(h.delegation.checking()).toBe(true);
+    h.emit({ type: 'sessionClosed', reason: 'close_requested' });
+    expect(h.delegation.checking()).toBe(false);
+  });
+});
+
 describe('createLiveDelegation: статус (T6, VA-06)', () => {
   it('смена состояния открытого Request → thinking.append с delegation_id, временем и возрастом; job не запускается заново', async () => {
     const h = setup({ phase: 'live' });

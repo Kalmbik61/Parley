@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { S } from '../../../shared/strings.js';
+import type { VoiceAnalysis, VoiceFrame } from '../assistant/voice-features.js';
 import type { LiveCallPhase, LiveController, LiveControllerEvent, LiveStartResult } from './controller.js';
 import { useLiveStore } from './store.js';
 
@@ -18,6 +19,7 @@ function fakeController(startResult: LiveStartResult = { ok: true, voiceSessionI
       emit({ type: 'phase', phase: 'idle' });
     }),
     sendAppend: vi.fn(() => true),
+    readVoice: vi.fn<LiveController['readVoice']>(() => false),
     subscribe: (listener: (event: LiveControllerEvent) => void) => {
       listeners.add(listener);
       return () => void listeners.delete(listener);
@@ -79,10 +81,12 @@ describe('useLiveStore', () => {
   it('attachDelegation отражает итоги поручений и снимает их при отключении', () => {
     let listener: (() => void) | null = null;
     let current = [{ requestId: 'req-1', text: 'Rooms are quiet.', kind: 'card' as const }];
+    let checking = false;
     const dismiss = vi.fn();
     const delegation = {
       items: () => [],
       results: () => current,
+      checking: () => checking,
       subscribe: (callback: () => void) => {
         listener = callback;
         return () => void (listener = null);
@@ -92,15 +96,24 @@ describe('useLiveStore', () => {
     };
     const detach = useLiveStore.getState().attachDelegation(delegation);
     expect(useLiveStore.getState().results).toEqual(current);
+    expect(useLiveStore.getState().checking).toBe(false);
+    checking = true;
+    listener?.();
+    expect(useLiveStore.getState().checking).toBe(true);
+    checking = false;
     current = [];
     listener?.();
     expect(useLiveStore.getState().results).toEqual([]);
+    expect(useLiveStore.getState().checking).toBe(false);
     useLiveStore.getState().dismissResult('req-1');
     expect(dismiss).toHaveBeenCalledWith('req-1');
     current = [{ requestId: 'req-2', text: 'x', kind: 'card' as const }];
     listener?.();
+    checking = true;
+    listener?.();
     detach();
     expect(useLiveStore.getState().results).toEqual([]);
+    expect(useLiveStore.getState().checking).toBe(false);
   });
 
   it('без контроллера toggle ничего не делает; отвязка освобождает контроллер', async () => {
@@ -110,5 +123,89 @@ describe('useLiveStore', () => {
     unbind();
     expect(controller.dispose).toHaveBeenCalled();
     expect(useLiveStore.getState().controller).toBeNull();
+  });
+});
+
+describe('useLiveStore: эмоция', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    useLiveStore.getState().bind(null);
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it('по умолчанию calm; setEmotion меняет её', () => {
+    expect(useLiveStore.getState().emotion).toBe('calm');
+    useLiveStore.getState().setEmotion('joy');
+    expect(useLiveStore.getState().emotion).toBe('joy');
+  });
+
+  it('ошибка контроллера держит error 2 с, затем calm', () => {
+    const { controller, emit } = fakeController();
+    useLiveStore.getState().bind(controller);
+    emit({ type: 'error', code: 'oops', message: 'boom' });
+    expect(useLiveStore.getState().emotion).toBe('error');
+    vi.advanceTimersByTime(1999);
+    expect(useLiveStore.getState().emotion).toBe('error');
+    vi.advanceTimersByTime(1);
+    expect(useLiveStore.getState().emotion).toBe('calm');
+  });
+
+  it('эмоция, выставленная за эти 2 с, не затирается таймером; закрытие сессии сбрасывает на calm', () => {
+    const { controller, emit } = fakeController();
+    useLiveStore.getState().bind(controller);
+    emit({ type: 'error', code: 'oops', message: 'boom' });
+    useLiveStore.getState().setEmotion('joy');
+    vi.advanceTimersByTime(3000);
+    expect(useLiveStore.getState().emotion).toBe('joy');
+    emit({ type: 'phase', phase: 'idle' });
+    expect(useLiveStore.getState().emotion).toBe('calm');
+  });
+});
+
+describe('useLiveStore: voiceFrame', () => {
+  const frame: VoiceFrame = { amp: 0.7, visemes: { a: 1, i: 0, u: 0, m: 0 }, pulse: 0, eyesUp: 0, blink: false, loud: 0.5 };
+  const setup = (hasData: boolean) => {
+    const { controller, emit } = fakeController();
+    controller.readVoice.mockImplementation((time) => {
+      if (hasData) time[0] = 0.25;
+      return hasData;
+    });
+    const step = vi.fn<VoiceAnalysis['step']>(() => frame);
+    const analysis = vi.fn((): VoiceAnalysis => ({ step }));
+    let now = 1000;
+    useLiveStore.getState().bind(controller);
+    useLiveStore.getState().configureVoice({ analysis, now: () => now });
+    return { controller, emit, step, analysis, advance: (ms: number) => void (now += ms) };
+  };
+
+  beforeEach(() => useLiveStore.getState().bind(null));
+
+  it('null, пока модель не играет, и анализатор трека не читается', () => {
+    const { controller, step } = setup(true);
+    expect(useLiveStore.getState().voiceFrame()).toBeNull();
+    expect(controller.readVoice).not.toHaveBeenCalled();
+    expect(step).not.toHaveBeenCalled();
+  });
+
+  it('кадр из данных анализатора, когда модель играет; dt по часам кадра', () => {
+    const { emit, step, analysis, advance } = setup(true);
+    emit({ type: 'modelPlaying', value: true });
+    expect(useLiveStore.getState().voiceFrame()).toBe(frame);
+    expect(step.mock.calls[0]?.[0][0]).toBe(0.25);
+    expect(step.mock.calls[0]?.[2]).toBeCloseTo(1 / 60);
+    advance(50);
+    useLiveStore.getState().voiceFrame();
+    expect(step.mock.calls[1]?.[2]).toBeCloseTo(0.05);
+    expect(analysis).toHaveBeenCalledTimes(1);
+  });
+
+  it('null, если в треке нет данных, и без настроенного анализа', () => {
+    const empty = setup(false);
+    empty.emit({ type: 'modelPlaying', value: true });
+    expect(useLiveStore.getState().voiceFrame()).toBeNull();
+    const ready = setup(true);
+    ready.emit({ type: 'modelPlaying', value: true });
+    useLiveStore.getState().configureVoice(null);
+    expect(useLiveStore.getState().voiceFrame()).toBeNull();
   });
 });

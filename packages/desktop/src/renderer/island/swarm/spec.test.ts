@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import type { AssistantState } from '@parley/protocol';
 import { HOST_IDLE } from '../assistant/store.js';
 import { createSwarm } from './engine.js';
-import { EMO, haloFor, swarmSpecFor } from './spec.js';
+import { EMO, haloFor, liveActive, swarmSpecFor, swarmSpecForLive, type SwarmLive } from './spec.js';
 
 const host = (phase: AssistantState['phase']): AssistantState => ({ ...HOST_IDLE, phase });
 
@@ -116,5 +116,55 @@ describe('haloFor', () => {
     expect(haloFor(swarmSpecFor(offline, 'idle', false), offline)).toEqual({ rgb: '156,148,138', alpha: 0.07 });
     const error = host('error');
     expect(haloFor(swarmSpecFor(error, 'idle', false), error)).toEqual({ rgb: '220,96,76', alpha: 0.17 });
+  });
+});
+
+describe('swarmSpecForLive', () => {
+  const live = (patch: Partial<SwarmLive> = {}): SwarmLive => ({ phase: 'live', humanSpeaking: false, modelPlaying: false, checking: false, emotion: 'calm', ...patch });
+
+  it('модель говорит — лицо с эмоцией Live, янтарь', () => {
+    expect(swarmSpecForLive(live({ modelPlaying: true, emotion: 'joy' }), false)).toMatchObject({ shape: 'face', emo: 'joy', pal: 'amber' });
+  });
+
+  it('коралл — только у эмоции error', () => {
+    expect(swarmSpecForLive(live({ modelPlaying: true, emotion: 'error' }), false)).toMatchObject({ shape: 'face', emo: 'error', pal: 'coral' });
+    for (const emotion of ['calm', 'joy', 'sad', 'surprise', 'anger'] as const) {
+      expect(swarmSpecForLive(live({ modelPlaying: true, emotion }), false).pal).toBe('amber');
+    }
+  });
+
+  it('человек говорит — облако listen', () => {
+    expect(swarmSpecForLive(live({ humanSpeaking: true }), false)).toMatchObject({ shape: 'cloud', fx: 'listen', emo: null });
+  });
+
+  it('проверка — сфера с дугой, как фаза tool', () => {
+    expect(swarmSpecForLive(live({ checking: true }), false)).toMatchObject({ shape: 'sphere', fx: 'arc', rot: 0.1 });
+  });
+
+  it('connecting и closing — сфера, иначе спокойная сфера', () => {
+    expect(swarmSpecForLive(live({ phase: 'connecting' }), false)).toMatchObject({ shape: 'sphere', fx: null, rot: 0.35 });
+    expect(swarmSpecForLive(live({ phase: 'closing' }), false)).toMatchObject({ shape: 'sphere', fx: null });
+    expect(swarmSpecForLive(live(), false)).toMatchObject({ shape: 'sphere', fx: null, rot: 0.3, pal: 'amber', emo: null });
+  });
+
+  it('приоритет: модель > человек > проверка > фаза', () => {
+    const all = live({ modelPlaying: true, humanSpeaking: true, checking: true, phase: 'connecting' });
+    expect(swarmSpecForLive(all, false).shape).toBe('face');
+    expect(swarmSpecForLive({ ...all, modelPlaying: false }, false).fx).toBe('listen');
+    expect(swarmSpecForLive({ ...all, modelPlaying: false, humanSpeaking: false }, false).fx).toBe('arc');
+    expect(swarmSpecForLive({ ...all, modelPlaying: false, humanSpeaking: false, checking: false }, false)).toMatchObject({ shape: 'sphere', fx: null });
+  });
+
+  it('мини-вид: лицо — сфера с палитрой лица, облако — точка', () => {
+    expect(swarmSpecForLive(live({ modelPlaying: true, emotion: 'joy' }), true)).toMatchObject({ shape: 'sphere', emo: null, pal: 'amber' });
+    expect(swarmSpecForLive(live({ modelPlaying: true, emotion: 'error' }), true)).toMatchObject({ shape: 'sphere', emo: null, pal: 'coral' });
+    expect(swarmSpecForLive(live({ humanSpeaking: true }), true)).toMatchObject({ shape: 'dot', fx: 'listen' });
+  });
+
+  it('liveActive: любая фаза, кроме idle', () => {
+    expect(liveActive(undefined)).toBe(false);
+    expect(liveActive({ phase: 'idle' })).toBe(false);
+    expect(liveActive({ phase: 'connecting' })).toBe(true);
+    expect(liveActive({ phase: 'closing' })).toBe(true);
   });
 });

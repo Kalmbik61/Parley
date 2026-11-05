@@ -82,7 +82,11 @@ const setup = (options: { prepare?: unknown; mic?: boolean; openMicError?: boole
     meter: (stream: unknown) => {
       const state = { stopped: false };
       meters.push(state);
-      return { read: () => (stream === 'remote' ? remoteLevel.value : micLevel.value), stop: () => void (state.stopped = true) };
+      return {
+        read: () => (stream === 'remote' ? remoteLevel.value : micLevel.value),
+        ...(stream === 'remote' ? { frame: (time: Float32Array, freq: Float32Array) => (time.fill(0.5), freq.fill(-30), true) } : {}),
+        stop: () => void (state.stopped = true),
+      };
     },
     sink: () => sink,
     now: () => clock.now,
@@ -236,6 +240,21 @@ describe('createLiveController: сигналы речи', () => {
     expect(controller.snapshot().modelPlaying).toBe(true);
     tickAt(2600);
     expect(controller.snapshot().modelPlaying).toBe(false);
+  });
+
+  it('readVoice: отдаёт данные анализатора удалённого трека, пока трека нет или сессия закрыта — false', async () => {
+    const { controller, peer } = setup();
+    const time = new Float32Array(4);
+    const freq = new Float32Array(2);
+    expect(controller.readVoice(time, freq)).toBe(false);
+    await controller.start();
+    expect(controller.readVoice(time, freq)).toBe(false);
+    peer.ontrack?.({ streams: ['remote'] });
+    expect(controller.readVoice(time, freq)).toBe(true);
+    expect([...time]).toEqual([0.5, 0.5, 0.5, 0.5]);
+    expect([...freq]).toEqual([-30, -30]);
+    peer.channel.receive({ type: 'session.closed', reason: 'close_requested' });
+    expect(controller.readVoice(time, freq)).toBe(false);
   });
 
   it('сигналы гаснут при закрытии сессии', async () => {

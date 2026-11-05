@@ -7,7 +7,11 @@ import type { IslandBridge } from '../../../shared/island.js';
 import type { LevelMeter, LiveControllerDeps, LiveMicStream, LivePeer, LiveSink } from './controller.js';
 import { rms } from './levels.js';
 
-const FFT_SIZE = 1024;
+/** Как у анализатора шины голоса TTS: лицо считает признаки по одним и тем же размерам и сглаживанию. */
+const FFT_SIZE = 2048;
+const SMOOTHING = 0.5;
+/** Уровень речи (гистерезис) считается по последним 1024 отсчётам, как до перехода на 2048. */
+const LEVEL_SAMPLES = 1024;
 
 export function createBrowserLiveDeps(bridge: Pick<IslandBridge, 'call' | 'on'> & { island: Pick<IslandBridge['island'], 'voice'> }): LiveControllerDeps {
   let context: AudioContext | null = null;
@@ -32,13 +36,19 @@ export function createBrowserLiveDeps(bridge: Pick<IslandBridge, 'call' | 'on'> 
       const source = ctx.createMediaStreamSource(stream as MediaStream);
       const analyser = ctx.createAnalyser();
       analyser.fftSize = FFT_SIZE;
+      analyser.smoothingTimeConstant = SMOOTHING;
       // Анализатор не подключён к выходу: уровень читаем, второй раз звук не играем.
       source.connect(analyser);
       const data = new Float32Array(analyser.fftSize);
       return {
         read: () => {
           analyser.getFloatTimeDomainData(data);
-          return rms(data);
+          return rms(data.subarray(data.length - LEVEL_SAMPLES));
+        },
+        frame: (time, freq) => {
+          analyser.getFloatTimeDomainData(time);
+          analyser.getFloatFrequencyData(freq);
+          return true;
         },
         stop: () => {
           try {

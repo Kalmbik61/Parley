@@ -631,9 +631,23 @@ describe('Live-голос (T3)', () => {
     phase: 'idle',
     humanSpeaking: false,
     modelPlaying: false,
+    checking: false,
+    emotion: 'calm',
     notice: null,
     onToggle: vi.fn(),
     ...patch,
+  });
+
+  it('рой следует за Live: модель говорит — лицо с эмоцией, человек — облако, проверка — сфера; без Live — по хосту', () => {
+    const { rerender } = render(<AssistantView {...props({ live: live({ phase: 'live', modelPlaying: true, emotion: 'joy' }) })} />);
+    expect(screen.getByTestId('swarm').getAttribute('data-shape')).toBe('face');
+    expect(screen.getByTestId('swarm').getAttribute('data-emo')).toBe('joy');
+    rerender(<AssistantView {...props({ live: live({ phase: 'live', humanSpeaking: true }) })} />);
+    expect(screen.getByTestId('swarm').getAttribute('data-shape')).toBe('cloud');
+    rerender(<AssistantView {...props({ live: live({ phase: 'live', checking: true }) })} />);
+    expect(screen.getByTestId('swarm').getAttribute('data-shape')).toBe('sphere');
+    rerender(<AssistantView {...props({ live: live({ phase: 'idle', modelPlaying: true }) })} />);
+    expect(screen.getByTestId('swarm').getAttribute('data-shape')).toBe('cloud');
   });
 
   it('без live кнопки нет: пошаговый голос работает как раньше', () => {

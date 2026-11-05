@@ -62,6 +62,8 @@ export interface LiveMicStream {
 /** Измеритель уровня потока: `read()` — текущий RMS (0…1); `stop()` освобождает граф. */
 export interface LevelMeter {
   read(): number;
+  /** Время и спектр того же анализатора (fftSize 2048) для лица, как у шины голоса TTS; `false` — данных нет. */
+  frame?(time: Float32Array<ArrayBuffer>, freq: Float32Array<ArrayBuffer>): boolean;
   stop(): void;
 }
 export interface LiveSink {
@@ -106,6 +108,8 @@ export interface LiveController {
   stop(reason?: 'close_requested' | 'idle_timeout'): Promise<void>;
   /** `false` — канал данных не открыт, сообщение не ушло. */
   sendAppend(input: { kind: AppendKind; delegationId: string | null; content: string }): boolean;
+  /** Время и спектр удалённого аудиотрека для рта лица; `false` — трека или анализатора нет, массивы не тронуты. */
+  readVoice(time: Float32Array<ArrayBuffer>, freq: Float32Array<ArrayBuffer>): boolean;
   subscribe(listener: (event: LiveControllerEvent) => void): () => void;
   snapshot(): LiveSnapshot;
   dispose(): void;
@@ -395,6 +399,8 @@ export function createLiveController(deps: LiveControllerDeps): LiveController {
         return false;
       }
     },
+
+    readVoice: (time, freq) => live?.remoteMeter?.frame?.(time, freq) ?? false,
 
     subscribe(listener) {
       listeners.add(listener);

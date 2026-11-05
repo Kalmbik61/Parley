@@ -125,8 +125,14 @@ export const INITIAL_CONFIG: IslandConfig = {
   anchor: 'center',
 };
 
-/** Кадр голоса для рта лица (Р10): рой читает его в своём кадре, а не при рендере. */
-const voiceFrame = (): VoiceFrame | null => useAssistantStore.getState().voiceFrame();
+/**
+ * Кадр голоса для рта лица (Р10): рой читает его в своём кадре, а не при рендере. Пока идёт Live, рот ведёт голос
+ * модели из удалённого трека, иначе — речь TTS.
+ */
+const voiceFrame = (): VoiceFrame | null => {
+  const liveStore = useLiveStore.getState();
+  return liveStore.phase !== 'idle' ? liveStore.voiceFrame() : useAssistantStore.getState().voiceFrame();
+};
 
 /** Реакция роя на событие (#9 §4.1): новый объект на каждое событие, между событиями — тот же. */
 const pulseOf = (event: SwarmEvent): SwarmPulse => ({ reaction: REACTION_FOR[event], at: performance.now() });
@@ -441,6 +447,17 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
     if (!connected) return;
     const controller = createLiveController(createBrowserLiveDeps(bridge));
     const unbind = useLiveStore.getState().bind(controller);
+    // Рот по голосу модели: тот же анализ признаков, что у TTS, но данные берутся из удалённого трека Live.
+    useLiveStore.getState().configureVoice({
+      analysis: () => {
+        const sampleRate = islandSound.graph()?.context.sampleRate;
+        return createVoiceAnalysis({
+          ...(sampleRate === undefined ? {} : { sampleRate }),
+          reducedMotion: () => configRef.current.motion === 'reduce' || (typeof window.matchMedia === 'function' && window.matchMedia(REDUCED_MOTION).matches),
+        });
+      },
+      now: () => performance.now(),
+    });
     // Мост делегаций и очередь речи (T4): Request поручений, итоги в паузе, восстановление после обрыва.
     const delegation = createLiveDelegation({
       controller,
@@ -462,6 +479,7 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
     return () => {
       detach();
       delegation.dispose();
+      useLiveStore.getState().configureVoice(null);
       unbind();
     };
   }, [connected, bridge]);
@@ -843,7 +861,7 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
           pulse: assistantPulse,
           speakOn: config.assistant.speech?.enabled === true,
           onToggleSpeak: () => useAssistantStore.getState().toggleSpeak(),
-          live: { phase: live.phase, humanSpeaking: live.humanSpeaking, modelPlaying: live.modelPlaying, notice: live.notice, onToggle: () => void useLiveStore.getState().toggle(), results: live.results, onDismissResult: live.dismissResult },
+          live: { phase: live.phase, humanSpeaking: live.humanSpeaking, modelPlaying: live.modelPlaying, checking: live.checking, emotion: live.emotion, notice: live.notice, onToggle: () => void useLiveStore.getState().toggle(), results: live.results, onDismissResult: live.dismissResult },
           onDraft: (text) => useAssistantStore.getState().setDraft(text),
           onSubmit: (text) => void useAssistantStore.getState().submit(text),
           onMic: () => useAssistantStore.getState().toggleListening(),

@@ -63,6 +63,8 @@ export interface LiveResultView {
 export interface LiveDelegation {
   items(): QueueItem[];
   results(): LiveResultView[];
+  /** Есть Request, поданный этой голосовой сессией, у job которого ещё нет итога (ни завершённого, ни доставленного). */
+  checking(): boolean;
   subscribe(listener: () => void): () => void;
   /** Убирает карточку с экрана (итог остаётся в очереди). */
   dismiss(requestId: string): void;
@@ -102,6 +104,8 @@ export function createLiveDelegation(deps: LiveDelegationDeps): LiveDelegation {
   const listeners = new Set<() => void>();
   const delegationByRequest = new Map<string, string>();
   const dismissed = new Set<string>();
+  /** Request, поданные текущей голосовой сессией: `true`, пока у job нет итога (подан, ждёт или идёт). */
+  const sessionRequests = new Map<string, boolean>();
   let session: Session | null = null;
   let openRequests: OpenRequestSummary[] = [];
   let refreshing = false;
@@ -176,8 +180,12 @@ export function createLiveDelegation(deps: LiveDelegationDeps): LiveDelegation {
         openRequests = requests
           .filter((request) => request.job.state === 'queued' || request.job.state === 'running')
           .map((request) => ({ requestId: request.requestId, text: request.text, state: request.job.state }));
+        for (const request of requests) {
+          if (sessionRequests.has(request.requestId)) sessionRequests.set(request.requestId, request.job.state === 'queued' || request.job.state === 'running');
+        }
         queue.observe(requests.map((request) => toResultInput(request, delegationByRequest.get(request.requestId) ?? null)));
         queue.step();
+        notify();
         status.observe(requests.map((request) => toStatusInput(request, delegationByRequest.get(request.requestId) ?? null)));
         status.step();
         telemetry.observeQueue(queue.items());
@@ -209,6 +217,8 @@ export function createLiveDelegation(deps: LiveDelegationDeps): LiveDelegation {
         },
         requestSubmitted: ({ delegationId, requestId, waitedMs, transcriptWaitMs }) => {
           delegationByRequest.set(requestId, delegationId);
+          sessionRequests.set(requestId, true);
+          notify();
           telemetry.requestSubmitted({ delegationId, requestId, delegationToSubmitMs: waitedMs, transcriptWaitMs });
           void refresh();
         },
@@ -234,6 +244,8 @@ export function createLiveDelegation(deps: LiveDelegationDeps): LiveDelegation {
     const current = session;
     if (current === null) return;
     session = null;
+    sessionRequests.clear();
+    notify();
     current.bridge.dispose();
     idleAck = createAckTracker({ now: deps.now });
     idle.stop();
@@ -318,6 +330,7 @@ export function createLiveDelegation(deps: LiveDelegationDeps): LiveDelegation {
           if (item.speech === 'queued' && item.gate === 'held') return [{ requestId: item.requestId, text: '', kind: 'held' }];
           return [];
         }),
+    checking: () => [...sessionRequests.values()].some(Boolean),
     subscribe(listener) {
       listeners.add(listener);
       return () => void listeners.delete(listener);

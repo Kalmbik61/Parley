@@ -29,7 +29,7 @@ import { Button } from '../../ui/button.js';
 import { levelWidth } from '../../voice/level.js';
 import { formatElapsed, useElapsed } from '../../voice/MicButton.js';
 import { Swarm } from '../swarm/Swarm.js';
-import { haloFor, swarmSpecFor, type SwarmPulse } from '../swarm/spec.js';
+import { haloFor, liveActive, swarmSpecFor, swarmSpecForLive, type SwarmEmotion, type SwarmPulse } from '../swarm/spec.js';
 import { hotkeyLabel, statusLabel } from './labels.js';
 import { ASK_MAX, type Exchange, type InputPhase, type QueuedMessage } from './store.js';
 import type { VoiceFrame } from './voice-features.js';
@@ -72,6 +72,10 @@ export interface AssistantViewProps {
     phase: 'idle' | 'connecting' | 'live' | 'closing';
     humanSpeaking: boolean;
     modelPlaying: boolean;
+    /** Есть Request голоса без итога: рой показывает «проверяю». */
+    checking: boolean;
+    /** Эмоция лица, пока говорит модель. */
+    emotion: SwarmEmotion;
     notice: string | null;
     onToggle(): void;
     /** Итоги поручений голоса (T4): карточка с текстом или «удержан» (уточнение поручения). */
@@ -322,7 +326,21 @@ export function AssistantView(props: AssistantViewProps): JSX.Element {
   // Пока вопрос в пути, рой думает: хост ещё в прошлой фазе.
   const swarmPhase = sending === null ? host.phase : 'thinking';
   const sentenceMood = props.sentenceMood ?? undefined;
-  const spec = useMemo(() => swarmSpecFor({ ...host, phase: swarmPhase }, input, false, sentenceMood), [swarmPhase, input, host.mood, sentenceMood]);
+  const live = props.live;
+  const liveOn = liveActive(live);
+  const liveHumanSpeaking = live?.humanSpeaking === true;
+  const liveModelPlaying = live?.modelPlaying === true;
+  const liveChecking = live?.checking === true;
+  const liveEmotion = live?.emotion ?? 'calm';
+  const livePhase = live?.phase ?? 'idle';
+  // Пока идёт Live, рой следует за разговором, а не за хостом и пошаговым голосом.
+  const spec = useMemo(
+    () =>
+      liveOn
+        ? swarmSpecForLive({ phase: livePhase, humanSpeaking: liveHumanSpeaking, modelPlaying: liveModelPlaying, checking: liveChecking, emotion: liveEmotion }, false)
+        : swarmSpecFor({ ...host, phase: swarmPhase }, input, false, sentenceMood),
+    [liveOn, livePhase, liveHumanSpeaking, liveModelPlaying, liveChecking, liveEmotion, swarmPhase, input, host.mood, sentenceMood],
+  );
   const halo = haloFor(spec, host);
   const dotColor = STATUS_DOT[host.phase];
   const scrollRef = useRef<HTMLDivElement>(null);
