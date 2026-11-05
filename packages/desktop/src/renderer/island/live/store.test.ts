@@ -62,6 +62,20 @@ describe('useLiveStore', () => {
     expect(useLiveStore.getState().notice).toBe('Live voice ended after three minutes of silence.');
   });
 
+  it('end завершает диалог и во время подключения; в idle и closing ничего не делает', async () => {
+    const { controller, emit } = fakeController();
+    useLiveStore.getState().bind(controller);
+    await useLiveStore.getState().end();
+    expect(controller.stop).not.toHaveBeenCalled();
+    emit({ type: 'phase', phase: 'connecting' });
+    await useLiveStore.getState().end();
+    expect(controller.stop).toHaveBeenCalledTimes(1);
+    expect(useLiveStore.getState().phase).toBe('idle');
+    emit({ type: 'phase', phase: 'closing' });
+    await useLiveStore.getState().end();
+    expect(controller.stop).toHaveBeenCalledTimes(1);
+  });
+
   it('attachDelegation отражает итоги поручений и снимает их при отключении', () => {
     let listener: (() => void) | null = null;
     let current = [{ requestId: 'req-1', text: 'Rooms are quiet.', kind: 'card' as const }];

@@ -39,7 +39,8 @@
  * Помощник (спека 2026-10-14, раздел 8): стор `useAssistantStore` привязан к мосту при подключении хоста. Режим открывает
  * событие main (`onAssistantOpen`) или точка в пилюле; пока он открыт или идёт ход, окно видно даже при выключенном
  * острове, а остров в покое не убирается. Esc, стрелка ⌃, смахивание и потеря фокуса панели (`onKeyboardBlur`) выходят
- * через `hideAssistant`: идущий ход сворачивается в мини-вид, иначе режим закрывается и клавиатура уходит обратно.
+ * через `hideAssistant`: идущий ход или Live-диалог сворачивается в мини-вид, иначе режим закрывается и клавиатура уходит
+ * обратно. Esc во время Live завершает диалог (вид возвращается к обычному), иначе закрывает режим.
  * Ответ сам не закрывается: человек читает его сколько нужно и закрывает одним из этих способов.
  *
  * Речь помощника (план 3b B22): проигрыватель окна (`createSpeaker`) и мост голоса уходят в стор вместе с остальными
@@ -193,7 +194,8 @@ function pendingFor(name: string | null, total: number, proposal: AssistantPropo
 function hideAssistant(): boolean {
   const s = useAssistantStore.getState();
   if (!s.open) return false;
-  if (assistantBusy(s)) s.collapse();
+  // Live-диалог тоже держит режим: выход сворачивает вид, а разговор идёт дальше (его завершают Esc, хоткей, простой).
+  if (assistantBusy(s) || useLiveStore.getState().phase !== 'idle') s.collapse();
   else s.close();
   return true;
 }
@@ -712,7 +714,11 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
           return;
         }
       }
-      if (event.key === 'Escape' && !event.isComposing && assistant.open) useAssistantStore.getState().close();
+      if (event.key === 'Escape' && !event.isComposing && assistant.open) {
+        // Во время Live Esc завершает диалог (поля ввода в компактном виде нет, фокус не нужен); режим остаётся открытым.
+        if (useLiveStore.getState().phase !== 'idle') void useLiveStore.getState().end();
+        else useAssistantStore.getState().close();
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);

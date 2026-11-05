@@ -22,6 +22,8 @@ export interface LiveStoreState {
   /** Подключает мост делегаций: стор отражает его итоги. Возврат — отключение. */
   attachDelegation(delegation: LiveDelegation | null): () => void;
   toggle(): Promise<void>;
+  /** Завершает диалог в любой фазе, кроме `idle` и `closing`: и во время подключения (`toggle` там ничего не делает). */
+  end(): Promise<void>;
 }
 
 const INITIAL = { phase: 'idle', humanSpeaking: false, modelPlaying: false, notice: null, results: [] } as const;
@@ -74,5 +76,11 @@ export const useLiveStore = create<LiveStoreState>((set, get) => ({
     set({ notice: null });
     const result = await controller.start();
     if (!result.ok) set({ notice: result.message });
+  },
+
+  async end() {
+    const { controller, phase } = get();
+    if (controller === null || phase === 'idle' || phase === 'closing') return;
+    await controller.stop();
   },
 }));

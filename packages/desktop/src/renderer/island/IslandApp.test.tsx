@@ -36,6 +36,7 @@ import { makeActivity, makeRoom, makeSession, makeWork } from '../test-utils/wor
 import { DONE_HOLD_MS, IDLE_RETRACT_MS, INITIAL_CONFIG, IslandApp, presentationEvent, RETRACT_MORPH_MS } from './IslandApp.js';
 import { createSpeaker } from './assistant/speaker.js';
 import { HOST_IDLE, useAssistantStore } from './assistant/store.js';
+import { useLiveStore } from './live/store.js';
 import { createVoiceAnalysis } from './assistant/voice-features.js';
 import { useConsentsStore } from './consents/store.js';
 import { sessionLabels } from './model.js';
@@ -883,6 +884,54 @@ describe('проводка острова', () => {
       assistantBlur();
       expect(screen.queryByTestId('assistant-view')).toBeNull();
       expect(island.keyboard).toHaveBeenLastCalledWith(false);
+    });
+
+    describe('Live-диалог (V4)', () => {
+      const startLive = async (phase: 'connecting' | 'live' = 'live') => {
+        const ctx = await renderAssistant();
+        ctx.assistantOpen({ listen: false });
+        await screen.findByTestId('assistant-view');
+        const controller = useLiveStore.getState().controller!;
+        const stop = vi.spyOn(controller, 'stop').mockResolvedValue(undefined);
+        act(() => useLiveStore.setState({ phase }));
+        return { ...ctx, stop };
+      };
+
+      it('вид компактный: ни поля ввода, ни подсказок', async () => {
+        await startLive();
+        expect(screen.getByTestId('assistant-view').dataset.compact).toBe('true');
+        expect(screen.queryByTestId('assistant-input')).toBeNull();
+      });
+
+      it.each(['live', 'connecting'] as const)('Esc в фазе %s завершает диалог и не закрывает режим', async (phase) => {
+        const { stop } = await startLive(phase);
+        fireEvent.keyDown(window, { key: 'Escape' });
+        expect(stop).toHaveBeenCalledTimes(1);
+        expect(screen.getByTestId('assistant-view')).toBeTruthy();
+        expect(useAssistantStore.getState().open).toBe(true);
+      });
+
+      it('потеря фокуса панели сворачивает вид, а диалог продолжается', async () => {
+        const { island, assistantBlur, stop } = await startLive();
+        assistantBlur();
+        expect(screen.queryByTestId('assistant-view')).toBeNull();
+        expect(useAssistantStore.getState()).toMatchObject({ open: true, collapsed: true });
+        expect(useLiveStore.getState().phase).toBe('live');
+        expect(stop).not.toHaveBeenCalled();
+        expect(island.keyboard).toHaveBeenLastCalledWith(false);
+        act(() => useAssistantStore.getState().expand(false));
+        expect(screen.getByTestId('assistant-view').dataset.compact).toBe('true');
+      });
+
+      it('после idle обычный вид возвращается с черновиком', async () => {
+        await startLive();
+        act(() => useAssistantStore.getState().setDraft('half-typed'));
+        act(() => useLiveStore.setState({ phase: 'idle' }));
+        expect((screen.getByTestId('assistant-input') as HTMLInputElement).value).toBe('half-typed');
+        expect(screen.getByTestId('assistant-view').dataset.compact).toBeUndefined();
+        fireEvent.keyDown(window, { key: 'Escape' });
+        expect(screen.queryByTestId('assistant-view')).toBeNull();
+      });
     });
 
     it('потеря фокуса панели во время хода сворачивает вид в мини-вид', async () => {
