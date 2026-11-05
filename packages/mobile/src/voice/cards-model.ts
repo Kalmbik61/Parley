@@ -27,9 +27,6 @@ export function applyCardChanged(list: readonly PhoneCard[], card: PhoneCard): P
 /** Убрать карточку после решения. */
 export const dropCard = (list: readonly PhoneCard[], cardId: string): PhoneCard[] => list.filter((c) => c.cardId !== cardId);
 
-/** Карточка над экраном: та, чей срок выходит раньше. */
-export const currentCard = (list: readonly PhoneCard[]): PhoneCard | null => list[0] ?? null;
-
 export type SheetMode = 'decide' | 'confirm_on_mac';
 
 /**
@@ -78,20 +75,26 @@ export async function decideCard(deps: DecideDeps, card: PhoneCard, choice: Card
 }
 
 export interface SheetContext {
-  card: PhoneCard | null;
+  /** Активные карточки в порядке срока. */
+  cards: readonly PhoneCard[];
   /** Обложка замка приложения (`useCovered`). */
   covered: boolean;
   /** Вкладка Voice в фокусе. */
   focused: boolean;
-  /** Карточки, которые человек отложил («Later»). */
+  /** Карточки, которые человек отложил («Later»), по `cardId`. */
   dismissed: ReadonlySet<string>;
 }
 
-/** B1/M4: лист показывается только открытым приложением, на вкладке Voice и если карточку не отложили. */
-export const sheetVisible = (c: SheetContext): boolean => c.card !== null && !c.covered && c.focused && !c.dismissed.has(c.card.cardId);
+/** Карточка для листа: первая не отложенная. Новая карточка (другой `cardId`) не прячется за отложенной. */
+export const sheetCard = (c: Pick<SheetContext, 'cards' | 'dismissed'>): PhoneCard | null => c.cards.find((card) => !c.dismissed.has(card.cardId)) ?? null;
 
-/** Отложенная карточка остаётся в списке: на экране значок, по нему лист открывается снова. */
-export const sheetWaiting = (c: SheetContext): boolean => c.card !== null && !c.covered && c.dismissed.has(c.card.cardId);
+/** B1/M4: лист показывается только открытым приложением, на вкладке Voice и если есть не отложенная карточка. */
+export const sheetVisible = (c: SheetContext): boolean => sheetCard(c) !== null && !c.covered && c.focused;
+
+/** Сколько карточек отложено и ждут: значок «N cards waiting». */
+export const waitingCount = (c: SheetContext): number => (c.covered ? 0 : c.cards.filter((card) => c.dismissed.has(card.cardId)).length);
+
+export const waitingLabel = (count: number): string => `${count} ${count === 1 ? 'card' : 'cards'} waiting · Open`;
 
 /** B1: под обложкой замка решение не принимается, как и при занятом вызове. */
 export const canDecide = (c: { card: PhoneCard | null; covered: boolean; busy: boolean }): boolean => c.card !== null && !c.covered && !c.busy;

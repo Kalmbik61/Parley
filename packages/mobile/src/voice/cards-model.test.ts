@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { PhoneCard } from '@parley/protocol/remote';
-import { canDecide, sheetVisible, sheetWaiting, sheetMode, applyCardChanged, cardsFromSnapshot, currentCard, decideCard, dropCard, STALE_CARD_MESSAGE, type DecideDeps } from './cards-model.js';
+import { canDecide, sheetCard, sheetVisible, waitingCount, waitingLabel, sheetMode, applyCardChanged, cardsFromSnapshot, decideCard, dropCard, STALE_CARD_MESSAGE, type DecideDeps } from './cards-model.js';
 
 const card = (patch: Partial<PhoneCard> = {}): PhoneCard => ({
   cardId: 'p1',
@@ -30,11 +30,10 @@ describe('список карточек', () => {
     expect(applyCardChanged(list, card({ revision: 2, text: 'old' }))[0]?.text).toBe('new');
     expect(applyCardChanged(list, card({ revision: 4, text: 'newer' }))[0]?.text).toBe('newer');
   });
-  it('первой идёт карточка с ближним сроком', () => {
+  it('карточки идут по сроку: первой та, что истекает раньше', () => {
     const list = applyCardChanged(applyCardChanged([], card({ cardId: 'late', expiresAt: 500 })), card({ cardId: 'soon', expiresAt: 50 }));
-    expect(currentCard(list)?.cardId).toBe('soon');
-    expect(currentCard(dropCard(list, 'soon'))?.cardId).toBe('late');
-    expect(currentCard([])).toBeNull();
+    expect(list.map((c) => c.cardId)).toEqual(['soon', 'late']);
+    expect(dropCard(list, 'soon').map((c) => c.cardId)).toEqual(['late']);
   });
 });
 
@@ -97,26 +96,36 @@ describe('decideCard: failed', () => {
   });
 });
 
-describe('лист карточки: замок, фокус, Later (B1, M4)', () => {
-  const base = { card: card(), covered: false, focused: true, dismissed: new Set<string>() };
+describe('лист карточки: замок, фокус, Later (B1, M4, n8)', () => {
+  const base = { cards: [card()], covered: false, focused: true, dismissed: new Set<string>() };
   it('виден при открытом приложении на вкладке Voice', () => {
     expect(sheetVisible(base)).toBe(true);
   });
   it('под обложкой замка не виден и не ждёт', () => {
     expect(sheetVisible({ ...base, covered: true })).toBe(false);
-    expect(sheetWaiting({ ...base, covered: true, dismissed: new Set(['p1']) })).toBe(false);
+    expect(waitingCount({ ...base, covered: true, dismissed: new Set(['p1']) })).toBe(0);
   });
   it('вне вкладки Voice не виден', () => {
     expect(sheetVisible({ ...base, focused: false })).toBe(false);
   });
   it('без карточки не виден', () => {
-    expect(sheetVisible({ ...base, card: null })).toBe(false);
+    expect(sheetVisible({ ...base, cards: [] })).toBe(false);
   });
-  it('Later: лист скрыт, карточка ждёт, значок возвращает лист', () => {
+  it('Later: лист скрыт, карточка ждёт, возврат открывает лист', () => {
     const later = { ...base, dismissed: new Set(['p1']) };
     expect(sheetVisible(later)).toBe(false);
-    expect(sheetWaiting(later)).toBe(true);
+    expect(waitingCount(later)).toBe(1);
     expect(sheetVisible({ ...later, dismissed: new Set<string>() })).toBe(true);
+  });
+  it('n8: новая карточка после Later снова открывает лист, значок считает отложенные', () => {
+    const cards = [card({ cardId: 'p1', expiresAt: 10 }), card({ cardId: 'p2', expiresAt: 20 })];
+    const ctx = { ...base, cards, dismissed: new Set(['p1']) };
+    expect(sheetVisible(ctx)).toBe(true);
+    expect(sheetCard(ctx)?.cardId).toBe('p2');
+    expect(waitingCount(ctx)).toBe(1);
+    expect(waitingCount({ ...ctx, dismissed: new Set(['p1', 'p2']) })).toBe(2);
+    expect(waitingLabel(1)).toBe('1 card waiting · Open');
+    expect(waitingLabel(2)).toBe('2 cards waiting · Open');
   });
   it('решение под замком, при занятом вызове и без карточки не принимается', () => {
     expect(canDecide({ card: card(), covered: false, busy: false })).toBe(true);

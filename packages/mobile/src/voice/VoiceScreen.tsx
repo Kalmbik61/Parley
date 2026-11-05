@@ -100,10 +100,10 @@ export function VoiceScreen() {
             </Text>
           </View>
         )}
-        {v.cardWaiting && (
-          <Pressable accessibilityRole="button" accessibilityLabel="Open the waiting card" onPress={v.reopenCard} style={styles.waiting}>
+        {v.waitingText !== null && (
+          <Pressable accessibilityRole="button" accessibilityLabel={v.waitingText} onPress={v.reopenCard} style={styles.waiting}>
             <Text allowFontScaling style={[typography.footnote, { color: voicePalette.accent }]}>
-              1 card waiting · Open
+              {v.waitingText}
             </Text>
           </Pressable>
         )}

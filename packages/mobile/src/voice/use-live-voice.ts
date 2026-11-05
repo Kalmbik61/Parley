@@ -20,11 +20,12 @@ import {
   applyCardChanged,
   canDecide,
   cardsFromSnapshot,
-  currentCard,
   decideCard,
   dropCard,
+  sheetCard,
   sheetVisible,
-  sheetWaiting,
+  waitingCount,
+  waitingLabel,
   sheetMode as sheetModeOf,
   type CardChoice,
   type SheetMode,
@@ -59,8 +60,8 @@ export interface LiveVoice {
   card: PhoneCard | null;
   /** Лист карточки открыт (приложение не под замком, вкладка в фокусе, карточку не отложили). */
   sheetOpen: boolean;
-  /** Карточка отложена: на экране значок, по нему лист открывается снова. */
-  cardWaiting: boolean;
+  /** Подпись значка отложенных карточек («2 cards waiting · Open»); `null` — таких нет. */
+  waitingText: string | null;
   sheetMode: SheetMode;
   cardBusy: boolean;
   notice: string | null;
@@ -329,13 +330,14 @@ export function useLiveVoice(): LiveVoice {
     }
   }, []);
 
-  const card = currentCard(cards);
   const covered = useCovered();
   const focused = useIsFocused();
   const [dismissed, setDismissed] = useState<ReadonlySet<string>>(new Set());
   const [hiddenByLock, setHiddenByLock] = useState(false);
-  const sheetCtx = { card, covered: covered || hiddenByLock, focused, dismissed };
+  const sheetCtx = { cards, covered: covered || hiddenByLock, focused, dismissed };
+  const card = sheetCard(sheetCtx);
   const sheetOpen = sheetVisible(sheetCtx);
+  const waiting = waitingCount(sheetCtx);
   // B1: замок закрывает лист сразу и снимает отметку, когда обложка уходит.
   useCloseOnLock(sheetOpen, () => setHiddenByLock(true));
   useEffect(() => {
@@ -345,8 +347,8 @@ export function useLiveVoice(): LiveVoice {
     if (card !== null) setDismissed((set) => new Set(set).add(card.cardId));
   }, [card]);
   const reopenCard = useCallback(() => {
-    if (card !== null) setDismissed((set) => new Set([...set].filter((id) => id !== card.cardId)));
-  }, [card]);
+    setDismissed(new Set());
+  }, []);
 
   const decide = useCallback(
     (choice: CardChoice) => {
@@ -378,5 +380,5 @@ export function useLiveVoice(): LiveVoice {
   const orb = orbStateOf(voice, job === null ? [] : [{ state: job.state }]);
   const fallback = chooseFallback({ voice, reachable, canUseVoice, failure, remainingSeconds: usage?.remainingSeconds ?? null });
 
-  return { voice, orb, muted, errorText: fallback === null ? errorText : null, fallback, progress, result, card, sheetOpen, cardWaiting: sheetWaiting(sheetCtx), sheetMode: sheetModeOf(methods), cardBusy, notice, sending: textJob === 'submitting', start, stop, toggleMute, submitText, decide, later, reopenCard, retry };
+  return { voice, orb, muted, errorText: fallback === null ? errorText : null, fallback, progress, result, card, sheetOpen, waitingText: waiting === 0 ? null : waitingLabel(waiting), sheetMode: sheetModeOf(methods), cardBusy, notice, sending: textJob === 'submitting', start, stop, toggleMute, submitText, decide, later, reopenCard, retry };
 }
