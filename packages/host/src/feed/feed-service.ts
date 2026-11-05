@@ -167,6 +167,8 @@ export interface FeedService {
    * (нет `prompt` — последний `text` вообще); с `agentId` игнорируется.
    */
   snapshot(ref: SessionRef, agentId?: string, scope?: 'attention'): Promise<FeedSnapshot>;
+  /** Current pending cards after snapshot preparation; reads reducer state before batched flush. */
+  peekAttention(ref: SessionRef): readonly FeedCard[] | undefined;
   /** Ограниченная проекция существующей ленты, без подписки и дополнительного source polling. */
   progress(ref: SessionRef, client: Client): Promise<ProgressResult>;
   subscribe(ref: SessionRef, client: Client): void;
@@ -1636,6 +1638,14 @@ export function createFeedService(
           if (feed !== undefined) stopCodexPoll(feed);
         }
       }
+    },
+
+    peekAttention(ref) {
+      const feed = feeds.get(refKey(ref));
+      if (!feed || !feedCurrent(feed) || (!feed.live && !feed.seeded) || feed.seeding) return undefined;
+      const current = sourceOf(ref);
+      if (feed.observedSource === null ? current !== null : !sameSource(feed.observedSource, current)) return undefined;
+      return feed.state.items.filter(isPendingCard) as FeedCard[];
     },
 
     subscriberCount() {

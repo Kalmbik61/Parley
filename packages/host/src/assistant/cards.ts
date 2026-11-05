@@ -83,6 +83,13 @@ export interface CardStore {
   release(proposalId: string): boolean;
   /** Активные карточки → `superseded` (после `reset`). */
   supersedeAll(): void;
+  /** Все карточки источника (любое состояние); для job источник — `job:<jobId>`. */
+  bySource(source: string): CardRow[];
+  /**
+   * Активные карточки источника → `superseded` (отзыв при вытеснении Request, T5). Один условный UPDATE: захваченная
+   * (`decided`) карточка не отзывается. Не открывает транзакцию — зовётся и внутри чужой; возвращает отозванные.
+   */
+  withdrawBySource(source: string): CardRow[];
   /** Новая карточка с тем же содержимым вместо просроченной («Запросить заново»); старая остаётся как была. */
   reissue(proposalId: string, newId: string, expiresAt: number, now: number): CardRow | null;
   /** Старт хоста: захваченная карточка без итога (хост умер посреди действия) получает исход `unknown` и остаётся неисполнимой. */
@@ -146,6 +153,14 @@ export function createCardStore(db: DatabaseSync): CardStore {
     },
     supersedeAll() {
       db.prepare(`UPDATE assistant_cards SET state = 'superseded', revision = revision + 1 WHERE state = 'active'`).run();
+    },
+    bySource(source) {
+      return (db.prepare(`SELECT * FROM assistant_cards WHERE source = ? ORDER BY created_at, rowid`).all(source) as unknown as Raw[]).map(fromRaw);
+    },
+    withdrawBySource(source) {
+      const rows = (db.prepare(`SELECT * FROM assistant_cards WHERE state = 'active' AND source = ?`).all(source) as unknown as Raw[]).map(fromRaw);
+      if (rows.length > 0) db.prepare(`UPDATE assistant_cards SET state = 'superseded', revision = revision + 1 WHERE state = 'active' AND source = ?`).run(source);
+      return rows.map((card) => ({ ...card, state: 'superseded' as const, revision: card.revision + 1 }));
     },
     reissue(proposalId, newId, expiresAt, now) {
       const old = one(proposalId);

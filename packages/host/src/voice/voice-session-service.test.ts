@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openMemoryDb } from '@parley/core';
 import { LiveError, type LiveClient, type LiveClosed, type Sideband } from './live-client.js';
+import { VOICE_PROMPT, liveSessionConfig } from './voice-prompt.js';
 import { INIT_BILLED_SECONDS, MAX_SESSION_MS, WARNING_BEFORE_MS, createVoiceSessionService } from './voice-session-service.js';
 
 class FakeSideband implements Sideband {
@@ -42,9 +43,11 @@ const setup = (opts: { createError?: Error; attachError?: Error; attachFailures?
     : realDb;
   let failures = opts.attachFailures ?? 0;
   const sidebands: FakeSideband[] = [];
+  const createCalls: Array<{ offer: string; session: Record<string, unknown> | undefined }> = [];
   let n = 0;
   const live: LiveClient = {
-    async createSession() {
+    async createSession(offer, session) {
+      createCalls.push({ offer, session });
       if (opts.createError) throw opts.createError;
       n += 1;
       return { sessionId: `sess_${n}`, sdpAnswer: 'answer' };
@@ -77,7 +80,7 @@ const setup = (opts: { createError?: Error; attachError?: Error; attachFailures?
   const addUsage = (id: string, day: string, estimate: number, final: number | null) =>
     realDb.prepare("INSERT INTO voice_usage (voice_session_id, day, state, seconds_estimate, seconds_final) VALUES (?, ?, 'closed', ?, ?)").run(id, day, estimate, final);
   const row = (id = 'sess_1') => realDb.prepare('SELECT * FROM voice_usage WHERE voice_session_id = ?').get(id) as Record<string, unknown> | undefined;
-  return { db, service, sidebands, warnings, closed, row, addUsage };
+  return { db, service, sidebands, createCalls, warnings, closed, row, addUsage };
 };
 
 describe('VoiceSessionService', () => {
@@ -89,6 +92,19 @@ describe('VoiceSessionService', () => {
     expect(await service.prepare('offer')).toEqual({ ok: true, voiceSessionId: 'sess_1', sdpAnswer: 'answer' });
     expect(row()).toMatchObject({ day: '2026-11-04', state: 'open', seconds_estimate: INIT_BILLED_SECONDS, seconds_final: null });
     expect(service.activeSessionId()).toBe('sess_1');
+  });
+
+  it('prepare: конфиг сессии передаётся как есть; без него — прежний конфиг клиента (телефон)', async () => {
+    const { service, createCalls } = setup();
+    await service.prepare('offer', liveSessionConfig());
+    expect(createCalls[0]?.offer).toBe('offer');
+    const session = createCalls[0]?.session ?? {};
+    expect(session).toEqual(liveSessionConfig());
+    expect(session).toMatchObject({ model: 'gpt-live-1', instructions: VOICE_PROMPT, delegation: { type: 'client' } });
+    expect(JSON.stringify(session)).not.toContain('acknowledgement_delay_ms');
+    const legacy = setup();
+    await legacy.service.prepare('offer-2');
+    expect(legacy.createCalls[0]?.session).toBeUndefined();
   });
 
   it('второй prepare (в том числе одновременный) — busy', async () => {

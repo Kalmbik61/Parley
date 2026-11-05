@@ -18,7 +18,7 @@ import type { IslandModel } from './model.js';
 import { CAPSULE_SIDE, type Notch } from './notch.js';
 import { SwarmIcon } from '../components/SwarmIcon.js';
 import { Swarm } from './swarm/Swarm.js';
-import { swarmSpecFor, type SwarmPulse } from './swarm/spec.js';
+import { liveActive, swarmSpecFor, swarmSpecForLive, type SwarmPulse } from './swarm/spec.js';
 
 /** Что в капсуле: слева помощник или агенты (`null` — пусто), справа один статус (`null` — пусто). */
 export interface CapsuleContent {
@@ -57,8 +57,21 @@ export function CapsuleSwarm({ assistant, face, pulse, reducedMotion, height }: 
   const host = assistant?.view.host ?? HOST_IDLE;
   const input = assistant?.view.input ?? 'idle';
   const sentenceMood = assistant?.view.sentenceMood ?? undefined;
-  // Лицо — облик большого вида (`mini` ложно): у мини-облика речь — сфера без рта.
-  const spec = useMemo(() => swarmSpecFor(host, input, !face, sentenceMood), [host.phase, host.mood, input, sentenceMood, face]);
+  const live = assistant?.view.live;
+  const liveOn = liveActive(live);
+  const liveHumanSpeaking = live?.humanSpeaking === true;
+  const liveModelPlaying = live?.modelPlaying === true;
+  const liveChecking = live?.checking === true;
+  const liveEmotion = live?.emotion ?? 'calm';
+  const livePhase = live?.phase ?? 'idle';
+  // Лицо — облик большого вида (`mini` ложно): у мини-облика речь — сфера без рта. Пока идёт Live, облик — по разговору.
+  const spec = useMemo(
+    () =>
+      liveOn
+        ? swarmSpecForLive({ phase: livePhase, humanSpeaking: liveHumanSpeaking, modelPlaying: liveModelPlaying, checking: liveChecking, emotion: liveEmotion }, !face)
+        : swarmSpecFor(host, input, !face, sentenceMood),
+    [liveOn, livePhase, liveHumanSpeaking, liveModelPlaying, liveChecking, liveEmotion, host.phase, host.mood, input, sentenceMood, face],
+  );
   const size = Math.min(28, height - 4);
   return (
     <Swarm
@@ -71,7 +84,7 @@ export function CapsuleSwarm({ assistant, face, pulse, reducedMotion, height }: 
       k={0.15}
       minPx={1.4}
       seed={5}
-      fps={assistant?.busy === true ? 30 : 0}
+      fps={assistant?.busy === true || liveOn ? 30 : 0}
       {...(face && assistant?.view.voice !== undefined ? { voice: assistant.view.voice } : {})}
       pulse={pulse}
       reducedMotion={reducedMotion}
@@ -89,7 +102,8 @@ export function NotchCapsule({ notch, content, assistant, pulse, reducedMotion, 
   onOpen(): void;
 }): JSX.Element {
   const { left, right } = content;
-  const face = left === 'assistant' && assistant?.view.input === 'speaking';
+  const live = assistant?.view.live;
+  const face = left === 'assistant' && (liveActive(live) ? live?.modelPlaying === true : assistant?.view.input === 'speaking');
   return (
     // Не кнопка: за капсулу остров тащится и смахивается, как за пилюлю; нажатие без сдвига — клик.
     <div data-testid="island-capsule" className="island-reveal flex cursor-pointer" style={{ height: notch.height }} onClick={onOpen}>

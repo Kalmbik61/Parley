@@ -210,6 +210,32 @@ const SCHEMA_VOICE_USAGE = `
 `;
 
 /**
+ * Локальная телеметрия голоса (спека 2026-11-04 «Голос↔Ассистент», §11, T6): одна строка на сессию (`request_id = ''`) и
+ * по строке на Request. Только числа, перечисления и id: ни аудио, ни транскрипта, ни текста итога. Строки сливаются по
+ * ключу «сессия + Request» (новый факт дописывается, прежний не затирается). Таблица ограничена хостом (последние строки).
+ */
+const SCHEMA_VOICE_TELEMETRY = `
+  CREATE TABLE IF NOT EXISTS voice_telemetry (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    voice_session_id TEXT NOT NULL,
+    request_id TEXT NOT NULL DEFAULT '',
+    at INTEGER NOT NULL,
+    first_audio_ms INTEGER,
+    ack_audible TEXT CHECK(ack_audible IN ('true','false','unknown')),
+    delegation_to_submit_ms INTEGER,
+    transcript_wait_ms INTEGER,
+    link_request_ms INTEGER,
+    job_duration_ms INTEGER,
+    result_hold_ms INTEGER,
+    speech_state TEXT CHECK(speech_state IN ('queued','submitted','played','unknown','dropped')),
+    interrupts INTEGER,
+    superseded_count INTEGER,
+    voice_seconds INTEGER,
+    voice_cost_estimate_usd REAL,
+    UNIQUE(voice_session_id, request_id));
+`;
+
+/**
  * Долговечные разговоры помощника (спека 2026-11-03, C1): история ходов острова и Telegram. Канал — атрибут сообщения,
  * а не разговора: оба канала пишут в один. `turn_key` + `role` уникальны в разговоре: повтор записи не плодит строк.
  * Тексты людей живут только здесь.
@@ -230,6 +256,35 @@ const SCHEMA_ASSISTANT_CONVERSATIONS = `
     UNIQUE(conversation_id, turn_key, role));
 `;
 
+/**
+ * Request голосовых поручений (спека 2026-11-04 «Голос↔Ассистент», §4, T2): строка на поручение. `origin_key` уникален
+ * (из исходных voiceSessionId + delegationId, после восстановления не меняется), `job_id` уникален: на Request ровно один
+ * job. `seq` растёт в разговоре, `version` — своя, не ревизия job. `assistant_request_deliveries` — устойчивые отметки
+ * доставки итога потребителю: `job_revision` — ревизия финального состояния job, которую он получил.
+ */
+const SCHEMA_ASSISTANT_REQUESTS = `
+  CREATE TABLE IF NOT EXISTS assistant_requests (
+    request_id TEXT PRIMARY KEY,
+    origin_key TEXT NOT NULL UNIQUE,
+    conversation_id TEXT NOT NULL,
+    seq INTEGER NOT NULL,
+    version INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    context_json TEXT,
+    job_id TEXT NOT NULL UNIQUE,
+    superseded_by TEXT,
+    transcript_partial INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE(conversation_id, seq));
+  CREATE TABLE IF NOT EXISTS assistant_request_deliveries (
+    request_id TEXT NOT NULL REFERENCES assistant_requests(request_id) ON DELETE CASCADE,
+    consumer TEXT NOT NULL,
+    job_revision INTEGER NOT NULL,
+    delivered_at INTEGER NOT NULL,
+    PRIMARY KEY (request_id, consumer));
+`;
+
 /** Шаг миграции: `up` выполняется внутри транзакции раннера, `user_version` ставит раннер. */
 export interface MigrationStep {
   version: number;
@@ -242,6 +297,14 @@ export interface MigrationStep {
  * Каждая закоммиченная промежуточная версия должна быть годной точкой старта для следующих шагов: шаг 2, например,
  * опирается на то, что его путь для базы версии 1 переносит и пустую базу.
  */
+/** Итоги Decisions эмоции по сессии (V2): счётчики, входные токены и флаг запасного варианта. Только числа. */
+const VOICE_TELEMETRY_DECISIONS_COLUMNS = [
+  ['decisions_received', 'INTEGER'],
+  ['decisions_rejected', 'INTEGER'],
+  ['decisions_input_tokens', 'INTEGER'],
+  ['decisions_fallback', 'INTEGER'],
+] as const;
+
 export const MIGRATIONS: readonly MigrationStep[] = [
   // 1: основа (`works`, `entries`).
   { version: 1, up: (db) => db.exec(SCHEMA_BASE) },
@@ -274,6 +337,37 @@ export const MIGRATIONS: readonly MigrationStep[] = [
   { version: 7, up: (db) => db.exec(SCHEMA_VOICE_USAGE) },
   // 8: долговечные разговоры помощника (спека 2026-11-03, C1).
   { version: 8, up: (db) => db.exec(SCHEMA_ASSISTANT_CONVERSATIONS) },
+  // 9: Request голосовых поручений и отметки доставки (спека 2026-11-04, T2).
+  { version: 9, up: (db) => db.exec(SCHEMA_ASSISTANT_REQUESTS) },
+  // 10: итог job (`JobResult`: ответ, карточки и вызовы инструментов, что записал хост; план голоса, T1).
+  {
+    version: 10,
+    up: (db) => {
+      const has = db.prepare('PRAGMA table_info(assistant_jobs)').all().some((column) => column['name'] === 'result_json');
+      if (!has) db.exec('ALTER TABLE assistant_jobs ADD COLUMN result_json TEXT');
+    },
+  },
+  // 11: итог `link_request` голосового Request: независимый или вытесняющий; пока `link_kind` пуст, связь не определена (T5).
+  {
+    version: 11,
+    up: (db) => {
+      const have = new Set(db.prepare('PRAGMA table_info(assistant_requests)').all().map((column) => column['name']));
+      if (!have.has('link_kind')) db.exec('ALTER TABLE assistant_requests ADD COLUMN link_kind TEXT');
+      if (!have.has('link_supersedes_json')) db.exec('ALTER TABLE assistant_requests ADD COLUMN link_supersedes_json TEXT');
+      if (!have.has('link_reason')) db.exec('ALTER TABLE assistant_requests ADD COLUMN link_reason TEXT');
+      if (!have.has('linked_at')) db.exec('ALTER TABLE assistant_requests ADD COLUMN linked_at INTEGER');
+    },
+  },
+  // 12: локальная телеметрия голоса (спека 2026-11-04, §11, T6).
+  { version: 12, up: (db) => db.exec(SCHEMA_VOICE_TELEMETRY) },
+  // 13: итоги Decisions эмоции в телеметрии голоса (V2): решения, отклонённые, входные токены, флаг запасного варианта.
+  {
+    version: 13,
+    up: (db) => {
+      const have = new Set(db.prepare('PRAGMA table_info(voice_telemetry)').all().map((column) => column['name']));
+      for (const [name, type] of VOICE_TELEMETRY_DECISIONS_COLUMNS) if (!have.has(name)) db.exec(`ALTER TABLE voice_telemetry ADD COLUMN ${name} ${type}`);
+    },
+  },
 ];
 
 export const WORK_DB_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]!.version;

@@ -66,7 +66,7 @@ import { Swarm } from './swarm/Swarm.js';
 import { ProgressView } from './ProgressView.js';
 import type { ProgressState } from './progress.js';
 import { HOST_IDLE } from './assistant/store.js';
-import { REACTION_FOR, swarmSpecFor, type SwarmPulse } from './swarm/spec.js';
+import { liveActive, REACTION_FOR, swarmSpecFor, swarmSpecForLive, type SwarmPulse } from './swarm/spec.js';
 import { droppedMinWidth, notchShift } from './notch.js';
 import { CapsuleSwarm, capsuleContent, NotchCapsule } from './NotchCapsule.js';
 
@@ -156,12 +156,24 @@ function rowTarget(row: IslandRow): FocusTarget {
  * занят. Пока помощник говорит — лицо капсулы выреза (`CapsuleSwarm`): рот идёт по голосу, эмоция — по предложению.
  */
 function MiniSwarm({ assistant, reducedMotion }: { assistant: IslandAssistantProps; reducedMotion: boolean }): JSX.Element {
-  const { host, input } = assistant.view;
+  const { host, input, live } = assistant.view;
   const sentenceMood = assistant.view.sentenceMood ?? undefined;
-  const spec = useMemo(() => swarmSpecFor(host, input, true, sentenceMood), [host.phase, host.mood, input, sentenceMood]);
-  if (input === 'speaking') return <CapsuleSwarm assistant={assistant} face pulse={assistant.pulse ?? null} reducedMotion={reducedMotion} height={32} />;
+  const liveOn = liveActive(live);
+  const liveHumanSpeaking = live?.humanSpeaking === true;
+  const liveModelPlaying = live?.modelPlaying === true;
+  const liveChecking = live?.checking === true;
+  const liveEmotion = live?.emotion ?? 'calm';
+  const livePhase = live?.phase ?? 'idle';
+  const spec = useMemo(
+    () =>
+      liveOn
+        ? swarmSpecForLive({ phase: livePhase, humanSpeaking: liveHumanSpeaking, modelPlaying: liveModelPlaying, checking: liveChecking, emotion: liveEmotion }, true)
+        : swarmSpecFor(host, input, true, sentenceMood),
+    [liveOn, livePhase, liveHumanSpeaking, liveModelPlaying, liveChecking, liveEmotion, host.phase, host.mood, input, sentenceMood],
+  );
+  if (!liveOn && input === 'speaking') return <CapsuleSwarm assistant={assistant} face pulse={assistant.pulse ?? null} reducedMotion={reducedMotion} height={32} />;
   return (
-    <Swarm spec={spec} souls={150} width={28} height={28} d={17} cy={14} k={0.15} minPx={1.5} seed={5} fps={assistant.busy ? 30 : 0} pulse={assistant.pulse ?? null} reducedMotion={reducedMotion} />
+    <Swarm spec={spec} souls={150} width={28} height={28} d={17} cy={14} k={0.15} minPx={1.5} seed={5} fps={assistant.busy || liveOn ? 30 : 0} pulse={assistant.pulse ?? null} reducedMotion={reducedMotion} />
   );
 }
 

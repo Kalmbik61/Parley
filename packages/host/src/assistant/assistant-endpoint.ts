@@ -1,15 +1,18 @@
 /**
  * Приёмник инструментов помощника (спека 2026-10-14, 7.1): `POST /assistant/<tool>` на том же сервере 127.0.0.1, что
  * принимает хуки (`hooks/hook-server.ts`, параметр `routes`) — по одному точному пути на инструмент, как у
- * `/agent/browser`. Токен один — у текущего разговора (`setToken`); сравнение в постоянное время; `null` — маршруты
- * закрыты. Отказы доступа — без тела, как у хуков: токен — 401, тело больше 1 МиБ — 413, не JSON-объект — 400.
+ * `/agent/browser`. Токен разговора один (`setToken`); у каждого job свой токен (`jobTokens`), привязанный к `jobId`
+ * (план голоса, T1). Сравнение в постоянное время; `null` — маршруты разговора закрыты. Токен job вызывает только
+ * инструменты из `JOB_TOOL_ALLOWLIST`, остальное — 403 без вызова сервиса: токен разговора job не получает; `link_request` и `request_status` — наоборот, только для токена job. Отказы доступа — без тела, как у хуков: токен — 401, тело больше 1 МиБ — 413, не JSON-объект — 400.
  * Ответ обработчика уходит как есть: `200 {text}` или не-200 `{error}` (режим помощника `parley-mcp` читает оба).
  *
  * Журнал — одна строка на вызов: инструмент и статус; аргументов (там текст человека) и токена в нём нет.
  */
 import { timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { JOB_ONLY_TOOLS, JOB_TOOL_ALLOWLIST } from '@parley/core';
 import type { Log } from '../log.js';
+import type { JobTokens } from './job-tokens.js';
 
 /** Основа путей приёмника; адрес для `PARLEY_ASSISTANT_URL` — `<origin сервера хуков>/assistant`. */
 export const ASSISTANT_PATH = '/assistant';
@@ -29,9 +32,14 @@ export const ASSISTANT_TOOL_NAMES = [
   'list_reminders',
   'cancel_reminder',
   'end_conversation',
+  'link_request',
+  'request_status',
 ] as const;
 /** Предел тела вызова: аргументы инструментов — короткие строки. */
 export const ASSISTANT_BODY_LIMIT = 1024 * 1024;
+
+/** Кто вызывает: разговор помощника или фоновый job (его `jobId` хост знает по токену, не со слов модели). */
+export type AssistantCaller = { kind: 'conversation' } | { kind: 'job'; jobId: string };
 
 /** Ответ инструмента: статус и тело для MCP-сервера помощника. */
 export interface AssistantReply {
@@ -41,8 +49,10 @@ export interface AssistantReply {
 
 export interface AssistantEndpointOptions {
   log: Log;
-  /** Вызов инструмента текущего разговора (`assistant-service.tool`). */
-  tool(name: string, args: unknown): Promise<AssistantReply>;
+  /** Вызов инструмента (`assistant-service.tool`) от разговора или от job. */
+  tool(name: string, args: unknown, caller: AssistantCaller): Promise<AssistantReply>;
+  /** Токены job; без них маршруты принимают только токен разговора. */
+  jobTokens?: Pick<JobTokens, 'jobOf'>;
 }
 
 export interface AssistantEndpoint {
@@ -64,14 +74,17 @@ export function createAssistantEndpoint(options: AssistantEndpointOptions): Assi
   const { log } = options;
   let token: Buffer | null = null;
 
-  const allowed = (header: string | undefined): boolean => {
-    if (token === null) return false;
-    const given = Buffer.from(header?.startsWith('Bearer ') === true ? header.slice('Bearer '.length).trim() : '');
-    return given.length === token.length && timingSafeEqual(given, token);
+  /** Чей это токен; `null` — ничей. */
+  const authenticate = (header: string | undefined): AssistantCaller | null => {
+    const bearer = header?.startsWith('Bearer ') === true ? header.slice('Bearer '.length).trim() : '';
+    const given = Buffer.from(bearer);
+    if (token !== null && given.length === token.length && timingSafeEqual(given, token)) return { kind: 'conversation' };
+    const jobId = bearer === '' ? null : (options.jobTokens?.jobOf(bearer) ?? null);
+    return jobId === null ? null : { kind: 'job', jobId };
   };
 
   /** Отказ без тела; соединение закрывается — недочитанное тело дальше не читается. */
-  function refuse(req: IncomingMessage, res: ServerResponse, status: 400 | 401 | 413, reason: string): void {
+  function refuse(req: IncomingMessage, res: ServerResponse, status: 400 | 401 | 403 | 413, reason: string): void {
     if (!res.headersSent) {
       log.warn('вызов инструмента помощника отклонён', { status, reason });
       res.writeHead(status, { 'Content-Length': '0', Connection: 'close' });
@@ -87,8 +100,18 @@ export function createAssistantEndpoint(options: AssistantEndpointOptions): Assi
   }
 
   function handle(name: string, req: IncomingMessage, res: ServerResponse): void {
-    if (!allowed(headerOf(req, 'authorization'))) {
+    const caller = authenticate(headerOf(req, 'authorization'));
+    if (caller === null) {
       refuse(req, res, 401, 'token');
+      return;
+    }
+    if (caller.kind === 'job' && !JOB_TOOL_ALLOWLIST.includes(name)) {
+      refuse(req, res, 403, 'job-tool');
+      return;
+    }
+    // `link_request` и `request_status` принадлежат job: токен разговора их не вызывает.
+    if (caller.kind === 'conversation' && JOB_ONLY_TOOLS.includes(name)) {
+      refuse(req, res, 403, 'job-only-tool');
       return;
     }
     const declared = Number(headerOf(req, 'content-length') ?? '0');
@@ -129,7 +152,7 @@ export function createAssistantEndpoint(options: AssistantEndpointOptions): Assi
         return;
       }
       void options
-        .tool(name, args)
+        .tool(name, args, caller)
         .catch((error: unknown): AssistantReply => ({ status: 500, body: { error: error instanceof Error ? error.message : String(error) } }))
         .then((result) => {
           log.info('инструмент помощника', { tool: name, status: result.status });

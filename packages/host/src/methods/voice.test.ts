@@ -7,9 +7,10 @@ import type { RequestInfo } from '../context.js';
 import type { VoiceSessionService } from '../voice/voice-session-service.js';
 import { createVoiceHandlers } from './voice.js';
 
-const request = {} as RequestInfo;
-const call = (handlers: ReturnType<typeof createVoiceHandlers>, name: string, params: unknown): Promise<any> =>
-  (handlers[name] as unknown as (params: unknown, request: RequestInfo) => Promise<unknown>)(params, request) as Promise<any>;
+const requestFrom = (role?: 'remote'): RequestInfo => ({ client: { id: 'c', name: 'c', features: new Set(), ...(role === undefined ? {} : { role }) } }) as unknown as RequestInfo;
+const request = requestFrom();
+const call = (handlers: ReturnType<typeof createVoiceHandlers>, name: string, params: unknown, from: RequestInfo = request): Promise<any> =>
+  (handlers[name] as unknown as (params: unknown, request: RequestInfo) => Promise<unknown>)(params, from) as Promise<any>;
 
 function realJobs() {
   const execute = vi.fn((): JobRun => ({ cancel: () => {}, done: new Promise(() => {}) }));
@@ -61,7 +62,6 @@ describe('методы телефона: голосовая сессия', () =>
     const usage = { limitSeconds: 1800, usedSeconds: 60, remainingSeconds: 1740 };
     const handlers = createVoiceHandlers(undefined, { service: svc, usage: () => usage });
     expect(await call(handlers, 'voice.session.prepare', { sdp: 'OFFER' })).toEqual({ ok: true, voiceSessionId: 'sess_1', sdpAnswer: 'ANSWER-SDP' });
-    expect(svc.prepare).toHaveBeenCalledWith('OFFER');
     expect(await call(handlers, 'voice.session.close', { voiceSessionId: 'sess_1' })).toEqual({ closed: true });
     expect(await call(handlers, 'voice.usage.get', {})).toEqual(usage);
 
@@ -70,6 +70,21 @@ describe('методы телефона: голосовая сессия', () =>
       usage: () => usage,
     });
     expect(await call(limited, 'voice.session.prepare', { sdp: 'OFFER' })).toMatchObject({ ok: false, code: 'limit_reached' });
+  });
+
+  it('остров получает инструкции и клиентскую делегацию, телефон (remote) — прежний конфиг без делегации и без triggers', async () => {
+    const svc = service();
+    const handlers = createVoiceHandlers(undefined, { service: svc, usage: () => ({ limitSeconds: 0, usedSeconds: 0, remainingSeconds: 0 }) });
+    await call(handlers, 'voice.session.prepare', { sdp: 'ISLAND' });
+    await call(handlers, 'voice.session.prepare', { sdp: 'PHONE' }, requestFrom('remote'));
+    const [island, phone] = (svc.prepare as ReturnType<typeof vi.fn>).mock.calls as Array<[string, Record<string, unknown> | undefined]>;
+    expect(island?.[0]).toBe('ISLAND');
+    expect(island?.[1]).toMatchObject({ model: 'gpt-live-1', delegation: { type: 'client' } });
+    expect(typeof island?.[1]?.['instructions']).toBe('string');
+    // V2: триггер эмоции только у острова; конфиг телефона не меняется (второго аргумента нет, значит, и triggers).
+    expect(island?.[1]?.['triggers']).toHaveLength(1);
+    expect(phone).toEqual(['PHONE']);
+    expect(phone?.[1]).toBeUndefined();
   });
 
   it('ничего не пишет в консоль: ни SDP, ни ответ', async () => {

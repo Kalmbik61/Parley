@@ -39,7 +39,8 @@
  * Помощник (спека 2026-10-14, раздел 8): стор `useAssistantStore` привязан к мосту при подключении хоста. Режим открывает
  * событие main (`onAssistantOpen`) или точка в пилюле; пока он открыт или идёт ход, окно видно даже при выключенном
  * острове, а остров в покое не убирается. Esc, стрелка ⌃, смахивание и потеря фокуса панели (`onKeyboardBlur`) выходят
- * через `hideAssistant`: идущий ход сворачивается в мини-вид, иначе режим закрывается и клавиатура уходит обратно.
+ * через `hideAssistant`: идущий ход или Live-диалог сворачивается в мини-вид, иначе режим закрывается и клавиатура уходит
+ * обратно. Esc во время Live завершает диалог (вид возвращается к обычному), иначе закрывает режим.
  * Ответ сам не закрывается: человек читает его сколько нужно и закрывает одним из этих способов.
  *
  * Речь помощника (план 3b B22): проигрыватель окна (`createSpeaker`) и мост голоса уходят в стор вместе с остальными
@@ -72,10 +73,16 @@ import { useWorksStore } from '../store/works.js';
 import { WorksErrorBanner } from '../components/WorksErrorBanner.js';
 import { browserRecorderDeps } from '../voice/browser-recorder.js';
 import { startRecording } from '../voice/recorder.js';
+import { runHotkey } from './assistant/hotkey.js';
 import { listen } from './assistant/listen.js';
 import { miniLabel } from './assistant/labels.js';
 import { createSpeaker } from './assistant/speaker.js';
 import { assistantBusy, useAssistantStore } from './assistant/store.js';
+import { createBrowserLiveDeps } from './live/browser.js';
+import { createLiveController } from './live/controller.js';
+import { createLiveDelegation } from './live/delegation.js';
+import { S } from '../../shared/strings.js';
+import { useLiveStore } from './live/store.js';
 import { createVoiceAnalysis, type VoiceFrame } from './assistant/voice-features.js';
 import { useConsentsStore } from './consents/store.js';
 import { IslandTab } from './IslandTab.js';
@@ -119,8 +126,14 @@ export const INITIAL_CONFIG: IslandConfig = {
   anchor: 'center',
 };
 
-/** Кадр голоса для рта лица (Р10): рой читает его в своём кадре, а не при рендере. */
-const voiceFrame = (): VoiceFrame | null => useAssistantStore.getState().voiceFrame();
+/**
+ * Кадр голоса для рта лица (Р10): рой читает его в своём кадре, а не при рендере. Пока идёт Live, рот ведёт голос
+ * модели из удалённого трека, иначе — речь TTS.
+ */
+const voiceFrame = (): VoiceFrame | null => {
+  const liveStore = useLiveStore.getState();
+  return liveStore.phase !== 'idle' ? liveStore.voiceFrame() : useAssistantStore.getState().voiceFrame();
+};
 
 /** Реакция роя на событие (#9 §4.1): новый объект на каждое событие, между событиями — тот же. */
 const pulseOf = (event: SwarmEvent): SwarmPulse => ({ reaction: REACTION_FOR[event], at: performance.now() });
@@ -188,7 +201,8 @@ function pendingFor(name: string | null, total: number, proposal: AssistantPropo
 function hideAssistant(): boolean {
   const s = useAssistantStore.getState();
   if (!s.open) return false;
-  if (assistantBusy(s)) s.collapse();
+  // Live-диалог тоже держит режим: выход сворачивает вид, а разговор идёт дальше (его завершают Esc, хоткей, простой).
+  if (assistantBusy(s) || useLiveStore.getState().phase !== 'idle') s.collapse();
   else s.close();
   return true;
 }
@@ -429,6 +443,55 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
   const unseenDone = doneRows.filter((row) => !row.seen).length;
   const labels = useMemo(() => sessionLabels(entries), [entries]);
   const assistant = useAssistantStore();
+  const live = useLiveStore();
+  useEffect(() => {
+    if (!connected) return;
+    const controller = createLiveController(createBrowserLiveDeps(bridge));
+    const unbind = useLiveStore.getState().bind(controller);
+    // Рот по голосу модели: тот же анализ признаков, что у TTS, но данные берутся из удалённого трека Live.
+    useLiveStore.getState().configureVoice({
+      analysis: () => {
+        const sampleRate = islandSound.graph()?.context.sampleRate;
+        return createVoiceAnalysis({
+          ...(sampleRate === undefined ? {} : { sampleRate }),
+          reducedMotion: () => configRef.current.motion === 'reduce' || (typeof window.matchMedia === 'function' && window.matchMedia(REDUCED_MOTION).matches),
+        });
+      },
+      now: () => performance.now(),
+    });
+    // Мост делегаций и очередь речи (T4): Request поручений, итоги в паузе, восстановление после обрыва.
+    const delegation = createLiveDelegation({
+      controller,
+      call: bridge.call,
+      onHostEvent: bridge.on,
+      now: Date.now,
+      setTimer: (callback, ms) => {
+        const id = setTimeout(callback, ms);
+        return () => clearTimeout(id);
+      },
+      setTick: (callback, ms) => {
+        const id = setInterval(callback, ms);
+        return () => clearInterval(id);
+      },
+      phrases: { detailsOnScreen: S.assistant.live.detailsOnScreen, clarifying: S.assistant.live.clarifying },
+      fallbackText: S.assistant.live.untranscribed,
+    });
+    const detach = useLiveStore.getState().attachDelegation(delegation);
+    return () => {
+      detach();
+      delegation.dispose();
+      useLiveStore.getState().configureVoice(null);
+      unbind();
+    };
+  }, [connected, bridge]);
+  // Пока идёт Live, речь помощника (TTS) и пошаговая запись молчат; после остановки возвращаются.
+  useEffect(() => {
+    const sync = (phase: string): void => useAssistantStore.getState().setLiveActive(phase !== 'idle');
+    sync(useLiveStore.getState().phase);
+    return useLiveStore.subscribe((state, previous) => {
+      if (state.phase !== previous.phase) sync(state.phase);
+    });
+  }, []);
   useEffect(() => {
     if (keyboardOwner === 'request' && !assistant.open) requestAnimationFrame(() => shapeRef.current?.focus());
   }, [keyboardOwner, assistant.open]);
@@ -473,7 +536,10 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
     });
     void bridge.call('assistant.state', {}).then((state) => useAssistantStore.getState().applyHost(state)).catch(() => {});
     const off = bridge.on('assistant.changed', (state) => useAssistantStore.getState().applyHost(state));
-    const offOpen = bridge.island.onAssistantOpen((request) => useAssistantStore.getState().openMode(request));
+    const offOpen = bridge.island.onAssistantOpen((request) => void runHotkey(request, configRef.current.assistant.speech?.enabled === true, {
+      assistant: useAssistantStore.getState,
+      live: useLiveStore.getState,
+    }));
     const offBlur = bridge.island.onKeyboardBlur(() => {
       if (ownerRef.current === 'assistant') hideAssistant();
       releaseKeyboard();
@@ -670,7 +736,11 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
           return;
         }
       }
-      if (event.key === 'Escape' && !event.isComposing && assistant.open) useAssistantStore.getState().close();
+      if (event.key === 'Escape' && !event.isComposing && assistant.open) {
+        // Во время Live Esc завершает диалог (поля ввода в компактном виде нет, фокус не нужен); режим остаётся открытым.
+        if (useLiveStore.getState().phase !== 'idle') void useLiveStore.getState().end();
+        else useAssistantStore.getState().close();
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -795,6 +865,7 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
           pulse: assistantPulse,
           speakOn: config.assistant.speech?.enabled === true,
           onToggleSpeak: () => useAssistantStore.getState().toggleSpeak(),
+          live: { phase: live.phase, humanSpeaking: live.humanSpeaking, modelPlaying: live.modelPlaying, checking: live.checking, emotion: live.emotion, notice: live.notice, onToggle: () => void useLiveStore.getState().toggle(), results: live.results, onDismissResult: live.dismissResult },
           onDraft: (text) => useAssistantStore.getState().setDraft(text),
           onSubmit: (text) => void useAssistantStore.getState().submit(text),
           onMic: () => useAssistantStore.getState().toggleListening(),

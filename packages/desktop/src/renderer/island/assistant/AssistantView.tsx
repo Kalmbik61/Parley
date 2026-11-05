@@ -12,10 +12,15 @@
  * Речь (план 3 Task 9; план 3b B24, Р10): пока говорит голос, рой — лицо с эмоцией звучащего предложения, рот берёт
  * кадр голоса геттером `voice` в цикле кадров роя, без ререндера. Значок динамика рядом с микрофоном (`#spk` макета)
  * переключает «Speak answers». Реакции фаз помощника (#9 §4.2) и «Reduce motion» Parley уходят в рой пропсами.
+ *
+ * Пока идёт Live-диалог (фаза не `idle`), вид компактный: только лицо с ореолом. Строка ввода, подсказки, история,
+ * вопрос и ответ, очередь, кнопка «needs you» и подпись состояния скрыты. Остаются то, без чего теряется функция:
+ * карточка подтверждения (граница безопасности действий), итоги поручений голоса и одна строка уведомления. Рой и его
+ * размеры те же, лицо не прыгает при смене режима.
  */
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Loader2, Mic, Volume2, VolumeX, X } from 'lucide-react';
+import { AudioLines, Loader2, Mic, Volume2, VolumeX, X } from 'lucide-react';
 import type { FeedDecision } from '@parley/core';
 import { reportLine, type ActionsReport, type ActionStepView, type AssistantProposal, type AssistantState } from '@parley/protocol';
 import { S } from '../../../shared/strings.js';
@@ -24,7 +29,7 @@ import { Button } from '../../ui/button.js';
 import { levelWidth } from '../../voice/level.js';
 import { formatElapsed, useElapsed } from '../../voice/MicButton.js';
 import { Swarm } from '../swarm/Swarm.js';
-import { haloFor, swarmSpecFor, type SwarmPulse } from '../swarm/spec.js';
+import { haloFor, liveActive, swarmSpecFor, swarmSpecForLive, type SwarmEmotion, type SwarmPulse } from '../swarm/spec.js';
 import { hotkeyLabel, statusLabel } from './labels.js';
 import { ASK_MAX, type Exchange, type InputPhase, type QueuedMessage } from './store.js';
 import type { VoiceFrame } from './voice-features.js';
@@ -62,6 +67,21 @@ export interface AssistantViewProps {
   /** «Speak answers» включено: значок динамика нажат. */
   speakOn: boolean;
   onToggleSpeak(): void;
+  /** Live-голос (T3): кнопка рядом с микрофоном; нет — режима нет, остаётся пошаговый голос. */
+  live?: {
+    phase: 'idle' | 'connecting' | 'live' | 'closing';
+    humanSpeaking: boolean;
+    modelPlaying: boolean;
+    /** Есть Request голоса без итога: рой показывает «проверяю». */
+    checking: boolean;
+    /** Эмоция лица, пока говорит модель. */
+    emotion: SwarmEmotion;
+    notice: string | null;
+    onToggle(): void;
+    /** Итоги поручений голоса (T4): карточка с текстом или «удержан» (уточнение поручения). */
+    results?: ReadonlyArray<{ requestId: string; text: string; kind: 'card' | 'held' }>;
+    onDismissResult?(requestId: string): void;
+  };
   onDraft(text: string): void;
   onSubmit(text: string): void;
   onMic(): void;
@@ -306,7 +326,21 @@ export function AssistantView(props: AssistantViewProps): JSX.Element {
   // Пока вопрос в пути, рой думает: хост ещё в прошлой фазе.
   const swarmPhase = sending === null ? host.phase : 'thinking';
   const sentenceMood = props.sentenceMood ?? undefined;
-  const spec = useMemo(() => swarmSpecFor({ ...host, phase: swarmPhase }, input, false, sentenceMood), [swarmPhase, input, host.mood, sentenceMood]);
+  const live = props.live;
+  const liveOn = liveActive(live);
+  const liveHumanSpeaking = live?.humanSpeaking === true;
+  const liveModelPlaying = live?.modelPlaying === true;
+  const liveChecking = live?.checking === true;
+  const liveEmotion = live?.emotion ?? 'calm';
+  const livePhase = live?.phase ?? 'idle';
+  // Пока идёт Live, рой следует за разговором, а не за хостом и пошаговым голосом.
+  const spec = useMemo(
+    () =>
+      liveOn
+        ? swarmSpecForLive({ phase: livePhase, humanSpeaking: liveHumanSpeaking, modelPlaying: liveModelPlaying, checking: liveChecking, emotion: liveEmotion }, false)
+        : swarmSpecFor({ ...host, phase: swarmPhase }, input, false, sentenceMood),
+    [liveOn, livePhase, liveHumanSpeaking, liveModelPlaying, liveChecking, liveEmotion, swarmPhase, input, host.mood, sentenceMood],
+  );
   const halo = haloFor(spec, host);
   const dotColor = STATUS_DOT[host.phase];
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -326,9 +360,12 @@ export function AssistantView(props: AssistantViewProps): JSX.Element {
     else props.onSubmit(draft);
   };
   const question = sending ?? host.question;
+  const compact = props.live !== undefined && props.live.phase !== 'idle';
+  // Компактный вид показывает одну строку: отказ Live, затем уведомление острова, затем причину закрытой карточки.
+  const compactNotice = props.live?.notice ?? props.notice ?? (proposal === null ? props.cardError : null);
   return (
-    <div data-testid="assistant-view" onPointerDownCapture={props.onTakeKeyboard} className="island-reveal flex w-[420px] flex-col gap-2 px-3 pb-3 pt-1.5 text-sm" style={{ maxHeight: props.maxHeight }}>
-      {pending === null ? null : (
+    <div data-testid="assistant-view" data-compact={compact || undefined} onPointerDownCapture={props.onTakeKeyboard} className="island-reveal flex w-[420px] flex-col gap-2 px-3 pb-3 pt-1.5 text-sm" style={{ maxHeight: props.maxHeight }}>
+      {compact || pending === null ? null : (
         <button type="button" data-testid="assistant-pending" className="flex cursor-pointer items-center gap-2 self-start rounded px-1 text-[13px] text-foreground/80 hover:bg-white/10" onClick={props.onShowRequests}>
           <span className="size-[7px] rounded-full bg-[var(--color-accent)]" />
           {S.assistant.needsYou(pending.name, pending.total)}
@@ -357,45 +394,51 @@ export function AssistantView(props: AssistantViewProps): JSX.Element {
           className="absolute inset-0"
         />
       </div>
-      <div data-testid="assistant-status" className="flex items-center justify-center gap-1.5 text-[13px] text-muted-foreground">
-        <span
-          data-testid="assistant-status-dot"
-          className={`size-[7px] shrink-0 rounded-full ${dotColor === undefined ? 'bg-[var(--color-accent)]' : ''} ${input === 'listening' ? 'assistant-dot-pulse' : ''}`}
-          {...(dotColor === undefined ? {} : { style: { background: dotColor } })}
-        />
-        {statusLabel(host, input, sending !== null)}
-      </div>
+      {compact ? null : (
+        <div data-testid="assistant-status" className="flex items-center justify-center gap-1.5 text-[13px] text-muted-foreground">
+          <span
+            data-testid="assistant-status-dot"
+            className={`size-[7px] shrink-0 rounded-full ${dotColor === undefined ? 'bg-[var(--color-accent)]' : ''} ${input === 'listening' ? 'assistant-dot-pulse' : ''}`}
+            {...(dotColor === undefined ? {} : { style: { background: dotColor } })}
+          />
+          {statusLabel(host, input, sending !== null)}
+        </div>
+      )}
       {/* Середина сжимается первой (`min-h-0`); пустая не занимает места и не добавляет зазор. Нажатие на ней не тащит
           остров: иначе ползунок прокрутки двигал бы окно. */}
       <div ref={scrollRef} data-testid="assistant-scroll" data-no-drag className="flex min-h-0 flex-col gap-2 overflow-y-auto empty:hidden">
-        {history.map((exchange) => (
-          <div key={exchange.id} data-testid="assistant-history" className="flex shrink-0 flex-col gap-1 text-[13px] text-muted-foreground">
-            <div title={exchange.question} className="line-clamp-2">
-              {exchange.question}
-            </div>
-            {exchange.answer === '' ? null : <div className="whitespace-pre-wrap opacity-80">{exchange.answer}</div>}
-          </div>
-        ))}
-        {question === null ? null : (
-          <div data-testid="assistant-question" title={question} className="line-clamp-2 shrink-0 text-[13px] text-muted-foreground">
-            {question}
-          </div>
+        {compact ? null : (
+          <>
+            {history.map((exchange) => (
+              <div key={exchange.id} data-testid="assistant-history" className="flex shrink-0 flex-col gap-1 text-[13px] text-muted-foreground">
+                <div title={exchange.question} className="line-clamp-2">
+                  {exchange.question}
+                </div>
+                {exchange.answer === '' ? null : <div className="whitespace-pre-wrap opacity-80">{exchange.answer}</div>}
+              </div>
+            ))}
+            {question === null ? null : (
+              <div data-testid="assistant-question" title={question} className="line-clamp-2 shrink-0 text-[13px] text-muted-foreground">
+                {question}
+              </div>
+            )}
+            {host.answer === '' || sending !== null ? null : (
+              <div data-testid="assistant-answer" className="shrink-0 whitespace-pre-wrap">
+                {host.answer}
+              </div>
+            )}
+            {sending === null && host.outcome === 'sent' ? <div data-testid="assistant-sent" className="text-[13px] text-[var(--color-accent)]">{S.assistant.sent}</div> : null}
+            {sending === null && host.outcome === 'cancelled' ? <div className="text-[13px] text-muted-foreground">{S.assistant.cancelled}</div> : null}
+            {sending === null && host.outcome === 'done' && report === null ? <div data-testid="assistant-done" className="text-[13px] text-[var(--color-accent)]">{S.assistant.done}</div> : null}
+            {report === null ? null : <PlanReport report={report} />}
+            {/* Карточку закрыл хост с причиной (уже отвечена, решение пересмотрено, задача не ушла): карточки уже нет, причина — рядом с итогом. */}
+            {sending === null && proposal === null && props.cardError !== null ? (
+              <div data-testid="assistant-outcome-note" className="text-[13px] text-[var(--status-warning-text)]">
+                {props.cardError}
+              </div>
+            ) : null}
+          </>
         )}
-        {host.answer === '' || sending !== null ? null : (
-          <div data-testid="assistant-answer" className="shrink-0 whitespace-pre-wrap">
-            {host.answer}
-          </div>
-        )}
-        {sending === null && host.outcome === 'sent' ? <div data-testid="assistant-sent" className="text-[13px] text-[var(--color-accent)]">{S.assistant.sent}</div> : null}
-        {sending === null && host.outcome === 'cancelled' ? <div className="text-[13px] text-muted-foreground">{S.assistant.cancelled}</div> : null}
-        {sending === null && host.outcome === 'done' && report === null ? <div data-testid="assistant-done" className="text-[13px] text-[var(--color-accent)]">{S.assistant.done}</div> : null}
-        {report === null ? null : <PlanReport report={report} />}
-        {/* Карточку закрыл хост с причиной (уже отвечена, решение пересмотрено, задача не ушла): карточки уже нет, причина — рядом с итогом. */}
-        {sending === null && proposal === null && props.cardError !== null ? (
-          <div data-testid="assistant-outcome-note" className="text-[13px] text-[var(--status-warning-text)]">
-            {props.cardError}
-          </div>
-        ) : null}
         {proposal === null ? null : (
           <div data-testid="assistant-card" className="flex shrink-0 flex-col gap-2 rounded-md bg-white/5 p-2.5">
             {cardBody(proposal, mentions)}
@@ -412,7 +455,7 @@ export function AssistantView(props: AssistantViewProps): JSX.Element {
             </div>
           </div>
         )}
-        {queue.map((item) => (
+        {compact ? null : queue.map((item) => (
           <div key={item.id} data-testid="assistant-queued" className="flex shrink-0 items-start gap-2 text-[13px] text-muted-foreground">
             <span className="line-clamp-2 min-w-0 flex-1" title={item.text}>
               {item.text}
@@ -429,69 +472,123 @@ export function AssistantView(props: AssistantViewProps): JSX.Element {
             </button>
           </div>
         ))}
-        {props.notice === null ? null : <div className="text-[13px] text-muted-foreground">{props.notice}</div>}
-      </div>
-      <form
-        className="flex items-center gap-2 rounded-md bg-white/5 px-2 py-1"
-        onSubmit={(event) => {
-          event.preventDefault();
-          submit();
-        }}
-      >
-        <input
-          data-testid="assistant-input"
-          autoFocus
-          value={draft}
-          maxLength={ASK_MAX}
-          placeholder={S.assistant.placeholder}
-          className="min-w-0 flex-1 bg-transparent py-1 outline-none placeholder:text-muted-foreground"
-          onFocus={props.onTakeKeyboard}
-          onChange={(event) => props.onDraft(event.target.value)}
-        />
-        {input === 'listening' ? (
+        {compact ? (
+          compactNotice === null ? null : (
+            <div data-testid={props.live?.notice != null ? 'assistant-live-notice' : 'assistant-notice'} className="text-[13px] text-muted-foreground">
+              {compactNotice}
+            </div>
+          )
+        ) : (
           <>
-            <span className="h-1.5 w-10 overflow-hidden rounded-full bg-white/10">
-              <span className="block h-full bg-destructive transition-[width]" style={{ width: `${Math.round(levelWidth(props.level) * 100)}%` }} />
-            </span>
-            <span data-testid="assistant-mic-elapsed" className="text-xs tabular-nums text-muted-foreground">
-              {formatElapsed(elapsed)}
-            </span>
+            {props.notice === null ? null : <div data-testid="assistant-notice" className="text-[13px] text-muted-foreground">{props.notice}</div>}
+            {props.live?.notice == null ? null : (
+              <div data-testid="assistant-live-notice" className="text-[13px] text-muted-foreground">
+                {props.live.notice}
+              </div>
+            )}
           </>
-        ) : null}
-        <button
-          type="button"
-          data-testid="assistant-mic"
-          aria-label={input === 'listening' ? S.assistant.stopMic : input === 'transcribing' ? S.assistant.transcribing : S.assistant.mic}
-          disabled={input === 'transcribing'}
-          className="cursor-pointer text-muted-foreground hover:text-foreground"
-          onMouseDown={(event) => event.preventDefault()}
-          onClick={props.onMic}
-        >
-          {input === 'listening' ? (
-            <span className="assistant-dot-pulse block size-2.5 rounded-full bg-destructive" />
-          ) : input === 'transcribing' ? (
-            <Loader2 size={16} className="animate-spin" />
-          ) : (
-            <Mic size={16} />
-          )}
-        </button>
-        <button
-          type="button"
-          data-testid="assistant-speak"
-          aria-label={S.assistant.settings.speak}
-          aria-pressed={props.speakOn}
-          title={S.assistant.settings.speak}
-          className={`cursor-pointer hover:text-foreground ${props.speakOn ? 'text-[var(--color-accent)]' : 'text-muted-foreground'}`}
-          onMouseDown={(event) => event.preventDefault()}
-          onClick={props.onToggleSpeak}
-        >
-          {props.speakOn ? <Volume2 size={16} /> : <VolumeX size={16} />}
-        </button>
-      </form>
-      <div className="flex justify-between text-[12px] text-muted-foreground">
-        <span>{S.assistant.escToClose}</span>
-        <span>{S.assistant.hotkeyToTalk(hotkeyLabel(props.hotkey))}</span>
+        )}
+        {(props.live?.results ?? []).map((result) => (
+          <div key={result.requestId} data-testid={`assistant-live-result-${result.kind}`} className="flex items-start gap-2 text-[13px] text-muted-foreground">
+            <span className="min-w-0 flex-1">{result.kind === 'held' ? S.assistant.live.resultHeld : `${S.assistant.live.resultCard}: ${result.text}`}</span>
+            {result.kind === 'card' && props.live?.onDismissResult !== undefined ? (
+              <button
+                type="button"
+                aria-label={S.assistant.live.dismissResult}
+                className="shrink-0 cursor-pointer hover:text-foreground"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => props.live?.onDismissResult?.(result.requestId)}
+              >
+                <X size={14} />
+              </button>
+            ) : null}
+          </div>
+        ))}
       </div>
+      {compact ? null : (
+        <form
+          className="flex items-center gap-2 rounded-md bg-white/5 px-2 py-1"
+          onSubmit={(event) => {
+            event.preventDefault();
+            submit();
+          }}
+        >
+          <input
+            data-testid="assistant-input"
+            autoFocus
+            value={draft}
+            maxLength={ASK_MAX}
+            placeholder={S.assistant.placeholder}
+            className="min-w-0 flex-1 bg-transparent py-1 outline-none placeholder:text-muted-foreground"
+            onFocus={props.onTakeKeyboard}
+            onChange={(event) => props.onDraft(event.target.value)}
+          />
+          {input === 'listening' ? (
+            <>
+              <span className="h-1.5 w-10 overflow-hidden rounded-full bg-white/10">
+                <span className="block h-full bg-destructive transition-[width]" style={{ width: `${Math.round(levelWidth(props.level) * 100)}%` }} />
+              </span>
+              <span data-testid="assistant-mic-elapsed" className="text-xs tabular-nums text-muted-foreground">
+                {formatElapsed(elapsed)}
+              </span>
+            </>
+          ) : null}
+          <button
+            type="button"
+            data-testid="assistant-mic"
+            aria-label={input === 'listening' ? S.assistant.stopMic : input === 'transcribing' ? S.assistant.transcribing : S.assistant.mic}
+            disabled={input === 'transcribing' || (props.live !== undefined && props.live.phase !== 'idle')}
+            className="cursor-pointer text-muted-foreground hover:text-foreground"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={props.onMic}
+          >
+            {input === 'listening' ? (
+              <span className="assistant-dot-pulse block size-2.5 rounded-full bg-destructive" />
+            ) : input === 'transcribing' ? (
+              <Loader2 size={16} className="animate-spin" />
+            ) : (
+              <Mic size={16} />
+            )}
+          </button>
+          {props.live === undefined ? null : (
+            <button
+              type="button"
+              data-testid="assistant-live"
+              aria-label={props.live.phase === 'live' ? S.assistant.live.stop : props.live.phase === 'idle' ? S.assistant.live.start : S.assistant.live.connecting}
+              title={props.live.phase === 'live' ? S.assistant.live.stop : S.assistant.live.start}
+              aria-pressed={props.live.phase === 'live'}
+              disabled={props.live.phase === 'connecting' || props.live.phase === 'closing' || (props.live.phase === 'idle' && input !== 'idle')}
+              className={`cursor-pointer hover:text-foreground ${props.live.phase === 'live' ? 'text-[var(--color-accent)]' : 'text-muted-foreground'}`}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={props.live.onToggle}
+            >
+              {props.live.phase === 'connecting' || props.live.phase === 'closing' ? (
+                <Loader2 size={16} className="animate-spin" />
+              ) : (
+                <AudioLines size={16} className={props.live.humanSpeaking || props.live.modelPlaying ? 'assistant-dot-pulse' : undefined} />
+              )}
+            </button>
+          )}
+          <button
+            type="button"
+            data-testid="assistant-speak"
+            aria-label={S.assistant.settings.speak}
+            aria-pressed={props.speakOn}
+            title={S.assistant.settings.speak}
+            className={`cursor-pointer hover:text-foreground ${props.speakOn ? 'text-[var(--color-accent)]' : 'text-muted-foreground'}`}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={props.onToggleSpeak}
+          >
+            {props.speakOn ? <Volume2 size={16} /> : <VolumeX size={16} />}
+          </button>
+        </form>
+      )}
+      {compact ? null : (
+        <div className="flex justify-between text-[12px] text-muted-foreground">
+          <span>{S.assistant.escToClose}</span>
+          <span>{S.assistant.hotkeyToTalk(hotkeyLabel(props.hotkey))}</span>
+        </div>
+      )}
     </div>
   );
 }

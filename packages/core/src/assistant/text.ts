@@ -151,6 +151,33 @@ export function speakable(text: string): string {
     .trim();
 }
 
+/**
+ * Человеческий текст результатов Parley (O1): refs — точные адреса, id и явно известные короткие теги
+ * с готовыми displayName. Выбор liveLead и различение одноимённых участников делает проекция, не фильтр.
+ * Неизвестный S24 остаётся обычным текстом; имена подставляются буквально, без повторной обработки.
+ * DTO/словарь не меняются. Старый контракт speakable намеренно остаётся отдельным.
+ */
+export function normalizeHumanText(text: string, refs: Readonly<Record<string, string>>): string {
+  return text
+    .replace(/\[\[\s*(?:calm|joy|sad|surprise|anger|error)\s*(?:\]\]|\](?=\s|$))/gi, ' ')
+    // Тег `[hum]` из выходного транскрипта GPT-Live (T0 §2e): только он, остальные скобки — обычный текст. Применять к
+    // собранному транскрипту, а не к каждой дельте: тег может быть разрезан между событиями.
+    .replace(/\[hum\]/gi, ' ')
+    .replace(
+      /(?<![\p{L}\p{N}\p{M}_@-])(?:(?:session|room|work):[\w-]+(?::[\w-]+)*|[srw]-\d+|@s\d+|S\d+)(?![\p{L}\p{N}\p{M}_-])/gu,
+      (ref) => {
+        const name = Object.hasOwn(refs, ref) ? refs[ref]?.trim() : undefined;
+        if (name) return name;
+        if (ref.startsWith('S')) return ref;
+        if (ref.startsWith('room:') || ref.startsWith('r-')) return 'комната'; // cyrillic-ok: человеческая подпись неизвестной ссылки на комнату
+        if (ref.startsWith('work:') || ref.startsWith('w-')) return 'работа'; // cyrillic-ok: человеческая подпись неизвестной ссылки на работу
+        return 'участник'; // cyrillic-ok: человеческая подпись неизвестной ссылки на участника
+      },
+    )
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 export type ConfirmAnswer = 'send' | 'cancel';
 
 const SEND_PHRASES = new Set([

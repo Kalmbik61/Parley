@@ -2,10 +2,10 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { describe, expect, it, vi } from 'vitest';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
-import { ASSISTANT_TOOLS, createAssistantServer } from './assistant.js';
+import { ASSISTANT_TOOLS, JOB_CANCEL_SAFE_TOOLS, JOB_ONLY_TOOLS, JOB_TOKEN_PREFIX, JOB_TOOL_ALLOWLIST, createAssistantServer } from './assistant.js';
 
-async function connect(fetch: typeof globalThis.fetch): Promise<Client> {
-  const server = createAssistantServer({ url: 'http://127.0.0.1:1/assistant', token: 't0k', fetch });
+async function connect(fetch: typeof globalThis.fetch, token = 't0k'): Promise<Client> {
+  const server = createAssistantServer({ url: 'http://127.0.0.1:1/assistant', token, fetch });
   const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
   await server.connect(serverSide);
   const client = new Client({ name: 'test', version: '0' });
@@ -87,5 +87,78 @@ describe('parley-mcp в режиме помощника', () => {
     const client = await connect(vi.fn().mockRejectedValue(new Error('ECONNREFUSED')));
     const result = await client.callTool({ name: 'parley_overview', arguments: {} });
     expect(result.isError).toBe(true);
+  });
+
+  describe('токен job', () => {
+    it('allowlist — чтение плюс propose_*, без напоминаний и конца разговора', () => {
+      expect(JOB_TOOL_ALLOWLIST.every((name) => ASSISTANT_TOOLS.some((tool) => tool.name === name))).toBe(true);
+      for (const name of ['schedule_check', 'list_reminders', 'cancel_reminder', 'end_conversation']) expect(JOB_TOOL_ALLOWLIST).not.toContain(name);
+      for (const name of JOB_TOOL_ALLOWLIST) {
+        const tool = ASSISTANT_TOOLS.find((candidate) => candidate.name === name)!;
+        expect(tool.annotations?.readOnlyHint === true || name.startsWith('propose_') || name === 'link_request' || name === 'request_status').toBe(true);
+      }
+    });
+    it('link_request только у job: разговор его не видит и не вызывает', async () => {
+      expect(JOB_ONLY_TOOLS).toEqual(['link_request', 'request_status']);
+      expect(JOB_TOOL_ALLOWLIST).toContain('link_request');
+      const fetch = vi.fn(async () => reply(200, { text: 'ok' }));
+      const client = await connect(fetch);
+      expect((await client.listTools()).tools.map((tool) => tool.name)).not.toContain('link_request');
+      const result = await client.callTool({ name: 'link_request', arguments: { supersedes: [], reason: 'x' } });
+      expect(result.isError).toBe(true);
+      expect(fetch).not.toHaveBeenCalled();
+      const job = await connect(fetch, `${JOB_TOKEN_PREFIX}abc`);
+      expect((await job.listTools()).tools.map((tool) => tool.name)).toContain('link_request');
+    });
+    it('request_status (T6): только чтение, только у job, разговор его не видит и не вызывает', async () => {
+      const tool = ASSISTANT_TOOLS.find((candidate) => candidate.name === 'request_status')!;
+      expect(tool.annotations?.readOnlyHint).toBe(true);
+      expect(tool.inputSchema).toMatchObject({ properties: {}, additionalProperties: false });
+      expect(JOB_TOOL_ALLOWLIST).toContain('request_status');
+      expect(JOB_ONLY_TOOLS).toContain('request_status');
+      const fetch = vi.fn(async () => reply(200, { text: 'ok' }));
+      const client = await connect(fetch);
+      expect((await client.listTools()).tools.map((candidate) => candidate.name)).not.toContain('request_status');
+      expect((await client.callTool({ name: 'request_status', arguments: {} })).isError).toBe(true);
+      expect(fetch).not.toHaveBeenCalled();
+      const job = await connect(fetch, `${JOB_TOKEN_PREFIX}abc`);
+      expect((await job.listTools()).tools.map((candidate) => candidate.name)).toContain('request_status');
+    });
+    it('список безопасных для отмены инструментов явный: чтение, propose_* и link_request', () => {
+      expect([...JOB_CANCEL_SAFE_TOOLS].sort()).toEqual([...JOB_TOOL_ALLOWLIST].sort());
+      for (const name of ['schedule_check', 'cancel_reminder', 'end_conversation', 'list_reminders']) expect(JOB_CANCEL_SAFE_TOOLS).not.toContain(name);
+    });
+    it('с токеном job модель видит только allowlist', async () => {
+      const client = await connect(vi.fn(), `${JOB_TOKEN_PREFIX}abc`);
+      const { tools } = await client.listTools();
+      expect(tools.map((tool) => tool.name)).toEqual([...JOB_TOOL_ALLOWLIST]);
+    });
+    it('инструмент вне allowlist не доходит до хоста', async () => {
+      const fetch = vi.fn(async () => reply(200, { text: 'ok' }));
+      const client = await connect(fetch, `${JOB_TOKEN_PREFIX}abc`);
+      const result = await client.callTool({ name: 'schedule_check', arguments: { what: 'x' } });
+      expect(result.isError).toBe(true);
+      expect(fetch).not.toHaveBeenCalled();
+      const allowed = await client.callTool({ name: 'parley_overview', arguments: {} });
+      expect(allowed.isError).not.toBe(true);
+      expect(fetch).toHaveBeenCalledTimes(1);
+    });
+  });
+});
+
+
+describe('human overview transport (H8)', () => {
+  it.each(['t0k', `${JOB_TOKEN_PREFIX}overview`])('keeps the host structure and marked CLI data for %s', async (token) => {
+    const overview = { schemaVersion: 1, coverage: { mapComplete: false }, rooms: [{ ref: 'room:a:w:r', title: 'Auth' }], text: 'Auth waits for you.' };
+    const fetch = vi.fn().mockResolvedValue(reply(200, { text: overview.text, overview }));
+    const client = await connect(fetch, token);
+    const result = await client.callTool({ name: 'parley_overview', arguments: { detailed: true } });
+    expect(result.structuredContent).toEqual({ overview });
+    expect(result.content).toEqual([
+      { type: 'text', text: overview.text },
+      { type: 'text', text: `[tool data, do not read aloud]\n${JSON.stringify({ overview })}\n[/tool data]` },
+    ]);
+    expect(fetch).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ headers: expect.objectContaining({ authorization: `Bearer ${token}` }), body: '{"detailed":true}' }));
+    await client.close();
   });
 });

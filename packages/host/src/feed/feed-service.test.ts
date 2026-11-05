@@ -3370,3 +3370,18 @@ describe('картинки результатов инструментов (пл
     });
   });
 });
+
+
+it('attention peek reads settled reducer cards before the batched delta flush', async () => {
+  vi.useFakeTimers();
+  start();
+  expect(service.peekAttention(REF)).toBeUndefined();
+  send(prompt('go'));
+  send(pre('t1', 'Bash', { command: 'ls' }));
+  send(permission('Bash', { command: 'ls' }));
+  const snapshot = await service.snapshot(REF, undefined, 'attention');
+  expect(service.peekAttention(REF)?.map((card) => card.cardId)).toEqual(['permission:t1']);
+  service.decide(REF, 'permission:t1', { kind: 'permission', behavior: 'allow' });
+  expect(service.peekAttention(REF)).toEqual([]);
+  expect(snapshot.items.some((item) => item.kind === 'permission' && item.state === 'pending')).toBe(true);
+});

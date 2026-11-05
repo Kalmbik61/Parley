@@ -46,7 +46,11 @@ export interface VoiceSessionServiceDeps extends VoiceSessionEvents {
 }
 
 export interface VoiceSessionService {
-  prepare(sdpOffer: string): Promise<PrepareResult>;
+  /**
+   * `liveSession` — тело сессии для OpenAI; нет — прежний конфиг клиента (`{ model }`). Остров передаёт инструкции и
+   * клиентскую делегацию (`liveSessionConfig`), телефон без моста делегаций получает прежний конфиг.
+   */
+  prepare(sdpOffer: string, liveSession?: Record<string, unknown>): Promise<PrepareResult>;
   /** Закрывает сессию; false, если такой активной нет. */
   close(voiceSessionId: string): Promise<boolean>;
   activeSessionId(): string | null;
@@ -200,7 +204,7 @@ export function createVoiceSessionService(deps: VoiceSessionServiceDeps): VoiceS
   };
 
   return {
-    async prepare(sdpOffer) {
+    async prepare(sdpOffer, liveSession) {
       if (active !== null) return { ok: false, code: 'busy', message: 'A voice session is already active' };
       // Бюджет исчерпан: к OpenAI не ходим. Проверка синхронная, поэтому до занятия слота.
       try {
@@ -215,7 +219,7 @@ export function createVoiceSessionService(deps: VoiceSessionServiceDeps): VoiceS
       // Ответ создания без SDP, но с id: сессия у OpenAI есть, её нужно закрыть по id.
       let unusable = false;
       try {
-        created = await live.createSession(sdpOffer);
+        created = await live.createSession(sdpOffer, liveSession);
       } catch (error) {
         if (error instanceof LiveError && error.sessionId !== undefined) {
           created = { sessionId: error.sessionId, sdpAnswer: '' };

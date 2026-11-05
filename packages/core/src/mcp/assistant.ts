@@ -1,6 +1,6 @@
 /**
- * Режим помощника `parley-mcp` (спека 2026-10-14, 7.1): четырнадцать инструментов, каждый — POST в маршрут хоста
- * `/assistant/<имя>` с токеном разговора. Карту работ сервер сам не читает: всё знает хост.
+ * Режим помощника `parley-mcp` (спека 2026-10-14, 7.1): четырнадцать инструментов разговора, а `link_request` и `request_status` только для
+ * job, каждый — POST в маршрут хоста `/assistant/<имя>` с токеном. Карту работ сервер сам не читает: всё знает хост.
  */
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
@@ -15,8 +15,8 @@ const TARGET = {
 export const ASSISTANT_TOOLS: Tool[] = [
   {
     name: 'parley_overview',
-    description: 'Current state of all open works in Parley: rooms (members, who works, plan progress, who needs the person) and sessions (state, task, summary, what they wait for). Call it before answering anything about the current state.',
-    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    description: 'Current human overview of permitted non-archived works and rooms, grouped by human waits, working and other. Coverage gaps and unlisted rooms are explicit. Use structural refs only for subsequent tools; tool data must never be read aloud. Call it before answering anything about the current state.',
+    inputSchema: { type: 'object', properties: { detailed: { type: 'boolean', description: 'List every current room and its members within the permitted scope.' } }, additionalProperties: false },
     annotations: { readOnlyHint: true },
   },
   {
@@ -301,6 +301,89 @@ export const ASSISTANT_TOOLS: Tool[] = [
     description: 'The person asked to start over: the conversation is forgotten after this reply.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
+  {
+    name: 'link_request',
+    description:
+      'Call this first, once. Tell Parley whether the task you were given replaces an earlier open request of the same conversation (the person corrected or withdrew it: "no, instead…", "never mind, do this"). The open requests are listed in your task with their requestId and version. supersedes lists only the earlier requests your task replaces, each with the version you saw; use [] when your task is independent or you are not sure. Nothing is cancelled unless the host confirms that the earlier request did nothing but read and prepare cards. The reply says what was done or why nothing changed.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        supersedes: {
+          type: 'array',
+          maxItems: 10,
+          description: 'The earlier open requests that this task replaces; [] when it is independent.',
+          items: {
+            type: 'object',
+            properties: {
+              requestId: { type: 'string', description: 'The requestId from the open requests in your task.' },
+              expectedVersion: { type: 'integer', minimum: 1, description: 'The version of that request as listed in your task.' },
+            },
+            required: ['requestId', 'expectedVersion'],
+            additionalProperties: false,
+          },
+        },
+        reason: { type: 'string', description: 'One short sentence: why it replaces them, or why it is independent.' },
+      },
+      required: ['supersedes', 'reason'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'request_status',
+    description:
+      'Read-only status of the open voice requests of your own conversation: for each one its state, version, how long ago it was asked and a short summary of its result when it has one. Use it when the task asks for the status ("what is the status", "any news"). It never starts, repeats or changes any work.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: true },
+  },
+];
+
+/**
+ * Токен job (а не разговора) начинается с этого префикса. MCP-сервер по нему показывает модели только
+ * `JOB_TOOL_ALLOWLIST`; хост проверяет список независимо, по тому, чей это токен (`assistant-endpoint.ts`).
+ */
+export const JOB_TOKEN_PREFIX = 'job_';
+
+/**
+ * Явный список инструментов job: чтение плюс `propose_*` (запись только через карточки). Остальное не входит:
+ * `schedule_check`, `cancel_reminder`, `end_conversation` меняют состояние разговора, `list_reminders` читает чужое
+ * для job состояние напоминаний. Новый инструмент в job не попадает, пока его не добавят сюда.
+ */
+export const JOB_TOOL_ALLOWLIST: readonly string[] = [
+  'parley_overview',
+  'parley_detail',
+  'parley_find',
+  'parley_room',
+  'parley_session',
+  'propose_message',
+  'propose_room',
+  'propose_decision',
+  'propose_room_decision',
+  'propose_actions',
+  'link_request',
+  'request_status',
+];
+
+/** Инструменты только для job: токен разговора их не видит, а хост отвечает ему 403 (`assistant-endpoint.ts`). */
+export const JOB_ONLY_TOOLS: readonly string[] = ['link_request', 'request_status'];
+
+/**
+ * Инструменты, после которых job можно отменить, не оставив исполненного действия (спека §5 п.3): чтение, `propose_*`
+ * и сама `link_request`. Список явный и не выводится из `JOB_TOOL_ALLOWLIST`: новый инструмент job не становится
+ * безопасным для отмены, пока его не добавят сюда. `schedule_check` и подобные не входят.
+ */
+export const JOB_CANCEL_SAFE_TOOLS: readonly string[] = [
+  'parley_overview',
+  'parley_detail',
+  'parley_find',
+  'parley_room',
+  'parley_session',
+  'propose_message',
+  'propose_room',
+  'propose_decision',
+  'propose_room_decision',
+  'propose_actions',
+  'link_request',
+  'request_status',
 ];
 
 export interface AssistantServerOptions {
@@ -311,25 +394,38 @@ export interface AssistantServerOptions {
   fetch?: typeof fetch;
 }
 
-type ToolResult = { content: Array<{ type: 'text'; text: string }>; isError?: true };
+/** Transport-only JSON envelope: core does not depend on the host protocol package. */
+interface OverviewPayload { text?: unknown; error?: unknown; overview?: Record<string, unknown> }
+
+type ToolResult = { structuredContent?: { overview: Record<string, unknown> }; content: Array<{ type: 'text'; text: string }>; isError?: true };
 
 const failure = (text: string): ToolResult => ({ content: [{ type: 'text', text }], isError: true });
 
 export function createAssistantServer(options: AssistantServerOptions): Server {
   const call = options.fetch ?? fetch;
   const server = new Server({ name: ASSISTANT_MCP_NAME, version: '0.0.0' }, { capabilities: { tools: {} } });
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: ASSISTANT_TOOLS }));
+  const tools = options.token.startsWith(JOB_TOKEN_PREFIX)
+    ? ASSISTANT_TOOLS.filter((tool) => JOB_TOOL_ALLOWLIST.includes(tool.name))
+    : ASSISTANT_TOOLS.filter((tool) => !JOB_ONLY_TOOLS.includes(tool.name));
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
   server.setRequestHandler(CallToolRequestSchema, async (request): Promise<ToolResult> => {
     const name = request.params.name;
-    if (!ASSISTANT_TOOLS.some((tool) => tool.name === name)) return failure(`unknown tool ${name}`);
+    if (!tools.some((tool) => tool.name === name)) return failure(`unknown tool ${name}`);
     try {
       const response = await call(`${options.url}/${name}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', authorization: `Bearer ${options.token}` },
         body: JSON.stringify(request.params.arguments ?? {}),
       });
-      const body = (await response.json().catch(() => ({}))) as { text?: unknown; error?: unknown };
-      if (response.ok && typeof body.text === 'string') return { content: [{ type: 'text', text: body.text }] };
+      const body = (await response.json().catch(() => ({}))) as OverviewPayload;
+      if (response.ok && typeof body.text === 'string') {
+        const content: ToolResult['content'] = [{ type: 'text', text: body.text }];
+        if (name === 'parley_overview' && body.overview && typeof body.overview === 'object' && !Array.isArray(body.overview)) {
+          content.push({ type: 'text', text: `[tool data, do not read aloud]\n${JSON.stringify({ overview: body.overview })}\n[/tool data]` });
+          return { content, structuredContent: { overview: body.overview } };
+        }
+        return { content };
+      }
       return failure(typeof body.error === 'string' ? body.error : `Parley answered ${response.status}`);
     } catch (error) {
       return failure(`Parley is not reachable: ${(error as Error).message}`);

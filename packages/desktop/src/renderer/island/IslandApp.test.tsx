@@ -36,6 +36,8 @@ import { makeActivity, makeRoom, makeSession, makeWork } from '../test-utils/wor
 import { DONE_HOLD_MS, IDLE_RETRACT_MS, INITIAL_CONFIG, IslandApp, presentationEvent, RETRACT_MORPH_MS } from './IslandApp.js';
 import { createSpeaker } from './assistant/speaker.js';
 import { HOST_IDLE, useAssistantStore } from './assistant/store.js';
+import type { LiveController, LiveControllerEvent, LiveStartResult } from './live/controller.js';
+import { useLiveStore } from './live/store.js';
 import { createVoiceAnalysis } from './assistant/voice-features.js';
 import { useConsentsStore } from './consents/store.js';
 import { sessionLabels } from './model.js';
@@ -885,6 +887,54 @@ describe('проводка острова', () => {
       expect(island.keyboard).toHaveBeenLastCalledWith(false);
     });
 
+    describe('Live-диалог (V4)', () => {
+      const startLive = async (phase: 'connecting' | 'live' = 'live') => {
+        const ctx = await renderAssistant();
+        ctx.assistantOpen({ listen: false });
+        await screen.findByTestId('assistant-view');
+        const controller = useLiveStore.getState().controller!;
+        const stop = vi.spyOn(controller, 'stop').mockResolvedValue(undefined);
+        act(() => useLiveStore.setState({ phase }));
+        return { ...ctx, stop };
+      };
+
+      it('вид компактный: ни поля ввода, ни подсказок', async () => {
+        await startLive();
+        expect(screen.getByTestId('assistant-view').dataset.compact).toBe('true');
+        expect(screen.queryByTestId('assistant-input')).toBeNull();
+      });
+
+      it.each(['live', 'connecting'] as const)('Esc в фазе %s завершает диалог и не закрывает режим', async (phase) => {
+        const { stop } = await startLive(phase);
+        fireEvent.keyDown(window, { key: 'Escape' });
+        expect(stop).toHaveBeenCalledTimes(1);
+        expect(screen.getByTestId('assistant-view')).toBeTruthy();
+        expect(useAssistantStore.getState().open).toBe(true);
+      });
+
+      it('потеря фокуса панели сворачивает вид, а диалог продолжается', async () => {
+        const { island, assistantBlur, stop } = await startLive();
+        assistantBlur();
+        expect(screen.queryByTestId('assistant-view')).toBeNull();
+        expect(useAssistantStore.getState()).toMatchObject({ open: true, collapsed: true });
+        expect(useLiveStore.getState().phase).toBe('live');
+        expect(stop).not.toHaveBeenCalled();
+        expect(island.keyboard).toHaveBeenLastCalledWith(false);
+        act(() => useAssistantStore.getState().expand(false));
+        expect(screen.getByTestId('assistant-view').dataset.compact).toBe('true');
+      });
+
+      it('после idle обычный вид возвращается с черновиком', async () => {
+        await startLive();
+        act(() => useAssistantStore.getState().setDraft('half-typed'));
+        act(() => useLiveStore.setState({ phase: 'idle' }));
+        expect((screen.getByTestId('assistant-input') as HTMLInputElement).value).toBe('half-typed');
+        expect(screen.getByTestId('assistant-view').dataset.compact).toBeUndefined();
+        fireEvent.keyDown(window, { key: 'Escape' });
+        expect(screen.queryByTestId('assistant-view')).toBeNull();
+      });
+    });
+
     it('потеря фокуса панели во время хода сворачивает вид в мини-вид', async () => {
       const { island, assistantOpen, assistantBlur } = await renderAssistant();
       assistantOpen({ listen: false });
@@ -1115,6 +1165,87 @@ describe('речь помощника (план 3b B22)', () => {
 
   it('до прихода настроек речь выключена и голоса нет', () => {
     expect(INITIAL_CONFIG.assistant.speech).toEqual({ enabled: false, voice: 'alloy', gender: 'female', available: false });
+  });
+
+  describe('хоткей: Live или Whisper (V3)', () => {
+    /** Подставной контроллер вместо настоящего: фазы идут через стор, как у настоящего. */
+    function hotkeyController(startResult: LiveStartResult) {
+      const listeners = new Set<(event: LiveControllerEvent) => void>();
+      const emit = (event: LiveControllerEvent): void => listeners.forEach((listener) => listener(event));
+      return {
+        start: vi.fn(async () => {
+          emit({ type: 'phase', phase: 'connecting' });
+          emit({ type: 'phase', phase: startResult.ok ? 'live' : 'idle' });
+          return startResult;
+        }),
+        stop: vi.fn(async () => {
+          emit({ type: 'sessionClosed', reason: 'close_requested' });
+          emit({ type: 'phase', phase: 'idle' });
+        }),
+        sendAppend: vi.fn(() => true),
+        readVoice: vi.fn(() => false),
+        subscribe: (listener: (event: LiveControllerEvent) => void) => {
+          listeners.add(listener);
+          return () => void listeners.delete(listener);
+        },
+        snapshot: () => ({ phase: 'idle' as const, voiceSessionId: null, humanSpeaking: false, modelPlaying: false }),
+        dispose: vi.fn(),
+      } satisfies LiveController;
+    }
+    async function renderHotkey(assistant: typeof ASSISTANT_ON, startResult: LiveStartResult = { ok: true, voiceSessionId: 'live_1' }) {
+      const ctx = setup({ assistant });
+      render(<IslandApp bridge={ctx.bridge} />);
+      await waitFor(() => expect(ctx.island.onAssistantOpen).toHaveBeenCalled());
+      // Настройки (речь) приходят отдельно от подписки: ждём, пока они дойдут до хоткея.
+      await act(async () => { await Promise.resolve(); });
+      const controller = hotkeyController(startResult);
+      act(() => void useLiveStore.getState().bind(controller));
+      return { ...ctx, controller };
+    }
+    const press = async (ctx: { assistantOpen: (request: { listen: boolean }) => void }): Promise<void> => {
+      ctx.assistantOpen({ listen: true });
+      await act(async () => { await Promise.resolve(); });
+    };
+
+    it('«Speak answers» включено: хоткей открывает вид и запускает Live, второе нажатие его завершает', async () => {
+      const ctx = await renderHotkey(ASSISTANT_SPEAKS);
+      await press(ctx);
+      expect(await screen.findByTestId('assistant-view')).toBeTruthy();
+      expect(ctx.controller.start).toHaveBeenCalledTimes(1);
+      expect(useLiveStore.getState().phase).toBe('live');
+      expect(screen.queryByText(S.assistant.voiceOff)).toBeNull();
+      await press(ctx);
+      expect(ctx.controller.stop).toHaveBeenCalledTimes(1);
+      expect(useLiveStore.getState().phase).toBe('idle');
+    });
+
+    it('«Speak answers» выключено: хоткей начинает запись Whisper, Live не трогается', async () => {
+      const ctx = await renderHotkey(ASSISTANT_ON);
+      await press(ctx);
+      expect(await screen.findByTestId('assistant-view')).toBeTruthy();
+      expect(ctx.controller.start).not.toHaveBeenCalled();
+      // Голос в настройках выключен: запись началась и сразу сказала об этом, значит путь Whisper выбран.
+      expect(screen.getByText(S.assistant.voiceOff)).toBeTruthy();
+    });
+
+    it('Live отказал (нет ключа): запись Whisper и причина одной строкой', async () => {
+      const ctx = await renderHotkey(ASSISTANT_SPEAKS, { ok: false, code: 'no_key', message: S.assistant.live.noKey });
+      await press(ctx);
+      expect(await screen.findByTestId('assistant-view')).toBeTruthy();
+      expect(ctx.controller.start).toHaveBeenCalledTimes(1);
+      expect(screen.getByTestId('assistant-live-notice').textContent).toBe(S.assistant.live.noKey);
+      expect(screen.getByText(S.assistant.voiceOff)).toBeTruthy();
+    });
+
+    it('кнопка «Start Live voice» работает как раньше', async () => {
+      const ctx = await renderHotkey(ASSISTANT_ON);
+      ctx.assistantOpen({ listen: false });
+      await screen.findByTestId('assistant-view');
+      fireEvent.click(screen.getByTestId('assistant-live'));
+      await act(async () => { await Promise.resolve(); });
+      expect(ctx.controller.start).toHaveBeenCalledTimes(1);
+      expect(useLiveStore.getState().phase).toBe('live');
+    });
   });
 });
 

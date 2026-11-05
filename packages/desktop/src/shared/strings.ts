@@ -2990,6 +2990,34 @@ export const S = {
     hotkeyToTalk: (keys: string): string => `${keys} to talk`,
     mic: 'Talk',
     stopMic: 'Stop listening',
+    /** Live-голос (GPT-Live, звук-звук): кнопка и сообщения; нет ключа или лимит — текст и обычный голосовой ввод работают. */
+    live: {
+      start: 'Start Live voice',
+      stop: 'End Live voice',
+      connecting: 'Connecting Live voice…',
+      noKey: 'Live voice needs an OpenAI key. Add it in Settings → Voice. Text and push-to-talk still work.',
+      limitReached: 'The daily Live voice limit is used up. Text and push-to-talk still work.',
+      busy: 'A Live voice session is already running.',
+      mic: 'Microphone access is needed for Live voice. Text and push-to-talk still work.',
+      failed: 'Live voice could not start. Text and push-to-talk still work.',
+      closed: (reason: string): string =>
+        reason === 'close_requested'
+          ? 'Live voice ended.'
+          : reason === 'idle_timeout'
+            ? 'Live voice ended after three minutes of silence.'
+            : reason === 'expired'
+              ? 'Live voice ended: the session expired.'
+              : 'Live voice ended unexpectedly.',
+      /** Результаты поручений голоса: карточки на острове, пока голос ждёт паузу или итог не прозвучал. */
+      resultHeld: 'Clarifying your request — the earlier result is on hold.',
+      resultCard: 'Live result',
+      dismissResult: 'Dismiss result',
+      /** Реплики, которые остров добавляет в Live как `commentary.append`: модель говорит их на языке человека. */
+      detailsOnScreen: 'Details are on the screen.',
+      clarifying: 'Say one short sentence: you are clarifying the request.',
+      /** Текст Request, если речь совсем не распозналась (уходит агенту, не человеку). */
+      untranscribed: '(the spoken request was not transcribed)',
+    },
     listening: 'Listening…',
     transcribing: 'Recognizing…',
     thinking: 'Thinking…',

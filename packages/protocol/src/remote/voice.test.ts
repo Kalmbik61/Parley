@@ -27,8 +27,11 @@ describe('голос и jobs: списки', () => {
 
   it('isRemoteForbidden не задевает новые имена', () => {
     for (const name of [...NEW_METHODS, 'jobs.changed', 'voice.session.closed']) expect(isRemoteForbidden(name), name).toBe(false);
-    // запретный список не получил записей `voice.*` и `jobs.*`: лишние методы закрыты белым списком
-    expect(REMOTE_FORBIDDEN.some((entry) => entry.startsWith('voice.') || entry.startsWith('jobs.'))).toBe(false);
+    // запретный список не получил общих записей `voice.*` и `jobs.*`: лишние методы закрыты белым списком.
+    // Исключение — `voice.telemetry.*` (T6): локальные методы острова названы явно и не задевают методы телефона.
+    expect(REMOTE_FORBIDDEN.filter((entry) => (entry.startsWith('voice.') || entry.startsWith('jobs.')) && entry !== 'voice.telemetry.*')).toEqual([]);
+    expect(isRemoteForbidden('voice.telemetry.record')).toBe(true);
+    expect(isRemoteForbidden('voice.session.prepare')).toBe(false);
   });
 
   it('VO-14: метод вне белого списка под voice.* и jobs.* не пройдёт', () => {

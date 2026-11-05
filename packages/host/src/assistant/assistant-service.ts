@@ -19,6 +19,8 @@ import {
   cardDetail,
   cardGist,
   codexInstructionsFile,
+  JOB_ONLY_TOOLS,
+  JOB_TOOL_ALLOWLIST,
   openMemoryDb,
   parseClaudeLine,
   parseCodexLine,
@@ -26,7 +28,6 @@ import {
   pendingCards,
   planRefOf,
   readLetters,
-  sessionDotState,
   sessionMention,
   WorkNotFoundError,
   type AssistantLanguage,
@@ -40,17 +41,21 @@ import {
   type WorkMap,
 } from '@parley/core';
 import { createMoodStripper, matchConfirm, type AssistantGender, type AssistantMood, type MoodMark, type MoodStrip } from '@parley/core/assistant';
-import { feedDecision, refKey, type ActionsReport, type AssistantCardChanged, type AssistantDetail, type AssistantProposal, type AssistantOrigin, type AssistantSettings, type AssistantState, type EventData, type CardDecideResult, type EventName, type Params, type SendResult, type SessionRef } from '@parley/protocol';
+import { feedDecision, refKey, type ActionsReport, type AssistantCardChanged, type AssistantDetail, type AssistantProposal, type AssistantOrigin, type HumanOverviewV1, type AssistantSettings, type AssistantState, type EventData, type CardDecideResult, type EventName, type Params, type SendResult, type SessionRef } from '@parley/protocol';
 import { HostError } from '../errors.js';
 import { createCardStore, type CardRow, type CardStore, type CardVia } from './cards.js';
 import { createConversationStore, type ConversationStore } from './conversation-store.js';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { FeedService } from '../feed/feed-service.js';
 import { memberOf, preparePlan, type PreparedPlan } from './actions.js';
-import { ASSISTANT_PATH, type AssistantReply } from './assistant-endpoint.js';
+import { ASSISTANT_PATH, type AssistantCaller, type AssistantReply } from './assistant-endpoint.js';
+import type { JobTokens } from './job-tokens.js';
+import type { RequestLinker } from './request-link.js';
+import type { RequestStatusReader } from './request-status.js';
 import type { WorksService } from '../works/works-service.js';
 import { findText } from './find.js';
-import { detailText, overviewText, resolveTarget, targetsOf, type AssistantTarget, type OverviewSource } from './overview.js';
+import { detailText, resolveTarget, targetsOf, type AssistantTarget, type OverviewSource } from './overview.js';
+import { humanOverview } from './human-overview.js';
 import { isLastCheck, type Reminder, type ReminderStore } from './reminders.js';
 import { roomPageText, type LetterPage } from './room-page.js';
 import { appendSent, readSent } from './sent-log.js';
@@ -76,7 +81,7 @@ export interface AssistantServiceDeps {
   broadcast<E extends EventName>(event: E, data: EventData<E>): void;
   works: Pick<WorksService, 'snapshot'>;
   activity: Pick<ActivityService, 'get'>;
-  feed?: Pick<FeedService, 'snapshot' | 'decide'>;
+  feed?: Pick<FeedService, 'snapshot' | 'decide'> & Partial<Pick<FeedService, 'peekAttention'>>;
   /** Общий отправитель хоста (`createSender`) — тот же, что у `pty.send`. */
   send(params: { ref: SessionRef; text: string; submit: boolean }): Promise<SendResult>;
   /**
@@ -111,6 +116,12 @@ export interface AssistantServiceDeps {
   ready(entry: ProviderEntry): Promise<string | null>;
   launchEnv(entry: ProviderEntry): Promise<NodeJS.ProcessEnv>;
   binary(command: string): Promise<string>;
+  /** Запись хостом вызовов и карточек job (план голоса, T1); без неё `JobResult` приходит пустым. */
+  jobTools?: Pick<JobTokens, 'recordTool' | 'recordCard'> & Partial<Pick<JobTokens, 'recordOverview'>>;
+  /** Связь голосовых поручений (`link_request`, T5) и отказ `propose_*` частичному или вытесненному Request; без неё `link_request` недоступен. */
+  requestLink?: RequestLinker;
+  /** Запасной статус голосовых поручений (`request_status`, T6): чтение открытых Request разговора вызывающего job; без него инструмент недоступен. */
+  requestStatus?: RequestStatusReader;
   /** Напоминания (`schedule_check`, `list_reminders`, `cancel_reminder`); срабатывание приходит в `onReminder`. */
   reminders: Pick<ReminderStore, 'add' | 'list' | 'cancel'>;
   home: string;
@@ -155,7 +166,8 @@ export interface AssistantService {
   reset(): void;
   state(): AssistantState;
   sent(ref: SessionRef): Promise<Array<{ text: string; at: string }>>;
-  tool(name: string, args: unknown): Promise<AssistantReply>;
+  /** `caller` — разговор по умолчанию; job вызывает только инструменты из `JOB_TOOL_ALLOWLIST`. */
+  tool(name: string, args: unknown, caller?: AssistantCaller): Promise<AssistantReply>;
   /** Срок напоминания (его отдаёт хост в `reminders.start`): ждёт конца идущего хода и сам запускает новый. */
   onReminder(reminder: Reminder, late: boolean): Promise<'fired' | 'skipped' | 'later' | 'retry'>;
   stop(): void;
@@ -177,6 +189,19 @@ interface Conversation {
 type RoomTarget = Extract<AssistantTarget, { kind: 'room' }>;
 type SessionTarget = Extract<AssistantTarget, { kind: 'session' }>;
 type WorkTarget = Extract<AssistantTarget, { kind: 'work' }>;
+
+/**
+ * Кто создаёт карточку. Разговор — его токен и источник карточек канала; job (план голоса, T1) — своя метка вместо
+ * токена разговора и свой источник `job:<id>`, чтобы его карточка не вытесняла карточку острова и наоборот.
+ */
+/** Job нельзя готовить карточки: его Request частичный или вытеснен. Для job это отказ 409, не сбой хоста. */
+class JobRefusal extends Error {}
+
+interface Owner {
+  token: string;
+  source?: string;
+  jobId?: string;
+}
 
 /** Ждущая карточка. Вид (`kind`) совпадает с `view.action` и сужает остальные поля; `token` — разговор, что её создал. */
 type Pending = PendingBody & { token: string; /** Откуда пришло решение; ставится в `decide`. */ via?: CardVia };
@@ -407,10 +432,15 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     const last = rows[rows.length - 1];
     return last === undefined ? null : pendingOf(last);
   };
-  function setPending(card: Pending): void {
+  function setPending(card: Pending, owner: Owner): void {
+    // Request job вытеснили или он частичный, пока шёл `await`: карточка уже не нужна, а вытесненный её отзыв не пережил бы.
+    const refused = owner.jobId === undefined ? null : (deps.requestLink?.proposeRefusal(owner.jobId) ?? null);
+    if (refused !== null) throw new JobRefusal(refused);
     const { view, kind, ...payload } = card; // `token` остаётся в payload: заметка исхода уходит только в тот разговор, что создал карточку
     const before = cards.active();
-    const row = cards.put({ proposalId: view.id, kind, view, payload, source: cardSource, expiresAt: now() + cardTtl }, now());
+    const row = cards.put({ proposalId: view.id, kind, view, payload, source: owner.source ?? cardSource, expiresAt: now() + cardTtl }, now());
+    // Карточки job записывает хост, а не модель: они попадают в `JobResult.cards`.
+    if (owner.jobId !== undefined) deps.jobTools?.recordCard(owner.jobId, { cardId: view.id, kind });
     armSweep();
     emitSuperseded(before);
     emitCard(row);
@@ -710,7 +740,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
   const hiddenRefusal = (target: AssistantTarget): AssistantReply | null =>
     target.hidden === undefined ? null : { status: 409, body: { error: `${target.name} is ${target.hidden}; reopen it in Parley first` } };
 
-  function propose(input: Record<string, unknown>, src: OverviewSource, targets: readonly AssistantTarget[], hidden: readonly AssistantTarget[]): AssistantReply {
+  function propose(owner: Owner, input: Record<string, unknown>, src: OverviewSource, targets: readonly AssistantTarget[], hidden: readonly AssistantTarget[]): AssistantReply {
     const text = stringArg(input, 'text').trim();
     if (text === '') return { status: 400, body: { error: 'text is empty' } };
     if (text.length > MAX_TEXT) return { status: 400, body: { error: `text is longer than ${MAX_TEXT} characters` } };
@@ -734,7 +764,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     const kind = input['kind'];
     proposals += 1;
     const fresh: Pending = {
-      token: conversation?.token ?? '',
+      token: owner.token,
       kind: 'message',
       view: {
         action: 'message',
@@ -749,7 +779,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       target,
       to: mentioned.map((session) => session.ref.sessionId),
     };
-    setPending(fresh);
+    setPending(fresh, owner);
     publish({ proposal: fresh.view, outcome: null });
     return { status: 200, body: { text: CARD_SHOWN } };
   }
@@ -757,7 +787,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
   const workMap = (src: OverviewSource, target: { projectPath: string; workId: string }): WorkMap | undefined =>
     src.entries.find((entry) => entry.projectPath === target.projectPath && entry.map.work.id === target.workId)?.map;
 
-  function proposeRoom(input: Record<string, unknown>, src: OverviewSource, targets: readonly AssistantTarget[], hidden: readonly AssistantTarget[]): AssistantReply {
+  function proposeRoom(owner: Owner, input: Record<string, unknown>, src: OverviewSource, targets: readonly AssistantTarget[], hidden: readonly AssistantTarget[]): AssistantReply {
     const found = resolveTarget(targets, stringArg(input, 'work'), { hidden });
     if ('error' in found) return { status: 404, body: { error: found.error } };
     const work = found.target;
@@ -795,7 +825,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     const names = members.map((member) => member.name);
     proposals += 1;
     const fresh: Pending = {
-      token: conversation?.token ?? '',
+      token: owner.token,
       kind: 'room',
       view: {
         action: 'room',
@@ -812,12 +842,12 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       members: members.map((member) => member.id),
       lead: lead.id,
     };
-    setPending(fresh);
+    setPending(fresh, owner);
     publish({ proposal: fresh.view, outcome: null });
     return { status: 200, body: { text: CARD_SHOWN } };
   }
 
-  function proposeRoomDecision(input: Record<string, unknown>, src: OverviewSource, targets: readonly AssistantTarget[], hidden: readonly AssistantTarget[]): AssistantReply {
+  function proposeRoomDecision(owner: Owner, input: Record<string, unknown>, src: OverviewSource, targets: readonly AssistantTarget[], hidden: readonly AssistantTarget[]): AssistantReply {
     const found = resolveTarget(targets, stringArg(input, 'target'), { hidden });
     if ('error' in found) return { status: 404, body: { error: found.error } };
     const room = found.target;
@@ -834,7 +864,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     const kept = choice === 'return' && note !== '' ? note : null;
     proposals += 1;
     const fresh: Pending = {
-      token: conversation?.token ?? '',
+      token: owner.token,
       kind: 'room-decision',
       view: {
         action: 'room-decision',
@@ -855,7 +885,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       },
       room,
     };
-    setPending(fresh);
+    setPending(fresh, owner);
     publish({ proposal: fresh.view, outcome: null });
     return { status: 200, body: { text: CARD_SHOWN } };
   }
@@ -887,7 +917,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     return { error: `answers must cover every question, by its number or exact text: ${list}` };
   }
 
-  async function proposeDecision(input: Record<string, unknown>, targets: readonly AssistantTarget[], hidden: readonly AssistantTarget[]): Promise<AssistantReply> {
+  async function proposeDecision(owner: Owner, input: Record<string, unknown>, targets: readonly AssistantTarget[], hidden: readonly AssistantTarget[]): Promise<AssistantReply> {
     const found = resolveTarget(targets, stringArg(input, 'target'), { hidden });
     if ('error' in found) return { status: 404, body: { error: found.error } };
     const session = found.target;
@@ -935,7 +965,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     const answerLines = chosenAnswers.map((answer, index) => `\n${chosenAnswers.length === 1 ? 'A' : `A${index + 1}`}: ${answer}`).join('');
     proposals += 1;
     const fresh: Pending = {
-      token: conversation?.token ?? '',
+      token: owner.token,
       kind: 'decision',
       view: {
         action: 'decision',
@@ -948,42 +978,76 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       },
       ref: session.ref,
     };
-    setPending(fresh);
+    setPending(fresh, owner);
     publish({ proposal: fresh.view, outcome: null });
     return { status: 200, body: { text: CARD_SHOWN + note } };
   }
 
-  /** Карточки ждущих запросов по сессиям, что стоят `blocked`; остальных не опрашиваем. Сбой ленты — без карточек. */
-  async function waitingCards(src: OverviewSource): Promise<Map<string, readonly FeedCard[]>> {
-    const map = new Map<string, readonly FeedCard[]>();
-    const feed = deps.feed;
-    if (feed === undefined) return map;
+  /** One collection for tools, conversation channels and jobs; projection itself is synchronous. */
+  async function collectOverview(detailed = false, jobId?: string): Promise<{ text: string; overview: HumanOverviewV1 }> {
+    const context = await reasonContext();
+    let src = source();
+    const initial = JSON.stringify(src.entries);
+    let mapComplete = true;
+    const collected = new Map<string, { ref: SessionRef; activity: string; cards: readonly FeedCard[] }>();
+    const sessionOf = (ref: SessionRef) => src.entries
+      .find((entry) => entry.projectPath === ref.projectPath && entry.map.work.id === ref.workId && entry.map.work.status !== 'archived')
+      ?.map.sessions.find((session) => session.id === ref.sessionId && session.lifecycle === 'active');
+    // Re-read membership/lifecycle and live needs after each asynchronous boundary. A changed source
+    // invalidates its cards rather than letting an earlier wait masquerade as a current request.
+    const revalidate = (): void => {
+      src = source();
+      if (JSON.stringify(src.entries) !== initial) mapComplete = false;
+      for (const [key, value] of collected) {
+        if (!sessionOf(value.ref) || JSON.stringify(src.live(value.ref)?.activity) !== value.activity)
+          collected.delete(key);
+      }
+    };
     const refs: SessionRef[] = [];
     for (const entry of src.entries) {
+      if (entry.map.work.status === 'archived') continue;
       for (const session of entry.map.sessions) {
-        if (session.lifecycle === 'closed') continue;
-        const ref: SessionRef = { projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id };
-        if (sessionDotState(session, src.live(ref)?.activity.activity ?? null) === 'blocked') refs.push(ref);
+        if (session.lifecycle === 'active') refs.push({ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id });
       }
     }
-    await Promise.all(
-      refs.map(async (ref) => {
-        try {
-          const { items } = await feed.snapshot(ref, undefined, 'attention');
-          map.set(refKey(ref), pendingCards(items));
-        } catch {
-          // ленты нет — строка сессии без карточек
-        }
-      }),
-    );
-    return map;
+    const feed = deps.feed;
+    if (feed) {
+      // A bounded second read checks card revisions/content too. Changed or unavailable cards stay
+      // unknown; no retry loop, TTL or cached overview is introduced.
+      const activities = refs.map((ref) => JSON.stringify(src.live(ref)?.activity));
+      const first = await Promise.allSettled(refs.map((ref) => feed.snapshot(ref, undefined, 'attention')));
+      revalidate();
+      const second = await Promise.allSettled(refs.map((ref, index) =>
+        sessionOf(ref) && JSON.stringify(src.live(ref)?.activity) === activities[index]
+          ? feed.snapshot(ref, undefined, 'attention')
+          : Promise.reject(new Error('Overview source changed')),
+      ));
+      revalidate();
+      for (const [index, ref] of refs.entries()) {
+        const before = first[index]!;
+        const after = second[index]!;
+        const activity = activities[index]!;
+        if (!sessionOf(ref) || JSON.stringify(src.live(ref)?.activity) !== activity || before.status !== 'fulfilled' || after.status !== 'fulfilled') continue;
+        const cards = pendingCards(after.value.items);
+        if (before.value.revision === after.value.revision && JSON.stringify(pendingCards(before.value.items)) === JSON.stringify(cards))
+          collected.set(refKey(ref), { ref, activity, cards });
+      }
+    }
+    revalidate();
+    // No await between these peeks and projection: async snapshots prepare the feeds, while
+    // current reducer state proves that no card settled while another feed was still loading.
+    for (const [key, value] of collected) {
+      const current = feed?.peekAttention?.(value.ref);
+      if (current === undefined || JSON.stringify(current) !== JSON.stringify(value.cards)) collected.delete(key);
+    }
+    const overview = humanOverview({ ...src, ...context, now: new Date(now()), cards: (ref) => collected.get(refKey(ref))?.cards }, { mapComplete, detailed });
+    if (jobId !== undefined) deps.jobTools?.recordOverview?.(jobId, overview);
+    return { text: overview.text, overview };
   }
 
-  /** Обзор без CLI: данные карты, живая активность и карточки ленты; тот же текст читают инструмент и голосовой канал. */
+  /** String consumers get exactly the human text from the shared collection. */
   async function overview(): Promise<string> {
-    const src = source();
-    const waiting = await waitingCards(src);
-    return overviewText({ ...src, ...(await reasonContext()), cards: (ref) => waiting.get(refKey(ref)) });
+    return (await collectOverview()).text;
   }
 
   /** Ждущие карточки одной сессии для `parley_detail`; сбой ленты — без карточек. */
@@ -1096,7 +1160,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     return settle(current, 'done');
   }
 
-  async function proposeActions(input: Record<string, unknown>, src: OverviewSource): Promise<AssistantReply> {
+  async function proposeActions(owner: Owner, input: Record<string, unknown>, src: OverviewSource): Promise<AssistantReply> {
     if (running !== null) return { status: 409, body: { error: 'A plan is still running; wait until it ends' } };
     if (!deps.actionsShown()) return { status: 409, body: { error: 'No Parley window can show this card; ask the person to open or update Parley' } };
     const prepared = await preparePlan(input, {
@@ -1110,12 +1174,12 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     const { plan } = prepared;
     proposals += 1;
     const fresh: Pending = {
-      token: conversation?.token ?? '',
+      token: owner.token,
       kind: 'actions',
       view: { action: 'actions', id: `p${proposals}`, target: plan.target, where: plan.where, text: plan.text, steps: plan.view },
       plan,
     };
-    setPending(fresh);
+    setPending(fresh, owner);
     publish({ proposal: fresh.view, outcome: null });
     return { status: 200, body: { text: ACTIONS_SHOWN } };
   }
@@ -1263,6 +1327,121 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     armSweep();
   }
 
+  /** Исполняет инструмент помощника от имени `owner`; `current` — разговор (у job его нет). */
+  async function dispatch(name: string, args: unknown, owner: Owner, current?: Conversation): Promise<AssistantReply> {
+    const input = typeof args === 'object' && args !== null && !Array.isArray(args) ? (args as Record<string, unknown>) : {};
+    const src = source();
+    const targets = targetsOf(src);
+    const hidden = hiddenOf(src);
+    switch (name) {
+      case 'parley_overview': {
+        return { status: 200, body: await collectOverview(input.detailed === true, owner.jobId) };
+      }
+      case 'parley_detail': {
+        const found = resolveTarget(targets, stringArg(input, 'target'), { hidden });
+        if ('error' in found) return { status: 404, body: { error: found.error } };
+        const target = found.target;
+        const reply = target.kind === 'session' ? await lastReply(target.ref) : null;
+        const waiting = target.kind === 'session' ? await waitingCardsOf(target.ref) : [];
+        return { status: 200, body: { text: detailText({ ...src, ...(await reasonContext()) }, target, reply, waiting) } };
+      }
+      case 'parley_find': {
+        const query = stringArg(input, 'query').trim();
+        if (query === '') return { status: 400, body: { error: 'query is empty' } };
+        return { status: 200, body: { text: findText({ ...src, ...(await reasonContext()) }, query, { includeClosed: input['include_closed'] === true }) } };
+      }
+      case 'parley_room': {
+        const found = resolveTarget(targets, stringArg(input, 'target'), { hidden });
+        if ('error' in found) return { status: 404, body: { error: found.error } };
+        const target = found.target;
+        if (target.kind !== 'room') return { status: 400, body: { error: `${target.name} is not a room` } };
+        const before = input['before'];
+        if (before !== undefined && !(typeof before === 'number' && Number.isInteger(before) && before > 0)) {
+          return { status: 400, body: { error: 'before must be the number from the last reply' } };
+        }
+        const limit = input['limit'];
+        return {
+          status: 200,
+          body: { text: roomPageText(src, target, { ...(before === undefined ? {} : { before }), ...(typeof limit === 'number' ? { limit } : {}) }, letterPageOf) },
+        };
+      }
+      case 'parley_session': {
+        const found = resolveTarget(targets, stringArg(input, 'target'), { hidden });
+        if ('error' in found) return { status: 404, body: { error: found.error } };
+        const target = found.target;
+        if (target.kind !== 'session') return { status: 400, body: { error: `${target.name} is not a session` } };
+        const header = detailText({ ...src, ...(await reasonContext()) }, target, null, await waitingCardsOf(target.ref));
+        let items: readonly FeedItem[] = [];
+        if (deps.feed !== undefined) {
+          try {
+            items = (await deps.feed.snapshot(target.ref)).items;
+          } catch {
+            // ленты у сессии нет — «истории пока нет»
+          }
+        }
+        const before = stringArg(input, 'before');
+        const limit = input['limit'];
+        const history = historyText(header, items, { ...(before === '' ? {} : { before }), ...(typeof limit === 'number' ? { limit } : {}) });
+        return 'error' in history ? { status: 400, body: { error: history.error } } : { status: 200, body: { text: history.text } };
+      }
+      case 'propose_message':
+        return propose(owner, input, src, targets, hidden);
+      case 'propose_room':
+        return proposeRoom(owner, input, src, targets, hidden);
+      case 'propose_room_decision':
+        return proposeRoomDecision(owner, input, src, targets, hidden);
+      case 'propose_decision':
+        return proposeDecision(owner, input, targets, hidden);
+      case 'propose_actions':
+        return proposeActions(owner, input, src);
+      case 'schedule_check':
+      case 'list_reminders':
+      case 'cancel_reminder':
+        return reminderTool(name, input);
+      case 'end_conversation':
+        if (current === undefined) return { status: 403, body: { error: 'Only the conversation can end itself' } };
+        current.endAfterTurn = true;
+        return { status: 200, body: { text: 'The conversation starts over after this reply.' } };
+      default:
+        return { status: 404, body: { error: `unknown tool ${name}` } };
+    }
+  }
+
+  /** Карточки отозваны (вытеснение Request): те же события и экран, что у погашения по сроку. */
+  function announceWithdrawn(withdrawn: readonly CardRow[]): void {
+    if (withdrawn.length === 0) return;
+    armSweep();
+    for (const card of withdrawn) emitCard(cards.get(card.proposalId));
+    if (withdrawn.some((card) => card.proposalId === state.proposal?.id)) publish({ proposal: shown()?.view ?? null, phase: turn === null ? restPhase() : state.phase });
+  }
+
+  /** Инструмент job: `link_request` решает связь, `propose_*` не доходит до карточки у частичного и вытесненного Request. */
+  async function jobTool(name: string, args: unknown, jobId: string): Promise<AssistantReply> {
+    if (name === 'link_request') {
+      if (deps.requestLink === undefined) return { status: 409, body: { error: 'link_request is not available' } };
+      const outcome = deps.requestLink.link(jobId, args);
+      if (!outcome.ok) return { status: outcome.status, body: { error: outcome.error } };
+      announceWithdrawn(outcome.withdrawn);
+      return { status: 200, body: { text: outcome.text } };
+    }
+    if (name === 'request_status') {
+      if (deps.requestStatus === undefined) return { status: 409, body: { error: 'request_status is not available' } };
+      const outcome = deps.requestStatus.status(jobId);
+      return outcome.ok ? { status: 200, body: { text: outcome.text } } : { status: outcome.status, body: { error: outcome.error } };
+    }
+    if (name.startsWith('propose_')) {
+      const refused = deps.requestLink?.proposeRefusal(jobId) ?? null;
+      if (refused !== null) return { status: 409, body: { error: refused } };
+    }
+    try {
+      return await dispatch(name, args, { token: `job:${jobId}`, source: `job:${jobId}`, jobId });
+    } catch (error) {
+      if (error instanceof JobRefusal) return { status: 409, body: { error: error.message } };
+      throw error;
+    }
+  }
+
+  const CONVERSATION_CALLER: AssistantCaller = { kind: 'conversation' };
   const api: AssistantService = {
     async ask(params, origin = 'island') {
       lastAsk = { provider: params.provider, model: params.model, language: params.language };
@@ -1396,84 +1575,19 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       return state;
     },
     sent: (ref) => readSent(deps.home, ref),
-    async tool(name, args) {
+    async tool(name, args, caller = CONVERSATION_CALLER) {
+      if (caller.kind === 'job') {
+        // Токен job уже отсёк приёмник; список проверяется ещё раз здесь, чтобы сервис не зависел от приёмника.
+        if (!JOB_TOOL_ALLOWLIST.includes(name)) return { status: 403, body: { error: `${name} is not available to background jobs` } };
+        const reply = await jobTool(name, args, caller.jobId);
+        deps.jobTools?.recordTool(caller.jobId, name, reply.status >= 200 && reply.status < 300);
+        return reply;
+      }
+      // Токен разговора `link_request` не вызывает: приёмник его уже отсёк, здесь то же правило для сервиса.
+      if (JOB_ONLY_TOOLS.includes(name)) return { status: 403, body: { error: `${name} is only available to background jobs` } };
       const current = conversation;
       if (current === null) return { status: 409, body: { error: 'No assistant conversation is active' } };
-      const input = typeof args === 'object' && args !== null && !Array.isArray(args) ? (args as Record<string, unknown>) : {};
-      const src = source();
-      const targets = targetsOf(src);
-      const hidden = hiddenOf(src);
-      switch (name) {
-        case 'parley_overview': {
-          return { status: 200, body: { text: await overview() } };
-        }
-        case 'parley_detail': {
-          const found = resolveTarget(targets, stringArg(input, 'target'), { hidden });
-          if ('error' in found) return { status: 404, body: { error: found.error } };
-          const target = found.target;
-          const reply = target.kind === 'session' ? await lastReply(target.ref) : null;
-          const waiting = target.kind === 'session' ? await waitingCardsOf(target.ref) : [];
-          return { status: 200, body: { text: detailText({ ...src, ...(await reasonContext()) }, target, reply, waiting) } };
-        }
-        case 'parley_find': {
-          const query = stringArg(input, 'query').trim();
-          if (query === '') return { status: 400, body: { error: 'query is empty' } };
-          return { status: 200, body: { text: findText({ ...src, ...(await reasonContext()) }, query, { includeClosed: input['include_closed'] === true }) } };
-        }
-        case 'parley_room': {
-          const found = resolveTarget(targets, stringArg(input, 'target'), { hidden });
-          if ('error' in found) return { status: 404, body: { error: found.error } };
-          const target = found.target;
-          if (target.kind !== 'room') return { status: 400, body: { error: `${target.name} is not a room` } };
-          const before = input['before'];
-          if (before !== undefined && !(typeof before === 'number' && Number.isInteger(before) && before > 0)) {
-            return { status: 400, body: { error: 'before must be the number from the last reply' } };
-          }
-          const limit = input['limit'];
-          return {
-            status: 200,
-            body: { text: roomPageText(src, target, { ...(before === undefined ? {} : { before }), ...(typeof limit === 'number' ? { limit } : {}) }, letterPageOf) },
-          };
-        }
-        case 'parley_session': {
-          const found = resolveTarget(targets, stringArg(input, 'target'), { hidden });
-          if ('error' in found) return { status: 404, body: { error: found.error } };
-          const target = found.target;
-          if (target.kind !== 'session') return { status: 400, body: { error: `${target.name} is not a session` } };
-          const header = detailText({ ...src, ...(await reasonContext()) }, target, null, await waitingCardsOf(target.ref));
-          let items: readonly FeedItem[] = [];
-          if (deps.feed !== undefined) {
-            try {
-              items = (await deps.feed.snapshot(target.ref)).items;
-            } catch {
-              // ленты у сессии нет — «истории пока нет»
-            }
-          }
-          const before = stringArg(input, 'before');
-          const limit = input['limit'];
-          const history = historyText(header, items, { ...(before === '' ? {} : { before }), ...(typeof limit === 'number' ? { limit } : {}) });
-          return 'error' in history ? { status: 400, body: { error: history.error } } : { status: 200, body: { text: history.text } };
-        }
-        case 'propose_message':
-          return propose(input, src, targets, hidden);
-        case 'propose_room':
-          return proposeRoom(input, src, targets, hidden);
-        case 'propose_room_decision':
-          return proposeRoomDecision(input, src, targets, hidden);
-        case 'propose_decision':
-          return proposeDecision(input, targets, hidden);
-        case 'propose_actions':
-          return proposeActions(input, src);
-        case 'schedule_check':
-        case 'list_reminders':
-        case 'cancel_reminder':
-          return reminderTool(name, input);
-        case 'end_conversation':
-          current.endAfterTurn = true;
-          return { status: 200, body: { text: 'The conversation starts over after this reply.' } };
-        default:
-          return { status: 404, body: { error: `unknown tool ${name}` } };
-      }
+      return dispatch(name, args, { token: current.token }, current);
     },
     async onReminder(reminder, late) {
       // Идущий ход не перебиваем: ждём, пока он закончится и никакой вопрос человека не запускается. Параметры

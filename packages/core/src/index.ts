@@ -891,6 +891,7 @@ export {
   assistantPrompt, codexInstructionsFile, versionAtLeast,
 } from './assistant/launch.js';
 export type { AssistantMcpParams } from './assistant/launch.js';
+export { JOB_CANCEL_SAFE_TOOLS, JOB_ONLY_TOOLS, JOB_TOKEN_PREFIX, JOB_TOOL_ALLOWLIST } from './mcp/assistant.js';
 export type { AgentPlanStatus, AgentPlanItem, AgentPlanState, AgentPlanSummary, AgentPlan, PlanCall } from './agent-plan.js';
 export { fetchLatestVersion, installMethod, isNewer } from './cli-updates.js';
 export type { CliUpdateProvider, InstallMethod, LatestVersionSource } from './cli-updates.js';

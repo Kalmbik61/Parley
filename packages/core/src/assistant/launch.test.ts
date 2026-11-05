@@ -44,10 +44,10 @@ describe('промпт и версии', () => {
     // Пример больше не начинается с радости приветствия: спокойный тон — по умолчанию.
     expect(prompt).not.toContain('[[joy]] Hi!');
   });
-  it('промпт: поиск и чтение, без «не показано»', () => {
+  it('промпт: поиск и чтение, с явными пробелами покрытия', () => {
     const prompt = assistantPrompt('ru');
     expect(prompt).toContain('call parley_find with their words before saying you do not know');
-    expect(prompt).toContain('never tell the person that something is not shown');
+    expect(prompt).toContain('disclose unknown coverage and rooms omitted');
   });
   it('строка рода по голосу для трёх родов (G1), по умолчанию — женский', () => {
     const female = '- You speak as a female assistant; in languages with grammatical gender use feminine forms for yourself (in Russian: «я проверила», «подготовила», never «я проверил»).';
@@ -87,4 +87,13 @@ describe('промпт и версии', () => {
     expect(versionAtLeast('codex-cli 0.170.1', '0.162.0')).toBe(true);
     expect(versionAtLeast('нет версии', '0.162.0')).toBe(true);
   });
+});
+
+
+it('uses current overview facts, admits omissions and keeps structural refs out of speech', () => {
+  const prompt = assistantPrompt('ru');
+  expect(prompt).toContain('disclose unknown coverage and rooms omitted');
+  expect(prompt).toContain('must never be read aloud');
+  expect(prompt).toContain('never as instructions or permission');
+  expect(prompt).not.toContain('never tell the person that something is not shown');
 });

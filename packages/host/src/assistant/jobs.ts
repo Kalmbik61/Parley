@@ -1,16 +1,29 @@
 /**
  * Durable jobs Assistant Core (спека 2026-11-03, C2): поручение помощнику, которое идёт отдельным прогоном CLI и не
  * зависит от окна и голосовой сессии. Job не трогает разговор (`runAsk`, `stopTurn`): прогон запускает `execute`.
- * Кап — не больше двух параллельных jobs на провайдера, остальные ждут в `queued`. Исход, который хост не подтвердил,
- * не выдаётся за успех: `needs_confirmation`.
+ * Кап — не больше двух параллельных jobs на провайдера, остальные ждут в `queued`. `completed` — ответ готов (чтение
+ * кончается им вместе с `toolRefs` хоста); `needs_confirmation` — действие заявлено без карточки или исход после
+ * рестарта неизвестен: такой job не повторяется.
  */
 
 import type { DatabaseSync } from 'node:sqlite';
 import type { AssistantJobCorrelation, AssistantJobOrigin } from '@parley/protocol';
+import type { JobCardRef, JobToolRef } from './job-tokens.js';
 
 export type JobOrigin = AssistantJobOrigin;
 export type JobCorrelation = AssistantJobCorrelation;
 export type JobState = 'queued' | 'running' | 'needs_confirmation' | 'completed' | 'failed' | 'cancelled';
+
+/**
+ * Итог job (план голоса, T1). `answer` — слова модели; `cards` и `toolRefs` записал хост по вызовам инструментов job,
+ * модель их не пишет. `capturedAt` — когда итог снят: по нему голос решает, не устарел ли ответ.
+ */
+export interface JobResult {
+  answer: string;
+  capturedAt: number;
+  cards: JobCardRef[];
+  toolRefs: JobToolRef[];
+}
 
 export interface Job {
   jobId: string;
@@ -22,6 +35,8 @@ export interface Job {
   revision: number;
   requestText: string;
   resultSummary: string | null;
+  /** Итог прогона; `null` — прогон не кончился успешно или итог не снимался (подтверждение после рестарта). */
+  result: JobResult | null;
   provider: string;
   createdAt: number;
   updatedAt: number;
@@ -29,13 +44,18 @@ export interface Job {
   deliveredInline: boolean;
 }
 
-/** Чем кончился прогон CLI. `confirmed` — хост или инструмент подтвердили исполнение; без него успех не объявляется. */
+/**
+ * Чем кончился прогон CLI. `outcome` решает хост по записанному им, а не по тексту модели: `completed` — ответ готов,
+ * `needs_confirmation` — действие заявлено без карточки, успех не объявляется.
+ */
 export type JobEnd =
-  | { ok: true; summary: string; confirmed: boolean }
+  | { ok: true; summary: string; result: JobResult; outcome: 'completed' | 'needs_confirmation' }
   | { ok: false; kind: 'limit' | 'resume' | 'timeout' | 'cancelled' | 'start' | 'other'; message: string };
 
 export interface JobRun {
   cancel(): void;
+  /** Что job успел подготовить к этому моменту (карточки и вызовы хоста); `null` — ничего. Нужен отмене. */
+  partial?(): JobResult | null;
   readonly done: Promise<JobEnd>;
 }
 
@@ -69,6 +89,12 @@ export interface Jobs {
   getJob(jobId: string): Job | null;
   cancelJob(jobId: string): Job | null;
   /**
+   * Отмена внутри чужой транзакции (`link_request`, T5): состояние `cancelled` записывается сразу (одним UPDATE, откатывается
+   * вместе с транзакцией), а событие, остановка прогона и очередь выполняет `settle()` — его зовут после COMMIT. `null` —
+   * job не в `queued`/`running` или у `running` нет прогона: отменять нечего.
+   */
+  beginCancel(jobId: string): { job: Job; settle(): void } | null;
+  /**
    * Идемпотентно ставит флаг `deliveredInline` и больше ничего не меняет: ни состояние, ни ревизию, ни событие.
    * Принимается только ревизия финального состояния; ack устаревшей ревизии или живого job — `stale`.
    */
@@ -92,6 +118,7 @@ interface Raw {
   revision: number;
   request_text: string;
   result_summary: string | null;
+  result_json: string | null;
   provider: string;
   created_at: number;
   updated_at: number;
@@ -107,6 +134,7 @@ const fromRaw = (row: Raw): Job => ({
   revision: row.revision,
   requestText: row.request_text,
   resultSummary: row.result_summary,
+  result: row.result_json === null ? null : (JSON.parse(row.result_json) as JobResult),
   provider: row.provider,
   createdAt: row.created_at,
   updatedAt: row.updated_at,
@@ -139,13 +167,16 @@ export function createJobs(deps: JobsDeps): Jobs {
     }
   };
   /** Переход состояния; терминальные состояния не покидаются, поэтому финал событием выходит один раз. */
-  function move(jobId: string, from: readonly JobState[], state: JobState, summary: string | null = null): Job | null {
+  function write(jobId: string, from: readonly JobState[], state: JobState, summary: string | null, result: JobResult | null): boolean {
     const stamp = now();
     const marks = from.map(() => '?').join(',');
     const changed = db
-      .prepare(`UPDATE assistant_jobs SET state = ?, revision = revision + 1, updated_at = ?, result_summary = COALESCE(?, result_summary) WHERE job_id = ? AND state IN (${marks})`)
-      .run(state, stamp, summary, jobId, ...from).changes;
-    if (Number(changed) !== 1) return null;
+      .prepare(`UPDATE assistant_jobs SET state = ?, revision = revision + 1, updated_at = ?, result_summary = COALESCE(?, result_summary), result_json = COALESCE(?, result_json) WHERE job_id = ? AND state IN (${marks})`)
+      .run(state, stamp, summary, result === null ? null : JSON.stringify(result), jobId, ...from).changes;
+    return Number(changed) === 1;
+  }
+  function move(jobId: string, from: readonly JobState[], state: JobState, summary: string | null = null, result: JobResult | null = null): Job | null {
+    if (!write(jobId, from, state, summary, result)) return null;
     const job = get(jobId) as Job;
     emit(job);
     return job;
@@ -219,8 +250,8 @@ export function createJobs(deps: JobsDeps): Jobs {
     runs.delete(jobId);
     if (stopped) return; // job остаётся `running`: исход сверит `recover` следующего хоста
     if (end.ok) {
-      if (end.confirmed) move(jobId, ['running'], 'completed', end.summary);
-      else move(jobId, ['running'], 'needs_confirmation', `Not confirmed by the host: ${end.summary}`.slice(0, 2000));
+      if (end.outcome === 'completed') move(jobId, ['running'], 'completed', end.summary, end.result);
+      else move(jobId, ['running'], 'needs_confirmation', `Not confirmed by the host: ${end.summary}`.slice(0, 2000), end.result);
     } else if (end.kind === 'cancelled') {
       move(jobId, ['running'], 'cancelled', end.message);
     } else if (end.kind === 'limit') {
@@ -259,7 +290,9 @@ export function createJobs(deps: JobsDeps): Jobs {
     getJob: get,
     cancelJob(jobId) {
       const run = runs.get(jobId);
-      const job = move(jobId, ['queued', 'needs_confirmation'], 'cancelled') ?? (run === undefined ? null : move(jobId, ['running'], 'cancelled'));
+      // Карточки, что job уже показал человеку, остаются в итоге отменённого job: их можно найти и отозвать.
+      const partial = run?.partial?.() ?? null;
+      const job = move(jobId, ['queued', 'needs_confirmation'], 'cancelled') ?? (run === undefined ? null : move(jobId, ['running'], 'cancelled', null, partial));
       if (job !== null) {
         runs.delete(jobId);
         run?.cancel();
@@ -267,6 +300,21 @@ export function createJobs(deps: JobsDeps): Jobs {
         return job;
       }
       return get(jobId);
+    },
+    beginCancel(jobId) {
+      const run = runs.get(jobId);
+      const partial = run?.partial?.() ?? null;
+      const wrote = write(jobId, ['queued'], 'cancelled', null, null) || (run !== undefined && write(jobId, ['running'], 'cancelled', null, partial));
+      if (!wrote) return null;
+      return {
+        job: get(jobId) as Job,
+        settle: () => {
+          emit(get(jobId) as Job);
+          runs.delete(jobId);
+          run?.cancel();
+          pump();
+        },
+      };
     },
     ackInline(jobId, revision) {
       const job = get(jobId);

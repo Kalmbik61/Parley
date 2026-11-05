@@ -868,3 +868,47 @@ describe('стор помощника: речь (план 3b B22)', () => {
     expect(t.analysis).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('стор помощника: Live-голос и пошаговый голос (T3)', () => {
+  it('пока Live идёт, ответ не озвучивается; идущая речь глушится; после остановки Live озвучка возвращается', () => {
+    const t = speechSetup();
+    t.host({ phase: 'thinking', question: 'q' });
+    t.host({ phase: 'answering', answer: 'The room is working. Two agents' });
+    expect(t.texts()).toEqual(['The room is working.']);
+    t.store.getState().setLiveActive(true);
+    expect(t.api.cancel).toHaveBeenCalled();
+    expect(t.speaker.stop).toHaveBeenCalled();
+    const spoken = t.texts().length;
+    t.host({ phase: 'answering', answer: 'The room is working. Two agents are busy now. All fine here.' });
+    t.host({ phase: 'idle', answer: 'The room is working. Two agents are busy now. All fine here.' });
+    expect(t.texts()).toHaveLength(spoken);
+    t.store.getState().setLiveActive(false);
+    t.host({ phase: 'thinking', question: 'q2', turn: 2 });
+    t.host({ phase: 'answering', answer: 'Back to normal. Voice works.', turn: 2 });
+    t.host({ phase: 'idle', answer: 'Back to normal. Voice works.', turn: 2 });
+    expect(t.texts().slice(spoken).length).toBeGreaterThan(0);
+  });
+
+  it('пока Live идёт, пошаговая запись не стартует (кнопка и хоткей); после остановки работает', () => {
+    const listen = vi.fn(() => ({ stop: vi.fn(), cancel: vi.fn(), result: new Promise<never>(() => {}) }));
+    const { store } = setup({ listen });
+    store.getState().setLiveActive(true);
+    store.getState().toggleListening();
+    store.getState().openMode({ listen: true });
+    expect(listen).not.toHaveBeenCalled();
+    expect(store.getState().input).toBe('idle');
+    store.getState().setLiveActive(false);
+    store.getState().toggleListening();
+    expect(listen).toHaveBeenCalledTimes(1);
+    expect(store.getState().input).toBe('listening');
+  });
+
+  it('Live стартует во время пошаговой записи: запись отменяется', () => {
+    const cancel = vi.fn();
+    const { store } = setup({ listen: vi.fn(() => ({ stop: vi.fn(), cancel, result: new Promise<never>(() => {}) })) });
+    store.getState().toggleListening();
+    store.getState().setLiveActive(true);
+    expect(cancel).toHaveBeenCalled();
+  });
+});
+

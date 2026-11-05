@@ -199,7 +199,61 @@ export type { AssistantJobOrigin, AssistantJobCorrelation } from './remote/job-s
 export const assistantDecidedViaSchema = z.enum(['island', 'telegram', 'mobile']);
 export type AssistantDecidedVia = z.infer<typeof assistantDecidedViaSchema>;
 
+/**
+ * Request голосового поручения (спека «Голос↔Ассистент», §4, T2): хост-сторона запись «человек поручил, Live делегировал».
+ * Методы только локальные (остров): в remote-списках их нет, `jobs.submit` телефона по-прежнему ставит `mobile`.
+ * `originKey` хост выводит из исходных `voiceSessionId` + `delegationId`: клиент при восстановлении шлёт прежние id.
+ */
+const requestId = z.string().min(1).max(128);
+const requestConsumer = z.string().min(1).max(64);
+export const assistantRequestMethodSchemas = {
+  'requests.submit': z.strictObject({
+    /** Разговор острова, а не голосовая сессия. */
+    conversationId: z.string().min(1).max(128),
+    voiceSessionId: z.string().min(1).max(128),
+    delegationId: z.string().min(1).max(128),
+    /** Без поля хост берёт `delegationId`: связь job требует turnId. */
+    turnId: z.string().min(1).max(128).optional(),
+    text: z.string().min(1).max(4000),
+    /** Последние реплики и открытые Request; хост хранит как есть (не больше 16 КБ в JSON). */
+    context: z.record(z.string(), z.unknown()).optional(),
+    transcriptPartial: z.boolean().optional(),
+  }),
+  'requests.list': z.strictObject({ conversationId: z.string().min(1).max(128), consumer: requestConsumer }),
+  /** Потребитель получил итог: `revision` — ревизия финального состояния job, как в `jobs.ackInline`. */
+  'requests.ack': z.strictObject({ requestId, consumer: requestConsumer, revision: z.number().int().nonnegative() }),
+} as const;
+
+/**
+ * Локальная телеметрия голоса (спека «Голос↔Ассистент», §11, T6): остров присылает числа и перечисления, что измерил сам
+ * (`voice.telemetry.record`); хост дописывает свои (`link_request_ms`, `job_duration_ms`, `superseded_count`, `voice_seconds`,
+ * `voice_cost_estimate_usd`). Текстовых полей нет: ни аудио, ни транскрипта, ни текста итога. Чтение для приёмки — `voice.telemetry.list`.
+ * Методы только локальные: в remote-списках их нет. Без `requestId` запись относится к сессии, с ним — к Request.
+ */
+const telemetryMs = z.number().int().nonnegative().max(86_400_000);
+export const voiceTelemetryMethodSchemas = {
+  'voice.telemetry.record': z.strictObject({
+    voiceSessionId: z.string().min(1).max(128),
+    requestId: z.string().min(1).max(128).optional(),
+    firstAudioMs: telemetryMs.optional(),
+    ackAudible: z.union([z.boolean(), z.literal('unknown')]).optional(),
+    delegationToSubmitMs: telemetryMs.optional(),
+    transcriptWaitMs: telemetryMs.optional(),
+    resultHoldMs: telemetryMs.optional(),
+    speechState: z.enum(['queued', 'submitted', 'played', 'unknown', 'dropped']).optional(),
+    interrupts: z.number().int().nonnegative().max(10_000).optional(),
+    /** Decisions эмоции (V2), итоги сессии: только числа и флаг. */
+    decisionsReceived: z.number().int().nonnegative().max(1_000_000).optional(),
+    decisionsRejected: z.number().int().nonnegative().max(1_000_000).optional(),
+    decisionsInputTokens: z.number().int().nonnegative().max(1_000_000_000).optional(),
+    decisionsFallback: z.boolean().optional(),
+  }),
+  'voice.telemetry.list': z.strictObject({ limit: z.number().int().min(1).max(500).optional() }),
+} as const;
+
 export const assistantMethodSchemas = {
+  ...assistantRequestMethodSchemas,
+  ...voiceTelemetryMethodSchemas,
   'assistant.ask': z.object({
     text: z.string().min(1).max(4000),
     /** `null` — первый готовый провайдер (`claude`, `glm`, `codex`). */
@@ -276,7 +330,98 @@ export type CardDecideResult =
   | { applied: true; error: string | null; reason: 'applied' }
   | { applied: false; error: string; reason: 'already_handled' | 'expired' | 'not_found' | 'failed' };
 
+/**
+ * Итог job (`JobResult`, план голоса T1): `cards` и `toolRefs` записал хост, не модель. В `toolRefs` нет аргументов
+ * вызовов, в `cards` — только id и вид карточки.
+ */
+export interface AssistantRequestJobResult {
+  answer: string;
+  capturedAt: number;
+  cards: Array<{ cardId: string; kind: string }>;
+  toolRefs: Array<{ tool: string; ok: boolean; at: number }>;
+}
+
+/** Состояние job в Request: проекция без логов и argv. `result` — итог прогона; `null`, пока его нет (или он не снимался). */
+export interface AssistantRequestJob {
+  jobId: string;
+  state: 'queued' | 'running' | 'needs_confirmation' | 'completed' | 'failed' | 'cancelled';
+  revision: number;
+  resultSummary: string | null;
+  result: AssistantRequestJobResult | null;
+}
+
+/**
+ * Request на хосте. `version` отдельна от `job.revision`; `delivery` — ревизия job, доставленная потребителю.
+ *
+ * Ворота очереди (спека §5 п.5): пока у разговора есть более новый Request, чья связь не определена (job ещё идёт и не
+ * вызвал `link_request`), итог этого Request не доставлен потребителю `live` (так хост называет потребителя Live) и не вытеснен, `gate` — `held`: итог не
+ * озвучивать. Это касается и уже `completed` итога. `heldSince` — когда появился удерживающий Request, `heldBy` — его
+ * `requestId`; без удержания оба `null`. Озвучивать можно, когда `stale === false` и `gate === 'open'`.
+ * `stale` — Request вытеснен (`supersededBy` не `null`): итог неактуален, завершённый job при этом остаётся
+ * `completed`, а не выдаётся за отменённый.
+ */
+export interface AssistantRequestView {
+  requestId: string;
+  originKey: string;
+  conversationId: string;
+  seq: number;
+  version: number;
+  text: string;
+  context: Record<string, unknown> | null;
+  jobId: string;
+  supersededBy: string | null;
+  transcriptPartial: boolean;
+  delivery: Record<string, number>;
+  /**
+   * Связь с прежними (`link_request`, спека §5, T5); `null` — job ещё не вызвал `link_request`. `independent` — прежние
+   * не затронуты; `supersedes` — вытеснил перечисленные Request (`requestId` в `supersedes`): их `version` поднята, у них
+   * `supersededBy` этого Request.
+   */
+  link: { kind: 'independent' | 'supersedes'; supersedes: string[]; linkedAt: number } | null;
+  gate: 'open' | 'held';
+  heldSince: number | null;
+  heldBy: string | null;
+  stale: boolean;
+  createdAt: number;
+  updatedAt: number;
+  job: AssistantRequestJob;
+}
+
+export type AssistantRequestAck = { ok: boolean; reason: 'acked' | 'already_acked' | 'stale' | 'not_found' | 'not_terminal' };
+
+/** Строка телеметрии голоса (поля — имена из спеки §11); `null` — не измерено. Только числа, перечисления и id. */
+export interface VoiceTelemetryRow {
+  voice_session_id: string;
+  /** `null` — запись уровня сессии. */
+  request_id: string | null;
+  at: number;
+  first_audio_ms: number | null;
+  ack_audible: boolean | 'unknown' | null;
+  delegation_to_submit_ms: number | null;
+  transcript_wait_ms: number | null;
+  link_request_ms: number | null;
+  job_duration_ms: number | null;
+  result_hold_ms: number | null;
+  speech_state: 'queued' | 'submitted' | 'played' | 'unknown' | 'dropped' | null;
+  interrupts: number | null;
+  /** Decisions эмоции (V2): решения после дедупликации, из них отклонённые, сумма входных токенов; `null` — не измерено. */
+  decisions_received: number | null;
+  decisions_rejected: number | null;
+  decisions_input_tokens: number | null;
+  /** Модель говорила, а решений не пришло ни одного (лицо оставалось спокойным). */
+  decisions_fallback: boolean | null;
+  superseded_count: number | null;
+  voice_seconds: number | null;
+  /** Оценка стоимости голоса по ориентировочным тарифам Live и Decisions, не счёт; `null` — тариф не задан. */
+  voice_cost_estimate_usd: number | null;
+}
+
 export interface AssistantMethodResults {
+  'voice.telemetry.record': { ok: true };
+  'voice.telemetry.list': { rows: VoiceTelemetryRow[] };
+  'requests.submit': { request: AssistantRequestView; created: boolean };
+  'requests.list': { requests: AssistantRequestView[] };
+  'requests.ack': AssistantRequestAck;
   'assistant.ask': { ok: true };
   'assistant.cancel': { ok: true };
   'assistant.decide': { applied: boolean; error: string | null };

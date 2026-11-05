@@ -14,6 +14,7 @@ import {
   AGENT_TOOLS_PATH,
   ASSISTANT_MIN_VERSIONS,
   ASSISTANT_PROVIDER_ORDER,
+  JOB_CANCEL_SAFE_TOOLS,
   assistantCwd,
   bothEnv,
   clearSecret,
@@ -108,15 +109,21 @@ import { swarmMemberOf } from './swarms/spawn.js';
 import { createSwarmsService } from './swarms/swarms-service.js';
 import { createHistoryService } from './rooms/history-service.js';
 import { addRoomMember, createHumanRoom, resolveRoomProposal, sendHumanLetter } from './rooms/rooms-service.js';
-import { createAssistantEndpoint } from './assistant/assistant-endpoint.js';
+import { ASSISTANT_PATH, createAssistantEndpoint } from './assistant/assistant-endpoint.js';
+import { createJobTokens } from './assistant/job-tokens.js';
 import { createAssistantService, type AssistantService } from './assistant/assistant-service.js';
 import { createReminderStore } from './assistant/reminders.js';
 import { createCardStore } from './assistant/cards.js';
 import { createConversationStore } from './assistant/conversation-store.js';
-import { createJobs } from './assistant/jobs.js';
+import { createJobs, type Job } from './assistant/jobs.js';
+import { createRequests } from './assistant/requests.js';
+import { createRequestLinker, type RequestLinker } from './assistant/request-link.js';
+import { createRequestStatus, type RequestStatusReader } from './assistant/request-status.js';
+import { createJobPrompt } from './assistant/job-context.js';
 import { createJobExecutor } from './assistant/job-executor.js';
 import { createLiveClient } from './voice/live-client.js';
 import { createVoiceSessionService } from './voice/voice-session-service.js';
+import { createVoiceTelemetry, LIVE_USD_PER_MINUTE } from './voice/telemetry.js';
 import { dailyBudget } from './voice/budget.js';
 import { AGENT_BROWSER_PATH, createBrowserEndpoint } from './agent/browser-endpoint.js';
 import { createHookServer } from './hooks/hook-server.js';
@@ -434,12 +441,20 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   // Приёмник инструментов помощника (задача 8) нужен серверу хуков при создании, сам сервис — после сессий.
   // eslint-disable-next-line prefer-const -- поздняя привязка: замыкание приёмника читает её раньше присваивания
   let assistantService: AssistantService | undefined;
+  // Связь голосовых поручений (T5): строится после jobs и Request, а сервис зовёт её уже при вызове инструмента job.
+  // eslint-disable-next-line prefer-const -- поздняя привязка: сервис создаётся раньше jobs
+  let assistantLinker: RequestLinker | undefined;
+  // eslint-disable-next-line prefer-const -- поздняя привязка: Request создаются после сервиса помощника
+  let assistantStatus: RequestStatusReader | undefined;
+  // Токены job помощника (план голоса, T1): у каждого job свой токен MCP, токен разговора ему не отдаётся.
+  const assistantJobTokens = createJobTokens();
   const assistantEndpoint = createAssistantEndpoint({
     log,
-    tool: (name, args) =>
+    jobTokens: assistantJobTokens,
+    tool: (name, args, caller) =>
       assistantService === undefined
         ? Promise.resolve({ status: 503, body: { error: 'the assistant is not ready' } })
-        : assistantService.tool(name, args),
+        : assistantService.tool(name, args, caller),
   });
   const sessionEndpoint = createSessionEndpoint({
     authenticate: (req) => browserEndpoint.authenticate(req),
@@ -762,6 +777,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       : null;
   };
   const assistantLaunchEnv = async (entry: ProviderEntry): Promise<NodeJS.ProcessEnv> => providerLaunchEnv(entry, process.env, {}, await secretOf(entry));
+  const assistantCards = createCardStore(sideDb);
   const reminders = createReminderStore({ home: parleyHome(), log: (line) => log.info(line) });
   assistantService = createAssistantService({
     broadcast: (event, data) => handle.context.broadcast(event, data),
@@ -817,7 +833,15 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     launchEnv: assistantLaunchEnv,
     binary: (command) => findRunnerBinary(command, process.env),
     reminders,
-    cards: createCardStore(sideDb),
+    cards: assistantCards,
+    jobTools: assistantJobTokens,
+    requestLink: {
+      link: (jobId, raw) => assistantLinker?.link(jobId, raw) ?? { ok: false, status: 409, error: 'link_request is not ready' },
+      proposeRefusal: (jobId) => assistantLinker?.proposeRefusal(jobId) ?? null,
+    },
+    requestStatus: {
+      status: (jobId) => assistantStatus?.status(jobId) ?? { ok: false, status: 409, error: 'request_status is not ready' },
+    },
     conversations: createConversationStore(sideDb),
     home: parleyHome(),
     log: (line) => log.info(line),
@@ -825,6 +849,9 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   });
   const reminderTarget = assistantService;
 
+  // Вход job голосового Request (текст, контекст, открытые Request): Request создаётся после jobs, поэтому поздняя привязка.
+  // eslint-disable-next-line prefer-const -- поздняя привязка: замыкание executor читает её раньше присваивания
+  let jobPrompt: ((job: Job) => string) | undefined;
   // Jobs помощника: отдельный прогон CLI на job; перед стартом хоста сверяются «зависшие» running, при остановке прогоны гасятся.
   const assistantJobs = createJobs({
     db: sideDb,
@@ -834,9 +861,27 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       launchEnv: assistantLaunchEnv,
       binary: (command) => findRunnerBinary(command, process.env),
       cwd: assistantCwd(parleyHome()),
+      tokens: assistantJobTokens,
+      promptOf: (job) => jobPrompt?.(job) ?? job.requestText,
+      endpointUrl: () => {
+        const origin = hookServer.origin();
+        return origin === null ? null : `${origin}${ASSISTANT_PATH}`;
+      },
     }),
     defaultProvider: () => assistantService?.settings()?.provider ?? ASSISTANT_PROVIDER_ORDER[0] ?? 'claude',
     log: (line) => log.info(line),
+  });
+  // Request голосовых поручений: durable в той же базе, связан с job по ключу; закрытие голоса job не отменяет.
+  const assistantRequests = createRequests({ db: sideDb, jobs: assistantJobs });
+  jobPrompt = createJobPrompt({ requests: assistantRequests });
+  assistantStatus = createRequestStatus({ requests: assistantRequests });
+  assistantLinker = createRequestLinker({
+    db: sideDb,
+    requests: assistantRequests,
+    jobs: assistantJobs,
+    cards: assistantCards,
+    tokens: assistantJobTokens,
+    safeTools: JOB_CANCEL_SAFE_TOOLS,
   });
   assistantJobs.onJobChanged((job) => handle.context.broadcast('assistant.job.changed', { jobId: job.jobId, state: job.state, revision: job.revision }));
   assistantService.onCardChanged((change) => handle.context.broadcast('assistant.card.changed', change));
@@ -983,12 +1028,21 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   const initialConfig = (await loadConfig()).config;
   let remoteVoice = initialConfig.remoteVoice;
   let voiceDailyMinutes = initialConfig.voiceDailyMinutes;
+  // Локальная телеметрия голоса (T6): итоговый расход закрытой сессии перезаписывает прежнюю оценку.
+  const voiceTelemetry = createVoiceTelemetry({ db: sideDb, requests: assistantRequests, jobs: assistantJobs, usdPerMinute: () => LIVE_USD_PER_MINUTE });
   // Одна сессия на хост; ключ OpenAI читает live-client из `voice:openai` в момент вызова.
   const voiceSessions = createVoiceSessionService({
     db: sideDb,
     live: createLiveClient(),
     dailyMinutes: () => voiceDailyMinutes,
-    onClosed: (voiceSessionId, reason) => handle.context.broadcast('voice.session.closed', { voiceSessionId, reason }),
+    onClosed: (voiceSessionId, reason) => {
+      try {
+        voiceTelemetry.refreshSession(voiceSessionId);
+      } catch {
+        // телеметрия не мешает закрытию голоса
+      }
+      handle.context.broadcast('voice.session.closed', { voiceSessionId, reason });
+    },
   });
   // Остановка хоста и выключение платного голоса закрывают открытую сессию: звук идёт напрямую в OpenAI и иначе тарифицировался бы до их лимита.
   const closeActiveVoice = async (): Promise<void> => {
@@ -1030,6 +1084,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     browserAgent: browserEndpoint,
     send,
     assistant: assistantService,
+    assistantRequests,
+    voiceTelemetry,
     assistantJobs: {
       ...assistantJobs,
       ackInline(jobId, rev) {

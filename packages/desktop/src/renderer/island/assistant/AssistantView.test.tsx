@@ -11,6 +11,7 @@ import type { AssistantProposal, AssistantState } from '@parley/protocol';
 import { S } from '../../../shared/strings.js';
 import * as engineModule from '../swarm/engine.js';
 import { AssistantView, type AssistantViewProps } from './AssistantView.js';
+import { hotkeyLabel } from './labels.js';
 import { HOST_IDLE } from './store.js';
 import type { VoiceFrame } from './voice-features.js';
 
@@ -622,5 +623,191 @@ describe('речь: лицо, значок динамика, кадр голос
     const engines = spyEngines();
     render(<AssistantView {...props({ input: 'speaking', reducedMotion: true }, { mood: 'joy' })} />);
     expect(engines[0]!.setSpec).toHaveBeenCalledWith(expect.objectContaining({ shape: 'face', emo: 'joy' }), expect.any(Number), true);
+  });
+});
+
+describe('Live-голос (T3)', () => {
+  const live = (patch: Partial<NonNullable<AssistantViewProps['live']>> = {}): NonNullable<AssistantViewProps['live']> => ({
+    phase: 'idle',
+    humanSpeaking: false,
+    modelPlaying: false,
+    checking: false,
+    emotion: 'calm',
+    notice: null,
+    onToggle: vi.fn(),
+    ...patch,
+  });
+
+  it('рой следует за Live: модель говорит — лицо с эмоцией, человек — облако, проверка — сфера; без Live — по хосту', () => {
+    const { rerender } = render(<AssistantView {...props({ live: live({ phase: 'live', modelPlaying: true, emotion: 'joy' }) })} />);
+    expect(screen.getByTestId('swarm').getAttribute('data-shape')).toBe('face');
+    expect(screen.getByTestId('swarm').getAttribute('data-emo')).toBe('joy');
+    rerender(<AssistantView {...props({ live: live({ phase: 'live', humanSpeaking: true }) })} />);
+    expect(screen.getByTestId('swarm').getAttribute('data-shape')).toBe('cloud');
+    rerender(<AssistantView {...props({ live: live({ phase: 'live', checking: true }) })} />);
+    expect(screen.getByTestId('swarm').getAttribute('data-shape')).toBe('sphere');
+    rerender(<AssistantView {...props({ live: live({ phase: 'idle', modelPlaying: true }) })} />);
+    expect(screen.getByTestId('swarm').getAttribute('data-shape')).toBe('cloud');
+  });
+
+  it('без live кнопки нет: пошаговый голос работает как раньше', () => {
+    render(<AssistantView {...props()} />);
+    expect(screen.queryByTestId('assistant-live')).toBeNull();
+    expect((screen.getByTestId('assistant-mic') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('кнопка запускает Live; во время сессии вид компактный (V4), кнопок остановки в нём нет — диалог завершают Esc и хоткей', () => {
+    const onToggle = vi.fn();
+    const { rerender } = render(<AssistantView {...props({ live: live({ onToggle }) })} />);
+    fireEvent.click(screen.getByTestId('assistant-live'));
+    expect(onToggle).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('assistant-live').getAttribute('aria-label')).toBe(S.assistant.live.start);
+    for (const phase of ['connecting', 'live', 'closing'] as const) {
+      rerender(<AssistantView {...props({ live: live({ phase, onToggle }) })} />);
+      expect(screen.queryByTestId('assistant-live')).toBeNull();
+      expect(screen.queryByTestId('assistant-mic')).toBeNull();
+    }
+  });
+
+  it('VA-13: сообщение об отказе показано, а ввод текста и микрофон остаются доступны', () => {
+    render(<AssistantView {...props({ live: live({ notice: S.assistant.live.noKey }) })} />);
+    expect(screen.getByTestId('assistant-live-notice').textContent).toBe(S.assistant.live.noKey);
+    expect((screen.getByTestId('assistant-input') as HTMLInputElement).disabled).toBe(false);
+    expect((screen.getByTestId('assistant-mic') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('T4: итог карточкой и удержанный итог показаны, карточку можно убрать', () => {
+    const onDismissResult = vi.fn();
+    render(
+      <AssistantView
+        {...props({
+          live: live({
+            phase: 'live',
+            results: [
+              { requestId: 'req-1', text: 'Two rooms are waiting.', kind: 'card' },
+              { requestId: 'req-2', text: '', kind: 'held' },
+            ],
+            onDismissResult,
+          }),
+        })}
+      />,
+    );
+    expect(screen.getByTestId('assistant-live-result-card').textContent).toContain('Two rooms are waiting.');
+    expect(screen.getByTestId('assistant-live-result-held').textContent).toBe(S.assistant.live.resultHeld);
+    fireEvent.click(screen.getByLabelText(S.assistant.live.dismissResult));
+    expect(onDismissResult).toHaveBeenCalledWith('req-1');
+  });
+
+  it('пока идёт запись пошагового голоса, Live не запускается', () => {
+    render(<AssistantView {...props({ input: 'listening', listenStartedAt: 0, live: live() })} />);
+    expect((screen.getByTestId('assistant-live') as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
+describe('компактный вид во время Live (V4)', () => {
+  const live = (patch: Partial<NonNullable<AssistantViewProps['live']>> = {}): NonNullable<AssistantViewProps['live']> => ({
+    phase: 'live',
+    humanSpeaking: false,
+    modelPlaying: false,
+    notice: null,
+    onToggle: vi.fn(),
+    ...patch,
+  });
+  const busyHost: Partial<AssistantState> = { phase: 'answering', question: 'Who is working?', answer: 'Two agents.' };
+  const HIDDEN = ['assistant-input', 'assistant-mic', 'assistant-live', 'assistant-speak', 'assistant-status', 'assistant-pending', 'assistant-history', 'assistant-question', 'assistant-answer', 'assistant-queued'];
+
+  it.each(['connecting', 'live', 'closing'] as const)('фаза %s: только лицо; ввод, кнопки, подсказки, история, ответ, очередь, «needs you» и подпись скрыты', (phase) => {
+    render(
+      <AssistantView
+        {...props(
+          {
+            live: live({ phase }),
+            pending: { name: 'Auth', total: 2 },
+            history: [{ id: 1, question: 'Earlier?', answer: 'Yes.' }],
+            queue: [{ id: 1, text: 'Later' }],
+            draft: 'half-typed',
+          },
+          busyHost,
+        )}
+      />,
+    );
+    expect(screen.getByTestId('assistant-view').querySelectorAll('canvas')).toHaveLength(1);
+    expect(screen.getByTestId('assistant-view').dataset.compact).toBe('true');
+    for (const id of HIDDEN) expect(screen.queryByTestId(id), id).toBeNull();
+    expect(screen.queryByText(S.assistant.escToClose)).toBeNull();
+    expect(screen.queryByText(S.assistant.hotkeyToTalk(hotkeyLabel('Alt+Space')))).toBeNull();
+    expect(screen.queryByText('Earlier?')).toBeNull();
+    expect(screen.getByTestId('assistant-scroll').childElementCount).toBe(0);
+  });
+
+  it('рой тот же элемент, что в обычном виде: при смене режима лицо не пересоздаётся и не прыгает', () => {
+    const { rerender } = render(<AssistantView {...props({ live: live({ phase: 'idle' }) })} />);
+    const canvas = screen.getByTestId('assistant-view').querySelector('canvas');
+    expect(canvas).not.toBeNull();
+    rerender(<AssistantView {...props({ live: live() })} />);
+    expect(screen.getByTestId('assistant-view').querySelector('canvas')).toBe(canvas);
+    expect(screen.getByTestId('assistant-view').querySelectorAll('canvas')).toHaveLength(1);
+  });
+
+  it('карточка подтверждения остаётся с рабочими кнопками', () => {
+    const p = props({ live: live() }, { phase: 'awaiting-confirm', proposal: PROPOSAL });
+    render(<AssistantView {...p} />);
+    expect(screen.getByTestId('assistant-card')).toBeTruthy();
+    expect(screen.queryByTestId('assistant-input')).toBeNull();
+    act(() => void vi.advanceTimersByTime(500));
+    fireEvent.click(screen.getByTestId('assistant-send'));
+    expect(p.onDecide).toHaveBeenCalledWith('send');
+    fireEvent.click(screen.getByTestId('assistant-cancel'));
+    expect(p.onDecide).toHaveBeenCalledWith('cancel');
+  });
+
+  it('итоги поручений голоса видны, карточку можно убрать', () => {
+    const onDismissResult = vi.fn();
+    render(
+      <AssistantView
+        {...props({
+          live: live({
+            results: [
+              { requestId: 'req-1', text: 'Two rooms are waiting.', kind: 'card' },
+              { requestId: 'req-2', text: '', kind: 'held' },
+            ],
+            onDismissResult,
+          }),
+        })}
+      />,
+    );
+    expect(screen.getByTestId('assistant-live-result-card').textContent).toContain('Two rooms are waiting.');
+    expect(screen.getByTestId('assistant-live-result-held')).toBeTruthy();
+    fireEvent.click(screen.getByLabelText(S.assistant.live.dismissResult));
+    expect(onDismissResult).toHaveBeenCalledWith('req-1');
+  });
+
+  it('уведомление — одна строка: отказ Live важнее уведомления острова, а оно — причины закрытой карточки', () => {
+    const { rerender } = render(<AssistantView {...props({ live: live({ notice: S.assistant.live.noKey }), notice: 'Island notice', cardError: 'Card closed' })} />);
+    expect(screen.getByTestId('assistant-live-notice').textContent).toBe(S.assistant.live.noKey);
+    expect(screen.queryByText('Island notice')).toBeNull();
+    expect(screen.queryByText('Card closed')).toBeNull();
+    rerender(<AssistantView {...props({ live: live(), notice: 'Island notice', cardError: 'Card closed' })} />);
+    expect(screen.getByTestId('assistant-notice').textContent).toBe('Island notice');
+    expect(screen.queryByText('Card closed')).toBeNull();
+    rerender(<AssistantView {...props({ live: live(), cardError: 'Card closed' })} />);
+    expect(screen.getByTestId('assistant-notice').textContent).toBe('Card closed');
+  });
+
+  it('ошибка карточки при открытой карточке показывается на ней, а не второй строкой', () => {
+    render(<AssistantView {...props({ live: live(), cardError: 'Send failed' }, { phase: 'awaiting-confirm', proposal: PROPOSAL })} />);
+    expect(screen.getAllByText('Send failed')).toHaveLength(1);
+    expect(screen.getByTestId('assistant-card').textContent).toContain('Send failed');
+  });
+
+  it('после idle обычный вид возвращается с черновиком и историей', () => {
+    const base = { draft: 'half-typed', history: [{ id: 1, question: 'Earlier?', answer: 'Yes.' }] };
+    const { rerender } = render(<AssistantView {...props({ ...base, live: live() })} />);
+    expect(screen.queryByTestId('assistant-input')).toBeNull();
+    rerender(<AssistantView {...props({ ...base, live: live({ phase: 'idle' }) })} />);
+    expect((screen.getByTestId('assistant-input') as HTMLInputElement).value).toBe('half-typed');
+    expect(screen.getByText('Earlier?')).toBeTruthy();
+    expect(screen.getByTestId('assistant-status')).toBeTruthy();
+    expect(screen.getByText(S.assistant.escToClose)).toBeTruthy();
   });
 });

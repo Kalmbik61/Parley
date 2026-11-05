@@ -6,6 +6,7 @@
 
 import type { AssistantState } from '@parley/protocol';
 import type { InputPhase } from '../assistant/store.js';
+import type { LiveCallPhase } from '../live/controller.js';
 
 export type SwarmPalette = 'amber' | 'coral' | 'gray';
 export type SwarmShape = 'dot' | 'cloud' | 'sphere' | 'face';
@@ -179,6 +180,38 @@ export function swarmSpecFor(host: AssistantState, input: SwarmInput, mini: bool
         spec = { ...BASE };
     }
   }
+  return mini && spec.shape === 'cloud' ? { ...spec, shape: 'dot' } : spec;
+}
+
+/** Что рою нужно знать о Live-голосе: фаза звонка, сигналы речи, «проверяю» и эмоция модели. */
+export interface SwarmLive {
+  phase: LiveCallPhase;
+  humanSpeaking: boolean;
+  modelPlaying: boolean;
+  /** Есть Request этой сессии без доставленного или завершённого итога. */
+  checking: boolean;
+  emotion: SwarmEmotion;
+}
+
+/** Идёт ли Live (любая фаза, кроме `idle`): тогда рой смотрит на разговор, а не на хост и пошаговый голос. */
+export const liveActive = (live: Pick<SwarmLive, 'phase'> | undefined): boolean => live !== undefined && live.phase !== 'idle';
+
+/**
+ * Облик по Live-разговору. Приоритет: сбой канала (эмоция `error` — коралловое лицо, что бы ни звучало), затем модель
+ * говорит (лицо с эмоцией, янтарь), затем говорит человек
+ * (облако слушания), затем идёт проверка (сфера с дугой, как фаза `tool` хоста), затем подключение и закрытие (сфера,
+ * «дышит»), иначе спокойная сфера. В мини-виде лица нет — сфера с палитрой лица, облако рисуется точкой.
+ */
+export function swarmSpecForLive(live: SwarmLive, mini: boolean): SwarmSpec {
+  let spec: SwarmSpec;
+  if (live.modelPlaying || live.emotion === 'error') {
+    const emo = live.emotion;
+    spec = { ...BASE, shape: 'face', emo, pal: emo === 'error' ? 'coral' : 'amber', dim: EMO[emo].dim ?? 1 };
+    if (mini) spec = { ...spec, shape: 'sphere', emo: null };
+  } else if (live.humanSpeaking) spec = { ...BASE, fx: 'listen' };
+  else if (live.checking) spec = { ...BASE, shape: 'sphere', fx: 'arc', rot: 0.1 };
+  else if (live.phase === 'connecting' || live.phase === 'closing') spec = { ...BASE, shape: 'sphere' };
+  else spec = { ...BASE, shape: 'sphere', rot: 0.3 };
   return mini && spec.shape === 'cloud' ? { ...spec, shape: 'dot' } : spec;
 }
 

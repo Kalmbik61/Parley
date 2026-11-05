@@ -155,6 +155,9 @@ export const REMOTE_FORBIDDEN: readonly string[] = [
   'backlog.*',
   'plans.*',
   'assistant.*',
+  // Мост делегаций и телеметрия Live острова (T2, T6): только локальные методы хоста, телефону их не дают.
+  'requests.*',
+  'voice.telemetry.*',
   'browser.agentResult',
 ];
 
