@@ -349,19 +349,26 @@ export function BrowserSurface({ workKey, place, url, viewport, visible, bridge,
   useEffect(() => {
     setAuthFailed(false);
   }, [authRequest?.requestId]);
+  // Какой запрос на экране сейчас: ответ main на старый запрос (ack или отказ) приходит, когда уже мог встать новый, и его
+  // побочные действия — снять оверлей, вернуть фокус странице, показать ошибку — касаются только текущего запроса.
+  const currentAuthIdRef = useRef<string | null>(null);
+  currentAuthIdRef.current = authRequest?.requestId ?? null;
   const answerAuth = (credentials: { username: string; password: string } | null): void => {
     const request = authRequest;
     if (request === null) return;
     bridge.browser.authResponse(request.requestId, credentials).then(
       () => {
-        // Оверлей снимается по подтверждению main и только свой: за это время мог прийти повтор (новый requestId).
-        setAuthRequest((current) => (current !== null && current.requestId === request.requestId ? null : current));
+        // Оверлей снимается по подтверждению main и только свой: за это время мог прийти повтор (новый requestId) или main
+        // уже снял запрос отменой — тогда ни снимать, ни трогать фокус нечего.
+        if (currentAuthIdRef.current !== request.requestId) return;
+        setAuthRequest(null);
         // Фокус — странице, как после закрытого редактора: оверлей держал его, и клавиши корня иначе не доходили бы.
         viewRef.current?.focus();
       },
       (error: unknown) => {
         console.warn('[parley] authResponse failed', error);
-        setAuthFailed(true);
+        // Ошибка отправки — на запрос, который не дошёл; новый запрос не пострадавший.
+        if (currentAuthIdRef.current === request.requestId) setAuthFailed(true);
       },
     );
   };

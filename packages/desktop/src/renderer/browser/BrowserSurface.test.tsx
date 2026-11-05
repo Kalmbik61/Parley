@@ -260,16 +260,52 @@ describe('BrowserSurface (тест 3)', () => {
       expect(screen.getByRole('alert').textContent).toBe("Couldn't send the credentials. Try again or cancel.");
     });
 
-    it('подтверждение старого ответа не снимает более новый запрос (повтор после неверного пароля)', async () => {
-      openedTab();
+    it('подтверждение старого ответа не снимает более новый запрос и не отдаёт фокус странице (повтор после неверного пароля)', async () => {
+      setBrowserTab('http://localhost:5173/');
+      renderWork();
+      const view = arm(webview(), 42);
+      fire(view, 'dom-ready');
+      const focus = vi.spyOn(view, 'focus');
       let ack: () => void = () => undefined;
       bridge.browser.authResponse = vi.fn(() => new Promise<void>((resolve) => (ack = resolve)));
       act(() => bridge.emitAuthRequest(REQUEST));
       submit();
       act(() => bridge.emitAuthRequest({ ...REQUEST, requestId: 'a2', retry: true }));
+      const username = screen.getByLabelText('Username');
+      expect(document.activeElement).toBe(username);
       await act(async () => ack());
       expect(screen.getByTestId('browser-auth')).toBeTruthy();
       expect(screen.getByRole('alert').textContent).toBe('Wrong username or password. Try again.');
+      expect(document.activeElement).toBe(screen.getByLabelText('Username'));
+      expect(focus).not.toHaveBeenCalled();
+    });
+
+    it('отказ на старый ответ не вешает ошибку отправки на более новый запрос', async () => {
+      openedTab();
+      let reject: (error: Error) => void = () => undefined;
+      bridge.browser.authResponse = vi.fn(() => new Promise<void>((_resolve, fail) => (reject = fail)));
+      act(() => bridge.emitAuthRequest(REQUEST));
+      submit();
+      act(() => bridge.emitAuthRequest({ ...REQUEST, requestId: 'a2', retry: true }));
+      await act(async () => reject(new Error('invalid credentials')));
+      expect(screen.getByTestId('browser-auth')).toBeTruthy();
+      expect(screen.getByRole('alert').textContent).toBe('Wrong username or password. Try again.');
+    });
+
+    it('ack ответа, запрос которого main уже снял отменой, фокус странице не возвращает', async () => {
+      setBrowserTab('http://localhost:5173/');
+      renderWork();
+      const view = arm(webview(), 42);
+      fire(view, 'dom-ready');
+      const focus = vi.spyOn(view, 'focus');
+      let ack: () => void = () => undefined;
+      bridge.browser.authResponse = vi.fn(() => new Promise<void>((resolve) => (ack = resolve)));
+      act(() => bridge.emitAuthRequest(REQUEST));
+      submit();
+      act(() => bridge.emitAuthCancel({ requestId: 'a1', webContentsId: 42 }));
+      await act(async () => ack());
+      expect(screen.queryByTestId('browser-auth')).toBeNull();
+      expect(focus).not.toHaveBeenCalled();
     });
   });
 
