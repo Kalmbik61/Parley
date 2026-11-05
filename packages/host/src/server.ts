@@ -75,11 +75,16 @@ export interface RemoteLaunchPolicy {
    * комнаты. Читается до обработчика `rooms.archive` и `rooms.delete` роли `remote`.
    */
   roomState(projectPath: string, workId: string, roomId: string): Promise<RemoteRoomState | null>;
+  /**
+   * Участники новой комнаты по свежей карте работы (b-023): `null` — нет такой работы. Читается до обработчика
+   * `rooms.create` роли `remote`; `autonomous` — кто-то из них в автономном прогоне.
+   */
+  membersState(projectPath: string, workId: string, members: readonly string[]): Promise<RemoteRoomState | null>;
 }
 
 export interface RemoteRoomState {
   workArchived: boolean;
-  /** Комната идущего автономного прогона: телефон её не меняет. */
+  /** Комната (у `membersState` — кто-то из участников) идущего автономного прогона: телефон её не меняет. */
   autonomous: boolean;
 }
 
@@ -191,6 +196,20 @@ async function remoteRoomGate(params: unknown, policy: RemoteLaunchPolicy): Prom
   if (state === null) throw new HostError('bad_request', 'unknown room');
   if (state.workArchived) throw new HostError('conflict', 'the work is archived');
   if (state.autonomous) throw new HostError('conflict', 'the phone does not change rooms of an autonomous run');
+}
+
+/**
+ * Проверка участников `rooms.create` до обработчика (b-023): новая комната уводит участников из прежних (`leaveOtherRooms`),
+ * и сессию автономного прогона телефон оттуда не забирает. Та же принятая гонка, что у `remoteRoomGate`: карта читается без
+ * замка, обработчик берёт свой `updateMap` позже.
+ */
+async function remoteRoomCreateGate(params: unknown, policy: RemoteLaunchPolicy): Promise<void> {
+  // Правило параметров уже проверило строки `projectPath`, `workId` и непустой список `members`.
+  const { projectPath, workId, members } = params as { projectPath: string; workId: string; members: string[] };
+  const state = await policy.membersState(projectPath, workId, members);
+  if (state === null) throw new HostError('bad_request', 'unknown project or work');
+  if (state.workArchived) throw new HostError('conflict', 'the work is archived');
+  if (state.autonomous) throw new HostError('conflict', 'the phone does not change sessions of an autonomous run');
 }
 
 /**
@@ -511,11 +530,16 @@ function handleMessage(raw: unknown, client: Client, options: ServerOptions): vo
       : null;
   const policy = options.remoteLaunch;
   const roomGated = client.role === 'remote' && policy !== undefined && REMOTE_ROOM_METHODS.has(method);
-  const gated = client.role === 'remote' && policy !== undefined && (roomGated || Object.hasOwn(REMOTE_SESSION_RULES, method));
+  const createGated = client.role === 'remote' && policy !== undefined && method === 'rooms.create';
+  const gated = client.role === 'remote' && policy !== undefined && (roomGated || createGated || Object.hasOwn(REMOTE_SESSION_RULES, method));
   // Без доверия и проверки сессии обработчик зовётся синхронно, как раньше: порядок с уведомлениями того же чанка не
   // меняется.
   const pending = gated
-    ? (roomGated ? remoteRoomGate(parsed.params, policy) : remoteSessionGate(method, parsed.params, policy)).then(() => {
+    ? (roomGated
+        ? remoteRoomGate(parsed.params, policy)
+        : createGated
+          ? remoteRoomCreateGate(parsed.params, policy)
+          : remoteSessionGate(method, parsed.params, policy)).then(() => {
         if (!policy.enabled()) throw new HostError('unknown_method', `unknown method: ${method}`);
         if (closedClients.has(client)) throw new HostError('conflict', 'the phone disconnected');
         return handler(parsed.params as never, request);
