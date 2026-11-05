@@ -98,12 +98,34 @@ handoff `docs/design/2026-11-03-jarvis-handoff/` (`ORB_MOTION_SPEC.md`, `design/
 - **Критерии приёмки:** VO-01, VO-04/05, VO-06 (голос не решает карточку), VO-07 (лимит и нет ключа → R15 с текстом);
   тесты чистых частей (выбор шаблона R15, строка хода работы, AppState → stop); typecheck/lint/тесты mobile зелёные.
 
-### T4 · Карточки на телефоне — ждёт решения человека
+### T4 · Карточки на телефоне
 
-Нужна новая remote-поверхность: проекция активных карточек помощника (`cardId`, `revision`, `kind`, краткий текст,
-`dangerous`, `expiresAt`, `jobId?`), событие и метод снимка при переподключении, правила параметров, allowlist моста и
-хоста, тесты на запрет остального. Экран: R06 поверх карточек, `cards.decide`, опасные — через `confirmWithOwner`
-(Face ID до вызова). Без решения человека не начинается.
+Решение человека 2026-11-05 (через s-38, вариант A): карточки на телефоне в этой ветке. Покрывает backlog sg-22.
+
+**T4a · Remote-поверхность карточек (хост + протокол) — параллельно T1/T2.**
+
+- **Файлы:** `packages/protocol/src/remote/cards.ts` (новый: схема и проекция), `remote/allowlist.ts` (A-список: метод
+  `cards.list`, событие `cards.changed`; правило параметров `cards.list` — `strictObject({})`), `remote/index.ts`
+  (экспорт), тесты протокола; `packages/host/src/methods/assistant.ts` (`cards.list`), `packages/host/src/host.ts`
+  (рассылка `cards.changed` из `assistantService.onCardChanged`), при необходимости метод чтения активных карточек с
+  `view` в `assistant-service.ts`; тесты хоста; тест границы моста `packages/remote/test/` (если там перечислены события).
+- **Проекция `PhoneCard`** — по явному списку полей, как `projectPhoneJob`: `cardId`, `revision`, `kind`, `state`
+  (`needs_confirmation | decided | expired | superseded`), `title` (строка «что и кому»: `target` + `where`, ≤ 120 знаков),
+  `text` (≤ 280 знаков, обрезка с «…»), `dangerous` (`true`, если у карточки `actions` есть шаг с `danger: true`, иначе
+  `false`), `expiresAt`, `jobId` (если хост связывает карточку с job, иначе поле отсутствует). Никаких `payload`, путей,
+  argv, токенов, `decidedVia`.
+- **Поверхность:** `cards.list {}` → `{cards: PhoneCard[]}` — только активные; событие `cards.changed {card: PhoneCard}`
+  — каждая смена состояния, включая терминальные (телефон убирает карточку). Имена не под `assistant.*`;
+  `assistant.*` остаётся запрещённым. Метод и событие проходят allowlist моста и хоста (общие списки протокола).
+- **Критерии приёмки:** тест проекции (лишние поля отброшены, обрезка, `dangerous`); deny-тесты: `assistant.*`
+  методы и события по-прежнему отвергаются для `remote`, `cards.list` с лишним ключом — `bad_request`; хост: `cards.list`
+  отдаёт только активные, `cards.changed` уходит на decide/expire; `cards.decide` со старой ревизией — `already_handled`
+  (тест уже есть — зелёный). typecheck/lint/тесты protocol, host, remote зелёные.
+
+**T4b · R06 на телефоне** — входит в T3: снимок `cards.list` при подключении + `cards.changed`; карточка поверх
+экрана; «Send»/«Cancel» → `cards.decide {cardId, revision, choice}`; `dangerous` → `confirmWithOwner` (Face ID) до
+вызова, отказ Face ID — ничего не отправлено; ответ `already_handled`/`expired`/`not_found` → «This card is no longer
+current», карточка убрана. Голосом карточку не решить: у контроллера нет пути к `cards.decide` (тест T1).
 
 ### T5 · Критик и безопасность (Opus) — после T1–T3
 
