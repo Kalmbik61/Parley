@@ -44,6 +44,18 @@ describe('useLiveStore', () => {
     expect(useLiveStore.getState()).toMatchObject({ humanSpeaking: true, modelPlaying: true });
   });
 
+  it('start возвращает результат и не стартует повторно, пока фаза не idle', async () => {
+    const { controller } = fakeController();
+    useLiveStore.getState().bind(controller);
+    await expect(useLiveStore.getState().start()).resolves.toEqual({ ok: true, voiceSessionId: 'live_1' });
+    await expect(useLiveStore.getState().start()).resolves.toBeNull();
+    expect(controller.start).toHaveBeenCalledTimes(1);
+  });
+
+  it('start без контроллера — null', async () => {
+    await expect(useLiveStore.getState().start()).resolves.toBeNull();
+  });
+
   it('VA-13: отказ запуска кладёт понятное сообщение в notice', async () => {
     const { controller } = fakeController({ ok: false, code: 'no_key', message: S.assistant.live.noKey });
     useLiveStore.getState().bind(controller);

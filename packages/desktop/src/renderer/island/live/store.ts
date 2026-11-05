@@ -7,7 +7,7 @@ import { create } from 'zustand';
 import { S } from '../../../shared/strings.js';
 import type { VoiceAnalysis, VoiceFrame } from '../assistant/voice-features.js';
 import type { SwarmEmotion } from '../swarm/spec.js';
-import type { LiveCallPhase, LiveController } from './controller.js';
+import type { LiveCallPhase, LiveController, LiveStartResult } from './controller.js';
 import type { LiveDelegation, LiveResultView } from './delegation.js';
 
 /** Что стору нужно для кадра голоса: анализ признаков (создаётся лениво, как у TTS) и часы кадра, мс. */
@@ -43,6 +43,8 @@ export interface LiveStoreState {
   bind(controller: LiveController | null): () => void;
   /** Подключает мост делегаций: стор отражает его итоги. Возврат — отключение. */
   attachDelegation(delegation: LiveDelegation | null): () => void;
+  /** Запуск разговора; `null` — контроллера нет или фаза не `idle` (запускать нечего). Отказ ложится в `notice`. */
+  start(): Promise<LiveStartResult | null>;
   toggle(): Promise<void>;
   /** Завершает диалог в любой фазе, кроме `idle` и `closing`: и во время подключения (`toggle` там ничего не делает). */
   end(): Promise<void>;
@@ -143,6 +145,15 @@ export const useLiveStore = create<LiveStoreState>((set, get) => {
       };
     },
 
+    async start() {
+      const { controller, phase } = get();
+      if (controller === null || phase !== 'idle') return null;
+      set({ notice: null });
+      const result = await controller.start();
+      if (!result.ok) set({ notice: result.message });
+      return result;
+    },
+
     async toggle() {
       const { controller, phase } = get();
       if (controller === null) return;
@@ -150,10 +161,7 @@ export const useLiveStore = create<LiveStoreState>((set, get) => {
         await controller.stop();
         return;
       }
-      if (phase !== 'idle') return;
-      set({ notice: null });
-      const result = await controller.start();
-      if (!result.ok) set({ notice: result.message });
+      await get().start();
     },
 
     async end() {

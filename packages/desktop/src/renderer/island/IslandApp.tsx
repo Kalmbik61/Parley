@@ -73,6 +73,7 @@ import { useWorksStore } from '../store/works.js';
 import { WorksErrorBanner } from '../components/WorksErrorBanner.js';
 import { browserRecorderDeps } from '../voice/browser-recorder.js';
 import { startRecording } from '../voice/recorder.js';
+import { runHotkey } from './assistant/hotkey.js';
 import { listen } from './assistant/listen.js';
 import { miniLabel } from './assistant/labels.js';
 import { createSpeaker } from './assistant/speaker.js';
@@ -535,7 +536,10 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
     });
     void bridge.call('assistant.state', {}).then((state) => useAssistantStore.getState().applyHost(state)).catch(() => {});
     const off = bridge.on('assistant.changed', (state) => useAssistantStore.getState().applyHost(state));
-    const offOpen = bridge.island.onAssistantOpen((request) => useAssistantStore.getState().openMode(request));
+    const offOpen = bridge.island.onAssistantOpen((request) => void runHotkey(request, configRef.current.assistant.speech?.enabled === true, {
+      assistant: useAssistantStore.getState,
+      live: useLiveStore.getState,
+    }));
     const offBlur = bridge.island.onKeyboardBlur(() => {
       if (ownerRef.current === 'assistant') hideAssistant();
       releaseKeyboard();
