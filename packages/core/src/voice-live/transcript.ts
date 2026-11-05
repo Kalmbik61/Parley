@@ -46,7 +46,7 @@ export interface TranscriptBuffer {
    * `afterMs` (`offset_ms` прежней делегации). Сборка идёт назад от последнего фрагмента и останавливается там, где
    * `splits(fromMs, toMs)` для промежутка `[endMs предыдущего, startMs следующего)` говорит «делит» (между фрагментами
    * был ответ модели). Без `splits` не делит ничто: пауза в речи человека реплику не делит, но на паузе не короче `TURN_GAP_MS`
-   * между фрагментами ставится пробел (после паузы фрагмент приходит без ведущего).
+   * между фрагментами ставится пробел, если следующий начинается с буквы/цифры (после паузы фрагмент приходит без ведущего).
    * «Закончившиеся до offset_ms» из спеки понимается как «начавшиеся не позже»: в живых данных `offset_ms` у 11 из 19
    * делегаций равен `start_ms` последнего фрагмента, и строгое сравнение по `endMs` теряло бы конец фразы.
    */
@@ -96,8 +96,8 @@ export function createTranscriptBuffer(turnGapMs = TURN_GAP_MS): TranscriptBuffe
         from -= 1;
       }
       const picked = candidates.slice(from);
-      // После паузы фрагмент приходит без ведущего пробела: на паузе не короче turnGapMs ставим пробел (glue схлопнет двойные).
-      let text = glue(picked.flatMap((item, i) => (i > 0 && item.startMs - (picked[i - 1] as TranscriptFragment).endMs >= turnGapMs ? [{ ...item, text: ` ${item.text}` }] : [item])));
+      // После паузы фрагмент приходит без ведущего пробела: на паузе не короче turnGapMs ставим пробел, если фрагмент начинается с буквы/цифры (перед знаком препинания — нет; glue схлопнет двойные).
+      let text = glue(picked.flatMap((item, i) => (i > 0 && item.startMs - (picked[i - 1] as TranscriptFragment).endMs >= turnGapMs && /^[\p{L}\p{N}]/u.test(item.text) ? [{ ...item, text: ` ${item.text}` }] : [item])));
       if (text.length > MAX_REQUEST_TEXT) text = text.slice(text.length - MAX_REQUEST_TEXT).trimStart();
       return { text, lastEndMs: (picked[picked.length - 1] as TranscriptFragment).endMs, firstStartMs: (picked[0] as TranscriptFragment).startMs };
     },

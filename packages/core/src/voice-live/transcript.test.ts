@@ -42,7 +42,7 @@ describe('TranscriptBuffer', () => {
     buffer.push(frag(' ему, начинаем разработку', 7500, 8500));
     buffer.push(frag(', обязательно скажи', 9900, 10_900));
     const afterReply = (fromMs: number, toMs: number) => fromMs <= 1000 && 1000 < toMs;
-    expect(buffer.collect(10_900, null, afterReply).text).toBe('Да, давай, напиши тогда ему, начинаем разработку , обязательно скажи');
+    expect(buffer.collect(10_900, null, afterReply).text).toBe('Да, давай, напиши тогда ему, начинаем разработку, обязательно скажи');
   });
 
   it('пробел на паузе не короче TURN_GAP_MS; без паузы склейка как есть', () => {
@@ -50,6 +50,10 @@ describe('TranscriptBuffer', () => {
     buffer.push(frag('. Тогда напиши', 0, 1000));
     buffer.push(frag('в улучшайзинг', 2500, 3500));
     expect(buffer.collect(3500, null).text).toBe('. Тогда напиши в улучшайзинг');
+    const punct = createTranscriptBuffer();
+    punct.push(frag('Всё, хорошо понял', 0, 1000));
+    punct.push(frag('. Тогда напиши', 2500, 3500));
+    expect(punct.collect(3500, null).text).toBe('Всё, хорошо понял. Тогда напиши');
     const joined = createTranscriptBuffer();
     joined.push(frag('Par', 0));
     joined.push(frag('ley', 200));

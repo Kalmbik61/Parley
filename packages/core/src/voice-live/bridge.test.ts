@@ -105,7 +105,7 @@ describe('DelegationBridge', () => {
     await h.advance(TRANSCRIPT_WAIT_MS);
     expect(h.submits).toHaveLength(1);
     expect(h.submits[0]).toMatchObject({
-      text: 'Да, давай, напиши тогда ему, начинаем разработку , обязательно скажи, что исполнители должны быть Sonnet',
+      text: 'Да, давай, напиши тогда ему, начинаем разработку, обязательно скажи, что исполнители должны быть Sonnet',
       transcriptPartial: false,
     });
   });
@@ -118,11 +118,16 @@ describe('DelegationBridge', () => {
     h.bridge.handle({ type: 'delegationCreated', delegationId: 'd1', offsetMs: 4000 });
     await h.advance(0);
     expect(h.submits[0]?.text).toBe('First half second half');
-    h.bridge.handle({ type: 'outputTranscript', text: 'Ага, понял, жду дальше.', startMs: 4500, endMs: 5500 });
-    h.human('Third part', 6000, 7000);
-    h.bridge.handle({ type: 'delegationCreated', delegationId: 'd2', offsetMs: 7000 });
+  });
+
+  it('b-027: ответ модели из ≥ REPLY_MIN_WORDS слов в паузе делит реплику (без прежней делегации)', async () => {
+    const h = setup();
+    h.human('Part A', 0, 1000);
+    h.bridge.handle({ type: 'outputTranscript', text: 'Ага, понял, жду дальше.', startMs: 1200, endMs: 2500 });
+    h.human('Part B', 3000, 4000);
+    h.bridge.handle({ type: 'delegationCreated', delegationId: 'd1', offsetMs: 4000 });
     await h.advance(0);
-    expect(h.submits[1]?.text).toBe('Third part');
+    expect(h.submits[0]?.text).toBe('Part B');
   });
 
   it('b-027: длинный повтор после первой делегации (afterMs) с паузами — целиком, не partial', async () => {
