@@ -1,4 +1,5 @@
 import type { LetterReads } from './letter-store.js';
+import { letterSeq } from './letter-tables.js';
 import { isRoomArchived } from './rooms.js';
 import { swarmOfSession } from './swarms.js';
 import { HUMAN, PARLEY, SYSTEM, type Message, type SessionResult, type WorkMap } from './types.js';
@@ -20,7 +21,7 @@ export function lastTaskGiver(map: WorkMap, letters: LetterReads, sessionId: str
       break;
     }
     if (page.length < 50) break;
-    beforeSeq = Number(page[page.length - 1]!.id.slice(2));
+    beforeSeq = letterSeq(page[page.length - 1]!.id);
   }
   if (giver == null || giver === sessionId || giver === HUMAN) return null;
   return map.sessions.some((session) => session.id === giver && session.lifecycle !== 'closed') ? giver : null;
@@ -29,7 +30,7 @@ export function lastTaskGiver(map: WorkMap, letters: LetterReads, sessionId: str
 export function reportLetterText(sessionId: string, status: SessionResult, summary: string): string {
   const line = summary.split(/\r?\n/).map((part) => part.trim()).find((part) => part !== '') ?? '';
   const excerpt = line.length > 200 ? `${line.slice(0, 199)}…` : line;
-  return `${sessionId} reported ${status}: ${excerpt}. Full summary: get_map {session: "${sessionId}", field: "summary"}`;
+  return `${sessionId} reported ${status}${excerpt === '' ? '' : `: ${excerpt}`}. Full summary: get_map {session: "${sessionId}", field: "summary"}`;
 }
 
 export function isReportLetterAbout(message: Pick<Message, 'from' | 'roomId' | 'text'>, sessionId: string): boolean {

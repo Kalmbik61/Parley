@@ -9,7 +9,9 @@ it('builds a bounded first non-empty summary line', () => {
     's-02 reported failed: Problem. Full summary: get_map {session: "s-02", field: "summary"}',
   );
   expect(reportLetterText('s-02', 'done', 'x'.repeat(201))).toContain(`${'x'.repeat(199)}…`);
-  expect(reportLetterText('s-02', 'done', '\n')).toContain('reported done: . Full summary:');
+  expect(reportLetterText('s-02', 'done', '\n')).toBe(
+    's-02 reported done. Full summary: get_map {session: "s-02", field: "summary"}',
+  );
 });
 
 describe('report letter matcher', () => {

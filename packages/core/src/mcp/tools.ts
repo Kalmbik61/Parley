@@ -891,13 +891,15 @@ async function report(
   });
   if (status !== 'progress') {
     // Письмо уже лежит, когда смена результата разбудит ожидающего по id.
-    writeLetters(context.projectPath, context.workId, (letters, current) => {
-      const giver = lastTaskGiver(current, letters, sessionId);
-      if (giver === null) return;
-      const older = letters.unreadFor(giver).filter((message) => isReportLetterAbout(message, sessionId));
-      letters.markRead(giver, older.map((message) => message.id), new Date().toISOString());
-      letters.add({ from: 'system', roomId: null, to: [giver], kind: 'note', text: reportLetterText(sessionId, status, summary) });
-    });
+    try {
+      writeLetters(context.projectPath, context.workId, (letters, current) => {
+        const giver = lastTaskGiver(current, letters, sessionId);
+        if (giver === null) return;
+        const older = letters.unreadFor(giver).filter((message) => isReportLetterAbout(message, sessionId));
+        letters.markRead(giver, older.map((message) => message.id), new Date().toISOString());
+        letters.add({ from: SYSTEM, roomId: null, to: [giver], kind: 'note', text: reportLetterText(sessionId, status, summary) });
+      });
+    } catch { /* Уведомление не должно мешать сессии сдать результат. */ }
     // Итоговые метрики в карту фиксирует общий код жизненного цикла.
     map = await finishSession(context.projectPath, context.workId, sessionId, status);
   }
@@ -1164,10 +1166,12 @@ async function waitFor(
     const found = await waitOnce(unsettledMs > 0 ? Math.min(timeLeftMs, unsettledMs + SETTLE_SLACK_MS) : timeLeftMs);
     if (target !== 'inbox') {
       if (found !== null && typeof found === 'object' && 'state' in found && (found.state === 'done' || found.state === 'failed')) {
-        writeLetters(context.projectPath, context.workId, (letters) => {
-          const reports = letters.unreadFor(sessionId).filter((message) => isReportLetterAbout(message, target));
-          letters.markRead(sessionId, reports.map((message) => message.id), new Date().toISOString());
-        });
+        try {
+          writeLetters(context.projectPath, context.workId, (letters) => {
+            const reports = letters.unreadFor(sessionId).filter((message) => isReportLetterAbout(message, target));
+            letters.markRead(sessionId, reports.map((message) => message.id), new Date().toISOString());
+          });
+        } catch { /* Сбой отметки прочтения не должен терять ответ ожидания. */ }
       }
       return found === null ? { state: 'running' } : found;
     }

@@ -1,12 +1,13 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_CONFIG } from '../config.js';
 import { addSession } from '../work/map.js';
 import { addRoom } from '../work/rooms.js';
-import { createWork, updateMap, workPaths } from '../work/store.js';
+import { createWork, readStoredMap, updateMap, workPaths } from '../work/store.js';
 import { unreadLetters, writeLetters } from '../work/letter-store.js';
+import * as letterStore from '../work/letter-store.js';
 import { createToolRunner, type ToolRunner } from './tools.js';
 
 let home: string;
@@ -36,11 +37,30 @@ beforeEach(async () => {
   });
 });
 afterEach(async () => {
+  vi.restoreAllMocks();
   delete process.env.PARLEY_HOME;
   await Promise.all([home, project].map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
 describe('report letters', () => {
+  it('finishes the report even when its notification cannot be stored', async () => {
+    vi.spyOn(letterStore, 'writeLetters').mockImplementationOnce(() => { throw new Error('letter store unavailable'); });
+    const answer = await report();
+    expect(answer.isError).not.toBe(true);
+    expect(body(answer)).toMatchObject({ status: 'done', summary: 'Finished\nDetails' });
+    expect(readStoredMap(project, workId).sessions[1]?.result).toBe('done');
+    expect(inbox()).toHaveLength(0);
+  });
+
+  it('returns the wait result even when consuming its notification fails', async () => {
+    await report();
+    vi.spyOn(letterStore, 'writeLetters').mockImplementationOnce(() => { throw new Error('letter store unavailable'); });
+    const answer = await runner('s-01').call('wait_for', { target: 's-02', timeoutSec: 1 }, undefined);
+    expect(answer.isError).not.toBe(true);
+    expect(body(answer)).toMatchObject({ state: 'done', summary: 'Finished\nDetails' });
+    expect(inbox()).toHaveLength(1);
+  });
+
   it('mails the create_session caller and wakes an inbox wait immediately', async () => {
     const waiting = runner('s-01').call('wait_for', { target: 'inbox', timeoutSec: 1 }, undefined);
     await report('\nFinished\nDetails');
