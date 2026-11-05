@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildAppend, createEventDeduper, createSourceOffsets, parseLiveEvent } from './events.js';
+import { buildAppend, createEventDeduper, createSourceOffsets, parseLiveEvent } from './live-events.js';
 
 /** Целое `decision.event` из записки V0 §3 (реальный ответ OpenAI), без изменений формы. */
 const V0_DECISION = {

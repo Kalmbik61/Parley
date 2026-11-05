@@ -9,7 +9,7 @@
  */
 import type { IslandBridge } from '../../../shared/island.js';
 import { S } from '../../../shared/strings.js';
-import { buildAppend, createEventDeduper, createSourceOffsets, parseLiveEvent, type AppendKind, type LiveEmotion, type LiveEvent } from './events.js';
+import { buildAppend, createEventDeduper, createSourceOffsets, parseLiveEvent, type AppendKind, type LiveEmotion, type LiveEvent } from '@parley/core/voice-live';
 import { humanSpeakingHysteresis, modelPlayingHysteresis, rms, type Hysteresis } from './levels.js';
 
 export type LiveCallPhase = 'idle' | 'connecting' | 'live' | 'closing';
