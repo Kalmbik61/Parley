@@ -5,7 +5,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { BrowserAuthRequest } from '../../shared/basic-auth.js';
-import { AuthPrompt } from './AuthPrompt.js';
+import { AUTH_FIELD_LIMIT, AuthPrompt } from './AuthPrompt.js';
 
 afterEach(cleanup);
 
@@ -44,5 +44,18 @@ describe('AuthPrompt', () => {
     expect(screen.getByRole('alert').textContent).toBe('Wrong username or password. Try again.');
     expect((screen.getByLabelText('Password') as HTMLInputElement).value).toBe('');
     expect(screen.getByText('Proxy')).toBeTruthy();
+  });
+
+  it('поля ограничены теми же 1024 знаками, что и ответ в main', () => {
+    render(<AuthPrompt request={REQUEST} onSubmit={vi.fn()} />);
+    expect(AUTH_FIELD_LIMIT).toBe(1024);
+    expect(screen.getByLabelText('Username').getAttribute('maxlength')).toBe('1024');
+    expect(screen.getByLabelText('Password').getAttribute('maxlength')).toBe('1024');
+  });
+
+  it('failed — строка «Couldn\'t send the credentials», вместо строки неверного пароля', () => {
+    render(<AuthPrompt request={{ ...REQUEST, retry: true }} failed onSubmit={vi.fn()} />);
+    const alerts = screen.getAllByRole('alert').map((node) => node.textContent);
+    expect(alerts).toEqual(["Couldn't send the credentials. Try again or cancel."]);
   });
 });

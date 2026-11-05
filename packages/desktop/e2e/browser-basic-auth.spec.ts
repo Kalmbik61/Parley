@@ -231,5 +231,14 @@ test.describe('HTTP basic-auth во встроенном браузере', () =
     const snapshot = await agentTool(opened, 'browser_snapshot', { tab });
     expect(snapshot.isError, snapshot.text).toBe(false);
     expect(snapshot.text).toContain('HTTP basic auth');
+
+    // Агент идёт по подсказке: тот же адрес с user:pass@ отвечает ждущему вызову, оверлей человека снимается, страница открывается.
+    const resumed = await agentTool(opened, 'browser_open', { url: `http://${USER}:${PASSWORD}@localhost:${new URL(origin).port}/other`, own: true });
+    expect(resumed.isError, resumed.text).toBe(false);
+    expect(resumed.text).not.toContain(PASSWORD);
+    await expect
+      .poll(() => electronApp.evaluate(({ webContents }) => webContents.getAllWebContents().find((c) => c.getType() === 'webview' && c.getURL().endsWith('/other'))?.getTitle() ?? null), { timeout: 20_000 })
+      .toBe('Stand');
+    await expect(opened.window.getByTestId('browser-auth')).toHaveCount(0);
   });
 });

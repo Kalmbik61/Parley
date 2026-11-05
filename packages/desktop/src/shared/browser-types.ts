@@ -266,6 +266,11 @@ export interface BrowserApi {
    * на вкладку и origin и отвечает на первый вызов basic-auth. Другого пути пары нет: ни в раскладку, ни на диск.
    */
   rememberCredentials(webContentsId: number, url: string): Promise<void>;
+  /**
+   * Окно смонтировало гостя страницы `pageId` и сейчас откроет её адрес: пара из `browser_open` агента, ждавшая эту страницу,
+   * привязывается в main к гостю. Зовётся до первой загрузки; пароль через мост не ходит — только id страницы.
+   */
+  claimCredentials(webContentsId: number, pageId: string): Promise<void>;
   /** Страница вкладки просит логин и пароль (`browser:auth-request`): окно показывает оверлей над вкладкой. */
   onAuthRequest(listener: (e: BrowserAuthRequest) => void): () => void;
   /** Запрос снят main'ом (вкладка ушла со страницы или закрыта): окно убирает оверлей (`browser:auth-cancel`). */

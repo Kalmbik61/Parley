@@ -503,6 +503,7 @@ const bridge = {
       return () => browserAgentResizeListeners.delete(listener);
     },
     rememberCredentials: (webContentsId: number, url: string) => ipcRenderer.invoke('browser:remember-credentials', webContentsId, url) as Promise<void>,
+    claimCredentials: (webContentsId: number, pageId: string) => ipcRenderer.invoke('browser:claim-credentials', webContentsId, pageId) as Promise<void>,
     onAuthRequest: (listener: (e: BrowserAuthRequest) => void) => {
       browserAuthRequestListeners.add(listener);
       return () => browserAuthRequestListeners.delete(listener);

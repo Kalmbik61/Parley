@@ -318,7 +318,7 @@ export interface RegisterIpcOptions {
     /** Ответы окна на просьбы агента (спека браузера 3.7, этап B2): main/browser/agent-ops.ts. */
     agent: Pick<AgentOps, 'openTabResult' | 'registerTab' | 'captureReady' | 'stop' | 'focusReady'>;
     /** HTTP basic-auth гостей (main/browser/basic-auth.ts): пара из адреса и ответ окна на запрос логина. */
-    basicAuth: Pick<BasicAuth, 'remember' | 'answer'>;
+    basicAuth: Pick<BasicAuth, 'remember' | 'claimPage' | 'answer'>;
   };
 }
 
@@ -992,6 +992,17 @@ export function registerIpc(options: RegisterIpcOptions): void {
       if (typeof rawUrl !== 'string' || rawUrl.length > MAX_AUTH_URL) throw new HostError('bad_request', 'invalid address');
       const { url, credentials } = splitUrlCredentials(rawUrl);
       if (credentials !== null) browser.basicAuth.remember(guest.id, new URL(url).origin, credentials);
+    }),
+  );
+
+  // Окно смонтировало гостя страницы и сейчас откроет её адрес: пара из `browser_open` агента, ждавшая эту страницу, становится
+  // парой гостя — до первой загрузки (иначе первый вызов логина её не застал бы). Нет пары — ничего.
+  ipcMain.handle(
+    'browser:claim-credentials',
+    withIpcError(async (_event, id: unknown, pageId: unknown) => {
+      const guest = browserGuest(browser, id);
+      if (typeof pageId !== 'string' || pageId.length === 0 || pageId.length > 200) throw new HostError('bad_request', 'invalid page id');
+      browser.basicAuth.claimPage(guest.id, pageId);
     }),
   );
 

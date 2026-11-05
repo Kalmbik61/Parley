@@ -2249,6 +2249,7 @@ export const S = {
       signIn: 'Sign in',
       cancel: 'Cancel',
       wrong: 'Wrong username or password. Try again.',
+      sendFailed: "Couldn't send the credentials. Try again or cancel.",
     },
     /** ⌖ Select (спека браузера 4.6). */
     select: {

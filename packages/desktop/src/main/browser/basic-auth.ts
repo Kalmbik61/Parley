@@ -8,6 +8,14 @@
  *
  * Пароль не пишется на диск, в журналы, раскладку, историю и ответы агентам; он идёт только main ↔ окно своей вкладки.
  * Агенту видно лишь «вкладка ждёт вход» (`BASIC_AUTH_HINT`).
+ *
+ * Привязка «вкладка + origin» относится к данным, которыми ещё не отвечали. Ответив, Chromium кладёт пару в кэш HTTP-авторизации
+ * сессии раздела — он общий для всех вкладок и живёт до перезапуска, как в обычном браузере (решение владельца 2026-11-05):
+ * один вход на стенд для всех вкладок. Раздел и сессию мы не дробим.
+ *
+ * Пара из `browser_open` агента держится за логической страницей (`pageId`), а не за origin: main кладёт её после проверок
+ * доступа и ответа окна, а гостю отдаёт, когда страница монтируется (`claimPage` — до первой загрузки). Чужая вкладка того же
+ * origin её не получит, параллельные `open` друг друга не затирают, срока жизни у неё нет: она снимается при закрытии страницы.
  */
 import { randomUUID } from 'node:crypto';
 import type { WebContents } from 'electron';
@@ -16,16 +24,17 @@ import type { BasicCredentials, BrowserAuthCancel, BrowserAuthRequest } from '..
 /** Подсказка агенту, пока вкладка ждёт логин и пароль человека (спека задачи, пункт D). */
 export const BASIC_AUTH_HINT = 'The page asks for HTTP basic auth: pass user:pass@ in the URL or ask the human to sign in in the browser panel.';
 
-/** Сколько живёт пара, названная агентом в `open`, пока вкладка не названа: окно ставит её и регистрирует не мгновенно. */
-const PENDING_TTL_MS = 60_000;
-
 export type AuthDecision = { kind: 'credentials'; credentials: BasicCredentials } | { kind: 'prompt'; retry: boolean };
 
 export interface CredentialStore {
   /** Пара из адреса для вкладки и origin. */
   remember(contentsId: number, origin: string, credentials: BasicCredentials): void;
-  /** Пара из `open` агента: вкладки ещё нет, её занимает первый гость, которому этот origin задал вызов. */
-  addPending(origin: string, credentials: BasicCredentials): void;
+  /** Пара из `open` агента за логической страницей: гость ещё не смонтирован, `claimPage` отдаст её ему (и только ему). */
+  holdForPage(pageId: string, origin: string, credentials: BasicCredentials): void;
+  /** Гость страницы смонтирован: пара, ждавшая страницу, становится парой его вкладки (до первой загрузки). Нет пары — ничего. */
+  claimPage(contentsId: number, pageId: string): void;
+  /** Страница закрыта: пара, ждавшая её, снимается. */
+  dropPage(pageId: string): void;
   /** Что ответить на вызов. Прокси и отклонённая пара — только запрос; пара используется один раз за загрузку. */
   decide(contentsId: number, origin: string): AuthDecision;
   /** Человек ввёл данные в ответ на запрос: следующий такой же вызов — повтор. */
@@ -38,13 +47,13 @@ export interface CredentialStore {
   forget(contentsId: number): void;
 }
 
-export function createCredentialStore(deps: { now?(): number } = {}): CredentialStore {
-  const now = deps.now ?? Date.now;
+export function createCredentialStore(): CredentialStore {
   /** Вкладка → origin → пара из адреса. */
   const stored = new Map<number, Map<string, BasicCredentials>>();
   /** Вкладка → origins, на чей вызов уже отвечали и вердикта (конца загрузки) ещё нет. */
   const waiting = new Map<number, Set<string>>();
-  const pending = new Map<string, { credentials: BasicCredentials; expires: number }>();
+  /** Логическая страница → пара из `open` агента. */
+  const held = new Map<string, { origin: string; credentials: BasicCredentials }>();
 
   const mark = (id: number, origin: string): void => {
     const set = waiting.get(id) ?? new Set<string>();
@@ -56,13 +65,21 @@ export function createCredentialStore(deps: { now?(): number } = {}): Credential
     const map = stored.get(id) ?? new Map<string, BasicCredentials>();
     map.set(origin, credentials);
     stored.set(id, map);
-    pending.delete(origin);
   };
 
   return {
     remember,
-    addPending(origin, credentials) {
-      pending.set(origin, { credentials, expires: now() + PENDING_TTL_MS });
+    holdForPage(pageId, origin, credentials) {
+      held.set(pageId, { origin, credentials });
+    },
+    claimPage(id, pageId) {
+      const entry = held.get(pageId);
+      if (entry === undefined) return;
+      held.delete(pageId);
+      remember(id, entry.origin, entry.credentials);
+    },
+    dropPage(pageId) {
+      held.delete(pageId);
     },
     decide(id, origin) {
       if (waiting.get(id)?.has(origin) === true) {
@@ -70,13 +87,7 @@ export function createCredentialStore(deps: { now?(): number } = {}): Credential
         stored.get(id)?.delete(origin);
         return { kind: 'prompt', retry: true };
       }
-      let credentials = stored.get(id)?.get(origin);
-      if (credentials === undefined) {
-        const claimed = pending.get(origin);
-        if (claimed !== undefined && claimed.expires > now()) credentials = claimed.credentials;
-        pending.delete(origin);
-        if (credentials !== undefined) remember(id, origin, credentials);
-      }
+      const credentials = stored.get(id)?.get(origin);
       if (credentials === undefined) return { kind: 'prompt', retry: false };
       mark(id, origin);
       return { kind: 'credentials', credentials };
@@ -101,10 +112,17 @@ export type AuthAnswer = BasicCredentials | null;
 export interface BasicAuth {
   /** Подписывает гостя: `login`, уход со страницы, закрытие. Зовёт страж на каждого гостя раздела. */
   attach(contents: WebContents): void;
-  /** Пара из адреса для вкладки (переход человека или `navigate` агента). */
+  /**
+   * Пара для вкладки (переход человека, `navigate` агента, повторный `open` той же страницы). Если вкладка уже ждёт ответа
+   * человека на вызов этого origin, этот вызов отвечается парой, а оверлей окна снимается.
+   */
   remember(contentsId: number, origin: string, credentials: BasicCredentials): void;
-  /** Пара из `open` агента, пока вкладка неизвестна. */
-  addPending(origin: string, credentials: BasicCredentials): void;
+  /** Пара из `open` агента за логической страницей (см. `CredentialStore.holdForPage`). */
+  holdForPage(pageId: string, origin: string, credentials: BasicCredentials): void;
+  /** Окно смонтировало гостя страницы: пара, ждавшая страницу, привязывается к гостю — до первой загрузки. */
+  claimPage(contentsId: number, pageId: string): void;
+  /** Страница закрыта: пара, ждавшая её, снимается. */
+  dropPage(pageId: string): void;
   /** Вкладка ждёт ответа человека. */
   isPending(contentsId: number): boolean;
   /** Вызов, когда вкладка начинает ждать ответа; возвращает отписку. */
@@ -189,8 +207,14 @@ export function createBasicAuth(deps: { store?: CredentialStore; newId?(): strin
         listeners.delete(id);
       });
     },
-    remember: (id, origin, credentials) => store.remember(id, origin, credentials),
-    addPending: (origin, credentials) => store.addPending(origin, credentials),
+    remember(id, origin, credentials) {
+      store.remember(id, origin, credentials);
+      // Вкладка ждёт человека на вызов этого origin: отвечаем ему данными из адреса (не-прокси), оверлей окна снимаем.
+      if (prompts.get(id)?.origin === origin) finish(id, credentials, true);
+    },
+    holdForPage: (pageId, origin, credentials) => store.holdForPage(pageId, origin, credentials),
+    claimPage: (id, pageId) => store.claimPage(id, pageId),
+    dropPage: (pageId) => store.dropPage(pageId),
     isPending: (id) => prompts.has(id),
     onPending(id, listener) {
       const set = listeners.get(id) ?? new Set<() => void>();

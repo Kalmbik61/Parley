@@ -42,15 +42,36 @@ describe('createCredentialStore', () => {
     expect(store.decide(1, ORIGIN)).toEqual({ kind: 'prompt', retry: false });
   });
 
-  it('пара агента из open достаётся первому гостю origin и привязывается к нему; живёт ограниченно', () => {
-    let now = 0;
-    const store = createCredentialStore({ now: () => now });
-    store.addPending(ORIGIN, CREDS);
-    expect(store.decide(7, ORIGIN)).toEqual({ kind: 'credentials', credentials: CREDS });
+  it('пара агента из open держится за страницей и достаётся только её гостю; чужой гость того же origin ничего не получает', () => {
+    const store = createCredentialStore();
+    store.holdForPage('browser:aaaaaa', ORIGIN, CREDS);
+    // Чужая вкладка того же origin, чьё обращение пришло первым.
     expect(store.decide(8, ORIGIN)).toEqual({ kind: 'prompt', retry: false });
-    store.addPending('http://other.test', CREDS);
-    now = 61_000;
-    expect(store.decide(9, 'http://other.test')).toEqual({ kind: 'prompt', retry: false });
+    store.claimPage(7, 'browser:aaaaaa');
+    expect(store.decide(7, ORIGIN)).toEqual({ kind: 'credentials', credentials: CREDS });
+    expect(store.decide(9, ORIGIN)).toEqual({ kind: 'prompt', retry: false });
+  });
+
+  it('параллельные open одного origin за разными страницами не затирают друг друга', () => {
+    const store = createCredentialStore();
+    store.holdForPage('p1', ORIGIN, CREDS);
+    store.holdForPage('p2', ORIGIN, { username: 'other', password: 'x' });
+    store.claimPage(1, 'p1');
+    store.claimPage(2, 'p2');
+    expect(store.decide(1, ORIGIN)).toEqual({ kind: 'credentials', credentials: CREDS });
+    expect(store.decide(2, ORIGIN)).toEqual({ kind: 'credentials', credentials: { username: 'other', password: 'x' } });
+  });
+
+  it('пара ждёт страницу без срока; dropPage (закрытие или отказ) её снимает, повторный claim ничего не даёт', () => {
+    const store = createCredentialStore();
+    store.holdForPage('p1', ORIGIN, CREDS);
+    store.dropPage('p1');
+    store.claimPage(1, 'p1');
+    expect(store.decide(1, ORIGIN)).toEqual({ kind: 'prompt', retry: false });
+    store.holdForPage('p2', ORIGIN, CREDS);
+    store.claimPage(2, 'p2');
+    store.claimPage(3, 'p2');
+    expect(store.decide(3, ORIGIN)).toEqual({ kind: 'prompt', retry: false });
   });
 
   it('forget снимает все пары вкладки', () => {
@@ -172,6 +193,37 @@ describe('createBasicAuth', () => {
     expect(host.send).toHaveBeenCalledWith('browser:auth-request', expect.objectContaining({ isProxy: true, host: 'proxy.test:3128' }));
     const second = login();
     expect(second).toHaveBeenCalledWith();
+  });
+
+  it('remember для вкладки, ждущей человека на вызов этого origin, отвечает этому вызову и снимает оверлей', () => {
+    const auth = createBasicAuth({ newId: () => 'r9' });
+    const { contents, host, login } = fake();
+    auth.attach(contents);
+    const callback = login();
+    auth.remember(5, ORIGIN, CREDS);
+    expect(callback).toHaveBeenCalledWith('admin', 'pw');
+    expect(auth.isPending(5)).toBe(false);
+    expect(host.send).toHaveBeenCalledWith('browser:auth-cancel', { requestId: 'r9', webContentsId: 5 });
+  });
+
+  it('remember для другого origin ожидающий вызов не трогает', () => {
+    const auth = createBasicAuth({ newId: () => 'r10' });
+    const { contents, login } = fake();
+    auth.attach(contents);
+    const callback = login();
+    auth.remember(5, 'http://other.test', CREDS);
+    expect(callback).not.toHaveBeenCalled();
+    expect(auth.isPending(5)).toBe(true);
+  });
+
+  it('прокси-запрос парой из адреса не отвечается', () => {
+    const auth = createBasicAuth({ newId: () => 'r11' });
+    const { contents, login } = fake();
+    auth.attach(contents);
+    const callback = login({ isProxy: true, host: '127.0.0.1', port: 8080 }, `${ORIGIN}/`);
+    auth.remember(5, ORIGIN, CREDS);
+    expect(callback).not.toHaveBeenCalled();
+    expect(auth.isPending(5)).toBe(true);
   });
 
   it('onPending сообщает, что вкладка начала ждать', () => {

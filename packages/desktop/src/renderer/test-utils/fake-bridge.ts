@@ -819,6 +819,8 @@ export function createFakeBridge(): FakeBridge {
       rememberCredentials: async (webContentsId, url) => {
         browserCalls.push({ method: 'rememberCredentials', args: [webContentsId, url] });
       },
+      // Не пишется в browserCalls: вызов есть у каждой первой загрузки, и тесты, сверяющие журнал целиком, о нём не знают.
+      claimCredentials: async () => undefined,
       onAuthRequest: (listener) => {
         authRequestListeners.add(listener);
         return () => authRequestListeners.delete(listener);

@@ -60,7 +60,7 @@ export interface AgentOpsDeps {
    * HTTP basic-auth вкладок (`main/browser/basic-auth.ts`): пара из `user:pass@` адреса агента ложится сюда (только память),
    * а вкладка, ждущая логин человека, отвечает агенту подсказкой, а не ожиданием загрузки. Нет — как раньше, без учётных данных.
    */
-  basicAuth?: Pick<BasicAuth, 'remember' | 'addPending' | 'isPending' | 'onPending'>;
+  basicAuth?: Pick<BasicAuth, 'remember' | 'holdForPage' | 'dropPage' | 'isPending' | 'onPending'>;
   /** «Let agents use the browser» (`UiFile.browser.agentsAllowed`): читается на каждую операцию. */
   agentsAllowed(): Promise<boolean>;
   /** Просит окно открыть вкладку (`browser:agent-open-tab`); `false` — окно не готово слушать. */
@@ -678,8 +678,6 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
       throw new AgentOpError('bad_request', 'Only http(s) pages can be opened: pass an absolute URL such as https://example.com/ or http://localhost:5173/.');
     }
     const url = target.href;
-    // Пара из адреса — только в память main: вкладки ещё нет, её займёт первый гость этого origin, которому сервер задаст вызов.
-    if (target.credentials !== null) deps.basicAuth?.addPending(new URL(url).origin, target.credentials);
     const owner = ownerOf(request, args);
     const workKey = workKeyOf(request.ref.projectPath, request.ref.workId);
     // Человек приостановил агентов в этой панели: страницу в ней не открываем, как не работаем с уже открытыми (спека 4.8, S5).
@@ -695,6 +693,11 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
     if ('closed' in answer) throw new AgentOpError('unsupported', 'The window answered the open request as a close.');
     const agentId = registry.agentIdFor(workKey, answer.tabId);
     const base = { tab: agentId, owner, url: clipUrl(url), reused: answer.reused };
+    // Пара из адреса — только в память main и только после проверок доступа и ответа окна: за логической страницей (`answer.tabId`),
+    // окно отдаёт её гостю при монтировании, до первой загрузки (`claimCredentials`). Уже смонтированной странице, которую
+    // переиспользует `open`, пара привязывается ниже, к её гостю (и отвечает ждущему вызову человека).
+    const origin = new URL(url).origin;
+    if (target.credentials !== null && !(answer.reused && answer.mounted)) deps.basicAuth?.holdForPage(answer.tabId, origin, target.credentials);
     if (!answer.mounted) return { ...base, loaded: false, title: '', notes: [NOT_MOUNTED_NOTE] };
     // Страницу регистрирует окно, когда `<webview>` готов: ждём запись не дольше `openMs`, дальше — загрузку через runner.
     const until = Date.now() + openMs;
@@ -704,7 +707,7 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
       await new Promise((resolve) => setTimeout(resolve, Math.min(pollMs, left)));
     }
     return runner.run(request, agentId, async (contents, record, guard) => {
-      if (target.credentials !== null) deps.basicAuth?.remember(contents.id, new URL(url).origin, target.credentials);
+      if (target.credentials !== null && answer.reused) deps.basicAuth?.remember(contents.id, origin, target.credentials);
       const loaded = await settleLoad(contents, AGENT_LIMITS.loadMs, guard.signal, deps.basicAuth);
       const notes = deps.agentWindow.take(`${record.workKey}\n${record.pageId}`);
       return { ...base, loaded, title: titleForAgent(contents.getTitle()), notes: deps.basicAuth?.isPending(contents.id) === true ? [BASIC_AUTH_HINT, ...notes] : notes };
@@ -852,6 +855,7 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
               emulation: deps.emulation,
               window: deps.agentWindow,
               activity: deps.activity,
+              ...(deps.basicAuth === undefined ? {} : { basicAuth: deps.basicAuth }),
               ...(deps.uploadHome === undefined ? {} : { home: deps.uploadHome }),
             });
             return ok(await runner.run(request, args.tab, (contents, record, guard) => actions.actionOf(contents, record, request, args, guard), { changes: true, window: true, seen: true }));
@@ -903,6 +907,8 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
     },
     registerTab(e) {
       registry.register(e);
+      // Страница закрыта: пара, ждавшая её монтирования, не нужна (basic-auth).
+      if (e.kind === 'gone') deps.basicAuth?.dropPage(e.pageId);
       // «Pause agents» посреди операции: идущие операции панели обрываются, как при Stop.
       if (e.kind === 'paused' && e.paused) runner.stopPanel(e.workKey, e.owner, new AgentOpError('access_denied', PAUSED));
     },

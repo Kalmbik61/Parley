@@ -344,13 +344,26 @@ export function BrowserSurface({ workKey, place, url, viewport, visible, bridge,
   useEffect(() => {
     setAuthRequest(null);
   }, [state.webContentsId]);
+  // Ответ не дошёл до main (мост отказал): запрос остаётся с ошибкой — иначе вызов Chromium висел бы, а человек не видел бы формы.
+  const [authFailed, setAuthFailed] = useState(false);
+  useEffect(() => {
+    setAuthFailed(false);
+  }, [authRequest?.requestId]);
   const answerAuth = (credentials: { username: string; password: string } | null): void => {
     const request = authRequest;
     if (request === null) return;
-    setAuthRequest(null);
-    bridge.browser.authResponse(request.requestId, credentials).catch((error: unknown) => console.warn('[parley] authResponse failed', error));
-    // Фокус — странице, как после закрытого редактора: оверлей держал его, и клавиши корня иначе не доходили бы.
-    viewRef.current?.focus();
+    bridge.browser.authResponse(request.requestId, credentials).then(
+      () => {
+        // Оверлей снимается по подтверждению main и только свой: за это время мог прийти повтор (новый requestId).
+        setAuthRequest((current) => (current !== null && current.requestId === request.requestId ? null : current));
+        // Фокус — странице, как после закрытого редактора: оверлей держал его, и клавиши корня иначе не доходили бы.
+        viewRef.current?.focus();
+      },
+      (error: unknown) => {
+        console.warn('[parley] authResponse failed', error);
+        setAuthFailed(true);
+      },
+    );
   };
   // Адрес с `user:pass@`, введённый до гостя: пара ждёт его в памяти окна и уходит в main перед первой загрузкой.
   const pendingCredentialsUrlRef = useRef<string | null>(null);
@@ -476,7 +489,13 @@ export function BrowserSurface({ workKey, place, url, viewport, visible, bridge,
           console.warn('[parley] viewport is not set before the first page', error);
         }
       }
-      // Пара из адреса, введённого до гостя: в main до загрузки, иначе первый вызов логина её не застал бы.
+      // Пара агента (`browser_open` с `user:pass@`), ждавшая эту страницу: к гостю — до загрузки, иначе первый вызов логина её не застал бы.
+      try {
+        await bridge.browser.claimCredentials(id, tabId);
+      } catch (error) {
+        console.warn('[parley] credentials were not claimed for the page', error);
+      }
+      // Пара из адреса, введённого до гостя: в main до загрузки, по той же причине.
       const withCredentials = pendingCredentialsUrlRef.current;
       pendingCredentialsUrlRef.current = null;
       if (withCredentials !== null) {
@@ -931,7 +950,7 @@ export function BrowserSurface({ workKey, place, url, viewport, visible, bridge,
             onAddToChat={addAnnotations}
           />
         )}
-        {authRequest === null ? null : <AuthPrompt request={authRequest} onSubmit={answerAuth} />}
+        {authRequest === null ? null : <AuthPrompt request={authRequest} failed={authFailed} onSubmit={answerAuth} />}
         {state.loadFailed && !state.crashed ? (
           <div
             data-testid="browser-load-failed"

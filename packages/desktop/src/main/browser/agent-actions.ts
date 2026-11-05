@@ -20,7 +20,7 @@ import type { AgentInput, InputGuard, MouseStep } from './agent-input.js';
 import type { PageRecord } from './agent-pages.js';
 import { urlForAgent } from './agent-url.js';
 import type { AgentWindow } from './agent-window.js';
-import type { BasicAuth } from './basic-auth.js';
+import { BASIC_AUTH_HINT, type BasicAuth } from './basic-auth.js';
 import type { Emulation } from './emulation.js';
 import type { Inspector } from './inspector.js';
 import { SELECT_OPTION_FN } from './page-fns.js';
@@ -161,6 +161,8 @@ export function createAgentActions(deps: {
   emulation: Pick<Emulation, 'fitOf'>;
   window: Pick<AgentWindow, 'take'>;
   activity(e: AgentActivity): void;
+  /** Вкладка, ждущая логин человека (`basic-auth.ts`): переход после действия не ждёт загрузку, а отвечает подсказкой. */
+  basicAuth?: Pick<BasicAuth, 'isPending' | 'onPending'>;
   files?: { realpath(p: string): Promise<string>; stat(p: string): Promise<{ isFile(): boolean; size: number }> };
   home?: string;
 }): AgentActions {
@@ -385,9 +387,10 @@ export function createAgentActions(deps: {
         }
       }
 
-      const outcome = await withNavigation(contents, act, guard.signal);
+      const outcome = await withNavigation(contents, act, guard.signal, deps.basicAuth);
       notes.push(...deps.window.take(`${record.workKey}\n${record.pageId}`));
-      if (outcome.navigated && !outcome.loaded) notes.push('The page is still loading.');
+      if (deps.basicAuth?.isPending(contents.id) === true) notes.push(BASIC_AUTH_HINT);
+      else if (outcome.navigated && !outcome.loaded) notes.push('The page is still loading.');
       return { tab: record.agentId, url: urlForAgent(contents.getURL()), done: outcome.value, navigated: outcome.navigated, notes, ...(pageData === undefined ? {} : { pageData }) };
     },
   };

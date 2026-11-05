@@ -9,8 +9,13 @@ import { useEffect, useRef, useState } from 'react';
 import type { BrowserAuthRequest } from '../../shared/basic-auth.js';
 import { S } from '../../shared/strings.js';
 
+/** Предел поля логина и пароля — тот же, что у `browser:auth-response` в main (`main/ipc.ts`, MAX_AUTH_FIELD): длиннее main отвергает ответ. */
+export const AUTH_FIELD_LIMIT = 1024;
+
 export interface AuthPromptProps {
   request: BrowserAuthRequest;
+  /** Ответ не дошёл до main (мост отказал): запрос остаётся на экране, под заголовком — строка ошибки. */
+  failed?: boolean;
   /** Логин и пароль или `null` — отмена. */
   onSubmit(credentials: { username: string; password: string } | null): void;
 }
@@ -18,7 +23,7 @@ export interface AuthPromptProps {
 const INPUT =
   'h-8 w-full min-w-0 rounded-md border border-input bg-background px-2 text-sm text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring';
 
-export function AuthPrompt({ request, onSubmit }: AuthPromptProps): JSX.Element {
+export function AuthPrompt({ request, failed = false, onSubmit }: AuthPromptProps): JSX.Element {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const usernameRef = useRef<HTMLInputElement | null>(null);
@@ -58,7 +63,12 @@ export function AuthPrompt({ request, onSubmit }: AuthPromptProps): JSX.Element 
           </div>
           {request.realm === '' ? null : <div className="break-words text-xs text-muted-foreground">{S.browser.auth.realm(request.realm)}</div>}
         </div>
-        {request.retry ? (
+        {failed ? (
+          <div role="alert" className="text-xs text-destructive">
+            {S.browser.auth.sendFailed}
+          </div>
+        ) : null}
+        {request.retry && !failed ? (
           <div role="alert" className="text-xs text-destructive">
             {S.browser.auth.wrong}
           </div>
@@ -71,13 +81,14 @@ export function AuthPrompt({ request, onSubmit }: AuthPromptProps): JSX.Element 
             autoComplete="off"
             spellCheck={false}
             value={username}
+            maxLength={AUTH_FIELD_LIMIT}
             onChange={(event) => setUsername(event.target.value)}
             className={INPUT}
           />
         </label>
         <label className="flex flex-col gap-1 text-xs text-muted-foreground">
           {S.browser.auth.password}
-          <input type="password" autoComplete="off" value={password} onChange={(event) => setPassword(event.target.value)} className={INPUT} />
+          <input type="password" autoComplete="off" maxLength={AUTH_FIELD_LIMIT} value={password} onChange={(event) => setPassword(event.target.value)} className={INPUT} />
         </label>
         <div className="flex justify-end gap-2">
           <button type="button" onClick={() => onSubmit(null)} className="rounded-md border border-border px-3 py-1 text-xs text-foreground hover:bg-accent">
