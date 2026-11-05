@@ -61,6 +61,13 @@ export function VoiceScreen() {
             <Text allowFontScaling style={[typography.subheadline, { color: voicePalette.text2, textAlign: 'center' }]}>
               {v.fallback.body}
             </Text>
+            {v.fallback.retry && (
+              <Pressable accessibilityRole="button" onPress={v.retry} style={styles.retry}>
+                <Text allowFontScaling style={[typography.button, { color: voicePalette.accent }]}>
+                  Try again
+                </Text>
+              </Pressable>
+            )}
           </View>
         ) : (
           <>
@@ -93,6 +100,13 @@ export function VoiceScreen() {
             </Text>
           </View>
         )}
+        {v.cardWaiting && (
+          <Pressable accessibilityRole="button" accessibilityLabel="Open the waiting card" onPress={v.reopenCard} style={styles.waiting}>
+            <Text allowFontScaling style={[typography.footnote, { color: voicePalette.accent }]}>
+              1 card waiting · Open
+            </Text>
+          </Pressable>
+        )}
         {v.notice !== null && (
           <Text accessibilityLiveRegion="polite" allowFontScaling style={[typography.footnote, { color: voicePalette.error, textAlign: 'center' }]}>
             {v.notice}
@@ -123,7 +137,7 @@ export function VoiceScreen() {
           <SymbolView name="arrow.up" size={18} tintColor={voicePalette.onAccent} />
         </Pressable>
       </View>
-      <CardSheet card={v.card} busy={v.cardBusy} onDecide={v.decide} />
+      <CardSheet card={v.card} visible={v.sheetOpen} mode={v.sheetMode} busy={v.cardBusy} onDecide={v.decide} onLater={v.later} />
     </KeyboardAvoidingView>
   );
 }
@@ -152,6 +166,8 @@ const styles = StyleSheet.create({
   controls: { flexDirection: 'row', gap: 24, marginTop: 8 },
   round: { width: 64, height: 64, borderRadius: 32, alignItems: 'center', justifyContent: 'center' },
   fallback: { gap: 6, padding: 16, borderRadius: 16, backgroundColor: voicePalette.surface, alignSelf: 'stretch' },
+  retry: { alignSelf: 'center', minHeight: 44, justifyContent: 'center' },
+  waiting: { minHeight: 44, justifyContent: 'center', paddingHorizontal: 14, borderRadius: 22, backgroundColor: voicePalette.surface },
   progress: { color: voicePalette.text3, textAlign: 'center' },
   result: { padding: 14, borderRadius: 14, backgroundColor: voicePalette.surface, alignSelf: 'stretch' },
   composer: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, paddingHorizontal: 16, paddingTop: 8, backgroundColor: voicePalette.bg2 },

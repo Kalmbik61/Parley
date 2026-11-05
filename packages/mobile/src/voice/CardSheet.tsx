@@ -2,11 +2,11 @@
 import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import type { PhoneCard } from '@parley/protocol/remote';
 import { typography, voicePalette } from '../theme';
-import type { CardChoice } from './cards-model';
+import type { CardChoice, SheetMode } from './cards-model';
 
-export function CardSheet({ card, busy, onDecide }: { card: PhoneCard | null; busy: boolean; onDecide: (choice: CardChoice) => void }) {
+export function CardSheet({ card, visible, mode, busy, onDecide, onLater }: { card: PhoneCard | null; visible: boolean; mode: SheetMode; busy: boolean; onDecide: (choice: CardChoice) => void; onLater: () => void }) {
   return (
-    <Modal visible={card !== null} transparent animationType="slide" onRequestClose={() => undefined}>
+    <Modal visible={visible && card !== null} transparent animationType="slide" onRequestClose={onLater}>
       <View style={styles.backdrop}>
         {card !== null && (
           <View accessibilityViewIsModal style={styles.sheet}>
@@ -21,6 +21,16 @@ export function CardSheet({ card, busy, onDecide }: { card: PhoneCard | null; bu
             <Text allowFontScaling selectable style={[typography.body, { color: voicePalette.text2 }]}>
               {card.text}
             </Text>
+            <Pressable accessibilityRole="button" onPress={onLater} style={styles.later}>
+              <Text allowFontScaling style={[typography.body, { color: voicePalette.text2 }]}>
+                Later
+              </Text>
+            </Pressable>
+            {mode === 'confirm_on_mac' ? (
+              <Text accessibilityRole="alert" allowFontScaling style={[typography.headline, { color: voicePalette.accent, marginTop: 8 }]}>
+                Confirm on Mac
+              </Text>
+            ) : (
             <View style={styles.buttons}>
               <Pressable
                 accessibilityRole="button"
@@ -45,6 +55,7 @@ export function CardSheet({ card, busy, onDecide }: { card: PhoneCard | null; bu
                 </Text>
               </Pressable>
             </View>
+            )}
           </View>
         )}
       </View>
@@ -55,6 +66,7 @@ export function CardSheet({ card, busy, onDecide }: { card: PhoneCard | null; bu
 const styles = StyleSheet.create({
   backdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.5)' },
   sheet: { backgroundColor: voicePalette.surface, padding: 20, paddingBottom: 36, gap: 12, borderTopLeftRadius: 20, borderTopRightRadius: 20 },
+  later: { alignSelf: 'flex-end', minHeight: 44, justifyContent: 'center' },
   buttons: { flexDirection: 'row', gap: 12, marginTop: 8 },
   button: { flex: 1, minHeight: 50, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
 });

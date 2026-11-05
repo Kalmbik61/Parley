@@ -12,6 +12,8 @@ export interface FallbackView {
   reason: FallbackReasonR15;
   title: string;
   body: string;
+  /** Показывать «Try again»: причина проходит сама только после действия человека (ключ, микрофон, полночь). */
+  retry: boolean;
 }
 
 export interface FallbackInput {
@@ -43,20 +45,21 @@ export function chooseFallback(input: FallbackInput): FallbackView | null {
   const { voice, reachable, canUseVoice, failure, remainingSeconds } = input;
   if (voice.state === 'listening' || voice.state === 'speaking' || voice.state === 'delegating' || voice.state === 'paused') return null;
   if (!reachable || voice.state === 'offline') {
-    return { reason: 'mac_unreachable', title: 'Mac not reachable', body: `Voice needs your Mac. ${WRITE}` };
+    return { reason: 'mac_unreachable', title: 'Mac not reachable', body: `Voice needs your Mac. ${WRITE}`, retry: false };
   }
   if (!canUseVoice) {
-    return { reason: 'voice_off', title: 'Voice is switched off on the Mac', body: `Turn on phone voice in Parley on the Mac. ${WRITE}` };
+    return { reason: 'voice_off', title: 'Voice is switched off on the Mac', body: `Turn on phone voice in Parley on the Mac. ${WRITE}`, retry: false };
   }
   if (failure === 'no_key') {
-    return { reason: 'no_key', title: 'No OpenAI key on the Mac', body: `Add the key in Parley on the Mac. ${WRITE}` };
+    return { reason: 'no_key', title: 'No OpenAI key on the Mac', body: `Add the key in Parley on the Mac. ${WRITE}`, retry: true };
   }
-  if (voice.state === 'limit_reached' || failure === 'limit_reached') {
+  // Остаток снова положителен (полночь Mac): шаблон снимается, Start доступен.
+  if ((voice.state === 'limit_reached' || failure === 'limit_reached') && !(remainingSeconds !== null && remainingSeconds > 0)) {
     const left = remainingSeconds === null ? '' : ` ${formatRemaining(remainingSeconds)} left today.`;
-    return { reason: 'limit_reached', title: 'Daily voice limit reached', body: `${left.trim()} ${WRITE}`.trim() };
+    return { reason: 'limit_reached', title: 'Daily voice limit reached', body: `${left.trim()} ${WRITE}`.trim(), retry: true };
   }
   if (failure === 'mic') {
-    return { reason: 'mic_denied', title: 'Microphone access is off', body: `Allow the microphone for Parley in Settings. ${WRITE}` };
+    return { reason: 'mic_denied', title: 'Microphone access is off', body: `Allow the microphone for Parley in Settings. ${WRITE}`, retry: true };
   }
   return null;
 }
@@ -134,4 +137,12 @@ const TEXT_KEY_RE = /^[\w.:-]{1,64}$/;
 export function textJobKey(uuid: string): string {
   const key = `txt_${uuid}`;
   return TEXT_KEY_RE.test(key) ? key : `txt_${uuid.replace(/[^\w.:-]/g, '').slice(0, 36)}`;
+}
+
+/** После возврата на передний план и `macBack` прошлый отказ стирается; модель выходит из `error` и `limit_reached`. */
+export const needsReset = (voice: VoiceModel): boolean => voice.state === 'error' || voice.state === 'limit_reached';
+
+/** m5: тот же текст после сбоя отправляется с прежним ключом (хост не создаст второй job); другой текст — с новым. */
+export function keyForText(previous: { text: string; key: string } | null, text: string, fresh: () => string): { text: string; key: string } {
+  return previous !== null && previous.text === text ? previous : { text, key: fresh() };
 }

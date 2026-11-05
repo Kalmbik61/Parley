@@ -5,6 +5,8 @@ import {
   chooseFallback,
   decideResult,
   formatRemaining,
+  keyForText,
+  needsReset,
   latestJob,
   progressLine,
   resultText,
@@ -120,5 +122,35 @@ describe('appStateEffects', () => {
 describe('textJobKey', () => {
   it('ключ проходит REMOTE_ID_RE', () => {
     expect(textJobKey('123e4567-e89b-12d3-a456-426614174000')).toMatch(/^[\w.:-]{1,64}$/);
+  });
+});
+
+describe('M5: повтор после отказа R15', () => {
+  it('Try again у no_key, mic и лимита; у voice_off и недоступного Mac его нет', () => {
+    expect(chooseFallback(input({ failure: 'no_key', voice: voice('error') }))?.retry).toBe(true);
+    expect(chooseFallback(input({ failure: 'mic', voice: voice('error') }))?.retry).toBe(true);
+    expect(chooseFallback(input({ voice: voice('limit_reached') }))?.retry).toBe(true);
+    expect(chooseFallback(input({ canUseVoice: false }))?.retry).toBe(false);
+    expect(chooseFallback(input({ reachable: false }))?.retry).toBe(false);
+  });
+  it('лимит снимается, когда voice.usage.get показывает остаток', () => {
+    expect(chooseFallback(input({ voice: voice('limit_reached'), failure: 'limit_reached', remainingSeconds: 600 }))).toBeNull();
+    expect(chooseFallback(input({ voice: voice('limit_reached'), remainingSeconds: 0 }))?.reason).toBe('limit_reached');
+  });
+  it('needsReset: error и limit_reached сбрасываются при возврате', () => {
+    expect(needsReset(voice('error'))).toBe(true);
+    expect(needsReset(voice('limit_reached'))).toBe(true);
+    expect(needsReset(voice('idle'))).toBe(false);
+    expect(needsReset(voice('listening'))).toBe(false);
+  });
+});
+
+describe('m5: ключ текстового запроса', () => {
+  it('тот же текст держит ключ, другой берёт новый', () => {
+    let n = 0;
+    const fresh = (): string => `k${++n}`;
+    const first = keyForText(null, 'close S05', fresh);
+    expect(keyForText(first, 'close S05', fresh)).toBe(first);
+    expect(keyForText(first, 'other', fresh).key).toBe('k2');
   });
 });

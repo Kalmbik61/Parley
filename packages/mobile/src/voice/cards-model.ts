@@ -30,12 +30,22 @@ export const dropCard = (list: readonly PhoneCard[], cardId: string): PhoneCard[
 /** Карточка над экраном: та, чей срок выходит раньше. */
 export const currentCard = (list: readonly PhoneCard[]): PhoneCard | null => list[0] ?? null;
 
+export type SheetMode = 'decide' | 'confirm_on_mac';
+
+/**
+ * Режим листа карточки: без `cards.decide` в `hello.methods` (на Mac выключен запуск с телефона) решить карточку
+ * с телефона нельзя, лист показывает «Confirm on Mac» вместо Send/Cancel.
+ */
+export const sheetMode = (methods: readonly string[] | null): SheetMode => (methods?.includes('cards.decide') === true ? 'decide' : 'confirm_on_mac');
+
 export type CardOutcome =
   | { kind: 'applied' }
   /** Решить уже нельзя: карточку решили, срок вышел, её нет или хост отказал. Карточка убирается. */
   | { kind: 'stale'; message: string }
   /** Face ID отменён или недоступен: ничего не отправлено, карточка осталась. */
   | { kind: 'not_confirmed'; message: string }
+  /** Хост не смог выполнить (`failed`): карточка остаётся, можно повторить. */
+  | { kind: 'failed'; message: string }
   /** Вызов не дошёл до Mac: карточка осталась, можно повторить. */
   | { kind: 'unreachable'; message: string };
 
@@ -63,5 +73,25 @@ export async function decideCard(deps: DecideDeps, card: PhoneCard, choice: Card
   } catch {
     return { kind: 'unreachable', message: 'Could not reach the Mac. Try again' };
   }
-  return result.applied ? { kind: 'applied' } : { kind: 'stale', message: STALE_CARD_MESSAGE };
+  if (result.applied) return { kind: 'applied' };
+  return result.reason === 'failed' ? { kind: 'failed', message: 'Could not send — try again' } : { kind: 'stale', message: STALE_CARD_MESSAGE };
 }
+
+export interface SheetContext {
+  card: PhoneCard | null;
+  /** Обложка замка приложения (`useCovered`). */
+  covered: boolean;
+  /** Вкладка Voice в фокусе. */
+  focused: boolean;
+  /** Карточки, которые человек отложил («Later»). */
+  dismissed: ReadonlySet<string>;
+}
+
+/** B1/M4: лист показывается только открытым приложением, на вкладке Voice и если карточку не отложили. */
+export const sheetVisible = (c: SheetContext): boolean => c.card !== null && !c.covered && c.focused && !c.dismissed.has(c.card.cardId);
+
+/** Отложенная карточка остаётся в списке: на экране значок, по нему лист открывается снова. */
+export const sheetWaiting = (c: SheetContext): boolean => c.card !== null && !c.covered && c.dismissed.has(c.card.cardId);
+
+/** B1: под обложкой замка решение не принимается, как и при занятом вызове. */
+export const canDecide = (c: { card: PhoneCard | null; covered: boolean; busy: boolean }): boolean => c.card !== null && !c.covered && !c.busy;

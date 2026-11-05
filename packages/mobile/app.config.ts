@@ -12,7 +12,7 @@ const dev = variant === 'dev';
 
 // A47: the system prompts for dictation. expo-camera must carry the microphone text too: with `microphonePermission: false`
 // its Info.plist mod removes the key whatever the plugin order is, and the first tap on the microphone would crash the app.
-const MICROPHONE_TEXT = 'Parley listens only while you dictate into a message. Audio stays on this iPhone.';
+const MICROPHONE_TEXT = 'Parley uses the microphone for dictation and for live voice conversations with the Parley assistant. Live voice audio is sent through your Mac to OpenAI; dictation stays on this iPhone.';
 const SPEECH_TEXT = 'Parley turns your speech into text on this iPhone. Audio is not sent anywhere.';
 
 // Prebuild adds the dev launcher's own NSAllowsLocalNetworking and Local Network text even without the
