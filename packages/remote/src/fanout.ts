@@ -1,5 +1,5 @@
 import type { WorksSnapshot } from '@parley/protocol';
-import { REMOTE_EVENTS, projectPhoneJob, projectWorksSnapshot } from '@parley/protocol/remote';
+import { REMOTE_EVENTS, phoneCardSchema, projectPhoneJob, projectWorksSnapshot } from '@parley/protocol/remote';
 import type { SessionRef } from '@parley/protocol';
 import type { HostLink, HostLinkEvent } from './host-link.js';
 import { refKey } from './host-link.js';
@@ -199,6 +199,12 @@ export function createFanout(options: FanoutOptions): Fanout {
       const job = projectPhoneJob((event.data as { job?: unknown } | null)?.job);
       if (job === null) return;
       data = { job };
+    }
+    // Карточка телефону — по схеме проекции: лишние поля срезаются, событие без карточки пропадает (T4a).
+    if (event.event === 'cards.changed') {
+      const card = phoneCardSchema.safeParse((event.data as { card?: unknown } | null)?.card);
+      if (!card.success) return;
+      data = { card: card.data };
     }
     for (const [deviceId, phone] of [...phones]) {
       if (!phone.live || phones.get(deviceId) !== phone) continue;

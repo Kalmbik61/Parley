@@ -10,6 +10,7 @@ import {
   bridgeEventSchemas,
   checkRemoteParams,
   phoneActionEvent,
+  projectCardsResult,
   projectJobResult,
   projectWorksSnapshot,
 } from '@parley/protocol/remote';
@@ -81,6 +82,8 @@ const RESULT_PROJECTIONS: Readonly<Record<string, (result: unknown) => unknown>>
   // Job телефону — по списку полей, без логов и `argv` (план голоса, B3): хост шлёт проекцию, мост страхуется.
   'jobs.get': projectJobResult,
   'jobs.cancel': projectJobResult,
+  // Карточки телефону — только проекция (T4a).
+  'cards.list': projectCardsResult,
 };
 
 /** Только известный `reason` хоста идёт телефону в `data`; остальное отбрасывается. */

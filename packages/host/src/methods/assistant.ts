@@ -16,6 +16,8 @@ export function createAssistantHandlers(service: AssistantService, jobs?: Jobs):
   // Окно решает карточку тем же ядром, что Telegram и телефон; канал называется явно.
   const decide: Handler<'assistant.decide'> = (params) => service.decide(params.proposalId, params.decision, params.action, 'island');
   const decideCard: Handler<'cards.decide'> = (params) => service.decideCard(params, 'mobile');
+  // Телефону — только проекция активных карточек, без payload (T4a).
+  const listCards: Handler<'cards.list'> = async () => ({ cards: service.phoneCards() });
   const reissue: Handler<'assistant.reissue'> = async (params) => service.reissue(params.proposalId);
   const reset: Handler<'assistant.reset'> = async () => {
     service.reset();
@@ -33,6 +35,7 @@ export function createAssistantHandlers(service: AssistantService, jobs?: Jobs):
   };
   return {
     'cards.decide': decideCard as AnyHandler,
+    'cards.list': listCards as AnyHandler,
     'jobs.ackInline': ackInline as AnyHandler,
     'assistant.ask': ask as AnyHandler,
     'assistant.cancel': cancel as AnyHandler,

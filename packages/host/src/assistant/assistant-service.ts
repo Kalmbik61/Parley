@@ -42,6 +42,7 @@ import {
 } from '@parley/core';
 import { createMoodStripper, matchConfirm, type AssistantGender, type AssistantMood, type MoodMark, type MoodStrip } from '@parley/core/assistant';
 import { feedDecision, refKey, type ActionsReport, type AssistantCardChanged, type AssistantDetail, type AssistantProposal, type AssistantOrigin, type HumanOverviewV1, type AssistantSettings, type AssistantState, type EventData, type CardDecideResult, type EventName, type Params, type SendResult, type SessionRef } from '@parley/protocol';
+import { projectPhoneCard, type PhoneCard } from '@parley/protocol/remote';
 import { HostError } from '../errors.js';
 import { createCardStore, type CardRow, type CardStore, type CardVia } from './cards.js';
 import { createConversationStore, type ConversationStore } from './conversation-store.js';
@@ -157,6 +158,10 @@ export interface AssistantService {
   decideCard(input: { cardId: string; revision: number; choice: 'send' | 'cancel' }, via?: CardVia): Promise<CardDecideResult>;
   /** Долговечная карточка ядра по id (вид, состояние, ревизия); `null` — такой нет. Источник правды для каналов. */
   card(proposalId: string): { kind: string; state: CardRow['state']; revision: number } | null;
+  /** Проекция карточки для телефона (`cards.list`, `cards.changed`); `null` — такой нет или она не проецируется. */
+  phoneCard(proposalId: string): PhoneCard | null;
+  /** Проекции активных карточек (после погашения просроченных). */
+  phoneCards(): PhoneCard[];
   /** Изменения карточек ядра по одной: needs_confirmation, decided, expired, superseded. Возвращает отписку. */
   onCardChanged(listener: (change: AssistantCardChanged) => void): () => void;
   /** Детерминированный обзор (кто работает, что зависло) без запуска CLI: тот же текст, что у `parley_overview`. */
@@ -386,6 +391,17 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     decidedVia: row.decidedVia,
     outcome: row.outcome,
   });
+  /** Карточка для телефона: явный список полей; `jobId` — только если хост уже связал карточку с job (источник `job:<id>`). */
+  const phoneOf = (row: CardRow): PhoneCard | null =>
+    projectPhoneCard({
+      cardId: row.proposalId,
+      revision: row.revision,
+      kind: row.kind,
+      state: row.state === 'active' ? 'needs_confirmation' : row.state,
+      view: row.view,
+      expiresAt: row.expiresAt,
+      ...(row.source.startsWith('job:') ? { jobId: row.source.slice('job:'.length) } : {}),
+    });
   /** Переходы карточек при старте (погасли за время простоя, закрыты как unknown): слушатели ещё не подключены, каждый новый получает их при подключении. */
   let startupChanged: string[] = [];
   const emitCard = (row: CardRow | null): void => {
@@ -1525,6 +1541,14 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     card(proposalId) {
       const row = cards.get(proposalId);
       return row === null ? null : { kind: row.kind, state: row.state, revision: row.revision };
+    },
+    phoneCard(proposalId) {
+      const row = cards.get(proposalId);
+      return row === null ? null : phoneOf(row);
+    },
+    phoneCards() {
+      sweep();
+      return cards.active().flatMap((row) => phoneOf(row) ?? []);
     },
     onCardChanged(listener) {
       cardListeners.add(listener);

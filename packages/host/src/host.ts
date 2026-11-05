@@ -892,6 +892,11 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     const projected = projectPhoneJob(job);
     if (projected !== null) handle.context.broadcast('jobs.changed', { job: projected });
   });
+  // Телефону — проекция карточки на каждую смену состояния (в том числе терминальную); граница `remote` пропускает по REMOTE_EVENTS.
+  assistantService.onCardChanged((change) => {
+    const card = assistantService.phoneCard(change.cardId);
+    if (card !== null) handle.context.broadcast('cards.changed', { card });
+  });
   // Канонические уведомления: события ядра (терминальные jobs, карточки) пишутся в store, прошлые не заливаются.
   // До T4 канала `app` нет, поэтому режим константа TELEGRAM_ONLY: в `app` ничего не копится, Telegram получает прежнее.
   const notificationStore = createNotificationStore(sideDb);

@@ -16,6 +16,7 @@ import type {
   WorksSnapshot,
 } from './types.js';
 import type { WorksSyncInvalidated } from './works-sync.js';
+import type { CardsEvents } from './remote/cards.js';
 import type { VoiceEvents } from './remote/voice.js';
 
 /** Однонаправленные события хоста → клиенту, без ответа. */
@@ -79,6 +80,8 @@ export interface Events {
   'assistant.card.changed': AssistantCardChanged;
   /** Телефону: job помощника в проекции без логов и argv (план голоса, B3). */
   'jobs.changed': VoiceEvents['jobs.changed'];
+  /** Телефону: карточка помощника в проекции без payload (T4a). */
+  'cards.changed': CardsEvents['cards.changed'];
   /** Телефону: голосовая сессия закрыта (любая причина). */
   'voice.session.closed': VoiceEvents['voice.session.closed'];
   'telegram.changed': TelegramStatus;

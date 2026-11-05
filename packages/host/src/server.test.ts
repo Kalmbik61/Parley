@@ -2178,7 +2178,7 @@ describe('платный голос remoteVoice: гейт только для vo
     await waitConnected(socket.socket);
     const methods = ((await hello(socket, token, { client: 'remote' })).result as { methods: string[] }).methods;
     expect(methods).not.toContain('voice.session.prepare');
-    for (const name of ['voice.session.close', 'voice.usage.get', 'jobs.submit', 'jobs.get', 'cards.decide']) expect(methods, name).toContain(name);
+    for (const name of ['voice.session.close', 'voice.usage.get', 'jobs.submit', 'jobs.get', 'cards.decide', 'cards.list']) expect(methods, name).toContain(name);
     socket.close();
   });
 });
