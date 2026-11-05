@@ -75,6 +75,7 @@ import {
   topLetterSeq,
 } from './mail.js';
 import type { MailBatch, MailKnown, MailNotice } from './mail.js';
+import { remoteWorkMap } from './remote-snapshot.js';
 
 export type { MailNotice } from './mail.js';
 
@@ -98,6 +99,8 @@ export interface WorksServiceOptions {
    * само `mailBatchMs`.
    */
   mailBatchMs?: number;
+  /** Только для тестов: порог предупреждения о снимке для моста, байт; по умолчанию `REMOTE_SNAPSHOT_WARN_BYTES`. */
+  remoteWarnBytes?: number;
 }
 
 /**
@@ -125,6 +128,11 @@ export interface WorksService {
    * размер не зависит от переписки. Тот же `revision` и те же версии работ, что у `windowSnapshot`. `null` — не влезает в кадр.
    */
   mailSnapshot(): WorksSnapshot | null;
+  /**
+   * Снимок для моста телефона (клиент с ролью `remote` и `rooms-mail`): снимок без писем, из которого убрано то, чего мост не
+   * читает (`remoteWorkMap`). Тот же `revision` и те же версии работ. `null` — не влезает в кадр.
+   */
+  remoteSnapshot(): WorksSnapshot | null;
   /** Прежний полный снимок для клиента без `compact-works`; `null` — он не влезает в кадр, клиенту нужно обновление. */
   legacySnapshot(): WorksSnapshot | null;
   entry(projectPath: string, workId: string): WorkEntry | undefined;
@@ -158,6 +166,8 @@ const WINDOW_MESSAGES_PER_WORK_BYTES = 1024 * 1024;
 const WINDOW_MESSAGES_MIN_BYTES = 64 * 1024;
 /** Потолок снимка для окна целиком: кадр ограничен 8 МиБ, остальное — запас на события и дописывание. */
 const WINDOW_SNAPSHOT_MAX_BYTES = 5 * 1024 * 1024;
+/** С какого размера снимок для моста пишет в журнал, что запас до потолка почти выбран: один раз на пересечение. */
+const REMOTE_SNAPSHOT_WARN_BYTES = Math.floor(WINDOW_SNAPSHOT_MAX_BYTES * 0.8);
 /**
  * Сколько писем у всех работ вместе читать для прежнего окна: осторожный предел, а не точная граница. Потолок кадра
  * (`LEGACY_SNAPSHOT_MAX_BYTES`, 6 МиБ) на 40 000 писем даёт около 157 Б на письмо, а самое короткое письмо в JSON весит
@@ -180,6 +190,8 @@ const isCompactClient = (client: Client): boolean => client.features.has(COMPACT
 /** Окно с `rooms-mail` получает письма событием; без признака — `works.changed` с хвостами писем, как прежде (спека 6.10). */
 const isMailClient = (client: Client): boolean => client.features.has(ROOMS_MAIL_FEATURE);
 const lacksMail = (client: Client): boolean => !isMailClient(client);
+/** Мост телефона: снимок без писем, ужатый до того, что он читает (`remoteSnapshot`). */
+const isRemoteMailClient = (client: Client): boolean => client.role === 'remote' && isMailClient(client);
 const jsonBytes = (value: unknown): number => Buffer.byteLength(JSON.stringify(value), 'utf8');
 
 /** Ключ работы для внутренних карт сервиса: `\u0000` в путях и id не встречается. */
@@ -237,6 +249,11 @@ export function createWorksService(
    * его вместе с остальными не нужно — номер растёт там же, где обнуляется `windowCache`, а устаревший снимок мал.
    */
   let mailCache: { revision: number; snapshot: WorksSnapshot | null } | null = null;
+  /** Снимок для моста — так же по номеру рассылки; части ужимаются из частей без писем и живут, пока жива сама часть. */
+  let remoteCache: { revision: number; snapshot: WorksSnapshot | null } | null = null;
+  const remoteParts = new WeakMap<WindowPart, WindowPart>();
+  /** Снимок для моста выше `REMOTE_SNAPSHOT_WARN_BYTES` при последней сборке: предупреждение — только на пересечении. */
+  let remoteNearCap = false;
   let legacyCache: { revision: number; snapshot: WorksSnapshot | null } | null = null;
   /** Клиенты, о которых уже записано «нужно обновление», и признак сообщения о слишком большом снимке: не на каждую рассылку. */
   const upgradeNotified = new Set<string>();
@@ -305,11 +322,16 @@ export function createWorksService(
    * размеров частей: каркас без работ, сами работы и запятые между ними — столько же, сколько дал бы `JSON.stringify`
    * всего снимка, но без повторной сериализации работ, которые не менялись.
    *
-   * `letterless` — снимок для окон с `rooms-mail` (`mailWorkMap`): писем в нём нет, поэтому бюджет всем работам 0, а запасной
+   * `mail` — снимок для окон с `rooms-mail` (`mailWorkMap`): писем в нём нет, поэтому бюджет всем работам 0, а запасной
    * вариант отличается только короткими текстами. Слоты `windowParts` общие с обычным снимком: каждая сборка убирает из них
    * только свои варианты, чтобы две сборки на одном номере не выбрасывали части друг друга.
+   *
+   * `remote` — снимок для моста: части без писем, ужатые `remoteWorkMap`. Он просит те же варианты, что снимок без писем, и
+   * вариантов не убирает (их убирает сборка без писем); слоты пропавших работ уходят и у него.
+   * `bytes` — размер вернувшегося снимка, а при `null` — размер запасного варианта, который не влез.
    */
-  function buildWindow(letterless = false): WorksSnapshot | null {
+  function buildWindow(kind: 'compact' | 'mail' | 'remote' = 'compact'): { snapshot: WorksSnapshot | null; bytes: number } {
+    const letterless = kind !== 'compact';
     const asked = new Map<string, Set<string>>();
     const all = Array.from(entries.values());
     const live = all.filter((entry) => entry.map.work.status !== 'archived').length;
@@ -317,14 +339,19 @@ export function createWorksService(
       WINDOW_MESSAGES_PER_WORK_BYTES,
       Math.max(WINDOW_MESSAGES_MIN_BYTES, Math.floor(WINDOW_MESSAGES_TOTAL_BYTES / Math.max(live, 1))),
     );
+    const partOf = (work: WorkEntry, messageBytes: number, textMax?: number): WindowPart => {
+      const part = windowPart(work, messageBytes, asked, textMax, letterless);
+      return kind === 'remote' ? remotePart(part) : part;
+    };
+    let bytes = 0;
     const build = (messagesFor: (archived: boolean) => number, textMax?: number): WorksSnapshot | null => {
-      const parts = all.map((work) => windowPart(work, messagesFor(work.map.work.status === 'archived'), asked, textMax, letterless));
+      const parts = all.map((work) => partOf(work, messagesFor(work.map.work.status === 'archived'), textMax));
       const snapshot: WorksSnapshot = {
         entries: parts.map((part) => part.entry),
         branches: Object.fromEntries(branches),
         revision,
       };
-      const bytes =
+      bytes =
         jsonBytes({ ...snapshot, entries: [] }) +
         parts.reduce((sum, part) => sum + part.bytes, 0) +
         Math.max(parts.length - 1, 0);
@@ -337,19 +364,47 @@ export function createWorksService(
     for (const [key, slot] of windowParts) {
       const wanted = asked.get(key);
       if (wanted === undefined) windowParts.delete(key);
-      else for (const variant of slot.parts.keys()) if (variant.startsWith(LETTERLESS_VARIANT) === letterless && !wanted.has(variant)) slot.parts.delete(variant);
+      else if (kind !== 'remote') for (const variant of slot.parts.keys()) if (variant.startsWith(LETTERLESS_VARIANT) === letterless && !wanted.has(variant)) slot.parts.delete(variant);
     }
-    return snapshot;
+    return { snapshot, bytes };
+  }
+
+  /** Часть для моста из части без писем: ужимается один раз на часть (та же версия карты — та же часть). */
+  function remotePart(part: WindowPart): WindowPart {
+    let trimmed = remoteParts.get(part);
+    if (trimmed === undefined) {
+      const entry = { ...part.entry, map: remoteWorkMap(part.entry.map) };
+      trimmed = { entry, bytes: jsonBytes(entry) };
+      remoteParts.set(part, trimmed);
+    }
+    return trimmed;
   }
 
   const windowSnapshot = (): WorksSnapshot | null => {
-    if (windowCache?.revision !== revision) windowCache = { revision, snapshot: buildWindow() };
+    if (windowCache?.revision !== revision) windowCache = { revision, snapshot: buildWindow('compact').snapshot };
     return windowCache.snapshot;
   };
 
   const mailSnapshot = (): WorksSnapshot | null => {
-    if (mailCache?.revision !== revision) mailCache = { revision, snapshot: buildWindow(true) };
+    if (mailCache?.revision !== revision) mailCache = { revision, snapshot: buildWindow('mail').snapshot };
     return mailCache.snapshot;
+  };
+
+  const remoteSnapshot = (): WorksSnapshot | null => {
+    if (remoteCache?.revision !== revision) {
+      const { snapshot, bytes } = buildWindow('remote');
+      remoteCache = { revision, snapshot };
+      const near = bytes > (options.remoteWarnBytes ?? REMOTE_SNAPSHOT_WARN_BYTES);
+      if (near && !remoteNearCap) {
+        host.log.warn('карта: снимок для моста близок к потолку кадра', {
+          bytes,
+          cap: WINDOW_SNAPSHOT_MAX_BYTES,
+          percent: Math.round((bytes / WINDOW_SNAPSHOT_MAX_BYTES) * 1000) / 10,
+        });
+      }
+      remoteNearCap = near;
+    }
+    return remoteCache.snapshot;
   };
 
   /** Полные карты с письмами для прежнего окна; `null` — писем слишком много, чтобы читать их ради заведомого отказа. */
@@ -418,17 +473,19 @@ export function createWorksService(
   function publish(only?: (client: Client) => boolean): void {
     if (only !== undefined && !host.clients().some(only)) return;
     const wanted = only ?? ((): boolean => true);
-    const toMail = (client: Client): boolean => !isSyncClient(client) && isMailClient(client) && wanted(client);
+    const toMail = (client: Client): boolean => !isSyncClient(client) && isMailClient(client) && !isRemoteMailClient(client) && wanted(client);
+    const toRemote = (client: Client): boolean => isRemoteMailClient(client) && wanted(client);
     const toCompact = (client: Client): boolean => !isSyncClient(client) && isCompactClient(client) && !isMailClient(client) && wanted(client);
     const toLegacy = (client: Client): boolean => !isSyncClient(client) && !isCompactClient(client) && !isMailClient(client) && wanted(client);
 
     const connected = host.clients();
     const mailWindows = connected.some(toMail);
+    const remotes = connected.some(toRemote);
     let fits = true;
     // Снимок с хвостами писем читает письма из базы: его собирают, если ему есть кому уйти, а когда окон с признаком нет вовсе,
     // рассылка идёт как прежде, даже без клиентов. Подключены одни окна с признаком — он не нужен. Идёт первым: письмо, легшее
     // между сборками, окно с признаком получит событием, а окну без признака хвост нужен как был прочитан проходом.
-    if (connected.some(toCompact) || (!mailWindows && (sync === undefined || connected.some(client => !isSyncClient(client))))) {
+    if (connected.some(toCompact) || (!mailWindows && !remotes && (sync === undefined || connected.some(client => !isSyncClient(client))))) {
       const compact = windowSnapshot();
       if (compact === null) fits = false;
       else broadcastWorks(compact, toCompact);
@@ -437,6 +494,11 @@ export function createWorksService(
       const mail = mailSnapshot();
       if (mail === null) fits = false;
       else broadcastWorks(mail, toMail);
+    }
+    if (remotes) {
+      const remote = remoteSnapshot();
+      if (remote === null) fits = false;
+      else broadcastWorks(remote, toRemote);
     }
     if (!fits) {
       if (!oversizeNotified) {
@@ -1173,6 +1235,7 @@ export function createWorksService(
     snapshot: buildSnapshot,
     windowSnapshot,
     mailSnapshot,
+    remoteSnapshot,
     legacySnapshot,
     entry: (projectPath, workId) => entries.get(workKey(projectPath, workId)),
     firstReadDone: (projectPath, workId) => readAlready.has(workKey(projectPath, workId)),

@@ -30,6 +30,8 @@ export function worksList(works: WorksService): Handler<'works.list'> {
     return snapshot;
   };
   return async (_params, request) => {
+    // Мост телефона читает снимок без писем, ужатый до того, что он читает (`remoteSnapshot`); тот же вариант, что в works.changed.
+    if (request.client.role === 'remote' && request.client.features.has(ROOMS_MAIL_FEATURE)) return required(works.remoteSnapshot());
     // Окно с `rooms-mail` читает снимок без писем (спека rooms.mail 6.8): письма оно берёт страницами и событиями.
     if (request.client.features.has(ROOMS_MAIL_FEATURE)) return required(works.mailSnapshot());
     // Окно с `compact-works` читает компактный снимок (P35): письма хвостом, длинные тексты сокращены.
