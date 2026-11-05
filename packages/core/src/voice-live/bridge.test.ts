@@ -73,7 +73,7 @@ describe('DelegationBridge', () => {
     expect(h.submits[0]).toMatchObject({ text: 'Check the billing rooms', transcriptPartial: false });
   });
 
-  it('VA-14/VA-05: фрагментов не дождались — через 1,5 с partial с тем, что есть', async () => {
+  it('VA-14/VA-05: фрагментов не дождались, но к сроку поток затих — тишина, не partial', async () => {
     const h = setup();
     h.human('Check the', 0, 800);
     h.bridge.handle({ type: 'delegationCreated', delegationId: 'd1', offsetMs: 4000 });
@@ -81,7 +81,61 @@ describe('DelegationBridge', () => {
     expect(h.submits).toHaveLength(0);
     await h.advance(1);
     expect(h.submits).toHaveLength(1);
-    expect(h.submits[0]).toMatchObject({ text: 'Check the', transcriptPartial: true });
+    expect(h.submits[0]).toMatchObject({ text: 'Check the', transcriptPartial: false });
+  });
+
+  it('на сроке фрагменты человека ещё идут (последний < TRANSCRIPT_QUIET_MS назад), highWater не дотянул — partial', async () => {
+    const h = setup();
+    h.human('Check the', 0, 800);
+    h.bridge.handle({ type: 'delegationCreated', delegationId: 'd1', offsetMs: 4000 });
+    await h.advance(TRANSCRIPT_WAIT_MS - 100);
+    h.human(' billing', 800, 1000);
+    await h.advance(100);
+    expect(h.submits).toHaveLength(1);
+    expect(h.submits[0]).toMatchObject({ text: 'Check the billing', transcriptPartial: true });
+  });
+
+  it('b-027: длинное поручение с паузами 1,5 и 1,4 с после ответа модели уходит целиком и не partial', async () => {
+    const h = setup();
+    h.bridge.handle({ type: 'outputTranscript', text: 'Хорошо, что отправить ему дальше?', startMs: 0, endMs: 2000 });
+    h.human('Да, давай, напиши тогда', 3000, 5000);
+    h.human(' ему, начинаем разработку', 6500, 8500);
+    h.human(', обязательно скажи, что исполнители должны быть Sonnet', 9900, 12_000);
+    h.bridge.handle({ type: 'delegationCreated', delegationId: 'd1', offsetMs: 12_000 + 1500 });
+    await h.advance(TRANSCRIPT_WAIT_MS);
+    expect(h.submits).toHaveLength(1);
+    expect(h.submits[0]).toMatchObject({
+      text: 'Да, давай, напиши тогда ему, начинаем разработку , обязательно скажи, что исполнители должны быть Sonnet',
+      transcriptPartial: false,
+    });
+  });
+
+  it('b-027: «Угу.» модели в паузе реплику не делит, ответ из ≥ REPLY_MIN_WORDS слов делит', async () => {
+    const h = setup();
+    h.human('First half', 0, 1000);
+    h.bridge.handle({ type: 'outputTranscript', text: 'Угу.', startMs: 1200, endMs: 1500 });
+    h.human(' second half', 3000, 4000);
+    h.bridge.handle({ type: 'delegationCreated', delegationId: 'd1', offsetMs: 4000 });
+    await h.advance(0);
+    expect(h.submits[0]?.text).toBe('First half second half');
+    h.bridge.handle({ type: 'outputTranscript', text: 'Ага, понял, жду дальше.', startMs: 4500, endMs: 5500 });
+    h.human('Third part', 6000, 7000);
+    h.bridge.handle({ type: 'delegationCreated', delegationId: 'd2', offsetMs: 7000 });
+    await h.advance(0);
+    expect(h.submits[1]?.text).toBe('Third part');
+  });
+
+  it('b-027: длинный повтор после первой делегации (afterMs) с паузами — целиком, не partial', async () => {
+    const h = setup();
+    h.human('Check the rooms', 0, 1500);
+    h.bridge.handle({ type: 'delegationCreated', delegationId: 'd1', offsetMs: 1500 });
+    await h.advance(0);
+    h.human('Say it', 3000, 4000);
+    h.human(' again please', 5500, 6500);
+    h.human(' with all the details', 7900, 9000);
+    h.bridge.handle({ type: 'delegationCreated', delegationId: 'd2', offsetMs: 9000 + 1500 });
+    await h.advance(TRANSCRIPT_WAIT_MS);
+    expect(h.submits[1]).toMatchObject({ text: 'Say it again please with all the details', transcriptPartial: false });
   });
 
   it('совсем без фрагментов: partial с заменителем текста', async () => {
@@ -160,14 +214,14 @@ describe('DelegationBridge', () => {
     const h = setup();
     h.human('Old chat', 0, 600);
     h.bridge.handle({ type: 'outputTranscript', text: 'Sure [h', startMs: 700, endMs: 900 });
-    h.bridge.handle({ type: 'outputTranscript', text: 'um] thing.', startMs: 900, endMs: 1100 });
+    h.bridge.handle({ type: 'outputTranscript', text: 'um] thing, checking.', startMs: 900, endMs: 1100 });
     h.human('Now the rooms', 5000, 6000);
     h.bridge.handle({ type: 'delegationCreated', delegationId: 'd1', offsetMs: 6000 });
     await h.advance(0);
     expect(h.submits[0]?.text).toBe('Now the rooms');
     expect(h.submits[0]?.context['recentTurns']).toEqual([
       { role: 'human', text: 'Old chat' },
-      { role: 'assistant', text: 'Sure thing.' },
+      { role: 'assistant', text: 'Sure thing, checking.' },
     ]);
   });
 
