@@ -328,20 +328,35 @@ export function BrowserSurface({ workKey, place, url, viewport, visible, bridge,
 
   // Запрос логина и пароля этой вкладки (basic-auth): приходит main'ом по id гостя, снимается ответом, отменой main'а или сменой гостя.
   const [authRequest, setAuthRequest] = useState<BrowserAuthRequest | null>(null);
+  // Какой запрос на экране сейчас. Ответ main на старый запрос (ack или отказ) приходит, когда уже мог встать новый, и его побочные
+  // действия — снять оверлей, вернуть фокус странице, показать ошибку — касаются только текущего запроса. Ссылка меняется
+  // синхронно в каждом переходе (приход, отмена, смена гостя, снятие ответом), а не при рендере: ответ на старый запрос может
+  // прийти раньше, чем React зафиксирует новый.
+  const currentAuthIdRef = useRef<string | null>(null);
+  /** Снимает запрос `requestId`, если он ещё текущий; `true` — снят. Только свой: новый запрос остаётся. */
+  const dismissAuth = useCallback((requestId: string): boolean => {
+    if (currentAuthIdRef.current !== requestId) return false;
+    currentAuthIdRef.current = null;
+    setAuthRequest((current) => (current !== null && current.requestId === requestId ? null : current));
+    return true;
+  }, []);
   useEffect(() => {
     const offRequest = bridge.browser.onAuthRequest((event) => {
       const own = useBrowserStore.getState().tabs[tabId]?.webContentsId ?? null;
-      if (own !== null && event.webContentsId === own) setAuthRequest(event);
+      if (own === null || event.webContentsId !== own) return;
+      currentAuthIdRef.current = event.requestId;
+      setAuthRequest(event);
     });
     const offCancel = bridge.browser.onAuthCancel((event) => {
-      setAuthRequest((current) => (current !== null && current.requestId === event.requestId ? null : current));
+      dismissAuth(event.requestId);
     });
     return () => {
       offRequest();
       offCancel();
     };
-  }, [bridge, tabId]);
+  }, [bridge, tabId, dismissAuth]);
   useEffect(() => {
+    currentAuthIdRef.current = null;
     setAuthRequest(null);
   }, [state.webContentsId]);
   // Ответ не дошёл до main (мост отказал): запрос остаётся с ошибкой — иначе вызов Chromium висел бы, а человек не видел бы формы.
@@ -349,10 +364,6 @@ export function BrowserSurface({ workKey, place, url, viewport, visible, bridge,
   useEffect(() => {
     setAuthFailed(false);
   }, [authRequest?.requestId]);
-  // Какой запрос на экране сейчас: ответ main на старый запрос (ack или отказ) приходит, когда уже мог встать новый, и его
-  // побочные действия — снять оверлей, вернуть фокус странице, показать ошибку — касаются только текущего запроса.
-  const currentAuthIdRef = useRef<string | null>(null);
-  currentAuthIdRef.current = authRequest?.requestId ?? null;
   const answerAuth = (credentials: { username: string; password: string } | null): void => {
     const request = authRequest;
     if (request === null) return;
@@ -360,10 +371,8 @@ export function BrowserSurface({ workKey, place, url, viewport, visible, bridge,
       () => {
         // Оверлей снимается по подтверждению main и только свой: за это время мог прийти повтор (новый requestId) или main
         // уже снял запрос отменой — тогда ни снимать, ни трогать фокус нечего.
-        if (currentAuthIdRef.current !== request.requestId) return;
-        setAuthRequest(null);
         // Фокус — странице, как после закрытого редактора: оверлей держал его, и клавиши корня иначе не доходили бы.
-        viewRef.current?.focus();
+        if (dismissAuth(request.requestId)) viewRef.current?.focus();
       },
       (error: unknown) => {
         console.warn('[parley] authResponse failed', error);

@@ -280,6 +280,56 @@ describe('BrowserSurface (тест 3)', () => {
       expect(focus).not.toHaveBeenCalled();
     });
 
+    it('a2 приходит и ack a1 разрешается в одном пакете act (до фиксации a2): a2 на экране, гость не в фокусе', async () => {
+      setBrowserTab('http://localhost:5173/');
+      renderWork();
+      const view = arm(webview(), 42);
+      fire(view, 'dom-ready');
+      const focus = vi.spyOn(view, 'focus');
+      let ack: () => void = () => undefined;
+      bridge.browser.authResponse = vi.fn(() => new Promise<void>((resolve) => (ack = resolve)));
+      act(() => bridge.emitAuthRequest(REQUEST));
+      submit();
+      await act(async () => {
+        bridge.emitAuthRequest({ ...REQUEST, requestId: 'a2', retry: true });
+        ack();
+      });
+      expect(screen.getByTestId('browser-auth')).toBeTruthy();
+      expect(screen.getByRole('alert').textContent).toBe('Wrong username or password. Try again.');
+      expect(focus).not.toHaveBeenCalled();
+    });
+
+    it('a2 приходит и отказ на a1 в одном пакете: ошибки отправки у a2 нет', async () => {
+      openedTab();
+      let reject: (error: Error) => void = () => undefined;
+      bridge.browser.authResponse = vi.fn(() => new Promise<void>((_resolve, fail) => (reject = fail)));
+      act(() => bridge.emitAuthRequest(REQUEST));
+      submit();
+      await act(async () => {
+        bridge.emitAuthRequest({ ...REQUEST, requestId: 'a2', retry: true });
+        reject(new Error('invalid credentials'));
+      });
+      expect(screen.getByRole('alert').textContent).toBe('Wrong username or password. Try again.');
+    });
+
+    it('отмена main\'ом и ack в одном пакете: оверлей снят, гость не в фокусе', async () => {
+      setBrowserTab('http://localhost:5173/');
+      renderWork();
+      const view = arm(webview(), 42);
+      fire(view, 'dom-ready');
+      const focus = vi.spyOn(view, 'focus');
+      let ack: () => void = () => undefined;
+      bridge.browser.authResponse = vi.fn(() => new Promise<void>((resolve) => (ack = resolve)));
+      act(() => bridge.emitAuthRequest(REQUEST));
+      submit();
+      await act(async () => {
+        bridge.emitAuthCancel({ requestId: 'a1', webContentsId: 42 });
+        ack();
+      });
+      expect(screen.queryByTestId('browser-auth')).toBeNull();
+      expect(focus).not.toHaveBeenCalled();
+    });
+
     it('отказ на старый ответ не вешает ошибку отправки на более новый запрос', async () => {
       openedTab();
       let reject: (error: Error) => void = () => undefined;
