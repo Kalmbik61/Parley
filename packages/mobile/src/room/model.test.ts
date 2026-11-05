@@ -10,6 +10,7 @@ import {
   mentionQuery,
   quote,
   recipientsOf,
+  replyRecipients,
   roomComposer,
   roomHeader,
   roomOutgoing,
@@ -153,5 +154,27 @@ describe('roomOutgoing (Reply with selection, D1 §9.7)', () => {
     const out = roomOutgoing('why?', reply);
     expect(typedPart(out.text, reply.selected.trim())).toBe('why?');
     expect(roomOutgoing(typedPart(out.text, reply.selected.trim()), reply).text).toBe(out.text);
+  });
+});
+
+describe('replyRecipients (Reply addresses the quoted author, as the window, sg-28)', () => {
+  const members = ['s-1', 's-2', 's-3'];
+  const replyTo = (from: string) => ({ message: msg('m-5', from, '2026-11-05T10:00:00.000Z'), selected: '' });
+  it('the author is a member: added after the chips', () => {
+    expect(replyRecipients(['s-2'], replyTo('s-1'), members)).toEqual(['s-2', 's-1']);
+    expect(replyRecipients([], replyTo('s-1'), members)).toEqual(['s-1']);
+  });
+  it('the author is already a chip: not named twice', () => {
+    expect(replyRecipients(['s-1', 's-2'], replyTo('s-1'), members)).toEqual(['s-1', 's-2']);
+  });
+  it('the author left the room: not added, the letter goes as without Reply', () => {
+    expect(replyRecipients(['s-2'], replyTo('s-9'), members)).toEqual(['s-2']);
+    expect(replyRecipients([], replyTo('s-9'), members)).toEqual([]);
+  });
+  it('a reply to the human own letter adds nobody', () => {
+    expect(replyRecipients(['s-2'], replyTo('human'), members)).toEqual(['s-2']);
+  });
+  it('no reply: the chips only', () => {
+    expect(replyRecipients(['s-2'], null, members)).toEqual(['s-2']);
   });
 });

@@ -152,7 +152,7 @@ export interface RoomTarget {
   roomId: string;
 }
 
-/** `rooms.send` as the window does: always a `note`; recipients only from chips; the reply links by id. */
+/** `rooms.send` as the window does: always a `note`; recipients from `replyRecipients`; the reply links by id. */
 export async function sendLetter(
   client: Pick<RemoteClient, 'sendRoomMessage'>,
   room: RoomTarget,
@@ -176,4 +176,14 @@ export interface RoomReply {
 export function roomOutgoing(draft: string, reply: RoomReply | null): { text: string; replyTo: string | null } {
   if (reply === null) return { text: draft, replyTo: null };
   return { text: reply.selected.trim() === '' ? draft : withQuote(reply.selected.trim(), draft), replyTo: reply.message.id };
+}
+
+/**
+ * Who the letter goes to (sg-28): the chips, and on a Reply also the author of the quoted letter while they are still a
+ * member and not named already, as the window's RoomPanel `handleSend` does. The human's own letter adds nobody: the
+ * human is not in `members`.
+ */
+export function replyRecipients(to: readonly string[], reply: RoomReply | null, memberIds: readonly string[]): string[] {
+  const author = reply?.message.from;
+  return author !== undefined && memberIds.includes(author) && !to.includes(author) ? [...to, author] : [...to];
 }

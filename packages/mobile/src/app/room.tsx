@@ -25,7 +25,7 @@ import { DictationHiddenGuard, useDictationTarget } from '../voice/use-dictation
 import { Toast, useToast } from '../components/Toast';
 import { useCanAct, useClient, useRemoteState } from '../hooks/use-remote';
 import { parseWorkParam, sessionParam, workParam } from '../nav/refs';
-import { COMPOSER_PLACEHOLDER, filterMentionable, insertMention, lines, mentionQuery, type Line, recipientsOf, roomComposer, roomHeader, deliveryLine, letterProblem, roomOutgoing, type Mentionable } from '../room/model';
+import { COMPOSER_PLACEHOLDER, filterMentionable, insertMention, lines, mentionQuery, type Line, recipientsOf, replyRecipients, roomComposer, roomHeader, deliveryLine, letterProblem, roomOutgoing, type Mentionable } from '../room/model';
 import { visibleOutLetters, type OutLetter } from '../room/out-letters';
 import { REREAD_INSTANT_ROWS } from '../feed/follow-end';
 import { useFollowEnd } from '../feed/use-follow-end';
@@ -366,12 +366,13 @@ export default function RoomScreen() {
   const hidden = chat.switchedOff ? ({ kind: 'hidden', text: 'Messaging agents from the phone is turned off on your Mac' } as const) : composer;
   const q = mentionQuery(chat.draft);
   const menu = q === null || hidden.kind === 'hidden' ? null : filterMentionable(mentionables, q.query);
-  const to = recipientsOf(chat.draft, chat.chips).map((x) => x.label);
+  const memberIds = room.members;
+  // The To line names who the letter goes to: the chips and, on a Reply, the quoted author (`replyRecipients`, sg-28).
+  const to = replyRecipients(recipientsOf(chat.draft, chat.chips).map((x) => x.id), chat.reply, memberIds).map(labelOf);
   const outgoing = roomOutgoing(chat.draft, chat.reply);
   // The whole letter is measured, with the selected fragment's quote block (critic A42 M3).
   const problem = letterProblem(chat.draft) ?? letterProblem(outgoing.text);
   const canSend = hidden.kind === 'input' && hidden.sendEnabled && problem === null && !chat.busy;
-  const memberIds = room.members;
 
   return (
     <View style={[styles.page, { backgroundColor: c.bg }]}>
@@ -558,7 +559,7 @@ export default function RoomScreen() {
                   style={[typography.body, styles.input, { backgroundColor: c.surface, color: c.label, opacity: chat.busy ? 0.6 : 1 }]}
                 />
                 <MicButton id={dictationId} editable={!chat.busy && hidden.sendEnabled} />
-                <Pressable accessibilityRole="button" accessibilityLabel="Send" accessibilityState={{ disabled: !canSend, busy: chat.busy }} disabled={!canSend} onPress={() => void (dictation.finishBeforeSend(dictationId) || chat.send())} style={styles.send}>
+                <Pressable accessibilityRole="button" accessibilityLabel="Send" accessibilityState={{ disabled: !canSend, busy: chat.busy }} disabled={!canSend} onPress={() => void (dictation.finishBeforeSend(dictationId) || chat.send(memberIds))} style={styles.send}>
                   <SymbolView name="arrow.up.circle.fill" size={32} tintColor={canSend ? c.tint : c.off} />
                 </Pressable>
               </View>
