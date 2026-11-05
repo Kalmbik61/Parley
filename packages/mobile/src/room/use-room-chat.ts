@@ -6,7 +6,7 @@ import { roomKey } from '@parley/remote-client';
 import { roomDraftOf, setRoomDraft } from './room-drafts';
 import { haptic } from '../haptics';
 import { useClient } from '../hooks/use-remote';
-import { letterProblem, recipientsOf, roomOutgoing, sendLetter, type Mentionable, type RoomReply, type RoomTarget } from './model';
+import { letterProblem, recipientsOf, replyRecipients, roomOutgoing, sendLetter, type Mentionable, type RoomReply, type RoomTarget } from './model';
 
 const outboxes = new Map<string, OutLetter[]>();
 export { roomDraftOf, setRoomDraft } from './room-drafts';
@@ -22,7 +22,9 @@ export interface RoomChatFlow {
   busy: boolean;
   /** `rooms.send` answered `unknown_method`: the Mac switch is off. */
   switchedOff: boolean;
-  send(): Promise<void>;
+  /** `memberIds` — the room's members now: a Reply also addresses the quoted author while they are one (`replyRecipients`). */
+  send(memberIds: readonly string[]): Promise<void>;
+  /** Resends the stored `to`, which already holds the quoted author. */
   retry(letter: OutLetter): Promise<void>;
   /** Developer preview only: put a letter on its way without a call. */
   seedOut(letter: OutLetter): void;
@@ -104,10 +106,10 @@ export function useRoomChat(room: RoomTarget | null, notify: (text: string) => v
     out,
     busy,
     switchedOff,
-    send: async () => {
+    send: async (memberIds) => {
       const out = roomOutgoing(draft, reply);
       if (letterProblem(draft) !== null || letterProblem(out.text) !== null) return;
-      const to = recipientsOf(draft, chips).map((c) => c.id);
+      const to = replyRecipients(recipientsOf(draft, chips).map((c) => c.id), reply, memberIds);
       await run({ id: `out-${Date.now().toString(36)}`, text: out.text, typed: draft, to, replyTo: out.replyTo, at: Date.now(), state: 'sending', note: null, messageId: null }, true);
     },
     retry: (letter) => run(letter, false),
