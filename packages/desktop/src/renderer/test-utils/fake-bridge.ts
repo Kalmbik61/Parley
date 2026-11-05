@@ -5,6 +5,7 @@
  * `emit*` имитирует события и статус, пришедшие от хоста.
  */
 
+import type { BrowserAuthCancel, BrowserAuthRequest } from '../../shared/basic-auth.js';
 import type {
   ConsentCard,
   EventData,
@@ -243,6 +244,10 @@ export interface FakeBridge extends ParleyBridge {
   emitAgentActivity(e: AgentActivity): void;
   /** Агент поменял размер страницы: событие `browser:agent-resize` слушателям `browser.onAgentResize` (этап D). */
   emitAgentResize(e: AgentResize): void;
+  /** Страница просит логин и пароль: событие `browser:auth-request` слушателям `browser.onAuthRequest` (basic-auth). */
+  emitAuthRequest(e: BrowserAuthRequest): void;
+  /** Запрос снят main'ом: событие `browser:auth-cancel` слушателям `browser.onAuthCancel`. */
+  emitAuthCancel(e: BrowserAuthCancel): void;
   /** Фокус окна macOS: событие `app:window-focus` слушателям `app.onWindowFocus` (кусок 9.2b). */
   emitWindowFocus(focused: boolean): void;
   /** Ответ browser.pickStart; по умолчанию null. Отказ — объект с code, как у прочих отказов подставного моста. */
@@ -388,6 +393,8 @@ export function createFakeBridge(): FakeBridge {
   const agentOpenTabListeners = new Set<(e: AgentOpenTab) => void>();
   const agentActivityListeners = new Set<(e: AgentActivity) => void>();
   const agentResizeListeners = new Set<(e: AgentResize) => void>();
+  const authRequestListeners = new Set<(e: BrowserAuthRequest) => void>();
+  const authCancelListeners = new Set<(e: BrowserAuthCancel) => void>();
   const windowFocusListeners = new Set<(focused: boolean) => void>();
   let voiceModels: VoiceModelId[] = [];
   let transcribeResult: TranscribeResult = { text: 'dictated text' };
@@ -605,6 +612,12 @@ export function createFakeBridge(): FakeBridge {
     emitAgentActivity: (e) => {
       for (const listener of agentActivityListeners) listener(e);
     },
+    emitAuthRequest: (e) => {
+      for (const listener of authRequestListeners) listener(e);
+    },
+    emitAuthCancel: (e) => {
+      for (const listener of authCancelListeners) listener(e);
+    },
     emitAgentResize: (e) => {
       for (const listener of agentResizeListeners) listener(e);
     },
@@ -802,6 +815,20 @@ export function createFakeBridge(): FakeBridge {
       onAgentResize: (listener) => {
         agentResizeListeners.add(listener);
         return () => agentResizeListeners.delete(listener);
+      },
+      rememberCredentials: async (webContentsId, url) => {
+        browserCalls.push({ method: 'rememberCredentials', args: [webContentsId, url] });
+      },
+      onAuthRequest: (listener) => {
+        authRequestListeners.add(listener);
+        return () => authRequestListeners.delete(listener);
+      },
+      onAuthCancel: (listener) => {
+        authCancelListeners.add(listener);
+        return () => authCancelListeners.delete(listener);
+      },
+      authResponse: async (requestId, credentials) => {
+        browserCalls.push({ method: 'authResponse', args: [requestId, credentials] });
       },
       agentStop: async (webContentsId) => {
         browserCalls.push({ method: 'agentStop', args: [webContentsId] });

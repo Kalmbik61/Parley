@@ -12,6 +12,7 @@
 import path from 'node:path';
 import type { App, DownloadItem, Session, WebContents, WebPreferences } from 'electron';
 import { BROWSER_PARTITION, type BrowserOpenTab } from '../../shared/browser-types.js';
+import type { BasicAuth } from './basic-auth.js';
 
 export type NavVerdict = 'allow' | 'deny';
 
@@ -101,7 +102,7 @@ export function guardWebviewAttach(contents: Pick<WebContents, 'on'>): void {
 /** Обработчики гостя `<webview>`: окна, навигация, масштаб, уход со страницы, клавиши. */
 function guardGuest(
   contents: WebContents,
-  deps: Pick<BrowserGuardDeps, 'openTab' | 'forwardShortcuts' | 'fetchFavicon' | 'inspect' | 'agentFocus'>,
+  deps: Pick<BrowserGuardDeps, 'openTab' | 'forwardShortcuts' | 'fetchFavicon' | 'inspect' | 'agentFocus' | 'basicAuth'>,
 ): void {
   // Журнал консоли и сети — первым: до первой загрузки гостя, иначе её запросы и ранние сообщения прошли бы мимо
   // (спайк 0.1). Сбой журнала клетку не отменяет: исключение отсюда оставило бы гостя с allowpopups без обработчиков
@@ -110,6 +111,13 @@ function guardGuest(
     deps.inspect(contents);
   } catch (error) {
     console.warn('[parley] inspector attach failed', error);
+  }
+
+  // Basic-auth гостя: без обработчика `login` Electron отменяет вызов, и вкладка остаётся на 401. Сбой не снимает клетку.
+  try {
+    deps.basicAuth?.attach(contents);
+  } catch (error) {
+    console.warn('[parley] basic auth attach failed', error);
   }
 
   contents.setWindowOpenHandler(({ url }) => {
@@ -202,6 +210,8 @@ interface BrowserGuardDeps {
   inspect(contents: WebContents): void;
   /** Пока `true` (у гостя открыто окно операции агента), `focus` гостя окну не шлётся: `browser:focus` менял бы активную вкладку. */
   agentFocus?(webContentsId: number): boolean;
+  /** HTTP basic-auth гостей (`main/browser/basic-auth.ts`): подписка на `login` каждого гостя. */
+  basicAuth?: Pick<BasicAuth, 'attach'>;
 }
 
 /**

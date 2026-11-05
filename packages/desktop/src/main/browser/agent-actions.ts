@@ -20,6 +20,7 @@ import type { AgentInput, InputGuard, MouseStep } from './agent-input.js';
 import type { PageRecord } from './agent-pages.js';
 import { urlForAgent } from './agent-url.js';
 import type { AgentWindow } from './agent-window.js';
+import type { BasicAuth } from './basic-auth.js';
 import type { Emulation } from './emulation.js';
 import type { Inspector } from './inspector.js';
 import { SELECT_OPTION_FN } from './page-fns.js';
@@ -77,10 +78,14 @@ export const sleep = (ms: number, signal: AbortSignal): Promise<void> =>
   });
 
 /** Ждёт конец загрузки до `ms`; `true` — дождались, `false` — срок вышел или гость умер. Обрыв — отказ с причиной. */
-export function settleLoad(contents: WebContents, ms: number, signal: AbortSignal): Promise<boolean> {
+export function settleLoad(contents: WebContents, ms: number, signal: AbortSignal, auth?: Pick<BasicAuth, 'isPending' | 'onPending'>): Promise<boolean> {
   if (!contents.isLoading()) return Promise.resolve(true);
+  // Вкладка ждёт логин и пароль человека: загрузка не кончится, пока он не ответит, — агенту отвечаем сразу (`loaded: false`).
+  if (auth?.isPending(contents.id) === true) return Promise.resolve(false);
   return new Promise((resolve, reject) => {
+    const offPending = auth?.onPending(contents.id, () => finish(() => resolve(false)));
     const finish = (action: () => void): void => {
+      offPending?.();
       clearTimeout(timer);
       contents.off('did-stop-loading', onStop);
       contents.off('destroyed', onGone);
@@ -101,7 +106,7 @@ export function settleLoad(contents: WebContents, ms: number, signal: AbortSigna
  * Шаги страницы и переход, который они начали за `settleMs`: его загрузка дожидается до `loadMs` (спека 5.1). Переход на
  * другой документ — главный кадр и не `isSameDocument`.
  */
-export async function withNavigation<T>(contents: WebContents, run: () => Promise<T>, signal: AbortSignal): Promise<{ value: T; navigated: boolean; loaded: boolean }> {
+export async function withNavigation<T>(contents: WebContents, run: () => Promise<T>, signal: AbortSignal, auth?: Pick<BasicAuth, 'isPending' | 'onPending'>): Promise<{ value: T; navigated: boolean; loaded: boolean }> {
   let started = false;
   const onStart = (details: { isMainFrame: boolean; isSameDocument: boolean }): void => {
     if (details.isMainFrame && !details.isSameDocument) started = true;
@@ -115,7 +120,7 @@ export async function withNavigation<T>(contents: WebContents, run: () => Promis
     contents.off('did-start-navigation', onStart as never);
   }
   if (!started) return { value, navigated: false, loaded: true };
-  return { value, navigated: true, loaded: await settleLoad(contents, AGENT_LIMITS.loadMs, signal) };
+  return { value, navigated: true, loaded: await settleLoad(contents, AGENT_LIMITS.loadMs, signal, auth) };
 }
 
 const SECRET_UPLOAD = 'Parley does not upload files from secret locations (~/.ssh, keychains, .env …).';

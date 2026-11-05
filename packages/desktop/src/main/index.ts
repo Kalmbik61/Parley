@@ -46,6 +46,7 @@ import guestAnnotateScript from './browser/guest-annotate.js?raw';
 import guestDomScript from './browser/guest-dom.js?raw';
 import guestPickScript from './browser/guest-pick.js?raw';
 import { installBrowserGuard, promptDownload } from './browser/guard.js';
+import { createBasicAuth } from './browser/basic-auth.js';
 import { createInspector, forwardBatches } from './browser/inspector.js';
 import { saveDiagnostics } from './diagnostics/bundle.js';
 import { AGENT_SHOT_MAX_AGE_MS, AGENT_SHOT_PREFIX, cleanupDrops, cleanupDropsTree, DropTooLargeError, dropsDir, MAX_DROP_IMAGE_BYTES, saveImage } from './drops.js';
@@ -405,6 +406,8 @@ if (!gotLock) {
     // до выбора элемента: Select берёт у него снимок, роль и React (спека 3.8).
     const inspector = createInspector({ fromId: (id) => webContents.fromId(id) ?? null });
     forwardBatches(inspector, (id) => webContents.fromId(id) ?? null);
+    // HTTP basic-auth гостей: пара из адреса — только память; запрос логина идёт окну-хозяину гостя (страж подписывает гостя).
+    const basicAuth = createBasicAuth();
     const typing = createTypingClock();
     const emulation = createEmulation({ inspector });
     // Окно операции агента, скачивания агента и тишина клавиатуры человека (15b): до стража, он их читает.
@@ -466,6 +469,7 @@ if (!gotLock) {
       fetchFavicon: (iconUrl, pageUrl) =>
         fetchFavicon(iconUrl, pageUrl, (url, init) => browserSession.fetch(url, init)),
       inspect: (contents) => inspector.attach(contents),
+      basicAuth,
     });
 
     mainWindow = openWindow();
@@ -820,6 +824,7 @@ if (!gotLock) {
     // `loadedWindows` тут не годится: первый же `<webview>` даёт окну `did-start-loading` (а `did-finish-load` — нет), и признак
     // снимался бы насовсем; главный кадр окна от гостей не зависит.
     const ops = createAgentOps({
+      basicAuth,
       scripts: createAgentScripts({ inspector }),
       storage: createAgentStorage({ cookies: browserSession.cookies, inspector }),
       downloads: agentDownloads,
@@ -1045,6 +1050,7 @@ if (!gotLock) {
         inspector,
         emulation,
         agent: ops,
+        basicAuth,
       },
       saveDropImage: async () => {
         if (fakeDrops) return saveImage({ png: FAKE_DROP_PNG, dir: dropsDir() });

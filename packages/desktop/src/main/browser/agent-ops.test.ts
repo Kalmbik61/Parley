@@ -15,7 +15,8 @@ import { createEmulation } from './emulation.js';
 import { createPageRegistry } from './agent-pages.js';
 import { createAgentWindow } from './agent-window.js';
 import { createTypingClock } from './human-typing.js';
-import { captureSpec, createAgentOps, NOT_MOUNTED_NOTE, openableHref, type AgentOps } from './agent-ops.js';
+import { captureSpec, createAgentOps, NOT_MOUNTED_NOTE, openableHref, openableTarget, resolveAgentTarget, type AgentOps } from './agent-ops.js';
+import type { BasicAuth } from './basic-auth.js';
 
 const REF = { projectPath: '/proj', workId: 'w-1', sessionId: 's-02' };
 const OTHER_REF = { projectPath: '/proj', workId: 'w-2', sessionId: 's-01' };
@@ -60,7 +61,7 @@ function sendWith(options: { viewport?: { width: number; height: number }; conte
 }
 
 /** Окно отвечает на просьбу своим ответом (если он задан) сразу после неё, как ответил бы рендерер. */
-function setup(overrides: { allowed?: boolean; reply?: AgentOpenTabResult | null; sent?: boolean; openMs?: number; owners?: BrowserAgentOwner[]; confirmSurface?: boolean; captureReadyMs?: number; windowHeight?: number; screenDpr?: number; screenDprHangs?: boolean; screenDprRejects?: boolean; guestCallMs?: number; opTimeoutMs?: number } = {}) {
+function setup(overrides: { allowed?: boolean; reply?: AgentOpenTabResult | null; sent?: boolean; openMs?: number; owners?: BrowserAgentOwner[]; confirmSurface?: boolean; captureReadyMs?: number; windowHeight?: number; screenDpr?: number; screenDprHangs?: boolean; screenDprRejects?: boolean; guestCallMs?: number; opTimeoutMs?: number; basicAuth?: Pick<BasicAuth, 'remember' | 'addPending' | 'isPending' | 'onPending'> } = {}) {
   const asked: AgentOpenTab[] = [];
   const state = { allowed: overrides.allowed ?? true, reply: overrides.reply === undefined ? { tabId: 'browser:aaaaaa', reused: false, mounted: true } : overrides.reply };
   const openTab = vi.fn((e: AgentOpenTab): boolean => {
@@ -123,6 +124,7 @@ function setup(overrides: { allowed?: boolean; reply?: AgentOpenTabResult | null
     ...(overrides.screenDprHangs === true ? { screenDpr: () => new Promise<number | null>(() => undefined) } : {}),
     ...(overrides.screenDprRejects === true ? { screenDpr: () => Promise.reject(new Error('Script failed to execute')) } : {}),
     ...(overrides.guestCallMs === undefined ? {} : { guestCallMs: overrides.guestCallMs }),
+    ...(overrides.basicAuth === undefined ? {} : { basicAuth: overrides.basicAuth }),
   };
   const ops: AgentOps = createAgentOps(deps);
   // Окно всегда начинает с `hello`: записи до него реестр пропускает.
@@ -237,6 +239,28 @@ describe('open (спека 5.1 browser_open)', () => {
     expect(openableHref('https://example.com/')).toBe('https://example.com/');
     expect(openableHref('file:///etc/hosts')).toBeNull();
     expect(openableHref('javascript:alert(1)')).toBeNull();
+  });
+
+  it('openableTarget: пара user:pass отделена от адреса; openableHref и resolveAgentTarget — тот же контракт', () => {
+    expect(openableTarget('https://admin:p%40ss@stand.example.test/a?b=1#c')).toEqual({
+      href: 'https://stand.example.test/a?b=1#c',
+      credentials: { username: 'admin', password: 'p@ss' },
+    });
+    expect(openableTarget('http://localhost:5173/')).toEqual({ href: 'http://localhost:5173/', credentials: null });
+    expect(openableTarget('file://u:p@host/x')).toBeNull();
+    expect(openableHref('https://admin:pw@stand.example.test/')).toBe('https://stand.example.test/');
+    expect(resolveAgentTarget('https://u:p@h.test/x', 'http://localhost/')).toEqual({ href: 'https://h.test/x', credentials: { username: 'u', password: 'p' } });
+    expect(resolveAgentTarget('/x', 'https://app.test/a')).toEqual({ href: 'https://app.test/x', credentials: null });
+  });
+
+  it('open с user:pass@: пара уходит только в basic-auth main; окно и ответ агенту — без пароля', async () => {
+    const addPending = vi.fn();
+    const { run, asked } = setup({ basicAuth: { remember: vi.fn(), addPending, isPending: () => false, onPending: () => () => undefined } });
+    const result = await run({ url: 'http://admin:s3cret@127.0.0.1:8080/secret' });
+    expect(addPending).toHaveBeenCalledWith('http://127.0.0.1:8080', { username: 'admin', password: 's3cret' });
+    expect(asked[0]?.url).toBe('http://127.0.0.1:8080/secret');
+    expect(JSON.stringify(asked)).not.toContain('s3cret');
+    expect(JSON.stringify(result)).not.toContain('s3cret');
   });
 
   it('общий выключатель «Let agents use the browser» — access_denied, окну ничего', async () => {
