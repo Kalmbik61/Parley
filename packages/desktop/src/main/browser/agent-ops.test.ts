@@ -80,6 +80,8 @@ function setup(overrides: { allowed?: boolean; reply?: AgentOpenTabResult | null
     snapshot: vi.fn((id: number): DevtoolsSnapshot | null => snapshots.get(id) ?? EMPTY),
     send: vi.fn(sendWith() as <T>(id: number, method: string, params?: Record<string, unknown>) => Promise<T>),
     responseBody: vi.fn(async (): Promise<{ text: string; base64: boolean; truncated: boolean } | null> => null),
+    // Пути с окном операции (`open`, `navigate`, `action`) подписываются на события гостя: файловый диалог (`createWindowHooks`).
+    onEvent: vi.fn((): (() => void) => () => undefined),
   };
   const emulation = {
     current: vi.fn((): ViewportSpec | null => null),
