@@ -130,6 +130,9 @@ const REMOTE_SWITCHED_METHODS: ReadonlySet<string> = new Set([
   ...REMOTE_LAUNCH_METHODS,
   'pty.send',
   'consents.decide',
+  // Решение по карточке помощника с телефона (B3) внутри хоста запускает sessions.close, rooms.create и отправки,
+  // поэтому идёт за тем же переключателем; `cards.list` — чтение, он открыт всегда.
+  'cards.decide',
   'sessions.resume',
   'feed.interrupt',
   'sessions.stop',
