@@ -40,14 +40,52 @@ describe('VoiceTelemetry', () => {
     telemetry.modelPlaying(true);
     telemetry.modelPlaying(false);
     telemetry.sessionEnded();
-    expect(records).toEqual([{ voiceSessionId: 'vs-1', firstAudioMs: 800, interrupts: 1 }]);
+    expect(records).toEqual([{ voiceSessionId: 'vs-1', firstAudioMs: 800, interrupts: 1, decisionsReceived: 0, decisionsRejected: 0, decisionsInputTokens: 0, decisionsFallback: true }]);
   });
 
   it('модель не говорила — first_audio_ms = null', () => {
     const { telemetry, records } = setup();
     telemetry.sessionStarted('vs-1');
     telemetry.sessionEnded();
-    expect(records).toEqual([{ voiceSessionId: 'vs-1', firstAudioMs: null, interrupts: 0 }]);
+    expect(records).toEqual([{ voiceSessionId: 'vs-1', firstAudioMs: null, interrupts: 0, decisionsReceived: 0, decisionsRejected: 0, decisionsInputTokens: 0, decisionsFallback: false }]);
+  });
+
+  it('Decisions: решения, отклонённые и сумма входных токенов считаются за сессию; следующая сессия начинает с нуля', () => {
+    const { telemetry, records } = setup();
+    telemetry.sessionStarted('vs-1');
+    telemetry.modelPlaying(true);
+    telemetry.decision({ inputTokens: 165, rejected: false });
+    telemetry.decision({ inputTokens: 200.4, rejected: true });
+    telemetry.decision({ inputTokens: 0, rejected: false });
+    telemetry.sessionEnded();
+    expect(records.at(-1)).toMatchObject({ decisionsReceived: 3, decisionsRejected: 1, decisionsInputTokens: 365, decisionsFallback: false });
+    telemetry.sessionStarted('vs-2');
+    telemetry.sessionEnded();
+    expect(records.at(-1)).toMatchObject({ voiceSessionId: 'vs-2', decisionsReceived: 0, decisionsRejected: 0, decisionsInputTokens: 0 });
+  });
+
+  it('запасной вариант: модель говорила, решений не было — decisionsFallback; не говорила — нет; решения без речи не нужны', () => {
+    const { telemetry, records } = setup();
+    telemetry.sessionStarted('vs-1');
+    telemetry.modelPlaying(true);
+    telemetry.sessionEnded();
+    expect(records.at(-1)).toMatchObject({ decisionsReceived: 0, decisionsFallback: true });
+    telemetry.sessionStarted('vs-2');
+    telemetry.sessionEnded();
+    expect(records.at(-1)).toMatchObject({ decisionsFallback: false });
+    telemetry.sessionStarted('vs-3');
+    telemetry.modelPlaying(true);
+    telemetry.decision({ inputTokens: 10, rejected: true });
+    telemetry.sessionEnded();
+    expect(records.at(-1)).toMatchObject({ decisionsReceived: 1, decisionsRejected: 1, decisionsFallback: false });
+  });
+
+  it('решение вне сессии не считается', () => {
+    const { telemetry, records } = setup();
+    telemetry.decision({ inputTokens: 50, rejected: false });
+    telemetry.sessionStarted('vs-1');
+    telemetry.sessionEnded();
+    expect(records.at(-1)).toMatchObject({ decisionsReceived: 0, decisionsInputTokens: 0 });
   });
 
   it('submit и подтверждение: запись уходит, когда известен Request; порядок событий не важен', () => {
@@ -97,7 +135,7 @@ describe('VoiceTelemetry', () => {
     telemetry.ackResolved('d1', true);
     telemetry.observeQueue([item({ speech: 'played', submittedAt: 11_000 })]);
     telemetry.sessionEnded();
-    const allowed = new Set(['voiceSessionId', 'requestId', 'ackAudible', 'delegationToSubmitMs', 'transcriptWaitMs', 'resultHoldMs', 'speechState', 'firstAudioMs', 'interrupts']);
+    const allowed = new Set(['voiceSessionId', 'requestId', 'ackAudible', 'delegationToSubmitMs', 'transcriptWaitMs', 'resultHoldMs', 'speechState', 'firstAudioMs', 'interrupts', 'decisionsReceived', 'decisionsRejected', 'decisionsInputTokens', 'decisionsFallback']);
     for (const record of records) {
       expect(Object.keys(record).every((key) => allowed.has(key))).toBe(true);
       expect(JSON.stringify(record)).not.toContain('Two rooms');

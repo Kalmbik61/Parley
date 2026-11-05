@@ -18,7 +18,25 @@ describe('VOICE_PROMPT', () => {
     expect(VOICE_PROMPT).toContain('confirm it on the screen');
   });
 
-  it('конфиг сессии: модель, инструкции, клиентская делегация без задержки подтверждения', () => {
-    expect(liveSessionConfig()).toEqual({ model: 'gpt-live-1', instructions: VOICE_PROMPT, delegation: { type: 'client' } });
+  it('конфиг сессии: модель, инструкции, клиентская делегация без задержки подтверждения и один Decisions-триггер эмоции', () => {
+    const config = liveSessionConfig();
+    expect(config).toMatchObject({ model: 'gpt-live-1', instructions: VOICE_PROMPT, delegation: { type: 'client' } });
+    // Ровно конфиг из записки V0 §2.
+    expect(config['triggers']).toEqual([
+      {
+        type: 'decisions',
+        event_type: 'session.output_transcript.delta',
+        decisions: {
+          questions: [
+            {
+              type: 'choice',
+              name: 'expression',
+              instructions: 'Pick the emotion of what the assistant is saying right now.',
+              choices: [{ value: 'calm' }, { value: 'joy' }, { value: 'sad' }, { value: 'surprise' }, { value: 'anger' }],
+            },
+          ],
+        },
+      },
+    ]);
   });
 });

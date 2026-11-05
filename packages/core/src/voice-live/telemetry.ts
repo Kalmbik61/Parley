@@ -11,7 +11,10 @@
  * - `interrupts` — сколько раз человек заговорил поверх воспроизведения модели;
  * - `delegation_to_submit_ms` — от `delegation.created` до принятого хостом Request; `transcript_wait_ms` — часть этого
  *   срока до сборки текста поручения;
- * - `result_hold_ms` — от готовности итога до передачи в Live.
+ * - `result_hold_ms` — от готовности итога до передачи в Live;
+ * - Decisions (V2): `decisionsReceived` — решения об эмоции после дедупликации, `decisionsRejected` — из них с неизвестным значением
+ *   или уверенностью ниже порога, `decisionsInputTokens` — сумма входных токенов Decisions, `decisionsFallback` — модель говорила,
+ *   а решений не пришло ни одного (лицо всю сессию оставалось спокойным). Только числа: текста решений нет.
  */
 import type { AckAudible } from './ack.js';
 import type { QueueItem } from './speech-queue.js';
@@ -33,6 +36,10 @@ export interface TelemetrySessionRecord {
   /** `null` — модель за сессию не воспроизводила. */
   firstAudioMs: number | null;
   interrupts: number;
+  decisionsReceived: number;
+  decisionsRejected: number;
+  decisionsInputTokens: number;
+  decisionsFallback: boolean;
 }
 
 export type TelemetryRecord = TelemetryRequestRecord | TelemetrySessionRecord;
@@ -51,6 +58,8 @@ export interface VoiceTelemetry {
   requestSubmitted(info: { delegationId: string; requestId: string; delegationToSubmitMs: number; transcriptWaitMs: number }): void;
   /** Состояние очереди речи: итоговые состояния и срок удержания записываются один раз. */
   observeQueue(items: readonly QueueItem[]): void;
+  /** Пришло решение Decisions (после дедупликации): `rejected` — неизвестное значение или низкая уверенность. */
+  decision(info: { inputTokens: number; rejected: boolean }): void;
   /** Сессия закончилась: одна запись уровня сессии. */
   sessionEnded(): void;
 }
@@ -62,6 +71,9 @@ export function createVoiceTelemetry(deps: VoiceTelemetryDeps): VoiceTelemetry {
   let startedAt = 0;
   let firstAudioMs: number | null = null;
   let interrupts = 0;
+  let decisionsReceived = 0;
+  let decisionsRejected = 0;
+  let decisionsInputTokens = 0;
   let humanSpeaking = false;
   let modelPlaying = false;
   const requestByDelegation = new Map<string, string>();
@@ -84,8 +96,17 @@ export function createVoiceTelemetry(deps: VoiceTelemetryDeps): VoiceTelemetry {
       startedAt = deps.now();
       firstAudioMs = null;
       interrupts = 0;
+      decisionsReceived = 0;
+      decisionsRejected = 0;
+      decisionsInputTokens = 0;
       humanSpeaking = false;
       modelPlaying = false;
+    },
+    decision({ inputTokens, rejected }) {
+      if (voiceSessionId === null) return;
+      decisionsReceived += 1;
+      if (rejected) decisionsRejected += 1;
+      decisionsInputTokens += whole(inputTokens);
     },
     humanSpeaking(value) {
       if (value && !humanSpeaking && modelPlaying) interrupts += 1;
@@ -128,7 +149,7 @@ export function createVoiceTelemetry(deps: VoiceTelemetryDeps): VoiceTelemetry {
     },
     sessionEnded() {
       if (voiceSessionId === null) return;
-      deps.record({ voiceSessionId, firstAudioMs, interrupts });
+      deps.record({ voiceSessionId, firstAudioMs, interrupts, decisionsReceived, decisionsRejected, decisionsInputTokens, decisionsFallback: firstAudioMs !== null && decisionsReceived === 0 });
       // `voiceSessionId` остаётся: очередь после закрытия сессии переводит отправленное в `unknown`, и это тоже записывается.
     },
   };

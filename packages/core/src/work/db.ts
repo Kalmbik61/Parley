@@ -297,6 +297,14 @@ export interface MigrationStep {
  * Каждая закоммиченная промежуточная версия должна быть годной точкой старта для следующих шагов: шаг 2, например,
  * опирается на то, что его путь для базы версии 1 переносит и пустую базу.
  */
+/** Итоги Decisions эмоции по сессии (V2): счётчики, входные токены и флаг запасного варианта. Только числа. */
+const VOICE_TELEMETRY_DECISIONS_COLUMNS = [
+  ['decisions_received', 'INTEGER'],
+  ['decisions_rejected', 'INTEGER'],
+  ['decisions_input_tokens', 'INTEGER'],
+  ['decisions_fallback', 'INTEGER'],
+] as const;
+
 export const MIGRATIONS: readonly MigrationStep[] = [
   // 1: основа (`works`, `entries`).
   { version: 1, up: (db) => db.exec(SCHEMA_BASE) },
@@ -352,6 +360,14 @@ export const MIGRATIONS: readonly MigrationStep[] = [
   },
   // 12: локальная телеметрия голоса (спека 2026-11-04, §11, T6).
   { version: 12, up: (db) => db.exec(SCHEMA_VOICE_TELEMETRY) },
+  // 13: итоги Decisions эмоции в телеметрии голоса (V2): решения, отклонённые, входные токены, флаг запасного варианта.
+  {
+    version: 13,
+    up: (db) => {
+      const have = new Set(db.prepare('PRAGMA table_info(voice_telemetry)').all().map((column) => column['name']));
+      for (const [name, type] of VOICE_TELEMETRY_DECISIONS_COLUMNS) if (!have.has(name)) db.exec(`ALTER TABLE voice_telemetry ADD COLUMN ${name} ${type}`);
+    },
+  },
 ];
 
 export const WORK_DB_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]!.version;

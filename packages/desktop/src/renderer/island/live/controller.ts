@@ -9,7 +9,7 @@
  */
 import type { IslandBridge } from '../../../shared/island.js';
 import { S } from '../../../shared/strings.js';
-import { buildAppend, createEventDeduper, parseLiveEvent, type AppendKind, type LiveEvent } from './events.js';
+import { buildAppend, createEventDeduper, createSourceOffsets, parseLiveEvent, type AppendKind, type LiveEmotion, type LiveEvent } from './events.js';
 import { humanSpeakingHysteresis, modelPlayingHysteresis, rms, type Hysteresis } from './levels.js';
 
 export type LiveCallPhase = 'idle' | 'connecting' | 'live' | 'closing';
@@ -21,6 +21,9 @@ export type LiveStartResult = { ok: true; voiceSessionId: string } | { ok: false
 /** События для остального renderer: события протокола плюс два сигнала речи и смена фазы. */
 export type LiveControllerEvent =
   | Extract<LiveEvent, { type: 'delegationCreated' | 'inputTranscript' | 'outputTranscript' | 'sessionClosed' | 'error' | 'appended' | 'usage' }>
+  | Extract<LiveEvent, { type: 'decisionRejected' }>
+  /** Решение Decisions об эмоции; `sourceEndMs` — `end_ms` исходного фрагмента транскрипта (`null` — фрагмент неизвестен). */
+  | { type: 'emotion'; value: LiveEmotion; confidence: number; sourceEventId: string | null; sourceEndMs: number | null; inputTokens: number }
   | { type: 'humanSpeaking'; value: boolean }
   | { type: 'modelPlaying'; value: boolean }
   | { type: 'phase'; phase: LiveCallPhase };
@@ -136,6 +139,7 @@ export function createLiveController(deps: LiveControllerDeps): LiveController {
   let appendCounter = 0;
   let stopReason: 'close_requested' | 'idle_timeout' | null = null;
   let deduper = createEventDeduper();
+  let sourceOffsets = createSourceOffsets();
   let human: Hysteresis = humanSpeakingHysteresis();
   let model: Hysteresis = modelPlayingHysteresis();
   const signals: LiveSignals = { humanSpeaking: false, modelPlaying: false };
@@ -218,6 +222,11 @@ export function createLiveController(deps: LiveControllerDeps): LiveController {
       return;
     }
     if (event.type === 'sessionStarted') return;
+    if (event.type === 'outputTranscript') sourceOffsets.remember(parsed.eventId, event.endMs);
+    if (event.type === 'emotion') {
+      emit({ ...event, sourceEndMs: sourceOffsets.endOf(event.sourceEventId) });
+      return;
+    }
     emit(event);
   };
 
@@ -237,6 +246,7 @@ export function createLiveController(deps: LiveControllerDeps): LiveController {
       const mine = ++generation;
       stopReason = null;
       deduper = createEventDeduper();
+      sourceOffsets = createSourceOffsets();
       human = humanSpeakingHysteresis();
       model = modelPlayingHysteresis();
       setPhase('connecting');

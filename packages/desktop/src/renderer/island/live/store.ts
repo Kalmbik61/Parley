@@ -9,6 +9,7 @@ import type { VoiceAnalysis, VoiceFrame } from '../assistant/voice-features.js';
 import type { SwarmEmotion } from '../swarm/spec.js';
 import type { LiveCallPhase, LiveController, LiveStartResult } from './controller.js';
 import type { LiveDelegation, LiveResultView } from './delegation.js';
+import { createEmotionSmoother, type EmotionSmoother } from './emotion.js';
 
 /** Что стору нужно для кадра голоса: анализ признаков (создаётся лениво, как у TTS) и часы кадра, мс. */
 export interface LiveVoiceDeps {
@@ -34,6 +35,7 @@ export interface LiveStoreState {
   checking: boolean;
   /** Эмоция лица, пока говорит модель; `calm` по умолчанию. Её ведут Decisions GPT-Live (V2) и ошибка контроллера. */
   emotion: SwarmEmotion;
+  /** Задаёт эмоцию лица. Пока идёт вспышка ошибки (2 с), `error` сильнее: новое значение запоминается и появится после неё. */
   setEmotion(emotion: SwarmEmotion): void;
   /** Подключает анализ признаков голоса для `voiceFrame`. */
   configureVoice(deps: LiveVoiceDeps | null): void;
@@ -59,6 +61,9 @@ export const useLiveStore = create<LiveStoreState>((set, get) => {
   let analysis: VoiceAnalysis | null = null;
   let frameAt: number | null = null;
   let errorTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Что должно быть на лице без вспышки ошибки: последнее значение `setEmotion` (пока вспышка идёт, лицо его не показывает). */
+  let wanted: SwarmEmotion = 'calm';
+  let smoother: EmotionSmoother | null = null;
 
   const clearErrorTimer = (): void => {
     if (errorTimer !== null) clearTimeout(errorTimer);
@@ -70,7 +75,7 @@ export const useLiveStore = create<LiveStoreState>((set, get) => {
     set({ emotion: 'error' });
     errorTimer = setTimeout(() => {
       errorTimer = null;
-      if (get().emotion === 'error') set({ emotion: 'calm' });
+      if (get().emotion === 'error') set({ emotion: wanted });
     }, ERROR_EMOTION_MS);
   };
 
@@ -80,7 +85,8 @@ export const useLiveStore = create<LiveStoreState>((set, get) => {
     dismissResult: () => {},
 
     setEmotion(emotion) {
-      clearErrorTimer();
+      wanted = emotion;
+      if (errorTimer !== null) return;
       set({ emotion });
     },
 
@@ -106,24 +112,44 @@ export const useLiveStore = create<LiveStoreState>((set, get) => {
     bind(controller) {
       get().controller?.dispose();
       clearErrorTimer();
+      smoother?.reset();
+      smoother = null;
+      wanted = 'calm';
       analysis = null;
       frameAt = null;
       set({ ...INITIAL, controller });
       if (controller === null) return () => {};
+      // Эмоцию Decisions сглаживает чистый модуль; на лицо она идёт через `setEmotion`, который вспышку ошибки не прерывает.
+      const faces = createEmotionSmoother({
+        now: () => Date.now(),
+        setTimer: (callback, ms) => {
+          const id = setTimeout(callback, ms);
+          return () => clearTimeout(id);
+        },
+        apply: (emotion) => get().setEmotion(emotion),
+      });
+      smoother = faces;
       const unsubscribe = controller.subscribe((event) => {
         if (event.type === 'phase') {
           set({ phase: event.phase });
           if (event.phase === 'idle') {
             clearErrorTimer();
+            faces.reset();
+            wanted = 'calm';
             set({ emotion: 'calm' });
           }
         } else if (event.type === 'error') flashError();
+        else if (event.type === 'emotion') faces.decision({ value: event.value, confidence: event.confidence, sourceEndMs: event.sourceEndMs });
         else if (event.type === 'humanSpeaking') set({ humanSpeaking: event.value });
-        else if (event.type === 'modelPlaying') set({ modelPlaying: event.value });
-        else if (event.type === 'sessionClosed') set({ notice: event.reason === 'close_requested' ? null : S.assistant.live.closed(event.reason) });
+        else if (event.type === 'modelPlaying') {
+          set({ modelPlaying: event.value });
+          faces.setPlaying(event.value);
+        } else if (event.type === 'sessionClosed') set({ notice: event.reason === 'close_requested' ? null : S.assistant.live.closed(event.reason) });
       });
       return () => {
         unsubscribe();
+        faces.reset();
+        if (smoother === faces) smoother = null;
         clearErrorTimer();
         if (get().controller === controller) set({ ...INITIAL, controller: null });
         controller.dispose();

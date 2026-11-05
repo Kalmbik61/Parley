@@ -69,16 +69,16 @@ describe('workDb', () => {
     expect(modes.every(([, mode]) => mode === 0o600)).toBe(true);
   });
 
-  it('создаёт parley.db в PARLEY_HOME с WAL и user_version = 12', () => {
+  it('создаёт parley.db в PARLEY_HOME с WAL и user_version = 13', () => {
     expect(WORK_DB_FILE).toBe('parley.db');
-    expect(WORK_DB_SCHEMA_VERSION).toBe(12);
+    expect(WORK_DB_SCHEMA_VERSION).toBe(13);
     expect(existsSync(home)).toBe(false);
 
     workDb();
 
     expect(existsSync(path.join(home, 'parley.db'))).toBe(true);
     expect(pragma('journal_mode')).toBe('wal');
-    expect(pragma('user_version')).toBe(12);
+    expect(pragma('user_version')).toBe(13);
   });
 
   it('шаг 4 создаёт таблицы Assistant Core: idempotency_key уникален, состояния ограничены', () => {
@@ -156,7 +156,7 @@ describe('workDb', () => {
     closeWorkDb();
 
     expect(indexColumns('messages_sender')).toEqual(['project_path', 'work_id', 'room_id', 'sender', 'seq']);
-    expect(pragma('user_version')).toBe(12);
+    expect(pragma('user_version')).toBe(13);
     expect(workDb().prepare('SELECT id, sender FROM messages').all()).toEqual([{ id: 'm-01', sender: 'human' }]);
     expect(workDb().prepare('SELECT id FROM works').all()).toEqual([{ id: 'w-0001' }]);
   });
@@ -190,7 +190,7 @@ describe('workDb', () => {
   it('база версии 1 (письма в entries) поднимается до 2 при открытии: письмо в таблице с кандидатом, строки message ушли, версия работы прежняя', () => {
     writeV1(goodLetter);
 
-    expect(pragma('user_version')).toBe(12);
+    expect(pragma('user_version')).toBe(13);
 
     const db = workDb();
     expect(db.prepare('SELECT seq, id, sender, recipients, body FROM messages').all()).toEqual([
@@ -217,7 +217,7 @@ describe('workDb', () => {
     check.prepare(`UPDATE entries SET json = ?`).run(goodLetter);
     check.close();
 
-    expect(pragma('user_version')).toBe(12);
+    expect(pragma('user_version')).toBe(13);
   });
 
   it('отдаёт один и тот же дескриптор, пока PARLEY_HOME не меняется', () => {
@@ -229,7 +229,7 @@ describe('workDb', () => {
     insertEntry('w-0001', 'a');
     closeWorkDb();
 
-    expect(pragma('user_version')).toBe(12);
+    expect(pragma('user_version')).toBe(13);
     const works = workDb().prepare('SELECT id FROM works').all();
     expect(works).toEqual([{ id: 'w-0001' }]);
     expect(countEntries()).toBe(1);
@@ -471,6 +471,36 @@ describe('реестр миграций', () => {
     expect(() => insert.run('vs-1', 'req-3', null, 'bogus')).toThrow(/CHECK/);
     const text = (db.prepare('PRAGMA table_info(voice_telemetry)').all() as Array<{ name: string; type: string }>).filter((column) => column.type === 'TEXT').map((column) => column.name);
     expect(text).toEqual(['voice_session_id', 'request_id', 'ack_audible', 'speech_state']);
+  });
+
+  it('шаг 13 добавляет числовые колонки Decisions в voice_telemetry; повтор на базе с колонками не падает; текстовых полей не прибавилось', () => {
+    const db = workDb();
+    const columns = (db.prepare('PRAGMA table_info(voice_telemetry)').all() as Array<{ name: string; type: string }>);
+    const added = columns.filter((column) => column.name.startsWith('decisions_'));
+    expect(added.map((column) => [column.name, column.type])).toEqual([
+      ['decisions_received', 'INTEGER'],
+      ['decisions_rejected', 'INTEGER'],
+      ['decisions_input_tokens', 'INTEGER'],
+      ['decisions_fallback', 'INTEGER'],
+    ]);
+    expect(columns.filter((column) => column.type === 'TEXT').map((column) => column.name)).toEqual(['voice_session_id', 'request_id', 'ack_audible', 'speech_state']);
+    const step = MIGRATIONS[MIGRATIONS.length - 1]!;
+    expect(step.version).toBe(13);
+    expect(() => step.up(db)).not.toThrow();
+  });
+
+  it('база версии 12 поднимается до 13 с сохранением строк voice_telemetry', () => {
+    mkdirSync(home, { recursive: true });
+    const db = open(path.join(home, 'v12.db'));
+    try {
+      runMigrations(db, MIGRATIONS.slice(0, 12));
+      db.prepare("INSERT INTO voice_telemetry (voice_session_id, request_id, at, interrupts) VALUES ('vs-1', '', 5, 2)").run();
+      runMigrations(db);
+      expect(version(db)).toBe(WORK_DB_SCHEMA_VERSION);
+      expect(db.prepare("SELECT interrupts, decisions_received, decisions_fallback FROM voice_telemetry WHERE voice_session_id = 'vs-1'").get()).toEqual({ interrupts: 2, decisions_received: null, decisions_fallback: null });
+    } finally {
+      db.close();
+    }
   });
 
   it('база версии 11 поднимается до последней: появляется voice_telemetry', () => {

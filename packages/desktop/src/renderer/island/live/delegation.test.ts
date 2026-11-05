@@ -493,4 +493,32 @@ describe('createLiveDelegation: телеметрия (T6)', () => {
       }
     }
   });
+
+  it('Decisions (V2): решения, отклонённые (низкая уверенность, чужое значение) и токены уходят числами в записи сессии', async () => {
+    const h = setup({ phase: 'live' });
+    h.emit({ type: 'modelPlaying', value: true });
+    h.emit({ type: 'emotion', value: 'joy', confidence: 0.98, sourceEventId: 's1', sourceEndMs: 6000, inputTokens: 165 });
+    h.emit({ type: 'emotion', value: 'calm', confidence: 0.41, sourceEventId: 's2', sourceEndMs: 6200, inputTokens: 170 });
+    h.emit({ type: 'decisionRejected', inputTokens: 180 });
+    await h.advance(1000);
+    h.emit({ type: 'modelPlaying', value: false });
+    h.emit({ type: 'sessionClosed', reason: 'close_requested' });
+    h.emit({ type: 'phase', phase: 'idle' });
+    await h.flush();
+    const last = h.callsOf('voice.telemetry.record').map((entry) => entry.params as Record<string, unknown>).at(-1);
+    expect(last).toMatchObject({ voiceSessionId: 'vs-1', decisionsReceived: 3, decisionsRejected: 2, decisionsInputTokens: 515, decisionsFallback: false });
+    expect(JSON.stringify(last)).not.toContain('joy');
+  });
+
+  it('Decisions (V2): модель говорила, решений нет — в записи сессии decisionsFallback', async () => {
+    const h = setup({ phase: 'live' });
+    h.emit({ type: 'modelPlaying', value: true });
+    await h.advance(1000);
+    h.emit({ type: 'modelPlaying', value: false });
+    h.emit({ type: 'sessionClosed', reason: 'close_requested' });
+    h.emit({ type: 'phase', phase: 'idle' });
+    await h.flush();
+    const last = h.callsOf('voice.telemetry.record').map((entry) => entry.params as Record<string, unknown>).at(-1);
+    expect(last).toMatchObject({ decisionsReceived: 0, decisionsRejected: 0, decisionsInputTokens: 0, decisionsFallback: true });
+  });
 });

@@ -7,6 +7,10 @@
  * `event_id` и здесь тоже (на случай повторной доставки по каналу).
  */
 
+/** Эмоции Decisions (V2): ровно пять значений вопроса `expression`; `error` приходит только от нашей стороны. */
+export const LIVE_EMOTIONS = ['calm', 'joy', 'sad', 'surprise', 'anger'] as const;
+export type LiveEmotion = (typeof LIVE_EMOTIONS)[number];
+
 export type LiveEvent =
   | { type: 'sessionStarted'; expiresAt: number | null }
   /** `offsetMs` — на одной шкале с `startMs`/`endMs` транскрипта (мс от старта сессии). */
@@ -17,6 +21,13 @@ export type LiveEvent =
   /** Подтверждение доставки `append`: приходит через 0,6–0,9 с и не означает звук. */
   | { type: 'appended'; kind: 'thinking' | 'commentary'; clientEventId: string | null }
   | { type: 'usage'; seconds: number }
+  /**
+   * Решение Decisions GPT-Live об эмоции (`decision.event` → `decision.completed`, вопрос `expression`).
+   * `sourceEventId` — `event_id` фрагмента транскрипта, вызвавшего решение; `inputTokens` — расход Decisions (0, если не указан).
+   */
+  | { type: 'emotion'; value: LiveEmotion; confidence: number; sourceEventId: string | null; inputTokens: number }
+  /** Решение пришло, но значения нет в списке или ответа `expression` нет: лицо не трогаем, считаем в телеметрии. */
+  | { type: 'decisionRejected'; inputTokens: number }
   | { type: 'sessionClosed'; reason: string }
   | { type: 'error'; code: string; message: string };
 
@@ -75,6 +86,8 @@ export function parseLiveEvent(raw: unknown): ParsedLiveEvent | null {
       const seconds = usage === null ? null : finite(usage['seconds']);
       return seconds === null ? null : wrap({ type: 'usage', seconds });
     }
+    case 'decision.event':
+      return parseDecision(value, wrap);
     case 'session.closed':
       return wrap({ type: 'sessionClosed', reason: text(value['reason']) ?? 'unknown' });
     case 'error':
@@ -89,6 +102,52 @@ export function parseLiveEvent(raw: unknown): ParsedLiveEvent | null {
     default:
       return null;
   }
+}
+
+const isEmotion = (value: unknown): value is LiveEmotion => typeof value === 'string' && (LIVE_EMOTIONS as readonly string[]).includes(value);
+
+/**
+ * `decision.event` с вложенным `event.type === 'decision.completed'` (форма: записка V0 §3). Ответ вопроса `expression` —
+ * `event.decision.answers[].choice`, уверенность — `confidence`, расход — `event.decision.usage.input_tokens`.
+ * Другой вложенный тип или нет `event.decision` — `null`: голос от этого не страдает, лицо остаётся спокойным.
+ */
+function parseDecision(value: Record<string, unknown>, wrap: (event: LiveEvent) => ParsedLiveEvent): ParsedLiveEvent | null {
+  const inner = isRecord(value['event']) ? value['event'] : null;
+  if (inner === null || inner['type'] !== 'decision.completed') return null;
+  const decision = isRecord(inner['decision']) ? inner['decision'] : null;
+  if (decision === null) return null;
+  const usage = isRecord(decision['usage']) ? decision['usage'] : null;
+  const tokens = usage === null ? null : finite(usage['input_tokens']);
+  const inputTokens = tokens === null ? 0 : Math.max(0, Math.round(tokens));
+  const answers = Array.isArray(decision['answers']) ? decision['answers'] : [];
+  const answer = answers.find((item): item is Record<string, unknown> => isRecord(item) && item['name'] === 'expression');
+  const choice = answer?.['choice'];
+  const confidence = answer === undefined ? null : finite(answer['confidence']);
+  if (!isEmotion(choice) || confidence === null) return wrap({ type: 'decisionRejected', inputTokens });
+  return wrap({ type: 'emotion', value: choice, confidence, sourceEventId: text(value['source_event_id']), inputTokens });
+}
+
+export interface SourceOffsets {
+  /** Запоминает конец фрагмента исходящего транскрипта (мс от старта сессии) под его `event_id`. */
+  remember(eventId: string | null, endMs: number): void;
+  /** Конец исходного фрагмента решения; `null` — фрагмент неизвестен (забыт или `source_event_id` нет). */
+  endOf(eventId: string | null): number | null;
+}
+
+/** Окно ограничено: фрагменты по 200 мс, решение приходит через доли секунды, поэтому хватает короткой памяти. */
+export function createSourceOffsets(capacity = 512): SourceOffsets {
+  const ends = new Map<string, number>();
+  return {
+    remember(eventId, endMs) {
+      if (eventId === null) return;
+      ends.set(eventId, endMs);
+      if (ends.size > capacity) {
+        const oldest = ends.keys().next().value;
+        if (oldest !== undefined) ends.delete(oldest);
+      }
+    },
+    endOf: (eventId) => (eventId === null ? null : (ends.get(eventId) ?? null)),
+  };
 }
 
 export interface EventDeduper {

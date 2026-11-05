@@ -4,7 +4,7 @@ import { METHODS } from '@parley/protocol';
 import { createJobs, type Job, type JobEnd, type JobRun } from '../assistant/jobs.js';
 import { createRequests } from '../assistant/requests.js';
 import { createVoiceTelemetryHandlers } from '../methods/voice-telemetry.js';
-import { createVoiceTelemetry, LIVE_USD_PER_MINUTE, TELEMETRY_MAX_ROWS } from './telemetry.js';
+import { createVoiceTelemetry, DECISIONS_USD_PER_MILLION_INPUT_TOKENS, LIVE_USD_PER_MINUTE, TELEMETRY_MAX_ROWS } from './telemetry.js';
 
 function setup(rate: number | null = null) {
   const db = openMemoryDb();
@@ -102,6 +102,45 @@ describe('VoiceTelemetry (хост)', () => {
     expect(h.telemetry.list()).toHaveLength(1);
   });
 
+  it('Decisions (V2): счётчики, токены и флаг сессии записываются; стоимость = Live по минутам + Decisions по токенам', () => {
+    expect(DECISIONS_USD_PER_MILLION_INPUT_TOKENS).toBe(0.1);
+    const h = setup(LIVE_USD_PER_MINUTE);
+    h.db.prepare("INSERT INTO voice_usage (voice_session_id, day, state, seconds_estimate, seconds_final) VALUES ('vs-1', '2026-11-05', 'closed', 50, 41)").run();
+    h.telemetry.record({ voiceSessionId: 'vs-1', firstAudioMs: 700, interrupts: 0, decisionsReceived: 22, decisionsRejected: 3, decisionsInputTokens: 4703, decisionsFallback: false });
+    // Числа записки V0: 41 с и 4703 токена.
+    expect(h.telemetry.list()[0]).toMatchObject({
+      decisions_received: 22,
+      decisions_rejected: 3,
+      decisions_input_tokens: 4703,
+      decisions_fallback: false,
+      voice_seconds: 41,
+      voice_cost_estimate_usd: expect.closeTo((41 / 60) * 0.05 + 0.0004703, 9),
+    });
+  });
+
+  it('обновление после закрытия usage сохраняет токены Decisions в стоимости; без Decisions стоимость прежняя', () => {
+    const h = setup(LIVE_USD_PER_MINUTE);
+    h.db.prepare("INSERT INTO voice_usage (voice_session_id, day, state, seconds_estimate) VALUES ('vs-1', '2026-11-05', 'open', 40)").run();
+    h.telemetry.record({ voiceSessionId: 'vs-1', interrupts: 0, decisionsReceived: 10, decisionsRejected: 0, decisionsInputTokens: 2_000_000, decisionsFallback: false });
+    h.db.prepare("UPDATE voice_usage SET state = 'closed', seconds_final = 60 WHERE voice_session_id = 'vs-1'").run();
+    h.telemetry.refreshSession('vs-1');
+    expect(h.telemetry.list()[0]).toMatchObject({ voice_seconds: 60, decisions_input_tokens: 2_000_000, voice_cost_estimate_usd: expect.closeTo(0.05 + 0.2, 9) });
+
+    const plain = setup(LIVE_USD_PER_MINUTE);
+    plain.db.prepare("INSERT INTO voice_usage (voice_session_id, day, state, seconds_estimate, seconds_final) VALUES ('vs-1', '2026-11-05', 'closed', 60, 60)").run();
+    plain.telemetry.record({ voiceSessionId: 'vs-1', interrupts: 0 });
+    expect(plain.telemetry.list()[0]).toMatchObject({ decisions_received: null, decisions_input_tokens: null, decisions_fallback: null, voice_cost_estimate_usd: expect.closeTo(0.05, 9) });
+  });
+
+  it('флаг запасного варианта: true / false / не измерено различаются', () => {
+    const h = setup();
+    h.telemetry.record({ voiceSessionId: 'vs-a', decisionsReceived: 0, decisionsRejected: 0, decisionsInputTokens: 0, decisionsFallback: true });
+    h.telemetry.record({ voiceSessionId: 'vs-b', decisionsFallback: false });
+    h.telemetry.record({ voiceSessionId: 'vs-c', interrupts: 1 });
+    const byId = Object.fromEntries(h.telemetry.list().map((row) => [row.voice_session_id, row.decisions_fallback]));
+    expect(byId).toEqual({ 'vs-a': true, 'vs-b': false, 'vs-c': null });
+  });
+
   it('запись острова после итогового usage сразу берёт итог', () => {
     const h = setup();
     h.db.prepare("INSERT INTO voice_usage (voice_session_id, day, state, seconds_estimate, seconds_final) VALUES ('vs-1', '2026-11-04', 'closed', 85, 96)").run();
@@ -128,7 +167,7 @@ describe('VoiceTelemetry (хост)', () => {
     const h = setup();
     const request = h.submit('d1');
     h.telemetry.record({ voiceSessionId: 'vs-1', requestId: request.requestId, ackAudible: true, delegationToSubmitMs: 5, speechState: 'unknown' });
-    h.telemetry.record({ voiceSessionId: 'vs-1', firstAudioMs: 5, interrupts: 0 });
+    h.telemetry.record({ voiceSessionId: 'vs-1', firstAudioMs: 5, interrupts: 0, decisionsReceived: 4, decisionsRejected: 1, decisionsInputTokens: 600, decisionsFallback: false });
     const text = (h.db.prepare('PRAGMA table_info(voice_telemetry)').all() as Array<{ name: string; type: string }>).filter((column) => column.type === 'TEXT').map((column) => column.name);
     expect(text).toEqual(['voice_session_id', 'request_id', 'ack_audible', 'speech_state']);
     const dump = JSON.stringify(h.db.prepare('SELECT * FROM voice_telemetry').all());
@@ -143,6 +182,10 @@ describe('VoiceTelemetry (хост)', () => {
   it('метод записи принимает только числа и перечисления: лишнее поле (текст) отклоняется схемой', () => {
     const schema = METHODS['voice.telemetry.record'];
     expect(schema.safeParse({ voiceSessionId: 'vs-1', requestId: 'req-1', ackAudible: 'unknown', speechState: 'played', interrupts: 1 }).success).toBe(true);
+    expect(schema.safeParse({ voiceSessionId: 'vs-1', decisionsReceived: 22, decisionsRejected: 1, decisionsInputTokens: 4703, decisionsFallback: false }).success).toBe(true);
+    expect(schema.safeParse({ voiceSessionId: 'vs-1', decisionsInputTokens: -1 }).success).toBe(false);
+    expect(schema.safeParse({ voiceSessionId: 'vs-1', decisionsFallback: 'yes' }).success).toBe(false);
+    expect(schema.safeParse({ voiceSessionId: 'vs-1', decision: 'joy' }).success).toBe(false);
     expect(schema.safeParse({ voiceSessionId: 'vs-1', transcript: 'hello' }).success).toBe(false);
     expect(schema.safeParse({ voiceSessionId: 'vs-1', speechState: 'free text' }).success).toBe(false);
     expect(schema.safeParse({ voiceSessionId: 'vs-1', resultHoldMs: -1 }).success).toBe(false);

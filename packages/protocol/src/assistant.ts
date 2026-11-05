@@ -242,6 +242,11 @@ export const voiceTelemetryMethodSchemas = {
     resultHoldMs: telemetryMs.optional(),
     speechState: z.enum(['queued', 'submitted', 'played', 'unknown', 'dropped']).optional(),
     interrupts: z.number().int().nonnegative().max(10_000).optional(),
+    /** Decisions эмоции (V2), итоги сессии: только числа и флаг. */
+    decisionsReceived: z.number().int().nonnegative().max(1_000_000).optional(),
+    decisionsRejected: z.number().int().nonnegative().max(1_000_000).optional(),
+    decisionsInputTokens: z.number().int().nonnegative().max(1_000_000_000).optional(),
+    decisionsFallback: z.boolean().optional(),
   }),
   'voice.telemetry.list': z.strictObject({ limit: z.number().int().min(1).max(500).optional() }),
 } as const;
@@ -399,9 +404,15 @@ export interface VoiceTelemetryRow {
   result_hold_ms: number | null;
   speech_state: 'queued' | 'submitted' | 'played' | 'unknown' | 'dropped' | null;
   interrupts: number | null;
+  /** Decisions эмоции (V2): решения после дедупликации, из них отклонённые, сумма входных токенов; `null` — не измерено. */
+  decisions_received: number | null;
+  decisions_rejected: number | null;
+  decisions_input_tokens: number | null;
+  /** Модель говорила, а решений не пришло ни одного (лицо оставалось спокойным). */
+  decisions_fallback: boolean | null;
   superseded_count: number | null;
   voice_seconds: number | null;
-  /** Оценка стоимости голоса по ориентировочному тарифу, не счёт; `null` — тариф не задан. */
+  /** Оценка стоимости голоса по ориентировочным тарифам Live и Decisions, не счёт; `null` — тариф не задан. */
   voice_cost_estimate_usd: number | null;
 }
 

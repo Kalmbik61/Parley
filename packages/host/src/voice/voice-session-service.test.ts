@@ -99,7 +99,8 @@ describe('VoiceSessionService', () => {
     await service.prepare('offer', liveSessionConfig());
     expect(createCalls[0]?.offer).toBe('offer');
     const session = createCalls[0]?.session ?? {};
-    expect(session).toEqual({ model: 'gpt-live-1', instructions: VOICE_PROMPT, delegation: { type: 'client' } });
+    expect(session).toEqual(liveSessionConfig());
+    expect(session).toMatchObject({ model: 'gpt-live-1', instructions: VOICE_PROMPT, delegation: { type: 'client' } });
     expect(JSON.stringify(session)).not.toContain('acknowledgement_delay_ms');
     const legacy = setup();
     await legacy.service.prepare('offer-2');

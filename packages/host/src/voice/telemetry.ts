@@ -3,7 +3,9 @@
  * хоста. Остров присылает то, что измерил сам (`first_audio_ms`, `ack_audible`, `delegation_to_submit_ms`,
  * `transcript_wait_ms`, `result_hold_ms`, `speech_state`, `interrupts`); хост дописывает то, что знает точнее клиента:
  * `link_request_ms`, `job_duration_ms` (по Request и job), `superseded_count`, `voice_seconds` (по `voice_usage`) и
- * `voice_cost_estimate_usd` (оценка по `LIVE_USD_PER_MINUTE`, не счёт; без заданного тарифа поле `null`).
+ * `voice_cost_estimate_usd` (оценка по `LIVE_USD_PER_MINUTE` плюс Decisions по `DECISIONS_USD_PER_MILLION_INPUT_TOKENS`, не счёт; без
+ * заданного тарифа Live поле `null`). Итоги Decisions эмоции (V2: `decisions_received`, `decisions_rejected`, `decisions_input_tokens`,
+ * `decisions_fallback`) остров присылает записью уровня сессии; текстов решений нет.
  *
  * Только числа, перечисления и id: ни аудио, ни транскрипта, ни текста поручения или итога — у схемы нет таких полей.
  * Записи одного ключа «сессия + Request» сливаются (`COALESCE`): новый факт дописывается, прежний не затирается.
@@ -22,6 +24,12 @@ export const TELEMETRY_MAX_ROWS = 500;
  */
 export const LIVE_USD_PER_MINUTE = 0.05;
 
+/**
+ * Тариф Decisions, USD за миллион входных токенов (uncached; output не тарифицируется). Источник: страница цен OpenAI Decisions,
+ * 0,10 USD за 1M, проверено 2026-11-05 (записка V0 `docs/research/2026-11-05-gpt-live-decisions-spike.md` §5). Оценка, не счёт.
+ */
+export const DECISIONS_USD_PER_MILLION_INPUT_TOKENS = 0.1;
+
 export interface VoiceTelemetryInput {
   voiceSessionId: string;
   /** Нет — запись уровня сессии. */
@@ -33,6 +41,10 @@ export interface VoiceTelemetryInput {
   resultHoldMs?: number | undefined;
   speechState?: 'queued' | 'submitted' | 'played' | 'unknown' | 'dropped' | undefined;
   interrupts?: number | undefined;
+  decisionsReceived?: number | undefined;
+  decisionsRejected?: number | undefined;
+  decisionsInputTokens?: number | undefined;
+  decisionsFallback?: boolean | undefined;
 }
 
 export interface VoiceTelemetry {
@@ -67,6 +79,10 @@ const COLUMNS = [
   'result_hold_ms',
   'speech_state',
   'interrupts',
+  'decisions_received',
+  'decisions_rejected',
+  'decisions_input_tokens',
+  'decisions_fallback',
   'superseded_count',
   'voice_seconds',
   'voice_cost_estimate_usd',
@@ -98,15 +114,24 @@ export function createVoiceTelemetry(deps: VoiceTelemetryDeps): VoiceTelemetry {
     return values;
   }
 
-  /** Что хост знает о сессии сам: расход из `voice_usage` и число вытесненных Request. */
-  function ofSession(voiceSessionId: string): Values {
+  /** Входные токены Decisions, уже записанные в строку сессии; `0`, если строки или значения нет. */
+  function storedDecisionTokens(voiceSessionId: string): number {
+    const row = db.prepare("SELECT decisions_input_tokens AS tokens FROM voice_telemetry WHERE voice_session_id = ? AND request_id = ''").get(voiceSessionId) as { tokens: number | null } | undefined;
+    return row?.tokens ?? 0;
+  }
+
+  /**
+   * Что хост знает о сессии сам: расход из `voice_usage`, число вытесненных Request и оценка стоимости (Live по минутам плюс
+   * Decisions по токенам). `decisionTokens` — токены из текущей записи; нет — те, что уже в строке сессии.
+   */
+  function ofSession(voiceSessionId: string, decisionTokens?: number | null): Values {
     const values: Values = {};
     try {
       const usage = db.prepare('SELECT COALESCE(seconds_final, seconds_estimate) AS seconds FROM voice_usage WHERE voice_session_id = ?').get(voiceSessionId) as { seconds: number } | undefined;
       if (usage !== undefined) {
         values.voice_seconds = usage.seconds;
         const rate = deps.usdPerMinute?.() ?? null;
-        if (rate !== null) values.voice_cost_estimate_usd = (usage.seconds / 60) * rate;
+        if (rate !== null) values.voice_cost_estimate_usd = (usage.seconds / 60) * rate + (((decisionTokens ?? storedDecisionTokens(voiceSessionId)) / 1_000_000) * DECISIONS_USD_PER_MILLION_INPUT_TOKENS);
       }
       const stale = db.prepare("SELECT COUNT(*) AS n FROM assistant_requests WHERE json_extract(origin_key, '$[0]') = ? AND superseded_by IS NOT NULL").get(voiceSessionId) as { n: number };
       values.superseded_count = Number(stale.n);
@@ -127,7 +152,11 @@ export function createVoiceTelemetry(deps: VoiceTelemetryDeps): VoiceTelemetry {
         result_hold_ms: wholeOrNull(input.resultHoldMs),
         speech_state: input.speechState ?? null,
         interrupts: wholeOrNull(input.interrupts),
-        ...(requestId === '' ? ofSession(input.voiceSessionId) : ofRequest(requestId)),
+        decisions_received: wholeOrNull(input.decisionsReceived),
+        decisions_rejected: wholeOrNull(input.decisionsRejected),
+        decisions_input_tokens: wholeOrNull(input.decisionsInputTokens),
+        decisions_fallback: input.decisionsFallback === undefined ? null : input.decisionsFallback ? 1 : 0,
+        ...(requestId === '' ? ofSession(input.voiceSessionId, input.decisionsInputTokens === undefined ? null : wholeOrNull(input.decisionsInputTokens)) : ofRequest(requestId)),
       };
       const names = COLUMNS;
       const marks = names.map(() => '?').join(', ');
@@ -168,6 +197,10 @@ export function createVoiceTelemetry(deps: VoiceTelemetryDeps): VoiceTelemetry {
           result_hold_ms: num(row['result_hold_ms']),
           speech_state: speech === 'queued' || speech === 'submitted' || speech === 'played' || speech === 'unknown' || speech === 'dropped' ? speech : null,
           interrupts: num(row['interrupts']),
+          decisions_received: num(row['decisions_received']),
+          decisions_rejected: num(row['decisions_rejected']),
+          decisions_input_tokens: num(row['decisions_input_tokens']),
+          decisions_fallback: num(row['decisions_fallback']) === null ? null : row['decisions_fallback'] === 1,
           superseded_count: num(row['superseded_count']),
           voice_seconds: num(row['voice_seconds']),
           voice_cost_estimate_usd: num(row['voice_cost_estimate_usd']),

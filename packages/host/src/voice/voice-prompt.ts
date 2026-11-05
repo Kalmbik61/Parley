@@ -34,7 +34,30 @@ export const VOICE_PROMPT = [
   'Speak in the language the user speaks.',
 ].join('\n');
 
-/** Тело `session` для `POST /v1/live/sessions`. */
+/** Эмоции лица острова, которые GPT-Live выбирает через Decisions (V2; совпадает с `SwarmEmotion` без `error`). */
+export const LIVE_EMOTIONS = ['calm', 'joy', 'sad', 'surprise', 'anger'] as const;
+
+/**
+ * Decisions-триггер эмоции (записка V0 `docs/research/2026-11-05-gpt-live-decisions-spike.md` §2): на каждый фрагмент
+ * исходящего транскрипта модель Decisions выбирает одно из пяти значений. Задаётся при создании сессии, ровно как в V0.
+ * Делегация остаётся `client`; `model` в триггере не указывается.
+ */
+export const EMOTION_TRIGGER = {
+  type: 'decisions',
+  event_type: 'session.output_transcript.delta',
+  decisions: {
+    questions: [
+      {
+        type: 'choice',
+        name: 'expression',
+        instructions: 'Pick the emotion of what the assistant is saying right now.',
+        choices: LIVE_EMOTIONS.map((value) => ({ value })),
+      },
+    ],
+  },
+} as const;
+
+/** Тело `session` для `POST /v1/live/sessions` (остров). Телефон (роль remote) получает прежний конфиг без триггеров. */
 export function liveSessionConfig(): Record<string, unknown> {
-  return { model: LIVE_MODEL, instructions: VOICE_PROMPT, delegation: { type: 'client' } };
+  return { model: LIVE_MODEL, instructions: VOICE_PROMPT, delegation: { type: 'client' }, triggers: [EMOTION_TRIGGER] };
 }

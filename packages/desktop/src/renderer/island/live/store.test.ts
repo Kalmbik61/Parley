@@ -162,14 +162,78 @@ describe('useLiveStore: эмоция', () => {
     expect(useLiveStore.getState().emotion).toBe('calm');
   });
 
-  it('эмоция, выставленная за эти 2 с, не затирается таймером; закрытие сессии сбрасывает на calm', () => {
+  it('V2: setEmotion не прерывает вспышку ошибки: error держится 2 с, затем появляется последняя запрошенная эмоция', () => {
     const { controller, emit } = fakeController();
     useLiveStore.getState().bind(controller);
     emit({ type: 'error', code: 'oops', message: 'boom' });
     useLiveStore.getState().setEmotion('joy');
-    vi.advanceTimersByTime(3000);
-    expect(useLiveStore.getState().emotion).toBe('joy');
+    expect(useLiveStore.getState().emotion).toBe('error');
+    useLiveStore.getState().setEmotion('sad');
+    vi.advanceTimersByTime(1999);
+    expect(useLiveStore.getState().emotion).toBe('error');
+    vi.advanceTimersByTime(1);
+    expect(useLiveStore.getState().emotion).toBe('sad');
     emit({ type: 'phase', phase: 'idle' });
+    expect(useLiveStore.getState().emotion).toBe('calm');
+  });
+
+  it('закрытие сессии во время вспышки ошибки сбрасывает на calm без последующего возврата эмоции', () => {
+    const { controller, emit } = fakeController();
+    useLiveStore.getState().bind(controller);
+    emit({ type: 'error', code: 'oops', message: 'boom' });
+    useLiveStore.getState().setEmotion('joy');
+    emit({ type: 'phase', phase: 'idle' });
+    vi.advanceTimersByTime(3000);
+    expect(useLiveStore.getState().emotion).toBe('calm');
+  });
+});
+
+describe('useLiveStore: эмоции Decisions (V2)', () => {
+  const decision = (value: 'joy' | 'sad' | 'calm', sourceEndMs: number, confidence = 0.9): LiveControllerEvent => ({
+    type: 'emotion',
+    value,
+    confidence,
+    sourceEventId: `src_${sourceEndMs}`,
+    sourceEndMs,
+    inputTokens: 100,
+  });
+  beforeEach(() => {
+    vi.useFakeTimers();
+    useLiveStore.getState().bind(null);
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it('пока модель играет, решение попадает на лицо; когда замолкла — calm', () => {
+    const { controller, emit } = fakeController();
+    useLiveStore.getState().bind(controller);
+    emit(decision('joy', 1000));
+    expect(useLiveStore.getState().emotion).toBe('calm');
+    emit({ type: 'modelPlaying', value: true });
+    emit(decision('joy', 1200));
+    expect(useLiveStore.getState().emotion).toBe('joy');
+    emit({ type: 'modelPlaying', value: false });
+    expect(useLiveStore.getState().emotion).toBe('calm');
+  });
+
+  it('вспышка ошибки сильнее: решение во время неё не показывается сразу, а появляется после 2 с', () => {
+    const { controller, emit } = fakeController();
+    useLiveStore.getState().bind(controller);
+    emit({ type: 'modelPlaying', value: true });
+    emit({ type: 'error', code: 'oops', message: 'boom' });
+    emit(decision('sad', 5000));
+    expect(useLiveStore.getState().emotion).toBe('error');
+    vi.advanceTimersByTime(2000);
+    expect(useLiveStore.getState().emotion).toBe('sad');
+  });
+
+  it('конец сессии сбрасывает лицо на calm и забывает отложенное решение', () => {
+    const { controller, emit } = fakeController();
+    useLiveStore.getState().bind(controller);
+    emit({ type: 'modelPlaying', value: true });
+    emit(decision('joy', 1000));
+    emit(decision('sad', 1200));
+    emit({ type: 'phase', phase: 'idle' });
+    vi.advanceTimersByTime(5000);
     expect(useLiveStore.getState().emotion).toBe('calm');
   });
 });

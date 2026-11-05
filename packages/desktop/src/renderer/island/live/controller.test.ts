@@ -167,6 +167,37 @@ describe('createLiveController: события канала данных', () =>
     expect(controller.snapshot().phase).toBe('live');
   });
 
+  it('V2: decision.event → emotion с end_ms исходного фрагмента; дубль по event_id отсекается; чужое значение — decisionRejected', async () => {
+    const { controller, peer, events } = setup();
+    await controller.start();
+    const decision = (id: string, source: string, choice: string, confidence = 0.9) => ({
+      type: 'decision.event',
+      event_id: id,
+      event: { type: 'decision.completed', decision: { answers: [{ name: 'expression', choice, confidence }], usage: { input_tokens: 165 } } },
+      source_event_id: source,
+    });
+    peer.channel.receive({ type: 'session.output_transcript.delta', start_ms: 5800, end_ms: 6000, delta: '[redacted]', event_id: 'src_1' });
+    peer.channel.receive(decision('d1', 'src_1', 'joy'));
+    peer.channel.receive(decision('d1', 'src_1', 'joy'));
+    peer.channel.receive(decision('d2', 'src_unknown', 'sad', 0.3));
+    peer.channel.receive(decision('d3', 'src_1', 'fear'));
+    expect(events.filter((e) => e.type === 'emotion' || e.type === 'decisionRejected')).toEqual([
+      { type: 'emotion', value: 'joy', confidence: 0.9, sourceEventId: 'src_1', sourceEndMs: 6000, inputTokens: 165 },
+      { type: 'emotion', value: 'sad', confidence: 0.3, sourceEventId: 'src_unknown', sourceEndMs: null, inputTokens: 165 },
+      { type: 'decisionRejected', inputTokens: 165 },
+    ]);
+    expect(controller.snapshot().phase).toBe('live');
+  });
+
+  it('V2: битое decision.event не ломает канал: сессия живёт, событий лица нет', async () => {
+    const { controller, peer, events } = setup();
+    await controller.start();
+    peer.channel.receive({ type: 'decision.event', event_id: 'bad1', event: { type: 'decision.completed' } });
+    peer.channel.receive({ type: 'decision.event', event_id: 'bad2' });
+    expect(events.some((e) => e.type === 'emotion' || e.type === 'decisionRejected')).toBe(false);
+    expect(controller.snapshot().phase).toBe('live');
+  });
+
   it('session.closed по каналу закрывает сессию один раз; событие хоста о том же закрытии не дублирует', async () => {
     const { controller, peer, events, track, hostListeners } = setup();
     await controller.start();

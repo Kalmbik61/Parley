@@ -34,6 +34,7 @@ import {
 import type { AssistantRequestView } from '@parley/protocol';
 import { ISLAND_CONVERSATION_ID, type IslandBridge } from '../../../shared/island.js';
 import type { LiveController, LiveControllerEvent } from './controller.js';
+import { isConfidentEmotion } from './emotion.js';
 
 /** Так хост называет потребителя Live (`LIVE_CONSUMER` в host/assistant/requests.ts). */
 export const LIVE_CONSUMER_ID = 'live';
@@ -141,7 +142,18 @@ export function createLiveDelegation(deps: LiveDelegationDeps): LiveDelegation {
     now: deps.now,
     record: (entry) => {
       // Только числа и перечисления; сбой записи голос не трогает.
-      const params = 'firstAudioMs' in entry ? { voiceSessionId: entry.voiceSessionId, interrupts: entry.interrupts, ...(entry.firstAudioMs === null ? {} : { firstAudioMs: entry.firstAudioMs }) } : entry;
+      const params =
+        'firstAudioMs' in entry
+          ? {
+              voiceSessionId: entry.voiceSessionId,
+              interrupts: entry.interrupts,
+              decisionsReceived: entry.decisionsReceived,
+              decisionsRejected: entry.decisionsRejected,
+              decisionsInputTokens: entry.decisionsInputTokens,
+              decisionsFallback: entry.decisionsFallback,
+              ...(entry.firstAudioMs === null ? {} : { firstAudioMs: entry.firstAudioMs }),
+            }
+          : entry;
       void deps.call('voice.telemetry.record', params).catch(() => {});
     },
   });
@@ -290,6 +302,12 @@ export function createLiveDelegation(deps: LiveDelegationDeps): LiveDelegation {
       case 'outputTranscript':
         ensureSession()?.bridge.handle({ type: 'outputTranscript', text: event.text, startMs: event.startMs, endMs: event.endMs });
         queue.outputText(event.text);
+        return;
+      case 'emotion':
+        telemetry.decision({ inputTokens: event.inputTokens, rejected: !isConfidentEmotion(event.confidence) });
+        return;
+      case 'decisionRejected':
+        telemetry.decision({ inputTokens: event.inputTokens, rejected: true });
         return;
       case 'delegationCreated': {
         const current = ensureSession();
