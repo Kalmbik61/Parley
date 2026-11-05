@@ -4,8 +4,11 @@ import InCallManager from 'react-native-incall-manager';
 import { RTCPeerConnection, mediaDevices } from 'react-native-webrtc';
 import type { LiveControllerDeps, LiveMic, LivePeer } from './live-controller.js';
 
+/** The mic with a mute switch: a disabled track sends silence, the session stays open. */
+export type MutableMic = LiveMic & { setEnabled(enabled: boolean): void };
+
 /** Starts the audio session (voice chat route with echo cancellation, loud speaker) and opens the microphone. */
-export async function openMic(): Promise<LiveMic> {
+export async function openMic(): Promise<MutableMic> {
   InCallManager.start({ media: 'audio', auto: false });
   InCallManager.setForceSpeakerphoneOn(true);
   try {
@@ -13,6 +16,9 @@ export async function openMic(): Promise<LiveMic> {
     return {
       addTo: (peer) => {
         for (const track of stream.getTracks()) peer.addTrack(track, stream);
+      },
+      setEnabled: (enabled) => {
+        for (const track of stream.getTracks()) track.enabled = enabled;
       },
       stop: () => {
         stream.getTracks().forEach((track) => track.stop());

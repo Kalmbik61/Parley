@@ -25,7 +25,7 @@ export async function openFromPush(data: unknown, router: Navigator): Promise<vo
   const { target, segment } = resolvePushRoute(data, await runtime.hostStore.list());
   if (target.kind === 'host') {
     await runtime.selectHost(target.host.hostId);
-    router.navigate(segment === 'letters' ? { pathname: '/', params: { segment } } : '/');
+    router.navigate(segment === 'letters' ? { pathname: '/inbox', params: { segment } } : '/inbox');
   } else {
     // Unknown route: the host list (Settings → Macs) with a toast.
     router.navigate({ pathname: '/settings', params: { toast: UNPAIRED_TOAST } });

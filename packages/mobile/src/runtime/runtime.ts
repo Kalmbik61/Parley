@@ -57,6 +57,7 @@ export class AppRuntime {
   }
   readonly #deps: RuntimeDeps;
   readonly #listeners = new Set<() => void>();
+  readonly #hostEventListeners = new Set<(event: string, data: unknown) => void>();
   #state: RuntimeState = {
     phase: 'booting',
     host: null,
@@ -91,6 +92,12 @@ export class AppRuntime {
     this.#listeners.add(listener);
     return () => void this.#listeners.delete(listener);
   };
+
+  /** Host events (`jobs.changed`, `cards.changed`, ...) for screens; survives reconnects and host switches. */
+  onHostEvent(listener: (event: string, data: unknown) => void): () => void {
+    this.#hostEventListeners.add(listener);
+    return () => void this.#hostEventListeners.delete(listener);
+  }
 
   /** Idempotent. */
   start(): Promise<void> {
@@ -214,7 +221,16 @@ export class AppRuntime {
     });
     this.#supervisor = supervisor;
     this.#teardown.push(
-      supervisor.onEvent((event, data) => client.handleEvent(event, data)),
+      supervisor.onEvent((event, data) => {
+        client.handleEvent(event, data);
+        for (const listener of [...this.#hostEventListeners]) {
+          try {
+            listener(event, data);
+          } catch {
+            // a screen's listener must not break the others or the store
+          }
+        }
+      }),
       client.store.subscribe((next, prev) => {
         if (next.snapshot !== prev.snapshot) this.#set({ lastUpdatedAt: platform.now() });
         if (next.hostStatus !== prev.hostStatus) this.#set({ hostStatus: next.hostStatus });
