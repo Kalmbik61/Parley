@@ -133,6 +133,12 @@ describe('swarmSpecForLive', () => {
     }
   });
 
+  it('сбой канала (error) — коралловое лицо и без звука модели, важнее речи человека и проверки', () => {
+    expect(swarmSpecForLive(live({ emotion: 'error' }), false)).toMatchObject({ shape: 'face', emo: 'error', pal: 'coral' });
+    expect(swarmSpecForLive(live({ emotion: 'error', humanSpeaking: true, checking: true, phase: 'connecting' }), false)).toMatchObject({ shape: 'face', emo: 'error', pal: 'coral' });
+    expect(swarmSpecForLive(live({ emotion: 'error' }), true)).toMatchObject({ shape: 'sphere', emo: null, pal: 'coral' });
+  });
+
   it('человек говорит — облако listen', () => {
     expect(swarmSpecForLive(live({ humanSpeaking: true }), false)).toMatchObject({ shape: 'cloud', fx: 'listen', emo: null });
   });

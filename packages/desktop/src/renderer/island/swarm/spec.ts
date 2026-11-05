@@ -197,13 +197,14 @@ export interface SwarmLive {
 export const liveActive = (live: Pick<SwarmLive, 'phase'> | undefined): boolean => live !== undefined && live.phase !== 'idle';
 
 /**
- * Облик по Live-разговору. Приоритет: модель говорит (лицо с эмоцией; коралл — только `error`), затем говорит человек
+ * Облик по Live-разговору. Приоритет: сбой канала (эмоция `error` — коралловое лицо, что бы ни звучало), затем модель
+ * говорит (лицо с эмоцией, янтарь), затем говорит человек
  * (облако слушания), затем идёт проверка (сфера с дугой, как фаза `tool` хоста), затем подключение и закрытие (сфера,
  * «дышит»), иначе спокойная сфера. В мини-виде лица нет — сфера с палитрой лица, облако рисуется точкой.
  */
 export function swarmSpecForLive(live: SwarmLive, mini: boolean): SwarmSpec {
   let spec: SwarmSpec;
-  if (live.modelPlaying) {
+  if (live.modelPlaying || live.emotion === 'error') {
     const emo = live.emotion;
     spec = { ...BASE, shape: 'face', emo, pal: emo === 'error' ? 'coral' : 'amber', dim: EMO[emo].dim ?? 1 };
     if (mini) spec = { ...spec, shape: 'sphere', emo: null };
