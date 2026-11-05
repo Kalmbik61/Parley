@@ -18,11 +18,13 @@ import {
   createAckTracker,
   createDelegationBridge,
   createEventDeduper,
+  createIdleCloser,
   createSpeechQueue,
   createStatusNotifier,
   parseLiveEvent,
   type AckTracker,
   type DelegationBridge,
+  type IdleCloser,
   type ResultInput,
   type SpeechPhrases,
   type SpeechQueue,
@@ -166,6 +168,8 @@ interface Live {
   ack: AckTracker;
   queue: SpeechQueue;
   status: StatusNotifier;
+  /** Автозакрытие по тишине (VA-12). */
+  idle: IdleCloser;
   /** Последний вид каждого job этой сессии. */
   jobs: Map<string, PhoneJob>;
   /** Самая новая виденная ревизия job (VO-15). */
@@ -229,6 +233,7 @@ export function createLiveController(deps: LiveControllerDeps): LiveController {
     target.stopTick();
     target.cancelTimer();
     target.settleOpen(false);
+    target.idle.stop();
     target.bridge.dispose();
     target.queue.sessionEnded();
     target.channel.onopen = target.channel.onclose = target.channel.onmessage = null;
@@ -255,7 +260,8 @@ export function createLiveController(deps: LiveControllerDeps): LiveController {
     if (closeHost) void deps.call('voice.session.close', { voiceSessionId: target.voiceSessionId }).catch(() => {});
     teardown(target);
     setPhase('idle');
-    emit({ type: reason === 'connection_lost' || reason === 'channel_closed' ? 'fail' : 'stop' });
+    // Дневной лимит хост называет причиной закрытия: экран должен показать «Daily voice limit reached», а не уйти в idle.
+    emit({ type: reason === 'connection_lost' || reason === 'channel_closed' ? 'fail' : reason === 'daily_limit' ? 'limitReached' : 'stop' });
   };
 
   const sendAppend = (target: Live, kind: 'thinking' | 'commentary', delegationId: string | null, content: string): string | null => {
@@ -335,6 +341,7 @@ export function createLiveController(deps: LiveControllerDeps): LiveController {
       if (target.humanSpeaking === value) return;
       target.humanSpeaking = value;
       target.queue.setHumanSpeaking(value);
+      target.idle.humanSpeaking(value);
       // Человек договорил, а модель ещё не говорит: Live готовит ответ.
       if (!value && !target.modelPlaying) emit({ type: 'thinking' });
     } else {
@@ -342,6 +349,7 @@ export function createLiveController(deps: LiveControllerDeps): LiveController {
       target.modelPlaying = value;
       target.queue.setModelPlaying(value);
       target.ack.modelPlaying(value);
+      target.idle.modelPlaying(value);
       emit({ type: value ? 'speechStart' : 'speechEnd' });
     }
     changed();
@@ -352,6 +360,7 @@ export function createLiveController(deps: LiveControllerDeps): LiveController {
     if (target.humanSpeaking && at - target.lastHumanAt >= SPEECH_HOLD_MS) setSpeech(target, 'human', false);
     if (target.modelPlaying && at - target.lastModelAt >= SPEECH_HOLD_MS) setSpeech(target, 'model', false);
     target.ack.tick();
+    target.idle.step();
     pump(target);
   };
 
@@ -376,6 +385,7 @@ export function createLiveController(deps: LiveControllerDeps): LiveController {
         return;
       case 'delegationCreated':
         target.delegations.push(event.delegationId);
+        target.idle.activity();
         target.bridge.handle({ type: 'delegationCreated', delegationId: event.delegationId, offsetMs: event.offsetMs });
         // Предыдущие делегации теперь перекрыты: их ещё не озвученные итоги отбрасываются очередью.
         pump(target);
@@ -448,6 +458,16 @@ export function createLiveController(deps: LiveControllerDeps): LiveController {
         submitFailed: ({ delegationId }) => endDelegation(self(), delegationId),
       },
     );
+    // Занято: идёт делегация или job, речь ждёт очереди или подтверждения.
+    const idle = createIdleCloser({
+      now: deps.now,
+      busy: () =>
+        self().openDelegations.size > 0 ||
+        [...self().jobs.values()].some(isOpen) ||
+        queue.items().some((item) => item.speech === 'queued' || item.speech === 'submitted') ||
+        ack.awaiting().length > 0,
+      onIdle: () => void stopLive().catch(() => {}),
+    });
     const target: Live = {
       voiceSessionId,
       peer,
@@ -457,6 +477,7 @@ export function createLiveController(deps: LiveControllerDeps): LiveController {
       ack,
       queue,
       status,
+      idle,
       jobs: new Map(),
       revisions: new Map(),
       delegations: [],
@@ -475,6 +496,23 @@ export function createLiveController(deps: LiveControllerDeps): LiveController {
     target.stopTick = deps.setTick(() => tick(target), TICK_MS);
     return target;
   };
+
+  /** `stop()` и автозакрытие: общий путь. */
+  async function stopLive(): Promise<void> {
+    generation += 1;
+    const target = live;
+    if (target === null) {
+      // Идёт подготовка (до ответа хоста): `start` увидит смену поколения и сам закроет сессию.
+      if (phase !== 'idle') {
+        setPhase('idle');
+        emit({ type: 'stop' });
+      }
+      return;
+    }
+    // Сначала освобождаем микрофон и peer, потом просим хост закрыть сессию (без ожидания ответа): молчащий хост не держит микрофон.
+    setPhase('closing');
+    finish(target, 'close_requested');
+  }
 
   const unsubscribeJobs = deps.onHostEvent('jobs.changed', (data) => onJobChanged(data.job));
   const unsubscribeClosed = deps.onHostEvent('voice.session.closed', (data) => {
@@ -510,6 +548,8 @@ export function createLiveController(deps: LiveControllerDeps): LiveController {
       mic.addTo(peer);
 
       let voiceSessionId: string | null = null;
+      /** Сессия, созданная именно этим вызовом: `catch` разбирает только её, а не глобальную `live`. */
+      let own: Live | null = null;
       const closeHostSession = (): void => {
         if (voiceSessionId !== null) void deps.call('voice.session.close', { voiceSessionId }).catch(() => {});
       };
@@ -543,13 +583,14 @@ export function createLiveController(deps: LiveControllerDeps): LiveController {
         voiceSessionId = prepared.voiceSessionId;
         const answerSdp = prepared.sdpAnswer;
 
-        const target = openSession(prepared.voiceSessionId, peer, channel, mic);
         if (mine !== generation) {
-          // stop() пришёл, пока создавалась сессия: закрываем её на хосте и ничего не оставляем.
+          // stop() пришёл, пока создавалась сессия: закрываем её на хосте, глобальную `live` (она может быть чужой) не трогаем.
           closeHostSession();
-          teardown(target);
+          dropLocal();
           return refuseQuietly('busy');
         }
+        const target = openSession(prepared.voiceSessionId, peer, channel, mic);
+        own = target;
         channel.onmessage = (event) => handleChannelMessage(target, deduper, event.data);
         channel.onclose = () => finish(target, 'channel_closed');
         peer.onconnectionstatechange = () => {
@@ -569,6 +610,8 @@ export function createLiveController(deps: LiveControllerDeps): LiveController {
         });
         await peer.setRemoteDescription({ type: 'answer', sdp: answerSdp });
         if (!(await opened)) {
+          // Закрыли посреди подключения (хост, обрыв, stop): событие модели уже было, второе не нужно.
+          if (target.closedEmitted) return refuseQuietly('failed');
           // Сессию могли уже закрыть (stop, хост, обрыв): тогда хост и ресурсы освобождены.
           if (!target.closedEmitted && live === target) {
             closeHostSession();
@@ -579,36 +622,20 @@ export function createLiveController(deps: LiveControllerDeps): LiveController {
         if (mine !== generation || target.closedEmitted) return refuseQuietly('busy');
         // После открытия канала таймер подключения не нужен; обрыв канала закрывает сессию через `onclose`.
         channel.onopen = null;
+        target.idle.start();
         setPhase('live');
         emit({ type: 'connected' });
         return { ok: true, voiceSessionId: target.voiceSessionId };
       } catch {
+        if (own !== null && own.closedEmitted) return refuseQuietly('failed');
         closeHostSession();
-        if (live !== null) teardown(live);
+        if (own !== null) teardown(own);
         else dropLocal();
         return abandon('failed');
       }
     },
 
-    async stop() {
-      generation += 1;
-      const target = live;
-      if (target === null) {
-        // Идёт подготовка (до ответа хоста): `start` увидит смену поколения и сам закроет сессию.
-        if (phase !== 'idle') {
-          setPhase('idle');
-          emit({ type: 'stop' });
-        }
-        return;
-      }
-      setPhase('closing');
-      try {
-        await deps.call('voice.session.close', { voiceSessionId: target.voiceSessionId });
-      } catch {
-        // сессию всё равно закрываем локально; хост закроет её по лимиту
-      }
-      finish(target, 'close_requested', false);
-    },
+    stop: stopLive,
 
     setForeground(value) {
       foreground = value;

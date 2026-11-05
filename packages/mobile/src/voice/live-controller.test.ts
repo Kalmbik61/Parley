@@ -549,3 +549,136 @@ describe('приватность и (g) cards.decide', () => {
     expect(h.calls.every((c) => ['voice.session.prepare', 'jobs.submit', 'jobs.ackInline', 'voice.session.close'].includes(c.method))).toBe(true);
   });
 });
+
+describe('автозакрытие по тишине (M3)', () => {
+  const closes = (h: Harness): number => h.calls.filter((c) => c.method === 'voice.session.close').length;
+  const MIN = 60_000;
+
+  it('3 минуты тишины без jobs → сессия закрыта один раз, событие stop', async () => {
+    const h = await started();
+    h.advance(3 * MIN - 1000);
+    expect(closes(h)).toBe(0);
+    h.advance(2000);
+    await flush();
+    expect(closes(h)).toBe(1);
+    expect(h.events.at(-1)).toEqual({ type: 'stop' });
+    expect(h.controller.snapshot().phase).toBe('idle');
+    h.advance(5 * MIN);
+    expect(closes(h)).toBe(1);
+  });
+
+  it('открытый job не даёт закрыть сессию; после итога и речи отсчёт идёт заново', async () => {
+    const h = await started();
+    await delegate(h);
+    h.hostEmit('jobs.changed', { job: job({ state: 'running', revision: 1, resultSummary: null }) });
+    h.advance(10 * MIN);
+    expect(closes(h)).toBe(0);
+    h.hostEmit('jobs.changed', { job: job({ state: 'completed', revision: 2 }) });
+    h.advance(MIN);
+    expect(closes(h)).toBe(0);
+    h.advance(3 * MIN);
+    await flush();
+    expect(closes(h)).toBe(1);
+  });
+
+  it('недавняя речь сбрасывает отсчёт', async () => {
+    const h = await started();
+    h.advance(2 * MIN + 30_000);
+    h.live(inputText('still here'));
+    h.advance(2 * MIN + 30_000);
+    expect(closes(h)).toBe(0);
+    h.advance(MIN);
+    await flush();
+    expect(closes(h)).toBe(1);
+  });
+});
+
+describe('причины закрытия (m1)', () => {
+  it('daily_limit от хоста → limitReached, а не stop', async () => {
+    const h = await started();
+    h.hostEmit('voice.session.closed', { voiceSessionId: SESSION, reason: 'daily_limit' });
+    expect(h.events.at(-1)).toEqual({ type: 'limitReached' });
+  });
+
+  it('daily_limit по каналу → limitReached', async () => {
+    const h = await started();
+    h.live({ type: 'session.closed', reason: 'daily_limit' });
+    expect(h.events.at(-1)).toEqual({ type: 'limitReached' });
+  });
+
+  it('закрытие хостом во время подключения даёт ровно одно событие модели', async () => {
+    const h = makeHarness({ neverOpens: true });
+    const pending = h.controller.start();
+    await flush();
+    h.hostEmit('voice.session.closed', { voiceSessionId: SESSION, reason: 'daily_limit' });
+    expect(await pending).toMatchObject({ ok: false });
+    expect(h.events.map((e) => e.type)).toEqual(['start', 'limitReached']);
+  });
+});
+
+describe('гонка двух start (m2)', () => {
+  it('поздний отказ prepare первого start не разбирает сессию второго', async () => {
+    const h = makeHarness();
+    let rejectFirst: (error: Error) => void = () => {};
+    let prepares = 0;
+    h.call.mockImplementation(async (method: string, params: unknown) => {
+      called.push(method);
+      h.calls.push({ method, params });
+      if (method === 'voice.session.prepare') {
+        prepares += 1;
+        if (prepares === 1) return new Promise((_, reject) => (rejectFirst = reject));
+        return { ok: true, voiceSessionId: 'S2', sdpAnswer: 'A' };
+      }
+      return { closed: true };
+    });
+    const first = h.controller.start();
+    await flush();
+    await h.controller.stop();
+    expect(await h.controller.start()).toEqual({ ok: true, voiceSessionId: 'S2' });
+    rejectFirst(new Error('timeout'));
+    expect(await first).toMatchObject({ ok: false });
+    expect(h.controller.snapshot()).toMatchObject({ phase: 'live', voiceSessionId: 'S2' });
+    expect(h.calls.filter((c) => c.method === 'voice.session.close')).toEqual([]);
+  });
+
+  it('поздний ok первого start после stop закрывается на хосте и не затирает сессию второго', async () => {
+    const h = makeHarness();
+    let resolveFirst: (value: unknown) => void = () => {};
+    let prepares = 0;
+    h.call.mockImplementation(async (method: string, params: unknown) => {
+      called.push(method);
+      h.calls.push({ method, params });
+      if (method === 'voice.session.prepare') {
+        prepares += 1;
+        if (prepares === 1) return new Promise((resolve) => (resolveFirst = resolve));
+        return { ok: true, voiceSessionId: 'S2', sdpAnswer: 'A' };
+      }
+      return { closed: true };
+    });
+    const first = h.controller.start();
+    await flush();
+    await h.controller.stop();
+    await h.controller.start();
+    resolveFirst({ ok: true, voiceSessionId: 'S1', sdpAnswer: 'A' });
+    expect(await first).toMatchObject({ ok: false });
+    expect(h.controller.snapshot()).toMatchObject({ phase: 'live', voiceSessionId: 'S2' });
+    expect(h.calls.filter((c) => c.method === 'voice.session.close').map((c) => c.params)).toEqual([{ voiceSessionId: 'S1' }]);
+  });
+});
+
+describe('stop() освобождает ресурсы до ответа хоста', () => {
+  it('close без ответа: микрофон и peer закрыты сразу, close вызван один раз', async () => {
+    const h = await started();
+    h.call.mockImplementation(async (method: string, params: unknown) => {
+      called.push(method);
+      h.calls.push({ method, params });
+      return new Promise(() => {});
+    });
+    await h.controller.stop();
+    expect(h.mic.stopped).toBe(true);
+    expect(h.peer.close).toHaveBeenCalled();
+    expect(h.calls.filter((c) => c.method === 'voice.session.close')).toEqual([{ method: 'voice.session.close', params: { voiceSessionId: SESSION } }]);
+    expect(h.events.at(-1)).toEqual({ type: 'stop' });
+    expect(h.controller.snapshot().phase).toBe('idle');
+  });
+});

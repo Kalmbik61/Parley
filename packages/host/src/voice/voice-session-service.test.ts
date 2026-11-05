@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openMemoryDb } from '@parley/core';
 import { LiveError, type LiveClient, type LiveClosed, type Sideband } from './live-client.js';
 import { VOICE_PROMPT, liveSessionConfig } from './voice-prompt.js';
-import { INIT_BILLED_SECONDS, MAX_SESSION_MS, WARNING_BEFORE_MS, createVoiceSessionService } from './voice-session-service.js';
+import { VOICE_PREPARE_BRIDGE_TIMEOUT_MS, VOICE_PREPARE_PHONE_TIMEOUT_MS } from '@parley/protocol/remote';
+import { INIT_BILLED_SECONDS, MAX_SESSION_MS, PREPARE_WORST_CASE_MS, WARNING_BEFORE_MS, createVoiceSessionService } from './voice-session-service.js';
 
 class FakeSideband implements Sideband {
   usage: Array<(s: number) => void> = [];
@@ -342,5 +343,13 @@ describe('VoiceSessionService', () => {
       clock.date = new Date(2026, 10, 5, 0, 1, 0);
       expect((await service.prepare('o')).ok).toBe(true);
     });
+  });
+});
+
+describe('таймауты prepare по звеньям (M2)', () => {
+  it('худший срок хоста < ответ моста < ответ телефона: телефон не сдаётся раньше хоста', () => {
+    expect(PREPARE_WORST_CASE_MS).toBe(20_000 + 3 * 10_000 + 250 + 1_000);
+    expect(PREPARE_WORST_CASE_MS).toBeLessThan(VOICE_PREPARE_BRIDGE_TIMEOUT_MS);
+    expect(VOICE_PREPARE_BRIDGE_TIMEOUT_MS).toBeLessThan(VOICE_PREPARE_PHONE_TIMEOUT_MS);
   });
 });

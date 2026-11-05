@@ -1,5 +1,5 @@
 // RPC поверх кадров приложения (спека §8.1, §8.4, §10.1): корреляция `id`, таймаут, `connection_lost`.
-import { appResponseFrame } from '@parley/protocol/remote';
+import { VOICE_PREPARE_METHOD, VOICE_PREPARE_PHONE_TIMEOUT_MS, appResponseFrame } from '@parley/protocol/remote';
 import type { Platform, TimerHandle } from './platform.js';
 
 /** Таймаут чтения по умолчанию (§10.1). */
@@ -29,11 +29,13 @@ const MUTATING_METHODS: ReadonlySet<string> = new Set([
   'rooms.archive',
   'rooms.delete',
   'consents.decide',
+  'jobs.submit',
+  'cards.decide',
 ]);
 
 /** Таймаут по умолчанию для метода: изменяющие ждут дольше чтений. */
 export const defaultTimeoutFor = (method: string): number =>
-  MUTATING_METHODS.has(method) ? RPC_MUTATING_TIMEOUT_MS : RPC_TIMEOUT_MS;
+  method === VOICE_PREPARE_METHOD ? VOICE_PREPARE_PHONE_TIMEOUT_MS : MUTATING_METHODS.has(method) ? RPC_MUTATING_TIMEOUT_MS : RPC_TIMEOUT_MS;
 
 /**
  * Коды клиента: `timeout` — ответа нет в срок; `connection_lost` — соединение ушло до ответа (итог вызова
