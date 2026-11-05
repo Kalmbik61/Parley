@@ -277,7 +277,7 @@ session waits for the human (an approval, a question, a usage limit, a sign-in):
 session to sleep: mail wakes it, so write to it or wait for mail via \`"inbox"\`. An unknown id is an error right
 away — it is a typo. Giving a new job to a session that has already handed in its
 \`report\`? Do not wait for it with \`wait_for(target)\` — it returns the old result at once.
-Wait with \`wait_for("inbox", 1500)\`: it will wake on the session's reply message.
+Wait with \`wait_for("inbox", 1500)\`: it will wake on the session's reply message or report letter.
 
 \`send_message(to, text, kind, room, replyTo)\` and \`check_inbox()\` — correspondence inside the
 workspace. Without \`room\`, \`to\` is exactly one session; with \`room\` it is one id or a list, an empty or
@@ -640,8 +640,8 @@ Wait with one call \`wait_for("inbox", 1500)\`: no text before or after it, no \
 more, then end the turn without \`report\` (you are not done): Parley wakes you with the pointer
 when mail arrives. Do not \`wait_for\` a session by its id when it will answer with a message
 anyway — wait via \`"inbox"\`, or end the turn: the message will wake you by itself. A session
-that only calls \`report\` sends no message: wait for it by id and call \`wait_for\` again while
-it is \`running\`.
+you tasked directly or created mails you its \`report(done/failed)\` as a letter: wait via
+\`"inbox"\`. A room member reports in the room. Wait by id only when you need its summary in the answer.
 
 Rules for letters:
 

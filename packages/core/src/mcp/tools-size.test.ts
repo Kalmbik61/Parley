@@ -34,6 +34,15 @@ function descriptionBytes(node: unknown): number {
 const ALL_TOOLS = [...TOOLS, CREATE_SESSION_TOOL];
 
 describe('размер описаний инструментов MCP', () => {
+  it('report и wait_for объясняют доставку нового отчёта письмом', () => {
+    expect(TOOLS.find((tool) => tool.name === 'report')?.description).toContain(
+      'Done/failed also mails the session that last tasked you directly or via create_session.',
+    );
+    expect(TOOLS.find((tool) => tool.name === 'wait_for')?.description).toContain(
+      'via "inbox": its next report arrives there as a letter.',
+    );
+  });
+
   it(`все строки description в TOOLS и create_session — не больше ${DESCRIPTIONS_MAX_BYTES} байт`, () => {
     expect(descriptionBytes(ALL_TOOLS)).toBeLessThanOrEqual(DESCRIPTIONS_MAX_BYTES);
   });

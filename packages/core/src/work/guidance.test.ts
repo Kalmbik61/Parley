@@ -121,11 +121,12 @@ describe('системная вставка', () => {
     expect(line).toMatch(/no Monitor, sleep or loops/);
     // Буквальное {"state":"running"}: Codex иначе путает его со своим «Script running with cell ID».
     expect(line).toContain('on {"state":"running"} repeat once, then end the turn without report (not done)');
-    // Повтор-и-конец — только для «inbox»: по id письмо не придёт (сдавший report пишет без сообщения), ждут дальше.
+    // Повтор-и-конец — только для «inbox»: по id ждут результат, пока running.
     expect(line).toContain('By id: repeat while running');
     expect(line).toContain('marks it read');
     // Прежняя подсказка: новое поручение сдавшей отчёт сессии ждут через «inbox», не по id.
     expect(line).toContain('wait via "inbox", not by id');
+    expect(line).toContain('(its report arrives as a letter)');
   });
 
   it('создаёт обычные сессии текущего workspace; канал хоста назван в гиде, а не во вставке', () => {

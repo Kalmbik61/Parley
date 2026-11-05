@@ -123,7 +123,7 @@ describe('темы гида', () => {
     // По id ждут, пока running (как и в вставке): повтор-и-конец — только для «inbox».
     expect(text).toContain('for a session id keep calling while it is `running`');
     // Ждать письма велено с таймаутом, как и везде (L1).
-    expect(text).toContain('Wait with `wait_for("inbox", 1500)`: it will wake on the session\'s reply message.');
+    expect(text).toContain('Wait with `wait_for("inbox", 1500)`: it will wake on the session\'s reply message or report letter.');
     expect(text).not.toContain('1800');
   });
 
@@ -136,8 +136,10 @@ describe('темы гида', () => {
     expect(text).toContain('Write only a result, a position, a question, a decision or a blocker.');
     expect(text).toContain('Wait with one call `wait_for("inbox", 1500)`: no text before or after it, no `Monitor`, `sleep` or polling loops');
     expect(text).toContain('On `{"state":"running"}` call it once more, then end the turn without `report` (you are not done)');
-    // По id ждут сдавшего только report: письма не будет, будить некому — ждать дальше, пока running.
-    expect(text).toContain('A session that only calls `report` sends no message: wait for it by id and call `wait_for` again while it is `running`.');
+    expect(text).toContain('A session you tasked directly or created mails you its `report(done/failed)` as a letter: wait via `"inbox"`.');
+    expect(text).toContain('A room member reports in the room.');
+    expect(text).toContain('Wait by id only when you need its summary in the answer.');
+    expect(text).not.toContain('only calls `report` sends no message');
     expect(text).toContain('wait via `"inbox"`');
   });
 

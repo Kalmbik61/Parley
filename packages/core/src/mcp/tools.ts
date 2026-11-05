@@ -64,6 +64,7 @@ import { readProjectMemory } from '../work/project-memory.js';
 import type { MemoryKind } from '../work/project-memory.js';
 import { readProjectPreferences } from '../work/project-preferences.js';
 import { finishSession } from '../work/metrics.js';
+import { isReportLetterAbout, lastTaskGiver, reportLetterText } from '../work/task-giver.js';
 import { SHORT_PROFILE_HIDDEN_TOOLS } from '../work/mcp-config.js';
 import { PROPOSAL_TEXT_MAX } from '../work/proposals.js';
 import {
@@ -485,7 +486,7 @@ export const TOOLS: Tool[] = [
     name: 'report',
     annotations: WRITES,
     description:
-      'Report on your own session: done or failed hands in the result (the session stays reachable, not closed); progress is an interim summary. A repeat overwrites the summary and artifacts.',
+      'Report your result (done/failed; stays reachable, not closed) or progress. Replaces summary and artifacts. Done/failed also mails the session that last tasked you directly or via create_session.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -513,7 +514,7 @@ export const TOOLS: Tool[] = [
     name: 'wait_for',
     annotations: WRITES,
     description:
-      'Wait for a session to finish (target = its id) or for mail (target = "inbox"); mail comes back marked read, so check_inbox is not needed. Timeout returns {"state":"running"}. {"state":"stuck"}: that session waits for the human or its usage limit — do not wait for it again, Parley writes when it is back. A session that already handed in its report returns the old result at once by id: wait for its answer to a new job via "inbox".',
+      'Wait for a session (target = its id) or mail (target = "inbox"); mail is marked read; no check_inbox needed. Timeout returns {"state":"running"}. {"state":"stuck"}: waiting for the human or a usage limit — do not wait for it again, Parley writes when back. A session that already handed in its report returns the old result at once by id: wait for its answer to a new job via "inbox": its next report arrives there as a letter.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -889,6 +890,16 @@ async function report(
     session.artifacts = artifacts;
   });
   if (status !== 'progress') {
+    // Письмо уже лежит, когда смена результата разбудит ожидающего по id.
+    try {
+      writeLetters(context.projectPath, context.workId, (letters, current) => {
+        const giver = lastTaskGiver(current, letters, sessionId);
+        if (giver === null) return;
+        const older = letters.unreadFor(giver).filter((message) => isReportLetterAbout(message, sessionId));
+        letters.markRead(giver, older.map((message) => message.id), new Date().toISOString());
+        letters.add({ from: SYSTEM, roomId: null, to: [giver], kind: 'note', text: reportLetterText(sessionId, status, summary) });
+      });
+    } catch { /* Уведомление не должно мешать сессии сдать результат. */ }
     // Итоговые метрики в карту фиксирует общий код жизненного цикла.
     map = await finishSession(context.projectPath, context.workId, sessionId, status);
   }
@@ -1153,7 +1164,17 @@ async function waitFor(
     const unsettledMs = target === 'inbox' ? settleDelay(unreadLetters(context.projectPath, context.workId, sessionId)) : 0;
     wakeOnPending = unsettledMs === 0;
     const found = await waitOnce(unsettledMs > 0 ? Math.min(timeLeftMs, unsettledMs + SETTLE_SLACK_MS) : timeLeftMs);
-    if (target !== 'inbox') return found === null ? { state: 'running' } : found;
+    if (target !== 'inbox') {
+      if (found !== null && typeof found === 'object' && 'state' in found && (found.state === 'done' || found.state === 'failed')) {
+        try {
+          writeLetters(context.projectPath, context.workId, (letters) => {
+            const reports = letters.unreadFor(sessionId).filter((message) => isReportLetterAbout(message, target));
+            letters.markRead(sessionId, reports.map((message) => message.id), new Date().toISOString());
+          });
+        } catch { /* Сбой отметки прочтения не должен терять ответ ожидания. */ }
+      }
+      return found === null ? { state: 'running' } : found;
+    }
     if (found === PENDING) continue;
     if (found === null) {
       if (cancelled()) return { state: 'running' };
