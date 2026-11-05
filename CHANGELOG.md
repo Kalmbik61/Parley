@@ -4,6 +4,44 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
+## 0.30.0
+
+**Impact**
+
+- **Goal:** Talk to the assistant in a live voice dialogue that keeps going while work runs in the background, open sites behind HTTP basic auth in the built-in browser, keep the phone in step with the Mac after an update and in large projects, and let a lead that re-tasks a finished session wake when it reports.
+- **Behaviour:** With "Speak answers" on, the assistant hotkey starts a live GPT-Live dialogue; requests go to background assistant jobs and their answers are spoken in a pause, while the island shows a compact face that follows the voice and picks an emotion. With it off, the hotkey keeps starting Whisper dictation. The built-in browser signs in to basic-auth sites from `user:pass@` in the address or from a sign-in card on the tab. After an app update the phone bridge of the old version is restarted by itself. The phone gets a much smaller workspace snapshot, its room Reply also addresses the quoted author, and it can no longer create a room that pulls a session out of an autonomous run. An agent that reports done or failed now sends a letter to the session that gave it its latest task.
+- **Numbers:** Live voice (PR #183): tests touched by the last tasks pass (desktop 10,111, host 4,148, protocol 543); GPT-Live emotion decisions median 154.5 ms, p95 496 ms (n = 22); a full run on the final tip was not measured. Basic auth (PR #184): `browser_open` on a page waiting for sign-in returns in 605 ms instead of the 15 s load wait. Bridge restart (PR #182): 11 new tests, desktop 9,961 passed. Phone snapshot (PR #186): 3,507,193 B → 33,961 B on a synthetic large map (1.0% of the 5 MiB frame cap); the live project was not measured. Report letter (PR #189): 157 of 157 in the touched test files.
+- **Screens:** The live dialogue was checked by the human in a test window, without saved screenshots. The basic-auth card was captured locally at 800×500, not attached. The phone Reply change was not run on a device or simulator.
+- **For the human:** Turn "Speak answers" on and press the assistant hotkey to try the live dialogue. Open a basic-auth stand once with `user:pass@` and once without. After updating, check that the phone's Diagnostics shows the new bridge version.
+- **Risk:** Medium. The live dialogue is new and its phone and Telegram paths were not verified. The bridge restart drops the phone connection for a few seconds once. The agent guidance line changed, so every session's system prompt text is different from 0.29.0.
+- **Cost:** Live dialogue minutes are billed to the person's OpenAI key; emotion decisions add under $0.001 per minute of talk (estimate). Runtime cost on the Mac is not measured.
+- **Verdict:** Ready to release; the live checks listed in "What is not proven yet" are still open.
+
+### Added
+
+- Live voice dialogue on the island ([#183](https://github.com/Kalmbik61/Parley/pull/183)): with "Speak answers" on, the assistant hotkey starts a GPT-Live dialogue and a second press ends it. The voice acknowledges a request, hands it to a background assistant job, keeps talking and speaks the answer in a pause; stale answers are not spoken. During the dialogue the island shows only a face: the mouth follows the voice, a cloud shows while you speak, a sphere while a request runs, and GPT-Live picks calm, joy, sad, surprise or anger. Esc ends the dialogue, collapsing the island keeps it running. If Live is refused, the hotkey falls back to Whisper dictation and says why.
+- HTTP basic auth in the built-in browser ([#184](https://github.com/Kalmbik61/Parley/pull/184)): `https://user:pass@host` works from the address bar and from agent `browser_open` / `browser_navigate`, and a page that asks for sign-in shows a card with Username and Password over the tab. Credentials stay in memory only and are removed from the visible URL, saved layouts and agent results. A sign-in is shared by all tabs until restart, as in Chrome. Only the Basic scheme is handled.
+- An agent that reports done or failed sends a letter to the session that gave it its latest task, so a lead waiting on its inbox wakes ([#189](https://github.com/Kalmbik61/Parley/pull/189)). Inside a room or a swarm nothing extra is sent; a repeated report replaces the unread letter.
+
+### Changed
+
+- Reply in a phone room also addresses the author of the quoted letter while they are still a member, as the window does ([#188](https://github.com/Kalmbik61/Parley/pull/188)).
+- The phone bridge gets its own workspace snapshot with only what the phone shows: the snapshot of a large project dropped from 97.5% of the frame cap to about 1%, and the host log warns when it passes 80% ([#186](https://github.com/Kalmbik61/Parley/pull/186)). Windows get the same snapshot as before.
+
+### Fixed
+
+- After an app update the phone no longer talks to the bridge of the old version: Parley restarts a running bridge whose version differs from the app, once per launch ([#182](https://github.com/Kalmbik61/Parley/pull/182)). Paired devices and relay settings are kept, and the phone reconnects by itself.
+- The phone can no longer create a room that takes a session out of an autonomous run; it gets "the phone does not change sessions of an autonomous run" instead ([#187](https://github.com/Kalmbik61/Parley/pull/187)).
+- An agent waiting on a page that asks for basic-auth sign-in no longer hangs on the 15 s load wait; it gets a short hint and never sees the typed password ([#184](https://github.com/Kalmbik61/Parley/pull/184)).
+
+### What is not proven yet
+
+- The live dialogue was accepted in a test window only; phone and Telegram channels, the anger emotion, mixed emotions and Russian speech for emotion decisions were not checked.
+- Basic auth was not tried through a real proxy or on a real stand.
+- A real update of the packaged app with the phone reconnecting to the restarted bridge was not run; quitting the app during the restart can leave no bridge until the next launch.
+- The phone snapshot size was not measured on a live project, and the phone Reply change was not run on a device.
+- The report letter was not run through a live host with real sessions.
+
 ## 0.29.0
 
 **Impact**
