@@ -6,6 +6,7 @@ import type { MethodName, NotificationName, Result } from '@parley/protocol';
 import type { BrowserWindow, IpcMain, NativeTheme, Session, WebContents } from 'electron';
 import { clampNoteText } from '../shared/app-note.js';
 import type { AppNote, CloseAnswer, DiagnosticsSaveResult, FocusTarget, UpdateInfo } from '../shared/bridge.js';
+import { splitUrlCredentials } from '../shared/basic-auth.js';
 import { encodeIpcError } from '../shared/ipc-error.js';
 import { DEVTOOLS_LIMITS, isViewportSpec, type DevtoolsSnapshot } from '../shared/browser-devtools.js';
 import type { AgentOpenTabResult, AgentPageRegistration, ContextInput, SavedContext } from '../shared/browser-types.js';
@@ -30,6 +31,7 @@ import { FilesDeniedError, type RootsRegistry } from './roots.js';
 import type { TtsService } from './assistant/tts.js';
 import { parseAnnotationPins, type createAnnotate } from './browser/annotate.js';
 import type { AgentOps } from './browser/agent-ops.js';
+import type { BasicAuth } from './browser/basic-auth.js';
 import { parseContextInput } from './browser/context-files.js';
 import type { createDesignMode } from './browser/design-mode.js';
 import type { Emulation } from './browser/emulation.js';
@@ -315,6 +317,8 @@ export interface RegisterIpcOptions {
     emulation: Pick<Emulation, 'set'>;
     /** Ответы окна на просьбы агента (спека браузера 3.7, этап B2): main/browser/agent-ops.ts. */
     agent: Pick<AgentOps, 'openTabResult' | 'registerTab' | 'captureReady' | 'stop' | 'focusReady'>;
+    /** HTTP basic-auth гостей (main/browser/basic-auth.ts): пара из адреса и ответ окна на запрос логина. */
+    basicAuth: Pick<BasicAuth, 'remember' | 'claimPage' | 'answer'>;
   };
 }
 
@@ -322,6 +326,9 @@ export interface RegisterIpcOptions {
 const MAX_FIND_TEXT = 1000;
 /** Журнала у гостя нет (захват не подключался): мост отдаёт пустой с `unavailable`, а не null (спека 3.5). */
 const NO_JOURNAL: DevtoolsSnapshot = { epoch: 0, capture: 'unavailable', console: [], network: [] };
+/** Адрес с учётными данными и поле логина или пароля — не длиннее, знаков. */
+const MAX_AUTH_URL = 8192;
+const MAX_AUTH_FIELD = 1024;
 /** requestId CDP — строка вида `1234.56`: длиннее — не наш. */
 const MAX_REQUEST_ID = 256;
 /** Место под страницу — CSS-пиксели окна, с запасом на любой экран. */
@@ -973,6 +980,46 @@ export function registerIpc(options: RegisterIpcOptions): void {
     'browser:devtools-clear',
     withIpcError(async (_event, id: unknown) => {
       browser.inspector.clear(browserGuest(browser, id).id);
+    }),
+  );
+
+  // Адрес с `user:pass@`, который человек ввёл в адресной строке: окно грузит адрес без пары, пара остаётся в памяти main
+  // на вкладку и origin и отвечает на первый вызов basic-auth. На диск и в журналы она не идёт.
+  ipcMain.handle(
+    'browser:remember-credentials',
+    withIpcError(async (_event, id: unknown, rawUrl: unknown) => {
+      const guest = browserGuest(browser, id);
+      if (typeof rawUrl !== 'string' || rawUrl.length > MAX_AUTH_URL) throw new HostError('bad_request', 'invalid address');
+      const { url, credentials } = splitUrlCredentials(rawUrl);
+      if (credentials !== null) browser.basicAuth.remember(guest.id, new URL(url).origin, credentials);
+    }),
+  );
+
+  // Окно смонтировало гостя страницы и сейчас откроет её адрес: пара из `browser_open` агента, ждавшая эту страницу, становится
+  // парой гостя — до первой загрузки (иначе первый вызов логина её не застал бы). Нет пары — ничего.
+  ipcMain.handle(
+    'browser:claim-credentials',
+    withIpcError(async (_event, id: unknown, pageId: unknown) => {
+      const guest = browserGuest(browser, id);
+      if (typeof pageId !== 'string' || pageId.length === 0 || pageId.length > 200) throw new HostError('bad_request', 'invalid page id');
+      browser.basicAuth.claimPage(guest.id, pageId);
+    }),
+  );
+
+  // Ответ окна на `browser:auth-request`: логин и пароль или отмена (null). Принимается только от окна-хозяина запроса.
+  ipcMain.handle(
+    'browser:auth-response',
+    withIpcError(async (rawEvent, requestId: unknown, username: unknown, password: unknown) => {
+      const sender = (rawEvent as { sender: WebContents }).sender;
+      if (typeof requestId !== 'string' || requestId.length === 0 || requestId.length > 64) throw new HostError('bad_request', 'invalid auth request id');
+      if (username === null) {
+        browser.basicAuth.answer(requestId, null, sender);
+        return;
+      }
+      if (typeof username !== 'string' || typeof password !== 'string' || username.length > MAX_AUTH_FIELD || password.length > MAX_AUTH_FIELD) {
+        throw new HostError('bad_request', 'invalid credentials');
+      }
+      browser.basicAuth.answer(requestId, { username, password }, sender);
     }),
   );
 

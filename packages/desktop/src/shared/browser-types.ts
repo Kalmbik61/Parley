@@ -4,6 +4,7 @@
  */
 import type { DevtoolsBatch, DevtoolsSnapshot, ResponseBody, ViewportSpec } from './browser-devtools.js';
 import type { ContextKind } from './context-markdown.js';
+import type { BrowserAuthCancel, BrowserAuthRequest } from './basic-auth.js';
 import type { BrowserOwner } from './layout-types.js';
 
 /** Единственный раздел `<webview>`: страж main (`main/browser/guard.ts`) другой не пускает. */
@@ -260,6 +261,22 @@ export interface BrowserApi {
   onAgentResize(listener: (e: AgentResize) => void): () => void;
   /** Человек нажал Stop на значке агента (`browser:agent-stop`): пауза панели страницы и обрыв операций её панели. */
   agentStop(webContentsId: number): Promise<void>;
+  /**
+   * Человек ввёл `user:pass@host` в адресной строке: окно грузит адрес без пары, а пару отдаёт сюда — она остаётся в памяти main
+   * на вкладку и origin и отвечает на первый вызов basic-auth. Другого пути пары нет: ни в раскладку, ни на диск.
+   */
+  rememberCredentials(webContentsId: number, url: string): Promise<void>;
+  /**
+   * Окно смонтировало гостя страницы `pageId` и сейчас откроет её адрес: пара из `browser_open` агента, ждавшая эту страницу,
+   * привязывается в main к гостю. Зовётся до первой загрузки; пароль через мост не ходит — только id страницы.
+   */
+  claimCredentials(webContentsId: number, pageId: string): Promise<void>;
+  /** Страница вкладки просит логин и пароль (`browser:auth-request`): окно показывает оверлей над вкладкой. */
+  onAuthRequest(listener: (e: BrowserAuthRequest) => void): () => void;
+  /** Запрос снят main'ом (вкладка ушла со страницы или закрыта): окно убирает оверлей (`browser:auth-cancel`). */
+  onAuthCancel(listener: (e: BrowserAuthCancel) => void): () => void;
+  /** Ответ оверлея: логин и пароль или `null` — отмена. Пароль идёт только main ↔ окно этой вкладки. */
+  authResponse(requestId: string, credentials: { username: string; password: string } | null): Promise<void>;
   /** Окно ответило на `focus` события активности (`browser:agent-focus-ready`); `ok` — фокус на `<webview>`, видимость не требуется. */
   agentFocusReady(id: string, ok: boolean): Promise<void>;
 }

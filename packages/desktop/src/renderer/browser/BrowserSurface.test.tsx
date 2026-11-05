@@ -207,6 +207,158 @@ describe('BrowserSurface (тест 3)', () => {
     expect(useBrowserStore.getState().tabs[TAB]?.webContentsId).toBe(42);
   });
 
+  describe('basic-auth: оверлей запроса логина', () => {
+    const REQUEST = { requestId: 'a1', webContentsId: 42, host: '127.0.0.1:8080', realm: 'Stand', isProxy: false, retry: false };
+
+    function openedTab(): void {
+      setBrowserTab('http://localhost:5173/');
+      renderWork();
+      fire(arm(webview(), 42), 'dom-ready');
+    }
+
+    function submit(): void {
+      fireEvent.change(screen.getByLabelText('Username'), { target: { value: 'admin' } });
+      fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'pw' } });
+      fireEvent.submit(screen.getByRole('dialog'));
+    }
+
+    it('запрос своего гостя — оверлей; чужого — нет; Esc — authResponse(null)', async () => {
+      openedTab();
+      act(() => bridge.emitAuthRequest({ ...REQUEST, webContentsId: 5 }));
+      expect(screen.queryByTestId('browser-auth')).toBeNull();
+      act(() => bridge.emitAuthRequest(REQUEST));
+      expect(screen.getByTestId('browser-auth')).toBeTruthy();
+      await act(async () => {
+        fireEvent.keyDown(screen.getByLabelText('Username'), { key: 'Escape' });
+      });
+      expect(bridge.browserCalls).toContainEqual({ method: 'authResponse', args: ['a1', null] });
+      expect(screen.queryByTestId('browser-auth')).toBeNull();
+    });
+
+    it('оверлей снимается по подтверждению main, а не при нажатии; отмена main\'ом (auth-cancel) тоже снимает', async () => {
+      openedTab();
+      let ack: () => void = () => undefined;
+      bridge.browser.authResponse = vi.fn(() => new Promise<void>((resolve) => (ack = resolve)));
+      act(() => bridge.emitAuthRequest(REQUEST));
+      submit();
+      expect(screen.getByTestId('browser-auth')).toBeTruthy();
+      await act(async () => ack());
+      expect(screen.queryByTestId('browser-auth')).toBeNull();
+      act(() => bridge.emitAuthRequest({ ...REQUEST, requestId: 'a2' }));
+      act(() => bridge.emitAuthCancel({ requestId: 'a2', webContentsId: 42 }));
+      expect(screen.queryByTestId('browser-auth')).toBeNull();
+    });
+
+    it('мост отказал — запрос остаётся с видимой ошибкой, а не пропадает вместе с висящим вызовом Chromium', async () => {
+      openedTab();
+      bridge.browser.authResponse = vi.fn(async () => {
+        throw new Error('invalid credentials');
+      });
+      act(() => bridge.emitAuthRequest(REQUEST));
+      await act(async () => submit());
+      expect(screen.getByTestId('browser-auth')).toBeTruthy();
+      expect(screen.getByRole('alert').textContent).toBe("Couldn't send the credentials. Try again or cancel.");
+    });
+
+    it('подтверждение старого ответа не снимает более новый запрос и не отдаёт фокус странице (повтор после неверного пароля)', async () => {
+      setBrowserTab('http://localhost:5173/');
+      renderWork();
+      const view = arm(webview(), 42);
+      fire(view, 'dom-ready');
+      const focus = vi.spyOn(view, 'focus');
+      let ack: () => void = () => undefined;
+      bridge.browser.authResponse = vi.fn(() => new Promise<void>((resolve) => (ack = resolve)));
+      act(() => bridge.emitAuthRequest(REQUEST));
+      submit();
+      act(() => bridge.emitAuthRequest({ ...REQUEST, requestId: 'a2', retry: true }));
+      const username = screen.getByLabelText('Username');
+      expect(document.activeElement).toBe(username);
+      await act(async () => ack());
+      expect(screen.getByTestId('browser-auth')).toBeTruthy();
+      expect(screen.getByRole('alert').textContent).toBe('Wrong username or password. Try again.');
+      expect(document.activeElement).toBe(screen.getByLabelText('Username'));
+      expect(focus).not.toHaveBeenCalled();
+    });
+
+    it('a2 приходит и ack a1 разрешается в одном пакете act (до фиксации a2): a2 на экране, гость не в фокусе', async () => {
+      setBrowserTab('http://localhost:5173/');
+      renderWork();
+      const view = arm(webview(), 42);
+      fire(view, 'dom-ready');
+      const focus = vi.spyOn(view, 'focus');
+      let ack: () => void = () => undefined;
+      bridge.browser.authResponse = vi.fn(() => new Promise<void>((resolve) => (ack = resolve)));
+      act(() => bridge.emitAuthRequest(REQUEST));
+      submit();
+      await act(async () => {
+        bridge.emitAuthRequest({ ...REQUEST, requestId: 'a2', retry: true });
+        ack();
+      });
+      expect(screen.getByTestId('browser-auth')).toBeTruthy();
+      expect(screen.getByRole('alert').textContent).toBe('Wrong username or password. Try again.');
+      expect(focus).not.toHaveBeenCalled();
+    });
+
+    it('a2 приходит и отказ на a1 в одном пакете: ошибки отправки у a2 нет', async () => {
+      openedTab();
+      let reject: (error: Error) => void = () => undefined;
+      bridge.browser.authResponse = vi.fn(() => new Promise<void>((_resolve, fail) => (reject = fail)));
+      act(() => bridge.emitAuthRequest(REQUEST));
+      submit();
+      await act(async () => {
+        bridge.emitAuthRequest({ ...REQUEST, requestId: 'a2', retry: true });
+        reject(new Error('invalid credentials'));
+      });
+      expect(screen.getByRole('alert').textContent).toBe('Wrong username or password. Try again.');
+    });
+
+    it('отмена main\'ом и ack в одном пакете: оверлей снят, гость не в фокусе', async () => {
+      setBrowserTab('http://localhost:5173/');
+      renderWork();
+      const view = arm(webview(), 42);
+      fire(view, 'dom-ready');
+      const focus = vi.spyOn(view, 'focus');
+      let ack: () => void = () => undefined;
+      bridge.browser.authResponse = vi.fn(() => new Promise<void>((resolve) => (ack = resolve)));
+      act(() => bridge.emitAuthRequest(REQUEST));
+      submit();
+      await act(async () => {
+        bridge.emitAuthCancel({ requestId: 'a1', webContentsId: 42 });
+        ack();
+      });
+      expect(screen.queryByTestId('browser-auth')).toBeNull();
+      expect(focus).not.toHaveBeenCalled();
+    });
+
+    it('отказ на старый ответ не вешает ошибку отправки на более новый запрос', async () => {
+      openedTab();
+      let reject: (error: Error) => void = () => undefined;
+      bridge.browser.authResponse = vi.fn(() => new Promise<void>((_resolve, fail) => (reject = fail)));
+      act(() => bridge.emitAuthRequest(REQUEST));
+      submit();
+      act(() => bridge.emitAuthRequest({ ...REQUEST, requestId: 'a2', retry: true }));
+      await act(async () => reject(new Error('invalid credentials')));
+      expect(screen.getByTestId('browser-auth')).toBeTruthy();
+      expect(screen.getByRole('alert').textContent).toBe('Wrong username or password. Try again.');
+    });
+
+    it('ack ответа, запрос которого main уже снял отменой, фокус странице не возвращает', async () => {
+      setBrowserTab('http://localhost:5173/');
+      renderWork();
+      const view = arm(webview(), 42);
+      fire(view, 'dom-ready');
+      const focus = vi.spyOn(view, 'focus');
+      let ack: () => void = () => undefined;
+      bridge.browser.authResponse = vi.fn(() => new Promise<void>((resolve) => (ack = resolve)));
+      act(() => bridge.emitAuthRequest(REQUEST));
+      submit();
+      act(() => bridge.emitAuthCancel({ requestId: 'a1', webContentsId: 42 }));
+      await act(async () => ack());
+      expect(screen.queryByTestId('browser-auth')).toBeNull();
+      expect(focus).not.toHaveBeenCalled();
+    });
+  });
+
   it('вкладка человека агенту не регистрируется: registerTab не зовётся ни разу', () => {
     setBrowserTab('http://localhost:5173/');
     renderWork();

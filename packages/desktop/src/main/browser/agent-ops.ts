@@ -4,7 +4,7 @@
  * методом `browser.agentResult`.
  *
  * Агент называет только адрес: работу вкладки задаёт хост по токену сессии (`ref` события), а не аргументы. Открыть можно
- * любой http(s) (`openableHref`), до окна он доходит без учётных данных; читать и действовать можно на любом сайте
+ * любой http(s) (`openableTarget`), до окна он доходит без учётных данных (пара `user:pass@` остаётся в памяти main, `basic-auth.ts`); читать и действовать можно на любом сайте
  * (решение владельца 2026-10-20: проверка «только loopback» снята), доступ решают хозяин, пауза панели и выключатель. Раскладка — дело окна:
  * место вкладки, предел страниц панели, повтор уже открытой страницы и тост решает рендерер (`renderer/browser/agent-open.ts`), main
  * просит его событием `browser:agent-open-tab`, ждёт ответ не дольше `AGENT_LIMITS.openMs` и переводит его в ответ агенту.
@@ -27,6 +27,7 @@ import type { ViewportSpec } from '../../shared/browser-devtools.js';
 import type { AgentActivity, AgentOpenTab, AgentOpenTabResult, AgentPageRegistration, AgentResize } from '../../shared/browser-types.js';
 import type { BrowserOwner } from '../../shared/layout-types.js';
 import { S } from '../../shared/strings.js';
+import { splitUrlCredentials, type BasicCredentials } from '../../shared/basic-auth.js';
 import { redactSecretsInText, redactUrlsInText } from '../../shared/redact.js';
 import { workKey as workKeyOf } from '../../shared/work-keys.js';
 import { AgentOpError } from './agent-errors.js';
@@ -34,6 +35,7 @@ import type { AgentDownloads } from './agent-downloads.js';
 import type { AgentScripts } from './agent-evaluate.js';
 import type { AgentStorage } from './agent-storage.js';
 import type { AgentWindow } from './agent-window.js';
+import { BASIC_AUTH_HINT, type BasicAuth } from './basic-auth.js';
 import type { TypingClock } from './human-typing.js';
 import { createAgentCapture } from './agent-capture.js';
 import { createAgentActions, settleLoad, sleep, withNavigation } from './agent-actions.js';
@@ -54,6 +56,11 @@ export { captureSpec } from './agent-capture.js';
 export type { LayoutMetrics } from './agent-pages.js';
 
 export interface AgentOpsDeps {
+  /**
+   * HTTP basic-auth вкладок (`main/browser/basic-auth.ts`): пара из `user:pass@` адреса агента ложится сюда (только память),
+   * а вкладка, ждущая логин человека, отвечает агенту подсказкой, а не ожиданием загрузки. Нет — как раньше, без учётных данных.
+   */
+  basicAuth?: Pick<BasicAuth, 'remember' | 'holdForPage' | 'dropPage' | 'isPending' | 'onPending'>;
   /** «Let agents use the browser» (`UiFile.browser.agentsAllowed`): читается на каждую операцию. */
   agentsAllowed(): Promise<boolean>;
   /** Просит окно открыть вкладку (`browser:agent-open-tab`); `false` — окно не готово слушать. */
@@ -532,11 +539,19 @@ export function createFocusBorrower(deps: {
   };
 }
 
+/** Адрес, который агент может открыть, и пара `user:pass` из него (если была). Адрес — без учётных данных. */
+export interface OpenableTarget {
+  href: string;
+  credentials: BasicCredentials | null;
+}
+
 /**
- * Адрес, который агент может открыть: любой http(s), без учётных данных; иначе `null` (`file:`, `javascript:`, `data:` и
- * прочие схемы, не-адрес). Фрагмент (#…) остаётся: им бывают маршруты SPA. Читать и управлять можно на любом http(s) (решение владельца 2026-10-20).
+ * Адрес, который агент может открыть: любой http(s); иначе `null` (`file:`, `javascript:`, `data:` и прочие схемы, не-адрес).
+ * Учётные данные `user:pass@` из адреса отделяются: `href` их не содержит (он идёт в окно, раскладку, историю и ответ агенту),
+ * а пара возвращается отдельно — её держит только `basic-auth` в памяти main. Фрагмент (#…) остаётся: им бывают маршруты SPA.
+ * Читать и управлять можно на любом http(s) (решение владельца 2026-10-20).
  */
-export function openableHref(raw: string): string | null {
+export function openableTarget(raw: string): OpenableTarget | null {
   let parsed: URL;
   try {
     parsed = new URL(raw);
@@ -544,24 +559,34 @@ export function openableHref(raw: string): string | null {
     return null;
   }
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+  const { credentials } = splitUrlCredentials(parsed.href);
   parsed.username = '';
   parsed.password = '';
-  return parsed.href;
+  return { href: parsed.href, credentials };
+}
+
+/** Адрес из `openableTarget` без пары: учётные данные из него убраны (не доходят ни до окна, ни до агента). */
+export function openableHref(raw: string): string | null {
+  return openableTarget(raw)?.href ?? null;
 }
 
 /**
  * Адрес для `navigate`: абсолютный http(s) как есть, путь от `/` — от адреса страницы; иное (`file:`, `javascript:`, `chrome:`,
- * не-адрес, страница без http(s)-адреса) — `null`. Итог проходит `openableHref` (без учётных данных).
+ * не-адрес, страница без http(s)-адреса) — `null`. Пара `user:pass@` отделяется, как в `openableTarget`.
  */
-export function resolveAgentUrl(raw: string, base: string): string | null {
-  const direct = openableHref(raw);
+export function resolveAgentTarget(raw: string, base: string): OpenableTarget | null {
+  const direct = openableTarget(raw);
   if (direct !== null) return direct;
   if (!raw.startsWith('/') || raw.startsWith('//')) return null;
   try {
-    return openableHref(new URL(raw, base).href);
+    return openableTarget(new URL(raw, base).href);
   } catch {
     return null;
   }
+}
+
+export function resolveAgentUrl(raw: string, base: string): string | null {
+  return resolveAgentTarget(raw, base)?.href ?? null;
 }
 
 /** Размер для окна по аргументам `resize`: пресет (DPR — правило меню), свой размер (не мобильный, DPR текущий или 1) или `fit` (`null`). */
@@ -648,10 +673,11 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
   }
 
   async function openOf(request: BrowserAgentOpEvent, args: BrowserAgentArgs<'open'>): Promise<BrowserAgentOpenResult> {
-    const url = openableHref(args.url);
-    if (url === null) {
+    const target = openableTarget(args.url);
+    if (target === null) {
       throw new AgentOpError('bad_request', 'Only http(s) pages can be opened: pass an absolute URL such as https://example.com/ or http://localhost:5173/.');
     }
+    const url = target.href;
     const owner = ownerOf(request, args);
     const workKey = workKeyOf(request.ref.projectPath, request.ref.workId);
     // Человек приостановил агентов в этой панели: страницу в ней не открываем, как не работаем с уже открытыми (спека 4.8, S5).
@@ -667,6 +693,11 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
     if ('closed' in answer) throw new AgentOpError('unsupported', 'The window answered the open request as a close.');
     const agentId = registry.agentIdFor(workKey, answer.tabId);
     const base = { tab: agentId, owner, url: clipUrl(url), reused: answer.reused };
+    // Пара из адреса — только в память main и только после проверок доступа и ответа окна: за логической страницей (`answer.tabId`),
+    // окно отдаёт её гостю при монтировании, до первой загрузки (`claimCredentials`). Уже смонтированной странице, которую
+    // переиспользует `open`, пара привязывается ниже, к её гостю (и отвечает ждущему вызову человека).
+    const origin = new URL(url).origin;
+    if (target.credentials !== null && !(answer.reused && answer.mounted)) deps.basicAuth?.holdForPage(answer.tabId, origin, target.credentials);
     if (!answer.mounted) return { ...base, loaded: false, title: '', notes: [NOT_MOUNTED_NOTE] };
     // Страницу регистрирует окно, когда `<webview>` готов: ждём запись не дольше `openMs`, дальше — загрузку через runner.
     const until = Date.now() + openMs;
@@ -676,8 +707,10 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
       await new Promise((resolve) => setTimeout(resolve, Math.min(pollMs, left)));
     }
     return runner.run(request, agentId, async (contents, record, guard) => {
-      const loaded = await settleLoad(contents, AGENT_LIMITS.loadMs, guard.signal);
-      return { ...base, loaded, title: titleForAgent(contents.getTitle()), notes: deps.agentWindow.take(`${record.workKey}\n${record.pageId}`) };
+      if (target.credentials !== null && answer.reused) deps.basicAuth?.remember(contents.id, origin, target.credentials);
+      const loaded = await settleLoad(contents, AGENT_LIMITS.loadMs, guard.signal, deps.basicAuth);
+      const notes = deps.agentWindow.take(`${record.workKey}\n${record.pageId}`);
+      return { ...base, loaded, title: titleForAgent(contents.getTitle()), notes: deps.basicAuth?.isPending(contents.id) === true ? [BASIC_AUTH_HINT, ...notes] : notes };
     }, { window: true });
   }
 
@@ -710,7 +743,8 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
 
   /** `navigate`: переход методом `webContents`; загрузку ждёт `withNavigation` до `loadMs`. */
   async function navigateOf(contents: WebContents, record: PageRecord, args: BrowserAgentArgs<'navigate'>, guard: InputGuard): Promise<BrowserAgentNavigateResult> {
-    const target = args.url === undefined ? null : resolveAgentUrl(args.url, contents.getURL());
+    const resolved = args.url === undefined ? null : resolveAgentTarget(args.url, contents.getURL());
+    const target = resolved?.href ?? null;
     if (args.url !== undefined && target === null) {
       throw new AgentOpError('bad_request', 'Only http(s) pages can be opened: pass an absolute URL such as https://example.com/, or a path starting with / on the current site.');
     }
@@ -720,6 +754,7 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
     const act = async (): Promise<void> => {
       guard.check();
       if (target !== null) {
+        if (resolved?.credentials != null) deps.basicAuth?.remember(contents.id, new URL(target).origin, resolved.credentials);
         // ERR_ABORTED — не ошибка: так отвечает переход, ставший скачиванием. Загрузку ждёт withNavigation, а не обещание.
         contents.loadURL(target).catch((error: unknown) => {
           const text = error instanceof Error ? error.message : String(error);
@@ -737,7 +772,8 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
         contents.reload();
       }
     };
-    const outcome = await withNavigation(contents, act, guard.signal);
+    const outcome = await withNavigation(contents, act, guard.signal, deps.basicAuth);
+    if (deps.basicAuth?.isPending(contents.id) === true) notes.push(BASIC_AUTH_HINT);
     if (failure.text !== null) notes.push(`The page failed to load: ${titleForAgent(failure.text)}`);
     return {
       tab: args.tab,
@@ -799,7 +835,11 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
           }
           case 'snapshot': {
             const args = parsed.data as BrowserAgentArgs<'snapshot'>;
-            return ok(await runner.run(request, args.tab, (contents, record) => dom.snapshotOf(contents, record, args)));
+            return ok(await runner.run(request, args.tab, async (contents, record) => {
+              // Вкладка ждёт логин человека: дерево страницы — пустая заглушка, вместо него — подсказка, сразу.
+              if (deps.basicAuth?.isPending(contents.id) === true) return { tab: args.tab, url: urlForAgent(contents.getURL()), text: BASIC_AUTH_HINT, refs: 0, truncated: false };
+              return dom.snapshotOf(contents, record, args);
+            }));
           }
           case 'wait_for': {
             const args = parsed.data as BrowserAgentArgs<'wait_for'>;
@@ -815,6 +855,7 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
               emulation: deps.emulation,
               window: deps.agentWindow,
               activity: deps.activity,
+              ...(deps.basicAuth === undefined ? {} : { basicAuth: deps.basicAuth }),
               ...(deps.uploadHome === undefined ? {} : { home: deps.uploadHome }),
             });
             return ok(await runner.run(request, args.tab, (contents, record, guard) => actions.actionOf(contents, record, request, args, guard), { changes: true, window: true, seen: true }));
@@ -866,6 +907,8 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
     },
     registerTab(e) {
       registry.register(e);
+      // Страница закрыта: пара, ждавшая её монтирования, не нужна (basic-auth).
+      if (e.kind === 'gone') deps.basicAuth?.dropPage(e.pageId);
       // «Pause agents» посреди операции: идущие операции панели обрываются, как при Stop.
       if (e.kind === 'paused' && e.paused) runner.stopPanel(e.workKey, e.owner, new AgentOpError('access_denied', PAUSED));
     },

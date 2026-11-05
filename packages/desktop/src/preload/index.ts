@@ -4,6 +4,7 @@ import type { WorksSyncBridge } from '../shared/bridge.js';
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { EventMessage, EventName, MethodName, NotificationName } from '@parley/protocol';
 import type { AppNote, CloseAnswer, DiagnosticsSaveResult, FocusTarget, ParleyBridge, HostStatus, UpdateInfo } from '../shared/bridge.js';
+import type { BrowserAuthCancel, BrowserAuthRequest } from '../shared/basic-auth.js';
 import type { DevtoolsBatch, DevtoolsSnapshot, ResponseBody, ViewportSpec } from '../shared/browser-devtools.js';
 import type {
   AgentActivity,
@@ -67,6 +68,8 @@ const browserDevtoolsListeners = new Set<(batch: DevtoolsBatch) => void>();
 const browserAgentOpenTabListeners = new Set<(e: AgentOpenTab) => void>();
 const browserAgentActivityListeners = new Set<(e: AgentActivity) => void>();
 const browserAgentResizeListeners = new Set<(e: AgentResize) => void>();
+const browserAuthRequestListeners = new Set<(e: BrowserAuthRequest) => void>();
+const browserAuthCancelListeners = new Set<(e: BrowserAuthCancel) => void>();
 const windowFocusListeners = new Set<(focused: boolean) => void>();
 const updateListeners = new Set<(info: UpdateInfo) => void>();
 const voiceProgressListeners = new Set<(progress: DownloadProgress) => void>();
@@ -157,6 +160,14 @@ ipcRenderer.on('browser:agent-activity', (_event, e: AgentActivity) => {
 
 ipcRenderer.on('browser:agent-resize', (_event, e: AgentResize) => {
   for (const listener of browserAgentResizeListeners) listener(e);
+});
+
+ipcRenderer.on('browser:auth-request', (_event, e: BrowserAuthRequest) => {
+  for (const listener of browserAuthRequestListeners) listener(e);
+});
+
+ipcRenderer.on('browser:auth-cancel', (_event, e: BrowserAuthCancel) => {
+  for (const listener of browserAuthCancelListeners) listener(e);
 });
 
 ipcRenderer.on('app:window-focus', (_event, focused: boolean) => {
@@ -491,6 +502,18 @@ const bridge = {
       browserAgentResizeListeners.add(listener);
       return () => browserAgentResizeListeners.delete(listener);
     },
+    rememberCredentials: (webContentsId: number, url: string) => ipcRenderer.invoke('browser:remember-credentials', webContentsId, url) as Promise<void>,
+    claimCredentials: (webContentsId: number, pageId: string) => ipcRenderer.invoke('browser:claim-credentials', webContentsId, pageId) as Promise<void>,
+    onAuthRequest: (listener: (e: BrowserAuthRequest) => void) => {
+      browserAuthRequestListeners.add(listener);
+      return () => browserAuthRequestListeners.delete(listener);
+    },
+    onAuthCancel: (listener: (e: BrowserAuthCancel) => void) => {
+      browserAuthCancelListeners.add(listener);
+      return () => browserAuthCancelListeners.delete(listener);
+    },
+    authResponse: (requestId: string, credentials: { username: string; password: string } | null) =>
+      ipcRenderer.invoke('browser:auth-response', requestId, credentials === null ? null : credentials.username, credentials?.password) as Promise<void>,
     agentStop: (webContentsId: number) => ipcRenderer.invoke('browser:agent-stop', webContentsId) as Promise<void>,
     agentFocusReady: (id: string, ok: boolean) => ipcRenderer.invoke('browser:agent-focus-ready', id, ok) as Promise<void>,
   },

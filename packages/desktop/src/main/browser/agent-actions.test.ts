@@ -9,6 +9,7 @@ import type { AgentDom } from './agent-dom.js';
 import type { AgentInput, InputGuard, MouseStep } from './agent-input.js';
 import type { PageRecord } from './agent-pages.js';
 import { S } from '../../shared/strings.js';
+import { BASIC_AUTH_HINT } from './basic-auth.js';
 import { SELECT_OPTION_FN } from './page-fns.js';
 
 const request = { opId: 'op-1', ref: { projectPath: '/proj', workId: 'w-1', sessionId: 's-02' }, label: 'S02', owners: [], op: 'action', args: {} } as unknown as BrowserAgentOpEvent;
@@ -17,7 +18,7 @@ const record = { workKey: 'w', pageId: 'bp-aaaaaa', agentId: 't1' } as unknown a
 type Describe = { nodeName: string; attributes: string[] };
 type FileSpec = { size: number; real?: string } | 'dir';
 
-function setup(options: { fit?: { scale: number; mobile: boolean } | null; zoom?: number; selectAnswer?: unknown; files?: Record<string, FileSpec>; home?: string; checked?: Array<boolean | 'mixed' | null>; take?: string[] } = {}) {
+function setup(options: { fit?: { scale: number; mobile: boolean } | null; zoom?: number; selectAnswer?: unknown; files?: Record<string, FileSpec>; home?: string; checked?: Array<boolean | 'mixed' | null>; take?: string[]; basicAuth?: { isPending(id: number): boolean; onPending(id: number, listener: () => void): () => void } } = {}) {
   const guest = Object.assign(new EventEmitter(), {
     id: 7,
     getZoomFactor: () => options.zoom ?? 1,
@@ -60,6 +61,7 @@ function setup(options: { fit?: { scale: number; mobile: boolean } | null; zoom?
     emulation: { fitOf: () => options.fit ?? null },
     window: { take: () => options.take ?? [] },
     activity: ctx.activity,
+    ...(options.basicAuth === undefined ? {} : { basicAuth: options.basicAuth }),
     files: {
       realpath: async (path) => {
         const spec = specs[path];
@@ -245,6 +247,22 @@ describe('action (спека 5.1, 4.8)', () => {
     });
     const result = await ctx.actions.actionOf(ctx.contents, record, request, { tab: 't1', action: 'click', x: 5, y: 5 }, guard());
     expect(result).toMatchObject({ navigated: true, notes: ['The page started a download: report.csv → /d/report.csv (see browser_downloads).'] });
+  });
+
+  it('действие открыло защищённую страницу, вкладка ждёт логин человека — подсказка сразу, без «still loading» и без ожидания loadMs', async () => {
+    let pending = false;
+    const ctx = setup({ basicAuth: { isPending: () => pending, onPending: () => () => undefined } });
+    ctx.input.mouse.mockImplementation(async (_c, steps) => {
+      if (steps.some((step) => step.type === 'mouseReleased')) {
+        ctx.guest.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false });
+        ctx.guest.isLoading.mockReturnValue(true);
+        pending = true;
+      }
+    });
+    const started = Date.now();
+    const result = await ctx.actions.actionOf(ctx.contents, record, request, { tab: 't1', action: 'click', x: 5, y: 5 }, guard());
+    expect(result).toMatchObject({ navigated: true, notes: [BASIC_AUTH_HINT] });
+    expect(Date.now() - started).toBeLessThan(AGENT_LIMITS.loadMs);
   });
 
   it('withNavigation: переход в том же документе и в дочернем кадре не считается; слушатель снят', async () => {

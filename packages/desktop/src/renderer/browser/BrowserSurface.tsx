@@ -27,6 +27,10 @@
  * - размер — из раскладки (`TabSpec.viewport`): эмуляцию ставит main (`use-viewport.ts`), а окно ставит тот же узел
  *   `<webview>` размером ширина×scale на высота×scale по центру нейтрального поля с подписью.
  *
+ * HTTP basic-auth (`AuthPrompt`, `main/browser/basic-auth.ts`): адрес `user:pass@host` из адресной строки грузится без пары —
+ * она уходит мостом в main (`rememberCredentials`) и остаётся там в памяти; в `url`, раскладку и историю её нет. Вызов логина
+ * от сервера main присылает событием `browser:auth-request`: оверлей над полем страницы, ответ — `authResponse`.
+ *
  * Цель «To» (этап B, спека браузера 4.5): сессия или комната, куда лягут «Add to chat», Select и аннотации. Хранится в
  * раскладке (`TabSpec.target`, нет поля — умолчание); `usePageContext` разрешает её, откатывает пропавшую с тостом и
  * ведёт очередь добавлений, меню `TargetMenu` стоит в строке вкладки. «Add to chat» панели Console | Network (запись
@@ -38,6 +42,7 @@ import { toast } from 'sonner';
 import type { WindowWorkEntry } from '@parley/core';
 import { AGENT_LIMITS } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
+import { splitUrlCredentials, type BrowserAuthRequest } from '../../shared/basic-auth.js';
 import { viewportSize, type ViewportSpec } from '../../shared/browser-devtools.js';
 import { BROWSER_PARTITION, type PickResult, type ViewportFraction } from '../../shared/browser-types.js';
 import { viewportNote } from '../../shared/context-markdown.js';
@@ -56,6 +61,7 @@ import { AnnotationEditor } from './annotate/AnnotationEditor.js';
 import { AnnotationTray } from './annotate/AnnotationTray.js';
 import { EMPTY_ANNOTATE, useAnnotateStore } from './annotate/store.js';
 import { addAnnotationsToChat, cancelMark, saveDraft, syncPins, useAnnotateMode } from './annotate/use-annotate-mode.js';
+import { AuthPrompt } from './AuthPrompt.js';
 import { BrowserChrome } from './BrowserChrome.js';
 import { createPageContextActions, elementDraft } from './context/actions.js';
 import { TargetMenu } from './context/TargetMenu.js';
@@ -320,6 +326,64 @@ export function BrowserSurface({ workKey, place, url, viewport, visible, bridge,
     if (!visible && state.mode !== 'off') useBrowserStore.getState().update(tabId, { mode: 'off' });
   }, [visible, state.mode, tabId]);
 
+  // Запрос логина и пароля этой вкладки (basic-auth): приходит main'ом по id гостя, снимается ответом, отменой main'а или сменой гостя.
+  const [authRequest, setAuthRequest] = useState<BrowserAuthRequest | null>(null);
+  // Какой запрос на экране сейчас. Ответ main на старый запрос (ack или отказ) приходит, когда уже мог встать новый, и его побочные
+  // действия — снять оверлей, вернуть фокус странице, показать ошибку — касаются только текущего запроса. Ссылка меняется
+  // синхронно в каждом переходе (приход, отмена, смена гостя, снятие ответом), а не при рендере: ответ на старый запрос может
+  // прийти раньше, чем React зафиксирует новый.
+  const currentAuthIdRef = useRef<string | null>(null);
+  /** Снимает запрос `requestId`, если он ещё текущий; `true` — снят. Только свой: новый запрос остаётся. */
+  const dismissAuth = useCallback((requestId: string): boolean => {
+    if (currentAuthIdRef.current !== requestId) return false;
+    currentAuthIdRef.current = null;
+    setAuthRequest((current) => (current !== null && current.requestId === requestId ? null : current));
+    return true;
+  }, []);
+  useEffect(() => {
+    const offRequest = bridge.browser.onAuthRequest((event) => {
+      const own = useBrowserStore.getState().tabs[tabId]?.webContentsId ?? null;
+      if (own === null || event.webContentsId !== own) return;
+      currentAuthIdRef.current = event.requestId;
+      setAuthRequest(event);
+    });
+    const offCancel = bridge.browser.onAuthCancel((event) => {
+      dismissAuth(event.requestId);
+    });
+    return () => {
+      offRequest();
+      offCancel();
+    };
+  }, [bridge, tabId, dismissAuth]);
+  useEffect(() => {
+    currentAuthIdRef.current = null;
+    setAuthRequest(null);
+  }, [state.webContentsId]);
+  // Ответ не дошёл до main (мост отказал): запрос остаётся с ошибкой — иначе вызов Chromium висел бы, а человек не видел бы формы.
+  const [authFailed, setAuthFailed] = useState(false);
+  useEffect(() => {
+    setAuthFailed(false);
+  }, [authRequest?.requestId]);
+  const answerAuth = (credentials: { username: string; password: string } | null): void => {
+    const request = authRequest;
+    if (request === null) return;
+    bridge.browser.authResponse(request.requestId, credentials).then(
+      () => {
+        // Оверлей снимается по подтверждению main и только свой: за это время мог прийти повтор (новый requestId) или main
+        // уже снял запрос отменой — тогда ни снимать, ни трогать фокус нечего.
+        // Фокус — странице, как после закрытого редактора: оверлей держал его, и клавиши корня иначе не доходили бы.
+        if (dismissAuth(request.requestId)) viewRef.current?.focus();
+      },
+      (error: unknown) => {
+        console.warn('[parley] authResponse failed', error);
+        // Ошибка отправки — на запрос, который не дошёл; новый запрос не пострадавший.
+        if (currentAuthIdRef.current === request.requestId) setAuthFailed(true);
+      },
+    );
+  };
+  // Адрес с `user:pass@`, введённый до гостя: пара ждёт его в памяти окна и уходит в main перед первой загрузкой.
+  const pendingCredentialsUrlRef = useRef<string | null>(null);
+
   const devtools = useDevtoolsStore((store) => store.tabs[tabId]) ?? EMPTY_DEVTOOLS;
   const counters = useMemo(() => devtoolsCounters(devtools), [devtools]);
   const devtoolsHeight = useUiStore((store) => store.ui.browser.devtoolsHeight);
@@ -439,6 +503,22 @@ export function BrowserSurface({ workKey, place, url, viewport, visible, bridge,
           await bridge.browser.setViewport(id, spec, fitArea(area));
         } catch (error) {
           console.warn('[parley] viewport is not set before the first page', error);
+        }
+      }
+      // Пара агента (`browser_open` с `user:pass@`), ждавшая эту страницу: к гостю — до загрузки, иначе первый вызов логина её не застал бы.
+      try {
+        await bridge.browser.claimCredentials(id, tabId);
+      } catch (error) {
+        console.warn('[parley] credentials were not claimed for the page', error);
+      }
+      // Пара из адреса, введённого до гостя: в main до загрузки, по той же причине.
+      const withCredentials = pendingCredentialsUrlRef.current;
+      pendingCredentialsUrlRef.current = null;
+      if (withCredentials !== null) {
+        try {
+          await bridge.browser.rememberCredentials(id, withCredentials);
+        } catch (error) {
+          console.warn('[parley] credentials were not passed to the page', error);
         }
       }
       try {
@@ -604,12 +684,23 @@ export function BrowserSurface({ workKey, place, url, viewport, visible, bridge,
   };
 
   const navigate = (next: string): void => {
+    // `user:pass@` из адреса: грузится и пишется в раскладку адрес без пары, пара уходит в память main (basic-auth).
+    const { url: clean, credentials } = splitUrlCredentials(next);
+    const id = state.webContentsId;
     if (src !== null) {
-      onPage((view) => view.loadURL(next));
+      if (credentials !== null && id !== null) {
+        bridge.browser
+          .rememberCredentials(id, next)
+          .catch((error: unknown) => console.warn('[parley] credentials were not passed to the page', error))
+          .finally(() => onPage((view) => view.loadURL(clean)));
+        return;
+      }
+      onPage((view) => view.loadURL(clean));
       return;
     }
     // Страницы ещё нет: адрес — в раскладку, и `<webview>` смонтируется с ним как с первым `src`.
-    const safe = layoutUrl(next);
+    pendingCredentialsUrlRef.current = credentials === null ? null : next;
+    const safe = layoutUrl(clean);
     if (safe !== null) patchPage({ url: safe });
   };
 
@@ -875,6 +966,7 @@ export function BrowserSurface({ workKey, place, url, viewport, visible, bridge,
             onAddToChat={addAnnotations}
           />
         )}
+        {authRequest === null ? null : <AuthPrompt request={authRequest} failed={authFailed} onSubmit={answerAuth} />}
         {state.loadFailed && !state.crashed ? (
           <div
             data-testid="browser-load-failed"

@@ -2236,6 +2236,21 @@ export const S = {
     /** Главный фрейм не загрузился (`did-fail-load`, fix-9). */
     loadFailed: "Couldn't load page",
     tooManyTabs: 'No more than 10 browser tabs per workspace',
+    /** Оверлей HTTP basic-auth над вкладкой (`renderer/browser/AuthPrompt.tsx`). */
+    auth: {
+      title: 'Sign in',
+      proxyTitle: 'Proxy sign-in',
+      proxy: 'Proxy',
+      /** Подпись источника: «host» запрашивает вход. */
+      requiredBy: (host: string): string => `${host} requires a username and password`,
+      realm: (realm: string): string => `Realm: ${realm}`,
+      username: 'Username',
+      password: 'Password',
+      signIn: 'Sign in',
+      cancel: 'Cancel',
+      wrong: 'Wrong username or password. Try again.',
+      sendFailed: "Couldn't send the credentials. Try again or cancel.",
+    },
     /** ⌖ Select (спека браузера 4.6). */
     select: {
       button: 'Select',
