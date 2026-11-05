@@ -581,6 +581,19 @@ describe('автозакрытие по тишине (M3)', () => {
     expect(closes(h)).toBe(1);
   });
 
+  it('job в needs_confirmation не держит сессию: через 3 минуты тишины она закрывается, job не отменяется', async () => {
+    const h = await started();
+    await delegate(h);
+    h.hostEmit('jobs.changed', { job: job({ state: 'needs_confirmation', revision: 2, resultSummary: 'Send the message?' }) });
+    expect(h.events.filter((e) => e.type === 'delegateEnd')).toHaveLength(1);
+    expect(h.controller.snapshot().jobs).toHaveLength(1);
+    h.advance(4 * MIN);
+    await flush();
+    expect(closes(h)).toBe(1);
+    expect(h.calls.map((c) => c.method)).not.toContain('jobs.cancel');
+    expect(h.events.filter((e) => e.type === 'delegateEnd')).toHaveLength(1);
+  });
+
   it('недавняя речь сбрасывает отсчёт', async () => {
     const h = await started();
     h.advance(2 * MIN + 30_000);

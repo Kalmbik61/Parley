@@ -156,7 +156,10 @@ export function idempotencyKeyOf(voiceSessionId: string, delegationId: string): 
 }
 
 const isOpen = (job: PhoneJob): boolean => job.state === 'queued' || job.state === 'running' || job.state === 'needs_confirmation';
-const isEnded = (job: PhoneJob): boolean => job.state === 'completed' || job.state === 'failed' || job.state === 'cancelled';
+/** Работа идёт: только это держит сессию от автозакрытия (карточка в ожидании подтверждения её не держит, как на острове). */
+const isWorking = (job: PhoneJob): boolean => job.state === 'queued' || job.state === 'running';
+/** Делегация закончена для модели: итог получен или job ждёт решения человека (сфера покажет карточку по job). */
+const isEnded = (job: PhoneJob): boolean => job.state !== 'queued' && job.state !== 'running';
 
 /** Сессия Live: всё, что живёт между открытием и закрытием канала. */
 interface Live {
@@ -463,7 +466,7 @@ export function createLiveController(deps: LiveControllerDeps): LiveController {
       now: deps.now,
       busy: () =>
         self().openDelegations.size > 0 ||
-        [...self().jobs.values()].some(isOpen) ||
+        [...self().jobs.values()].some(isWorking) ||
         queue.items().some((item) => item.speech === 'queued' || item.speech === 'submitted') ||
         ack.awaiting().length > 0,
       onIdle: () => void stopLive().catch(() => {}),
