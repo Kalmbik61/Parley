@@ -110,3 +110,25 @@ export const typography = {
   caption1: { fontSize: 12, lineHeight: 16, fontWeight: '400' },
   caption2: { fontSize: 11, lineHeight: 13, fontWeight: '600' },
 } as const;
+
+/**
+ * Палитра A (тёплая) голосового экрана: docs/design/2026-11-03-jarvis-handoff/tokens.ts. Голосовой экран всегда тёмный,
+ * от темы системы не зависит. Цвета самой сферы (amber/warm/coral/gray) лежат в `voice/orb/orb-spec.ts`.
+ */
+export const voicePalette = {
+  bg: '#100E0C',
+  bg2: '#1A1713',
+  field: '#1A1713',
+  surface: '#211D1A',
+  raised: '#2E2924',
+  bubble: '#2E2924',
+  border: '#39342F',
+  outline: '#39342F',
+  text: '#F3EEE6',
+  text2: '#C2BDB5',
+  text3: '#918B84',
+  accent: '#EFB05C',
+  onAccent: '#2B1C08',
+  success: '#7ECB9F',
+  error: '#E57159',
+} as const;

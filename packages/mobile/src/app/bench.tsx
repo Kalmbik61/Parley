@@ -8,7 +8,9 @@ import { Redirect } from 'expo-router';
 import { PrimaryButton, Row, Section } from '../components/ui';
 import { runBench, type BenchReport, type BenchRow } from '../dev/bench';
 import { DEV_BUILD } from '../dev/build';
-import { typography, useColors } from '../theme';
+import { typography, useColors, voicePalette } from '../theme';
+import { Orb } from '../voice/orb/Orb';
+import { STATES } from '../voice/orb/orb-spec';
 
 const fmt = (ms: number) => (ms < 1 ? ms.toFixed(3) : ms.toFixed(1)) + ' ms';
 const hermes = (globalThis as { HermesInternal?: unknown }).HermesInternal !== undefined;
@@ -48,6 +50,17 @@ export default function Bench() {
       <View style={{ marginHorizontal: 16 }}>
         <PrimaryButton title={running ? 'Running…' : 'Run (20 runs per case)'} disabled={running} onPress={() => void run()} />
       </View>
+      <Section header="Orb · 10 states" footer="Parley voice orb at 168 px and 32 px (mini, d ≤ 48). Reduced motion follows the system setting.">
+        <View style={[styles.orbs, { backgroundColor: voicePalette.bg }]}>
+          {STATES.map((s) => (
+            <View key={s.n} style={styles.orbCell}>
+              <Orb state={s.n} size={168} level={s.id === 'speaking' || s.id === 'listening' || s.id === 'recording' ? 0.5 : undefined} />
+              <Orb state={s.n} size={32} />
+              <Text style={[typography.caption1, { color: voicePalette.text2 }]}>{s.n} {s.id}</Text>
+            </View>
+          ))}
+        </View>
+      </Section>
       <Section header="Median (min–max)">
         {rows.map((r, i) => (
           <Row key={r.id} title={r.label} value={`${fmt(r.median)} (${fmt(r.min)}–${fmt(r.max)})`} mono last={i === rows.length - 1} />
@@ -69,4 +82,8 @@ export default function Bench() {
   );
 }
 
-const styles = StyleSheet.create({ content: { paddingBottom: 120, gap: 20, paddingTop: 12 } });
+const styles = StyleSheet.create({
+  content: { paddingBottom: 120, gap: 20, paddingTop: 12 },
+  orbs: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 28, paddingVertical: 36, paddingHorizontal: 16 },
+  orbCell: { alignItems: 'center', gap: 12 },
+});
