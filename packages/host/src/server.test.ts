@@ -806,7 +806,12 @@ describe('роль remote: запуск с телефона (A2b, спека м�
       };
       const workOpen = vi.fn(() => policy?.open ?? false);
       const roomAutonomous = vi.fn(() => policy?.autonomous ?? false);
-      const state = { enabled: policy?.enabled ?? false };
+      // Свежая карта участников `rooms.create` (b-023): по умолчанию никто не в прогоне.
+      const state: { enabled: boolean; members: { workArchived: boolean; autonomous: boolean } | null } = {
+        enabled: policy?.enabled ?? false,
+        members: { workArchived: false, autonomous: false },
+      };
+      const membersState = vi.fn(async () => state.members);
       const server = createHostServer({
         context,
         token: 't',
@@ -827,6 +832,7 @@ describe('роль remote: запуск с телефона (A2b, спека м�
                 sessionKnown: () => true,
                 trustFolder: async () => {},
                 sessionState: async () => ({ workArchived: false, lifecycle: 'sleeping', live: true, engine: false }),
+                membersState,
               },
             }),
       });
@@ -844,7 +850,7 @@ describe('роль remote: запуск с телефона (A2b, спека м�
         for (const client of clients) client.close();
         server.close();
       };
-      return { spies, workOpen, roomAutonomous, state, connect, close };
+      return { spies, workOpen, roomAutonomous, membersState, state, connect, close };
     }
 
     const session = { projectPath: '/p', workId: 'w-01', provider: 'claude', label: 'fix', task: 'do it', parent: null };
@@ -944,6 +950,33 @@ describe('роль remote: запуск с телефона (A2b, спека м�
       const desktop = await s.connect('desktop');
       expect((await answer(desktop.client, 162, 'rooms.send', letter)).error).toBeUndefined();
       expect(s.spies['rooms.send']).toHaveBeenCalledTimes(1);
+      s.close();
+    });
+
+    it('b-023: rooms.create с телефона — ворота по свежей карте участников до обработчика; окно ими не ограничено', async () => {
+      const s = await launchServer({ enabled: true, open: true });
+      const remote = await s.connect('remote');
+      let id = 170;
+      // Никто не в прогоне: комната создаётся, ворота получили проект, работу и участников.
+      expect((await answer(remote.client, ++id, 'rooms.create', room)).error).toBeUndefined();
+      expect(s.membersState.mock.calls).toEqual([['/p', 'w-01', ['s-01']]]);
+      // Участник в автономном прогоне, архивная работа и пропавшая работа — отказ до обработчика.
+      for (const [members, error] of [
+        [{ workArchived: false, autonomous: true }, { code: 'conflict', message: 'the phone does not change sessions of an autonomous run' }],
+        [{ workArchived: true, autonomous: false }, { code: 'conflict', message: 'the work is archived' }],
+        [null, { code: 'bad_request', message: 'unknown project or work' }],
+      ] as const) {
+        s.state.members = members;
+        expect((await answer(remote.client, ++id, 'rooms.create', room)).error, JSON.stringify(members)).toMatchObject(error);
+      }
+      expect(s.spies['rooms.create']).toHaveBeenCalledTimes(1);
+      // Окно с теми же участниками: ворот нет, обработчик вызван.
+      s.state.members = { workArchived: false, autonomous: true };
+      const asked = s.membersState.mock.calls.length;
+      const desktop = await s.connect('desktop');
+      expect((await answer(desktop.client, ++id, 'rooms.create', room)).error).toBeUndefined();
+      expect(s.spies['rooms.create']).toHaveBeenCalledTimes(2);
+      expect(s.membersState).toHaveBeenCalledTimes(asked);
       s.close();
     });
 
@@ -1530,6 +1563,22 @@ describe('роль remote: запуск с телефона (A2b, спека м�
       return { dir, workId: map.work.id, sessions };
     }
 
+    /** Живой автономный план комнаты (A41a, b-023): `active`, без попыток и операций. */
+    function activeAutonomousPlan(roomId: string): never {
+      const sha = 'a'.repeat(40);
+      return {
+        id: 'pl-01', roomId, rev: 1, mode: 'autonomous', status: 'active', goal: 'Implement', backlog: [],
+        acceptedAt: '2026-11-03T00:00:00.000Z', completedAt: null, cancelledAt: null, completionSummary: null,
+        items: [{ id: 1, title: 'Implement', owner: 'engine', verifier: 'engine', scope: 'src', after: [], criteria: ['Works'], status: 'ready', evidence: null, note: null, log: [] }],
+        autonomous: {
+          criteriaVersion: { 1: 1 }, checks: [], coverage: { 1: { 0: ['verifier'] } },
+          budget: { limits: { attemptsPerItem: 3, repairWaves: 3, minutesPerAttempt: 30, sessions: 10, concurrent: 4 }, spent: { attempts: 0, repairWaves: 0, sessions: 0, verifiers: 0, minutes: 0, launches: 0 }, reservations: [] },
+          integration: { branch: 'integration/pl-01', baseSha: sha, verifiedHead: sha, candidateHead: null, queue: [], suspended: null },
+          attempts: [], ops: [], halted: null, seq: { attempt: 0, receipt: 0, check: 0, op: 0 },
+        },
+      } as never;
+    }
+
     async function connectAs(home: string, token: string, name: string): Promise<{ client: TestClient; methods: string[] }> {
       const client = connectRaw(hostPaths(home).socket);
       await waitConnected(client.socket);
@@ -1848,18 +1897,7 @@ describe('роль remote: запуск с телефона (A2b, спека м�
 
         // Живой автономный план в комнате с обычным режимом (режим понизили после Go).
         await updateMap(p.dir, p.workId, (current) => {
-          const sha = 'a'.repeat(40);
-          current.plans.push({
-            id: 'pl-01', roomId: rooms['plan']!, rev: 1, mode: 'autonomous', status: 'active', goal: 'Implement', backlog: [],
-            acceptedAt: '2026-11-03T00:00:00.000Z', completedAt: null, cancelledAt: null, completionSummary: null,
-            items: [{ id: 1, title: 'Implement', owner: 'engine', verifier: 'engine', scope: 'src', after: [], criteria: ['Works'], status: 'ready', evidence: null, note: null, log: [] }],
-            autonomous: {
-              criteriaVersion: { 1: 1 }, checks: [], coverage: { 1: { 0: ['verifier'] } },
-              budget: { limits: { attemptsPerItem: 3, repairWaves: 3, minutesPerAttempt: 30, sessions: 10, concurrent: 4 }, spent: { attempts: 0, repairWaves: 0, sessions: 0, verifiers: 0, minutes: 0, launches: 0 }, reservations: [] },
-              integration: { branch: 'integration/pl-01', baseSha: sha, verifiedHead: sha, candidateHead: null, queue: [], suspended: null },
-              attempts: [], ops: [], halted: null, seq: { attempt: 0, receipt: 0, check: 0, op: 0 },
-            },
-          } as never);
+          current.plans.push(activeAutonomousPlan(rooms['plan']!));
         });
         expect((await answer(remote.client, 908, 'rooms.delete', target('plan'))).error)
           .toMatchObject({ code: 'conflict', message: 'the phone does not change rooms of an autonomous run' });
@@ -1896,6 +1934,60 @@ describe('роль remote: запуск с телефона (A2b, спека м�
           expect(seen.some((message) => message.event === 'host.notice'), method).toBe(false);
         }
         expect(await room('plain')).toBeDefined();
+        remote.client.close();
+      } finally {
+        delete process.env['PARLEY_CLAUDE_BIN'];
+      }
+    }, 40_000);
+
+    it('b-023: rooms.create с телефона на живом хосте — участник автономного прогона остаётся в своей комнате; архивная автономная комната с законченным прогоном не держит', async () => {
+      process.env['PARLEY_CLAUDE_BIN'] = STUB;
+      try {
+        const { home, token } = await boot();
+        const p = await project();
+        const [engine, auto] = p.sessions as [string, string];
+        const ids: Record<string, string> = {};
+        const rooms: Record<string, string> = {};
+        await updateMap(p.dir, p.workId, (current) => {
+          for (const label of ['plan', 'old', 'free']) ids[label] = addSession(current, { provider: 'claude', label, task: 't' }).id;
+          const member = current.sessions.find((entry) => entry.id === engine)!;
+          member.lifecycle = 'active';
+          member.workspace = { kind: 'artifacts', path: path.join(p.dir, 'review') } as never;
+          rooms['engine'] = addRoom(current, { title: 'engine', creator: 'human', members: [engine], lead: engine }).id;
+          const autonomous = addRoom(current, { title: 'auto', creator: 'human', members: [auto], lead: auto });
+          autonomous.mode = 'autonomous';
+          rooms['auto'] = autonomous.id;
+          rooms['plan'] = addRoom(current, { title: 'plan', creator: 'human', members: [ids['plan']!], lead: ids['plan']! }).id;
+          // Прогон кончился: комната в архиве, сессий движка в ней нет, живого плана нет — держит только режим.
+          const old = addRoom(current, { title: 'old', creator: 'human', members: [ids['old']!], lead: ids['old']! });
+          old.mode = 'autonomous';
+          old.archivedAt = '2026-11-04T00:00:00.000Z';
+          rooms['old'] = old.id;
+          current.plans.push(activeAutonomousPlan(rooms['plan']!));
+        });
+        const remote = await connectAs(home, token, 'remote');
+        await waitWork(remote.client, p.workId);
+        const create = (id: number, members: string[]) =>
+          answer(remote.client, id, 'rooms.create', { projectPath: p.dir, workId: p.workId, title: `phone ${id}`, members, quiet: true });
+        const roomsOf = async (session: string) =>
+          (await readMap(p.dir, p.workId)).rooms.filter((room) => room.members.includes(session)).map((room) => room.id);
+
+        // (a) сессия движка, (b) участник комнаты в режиме autonomous, (c) участник комнаты с живым автономным планом:
+        // conflict, и карта та же — участник в своей комнате, второй участник никуда не ушёл.
+        for (const [id, member, own] of [[950, engine, 'engine'], [951, auto, 'auto'], [952, ids['plan']!, 'plan']] as const) {
+          expect((await create(id, [member, ids['free']!])).error, member)
+            .toMatchObject({ code: 'conflict', message: 'the phone does not change sessions of an autonomous run' });
+          expect(await roomsOf(member), member).toEqual([rooms[own]]);
+        }
+        expect(await roomsOf(ids['free']!)).toEqual([]);
+        expect((await readMap(p.dir, p.workId)).rooms).toHaveLength(4);
+
+        // (d) обычный участник и (e) участник архивной автономной комнаты с законченным прогоном: комната создаётся.
+        const made = await create(953, [ids['free']!, ids['old']!]);
+        expect(made.error).toBeUndefined();
+        const { roomId } = made.result as { roomId: string };
+        expect(await roomsOf(ids['free']!)).toEqual([roomId]);
+        expect(await roomsOf(ids['old']!)).toEqual([roomId]);
         remote.client.close();
       } finally {
         delete process.env['PARLEY_CLAUDE_BIN'];

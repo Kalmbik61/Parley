@@ -52,6 +52,8 @@ import {
   writeSecret,
   type ProjectMigration,
   type ProviderEntry,
+  type Room,
+  type WorkMap,
 } from '@parley/core';
 import { createTelegramService } from './telegram/service.js';
 import { createHostContext } from './context.js';
@@ -1167,23 +1169,26 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
         const map = await readMap(projectPath, workId).catch(() => null);
         const room = map?.rooms.find((entry) => entry.id === roomId);
         if (!map || !room) return null;
-        // «Автономный прогон» (правило 20.3, критик A41a M1) — любое из трёх: режим комнаты; незакрытый участник — сессия
-        // движка (`workspace`), которую `archiveHumanRoom` с `stopSessions` усыпил бы мимо `remoteSessionGate`; живой
-        // автономный план комнаты — `active` или `completing`, либо с неисполненной операцией (`intended`): `deleteRoom`
-        // унёс бы его вместе с комнатой. Предложенный, завершённый и отменённый план без операций прогоном не считается.
-        const engineMember = room.members.some((id) => {
-          const member = map.sessions.find((entry) => entry.id === id);
-          return member !== undefined && member.lifecycle !== 'closed' && member.workspace != null;
-        });
-        const livePlan = (map.plans ?? []).some(
-          (plan) =>
-            plan.roomId === roomId &&
-            plan.mode === 'autonomous' &&
-            (plan.status === 'active' ||
-              plan.status === 'completing' ||
-              (plan.autonomous?.ops ?? []).some((op) => op.state === 'intended')),
-        );
-        return { workArchived: map.work.status === 'archived', autonomous: room.mode === 'autonomous' || engineMember || livePlan };
+        const signs = autonomousRun(map, room);
+        return { workArchived: map.work.status === 'archived', autonomous: signs.mode || signs.engineMember || signs.livePlan };
+      },
+      // Свежая карта, не снимок (b-023): `rooms.create` уводит участников из прежних комнат (`leaveOtherRooms`), и сессию
+      // прогона телефон оттуда не забирает. Участник в прогоне — незакрытая сессия движка или участник комнаты прогона.
+      // Архивная комната одним режимом не держит: прогон в ней кончился, если нет живой сессии движка и живого плана.
+      membersState: async (projectPath, workId, members) => {
+        if (worksService.entry(projectPath, workId) === undefined) return null;
+        const map = await readMap(projectPath, workId).catch(() => null);
+        if (!map) return null;
+        const inRun = (id: string): boolean => {
+          const session = map.sessions.find((entry) => entry.id === id);
+          if (session !== undefined && session.lifecycle !== 'closed' && session.workspace != null) return true;
+          return map.rooms.some((room) => {
+            if (!room.members.includes(id)) return false;
+            const signs = autonomousRun(map, room);
+            return signs.engineMember || signs.livePlan || (signs.mode && room.archivedAt == null);
+          });
+        };
+        return { workArchived: map.work.status === 'archived', autonomous: members.some(inRun) };
       },
       // Тем же путём, что окно (`NewWorkComposer`): `trust.check`, и только без записи — `trust.grant` в тот же `trust.json`.
       // Готовая запись не переписывается: кто доверил папку первым, остаётся в `by`.
@@ -1345,6 +1350,29 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   log.info('хост запущен', { pid: process.pid, version: hostVersion });
 
   return { paths, context: handle.context, closed };
+}
+
+/**
+ * Признаки автономного прогона комнаты (правило 20.3, критик A41a M1) по отдельности: режим комнаты; незакрытый участник —
+ * сессия движка (`workspace`), которую `archiveHumanRoom` с `stopSessions` усыпил бы мимо `remoteSessionGate`; живой
+ * автономный план комнаты — `active` или `completing`, либо с неисполненной операцией (`intended`): `deleteRoom` унёс бы
+ * его вместе с комнатой. Предложенный, завершённый и отменённый план без операций прогоном не считается. Меню комнаты
+ * (`roomState`) берёт любой из трёх; участники новой комнаты (`membersState`) у архивной комнаты режим не считают.
+ */
+function autonomousRun(map: WorkMap, room: Room): { mode: boolean; engineMember: boolean; livePlan: boolean } {
+  const engineMember = room.members.some((id) => {
+    const member = map.sessions.find((entry) => entry.id === id);
+    return member !== undefined && member.lifecycle !== 'closed' && member.workspace != null;
+  });
+  const livePlan = (map.plans ?? []).some(
+    (plan) =>
+      plan.roomId === room.id &&
+      plan.mode === 'autonomous' &&
+      (plan.status === 'active' ||
+        plan.status === 'completing' ||
+        (plan.autonomous?.ops ?? []).some((op) => op.state === 'intended')),
+  );
+  return { mode: room.mode === 'autonomous', engineMember, livePlan };
 }
 
 /**

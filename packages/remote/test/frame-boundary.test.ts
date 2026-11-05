@@ -230,6 +230,7 @@ describe('хост с ролью remote (A2, A2b): граница на наст�
         projectKnown: (projectPath) => projectPath === '/p',
         workKnown: (projectPath, workId) => projectPath === '/p' && workId === 'w-1',
         roomState: async (_projectPath, _workId, roomId) => (roomId === 'r-1' ? { workArchived: false, autonomous: false } : null),
+        membersState: async () => ({ workArchived: false, autonomous: false }),
         sessionState: async () => ({ workArchived: false, lifecycle: 'sleeping', live: true, engine: false }),
       },
     });
