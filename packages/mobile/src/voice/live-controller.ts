@@ -40,7 +40,7 @@ import {
 } from '@parley/core/voice-live';
 import type { SwarmEmotion } from '@parley/core/swarm';
 import type { PhoneJob, VoiceMethodResults, VoicePrepareResult } from '@parley/protocol/remote';
-import { NO_LEVELS, readAudioLevels, type AudioLevels } from './audio-levels.js';
+import { NO_LEVELS, readAudioLevels, type AudioLevels } from './audio-levels';
 import type { VoiceEvent } from './voice-model.js';
 
 export type LiveCallPhase = 'idle' | 'connecting' | 'live' | 'closing';
