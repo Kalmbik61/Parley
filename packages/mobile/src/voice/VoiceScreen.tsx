@@ -50,7 +50,6 @@ export function VoiceScreen() {
   const swarmSpec = useMemo(
     () => phoneSwarmSpec({ link, live }),
     // `live` пересоздаётся при каждом снимке; облик зависит только от этих полей.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [link, live.phase, live.humanSpeaking, live.modelPlaying, live.checking, live.emotion],
   );
   const [text, setText] = useState('');
