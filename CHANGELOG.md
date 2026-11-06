@@ -4,6 +4,48 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
+## 0.31.0
+
+**Impact**
+
+- **Goal:** Talk to the Parley assistant from the iPhone in a live voice dialogue with the island swarm on screen, decide assistant cards on the phone, let phone voice jobs resolve follow-up requests, and stop long dictated tasks from being cut.
+- **Behaviour:** The app opens on a new Voice screen that shows the 700-point island swarm (drawn with Skia) instead of the orb; Inbox moves to `/inbox`. The phone holds a live GPT-Live conversation and delegates requests to the host assistant as jobs, and the answers are spoken. Assistant cards appear over the Voice screen with Send, Cancel and Later; dangerous cards need Face ID, and `cards.decide` is refused while "Allow launching from the phone" (`remoteCreate`) is off. Phone voice now follows "Speak answers" plus a stored OpenAI key; the `remoteVoice` setting is removed and a stored value is ignored. Phone jobs carry up to 6 recent conversation turns (300 characters each, 4 KiB in total) plus up to 5 earlier phone requests from the last 30 minutes. A long dictated task with pauses now reaches the assistant whole and no longer comes back as a partial request.
+- **Numbers:** Dictation fix (PR #192): in a real 0.30.0 session (316 s of voice, 7 Requests), 4 of 7 Request texts started mid-sentence and the 2 long ones waited about 1.5 s and were partial; on the fixed code the same shapes give the full text, not partial; core `src/voice-live` tests 96 → 105. Phone voice (PR #193): mobile 737, host 4160 (7 skipped), protocol 548, remote-client 167 tests passed at its head; swarm engine step for 700 souls 0.06 ms with JIT and 0.6 ms without on the Mac, not measured on the iPhone; latency, audio quality, battery and binary size not measured. Job context (PR #194): core 6058, host 4166, mobile 744, protocol 549 passed; prompt growth up to about 3.3 K characters by construction, not measured on real jobs, latency not measured.
+- **Screens:** None captured. The Voice screen, the swarm and the card sheet were not seen on the device in this work.
+- **For the human:** Update the Mac first, then open the app on the iPhone → Voice and tap Start. Phone voice works when "Speak answers" is on and an OpenAI key is stored on the Mac. Say "create a room Alpha", then "add one more agent there". The iPhone app is built separately and run on a device; it is not part of the desktop release artifacts.
+- **Risk:** Medium. The remote surface grows by `cards.list`, the `cards.changed` event and an optional bounded `context` on `jobs.submit` (independent Opus critic: ship). Existing setups change: anyone with "Speak answers" on and `remoteVoice` off now has phone voice, and anyone with "Speak answers" off loses it; deep links to `/` now land on Voice. New native dependency `@shopify/react-native-skia` 2.14.0 needs an iOS rebuild. Swarm drawing runs on the JS thread (critic estimate 10–20% at 30 fps, not measured). If the model does not reply between two utterances, earlier speech since the previous delegation is part of the task text. A Mac on 0.30.0 or older costs the phone one extra round trip per delegation.
+- **Cost:** Phone voice bills OpenAI GPT-Live minutes on the Mac's key, bounded by the daily limit, the 30-minute session cap, background close and a 3-minute idle close. Emotions add about $0.0007/min against $0.05/min for Live (+1.4%, from the V0 spike, not measured on the phone). Job context adds no OpenAI spend: it goes to the host's CLI job. App binary size with Skia not measured.
+- **Verdict:** Ready to release for the desktop; the phone checks listed in "What is not proven yet" are still open.
+
+### Added
+
+- Voice screen on the iPhone ([#193](https://github.com/Kalmbik61/Parley/pull/193)): the app opens on Voice, holds a live GPT-Live dialogue and delegates requests to the host assistant as jobs, speaking verified results. Cancelled jobs and stale results are never spoken. A text field takes over when voice is not possible (no microphone, daily limit, no OpenAI key on the Mac, "Speak answers" off, Mac unreachable).
+- The island swarm on the phone ([#193](https://github.com/Kalmbik61/Parley/pull/193)): the swarm moved to the shared `@parley/core/swarm` subpath, the island draws it through a Canvas2D sink (pixel-equivalent, covered by a test) and the phone draws it with Skia. It shows the sphere only, supports every swarm state and island emotion, and pulses with loudness read from WebRTC `audioLevel` every 100 ms. Phone Live sessions get the same emotion trigger as the island.
+- Assistant cards on the phone ([#193](https://github.com/Kalmbik61/Parley/pull/193)): `cards.list` and the `cards.changed` event with an explicit-field projection, a card sheet with Send, Cancel and Later, and Face ID for dangerous cards. Cards are never shown or decided under the app lock or off the Voice tab.
+- Phone jobs carry recent conversation context ([#194](https://github.com/Kalmbik61/Parley/pull/194)): an optional strict `context.recentTurns` on `jobs.submit`, stored in the new nullable `assistant_jobs.context_json` column (migration 14). The prompt adds the turns and the earlier phone requests as a data block. A Mac on 0.30.0 or older answers `bad_request` and the phone retries once without context.
+
+### Changed
+
+- Phone voice follows "Speak answers" plus an OpenAI key on the Mac ([#193](https://github.com/Kalmbik61/Parley/pull/193)). The `remoteVoice` setting, its `REMOTE_VOICE` variable and the Remote settings switch are removed, and a stored value is ignored. Changing "Speak answers" reconnects remote connections, and turning it off ends an active phone voice session. Without a key the phone shows "No OpenAI key on the Mac".
+- `cards.decide` follows the `remoteCreate` switch; with it off the phone shows "Confirm on Mac" ([#193](https://github.com/Kalmbik61/Parley/pull/193)).
+- Phone voice sessions close when the app goes to the background and after 3 minutes of idle; prepare timeouts are ordered host 51.25 s < bridge 60 s < phone 75 s, so a slow prepare cannot leave an ownerless billed session ([#193](https://github.com/Kalmbik61/Parley/pull/193)).
+- The bottom text field sits above the floating tab bar and the keyboard ([#193](https://github.com/Kalmbik61/Parley/pull/193)); the microphone permission text says live voice audio goes through the Mac to OpenAI.
+- Desktop `tsconfig.web.json` pins React types, because pnpm hoisted `@types/react` 19 after the Skia install ([#193](https://github.com/Kalmbik61/Parley/pull/193)); this affects typecheck only.
+
+### Fixed
+
+- A long dictated task sent through island voice is no longer cut: the text starts after a model reply of at least 3 words or after the previous delegation, not after a human pause, and silence before the delegation no longer marks the Request partial, so the host prepares actions instead of asking to repeat ([#192](https://github.com/Kalmbik61/Parley/pull/192)).
+- The first device build crashed on opening the voice screen (`Cannot read property 'c1' of undefined`); the fix was superseded when the orb was removed ([#193](https://github.com/Kalmbik61/Parley/pull/193)).
+- Phone Live sessions close reliably and a phone session can idle-close while a card waits ([#193](https://github.com/Kalmbik61/Parley/pull/193)).
+- CI test fix: `packages/core/src/mcp/server.test.ts` is green and hermetic again; it no longer reads `PARLEY_*` variables from the process environment and expects the current `wait_for` description ([#194](https://github.com/Kalmbik61/Parley/pull/194)).
+
+### What is not proven yet
+
+- Nothing was checked end to end from the iPhone: the swarm rendering, emotions, the sphere pulsing with the voices, frame rate and JS-thread load, the text field position, audio, echo, latency, barge-in, Face ID, the app lock over the card sheet and background behaviour. Release builds were installed on an iPhone 17 Pro but nothing on screen was checked.
+- Delegation, cards and the "Speak answers" gate were not exercised against a host built from this release, and a spoken follow-up through a real CLI job was not run.
+- The Hermes behaviour of the phone's context mapping is covered by vitest only; jobs are not re-read after a bridge reconnect mid-session (backlog b-029).
+- A live run of the dictation fix with a real voice was not done. The Whisper path still stops recording after 1.2 s of silence (backlog b-028).
+
 ## 0.30.0
 
 **Impact**
