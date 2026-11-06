@@ -270,7 +270,7 @@ context: z.strictObject({
 
   - «Earlier phone requests» — до 5 job `origin: 'mobile'`, созданных не раньше чем за 30 минут до этого job, без него
     самого, из таблицы хоста.
-  - Итог прежнего поручения (например, «Created room Alpha (r-7)») приходит от хоста, а не от телефона. Так «туда»
+  - Итог прежнего поручения (например, «Prepared a card to create room Alpha in work W») приходит от хоста, а не от телефона. Так «туда»
     находит комнату и после перезапуска голосовой сессии, и из текстового поля.
   - Нет ни контекста, ни прежних поручений — промпт прежний (голый `requestText`).
 - Текстовое поле телефона `context` не шлёт: прежние поручения даёт хост.
@@ -288,7 +288,7 @@ context: z.strictObject({
     пустым `recentTurns` — принимаются. Тест `checkRemoteParams`.
   - Хост: миграция, `submitJob` и `Job.context`, обработчик `jobs.submit` передаёт `context`, `createJobPrompt` для
     mobile. Тесты:
-    - **follow-up**: job 1 «Create a room called Alpha» завершён с итогом «Created room Alpha (r-7) in work W»; job 2
+    - **follow-up**: job 1 «Create a room called Alpha» завершён с итогом «Prepared a card to create room Alpha in work W. It waits for your confirmation.»; job 2
       «and add one more agent there» с `recentTurns`. Промпт job 2 (через `promptOf` исполнителя) содержит текст и итог
       job 1 и реплики.
     - Окно 30 минут, только `mobile`, не больше 5, без самого job.

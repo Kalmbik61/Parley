@@ -39,6 +39,7 @@ import {
   type StatusNotifier,
 } from '@parley/core/voice-live';
 import type { SwarmEmotion } from '@parley/core/swarm';
+import { REMOTE_JOB_CONTEXT_LIMIT_BYTES } from '@parley/protocol/remote';
 import type { PhoneJob, PhoneJobContext, VoiceMethodResults, VoicePrepareResult } from '@parley/protocol/remote';
 import { NO_LEVELS, readAudioLevels, type AudioLevels } from './audio-levels';
 import type { VoiceEvent } from './voice-model.js';
@@ -63,9 +64,12 @@ export interface PhoneCallMap {
 const CONTEXT_TURNS = 6;
 const CONTEXT_TURN_CHARS = 300;
 
+/** Длина строки в байтах UTF-8 (`utf8Length` протокола не выходит из `@parley/protocol/remote`). */
+const utf8Length = (text: string): number => new TextEncoder().encode(text).length;
+
 /**
  * Реплики моста (`{role, text}`, у части версий ещё `at`) в форму `jobs.submit`: только роль и текст, пустые и чужие
- * роли отброшены, текст до 300 знаков, последние 6. Нет ни одной реплики — `undefined`, поле не шлётся.
+ * роли отброшены, текст до 300 знаков, последние 6, всё не больше 4 КиБ в UTF-8 (старейшие отбрасываются). Нет ни одной реплики — `undefined`, поле не шлётся.
  */
 export function phoneContextOf(context: unknown): PhoneJobContext | undefined {
   const raw = typeof context === 'object' && context !== null ? (context as { recentTurns?: unknown }).recentTurns : undefined;
@@ -75,9 +79,14 @@ export function phoneContextOf(context: unknown): PhoneJobContext | undefined {
     if (typeof turn !== 'object' || turn === null) continue;
     const { role, text } = turn as { role?: unknown; text?: unknown };
     if ((role !== 'human' && role !== 'assistant') || typeof text !== 'string' || text === '') continue;
-    recentTurns.push({ role, text: text.slice(0, CONTEXT_TURN_CHARS) });
+    // Обрезка не рвёт суррогатную пару: если на границе старшая половина, она уходит вместе с обрезанным хвостом.
+    const cut = /[\ud800-\udbff]/.test(text.charAt(CONTEXT_TURN_CHARS - 1)) ? CONTEXT_TURN_CHARS - 1 : CONTEXT_TURN_CHARS;
+    recentTurns.push({ role, text: text.slice(0, cut) });
   }
-  return recentTurns.length === 0 ? undefined : { recentTurns: recentTurns.slice(-CONTEXT_TURNS) };
+  const kept = recentTurns.slice(-CONTEXT_TURNS);
+  // Мост ограничивает контекст 4 КиБ в байтах UTF-8: старейшие реплики отбрасываются, пока не уложимся.
+  while (kept.length > 0 && utf8Length(JSON.stringify({ recentTurns: kept })) > REMOTE_JOB_CONTEXT_LIMIT_BYTES) kept.shift();
+  return kept.length === 0 ? undefined : { recentTurns: kept };
 }
 
 /** Хост на 0.30.0 и старше не знает поле `context` и отвечает `bad_request`; job он при этом не создаёт. */

@@ -311,12 +311,12 @@ export function createJobs(deps: JobsDeps): Jobs {
     },
     getJob: get,
     earlierMobile(jobId, query) {
-      const row = db.prepare('SELECT created_at FROM assistant_jobs WHERE job_id = ?').get(jobId) as unknown as { created_at: number } | undefined;
+      const row = db.prepare('SELECT created_at, rowid AS rid FROM assistant_jobs WHERE job_id = ?').get(jobId) as unknown as { created_at: number; rid: number } | undefined;
       if (row === undefined) return [];
       // `created_at` — миллисекунды числом: окно сравнивается числами. Берутся самые свежие из окна, отдаются от старых к новым.
       const rows = db
-        .prepare(`SELECT * FROM assistant_jobs WHERE origin = 'mobile' AND job_id <> ? AND created_at <= ? AND created_at >= ? ORDER BY created_at DESC, rowid DESC LIMIT ?`)
-        .all(jobId, row.created_at, row.created_at - query.windowMs, query.limit) as unknown as Raw[];
+        .prepare(`SELECT * FROM assistant_jobs WHERE origin = 'mobile' AND job_id <> ? AND (created_at < ? OR (created_at = ? AND rowid < ?)) AND created_at >= ? ORDER BY created_at DESC, rowid DESC LIMIT ?`)
+        .all(jobId, row.created_at, row.created_at, row.rid, row.created_at - query.windowMs, query.limit) as unknown as Raw[];
       return rows.map(fromRaw).reverse();
     },
     cancelJob(jobId) {

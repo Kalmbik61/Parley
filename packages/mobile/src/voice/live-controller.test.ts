@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { PhoneJob } from '@parley/protocol/remote';
+import { REMOTE_JOB_CONTEXT_LIMIT_BYTES, type PhoneJob } from '@parley/protocol/remote';
 import {
   createLiveController,
   idempotencyKeyOf,
@@ -330,6 +330,23 @@ describe('делегация (a)', () => {
       expect(phoneContextOf({ recentTurns: [{ role: 'system', text: 'x' }, { role: 'human', text: '' }] })).toBeUndefined();
       expect(phoneContextOf({ recentTurns: [] })).toBeUndefined();
       expect(phoneContextOf(undefined)).toBeUndefined();
+    });
+
+    it('phoneContextOf: 6 реплик по 300 иероглифов укладываются в 4 КиБ, остаются новейшие', () => {
+      const turns = Array.from({ length: 6 }, (_, i) => ({ role: 'human', text: String(i).repeat(1) + '漢'.repeat(299) }));
+      const context = phoneContextOf({ recentTurns: turns });
+      expect(new TextEncoder().encode(JSON.stringify(context)).length).toBeLessThanOrEqual(REMOTE_JOB_CONTEXT_LIMIT_BYTES);
+      expect(context?.recentTurns.length).toBeGreaterThan(0);
+      expect(context?.recentTurns.length).toBeLessThan(6);
+      expect(context?.recentTurns.at(-1)?.text.startsWith('5')).toBe(true);
+    });
+
+    it('phoneContextOf: суррогатная пара на границе 300 не рвётся', () => {
+      const text = 'a'.repeat(299) + '😀' + 'b';
+      const cut = phoneContextOf({ recentTurns: [{ role: 'human', text }] })?.recentTurns[0]?.text;
+      expect(cut).toBe('a'.repeat(299));
+      const whole = phoneContextOf({ recentTurns: [{ role: 'human', text: 'a'.repeat(298) + '😀' + 'b' }] })?.recentTurns[0]?.text;
+      expect(whole).toBe('a'.repeat(298) + '😀');
     });
 
     it('jobs.submit несёт context: роль и текст без at, до 300 знаков, не больше 6 реплик', async () => {
