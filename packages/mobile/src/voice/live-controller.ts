@@ -140,8 +140,10 @@ export interface LiveController {
 
 export const CONNECT_TIMEOUT_MS = 15_000;
 export const TICK_MS = 250;
-/** Период опроса громкости из `getStats()`. */
-export const LEVEL_POLL_MS = 50;
+/** Период опроса громкости из `getStats()`; движок и так сглаживает уровень. */
+export const LEVEL_POLL_MS = 100;
+/** Опрос, не ответивший за это время, бросается: следующий может начаться, а поздний ответ игнорируется. */
+export const LEVEL_POLL_TIMEOUT_MS = 1000;
 /** Сколько лицо держит `error` после ошибки, мс (как `ERROR_EMOTION_MS` острова). */
 export const ERROR_EMOTION_MS = 2000;
 /** Сколько тишины в транскрипте, чтобы считать речь законченной. */
@@ -209,8 +211,8 @@ interface Live {
   stopTick: () => void;
   /** Остановка опроса громкости. */
   stopPoll: () => void;
-  /** Опрос `getStats()` уже идёт: новый не начинается. */
-  polling: boolean;
+  /** Опрос `getStats()` уже идёт (с момента `deps.now()`): новый не начинается, пока тот не ответил или не истёк. */
+  polling: number | null;
   levels: AudioLevels;
   smoother: EmotionSmoother;
   offsets: SourceOffsets;
@@ -449,10 +451,14 @@ export function createLiveController(deps: LiveControllerDeps): LiveController {
 
   /** Один опрос громкости; наложение запросов и ответ после закрытия сессии отбрасываются. */
   const poll = (target: Live): void => {
-    if (target.polling || live !== target || target.closedEmitted) return;
-    target.polling = true;
+    if (live !== target || target.closedEmitted) return;
+    const at = deps.now();
+    if (target.polling !== null && at - target.polling < LEVEL_POLL_TIMEOUT_MS) return;
+    target.polling = at;
     void readAudioLevels(target.peer).then((levels) => {
-      target.polling = false;
+      // Ответ брошенного опроса (за него уже начат другой) не трогает ни уровни, ни флаг.
+      if (target.polling !== at) return;
+      target.polling = null;
       if (live !== target || target.closedEmitted) return;
       target.levels = levels;
       updateLevel();
@@ -588,7 +594,7 @@ export function createLiveController(deps: LiveControllerDeps): LiveController {
       pendingAcks: new Map(),
       stopTick: () => {},
       stopPoll: () => {},
-      polling: false,
+      polling: null,
       levels: NO_LEVELS,
       smoother,
       offsets: createSourceOffsets(),

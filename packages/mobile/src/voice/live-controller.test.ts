@@ -3,6 +3,7 @@ import type { PhoneJob } from '@parley/protocol/remote';
 import {
   createLiveController,
   idempotencyKeyOf,
+  LEVEL_POLL_MS,
   type LiveChannel,
   type LiveController,
   type LiveControllerDeps,
@@ -39,9 +40,9 @@ interface Harness {
   clock(): number;
   /** Подмена отчётов `getStats()`; по умолчанию тишина. */
   stats: { current: Map<string, Record<string, unknown>>; calls: number; fail: boolean };
-  /** Один опрос громкости (тик 50 мс) и ожидание его ответа. */
+  /** Один опрос громкости (тик 100 мс) и ожидание его ответа. */
   poll(): Promise<void>;
-  /** Сколько тиков сейчас активно: 250 мс — часы контроллера, 50 мс — опрос громкости. */
+  /** Сколько тиков сейчас активно: 250 мс — часы контроллера, 100 мс — опрос громкости. */
   activeTicks(): number[];
 }
 
@@ -172,7 +173,7 @@ function makeHarness(options: Options = {}): Harness {
     clock: () => at,
     stats,
     poll: async () => {
-      ticks.get(50)?.();
+      ticks.get(100)?.();
       await flush();
     },
     activeTicks: () => [...ticks.keys()],
@@ -910,15 +911,68 @@ describe('громкость (getStats)', () => {
     await h.poll();
     expect(requests).toBe(2);
   });
+
+  it('опрос, не ответивший за 1 с, бросается; следующий начинается и работает', async () => {
+    const h = await started();
+    h.live(outputText());
+    let requests = 0;
+    h.peer.getStats = () => {
+      requests += 1;
+      return new Promise(() => {}); // не завершится никогда
+    };
+    await h.poll();
+    h.advance(750);
+    await h.poll();
+    expect(requests).toBe(1); // ещё не истёк
+    h.advance(250);
+    h.live(outputText());
+    h.peer.getStats = () => {
+      requests += 1;
+      return Promise.resolve(new Map([['in', { type: 'inbound-rtp', kind: 'audio', audioLevel: 0.6 }]]));
+    };
+    await h.poll();
+    expect(requests).toBe(2);
+    expect(h.controller.level()).toBe(0.6);
+  });
+
+  it('поздний ответ брошенного опроса игнорируется', async () => {
+    const h = await started();
+    h.live(outputText());
+    let late: (stats: unknown) => void = () => {};
+    h.peer.getStats = () => new Promise((resolve) => (late = resolve));
+    await h.poll();
+    h.advance(1000);
+    h.live(outputText());
+    let release: (stats: unknown) => void = () => {};
+    h.peer.getStats = () => new Promise((resolve) => (release = resolve));
+    await h.poll(); // второй опрос начат, он ещё не ответил
+    late(new Map([['in', { type: 'inbound-rtp', kind: 'audio', audioLevel: 0.9 }]]));
+    await flush();
+    expect(h.controller.level()).toBe(0); // поздний ответ не меняет уровень
+    let requests = 0;
+    h.peer.getStats = () => {
+      requests += 1;
+      return Promise.resolve(new Map());
+    };
+    await h.poll();
+    expect(requests).toBe(0); // и не освободил флаг: второй опрос ещё идёт
+    release(new Map([['in', { type: 'inbound-rtp', kind: 'audio', audioLevel: 0.3 }]]));
+    await flush();
+    expect(h.controller.level()).toBe(0.3);
+  });
+
+  it('период опроса 100 мс', () => {
+    expect(LEVEL_POLL_MS).toBe(100);
+  });
 });
 
 describe('опрос громкости: жизненный цикл', () => {
-  it('без сессии опроса нет; в live идёт тик 50 мс', async () => {
+  it('без сессии опроса нет; в live идёт тик 100 мс', async () => {
     const h = makeHarness();
     expect(h.activeTicks()).toEqual([]);
     expect(h.stats.calls).toBe(0);
     await h.controller.start();
-    expect(h.activeTicks().sort((a, b) => a - b)).toEqual([50, 250]);
+    expect(h.activeTicks().sort((a, b) => a - b)).toEqual([100, 250]);
     await h.poll();
     expect(h.stats.calls).toBe(1);
   });
