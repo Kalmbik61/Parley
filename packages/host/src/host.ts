@@ -875,7 +875,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   });
   // Request голосовых поручений: durable в той же базе, связан с job по ключу; закрытие голоса job не отменяет.
   const assistantRequests = createRequests({ db: sideDb, jobs: assistantJobs });
-  jobPrompt = createJobPrompt({ requests: assistantRequests });
+  jobPrompt = createJobPrompt({ requests: assistantRequests, jobs: assistantJobs });
   assistantStatus = createRequestStatus({ requests: assistantRequests });
   assistantLinker = createRequestLinker({
     db: sideDb,

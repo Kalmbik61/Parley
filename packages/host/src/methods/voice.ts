@@ -21,7 +21,13 @@ export function createVoiceHandlers(jobs: Jobs | undefined, voice: VoiceDeps | u
   const handlers: Record<string, AnyHandler> = {};
   if (jobs !== undefined) {
     const submit: Handler<'jobs.submit'> = async (params) =>
-      jobs.submitJob({ origin: 'mobile', text: params.text, idempotencyKey: params.idempotencyKey, correlation: params.correlation });
+      jobs.submitJob({
+        origin: 'mobile',
+        text: params.text,
+        idempotencyKey: params.idempotencyKey,
+        correlation: params.correlation,
+        ...(params.context === undefined ? {} : { context: params.context }),
+      });
     const get: Handler<'jobs.get'> = async (params) => ({ job: projectPhoneJob(jobs.getJob(params.jobId)) });
     const cancel: Handler<'jobs.cancel'> = async (params) => ({ job: projectPhoneJob(jobs.cancelJob(params.jobId)) });
     handlers['jobs.submit'] = submit as AnyHandler;

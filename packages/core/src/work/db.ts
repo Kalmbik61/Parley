@@ -368,6 +368,14 @@ export const MIGRATIONS: readonly MigrationStep[] = [
       for (const [name, type] of VOICE_TELEMETRY_DECISIONS_COLUMNS) if (!have.has(name)) db.exec(`ALTER TABLE voice_telemetry ADD COLUMN ${name} ${type}`);
     },
   },
+  // 14: контекст разговора телефона у job (`jobs.submit` с `context`, m-3629): JSON реплик, nullable.
+  {
+    version: 14,
+    up: (db) => {
+      const has = db.prepare('PRAGMA table_info(assistant_jobs)').all().some((column) => column['name'] === 'context_json');
+      if (!has) db.exec('ALTER TABLE assistant_jobs ADD COLUMN context_json TEXT');
+    },
+  },
 ];
 
 export const WORK_DB_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]!.version;

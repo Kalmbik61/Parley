@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { addRoom, addSession, createWork, listTrust, parleyHome, readMap, trustKey, updateMap, workPaths } from '@parley/core';
+import { addRoom, addSession, createWork, listTrust, parleyHome, readMap, trustKey, updateMap, workDb, workPaths } from '@parley/core';
 import {
   ASSISTANT_ACTIONS_FEATURE,
   BROWSER_AGENT_FEATURE,
@@ -585,6 +585,29 @@ describe('роль remote: белый список этапа A (спека мо
     client.send({ id: 21, method: 'settings.set', params: { key: 'k', value: 'v' } });
     expect((await collectUntil(client, 21)).at(-1)?.error).toMatchObject({ code: 'unknown_method' });
     expect(running.context.clients().map((entry) => entry.role)).toEqual(['remote']);
+    client.close();
+  });
+
+  it('jobs.submit с context: принят и записан; 7 реплик или больше 4 КиБ — bad_request, job не создан (m-3629)', async () => {
+    const { home, token } = await boot();
+    const { client } = await connectAs(home, token, 'remote');
+    const base = { correlation: { mode: 'text' } };
+    const turn = { role: 'human', text: 'Create a room called Alpha' };
+    const stored = (key: string) => workDb().prepare('SELECT context_json, origin FROM assistant_jobs WHERE idempotency_key = ?').get(key);
+
+    client.send({ id: 40, method: 'jobs.submit', params: { ...base, text: 'add an agent', idempotencyKey: 'ctx-ok', context: { recentTurns: [turn] } } });
+    const accepted = (await collectUntil(client, 40)).at(-1);
+    expect(accepted?.error).toBeUndefined();
+    expect(accepted?.result).toMatchObject({ jobId: expect.any(String) });
+    expect(stored('ctx-ok')).toEqual({ context_json: JSON.stringify({ recentTurns: [turn] }), origin: 'mobile' });
+
+    const heavy = Array.from({ length: 6 }, () => ({ role: 'human', text: '日'.repeat(300) }));
+    const seven = Array.from({ length: 7 }, () => turn);
+    for (const [id, key, recentTurns] of [[41, 'ctx-big', heavy], [42, 'ctx-seven', seven]] as const) {
+      client.send({ id, method: 'jobs.submit', params: { ...base, text: 'add an agent', idempotencyKey: key, context: { recentTurns } } });
+      expect((await collectUntil(client, id)).at(-1)?.error, key).toMatchObject({ code: 'bad_request' });
+      expect(stored(key), key).toBeUndefined();
+    }
     client.close();
   });
 
