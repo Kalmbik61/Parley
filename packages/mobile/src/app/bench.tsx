@@ -1,7 +1,7 @@
 // Crypto bench for A20 item 16 (developer builds only: see `DEV_BUILD`). Runs the S2 cases on `@parley/noise` on this
 // device and shares the JSON. Measure in the Release configuration of the dev variant (`scripts/device-run.sh`); a Debug
 // number is not usable and the screen says so.
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { ScrollView, Share, StyleSheet, Text, View } from 'react-native';
 import * as Device from 'expo-device';
 import { Redirect } from 'expo-router';
@@ -9,14 +9,46 @@ import { PrimaryButton, Row, Section } from '../components/ui';
 import { runBench, type BenchReport, type BenchRow } from '../dev/bench';
 import { DEV_BUILD } from '../dev/build';
 import { typography, useColors, voicePalette } from '../theme';
-import { Orb } from '../voice/orb/Orb';
-import { STATES } from '../voice/orb/orb-spec';
+import type { SwarmEmotion, SwarmLive } from '@parley/core/swarm';
+import { SwarmFace } from '../voice/face/SwarmFace';
+import { phoneSwarmSpec } from '../voice/face/phone-spec';
 
 const fmt = (ms: number) => (ms < 1 ? ms.toFixed(3) : ms.toFixed(1)) + ' ms';
+const IDLE: SwarmLive = { phase: 'idle', humanSpeaking: false, modelPlaying: false, checking: false, emotion: 'calm' };
+const LIVE: SwarmLive = { ...IDLE, phase: 'live' };
+const EMOTIONS: SwarmEmotion[] = ['calm', 'joy', 'sad', 'surprise', 'anger'];
+// One sample per phone state; `level` marks the samples fed with a fake ~20 Hz loudness (see `useFakeLevel`).
+const FACES: { name: string; link: 'online' | 'offline'; live: SwarmLive; level?: number }[] = [
+  { name: 'online idle', link: 'online', live: IDLE },
+  { name: 'connecting', link: 'online', live: { ...IDLE, phase: 'connecting' } },
+  { name: 'listening', link: 'online', live: { ...LIVE, humanSpeaking: true }, level: 0.5 },
+  ...EMOTIONS.map((emotion) => ({
+    name: `model speaking · ${emotion}`,
+    link: 'online' as const,
+    live: { ...LIVE, modelPlaying: true, emotion },
+    level: 0.5,
+  })),
+  { name: 'checking', link: 'online', live: { ...LIVE, checking: true } },
+  { name: 'error', link: 'online', live: { ...LIVE, modelPlaying: true, emotion: 'error' }, level: 0.5 },
+  { name: 'offline', link: 'offline', live: IDLE },
+];
+/** Stand-in for the getStats() loudness: a speech-like 0..1 signal at 20 Hz. */
+function useFakeLevel(): number {
+  const [level, setLevel] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => {
+      const t = Date.now() / 1000;
+      setLevel(Math.max(0, Math.min(1, 0.45 + 0.35 * Math.sin(t * 5.1) * Math.sin(t * 1.7) + 0.15 * Math.sin(t * 13))));
+    }, 50);
+    return () => clearInterval(id);
+  }, []);
+  return level;
+}
 const hermes = (globalThis as { HermesInternal?: unknown }).HermesInternal !== undefined;
 
 export default function Bench() {
   const colors = useColors();
+  const fakeLevel = useFakeLevel();
   const [rows, setRows] = useState<BenchRow[]>([]);
   const [report, setReport] = useState<BenchReport | null>(null);
   const [running, setRunning] = useState(false);
@@ -50,13 +82,12 @@ export default function Bench() {
       <View style={{ marginHorizontal: 16 }}>
         <PrimaryButton title={running ? 'Running…' : 'Run (20 runs per case)'} disabled={running} onPress={() => void run()} />
       </View>
-      <Section header="Orb · 10 states" footer="Parley voice orb at 168 px and 32 px (mini, d ≤ 48). Reduced motion follows the system setting.">
+      <Section header="Swarm · phone states" footer="Island swarm sphere (700 souls, Skia) at 160 pt, one per phone state. Reduced motion follows the system setting.">
         <View style={[styles.orbs, { backgroundColor: voicePalette.bg }]}>
-          {STATES.map((s) => (
-            <View key={s.n} style={styles.orbCell}>
-              <Orb state={s.n} size={168} level={s.id === 'speaking' || s.id === 'listening' || s.id === 'recording' ? 0.5 : undefined} />
-              <Orb state={s.n} size={32} />
-              <Text style={[typography.caption1, { color: voicePalette.text2 }]}>{s.n} {s.id}</Text>
+          {FACES.map((f) => (
+            <View key={f.name} style={styles.orbCell}>
+              <SwarmFace spec={phoneSwarmSpec({ link: f.link, live: f.live })} level={f.level === undefined ? 0 : fakeLevel} size={160} />
+              <Text style={[typography.caption1, { color: voicePalette.text2 }]}>{f.name}</Text>
             </View>
           ))}
         </View>
