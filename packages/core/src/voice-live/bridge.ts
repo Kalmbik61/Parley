@@ -2,9 +2,12 @@
  * Мост делегаций (спека «Голос↔Ассистент» §4, T4, чистый TS): превращает `delegation.created` и фрагменты
  * транскрипта в Request на хосте.
  * - Текст поручения — фрагменты человека, начавшиеся не позже `offset_ms` (см. `TranscriptBuffer.collect`); начало —
- *   пауза в речи или `offset_ms` предыдущей делегации.
- * - Если к моменту делегации транскрипт ещё не дошёл до `offset_ms`, ждём до `TRANSCRIPT_WAIT_MS`; после срока Request
- *   уходит с `transcriptPartial: true` (такому Request хост разрешает только уточнение и статус).
+ *   ответ модели (не короче `REPLY_MIN_WORDS` слов) между фрагментами человека или `offset_ms` предыдущей делегации.
+ *   Пауза в речи человека реплику не делит (b-027).
+ * - Если к моменту делегации транскрипт ещё не дошёл до `offset_ms`, ждём до `TRANSCRIPT_WAIT_MS`; на сроке Request
+ *   частичный (`transcriptPartial: true`; хост разрешает такому только уточнение и статус), лишь если текста нет или
+ *   последний фрагмент человека пришёл меньше `TRANSCRIPT_QUIET_MS` назад: поток ещё идёт. Тишина перед `offset_ms`
+ *   Request частичным не делает.
  * - Старт job не ждёт подтверждения: мост отправляет Request сразу, как собран текст.
  * - Повтор submit безопасен: хост идемпотентен по `originKey` (`voiceSessionId` + `delegationId`).
  * Тишину (вопрос о Parley без `delegation.created`) мост ошибкой не считает: сигнала об этом нет (T0).
@@ -15,6 +18,10 @@ import { createTranscriptBuffer, type TranscriptBuffer } from './transcript.js';
 export const TRANSCRIPT_WAIT_MS = 1500;
 /** Насколько транскрипт может отставать от `offset_ms` и всё же считаться дошедшим (T0: «интервал без текста» до 1,2 с). */
 export const COVERAGE_GAP_MS = 1200;
+/** Ответ модели между фрагментами человека делит реплику, если в нём не меньше стольких слов («Угу.» не делит). */
+export const REPLY_MIN_WORDS = 3;
+/** На сроке ожидания Request частичный, если последний фрагмент человека пришёл меньше этого назад. */
+export const TRANSCRIPT_QUIET_MS = 500;
 export const CONTEXT_TURNS = 6;
 export const CONTEXT_TURN_CHARS = 300;
 export const CONTEXT_OPEN_REQUESTS = 5;
@@ -94,6 +101,8 @@ export function createDelegationBridge(deps: DelegationBridgeDeps, listener: Bri
   const seen = new Set<string>();
   let waiting: Waiting[] = [];
   let lastOffset: number | null = null;
+  /** `deps.now()` последнего фрагмента человека: тишина на сроке отличает «хвост в пути» от паузы. */
+  let lastHumanAt: number | null = null;
   let cancelTimer: (() => void) | null = null;
   let disposed = false;
 
@@ -102,6 +111,12 @@ export function createDelegationBridge(deps: DelegationBridgeDeps, listener: Bri
       .turns(beforeMs)
       .map((turn) => normalizeHumanText(turn.text, {}))
       .filter((text) => text !== '');
+
+  /** Ответ модели между фрагментами человека: фрагменты модели в `[fromMs, toMs)`, после нормализации не короче `REPLY_MIN_WORDS` слов. */
+  const hasReply = (fromMs: number, toMs: number): boolean => {
+    const reply = normalizeHumanText(model.textBetween(fromMs, toMs), {});
+    return reply.split(/\s+/).filter((token) => /\p{L}/u.test(token)).length >= REPLY_MIN_WORDS;
+  };
 
   const buildContext = (offsetMs: number, startMs: number | null): Record<string, unknown> => {
     const turns = [
@@ -151,12 +166,13 @@ export function createDelegationBridge(deps: DelegationBridgeDeps, listener: Bri
     cancelTimer = null;
     while (waiting.length > 0 && !disposed) {
       const head = waiting[0] as Waiting;
-      const collected = human.collect(head.offsetMs, head.afterMs);
+      const collected = human.collect(head.offsetMs, head.afterMs, hasReply);
       const caughtUp = collected.text !== '' && human.highWaterMs !== null && human.highWaterMs >= head.offsetMs - COVERAGE_GAP_MS;
       if (!caughtUp && deps.now() < head.deadline) break;
       waiting = waiting.slice(1);
       const text = collected.text === '' ? (deps.fallbackText ?? DEFAULT_FALLBACK_TEXT) : collected.text;
-      void send(head, text, !caughtUp, collected.firstStartMs);
+      const streaming = lastHumanAt !== null && deps.now() - lastHumanAt < TRANSCRIPT_QUIET_MS;
+      void send(head, text, !caughtUp && (collected.text === '' || streaming), collected.firstStartMs);
     }
     const next = waiting[0];
     if (next !== undefined && !disposed) cancelTimer = deps.setTimer(flush, Math.max(0, next.deadline - deps.now()));
@@ -168,6 +184,7 @@ export function createDelegationBridge(deps: DelegationBridgeDeps, listener: Bri
       switch (event.type) {
         case 'inputTranscript':
           human.push({ text: event.text, startMs: event.startMs, endMs: event.endMs });
+          lastHumanAt = deps.now();
           if (waiting.length > 0) flush();
           return;
         case 'outputTranscript':
