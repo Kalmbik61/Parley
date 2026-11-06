@@ -32,6 +32,7 @@ import {
   type SheetMode,
   type CardOutcome,
 } from './cards-model';
+import { createLevelSource, type LevelSource } from './face/level-source';
 import { createLiveController, type LiveController, type LiveFailure, type LiveSnapshot } from './live-controller';
 import { createPeer, openMic, type MutableMic } from './live-peer';
 import {
@@ -48,10 +49,11 @@ import {
 } from './screen-model';
 import { INITIAL_VOICE, orbStateOf, reduceVoice, type OrbView, type VoiceModel } from './voice-model';
 
-/** Всё, что рой на экране берёт от Live: состояние, громкость 0..1 (не чаще ~20 раз/с, только пока сессия live) и связь с Mac. */
+/** Всё, что рой на экране берёт от Live: состояние, громкость 0..1 (источником, не чаще ~10 раз/с, только пока сессия live) и связь с Mac. */
 export interface SwarmView {
   live: SwarmLive;
-  level: number;
+  /** Громкость отдаётся источником, а не состоянием: экран не перерисовывается на каждый опрос. */
+  levelSource: LevelSource;
   link: 'online' | 'offline';
 }
 
@@ -98,7 +100,7 @@ export function useLiveVoice(): LiveVoice {
 
   const [voice, dispatch] = useReducer(reduceVoice, INITIAL_VOICE);
   const [snapshot, setSnapshot] = useState<LiveSnapshot | null>(null);
-  const [level, setLevel] = useState(0);
+  const levelSource = useMemo(createLevelSource, []);
   const [muted, setMuted] = useState(false);
   const [failure, setFailure] = useState<LiveFailure | null>(null);
   const [errorText, setErrorText] = useState<string | null>(null);
@@ -142,8 +144,8 @@ export function useLiveVoice(): LiveVoice {
     });
     const offEvents = created.subscribe(dispatch);
     const offChange = created.onChange(() => setSnapshot(created.snapshot()));
-    // Контроллер зовёт `onLevel` не чаще опроса `getStats()` (50 мс) и только пока сессия live.
-    const offLevel = created.onLevel(setLevel);
+    // Контроллер зовёт `onLevel` не чаще опроса `getStats()` (100 мс) и только пока сессия live.
+    const offLevel = created.onLevel(levelSource.set);
     setController(created);
     // Экран уходит: `dispose` закрывает сессию на хосте и освобождает микрофон; jobs продолжаются.
     return () => {
@@ -151,9 +153,10 @@ export function useLiveVoice(): LiveVoice {
       offChange();
       offLevel();
       created.dispose();
+      levelSource.set(0);
       setController(null);
     };
-  }, []);
+  }, [levelSource]);
 
   // Фон: сессия закрыта и микрофон выключен; передний план отражается в контроллере (подтверждения только на экране).
   useEffect(() => {
@@ -400,10 +403,10 @@ export function useLiveVoice(): LiveVoice {
         checking: snapshot?.checking ?? false,
         emotion: snapshot?.emotion ?? 'calm',
       },
-      level,
+      levelSource,
       link: reachable ? 'online' : 'offline',
     }),
-    [snapshot, level, reachable],
+    [snapshot, levelSource, reachable],
   );
   const fallback = chooseFallback({ voice, reachable, canUseVoice, failure, remainingSeconds: usage?.remainingSeconds ?? null });
 

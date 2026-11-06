@@ -1,7 +1,7 @@
 // Crypto bench for A20 item 16 (developer builds only: see `DEV_BUILD`). Runs the S2 cases on `@parley/noise` on this
 // device and shares the JSON. Measure in the Release configuration of the dev variant (`scripts/device-run.sh`); a Debug
 // number is not usable and the screen says so.
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ScrollView, Share, StyleSheet, Text, View } from 'react-native';
 import * as Device from 'expo-device';
 import { Redirect } from 'expo-router';
@@ -10,6 +10,7 @@ import { runBench, type BenchReport, type BenchRow } from '../dev/bench';
 import { DEV_BUILD } from '../dev/build';
 import { typography, useColors, voicePalette } from '../theme';
 import type { SwarmEmotion, SwarmLive } from '@parley/core/swarm';
+import { createLevelSource, SILENT, type LevelSource } from '../voice/face/level-source';
 import { SwarmFace } from '../voice/face/SwarmFace';
 import { phoneSwarmSpec } from '../voice/face/phone-spec';
 
@@ -32,17 +33,17 @@ const FACES: { name: string; link: 'online' | 'offline'; live: SwarmLive; level?
   { name: 'error', link: 'online', live: { ...LIVE, modelPlaying: true, emotion: 'error' }, level: 0.5 },
   { name: 'offline', link: 'offline', live: IDLE },
 ];
-/** Stand-in for the getStats() loudness: a speech-like 0..1 signal at 20 Hz. */
-function useFakeLevel(): number {
-  const [level, setLevel] = useState(0);
+/** Stand-in for the getStats() loudness: a speech-like 0..1 signal at 20 Hz, delivered through a level source like the real one. */
+function useFakeLevel(): LevelSource {
+  const source = useMemo(createLevelSource, []);
   useEffect(() => {
     const id = setInterval(() => {
       const t = Date.now() / 1000;
-      setLevel(Math.max(0, Math.min(1, 0.45 + 0.35 * Math.sin(t * 5.1) * Math.sin(t * 1.7) + 0.15 * Math.sin(t * 13))));
+      source.set(Math.max(0, Math.min(1, 0.45 + 0.35 * Math.sin(t * 5.1) * Math.sin(t * 1.7) + 0.15 * Math.sin(t * 13))));
     }, 50);
     return () => clearInterval(id);
-  }, []);
-  return level;
+  }, [source]);
+  return source;
 }
 const hermes = (globalThis as { HermesInternal?: unknown }).HermesInternal !== undefined;
 
@@ -86,7 +87,7 @@ export default function Bench() {
         <View style={[styles.orbs, { backgroundColor: voicePalette.bg }]}>
           {FACES.map((f) => (
             <View key={f.name} style={styles.orbCell}>
-              <SwarmFace spec={phoneSwarmSpec({ link: f.link, live: f.live })} level={f.level === undefined ? 0 : fakeLevel} size={160} />
+              <SwarmFace spec={phoneSwarmSpec({ link: f.link, live: f.live })} levelSource={f.level === undefined ? SILENT : fakeLevel} size={160} />
               <Text style={[typography.caption1, { color: voicePalette.text2 }]}>{f.name}</Text>
             </View>
           ))}

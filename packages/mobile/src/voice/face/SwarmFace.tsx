@@ -17,11 +17,12 @@ import {
 import { useReducedMotion, useSharedValue } from 'react-native-reanimated';
 import { createSwarm, PAL, type SwarmSpec } from '@parley/core/swarm';
 import { createAtlasSink, PALETTES, SPRITE } from './atlas-sink';
+import type { LevelSource } from './level-source';
 
 export interface SwarmFaceProps {
   spec: SwarmSpec;
-  /** Громкость 0..1 (около 20 раз/с); рой плавно догоняет её сам. */
-  level: number;
+  /** Громкость 0..1 (около 10 раз/с); рой читает её в цикле кадров, а при росте от нуля цикл просыпается по подписке. */
+  levelSource: LevelSource;
   /** Сторона квадрата, pt. */
   size?: number;
   /** Идёт ли Live-сессия: тогда рой живёт непрерывно (30 к/с); иначе кадры идут, только пока движок просит. По умолчанию да. */
@@ -89,12 +90,12 @@ function emptyPicture(): SkPicture {
   return rec.finishRecordingAsPicture();
 }
 
-export function SwarmFace({ spec, level, size = 220, active = true }: SwarmFaceProps): JSX.Element {
+export function SwarmFace({ spec, levelSource, size = 220, active = true }: SwarmFaceProps): JSX.Element {
   const reduced = useReducedMotion();
   const [initial] = useState(emptyPicture);
   const picture = useSharedValue<SkPicture>(initial);
-  const live = useRef({ spec, level, reduced, active });
-  live.current = { spec, level, reduced, active };
+  const live = useRef({ spec, levelSource, reduced, active });
+  live.current = { spec, levelSource, reduced, active };
   const engineRef = useRef<ReturnType<typeof createSwarm> | null>(null);
   const kick = useRef<(() => void) | null>(null);
   // Облик, уже отданный движку: первый эффект ставит его при создании, второй — только при смене.
@@ -120,7 +121,7 @@ export function SwarmFace({ spec, level, size = 220, active = true }: SwarmFaceP
     let last = -Infinity;
 
     const render = (now: number): void => {
-      engine.frame(now, sink, live.current.reduced, live.current.level);
+      engine.frame(now, sink, live.current.reduced, live.current.levelSource.get());
       const n = sink.count;
       for (let i = 0; i < n; i++) {
         xforms[i]!.set(sink.xform[i * 4]!, sink.xform[i * 4 + 1]!, sink.xform[i * 4 + 2]!, sink.xform[i * 4 + 3]!);
@@ -135,7 +136,8 @@ export function SwarmFace({ spec, level, size = 220, active = true }: SwarmFaceP
 
     const loop = (now: number): void => {
       raf = 0;
-      const { level: lv, reduced: rm, active: on } = live.current;
+      const { levelSource: src, reduced: rm, active: on } = live.current;
+      const lv = src.get();
       // Правило острова: кадры идут, пока движок просит (переход, реакция), пока рой качает звук и пока идёт Live-сессия; при reduced motion вращения нет — только то, что просит движок, и звук.
       const run = engine.needsFrame() || lv > 0 || (!rm && on);
       if (!run) return;
@@ -171,10 +173,13 @@ export function SwarmFace({ spec, level, size = 220, active = true }: SwarmFaceP
     if (active) kick.current?.();
   }, [active]);
 
-  // Новый звук будит остановленный цикл.
+  // Новый звук будит остановленный цикл (экран не перерисовывается, поэтому подписка, а не проп).
   useEffect(() => {
-    if (level > 0) kick.current?.();
-  }, [level]);
+    if (levelSource.get() > 0) kick.current?.();
+    return levelSource.subscribe((lv) => {
+      if (lv > 0) kick.current?.();
+    });
+  }, [levelSource]);
 
   return (
     <Canvas style={{ width: size, height: size }} pointerEvents="none">

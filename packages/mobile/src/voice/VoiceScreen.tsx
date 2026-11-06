@@ -69,7 +69,7 @@ export function VoiceScreen() {
           Parley
         </Text>
         <View style={styles.orb} accessibilityLabel={caption ?? 'Parley voice'}>
-          <SwarmFace spec={swarmSpec} level={v.swarm.level} active={live.phase !== 'idle'} />
+          <SwarmFace spec={swarmSpec} levelSource={v.swarm.levelSource} active={live.phase !== 'idle'} />
         </View>
         {caption !== null && (
           <Text accessibilityLiveRegion="polite" allowFontScaling style={[typography.subheadline, styles.caption]}>
