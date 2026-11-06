@@ -1,13 +1,14 @@
-// Голосовой экран (вкладка Voice, VO-01): сфера, подпись, старт/стоп и mute, шаблон R15 с полем текста, ход работы, карточки.
+// Голосовой экран (вкладка Voice, VO-01): рой душ, подпись, старт/стоп и mute, шаблон R15 с полем текста, ход работы, карточки.
 // Экран всегда тёмный (палитра A), от темы системы не зависит.
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Keyboard, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SymbolView } from 'expo-symbols';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ConnectionBanner } from '../components/ConnectionBanner';
 import { typography, voicePalette } from '../theme';
 import { CardSheet } from './CardSheet';
-import { Orb } from './orb/Orb';
+import { SwarmFace } from './face/SwarmFace';
+import { phoneSwarmSpec } from './face/phone-spec';
 import { useLiveVoice } from './use-live-voice';
 import { composerSpacing } from './screen-model';
 import { CONNECTING_CAPTION_DELAY_MS } from './voice-model';
@@ -45,6 +46,13 @@ export function VoiceScreen() {
   const spacing = composerSpacing(insets.bottom, keyboardHeight);
   const v = useLiveVoice();
   const caption = useCaption(v.orb.caption);
+  const { live, link } = v.swarm;
+  const swarmSpec = useMemo(
+    () => phoneSwarmSpec({ link, live }),
+    // `live` пересоздаётся при каждом снимке; облик зависит только от этих полей.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [link, live.phase, live.humanSpeaking, live.modelPlaying, live.checking, live.emotion],
+  );
   const [text, setText] = useState('');
   const active = v.voice.state !== 'idle' && v.voice.state !== 'error' && v.voice.state !== 'offline' && v.voice.state !== 'limit_reached';
   const inSession = active && v.voice.state !== 'connecting';
@@ -62,7 +70,7 @@ export function VoiceScreen() {
           Parley
         </Text>
         <View style={styles.orb} accessibilityLabel={caption ?? 'Parley voice'}>
-          <Orb state={v.orb.orb} size={168} />
+          <SwarmFace spec={swarmSpec} level={v.swarm.level} active={live.phase !== 'idle'} />
         </View>
         {caption !== null && (
           <Text accessibilityLiveRegion="polite" allowFontScaling style={[typography.subheadline, styles.caption]}>
@@ -178,7 +186,7 @@ const styles = StyleSheet.create({
   page: { flex: 1, backgroundColor: voicePalette.bg },
   content: { alignItems: 'center', gap: 16, paddingHorizontal: 24, paddingBottom: 24 },
   title: { color: voicePalette.text, alignSelf: 'flex-start', paddingTop: 8 },
-  orb: { marginTop: 24, width: 168, height: 168 },
+  orb: { marginTop: 24, width: 220, height: 220 },
   caption: { color: voicePalette.text2, textAlign: 'center' },
   controls: { flexDirection: 'row', gap: 24, marginTop: 8 },
   round: { width: 64, height: 64, borderRadius: 32, alignItems: 'center', justifyContent: 'center' },

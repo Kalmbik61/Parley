@@ -113,7 +113,7 @@ export const typography = {
 
 /**
  * Палитра A (тёплая) голосового экрана: docs/design/2026-11-03-jarvis-handoff/tokens.ts. Голосовой экран всегда тёмный,
- * от темы системы не зависит. Цвета самой сферы (amber/warm/coral/gray) лежат в `voice/orb/orb-spec.ts`.
+ * от темы системы не зависит. Цвета роя (amber/coral/gray) лежат в `PAL` пакета `@parley/core/swarm`.
  */
 export const voicePalette = {
   bg: '#100E0C',

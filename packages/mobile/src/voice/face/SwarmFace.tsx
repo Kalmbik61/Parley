@@ -24,6 +24,8 @@ export interface SwarmFaceProps {
   level: number;
   /** Сторона квадрата, pt. */
   size?: number;
+  /** Идёт ли Live-сессия: тогда рой живёт непрерывно (30 к/с); иначе кадры идут, только пока движок просит. По умолчанию да. */
+  active?: boolean;
 }
 
 const SOULS = 700;
@@ -80,12 +82,12 @@ function emptyPicture(): SkPicture {
   return rec.finishRecordingAsPicture();
 }
 
-export function SwarmFace({ spec, level, size = 220 }: SwarmFaceProps): JSX.Element {
+export function SwarmFace({ spec, level, size = 220, active = true }: SwarmFaceProps): JSX.Element {
   const reduced = useReducedMotion();
   const [initial] = useState(emptyPicture);
   const picture = useSharedValue<SkPicture>(initial);
-  const live = useRef({ spec, level, reduced });
-  live.current = { spec, level, reduced };
+  const live = useRef({ spec, level, reduced, active });
+  live.current = { spec, level, reduced, active };
   const engineRef = useRef<ReturnType<typeof createSwarm> | null>(null);
   const kick = useRef<(() => void) | null>(null);
   // Облик, уже отданный движку: первый эффект ставит его при создании, второй — только при смене.
@@ -126,10 +128,9 @@ export function SwarmFace({ spec, level, size = 220 }: SwarmFaceProps): JSX.Elem
 
     const loop = (now: number): void => {
       raf = 0;
-      const { spec: s, level: lv, reduced: rm } = live.current;
-      // Правило острова: кадры идут, пока движок просит (переход, реакция), пока рой качает звук и пока рой живёт
-      // (не облако покоя); при reduced motion вращения нет — только то, что просит движок, и звук.
-      const run = engine.needsFrame() || lv > 0 || (!rm && (s.shape !== 'cloud' || s.fx !== null));
+      const { level: lv, reduced: rm, active: on } = live.current;
+      // Правило острова: кадры идут, пока движок просит (переход, реакция), пока рой качает звук и пока идёт Live-сессия; при reduced motion вращения нет — только то, что просит движок, и звук.
+      const run = engine.needsFrame() || lv > 0 || (!rm && on);
       if (!run) return;
       if (now - last >= FRAME_MS - 2) {
         last = now;
@@ -157,6 +158,11 @@ export function SwarmFace({ spec, level, size = 220 }: SwarmFaceProps): JSX.Elem
     engineRef.current?.setSpec(spec, performance.now(), reduced);
     kick.current?.();
   }, [spec, reduced]);
+
+  // Начало сессии будит остановленный цикл.
+  useEffect(() => {
+    if (active) kick.current?.();
+  }, [active]);
 
   // Новый звук будит остановленный цикл.
   useEffect(() => {
