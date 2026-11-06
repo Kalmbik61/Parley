@@ -32,6 +32,12 @@ export interface SwarmOptions {
    * Внутренний флаг для тестов F1 (#9 §11.10): в UI переключателя нет, по умолчанию `full`.
    */
   voiceMode?: 'loudness' | 'full';
+  /**
+   * Пульс по громкости (телефон): `mic` кадра (0..1) дополнительно сглаживается быстрой атакой и спадом ~120 мс и
+   * качает весь рой: масштаб до +6 %, яркость до +35 % и лёгкое детерминированное дрожание положения. Reduced motion —
+   * только яркость. По умолчанию выключено, остров не меняется.
+   */
+  soundPulse?: boolean;
 }
 
 /**
@@ -48,7 +54,8 @@ export interface SwarmSink {
 export interface SwarmEngine {
   setSpec(spec: SwarmSpec, now: number, reducedMotion: boolean): void;
   /**
-   * Шаг и отрисовка одного кадра в приёмник; `sink` null — только шаг (тесты). `mic` — громкость 0..1 для fx listen,
+   * Шаг и отрисовка одного кадра в приёмник; `sink` null — только шаг (тесты). `mic` — громкость 0..1 для fx listen
+   * и, при `soundPulse`, для пульса роя (звук микрофона или голоса модели — решает вызывающий),
    * `voice` — кадр голоса для рта лица; `null` — голос молчит, рот закрыт.
    */
   frame(now: number, sink: SwarmSink | null, reducedMotion: boolean, mic: number, voice?: VoiceFrame | null): void;
@@ -254,6 +261,9 @@ class SwarmImpl implements SwarmEngine {
   private rot = 0.5;
   private rv = 0.35;
   private mic = 0.4;
+  /** Сглаженный уровень пульса 0..1; только при `soundPulse`. */
+  private pl = 0;
+  private readonly soundPulse: boolean;
   private gl = 0;
   private last = 0;
   private cr = 1;
@@ -270,6 +280,7 @@ class SwarmImpl implements SwarmEngine {
     this.minPx = o.minPx ?? 2.4;
     this.mini = Math.max(o.width, o.height) <= 32;
     this.voiceMode = o.voiceMode ?? 'full';
+    this.soundPulse = o.soundPulse === true;
     const R = rng(o.seed ?? 7);
     this.R2 = rng((o.seed ?? 7) ^ 0x9e3779b9);
     const tot = BLOBS.reduce((a, b) => a + b[4], 0);
@@ -336,7 +347,7 @@ class SwarmImpl implements SwarmEngine {
   }
 
   needsFrame(): boolean {
-    return this.sp !== null && (this.dirty || this.trans || this.palT < 1 || this.reacts.length > 0);
+    return this.sp !== null && (this.dirty || this.trans || this.palT < 1 || this.reacts.length > 0 || this.pl > 0.005);
   }
 
   react(reaction: SwarmReaction, at: number, now: number, reducedMotion: boolean): void {
@@ -578,6 +589,12 @@ class SwarmImpl implements SwarmEngine {
       this.rot += dt * this.rv;
       if (E.fx === 'listen') this.mic += (mic - this.mic) * 0.3;
     }
+    if (this.soundPulse) {
+      // Быстрая атака (~30 мс) и спад ~120 мс: вход 20 Гц выглядит непрерывным.
+      const target = clamp(mic);
+      this.pl += (target - this.pl) * (1 - Math.exp(-dt / (target > this.pl ? 0.03 : 0.12)));
+      if (this.pl < 0.001) this.pl = 0;
+    }
     if (this.palT < 1) this.palT = clamp(this.palT + dt / 0.3);
     this.flash = Math.max(0, this.flash - dt / 0.6);
     const F = EMO[E.emo ?? 'calm'];
@@ -636,7 +653,10 @@ class SwarmImpl implements SwarmEngine {
     if (sink !== null) sink.begin(this.W, this.H);
     const pt = this.palT;
     const o = this.o;
-    const dim = E.dim * (1 + 0.8 * this.flash) * lit;
+    const dim = E.dim * (1 + 0.8 * this.flash) * lit * (1 + 0.35 * this.pl);
+    const pScale = rm ? 1 : 1 + 0.06 * this.pl;
+    const pJit = rm ? 0 : 0.02 * this.pl * this.d;
+    const jf = Math.floor(now / 50);
     for (const s of this.souls) {
       this.tg(s, t, amp, bl, vis);
       let x = o.x;
@@ -676,9 +696,13 @@ class SwarmImpl implements SwarmEngine {
       const zn = clamp(z + 0.5);
       let al = (s.corona ? 0.62 : 0.85) * mm * (0.5 + 0.5 * zn) * s.v * dim * br * (1 + 0.2 * Math.sin((TAU * t) / 1000 / s.tp + s.tw)); // мерцание ±20 %
       if (spark > 0 && spark < 1 && s.sk < 0.16) al *= 1 + 3 * Math.sin(Math.PI * spark);
-      const D = Math.max(this.minPx, this.d * this.k * s.sz * o.sm * (0.85 + 0.3 * zn));
-      let px = this.cx + rx * this.d;
-      const py = this.cy + ry * this.d;
+      const D = Math.max(this.minPx, this.d * this.k * s.sz * o.sm * (0.85 + 0.3 * zn)) * pScale;
+      let px = this.cx + rx * this.d * pScale;
+      let py = this.cy + ry * this.d * pScale;
+      if (pJit !== 0) {
+        px += (hs(s.rd * 97 + jf) - 0.5) * pJit;
+        py += (hs(s.rk * 89 + jf * 1.7) - 0.5) * pJit;
+      }
       if (glitch) {
         const row = Math.floor(py / 6);
         if (row % 3 === 0) px += (hs(row + Math.floor(now / 70)) - 0.5) * 0.14 * this.d;
