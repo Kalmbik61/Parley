@@ -10,28 +10,37 @@
  *   перекрытой новой в той же сессии, помечается `stale`.
  * - Пути к `cards.decide` нет: тип `PhoneCallMap` его не содержит. Голосом карточку не решить (VO-06).
  * - Закрытие голоса job не отменяет (VO-04): `jobs.cancel` тоже не вызывается.
- * - Сигналы речи считаются по активности транскриптов канала (фрагменты по 200 мс): уровней звука у контроллера нет.
+ * - Сигналы речи считаются по активности транскриптов канала (фрагменты по 200 мс). Громкость для роя (`level`) берётся
+ *   из `getStats()` пира около 20 раз в секунду, только пока сессия live.
+ * - Эмоция роя: решения Decisions разбирает общий разборщик, сглаживает общий сглаживатель; ошибка показывает `error`
+ *   две секунды (как стор острова), потом возвращается желаемая эмоция.
  * Тексты, SDP и ключ не логируются: контроллер ничего не пишет в консоль.
  */
 import {
   buildAppend,
   createAckTracker,
   createDelegationBridge,
+  createEmotionSmoother,
   createEventDeduper,
   createIdleCloser,
+  createSourceOffsets,
   createSpeechQueue,
   createStatusNotifier,
   parseLiveEvent,
   type AckTracker,
   type DelegationBridge,
+  type EmotionSmoother,
   type IdleCloser,
   type ResultInput,
   type SpeechPhrases,
+  type SourceOffsets,
   type SpeechQueue,
   type StatusInput,
   type StatusNotifier,
 } from '@parley/core/voice-live';
+import type { SwarmEmotion } from '@parley/core/swarm';
 import type { PhoneJob, VoiceMethodResults, VoicePrepareResult } from '@parley/protocol/remote';
+import { NO_LEVELS, readAudioLevels, type AudioLevels } from './audio-levels.js';
 import type { VoiceEvent } from './voice-model.js';
 
 export type LiveCallPhase = 'idle' | 'connecting' | 'live' | 'closing';
@@ -75,6 +84,8 @@ export interface LivePeer {
   setLocalDescription(description: unknown): Promise<void>;
   setRemoteDescription(description: { type: 'answer'; sdp: string }): Promise<void>;
   close(): void;
+  /** Отчёты WebRTC (в react-native-webrtc — `Map`); читает `audio-levels.ts`. */
+  getStats(): Promise<unknown>;
 }
 /** Открытый микрофон вместе с аудиосессией телефона; `stop()` освобождает и дорожки, и аудиосессию. */
 export interface LiveMic {
@@ -103,6 +114,10 @@ export interface LiveSnapshot {
   jobs: PhoneJob[];
   humanSpeaking: boolean;
   modelPlaying: boolean;
+  /** Эмоция роя: сглаженное решение Decisions или `error` во время вспышки. */
+  emotion: SwarmEmotion;
+  /** Есть job этой сессии без итога (в очереди или идёт). */
+  checking: boolean;
 }
 
 export interface LiveController {
@@ -116,11 +131,19 @@ export interface LiveController {
   /** Любое изменение снимка (фаза, jobs, сигналы речи). */
   onChange(listener: () => void): () => void;
   snapshot(): LiveSnapshot;
+  /** Громкость 0..1: голос модели, пока он играет, иначе микрофон, пока говорит человек и он не заглушён, иначе 0. */
+  level(): number;
+  /** Смена `level()`; не чаще одного раза за опрос статистики. */
+  onLevel(listener: (level: number) => void): () => void;
   dispose(): void;
 }
 
 export const CONNECT_TIMEOUT_MS = 15_000;
 export const TICK_MS = 250;
+/** Период опроса громкости из `getStats()`. */
+export const LEVEL_POLL_MS = 50;
+/** Сколько лицо держит `error` после ошибки, мс (как `ERROR_EMOTION_MS` острова). */
+export const ERROR_EMOTION_MS = 2000;
 /** Сколько тишины в транскрипте, чтобы считать речь законченной. */
 export const SPEECH_HOLD_MS = 800;
 /** У моста телефона нет разговоров острова: поле нужно только типу `BridgeSubmitInput`. */
@@ -184,6 +207,13 @@ interface Live {
   /** `clientEventId` отправленного итога → что отметить `ackInline`, когда придёт `appended`. */
   pendingAcks: Map<string, { jobId: string; revision: number }>;
   stopTick: () => void;
+  /** Остановка опроса громкости. */
+  stopPoll: () => void;
+  /** Опрос `getStats()` уже идёт: новый не начинается. */
+  polling: boolean;
+  levels: AudioLevels;
+  smoother: EmotionSmoother;
+  offsets: SourceOffsets;
   cancelTimer: () => void;
   /** Разбудить ожидание открытия канала (закрытие сессии посреди подключения не должно его повесить). */
   settleOpen: (opened: boolean) => void;
@@ -203,6 +233,10 @@ export function createLiveController(deps: LiveControllerDeps): LiveController {
   let appendCounter = 0;
   let foreground = true;
   let muted = false;
+  let wanted: SwarmEmotion = 'calm';
+  let cancelFlash: (() => void) | null = null;
+  let currentLevel = 0;
+  const levelListeners = new Set<(level: number) => void>();
 
   const guarded = (fn: () => void): void => {
     try {
@@ -219,6 +253,39 @@ export function createLiveController(deps: LiveControllerDeps): LiveController {
   };
   /** Фаза может смениться за `await`: чтение через функцию не даёт TS сузить её по прошлой проверке. */
   const currentPhase = (): LiveCallPhase => phase;
+  const emotion = (): SwarmEmotion => (cancelFlash !== null ? 'error' : wanted);
+  const setWanted = (next: SwarmEmotion): void => {
+    if (wanted === next) return;
+    wanted = next;
+    if (cancelFlash === null) changed();
+  };
+  const clearFlash = (): void => {
+    cancelFlash?.();
+    cancelFlash = null;
+  };
+  /** Ошибка: лицо показывает `error` две секунды, потом возвращается желаемая эмоция. */
+  const flashError = (): void => {
+    clearFlash();
+    const cancel = deps.setTimer(() => {
+      if (cancelFlash !== cancel) return;
+      cancelFlash = null;
+      changed();
+    }, ERROR_EMOTION_MS);
+    cancelFlash = cancel;
+    changed();
+  };
+  /** Громкость по правилу экрана; в `idle`/без сессии — 0. */
+  const computeLevel = (): number => {
+    if (live === null) return 0;
+    const raw = live.modelPlaying ? live.levels.model : live.humanSpeaking && !muted ? live.levels.mic : 0;
+    return Math.round(raw * 100) / 100;
+  };
+  const updateLevel = (): void => {
+    const next = computeLevel();
+    if (next === currentLevel) return;
+    currentLevel = next;
+    for (const listener of [...levelListeners]) guarded(() => listener(next));
+  };
   const setPhase = (next: LiveCallPhase): void => {
     if (phase === next) return;
     phase = next;
@@ -226,6 +293,7 @@ export function createLiveController(deps: LiveControllerDeps): LiveController {
   };
 
   const refuse = (code: LiveFailure): LiveStartResult => {
+    if (code !== 'limit_reached') flashError();
     emit({ type: code === 'limit_reached' ? 'limitReached' : 'fail' });
     return { ok: false, code, message: LIVE_MESSAGES[code] };
   };
@@ -234,6 +302,8 @@ export function createLiveController(deps: LiveControllerDeps): LiveController {
 
   const teardown = (target: Live): void => {
     target.stopTick();
+    target.stopPoll();
+    target.smoother.reset();
     target.cancelTimer();
     target.settleOpen(false);
     target.idle.stop();
@@ -252,19 +322,27 @@ export function createLiveController(deps: LiveControllerDeps): LiveController {
       // уже закрыт
     }
     target.mic.stop();
-    if (live === target) live = null;
+    if (live === target) {
+      live = null;
+      wanted = 'calm';
+      updateLevel();
+    }
   };
 
   /** Один конец сессии, с какой бы стороны он ни пришёл (хост, канал, обрыв, `stop()`). */
   const finish = (target: Live, reason: string, closeHost = true): void => {
     if (target.closedEmitted) return;
     target.closedEmitted = true;
+    clearFlash();
     // Хост должен узнать о конце сессии, иначе Mac продолжит считать минуты. Не нужно, если закрыл он сам или `stop()` уже звал close.
     if (closeHost) void deps.call('voice.session.close', { voiceSessionId: target.voiceSessionId }).catch(() => {});
     teardown(target);
     setPhase('idle');
     // Дневной лимит хост называет причиной закрытия: экран должен показать «Daily voice limit reached», а не уйти в idle.
-    emit({ type: reason === 'connection_lost' || reason === 'channel_closed' ? 'fail' : reason === 'daily_limit' ? 'limitReached' : 'stop' });
+    const failed = reason === 'connection_lost' || reason === 'channel_closed';
+    if (failed) flashError();
+    else changed();
+    emit({ type: failed ? 'fail' : reason === 'daily_limit' ? 'limitReached' : 'stop' });
   };
 
   const sendAppend = (target: Live, kind: 'thinking' | 'commentary', delegationId: string | null, content: string): string | null => {
@@ -353,8 +431,10 @@ export function createLiveController(deps: LiveControllerDeps): LiveController {
       target.queue.setModelPlaying(value);
       target.ack.modelPlaying(value);
       target.idle.modelPlaying(value);
+      target.smoother.setPlaying(value);
       emit({ type: value ? 'speechStart' : 'speechEnd' });
     }
+    updateLevel();
     changed();
   };
 
@@ -365,6 +445,18 @@ export function createLiveController(deps: LiveControllerDeps): LiveController {
     target.ack.tick();
     target.idle.step();
     pump(target);
+  };
+
+  /** Один опрос громкости; наложение запросов и ответ после закрытия сессии отбрасываются. */
+  const poll = (target: Live): void => {
+    if (target.polling || live !== target || target.closedEmitted) return;
+    target.polling = true;
+    void readAudioLevels(target.peer).then((levels) => {
+      target.polling = false;
+      if (live !== target || target.closedEmitted) return;
+      target.levels = levels;
+      updateLevel();
+    });
   };
 
   const handleChannelMessage = (target: Live, deduper: ReturnType<typeof createEventDeduper>, data: unknown): void => {
@@ -380,7 +472,14 @@ export function createLiveController(deps: LiveControllerDeps): LiveController {
         setSpeech(target, 'human', true);
         target.bridge.handle({ type: 'inputTranscript', text: event.text, startMs: event.startMs, endMs: event.endMs });
         return;
+      case 'emotion':
+        target.smoother.decision({ value: event.value, confidence: event.confidence, sourceEndMs: target.offsets.endOf(event.sourceEventId) });
+        return;
+      case 'error':
+        flashError();
+        return;
       case 'outputTranscript':
+        target.offsets.remember(parsed.eventId, event.endMs);
         target.lastModelAt = deps.now();
         setSpeech(target, 'model', true);
         target.bridge.handle({ type: 'outputTranscript', text: event.text, startMs: event.startMs, endMs: event.endMs });
@@ -471,6 +570,7 @@ export function createLiveController(deps: LiveControllerDeps): LiveController {
         ack.awaiting().length > 0,
       onIdle: () => void stopLive().catch(() => {}),
     });
+    const smoother = createEmotionSmoother({ now: deps.now, setTimer: deps.setTimer, apply: setWanted });
     const target: Live = {
       voiceSessionId,
       peer,
@@ -487,6 +587,11 @@ export function createLiveController(deps: LiveControllerDeps): LiveController {
       openDelegations: new Set(),
       pendingAcks: new Map(),
       stopTick: () => {},
+      stopPoll: () => {},
+      polling: false,
+      levels: NO_LEVELS,
+      smoother,
+      offsets: createSourceOffsets(),
       cancelTimer: () => {},
       settleOpen: () => {},
       humanSpeaking: false,
@@ -626,6 +731,7 @@ export function createLiveController(deps: LiveControllerDeps): LiveController {
         // После открытия канала таймер подключения не нужен; обрыв канала закрывает сессию через `onclose`.
         channel.onopen = null;
         target.idle.start();
+        target.stopPoll = deps.setTick(() => poll(target), LEVEL_POLL_MS);
         setPhase('live');
         emit({ type: 'connected' });
         return { ok: true, voiceSessionId: target.voiceSessionId };
@@ -645,6 +751,7 @@ export function createLiveController(deps: LiveControllerDeps): LiveController {
     },
     setMuted(value) {
       muted = value;
+      updateLevel();
     },
 
     subscribe(listener) {
@@ -662,7 +769,14 @@ export function createLiveController(deps: LiveControllerDeps): LiveController {
       jobs: live === null ? [] : [...live.jobs.values()].filter(isOpen),
       humanSpeaking: live?.humanSpeaking ?? false,
       modelPlaying: live?.modelPlaying ?? false,
+      emotion: emotion(),
+      checking: live !== null && [...live.jobs.values()].some(isWorking),
     }),
+    level: () => currentLevel,
+    onLevel(listener) {
+      levelListeners.add(listener);
+      return () => void levelListeners.delete(listener);
+    },
 
     dispose() {
       unsubscribeJobs();
@@ -673,8 +787,10 @@ export function createLiveController(deps: LiveControllerDeps): LiveController {
         void deps.call('voice.session.close', { voiceSessionId: target.voiceSessionId }).catch(() => {});
         teardown(target);
       }
+      clearFlash();
       listeners.clear();
       changeListeners.clear();
+      levelListeners.clear();
     },
   };
 }

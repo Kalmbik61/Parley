@@ -3,12 +3,13 @@
  * Проводка без решений: правила живут в `screen-model.ts`, `cards-model.ts`, `voice-model.ts` и контроллере.
  * Голос карточку не решает: `decide` вызывает только кнопка на экране.
  */
-import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { AppState } from 'react-native';
 import * as Crypto from 'expo-crypto';
 import { useIsFocused } from 'expo-router';
 import * as LocalAuthentication from 'expo-local-authentication';
 import { selectVoiceCapability } from '@parley/remote-client';
+import type { SwarmLive } from '@parley/core/swarm';
 import type { CardDecideResult } from '@parley/protocol';
 import type { PhoneCard, PhoneJob, VoiceMethodResults, VoiceUsage } from '@parley/protocol/remote';
 import { confirmWithOwner } from '../auth/confirm-owner';
@@ -47,8 +48,16 @@ import {
 } from './screen-model';
 import { INITIAL_VOICE, orbStateOf, reduceVoice, type OrbView, type VoiceModel } from './voice-model';
 
+/** Всё, что рой на экране берёт от Live: состояние, громкость 0..1 (не чаще ~20 раз/с, только пока сессия live) и связь с Mac. */
+export interface SwarmView {
+  live: SwarmLive;
+  level: number;
+  link: 'online' | 'offline';
+}
+
 export interface LiveVoice {
   voice: VoiceModel;
+  swarm: SwarmView;
   orb: OrbView;
   muted: boolean;
   /** Текст под сферой: сообщение об ошибке, если шаблона R15 нет. */
@@ -89,6 +98,7 @@ export function useLiveVoice(): LiveVoice {
 
   const [voice, dispatch] = useReducer(reduceVoice, INITIAL_VOICE);
   const [snapshot, setSnapshot] = useState<LiveSnapshot | null>(null);
+  const [level, setLevel] = useState(0);
   const [muted, setMuted] = useState(false);
   const [failure, setFailure] = useState<LiveFailure | null>(null);
   const [errorText, setErrorText] = useState<string | null>(null);
@@ -132,11 +142,14 @@ export function useLiveVoice(): LiveVoice {
     });
     const offEvents = created.subscribe(dispatch);
     const offChange = created.onChange(() => setSnapshot(created.snapshot()));
+    // Контроллер зовёт `onLevel` не чаще опроса `getStats()` (50 мс) и только пока сессия live.
+    const offLevel = created.onLevel(setLevel);
     setController(created);
     // Экран уходит: `dispose` закрывает сессию на хосте и освобождает микрофон; jobs продолжаются.
     return () => {
       offEvents();
       offChange();
+      offLevel();
       created.dispose();
       setController(null);
     };
@@ -378,7 +391,21 @@ export function useLiveVoice(): LiveVoice {
   const job = latestJob([textJob === 'submitting' ? null : textJob, ...(snapshot?.jobs ?? [])]);
   const progress = progressLine(textJob === 'submitting' && job === null ? 'submitting' : job);
   const orb = orbStateOf(voice, job === null ? [] : [{ state: job.state }]);
+  const swarm = useMemo<SwarmView>(
+    () => ({
+      live: {
+        phase: snapshot?.phase ?? 'idle',
+        humanSpeaking: snapshot?.humanSpeaking ?? false,
+        modelPlaying: snapshot?.modelPlaying ?? false,
+        checking: snapshot?.checking ?? false,
+        emotion: snapshot?.emotion ?? 'calm',
+      },
+      level,
+      link: reachable ? 'online' : 'offline',
+    }),
+    [snapshot, level, reachable],
+  );
   const fallback = chooseFallback({ voice, reachable, canUseVoice, failure, remainingSeconds: usage?.remainingSeconds ?? null });
 
-  return { voice, orb, muted, errorText: fallback === null ? errorText : null, fallback, progress, result, card, sheetOpen, waitingText: waiting === 0 ? null : waitingLabel(waiting), sheetMode: sheetModeOf(methods), cardBusy, notice, sending: textJob === 'submitting', start, stop, toggleMute, submitText, decide, later, reopenCard, retry };
+  return { voice, swarm, orb, muted, errorText: fallback === null ? errorText : null, fallback, progress, result, card, sheetOpen, waitingText: waiting === 0 ? null : waitingLabel(waiting), sheetMode: sheetModeOf(methods), cardBusy, notice, sending: textJob === 'submitting', start, stop, toggleMute, submitText, decide, later, reopenCard, retry };
 }

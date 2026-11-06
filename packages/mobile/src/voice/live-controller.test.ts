@@ -37,6 +37,12 @@ interface Harness {
   live(message: Record<string, unknown>): void;
   advance(ms: number): void;
   clock(): number;
+  /** Подмена отчётов `getStats()`; по умолчанию тишина. */
+  stats: { current: Map<string, Record<string, unknown>>; calls: number; fail: boolean };
+  /** Один опрос громкости (тик 50 мс) и ожидание его ответа. */
+  poll(): Promise<void>;
+  /** Сколько тиков сейчас активно: 250 мс — часы контроллера, 50 мс — опрос громкости. */
+  activeTicks(): number[];
 }
 
 interface Options {
@@ -51,7 +57,8 @@ function makeHarness(options: Options = {}): Harness {
   let eventCounter = 0;
   const timers: Array<{ id: number; due: number; callback: () => void }> = [];
   let timerId = 0;
-  let tickCallback: () => void = () => {};
+  const ticks = new Map<number, () => void>();
+  const stats: Harness['stats'] = { current: new Map(), calls: 0, fail: false };
   const listeners: Record<string, Array<(data: never) => void>> = {};
   const calls: Harness['calls'] = [];
   const events: VoiceEvent[] = [];
@@ -83,6 +90,11 @@ function makeHarness(options: Options = {}): Harness {
       if (options.neverOpens !== true) queueMicrotask(() => channel.open());
     },
     close: vi.fn(),
+    getStats: async () => {
+      stats.calls += 1;
+      if (stats.fail) throw new Error('stats');
+      return stats.current;
+    },
   };
   const mic = { stopped: false, addTo: vi.fn(), stop() { this.stopped = true; } };
 
@@ -118,11 +130,9 @@ function makeHarness(options: Options = {}): Harness {
         if (index !== -1) timers.splice(index, 1);
       };
     },
-    setTick: (callback) => {
-      tickCallback = callback;
-      return () => {
-        tickCallback = () => {};
-      };
+    setTick: (callback, ms) => {
+      ticks.set(ms, callback);
+      return () => void ticks.delete(ms);
     },
     phrases: { detailsOnScreen: 'Details are on screen.', clarifying: 'Clarifying.' },
     fallbackText: '(not transcribed)',
@@ -139,7 +149,7 @@ function makeHarness(options: Options = {}): Harness {
         timers.splice(timers.indexOf(timer), 1);
         timer.callback();
       }
-      tickCallback();
+      ticks.get(250)?.();
     }
   };
 
@@ -160,6 +170,12 @@ function makeHarness(options: Options = {}): Harness {
     },
     advance,
     clock: () => at,
+    stats,
+    poll: async () => {
+      ticks.get(50)?.();
+      await flush();
+    },
+    activeTicks: () => [...ticks.keys()],
   };
 }
 
@@ -693,5 +709,267 @@ describe('stop() освобождает ресурсы до ответа хос�
     expect(h.calls.filter((c) => c.method === 'voice.session.close')).toEqual([{ method: 'voice.session.close', params: { voiceSessionId: SESSION } }]);
     expect(h.events.at(-1)).toEqual({ type: 'stop' });
     expect(h.controller.snapshot().phase).toBe('idle');
+  });
+});
+
+const outputText = (delta = 'Hi', startMs = 0, endMs = 200) => ({ type: 'session.output_transcript.delta', delta, start_ms: startMs, end_ms: endMs });
+const emotionDecision = (choice: string, confidence = 0.9) => ({
+  type: 'decision.event',
+  event: { type: 'decision.completed', decision: { answers: [{ name: 'expression', choice, confidence }], usage: { input_tokens: 10 } } },
+});
+/** Модель говорит `ms` мс: транскрипт каждые 250 мс не даёт сигналу погаснуть. */
+const speak = (h: Harness, ms: number): void => {
+  for (let left = ms; left > 0; left -= 250) {
+    h.live(outputText('x', 0, 200));
+    h.advance(250);
+  }
+};
+const liveError = () => ({ type: 'error', error: { code: 'server_error', message: 'boom' } });
+
+describe('эмоция роя', () => {
+  it('Decisions-эмоция применяется, пока модель говорит, и возвращается к calm, когда она замолчала', async () => {
+    const h = await started();
+    expect(h.controller.snapshot().emotion).toBe('calm');
+    h.live(outputText());
+    h.live(emotionDecision('joy'));
+    expect(h.controller.snapshot().emotion).toBe('joy');
+    h.advance(1000); // 800 мс без транскрипта: модель замолчала
+    expect(h.controller.snapshot().modelPlaying).toBe(false);
+    expect(h.controller.snapshot().emotion).toBe('calm');
+  });
+
+  it('неуверенное решение и решение, пока модель молчит, лицо не меняют', async () => {
+    const h = await started();
+    h.live(emotionDecision('anger'));
+    expect(h.controller.snapshot().emotion).toBe('calm');
+    h.live(outputText());
+    h.live(emotionDecision('anger', 0.2));
+    expect(h.controller.snapshot().emotion).toBe('calm');
+  });
+
+  it('новая эмоция держится не меньше удержания: быстрая смена откладывается', async () => {
+    const h = await started();
+    h.live(outputText());
+    h.live(emotionDecision('joy'));
+    h.live(emotionDecision('sad'));
+    expect(h.controller.snapshot().emotion).toBe('joy');
+    speak(h, 1500); // модель продолжает говорить
+    expect(h.controller.snapshot().emotion).toBe('sad');
+  });
+
+  it('ошибка Live показывает error две секунды, потом возвращается желаемая эмоция', async () => {
+    const h = await started();
+    const changes = vi.fn();
+    h.controller.onChange(changes);
+    h.live(outputText());
+    h.live(emotionDecision('joy'));
+    h.live(liveError());
+    expect(h.controller.snapshot().emotion).toBe('error');
+    // Решение во время вспышки запоминается, но лицо остаётся error.
+    speak(h, 1500);
+    expect(h.controller.snapshot().emotion).toBe('error');
+    speak(h, 500);
+    expect(h.controller.snapshot().emotion).toBe('joy');
+    expect(changes).toHaveBeenCalled();
+  });
+
+  it('обрыв соединения: error две секунды после закрытия сессии, остановка пользователем вспышки не даёт', async () => {
+    const lost = await started();
+    lost.peer.connectionState = 'failed';
+    lost.peer.onconnectionstatechange?.();
+    expect(lost.controller.snapshot()).toMatchObject({ phase: 'idle', emotion: 'error' });
+    lost.advance(2000);
+    expect(lost.controller.snapshot().emotion).toBe('calm');
+
+    const stopped = await started();
+    stopped.live(liveError());
+    await stopped.controller.stop();
+    expect(stopped.controller.snapshot().emotion).toBe('calm');
+  });
+
+  it('отказ запуска показывает error, daily_limit и пустой ключ вспышки не дают', async () => {
+    const failed = makeHarness({ micFails: true });
+    await failed.controller.start();
+    expect(failed.controller.snapshot().emotion).toBe('error');
+    const limited = makeHarness({ prepare: { ok: false, code: 'limit_reached', message: 'Daily voice limit reached' } });
+    await limited.controller.start();
+    expect(limited.controller.snapshot().emotion).toBe('calm');
+  });
+});
+
+describe('checking', () => {
+  it('включается, пока job сессии в очереди или идёт, и гаснет с итогом или ожиданием подтверждения', async () => {
+    const h = await started();
+    expect(h.controller.snapshot().checking).toBe(false);
+    h.hostEmit('jobs.changed', { job: job({ state: 'queued', revision: 1, resultSummary: null }) });
+    expect(h.controller.snapshot().checking).toBe(true);
+    h.hostEmit('jobs.changed', { job: job({ state: 'running', revision: 2, resultSummary: null }) });
+    expect(h.controller.snapshot().checking).toBe(true);
+    h.hostEmit('jobs.changed', { job: job({ state: 'completed', revision: 3 }) });
+    expect(h.controller.snapshot().checking).toBe(false);
+    h.hostEmit('jobs.changed', { job: job({ jobId: 'job_2', state: 'needs_confirmation', revision: 1, delegationId: 'd2' }) });
+    expect(h.controller.snapshot().checking).toBe(false);
+  });
+
+  it('job чужой сессии не включает checking, конец сессии сбрасывает', async () => {
+    const h = await started();
+    h.hostEmit('jobs.changed', { job: job({ state: 'running', revision: 1, voiceSessionId: 'other' }) });
+    expect(h.controller.snapshot().checking).toBe(false);
+    h.hostEmit('jobs.changed', { job: job({ state: 'running', revision: 1 }) });
+    expect(h.controller.snapshot().checking).toBe(true);
+    await h.controller.stop();
+    expect(h.controller.snapshot().checking).toBe(false);
+  });
+});
+
+const report = (fields: Record<string, unknown>): Map<string, Record<string, unknown>> => new Map([[String(fields['type']) + String(fields['kind']), fields]]);
+function setStats(h: Harness, model: number | undefined, mic: number | undefined): void {
+  const next = new Map<string, Record<string, unknown>>();
+  next.set('in', { type: 'inbound-rtp', kind: 'audio', ...(model === undefined ? {} : { audioLevel: model }) });
+  next.set('in-video', { type: 'inbound-rtp', kind: 'video', audioLevel: 0.9 });
+  next.set('src', { type: 'media-source', kind: 'audio', ...(mic === undefined ? {} : { audioLevel: mic }) });
+  h.stats.current = next;
+}
+
+describe('громкость (getStats)', () => {
+  it('голос модели, пока он играет; микрофон, пока говорит человек; иначе 0', async () => {
+    const h = await started();
+    const seen: number[] = [];
+    h.controller.onLevel((level) => seen.push(level));
+    setStats(h, 0.4, 0.7);
+    await h.poll();
+    expect(h.controller.level()).toBe(0); // никто не говорит
+    h.live(inputText('hello'));
+    expect(h.controller.level()).toBe(0.7);
+    h.live(outputText());
+    expect(h.controller.level()).toBe(0.4); // модель важнее микрофона
+    h.advance(1000);
+    expect(h.controller.level()).toBe(0);
+    expect(seen).toEqual([0.7, 0.4, 0]);
+  });
+
+  it('заглушённый микрофон даёт 0, но голос модели слышен', async () => {
+    const h = await started();
+    setStats(h, 0.4, 0.7);
+    await h.poll();
+    h.live(inputText('hello'));
+    h.controller.setMuted(true);
+    expect(h.controller.level()).toBe(0);
+    h.live(outputText());
+    expect(h.controller.level()).toBe(0.4);
+    h.controller.setMuted(false);
+    h.advance(1000);
+    h.live(inputText('again'));
+    expect(h.controller.level()).toBe(0.7);
+  });
+
+  it('нет полей, мусор, сбой getStats и уровень вне диапазона дают 0 или границу', async () => {
+    const h = await started();
+    h.live(outputText());
+    setStats(h, undefined, undefined);
+    await h.poll();
+    expect(h.controller.level()).toBe(0);
+    h.stats.current = new Map([['x', { type: 'inbound-rtp', kind: 'audio', audioLevel: 'abc' }]]);
+    await h.poll();
+    expect(h.controller.level()).toBe(0);
+    setStats(h, 3, 0);
+    await h.poll();
+    expect(h.controller.level()).toBe(1);
+    h.stats.fail = true;
+    await h.poll();
+    expect(h.controller.level()).toBe(0);
+  });
+
+  it('микрофон: без media-source берётся outbound-rtp, потом track', async () => {
+    const h = await started();
+    h.live(inputText('hello'));
+    h.stats.current = new Map([['o', { type: 'outbound-rtp', kind: 'audio', audioLevel: 0.3 }]]);
+    await h.poll();
+    expect(h.controller.level()).toBe(0.3);
+    h.stats.current = new Map([['t', { type: 'track', kind: 'audio', remoteSource: false, audioLevel: 0.2 }]]);
+    await h.poll();
+    expect(h.controller.level()).toBe(0.2);
+    h.stats.current = report({ type: 'track', kind: 'audio', remoteSource: true, audioLevel: 0.9 });
+    await h.poll();
+    expect(h.controller.level()).toBe(0);
+  });
+
+  it('опрос не накладывается сам на себя', async () => {
+    const h = await started();
+    let release: () => void = () => {};
+    let requests = 0;
+    h.peer.getStats = () => {
+      requests += 1;
+      return new Promise((resolve) => (release = () => resolve(new Map())));
+    };
+    await h.poll();
+    await h.poll();
+    expect(requests).toBe(1);
+    release();
+    await flush();
+    await h.poll();
+    expect(requests).toBe(2);
+  });
+});
+
+describe('опрос громкости: жизненный цикл', () => {
+  it('без сессии опроса нет; в live идёт тик 50 мс', async () => {
+    const h = makeHarness();
+    expect(h.activeTicks()).toEqual([]);
+    expect(h.stats.calls).toBe(0);
+    await h.controller.start();
+    expect(h.activeTicks().sort((a, b) => a - b)).toEqual([50, 250]);
+    await h.poll();
+    expect(h.stats.calls).toBe(1);
+  });
+
+  it('до открытия канала опроса нет (подключение, отказ)', async () => {
+    const h = makeHarness({ neverOpens: true });
+    const pending = h.controller.start();
+    await flush();
+    expect(h.activeTicks()).toEqual([250]);
+    h.advance(15_000);
+    await pending;
+    expect(h.activeTicks()).toEqual([]);
+  });
+
+  it('stop() гасит опрос и обнуляет громкость', async () => {
+    const h = await started();
+    setStats(h, 0.5, 0.5);
+    await h.poll();
+    h.live(outputText());
+    expect(h.controller.level()).toBe(0.5);
+    await h.controller.stop();
+    expect(h.activeTicks()).toEqual([]);
+    expect(h.controller.level()).toBe(0);
+  });
+
+  it('закрытие хостом, обрыв и автозакрытие по тишине гасят опрос', async () => {
+    const closed = await started();
+    closed.hostEmit('voice.session.closed', { voiceSessionId: SESSION, reason: 'server' });
+    expect(closed.activeTicks()).toEqual([]);
+
+    const lost = await started();
+    lost.peer.connectionState = 'closed';
+    lost.peer.onconnectionstatechange?.();
+    expect(lost.activeTicks()).toEqual([]);
+
+    const idle = await started();
+    idle.advance(5 * 60_000);
+    await flush();
+    expect(idle.controller.snapshot().phase).toBe('idle');
+    expect(idle.activeTicks()).toEqual([]);
+  });
+
+  it('ответ getStats после закрытия сессии уровень не меняет', async () => {
+    const h = await started();
+    h.live(outputText());
+    let release: (stats: unknown) => void = () => {};
+    h.peer.getStats = () => new Promise((resolve) => (release = resolve));
+    await h.poll();
+    await h.controller.stop();
+    release(new Map([['in', { type: 'inbound-rtp', kind: 'audio', audioLevel: 0.8 }]]));
+    await flush();
+    expect(h.controller.level()).toBe(0);
   });
 });
