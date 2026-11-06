@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { S } from '../../../shared/strings.js';
-import type { VoiceAnalysis, VoiceFrame } from '../assistant/voice-features.js';
+import type { VoiceAnalysis, VoiceFrame } from '@parley/core/swarm';
 import type { LiveCallPhase, LiveController, LiveControllerEvent, LiveStartResult } from './controller.js';
 import { useLiveStore } from './store.js';
 

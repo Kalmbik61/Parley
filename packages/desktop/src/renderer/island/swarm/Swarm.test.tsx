@@ -2,10 +2,9 @@
 
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { swarmSpecFor } from './spec.js';
+import { swarmSpecFor, type VoiceFrame } from '@parley/core/swarm';
 import { HOST_IDLE } from '../assistant/store.js';
-import type { VoiceFrame } from '../assistant/voice-features.js';
-import * as engineModule from './engine.js';
+import * as engineModule from '@parley/core/swarm';
 import { Swarm } from './Swarm.js';
 
 const IDLE = swarmSpecFor(HOST_IDLE, 'idle', true);
@@ -101,7 +100,7 @@ describe('Swarm', () => {
     expect(voice).not.toHaveBeenCalled();
     frames.shift()!(1000);
     expect(voice).toHaveBeenCalled();
-    expect(step).toHaveBeenLastCalledWith(1000, ctx, false, 0, VOICE);
+    expect(step).toHaveBeenLastCalledWith(1000, expect.objectContaining({ begin: expect.any(Function), soul: expect.any(Function), end: expect.any(Function) }), false, 0, VOICE);
   });
 
   it('P1: мини-рой в покое — 0 кадров; pulse даёт кадры на длительность реакции, потом снова 0', () => {

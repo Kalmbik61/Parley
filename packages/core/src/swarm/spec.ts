@@ -4,17 +4,23 @@
  * силуэты лица по эмоциям, длительности переходов и выбор облика по фазе хоста и фазе ввода.
  */
 
-import type { AssistantState } from '@parley/protocol';
-import type { InputPhase } from '../assistant/store.js';
-import type { LiveCallPhase } from '../live/controller.js';
 
 export type SwarmPalette = 'amber' | 'coral' | 'gray';
 export type SwarmShape = 'dot' | 'cloud' | 'sphere' | 'face';
 export type SwarmFx = 'listen' | 'ring' | 'flow' | 'arc' | null;
 /** Эмоция лица — та же, что метка ответа хоста. */
-export type SwarmEmotion = AssistantState['mood'];
-/** Фаза ввода для облика: речь (`speaking`) и пауза после неё (`settling`) живут в острове, в `InputPhase`. */
-export type SwarmInput = InputPhase;
+export type SwarmEmotion = 'calm' | 'joy' | 'sad' | 'surprise' | 'anger' | 'error';
+/** Фаза хоста помощника — те же члены, что у `AssistantPhase` протокола (core протокол не импортирует: он сам зависит от core). */
+export type SwarmHostPhase = 'idle' | 'thinking' | 'tool' | 'answering' | 'awaiting-confirm' | 'error' | 'offline';
+/** Что облик берёт от `AssistantState`: фаза и эмоция ответа. Состояние протокола подходит структурно. */
+export interface SwarmHost {
+  phase: SwarmHostPhase;
+  mood: SwarmEmotion;
+}
+/** Фаза ввода для облика: речь (`speaking`) и пауза после неё (`settling`). Те же члены, что у `InputPhase` острова. */
+export type SwarmInput = 'idle' | 'listening' | 'transcribing' | 'speaking' | 'settling';
+/** Фаза звонка Live. Те же члены, что у `LiveCallPhase` острова. */
+export type SwarmLivePhase = 'idle' | 'connecting' | 'live' | 'closing';
 
 export interface SwarmSpec {
   shape: SwarmShape;
@@ -146,7 +152,7 @@ const BASE: SwarmSpec = { shape: 'cloud', fx: null, pal: 'amber', rot: 0.35, vis
  * хоста, затем речь, затем фаза хоста. Речь — лицо с эмоцией звучащего предложения (`sentenceMood`, #9 §6.7 L3), а
  * без неё — с эмоцией хода; в мини-виде лица нет — сфера с палитрой лица. В мини-виде облако рисуется точкой.
  */
-export function swarmSpecFor(host: AssistantState, input: SwarmInput, mini: boolean, sentenceMood?: SwarmEmotion): SwarmSpec {
+export function swarmSpecFor(host: SwarmHost, input: SwarmInput, mini: boolean, sentenceMood?: SwarmEmotion): SwarmSpec {
   let spec: SwarmSpec;
   if (input === 'listening' || input === 'transcribing') spec = { ...BASE, fx: 'listen' };
   else if (host.phase !== 'offline' && input === 'speaking') {
@@ -185,7 +191,7 @@ export function swarmSpecFor(host: AssistantState, input: SwarmInput, mini: bool
 
 /** Что рою нужно знать о Live-голосе: фаза звонка, сигналы речи, «проверяю» и эмоция модели. */
 export interface SwarmLive {
-  phase: LiveCallPhase;
+  phase: SwarmLivePhase;
   humanSpeaking: boolean;
   modelPlaying: boolean;
   /** Есть Request этой сессии без доставленного или завершённого итога. */
@@ -216,7 +222,7 @@ export function swarmSpecForLive(live: SwarmLive, mini: boolean): SwarmSpec {
 }
 
 /** Ореол за большим роем: цвет палитры и прозрачность (подтверждение 0.32, нет связи 0.07, иначе 0.17). */
-export function haloFor(spec: SwarmSpec, host: AssistantState): { rgb: string; alpha: number } {
+export function haloFor(spec: SwarmSpec, host: SwarmHost): { rgb: string; alpha: number } {
   const alpha = host.phase === 'awaiting-confirm' ? 0.32 : host.phase === 'offline' ? 0.07 : 0.17;
   return { rgb: PAL[spec.pal].halo, alpha };
 }

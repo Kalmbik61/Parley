@@ -11,8 +11,8 @@
  * Событие «рой перешёл в done» даёт реакцию `REACTION_FOR.done`, новый сдавший участник (`data-handed` вырос) — `glint`.
  */
 
-import { createSwarm, type SwarmEngine } from '../../src/renderer/island/swarm/engine.js';
-import { REACTION_FOR, type SwarmSpec } from '../../src/renderer/island/swarm/spec.js';
+import { createSwarm, REACTION_FOR, type SwarmEngine, type SwarmSink, type SwarmSpec } from '../../../core/src/swarm/index.js';
+import { createCanvasSink } from '../../src/renderer/island/swarm/canvas-sink.js';
 
 type Status = 'running' | 'collecting' | 'done' | 'failed' | 'cancelled';
 
@@ -35,7 +35,7 @@ interface Entry {
   group: string;
   canvas: HTMLCanvasElement;
   engine: SwarmEngine;
-  ctx: CanvasRenderingContext2D | null;
+  sink: SwarmSink | null;
   size: number;
   status: Status | null;
   handed: number;
@@ -61,14 +61,15 @@ function make(key: string, group: string, size: number): Entry {
   canvas.setAttribute('aria-hidden', 'true');
   const ctx = canvas.getContext('2d');
   ctx?.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const sink = ctx === null || ctx === undefined ? null : createCanvasSink(ctx);
   // Параметры мини-роя капсулы (`CapsuleSwarm`), подогнанные под размер иконки.
   // `d` — на весь холст: в иконке рой крупнее, чем в капсуле (там 0.62), иначе на 14–16 px видна лишь точка.
   const engine = createSwarm(size >= 20 ? 150 : 110, { width: size, height: size, d: Math.round(size * 0.9), cy: size / 2, k: 0.15, minPx: 1.8, seed: 5 });
-  return { key, seq: seq++, group, canvas, engine, ctx, size, status: null, handed: 0, live: false, last: 0, seen: true };
+  return { key, seq: seq++, group, canvas, engine, sink, size, status: null, handed: 0, live: false, last: 0, seen: true };
 }
 
 function paintStatic(entry: Entry, now: number): void {
-  entry.engine.frame(now, entry.ctx, true, 0);
+  entry.engine.frame(now, entry.sink, true, 0);
 }
 
 function tick(now: number): void {
@@ -77,7 +78,7 @@ function tick(now: number): void {
     const wanted = entry.live && !reduced;
     if ((wanted || entry.engine.needsFrame()) && now - entry.last >= (wanted ? 1000 / FPS - 2 : 14)) {
       entry.last = now;
-      entry.engine.frame(now, entry.ctx, reduced, 0);
+      entry.engine.frame(now, entry.sink, reduced, 0);
     }
   }
 }

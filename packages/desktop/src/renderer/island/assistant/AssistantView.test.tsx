@@ -9,11 +9,11 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AssistantProposal, AssistantState } from '@parley/protocol';
 import { S } from '../../../shared/strings.js';
-import * as engineModule from '../swarm/engine.js';
+import * as engineModule from '@parley/core/swarm';
 import { AssistantView, type AssistantViewProps } from './AssistantView.js';
 import { hotkeyLabel } from './labels.js';
 import { HOST_IDLE } from './store.js';
-import type { VoiceFrame } from './voice-features.js';
+import type { VoiceFrame } from '@parley/core/swarm';
 
 const PROPOSAL = { id: 'p1', target: 'Auth', where: 'Parley · Backend', kind: 'note', text: 'Please start with the tests.', wake: false } as const;
 

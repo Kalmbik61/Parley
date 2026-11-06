@@ -83,7 +83,7 @@ import { createLiveController } from './live/controller.js';
 import { createLiveDelegation } from './live/delegation.js';
 import { S } from '../../shared/strings.js';
 import { useLiveStore } from './live/store.js';
-import { createVoiceAnalysis, type VoiceFrame } from './assistant/voice-features.js';
+import { createVoiceAnalysis, type VoiceFrame, REACTION_FOR, type SwarmEvent, type SwarmPulse } from '@parley/core/swarm';
 import { useConsentsStore } from './consents/store.js';
 import { IslandTab } from './IslandTab.js';
 import { IslandView, sessionKeyOf, type IslandAssistantProps } from './IslandView.js';
@@ -94,7 +94,6 @@ import { useIslandRequests } from './requests.js';
 import { createProgressPoller, type ProgressState } from './progress.js';
 import { islandSound } from './sound/graph.js';
 import { CUE_PRIORITY } from './sound/cues.js';
-import { REACTION_FOR, type SwarmEvent, type SwarmPulse } from './swarm/spec.js';
 import { OUTCOME_SIGNAL, useIslandCues } from './useIslandCues.js';
 import { movePendingSelection, pendingKeyCommand, pendingNavigation, pendingRoomNavigation, reconcilePendingNavigation, type PendingNavigationState } from './navigation.js';
 

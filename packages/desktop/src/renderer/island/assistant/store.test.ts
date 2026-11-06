@@ -4,7 +4,7 @@ import type { AssistantState } from '@parley/protocol';
 import type { IslandSpeakRequest, IslandSpeechConfig, TtsEngineState } from '../../../shared/island.js';
 import type { Speaker } from './speaker.js';
 import { assistantBusy, createAssistantStore, HOST_IDLE, SENT_DELAY_MS, SETTLE_MS, SPEAK_FINAL_GRACE_MS, SPEECH_START_TIMEOUT_MS, type AssistantDeps } from './store.js';
-import type { VoiceAnalysis, VoiceFrame } from './voice-features.js';
+import type { VoiceAnalysis, VoiceFrame } from '@parley/core/swarm';
 
 const CONFIG = {
   enabled: true, provider: null, model: null, language: 'ru' as const, hotkey: 'Alt+Space', voice: { enabled: true, model: 'small' as const },

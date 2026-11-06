@@ -4,8 +4,8 @@
  * снимаются с записывающего контекста: центр каждого `drawImage` и `globalAlpha` в момент вызова.
  */
 
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { createSwarm, type SwarmEngine, type SwarmOptions } from './engine.js';
+import { describe, expect, it } from 'vitest';
+import { createSwarm, type SwarmEngine, type SwarmOptions, type SwarmSink } from './engine.js';
 import { REACTION_FOR, type SwarmReaction, type SwarmSpec } from './spec.js';
 
 const BIG = { width: 420, height: 136, d: 86, cy: 62, k: 0.058, minPx: 2.4 };
@@ -24,22 +24,19 @@ interface Dot {
   a: number;
 }
 
-/** Записывающий контекст: центры душ и их яркость за последний кадр. */
-function recorder(): { ctx: CanvasRenderingContext2D; dots: Dot[] } {
+/** Записывающий приёмник: центры душ и их яркость за последний кадр. */
+function recorder(): { sink: SwarmSink; dots: Dot[] } {
   const dots: Dot[] = [];
-  let alpha = 1;
-  const ctx = {
-    globalCompositeOperation: '',
-    get globalAlpha() {
-      return alpha;
+  const sink: SwarmSink = {
+    begin: () => {
+      dots.splice(0);
     },
-    set globalAlpha(v: number) {
-      alpha = v;
+    soul: (_pal, _color, x, y, size, alpha) => {
+      dots.push({ x: x + size / 2, y: y + size / 2, a: alpha });
     },
-    clearRect: () => dots.splice(0),
-    drawImage: (_img: unknown, x: number, y: number, w: number, h: number) => dots.push({ x: x + w / 2, y: y + h / 2, a: alpha }),
+    end: () => undefined,
   };
-  return { ctx: ctx as unknown as CanvasRenderingContext2D, dots };
+  return { sink, dots };
 }
 
 interface Rig {
@@ -51,15 +48,15 @@ interface Rig {
 /** Рой в облике `spec` с 0 мс и кадром в 3000 мс, когда переходы кончились; дальше кадры по `at`. */
 function rig(options: SwarmOptions, spec: SwarmSpec, reduced = false, count = 300): Rig {
   const engine = createSwarm(count, options);
-  const { ctx, dots } = recorder();
+  const { sink, dots } = recorder();
   engine.setSpec(spec, 0, reduced);
-  engine.frame(0, ctx, reduced, 0);
-  engine.frame(3000, ctx, reduced, 0);
+  engine.frame(0, sink, reduced, 0);
+  engine.frame(3000, sink, reduced, 0);
   return {
     engine,
     dots,
     at: (t) => {
-      engine.frame(t, ctx, reduced, 0);
+      engine.frame(t, sink, reduced, 0);
       return dots.map((d) => ({ ...d }));
     },
   };
@@ -82,19 +79,6 @@ const maxShift = (a: Dot[], b: Dot[]): number => Math.max(...a.map((d, i) => Mat
 const centroid = (dots: Dot[]): { x: number; y: number } => ({
   x: dots.reduce((s, d) => s + d.x, 0) / dots.length,
   y: dots.reduce((s, d) => s + d.y, 0) / dots.length,
-});
-
-beforeAll(() => {
-  // Спрайтам нужен 2d-контекст документа; jsdom его не даёт — подставляем заглушку.
-  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
-    createRadialGradient: () => ({ addColorStop: () => undefined }),
-    fillRect: () => undefined,
-    fillStyle: '',
-  } as unknown as CanvasRenderingContext2D);
-});
-
-afterAll(() => {
-  vi.restoreAllMocks();
 });
 
 describe('реакции роя', () => {

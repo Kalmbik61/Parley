@@ -29,10 +29,9 @@ import { Button } from '../../ui/button.js';
 import { levelWidth } from '../../voice/level.js';
 import { formatElapsed, useElapsed } from '../../voice/MicButton.js';
 import { Swarm } from '../swarm/Swarm.js';
-import { haloFor, liveActive, swarmSpecFor, swarmSpecForLive, type SwarmEmotion, type SwarmPulse } from '../swarm/spec.js';
+import { haloFor, liveActive, swarmSpecFor, swarmSpecForLive, type SwarmEmotion, type SwarmPulse, type VoiceFrame } from '@parley/core/swarm';
 import { hotkeyLabel, statusLabel } from './labels.js';
 import { ASK_MAX, type Exchange, type InputPhase, type QueuedMessage } from './store.js';
-import type { VoiceFrame } from './voice-features.js';
 
 export interface AssistantViewProps {
   host: AssistantState;

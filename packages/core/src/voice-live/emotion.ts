@@ -9,7 +9,7 @@
  * - модель замолчала или сессия закончилась — снова `calm`.
  * Ошибку контроллера (`error`) этот модуль не знает: её показывает стор, и она приходит только с нашей стороны.
  */
-import type { LiveEmotion } from '@parley/core/voice-live';
+import type { LiveEmotion } from './live-events.js';
 
 export const EMOTION_HOLD_MS = 1500;
 export const EMOTION_MIN_CONFIDENCE = 0.5;

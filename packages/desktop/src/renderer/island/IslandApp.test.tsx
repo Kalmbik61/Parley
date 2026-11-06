@@ -38,7 +38,7 @@ import { createSpeaker } from './assistant/speaker.js';
 import { HOST_IDLE, useAssistantStore } from './assistant/store.js';
 import type { LiveController, LiveControllerEvent, LiveStartResult } from './live/controller.js';
 import { useLiveStore } from './live/store.js';
-import { createVoiceAnalysis } from './assistant/voice-features.js';
+import { createVoiceAnalysis } from '@parley/core/swarm';
 import { useConsentsStore } from './consents/store.js';
 import { sessionLabels } from './model.js';
 import { PULL_EXPAND_PX } from './IslandTab.js';
@@ -46,7 +46,7 @@ import { useIslandReplies } from './replies.js';
 import { useIslandRequests } from './requests.js';
 import { CUE_COOLDOWN_MS, CUE_GAP_MS } from './sound/cues.js';
 import { islandSound } from './sound/graph.js';
-import * as engineModule from './swarm/engine.js';
+import * as engineModule from '@parley/core/swarm';
 import { createIslandController, HOVER_POLL_MS } from '../../main/island/window.js';
 import type { Rect } from '../../main/island/placement.js';
 
@@ -73,8 +73,8 @@ vi.mock('./assistant/speaker.js', () => ({
     };
   }),
 }));
-vi.mock('./assistant/voice-features.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('./assistant/voice-features.js')>();
+vi.mock('@parley/core/swarm', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@parley/core/swarm')>();
   return { ...actual, createVoiceAnalysis: vi.fn(actual.createVoiceAnalysis) };
 });
 

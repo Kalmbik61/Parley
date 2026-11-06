@@ -1,6 +1,6 @@
 /**
- * Движок роя душ на Canvas 2D: порт класса `Swarm` из одобренного макета island-mockup.html (спека 2026-10-14,
- * раздел 9). Без React; рисует через переданный контекст (`null` — только шаг, для тестов и jsdom).
+ * Движок роя душ: порт класса `Swarm` из одобренного макета island-mockup.html (спека 2026-10-14,
+ * раздел 9). Без React и DOM; рисует через приёмник `SwarmSink` (`null` — только шаг, для тестов); спрайты и смешение — у платформы.
  * Душа — точка со спрайтом «ядро + мягкое свечение»; формы: точка, облако пятен, сфера Фибоначчи с короной-кольцом,
  * лицо (два глаза и рот из тех же душ, эмоции — таблица `EMO`); эффекты: слушание (сжатие по громкости и волна),
  * кольцо подтверждения, поток ответа, дуга инструмента. Отличия лица от макета: моргание — на втором потоке
@@ -15,8 +15,8 @@
  * меняют только отрисовку относительно `cx`/`cy` и к концу реакции сходят на нет; положения `souls` не трогают.
  */
 
-import type { Visemes, VoiceFrame } from '../assistant/voice-features.js';
-import { BLOBS, DUR, EMO, PAL, type FaceSpec, type SwarmPalette, type SwarmReaction, type SwarmSpec } from './spec.js';
+import type { Visemes, VoiceFrame } from './voice-features.js';
+import { BLOBS, DUR, EMO, type FaceSpec, type SwarmPalette, type SwarmReaction, type SwarmSpec } from './spec.js';
 
 export interface SwarmOptions {
   width: number;
@@ -34,13 +34,24 @@ export interface SwarmOptions {
   voiceMode?: 'loudness' | 'full';
 }
 
+/**
+ * Приёмник кадра: рисует платформа (canvas острова, Skia телефона). Порядок вызовов и итоговая альфа — в движке;
+ * приёмник отвечает за спрайты и аддитивное смешение.
+ */
+export interface SwarmSink {
+  begin(width: number, height: number): void;
+  /** `x`, `y` — левый верхний угол спрайта в пикселях, `size` — сторона, `alpha` — итоговая прозрачность. */
+  soul(pal: SwarmPalette, color: number, x: number, y: number, size: number, alpha: number): void;
+  end(): void;
+}
+
 export interface SwarmEngine {
   setSpec(spec: SwarmSpec, now: number, reducedMotion: boolean): void;
   /**
-   * Шаг и отрисовка одного кадра; `ctx` null — только шаг (тесты, jsdom). `mic` — громкость 0..1 для fx listen,
+   * Шаг и отрисовка одного кадра в приёмник; `sink` null — только шаг (тесты). `mic` — громкость 0..1 для fx listen,
    * `voice` — кадр голоса для рта лица; `null` — голос молчит, рот закрыт.
    */
-  frame(now: number, ctx: CanvasRenderingContext2D | null, reducedMotion: boolean, mic: number, voice?: VoiceFrame | null): void;
+  frame(now: number, sink: SwarmSink | null, reducedMotion: boolean, mic: number, voice?: VoiceFrame | null): void;
   /** Нужен ли кадр: идёт переход или реакция, сменилась палитра или спека. */
   needsFrame(): boolean;
   /**
@@ -194,48 +205,6 @@ interface Target {
   sm: number;
   /** Индекс цвета. */
   c: number;
-}
-
-type Sprites = Record<SwarmPalette, HTMLCanvasElement[]>;
-
-/** Спрайт души: яркое ядро и мягкое свечение, 48×48; `null` — у документа нет 2d-контекста (jsdom). */
-function sprite(hex: string): HTMLCanvasElement | null {
-  const c = document.createElement('canvas');
-  c.width = c.height = 48;
-  const x = c.getContext('2d');
-  if (x === null || x === undefined) return null;
-  const n = parseInt(hex.slice(1), 16);
-  const r = n >> 16;
-  const g = (n >> 8) & 255;
-  const b = n & 255;
-  const gr = x.createRadialGradient(24, 24, 0, 24, 24, 24);
-  const k = (a: number, m: number): string => `rgba(${(r + (255 - r) * m) | 0},${(g + (255 - g) * m) | 0},${(b + (255 - b) * m) | 0},${a})`;
-  gr.addColorStop(0, k(1, 0.55));
-  gr.addColorStop(0.12, k(0.9, 0.2));
-  gr.addColorStop(0.35, k(0.3, 0));
-  gr.addColorStop(1, k(0, 0));
-  x.fillStyle = gr;
-  x.fillRect(0, 0, 48, 48);
-  return c;
-}
-
-let spriteCache: Sprites | null = null;
-
-/** Спрайты всех палитр, общие для всех роёв; создаются при первом кадре с реальным контекстом. */
-function sprites(): Sprites | null {
-  if (spriteCache !== null) return spriteCache;
-  const out: Partial<Sprites> = {};
-  for (const name of Object.keys(PAL) as SwarmPalette[]) {
-    const list: HTMLCanvasElement[] = [];
-    for (const hex of PAL[name].colors) {
-      const made = sprite(hex);
-      if (made === null) return null;
-      list.push(made);
-    }
-    out[name] = list;
-  }
-  spriteCache = out as Sprites;
-  return spriteCache;
 }
 
 /** Наименьший штрих рта-линии в долях d до масштаба лица (#9 §6.7: «рот всегда читается»). */
@@ -591,7 +560,7 @@ class SwarmImpl implements SwarmEngine {
     return 1 - 0.94 * k;
   }
 
-  frame(now: number, ctx: CanvasRenderingContext2D | null, reducedMotion: boolean, mic: number, voice: VoiceFrame | null = null): void {
+  frame(now: number, sink: SwarmSink | null, reducedMotion: boolean, mic: number, voice: VoiceFrame | null = null): void {
     const E = this.sp;
     if (E === null) return;
     const rm = reducedMotion;
@@ -664,13 +633,7 @@ class SwarmImpl implements SwarmEngine {
     const cloudSpin = E.shape === 'sphere' ? 0 : spin;
     this.cr = Math.cos(rotS);
     this.sr = Math.sin(rotS);
-    const spr = ctx === null ? null : sprites();
-    if (ctx !== null) {
-      ctx.clearRect(0, 0, this.W, this.H);
-      ctx.globalCompositeOperation = 'lighter';
-    }
-    const sa = spr === null ? null : spr[this.palTo];
-    const sb = spr === null ? null : spr[this.palFrom];
+    if (sink !== null) sink.begin(this.W, this.H);
     const pt = this.palT;
     const o = this.o;
     const dim = E.dim * (1 + 0.8 * this.flash) * lit;
@@ -695,7 +658,7 @@ class SwarmImpl implements SwarmEngine {
       s.y = y;
       s.z = z;
       s.v += ((s.rk < E.vis ? 1 : 0) - s.v) * Math.min(1, dt * 5);
-      if (ctx === null || sa === null || sb === null) continue;
+      if (sink === null) continue;
       // Слой реакций: закрутка (внутренние души ведут), масштаб и сдвиг — относительно центра роя.
       let rx = x;
       let ry = y;
@@ -725,17 +688,14 @@ class SwarmImpl implements SwarmEngine {
       if (al < 0.01) continue;
       const c = o.c;
       if (pt >= 1) {
-        ctx.globalAlpha = al;
-        ctx.drawImage(sa[c]!, px - D / 2, py - D / 2, D, D);
+        sink.soul(this.palTo, c, px - D / 2, py - D / 2, D, al);
       } else {
         // Кроссфейд палитры за 0,3 с.
-        ctx.globalAlpha = al * pt;
-        ctx.drawImage(sa[c]!, px - D / 2, py - D / 2, D, D);
-        ctx.globalAlpha = al * (1 - pt);
-        ctx.drawImage(sb[c]!, px - D / 2, py - D / 2, D, D);
+        sink.soul(this.palTo, c, px - D / 2, py - D / 2, D, al * pt);
+        sink.soul(this.palFrom, c, px - D / 2, py - D / 2, D, al * (1 - pt));
       }
     }
-    if (ctx !== null) ctx.globalAlpha = 1;
+    if (sink !== null) sink.end();
   }
 }
 
