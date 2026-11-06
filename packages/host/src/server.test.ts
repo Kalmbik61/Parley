@@ -2090,7 +2090,7 @@ describe('роль remote: запуск с телефона (A2b, спека м�
   });
 });
 
-describe('платный голос remoteVoice: гейт только для voice.session.prepare', () => {
+describe('платный голос за «Speak answers»: гейт только для voice.session.prepare', () => {
   const VOICE = ['jobs.submit', 'jobs.get', 'jobs.cancel', 'jobs.ackInline', 'voice.session.close', 'voice.usage.get'];
 
   async function voiceServer(initial: boolean) {
@@ -2108,7 +2108,7 @@ describe('платный голос remoteVoice: гейт только для vo
       notificationHandlers: {},
       registerClient: () => {},
       unregisterClient: () => {},
-      remoteVoice: () => state.on,
+      phoneVoice: () => state.on,
     });
     const socketPath = path.join(home, 'voice.sock');
     await new Promise<void>((resolve) => server.listen(socketPath, resolve));
@@ -2172,7 +2172,7 @@ describe('платный голос remoteVoice: гейт только для vo
     s.close();
   });
 
-  it('настоящий хост: remoteVoice по умолчанию выключен, prepare для remote закрыт, остальное голосовое открыто', async () => {
+  it('настоящий хост: без assistant.configure «Speak answers» выключен, prepare для remote закрыт, остальное голосовое открыто', async () => {
     const { home, token } = await boot();
     const socket = connectRaw(hostPaths(home).socket);
     await waitConnected(socket.socket);
@@ -2180,6 +2180,56 @@ describe('платный голос remoteVoice: гейт только для vo
     expect(methods).not.toContain('voice.session.prepare');
     for (const name of ['voice.session.close', 'voice.usage.get', 'jobs.submit', 'jobs.get', 'cards.list']) expect(methods, name).toContain(name);
     socket.close();
+  });
+
+  const configure = (speak: boolean) => ({ enabled: false, provider: null, model: null, language: 'en', voiceModel: null, speak });
+  const remoteMethods = async (home: string, token: string): Promise<{ client: TestClient; methods: string[] }> => {
+    const client = connectRaw(hostPaths(home).socket);
+    await waitConnected(client.socket);
+    return { client, methods: ((await hello(client, token, { client: 'remote' })).result as { methods: string[] }).methods };
+  };
+  const call = async (client: TestClient, id: number, method: string, params: unknown): Promise<RawMessage> => {
+    client.send({ id, method, params });
+    for (;;) {
+      const message = await client.next();
+      if (message.id === id) return message;
+    }
+  };
+
+  it('настоящий хост: speak: true от desktop открывает prepare новым remote; ключа нет — no_key', async () => {
+    const { home, token } = await boot();
+    const desktop = connectRaw(hostPaths(home).socket);
+    await waitConnected(desktop.socket);
+    await hello(desktop, token, { client: 'desktop' });
+    expect((await call(desktop, 1, 'assistant.configure', configure(true))).error).toBeUndefined();
+
+    const remote = await remoteMethods(home, token);
+    expect(remote.methods).toContain('voice.session.prepare');
+    const reply = await call(remote.client, 2, 'voice.session.prepare', { sdp: 'v=0' });
+    expect(reply.error).toBeUndefined();
+    expect(reply.result).toMatchObject({ ok: false, code: 'no_key' });
+    remote.client.close();
+    desktop.close();
+  });
+
+  it('настоящий хост: смена speak через assistant.configure закрывает открытые remote-соединения', async () => {
+    const { home, token } = await boot();
+    const desktop = connectRaw(hostPaths(home).socket);
+    await waitConnected(desktop.socket);
+    await hello(desktop, token, { client: 'desktop' });
+
+    const first = await remoteMethods(home, token);
+    expect((await call(desktop, 1, 'assistant.configure', configure(true))).error).toBeUndefined();
+    await waitClosed(first.client.socket);
+
+    const second = await remoteMethods(home, token);
+    expect(second.methods).toContain('voice.session.prepare');
+    // Повтор того же значения соединений не трогает.
+    expect((await call(desktop, 2, 'assistant.configure', configure(true))).error).toBeUndefined();
+    expect(second.client.socket.destroyed).toBe(false);
+    expect((await call(desktop, 3, 'assistant.configure', configure(false))).error).toBeUndefined();
+    await waitClosed(second.client.socket);
+    desktop.close();
   });
 });
 

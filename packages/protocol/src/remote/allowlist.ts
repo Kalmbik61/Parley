@@ -49,7 +49,7 @@ const A_METHODS = [
   'rooms.archive',
   'rooms.delete',
   // Голос, jobs и карточки помощника с телефона (план голоса B3): `voice.session.prepare` хост пускает только при
-  // включённом `remoteVoice`.
+  // включённом на Mac «Speak answers» (ключ OpenAI проверяет сам метод: `no_key`).
   'jobs.submit',
   'jobs.get',
   'jobs.cancel',

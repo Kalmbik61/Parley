@@ -1486,8 +1486,6 @@ export const S = {
     },
     /** Settings → Remote access (mobile app plan A10, spec 12). */
     remote: {
-      allowVoice: 'Allow paid voice from the phone',
-      allowVoiceHint: 'Off by default. On: the phone can start voice sessions billed to your OpenAI key, within the daily limit. The key itself never leaves this Mac.',
       enabled: 'Remote access (beta)',
       enabledHint: 'Lets your paired phone see and answer your agents while this Mac is on. Traffic goes through your own relay, end-to-end encrypted.',
       allowCreate: 'Allow starting and messaging agents from the phone',

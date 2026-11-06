@@ -147,7 +147,7 @@ describe('fallbackScreen (R15, VO-07)', () => {
   it('нет ключа на Mac ведёт на R15 даже в idle', () => {
     expect(fallbackScreen(m('idle'), { noKey: true })).toEqual({ reason: 'no_key' });
   });
-  it('remoteVoice выключен ведёт на R15 с отдельной причиной', () => {
+  it('«Speak answers» выключен ведёт на R15 с отдельной причиной', () => {
     expect(fallbackScreen(m('idle'), { remoteVoiceOff: true, noKey: true })).toEqual({ reason: 'remote_voice_off' });
   });
   it('в обычных состояниях R15 не нужен', () => {

@@ -20,7 +20,7 @@ export interface FallbackInput {
   voice: VoiceModel;
   /** Соединение с Mac в состоянии ready. */
   reachable: boolean;
-  /** `voice.session.prepare` есть в hello.methods (включён remoteVoice). */
+  /** `voice.session.prepare` есть в hello.methods (на Mac включён «Speak answers»). */
   canUseVoice: boolean;
   /** Код последнего отказа `start()`; `null` — отказа нет. */
   failure: LiveFailure | null;
@@ -48,7 +48,7 @@ export function chooseFallback(input: FallbackInput): FallbackView | null {
     return { reason: 'mac_unreachable', title: 'Mac not reachable', body: `Voice needs your Mac. ${WRITE}`, retry: false };
   }
   if (!canUseVoice) {
-    return { reason: 'voice_off', title: 'Voice is switched off on the Mac', body: `Turn on phone voice in Parley on the Mac. ${WRITE}`, retry: false };
+    return { reason: 'voice_off', title: 'Speak answers is off on the Mac', body: `Turn on Speak answers in Parley on the Mac. ${WRITE}`, retry: false };
   }
   if (failure === 'no_key') {
     return { reason: 'no_key', title: 'No OpenAI key on the Mac', body: `Add the key in Parley on the Mac. ${WRITE}`, retry: true };

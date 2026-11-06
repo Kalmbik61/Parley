@@ -149,7 +149,7 @@ export type FallbackReason = 'limit_reached' | 'no_key' | 'remote_voice_off';
 export interface VoiceAvailability {
   /** На Mac нет ключа OpenAI. */
   noKey?: boolean;
-  /** Настройка remoteVoice на Mac выключена («голос с телефона выключен»). */
+  /** «Speak answers» на Mac выключен («голос с телефона выключен»). */
   remoteVoiceOff?: boolean;
 }
 
