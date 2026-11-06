@@ -29,10 +29,9 @@ export function createVoiceHandlers(jobs: Jobs | undefined, voice: VoiceDeps | u
     handlers['jobs.cancel'] = cancel as AnyHandler;
   }
   if (voice !== undefined) {
-    // И остров, и телефон (`remote`) получают инструкции и клиентскую делегацию: оба имеют мост делегаций. Эмоции нужны
-    // только острову: телефону триггер Decisions не отдаём. Доступ удалённого клиента решает `remoteVoice` (гейт в server.ts).
-    const prepare: Handler<'voice.session.prepare'> = (params, request) =>
-      voice.service.prepare(params.sdp, liveSessionConfig({ emotion: request.client.role !== 'remote' }));
+    // И остров, и телефон (`remote`) получают одну и ту же сессию: инструкции, клиентскую делегацию и триггер эмоции
+    // (рой телефона показывает эмоции, как остров). Доступ удалённого клиента решает `remoteVoice` (гейт в server.ts).
+    const prepare: Handler<'voice.session.prepare'> = (params) => voice.service.prepare(params.sdp, liveSessionConfig());
     const close: Handler<'voice.session.close'> = async (params) => ({ closed: await voice.service.close(params.voiceSessionId) });
     const usage: Handler<'voice.usage.get'> = async () => voice.usage();
     handlers['voice.session.prepare'] = prepare as AnyHandler;
