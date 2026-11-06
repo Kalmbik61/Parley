@@ -1,12 +1,12 @@
 /**
- * Движок роя без canvas (`ctx = null`): детерминизм, границы облака, радиус сферы, лицо, переходы и reduced motion;
+ * Движок роя без отрисовки (`sink = null`): детерминизм, границы облака, радиус сферы, лицо, переходы и reduced motion;
  * формы рта по кадру голоса (L1, F1), пороги «рот не пропадает» (F5) и интонация (L2: глаза, моргание в паузе, импульс
  * и яркость — последние на поддельном контексте).
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { VoiceFrame, Visemes } from '../assistant/voice-features.js';
-import { createSwarm, type SwarmEngine, type SwarmOptions } from './engine.js';
+import type { VoiceFrame, Visemes } from './voice-features.js';
+import { createSwarm, type SwarmEngine, type SwarmOptions, type SwarmSink } from './engine.js';
 import { DUR, EMO, type SwarmEmotion, type SwarmSpec } from './spec.js';
 
 const OPTIONS = { width: 420, height: 136, d: 86, cy: 62, k: 0.058, minPx: 2.4 };
@@ -407,21 +407,17 @@ const eye = (engine: SwarmEngine, role: 0 | 1): { w: number; h: number; y: numbe
   return { w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys), y: ys.reduce((a, v) => a + v, 0) / ys.length };
 };
 
-/** Поддельный 2d-контекст: каждое `drawImage` пишет яркость (`globalAlpha`) и размер спрайта. */
-function recordingContext(): { ctx: CanvasRenderingContext2D; draws: Array<{ alpha: number; size: number }> } {
+/** Записывающий приёмник: каждая душа пишет яркость и размер спрайта. */
+function recordingSink(): { sink: SwarmSink; draws: Array<{ alpha: number; size: number }> } {
   const draws: Array<{ alpha: number; size: number }> = [];
-  const ctx = {
-    globalAlpha: 1,
-    globalCompositeOperation: '',
-    fillStyle: '',
-    clearRect: vi.fn(),
-    fillRect: vi.fn(),
-    createRadialGradient: () => ({ addColorStop: vi.fn() }),
-    drawImage(_img: unknown, _x: number, _y: number, w: number) {
-      draws.push({ alpha: this.globalAlpha, size: w });
+  const sink: SwarmSink = {
+    begin: () => undefined,
+    soul: (_pal, _color, _x, _y, size, alpha) => {
+      draws.push({ alpha, size });
     },
+    end: () => undefined,
   };
-  return { ctx: ctx as unknown as CanvasRenderingContext2D, draws };
+  return { sink, draws };
 }
 
 describe('лицо: интонация по голосу (L2, F2)', () => {
@@ -471,12 +467,11 @@ describe('лицо: интонация по голосу (L2, F2)', () => {
   });
 
   it('импульс: души +10 % размера и +45 % яркости; громче — ярче ×(0,9 + 0,25·loud); не в режиме громкости и не при reduced motion', () => {
-    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(() => recordingContext().ctx as never);
     const draw = (frame: VoiceFrame, voiceMode?: SwarmOptions['voiceMode'], reduced = false): Array<{ alpha: number; size: number }> => {
       const engine = createSwarm(300, { ...OPTIONS, ...(voiceMode === undefined ? {} : { voiceMode }) });
       engine.setSpec(face('calm'), 0, reduced);
-      const { ctx, draws } = recordingContext();
-      engine.frame(0, ctx, reduced, 0, frame);
+      const { sink, draws } = recordingSink();
+      engine.frame(0, sink, reduced, 0, frame);
       return draws;
     };
     const ratios = (a: ReadonlyArray<{ alpha: number; size: number }>, b: ReadonlyArray<{ alpha: number; size: number }>): { alpha: number[]; size: number[] } => {

@@ -9,3 +9,5 @@ export * from './speech-queue.js';
 export * from './status.js';
 export * from './idle-close.js';
 export * from './telemetry.js';
+export * from './live-events.js';
+export * from './emotion.js';

@@ -299,6 +299,8 @@ export const assistantMethodSchemas = {
     voiceGender: z.enum(['female', 'male', 'neutral']).optional(),
     /** Провайдер по умолчанию для новых агентов помощника; `null` — первый готовый. Старый хост поле молча отбросит. */
     defaultProvider: z.string().min(1).nullable().optional(),
+    /** «Speak answers» на Mac. Без поля — выключено: от него зависит, открыт ли платный голос телефону. */
+    speak: z.boolean().optional(),
   }),
 } as const;
 

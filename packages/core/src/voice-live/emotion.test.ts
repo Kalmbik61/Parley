@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createEmotionSmoother, EMOTION_HOLD_MS, EMOTION_MIN_CONFIDENCE, isConfidentEmotion, type EmotionDecision, type EmotionSmoother } from './emotion.js';
-import type { LiveEmotion } from './events.js';
+import type { LiveEmotion } from './live-events.js';
 
 function setup() {
   let now = 10_000;

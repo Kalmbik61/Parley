@@ -1593,6 +1593,28 @@ describe('голос, jobs и карточки с телефона (план г�
     expect(JSON.stringify(got[0])).not.toMatch(/argv|LOG/);
   });
 
+  it('cards.list: хост шлёт лишнее — телефон получает проекцию; лишний ключ параметров не доходит до хоста (T4a)', async () => {
+    const card = { cardId: 'p1', revision: 1, kind: 'message', state: 'needs_confirmation', title: 'Auth', text: 'x', dangerous: false, expiresAt: 5 };
+    host.handler = async () => ({ cards: [{ ...card, payload: { token: 'T0KEN' } }, { junk: 1 }] });
+    call('d1', 'l', 'cards.list', {});
+    call('d1', 'l2', 'cards.list', { all: true });
+    await flush();
+    expect(sessions.of('d1').find((f) => f.id === 'l')?.result).toEqual({ cards: [card] });
+    expect(sessions.of('d1').find((f) => f.id === 'l2')?.error).toBeDefined();
+    expect(host.calls.filter((c) => c.method === 'cards.list')).toHaveLength(1);
+  });
+
+  it('cards.changed: проекция идёт телефонам, лишние поля срезаны; assistant.card.changed не проходит; событие без карточки пропадает (T4a)', async () => {
+    const card = { cardId: 'p1', revision: 2, kind: 'message', state: 'decided', title: 'Auth', text: 'x', dangerous: false, expiresAt: 5 };
+    host.event('cards.changed', { card: { ...card, payload: { token: 'T0KEN' }, decidedVia: 'mobile' } });
+    host.event('cards.changed', { card: { cardId: 'broken' } });
+    host.event('assistant.card.changed', { cardId: 'p1', kind: 'message', state: 'decided', revision: 2, expiresAt: 5, decidedVia: 'mobile', outcome: 'sent' });
+    const got = events('d1', 'cards.changed');
+    expect(got).toHaveLength(1);
+    expect(JSON.stringify(got[0])).not.toMatch(/T0KEN|decidedVia/);
+    expect(events('d1', 'assistant.card.changed')).toHaveLength(0);
+  });
+
   it('повтор jobs.submit с тем же ключом уходит хосту как есть и получает прежний jobId', async () => {
     host.handler = async () => ({ jobId: 'j-7', revision: 1 });
     const params = { text: 'do it', idempotencyKey: 'same-key', correlation: { mode: 'text' } };

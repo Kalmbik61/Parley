@@ -23,6 +23,7 @@ export function assistantSettingsOf(
     voiceGender: assistantGender(ui.assistant),
     // Провайдер последней новой работы — умолчание для агентов, которых помощник создаёт сам.
     defaultProvider: ui.lastProvider,
+    speak: ui.assistant.speak,
   };
 }
 

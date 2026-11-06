@@ -7,9 +7,8 @@
  */
 
 import { useEffect, useRef } from 'react';
-import type { VoiceFrame } from '../assistant/voice-features.js';
-import { createSwarm, type SwarmEngine } from './engine.js';
-import type { SwarmPulse, SwarmSpec } from './spec.js';
+import { createSwarm, type SwarmEngine, type SwarmPulse, type SwarmSink, type SwarmSpec, type VoiceFrame } from '@parley/core/swarm';
+import { createCanvasSink } from './canvas-sink.js';
 
 export interface SwarmProps {
   spec: SwarmSpec;
@@ -40,7 +39,7 @@ export function Swarm(props: SwarmProps): JSX.Element {
   const { spec, souls, width, height, className } = props;
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<SwarmEngine | null>(null);
-  const ctxRef = useRef<CanvasRenderingContext2D | null>(null);
+  const sinkRef = useRef<SwarmSink | null>(null);
   const mqlRef = useRef<MediaQueryList | null>(null);
   // Цикл кадров читает свежие `fps`, `mic` и `voice` отсюда, не пересоздаваясь.
   const live = useRef({ fps: props.fps, mic: props.mic ?? 0, voice: props.voice, forced: props.reducedMotion === true });
@@ -64,10 +63,11 @@ export function Swarm(props: SwarmProps): JSX.Element {
     const engine = engineRef.current;
     if (canvas === null || engine === null) return undefined;
     mqlRef.current = typeof window.matchMedia === 'function' ? window.matchMedia(REDUCED) : null;
-    ctxRef.current = canvas.getContext('2d') ?? null;
-    const ctx = ctxRef.current;
+    const ctx = canvas.getContext('2d') ?? null;
     if (ctx === null) return undefined;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const sink = createCanvasSink(ctx);
+    sinkRef.current = sink;
     let raf = 0;
     let last = 0;
     const loop = (now: number): void => {
@@ -77,7 +77,7 @@ export function Swarm(props: SwarmProps): JSX.Element {
       const interval = 1000 / (fps || 30) - 2;
       if (((fps > 0 && !reduced) || engine.needsFrame()) && now - last >= interval) {
         last = now;
-        engine.frame(now, ctx, reduced, mic, voice?.() ?? null);
+        engine.frame(now, sink, reduced, mic, voice?.() ?? null);
       }
     };
     raf = requestAnimationFrame(loop);
@@ -90,7 +90,7 @@ export function Swarm(props: SwarmProps): JSX.Element {
     const reduced = isReduced();
     const now = performance.now();
     engine.setSpec(spec, now, reduced);
-    if (reduced) engine.frame(now, ctxRef.current, true, live.current.mic);
+    if (reduced) engine.frame(now, sinkRef.current, true, live.current.mic);
   }, [spec, props.reducedMotion]);
 
   const pulse = props.pulse ?? null;

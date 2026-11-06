@@ -18,6 +18,8 @@ interface Stub {
   features: string[];
   methods: string[];
   callError: { code: string; message: string; data?: unknown } | null;
+  /** Задержка ответа на обычные вызовы, мс. */
+  callDelayMs: number;
   /** Строка, которую стаб шлёт вместо ответа на works.list (для предела строки). */
   hugeWorksList: boolean;
   /** Ответ на works.list; функция получает кадр и сокет. */
@@ -62,6 +64,7 @@ async function startStub(init: Partial<Stub> = {}): Promise<Stub> {
     features: ['remote-policy-1', 'compact-works'],
     methods: ['works.list', 'feed.decide'],
     callError: null,
+    callDelayMs: 0,
     hugeWorksList: false,
     onWorksList: (reply) => reply(snap(1)),
     broadcast(msg) {
@@ -93,6 +96,7 @@ async function startStub(init: Partial<Stub> = {}): Promise<Stub> {
           if (stub.hugeWorksList) c.write(`${'x'.repeat(9 * 1024 * 1024)}\n`);
           else stub.onWorksList(send, c, m.id);
         } else if (stub.callError) c.write(`${JSON.stringify({ id: m.id, error: stub.callError })}\n`);
+        else if (stub.callDelayMs > 0) setTimeout(() => send({ ok: true }), stub.callDelayMs);
         else send({ ok: true });
       }
     });
@@ -102,13 +106,14 @@ async function startStub(init: Partial<Stub> = {}): Promise<Stub> {
   return stub;
 }
 
-function newLink(bootId?: string): HostLink {
+function newLink(bootId?: string, replyTimeoutMs?: number): HostLink {
   const link = createHostLink({
     socketPath: sock,
     tokenPath: tokenFile,
     log: createLog({ file: logFile }),
     backoff: { initialMs: 10, maxMs: 40 },
     ...(bootId ? { bootId } : {}),
+    ...(replyTimeoutMs === undefined ? {} : { replyTimeoutMs }),
   });
   links.push(link);
   return link;
@@ -320,5 +325,14 @@ describe('HostLink', () => {
     await until(() => link.failure === 'line_too_long');
     expect(link.status).not.toBe('online');
     expect(await readFile(logFile, 'utf8')).toContain('host.line_too_long');
+  });
+
+  it('voice.session.prepare ждёт хост дольше общего тайм-аута, остальные вызовы — нет', async () => {
+    await startStub({ callDelayMs: 150, methods: ['works.list', 'voice.session.prepare', 'x.y'] });
+    const link = newLink(undefined, 50);
+    link.start();
+    await until(() => link.status === 'online');
+    await expect(link.call('x.y', {})).rejects.toMatchObject({ code: 'timeout' });
+    await expect(link.call('voice.session.prepare', { sdp: 'o' })).resolves.toEqual({ ok: true });
   });
 });

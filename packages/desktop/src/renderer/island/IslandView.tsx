@@ -66,7 +66,7 @@ import { Swarm } from './swarm/Swarm.js';
 import { ProgressView } from './ProgressView.js';
 import type { ProgressState } from './progress.js';
 import { HOST_IDLE } from './assistant/store.js';
-import { liveActive, REACTION_FOR, swarmSpecFor, swarmSpecForLive, type SwarmPulse } from './swarm/spec.js';
+import { liveActive, REACTION_FOR, swarmSpecFor, swarmSpecForLive, type SwarmPulse } from '@parley/core/swarm';
 import { droppedMinWidth, notchShift } from './notch.js';
 import { CapsuleSwarm, capsuleContent, NotchCapsule } from './NotchCapsule.js';
 

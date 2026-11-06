@@ -8,7 +8,9 @@ import {
   REMOTE_TEXT_LIMIT_BYTES,
   checkRemoteParams,
   isRemoteForbidden,
+  projectCardsResult,
   projectJobResult,
+  projectPhoneCard,
   projectPhoneJob,
 } from './index.js';
 
@@ -114,5 +116,71 @@ describe('голос и jobs: проекция job для телефона', () 
     expect(projectJobResult({ job })).toEqual({ job: projectPhoneJob(job) });
     expect(JSON.stringify(projectJobResult({ job }))).not.toContain('argv');
     expect(projectJobResult(null)).toEqual({ job: null });
+  });
+});
+
+describe('карточки помощника на телефоне (T4a)', () => {
+  const row = {
+    cardId: 'p3',
+    revision: 2,
+    kind: 'actions',
+    state: 'needs_confirmation',
+    expiresAt: 99,
+    view: {
+      action: 'actions',
+      id: 'p3',
+      target: 'S05 Vera',
+      where: 'Parley · my_harnas',
+      text: 'Close S05',
+      steps: [{ verb: 'wake', line: 'Wake S05', text: null, danger: false }, { verb: 'close', line: 'Close S05', text: null, danger: true }],
+    },
+    payload: { token: 'SECRET', path: '/Users/x/secret', argv: ['rm'] },
+    decidedVia: 'island',
+    argv: ['x'],
+  };
+
+  it('cards.list и cards.changed в белых списках, assistant.* по-прежнему закрыт', () => {
+    expect(REMOTE_METHODS).toContain('cards.list');
+    expect(REMOTE_EVENTS).toContain('cards.changed');
+    expect(Object.keys(METHODS)).toContain('cards.list');
+    expect(isRemoteForbidden('cards.list')).toBe(false);
+    expect(isRemoteForbidden('cards.changed')).toBe(false);
+    for (const name of ['assistant.card.changed', 'assistant.decide', 'assistant.state', 'assistant.ask']) {
+      expect(isRemoteForbidden(name), name).toBe(true);
+      expect(REMOTE_METHODS).not.toContain(name);
+      expect(REMOTE_EVENTS).not.toContain(name);
+    }
+  });
+
+  it('cards.list: параметры строгие, лишний ключ — bad_request', () => {
+    expect(checkRemoteParams('cards.list', {})).toBe(true);
+    expect(checkRemoteParams('cards.list', { all: true })).toBe(false);
+    expect(checkRemoteParams('cards.list', null)).toBe(false);
+  });
+
+  it('проекция: лишние поля отброшены, dangerous по шагам, jobId только когда он есть', () => {
+    const card = projectPhoneCard({ ...row, jobId: 'job-7' });
+    expect(card).toEqual({ cardId: 'p3', revision: 2, kind: 'actions', state: 'needs_confirmation', title: 'S05 Vera · Parley · my_harnas', text: 'Close S05', dangerous: true, expiresAt: 99, jobId: 'job-7' });
+    const json = JSON.stringify(card);
+    for (const leak of ['SECRET', '/Users/x', 'argv', 'decidedVia', 'payload']) expect(json).not.toContain(leak);
+    expect(projectPhoneCard(row)).not.toHaveProperty('jobId');
+    expect(projectPhoneCard({ ...row, view: { ...row.view, steps: [{ danger: false }] } })).toMatchObject({ dangerous: false });
+    expect(projectPhoneCard({ ...row, view: { target: 'A', where: 'B', text: 'письмо' } })).toMatchObject({ dangerous: false });
+  });
+
+  it('проекция: title ≤ 120 и text ≤ 280 знаков с «…»; не карточка и неизвестное состояние — null', () => {
+    const long = projectPhoneCard({ ...row, view: { target: 'т'.repeat(200), where: 'w', text: 'я'.repeat(500) } });
+    expect(Array.from(long?.title ?? '')).toHaveLength(120);
+    expect(long?.title.endsWith('…')).toBe(true);
+    expect(Array.from(long?.text ?? '')).toHaveLength(280);
+    expect(long?.text.endsWith('…')).toBe(true);
+    expect(projectPhoneCard(null)).toBeNull();
+    expect(projectPhoneCard({ ...row, state: 'active' })).toBeNull();
+  });
+
+  it('projectCardsResult срезает лишнее и выбрасывает негодные карточки', () => {
+    const good = projectPhoneCard(row)!;
+    expect(projectCardsResult({ cards: [{ ...good, payload: { token: 'T' } }, { nope: 1 }] })).toEqual({ cards: [good] });
+    expect(projectCardsResult(null)).toEqual({ cards: [] });
   });
 });

@@ -1,6 +1,6 @@
 /**
- * Движок роя душ на Canvas 2D: порт класса `Swarm` из одобренного макета island-mockup.html (спека 2026-10-14,
- * раздел 9). Без React; рисует через переданный контекст (`null` — только шаг, для тестов и jsdom).
+ * Движок роя душ: порт класса `Swarm` из одобренного макета island-mockup.html (спека 2026-10-14,
+ * раздел 9). Без React и DOM; рисует через приёмник `SwarmSink` (`null` — только шаг, для тестов); спрайты и смешение — у платформы.
  * Душа — точка со спрайтом «ядро + мягкое свечение»; формы: точка, облако пятен, сфера Фибоначчи с короной-кольцом,
  * лицо (два глаза и рот из тех же душ, эмоции — таблица `EMO`); эффекты: слушание (сжатие по громкости и волна),
  * кольцо подтверждения, поток ответа, дуга инструмента. Отличия лица от макета: моргание — на втором потоке
@@ -15,8 +15,8 @@
  * меняют только отрисовку относительно `cx`/`cy` и к концу реакции сходят на нет; положения `souls` не трогают.
  */
 
-import type { Visemes, VoiceFrame } from '../assistant/voice-features.js';
-import { BLOBS, DUR, EMO, PAL, type FaceSpec, type SwarmPalette, type SwarmReaction, type SwarmSpec } from './spec.js';
+import type { Visemes, VoiceFrame } from './voice-features.js';
+import { BLOBS, DUR, EMO, type FaceSpec, type SwarmPalette, type SwarmReaction, type SwarmSpec } from './spec.js';
 
 export interface SwarmOptions {
   width: number;
@@ -32,15 +32,33 @@ export interface SwarmOptions {
    * Внутренний флаг для тестов F1 (#9 §11.10): в UI переключателя нет, по умолчанию `full`.
    */
   voiceMode?: 'loudness' | 'full';
+  /**
+   * Пульс по громкости (телефон): `mic` кадра (0..1) дополнительно сглаживается быстрой атакой и спадом ~120 мс и
+   * качает весь рой: масштаб до +6 %, яркость до +35 % и лёгкое детерминированное дрожание положения. Reduced motion —
+   * только яркость. По умолчанию выключено, остров не меняется.
+   */
+  soundPulse?: boolean;
+}
+
+/**
+ * Приёмник кадра: рисует платформа (canvas острова, Skia телефона). Порядок вызовов и итоговая альфа — в движке;
+ * приёмник отвечает за спрайты и аддитивное смешение.
+ */
+export interface SwarmSink {
+  begin(width: number, height: number): void;
+  /** `x`, `y` — левый верхний угол спрайта в пикселях, `size` — сторона, `alpha` — итоговая прозрачность. */
+  soul(pal: SwarmPalette, color: number, x: number, y: number, size: number, alpha: number): void;
+  end(): void;
 }
 
 export interface SwarmEngine {
   setSpec(spec: SwarmSpec, now: number, reducedMotion: boolean): void;
   /**
-   * Шаг и отрисовка одного кадра; `ctx` null — только шаг (тесты, jsdom). `mic` — громкость 0..1 для fx listen,
+   * Шаг и отрисовка одного кадра в приёмник; `sink` null — только шаг (тесты). `mic` — громкость 0..1 для fx listen
+   * и, при `soundPulse`, для пульса роя (звук микрофона или голоса модели — решает вызывающий),
    * `voice` — кадр голоса для рта лица; `null` — голос молчит, рот закрыт.
    */
-  frame(now: number, ctx: CanvasRenderingContext2D | null, reducedMotion: boolean, mic: number, voice?: VoiceFrame | null): void;
+  frame(now: number, sink: SwarmSink | null, reducedMotion: boolean, mic: number, voice?: VoiceFrame | null): void;
   /** Нужен ли кадр: идёт переход или реакция, сменилась палитра или спека. */
   needsFrame(): boolean;
   /**
@@ -196,48 +214,6 @@ interface Target {
   c: number;
 }
 
-type Sprites = Record<SwarmPalette, HTMLCanvasElement[]>;
-
-/** Спрайт души: яркое ядро и мягкое свечение, 48×48; `null` — у документа нет 2d-контекста (jsdom). */
-function sprite(hex: string): HTMLCanvasElement | null {
-  const c = document.createElement('canvas');
-  c.width = c.height = 48;
-  const x = c.getContext('2d');
-  if (x === null || x === undefined) return null;
-  const n = parseInt(hex.slice(1), 16);
-  const r = n >> 16;
-  const g = (n >> 8) & 255;
-  const b = n & 255;
-  const gr = x.createRadialGradient(24, 24, 0, 24, 24, 24);
-  const k = (a: number, m: number): string => `rgba(${(r + (255 - r) * m) | 0},${(g + (255 - g) * m) | 0},${(b + (255 - b) * m) | 0},${a})`;
-  gr.addColorStop(0, k(1, 0.55));
-  gr.addColorStop(0.12, k(0.9, 0.2));
-  gr.addColorStop(0.35, k(0.3, 0));
-  gr.addColorStop(1, k(0, 0));
-  x.fillStyle = gr;
-  x.fillRect(0, 0, 48, 48);
-  return c;
-}
-
-let spriteCache: Sprites | null = null;
-
-/** Спрайты всех палитр, общие для всех роёв; создаются при первом кадре с реальным контекстом. */
-function sprites(): Sprites | null {
-  if (spriteCache !== null) return spriteCache;
-  const out: Partial<Sprites> = {};
-  for (const name of Object.keys(PAL) as SwarmPalette[]) {
-    const list: HTMLCanvasElement[] = [];
-    for (const hex of PAL[name].colors) {
-      const made = sprite(hex);
-      if (made === null) return null;
-      list.push(made);
-    }
-    out[name] = list;
-  }
-  spriteCache = out as Sprites;
-  return spriteCache;
-}
-
 /** Наименьший штрих рта-линии в долях d до масштаба лица (#9 §6.7: «рот всегда читается»). */
 const MOUTH_STROKE = 0.07;
 
@@ -285,6 +261,9 @@ class SwarmImpl implements SwarmEngine {
   private rot = 0.5;
   private rv = 0.35;
   private mic = 0.4;
+  /** Сглаженный уровень пульса 0..1; только при `soundPulse`. */
+  private pl = 0;
+  private readonly soundPulse: boolean;
   private gl = 0;
   private last = 0;
   private cr = 1;
@@ -301,6 +280,7 @@ class SwarmImpl implements SwarmEngine {
     this.minPx = o.minPx ?? 2.4;
     this.mini = Math.max(o.width, o.height) <= 32;
     this.voiceMode = o.voiceMode ?? 'full';
+    this.soundPulse = o.soundPulse === true;
     const R = rng(o.seed ?? 7);
     this.R2 = rng((o.seed ?? 7) ^ 0x9e3779b9);
     const tot = BLOBS.reduce((a, b) => a + b[4], 0);
@@ -367,7 +347,7 @@ class SwarmImpl implements SwarmEngine {
   }
 
   needsFrame(): boolean {
-    return this.sp !== null && (this.dirty || this.trans || this.palT < 1 || this.reacts.length > 0);
+    return this.sp !== null && (this.dirty || this.trans || this.palT < 1 || this.reacts.length > 0 || this.pl > 0.005);
   }
 
   react(reaction: SwarmReaction, at: number, now: number, reducedMotion: boolean): void {
@@ -591,7 +571,7 @@ class SwarmImpl implements SwarmEngine {
     return 1 - 0.94 * k;
   }
 
-  frame(now: number, ctx: CanvasRenderingContext2D | null, reducedMotion: boolean, mic: number, voice: VoiceFrame | null = null): void {
+  frame(now: number, sink: SwarmSink | null, reducedMotion: boolean, mic: number, voice: VoiceFrame | null = null): void {
     const E = this.sp;
     if (E === null) return;
     const rm = reducedMotion;
@@ -608,6 +588,12 @@ class SwarmImpl implements SwarmEngine {
       this.rv += (E.rot - this.rv) * Math.min(1, dt * 2);
       this.rot += dt * this.rv;
       if (E.fx === 'listen') this.mic += (mic - this.mic) * 0.3;
+    }
+    if (this.soundPulse) {
+      // Быстрая атака (~30 мс) и спад ~120 мс: вход 20 Гц выглядит непрерывным.
+      const target = clamp(mic);
+      this.pl += (target - this.pl) * (1 - Math.exp(-dt / (target > this.pl ? 0.03 : 0.12)));
+      if (this.pl < 0.001) this.pl = 0;
     }
     if (this.palT < 1) this.palT = clamp(this.palT + dt / 0.3);
     this.flash = Math.max(0, this.flash - dt / 0.6);
@@ -664,16 +650,13 @@ class SwarmImpl implements SwarmEngine {
     const cloudSpin = E.shape === 'sphere' ? 0 : spin;
     this.cr = Math.cos(rotS);
     this.sr = Math.sin(rotS);
-    const spr = ctx === null ? null : sprites();
-    if (ctx !== null) {
-      ctx.clearRect(0, 0, this.W, this.H);
-      ctx.globalCompositeOperation = 'lighter';
-    }
-    const sa = spr === null ? null : spr[this.palTo];
-    const sb = spr === null ? null : spr[this.palFrom];
+    if (sink !== null) sink.begin(this.W, this.H);
     const pt = this.palT;
     const o = this.o;
-    const dim = E.dim * (1 + 0.8 * this.flash) * lit;
+    const dim = E.dim * (1 + 0.8 * this.flash) * lit * (1 + 0.35 * this.pl);
+    const pScale = rm ? 1 : 1 + 0.06 * this.pl;
+    const pJit = rm ? 0 : 0.02 * this.pl * this.d;
+    const jf = Math.floor(now / 50);
     for (const s of this.souls) {
       this.tg(s, t, amp, bl, vis);
       let x = o.x;
@@ -695,7 +678,7 @@ class SwarmImpl implements SwarmEngine {
       s.y = y;
       s.z = z;
       s.v += ((s.rk < E.vis ? 1 : 0) - s.v) * Math.min(1, dt * 5);
-      if (ctx === null || sa === null || sb === null) continue;
+      if (sink === null) continue;
       // Слой реакций: закрутка (внутренние души ведут), масштаб и сдвиг — относительно центра роя.
       let rx = x;
       let ry = y;
@@ -713,9 +696,13 @@ class SwarmImpl implements SwarmEngine {
       const zn = clamp(z + 0.5);
       let al = (s.corona ? 0.62 : 0.85) * mm * (0.5 + 0.5 * zn) * s.v * dim * br * (1 + 0.2 * Math.sin((TAU * t) / 1000 / s.tp + s.tw)); // мерцание ±20 %
       if (spark > 0 && spark < 1 && s.sk < 0.16) al *= 1 + 3 * Math.sin(Math.PI * spark);
-      const D = Math.max(this.minPx, this.d * this.k * s.sz * o.sm * (0.85 + 0.3 * zn));
-      let px = this.cx + rx * this.d;
-      const py = this.cy + ry * this.d;
+      const D = Math.max(this.minPx, this.d * this.k * s.sz * o.sm * (0.85 + 0.3 * zn)) * pScale;
+      let px = this.cx + rx * this.d * pScale;
+      let py = this.cy + ry * this.d * pScale;
+      if (pJit !== 0) {
+        px += (hs(s.rd * 97 + jf) - 0.5) * pJit;
+        py += (hs(s.rk * 89 + jf * 1.7) - 0.5) * pJit;
+      }
       if (glitch) {
         const row = Math.floor(py / 6);
         if (row % 3 === 0) px += (hs(row + Math.floor(now / 70)) - 0.5) * 0.14 * this.d;
@@ -725,17 +712,14 @@ class SwarmImpl implements SwarmEngine {
       if (al < 0.01) continue;
       const c = o.c;
       if (pt >= 1) {
-        ctx.globalAlpha = al;
-        ctx.drawImage(sa[c]!, px - D / 2, py - D / 2, D, D);
+        sink.soul(this.palTo, c, px - D / 2, py - D / 2, D, al);
       } else {
         // Кроссфейд палитры за 0,3 с.
-        ctx.globalAlpha = al * pt;
-        ctx.drawImage(sa[c]!, px - D / 2, py - D / 2, D, D);
-        ctx.globalAlpha = al * (1 - pt);
-        ctx.drawImage(sb[c]!, px - D / 2, py - D / 2, D, D);
+        sink.soul(this.palTo, c, px - D / 2, py - D / 2, D, al * pt);
+        sink.soul(this.palFrom, c, px - D / 2, py - D / 2, D, al * (1 - pt));
       }
     }
-    if (ctx !== null) ctx.globalAlpha = 1;
+    if (sink !== null) sink.end();
   }
 }
 

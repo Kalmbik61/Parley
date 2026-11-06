@@ -24,7 +24,7 @@ import { useIslandReplies } from './replies.js';
 import type { IslandRequest } from './requests.js';
 import { SWIPE_UP_PX } from './drag.js';
 import { HOST_IDLE } from './assistant/store.js';
-import * as engineModule from './swarm/engine.js';
+import * as engineModule from '@parley/core/swarm';
 import { CARD_ARM_MS, IslandView, type IslandAssistantProps, type IslandViewProps } from './IslandView.js';
 
 /**

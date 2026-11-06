@@ -4,7 +4,7 @@
  */
 import type { DatabaseSync } from 'node:sqlite';
 import type { LiveClient, Sideband } from './live-client.js';
-import { LiveError } from './live-client.js';
+import { CREATE_TIMEOUT_MS, LiveError, SIDEBAND_CONNECT_TIMEOUT_MS } from './live-client.js';
 import { DEFAULT_DAILY_MINUTES, dailyBudget, localDay } from './budget.js';
 
 export const MAX_SESSION_MS = 30 * 60_000;
@@ -21,6 +21,11 @@ export const ATTACH_ATTEMPTS = 3;
 /** Паузы перед 2-й и 3-й попыткой первого подключения sideband. */
 export const ATTACH_DELAYS_MS = [250, 1_000];
 /** Паузы перед попытками переподключения оборвавшегося sideband; когда они кончились, сессия считается потерянной. */
+/**
+ * Худший срок `prepare` на хосте: создание сессии, все попытки sideband и паузы между ними. Таймауты моста и телефона для
+ * `voice.session.prepare` обязаны быть больше (тест порядка), иначе ответ теряется, а платная сессия остаётся без владельца.
+ */
+export const PREPARE_WORST_CASE_MS = CREATE_TIMEOUT_MS + ATTACH_ATTEMPTS * SIDEBAND_CONNECT_TIMEOUT_MS + ATTACH_DELAYS_MS.reduce((sum, ms) => sum + ms, 0);
 export const RECONNECT_DELAYS_MS = [500, 2_000, 5_000, 10_000];
 
 export type PrepareResult =
@@ -47,8 +52,8 @@ export interface VoiceSessionServiceDeps extends VoiceSessionEvents {
 
 export interface VoiceSessionService {
   /**
-   * `liveSession` — тело сессии для OpenAI; нет — прежний конфиг клиента (`{ model }`). Остров передаёт инструкции и
-   * клиентскую делегацию (`liveSessionConfig`), телефон без моста делегаций получает прежний конфиг.
+   * `liveSession` — тело сессии для OpenAI; нет — прежний конфиг клиента (`{ model }`). Остров и телефон передают
+   * инструкции и клиентскую делегацию (`liveSessionConfig`), у телефона без триггера эмоции.
    */
   prepare(sdpOffer: string, liveSession?: Record<string, unknown>): Promise<PrepareResult>;
   /** Закрывает сессию; false, если такой активной нет. */

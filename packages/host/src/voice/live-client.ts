@@ -20,6 +20,8 @@ import { readSecret } from '@parley/core';
 export const LIVE_BASE_URL = 'https://api.openai.com';
 export const LIVE_MODEL = 'gpt-live-1';
 export const CREATE_TIMEOUT_MS = 20_000;
+/** Срок одной попытки подключения sideband. */
+export const SIDEBAND_CONNECT_TIMEOUT_MS = 10_000;
 
 /** Ошибка клиента: сообщение уже очищено от ключа. */
 export class LiveError extends Error {
@@ -91,7 +93,7 @@ export function createLiveClient(deps: LiveClientDeps = {}): LiveClient {
   const openSocket = deps.openSocket ?? defaultOpenSocket;
   const readKey = deps.readKey ?? (() => readSecret('voice:openai'));
   const baseUrl = deps.baseUrl ?? LIVE_BASE_URL;
-  const connectTimeoutMs = deps.connectTimeoutMs ?? 10_000;
+  const connectTimeoutMs = deps.connectTimeoutMs ?? SIDEBAND_CONNECT_TIMEOUT_MS;
   const createTimeoutMs = deps.createTimeoutMs ?? CREATE_TIMEOUT_MS;
 
   const requireKey = async (): Promise<string> => {

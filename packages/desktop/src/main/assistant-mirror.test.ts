@@ -13,7 +13,7 @@ describe('assistantSettingsOf', () => {
       voice,
       () => 'en',
     );
-    expect(settings).toEqual({ enabled: true, provider: 'claude', model: 'm', language: 'en', voiceModel: null, voiceGender: 'female', defaultProvider: null });
+    expect(settings).toEqual({ enabled: true, provider: 'claude', model: 'm', language: 'en', voiceModel: null, voiceGender: 'female', defaultProvider: null, speak: false });
   });
 
   it('голос включён, модель скачана: путь к модели', () => {

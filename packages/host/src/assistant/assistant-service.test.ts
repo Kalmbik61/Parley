@@ -1715,6 +1715,24 @@ describe('assistant-service: durable карточки', () => {
     service.stop();
   });
 
+  it('phoneCards: только активные, проекция без payload; решённая и погасшая карточки в список не входят', async () => {
+    let clock = 1_000_000;
+    const service = createAssistantService({ ...deps, now: () => clock, cardTtlMs: 60_000 });
+    const one = await propose(service, 'раз', 'island');
+    const two = await propose(service, 'два', 'telegram');
+    expect(service.phoneCards().map((card) => card.cardId)).toEqual([one.id, two.id]);
+    expect(service.phoneCards()[0]).toEqual({ cardId: one.id, revision: 1, kind: 'message', state: 'needs_confirmation', title: expect.stringContaining('Auth'), text: 'раз', dangerous: false, expiresAt: clock + 60_000 });
+    expect(service.phoneCards()[0]).not.toHaveProperty('jobId');
+    await service.decide(one.id, 'cancel', undefined, 'island');
+    expect(service.phoneCard(one.id)).toMatchObject({ state: 'decided' });
+    expect(service.phoneCards().map((card) => card.cardId)).toEqual([two.id]);
+    clock += 61_000;
+    expect(service.phoneCards()).toEqual([]);
+    expect(service.phoneCard(two.id)).toMatchObject({ state: 'expired' });
+    expect(service.phoneCard('nope')).toBeNull();
+    service.stop();
+  });
+
   it('две активные карточки: событие решения несёт id именно решённой', async () => {
     const service = createAssistantService(deps);
     const changes: Array<[string, string]> = [];

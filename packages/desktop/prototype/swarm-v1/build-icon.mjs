@@ -5,7 +5,7 @@
  *   pnpm install                                   # один раз: нужен esbuild, он приходит вместе с vite
  *   node packages/desktop/prototype/swarm-v1/build-icon.mjs
  *
- * Собирает `swarm-icon.entry.ts` (настоящие `island/swarm/engine.ts` и `spec.ts`, без React) в один IIFE и кладёт его
+ * Собирает `swarm-icon.entry.ts` (настоящие `@parley/core/swarm` (`swarm/engine.ts`, `spec.ts`) и приёмник `island/swarm/canvas-sink.ts`, без React) в один IIFE и кладёт его
  * в `index.html` между метками `swarm-icon:begin` / `swarm-icon:end`, чтобы прототип остался самодостаточным файлом.
  * Движок поменялся — запустите скрипт снова. Метки уже в `index.html`; на странице скрипт зовёт `SwarmIcons.sync()`.
  */

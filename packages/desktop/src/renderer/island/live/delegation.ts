@@ -34,7 +34,7 @@ import {
 import type { AssistantRequestView } from '@parley/protocol';
 import { ISLAND_CONVERSATION_ID, type IslandBridge } from '../../../shared/island.js';
 import type { LiveController, LiveControllerEvent } from './controller.js';
-import { isConfidentEmotion } from './emotion.js';
+import { isConfidentEmotion } from '@parley/core/voice-live';
 
 /** Так хост называет потребителя Live (`LIVE_CONSUMER` в host/assistant/requests.ts). */
 export const LIVE_CONSUMER_ID = 'live';

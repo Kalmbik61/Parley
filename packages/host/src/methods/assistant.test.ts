@@ -60,6 +60,14 @@ describe('createAssistantHandlers', () => {
     expect(await call(handlers, 'cards.decide', params)).toEqual({ applied: false, error: null, reason: 'expired' });
   });
 
+  it('cards.list: отдаёт проекции активных карточек сервиса, параметры строгие', async () => {
+    const cards = [{ cardId: 'p1', revision: 1, kind: 'message', state: 'needs_confirmation', title: 'Auth', text: 'x', dangerous: false, expiresAt: 5 }];
+    const phoneCards = vi.fn().mockReturnValue(cards);
+    const handlers = createAssistantHandlers({ phoneCards } as unknown as AssistantService);
+    expect(await call(handlers, 'cards.list', METHODS['cards.list'].parse({}))).toEqual({ cards });
+    expect(METHODS['cards.list'].safeParse({ all: true }).success).toBe(false);
+  });
+
   it('jobs.ackInline: передаёт jobs; без jobs - not_found', async () => {
     const ackInline = vi.fn().mockReturnValue({ ok: true, deliveredInline: true, reason: 'acked' });
     const params = METHODS['jobs.ackInline'].parse({ jobId: 'job-1', revision: 4 });

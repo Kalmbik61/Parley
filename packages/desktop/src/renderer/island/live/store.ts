@@ -5,11 +5,10 @@
  */
 import { create } from 'zustand';
 import { S } from '../../../shared/strings.js';
-import type { VoiceAnalysis, VoiceFrame } from '../assistant/voice-features.js';
-import type { SwarmEmotion } from '../swarm/spec.js';
+import { type VoiceAnalysis, type VoiceFrame, type SwarmEmotion } from '@parley/core/swarm';
 import type { LiveCallPhase, LiveController, LiveStartResult } from './controller.js';
 import type { LiveDelegation, LiveResultView } from './delegation.js';
-import { createEmotionSmoother, type EmotionSmoother } from './emotion.js';
+import { createEmotionSmoother, type EmotionSmoother } from '@parley/core/voice-live';
 
 /** Что стору нужно для кадра голоса: анализ признаков (создаётся лениво, как у TTS) и часы кадра, мс. */
 export interface LiveVoiceDeps {

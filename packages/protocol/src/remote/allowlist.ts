@@ -2,6 +2,7 @@
 // Значения из корня протокола не импортируются: сверку с METHODS делает тест.
 
 import { REMOTE_TEXT_LIMIT_BYTES, utf8Length } from './limits.js';
+import { cardsParamRules } from './cards.js';
 import { voiceParamRules } from './voice.js';
 
 export { REMOTE_TEXT_LIMIT_BYTES };
@@ -48,12 +49,14 @@ const A_METHODS = [
   'rooms.archive',
   'rooms.delete',
   // Голос, jobs и карточки помощника с телефона (план голоса B3): `voice.session.prepare` хост пускает только при
-  // включённом `remoteVoice`.
+  // включённом на Mac «Speak answers» (ключ OpenAI проверяет сам метод: `no_key`).
   'jobs.submit',
   'jobs.get',
   'jobs.cancel',
   'jobs.ackInline',
   'cards.decide',
+  // Карточки помощника телефону (T4a): список активных и проекция; `assistant.*` по-прежнему закрыт.
+  'cards.list',
   'voice.session.prepare',
   'voice.session.close',
   'voice.usage.get',
@@ -66,6 +69,7 @@ const A_EVENTS = [
   'feed.changed',
   'consents.changed',
   'jobs.changed',
+  'cards.changed',
   'voice.session.closed',
 ] as const;
 
@@ -294,6 +298,7 @@ export type RemoteParamRule = (params: unknown) => boolean;
 
 export const REMOTE_PARAM_RULES: Readonly<Record<string, RemoteParamRule>> = {
   ...voiceParamRules,
+  ...cardsParamRules,
   // Этап A: без `rev` карточку решения можно принять, не видев её текста (спека 4.2).
   'rooms.resolveProposal': params => {
     const p = record(params);

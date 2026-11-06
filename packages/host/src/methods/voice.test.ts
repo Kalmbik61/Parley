@@ -72,7 +72,7 @@ describe('методы телефона: голосовая сессия', () =>
     expect(await call(limited, 'voice.session.prepare', { sdp: 'OFFER' })).toMatchObject({ ok: false, code: 'limit_reached' });
   });
 
-  it('остров получает инструкции и клиентскую делегацию, телефон (remote) — прежний конфиг без делегации и без triggers', async () => {
+  it('и остров, и телефон (remote) получают инструкции, клиентскую делегацию и триггер эмоции', async () => {
     const svc = service();
     const handlers = createVoiceHandlers(undefined, { service: svc, usage: () => ({ limitSeconds: 0, usedSeconds: 0, remainingSeconds: 0 }) });
     await call(handlers, 'voice.session.prepare', { sdp: 'ISLAND' });
@@ -81,10 +81,13 @@ describe('методы телефона: голосовая сессия', () =>
     expect(island?.[0]).toBe('ISLAND');
     expect(island?.[1]).toMatchObject({ model: 'gpt-live-1', delegation: { type: 'client' } });
     expect(typeof island?.[1]?.['instructions']).toBe('string');
-    // V2: триггер эмоции только у острова; конфиг телефона не меняется (второго аргумента нет, значит, и triggers).
+    // Триггер эмоции получают оба: рой телефона показывает эмоции, как остров.
     expect(island?.[1]?.['triggers']).toHaveLength(1);
-    expect(phone).toEqual(['PHONE']);
-    expect(phone?.[1]).toBeUndefined();
+    expect(phone?.[0]).toBe('PHONE');
+    expect(phone?.[1]).toMatchObject({ model: 'gpt-live-1', delegation: { type: 'client' } });
+    expect(typeof phone?.[1]?.['instructions']).toBe('string');
+    expect(phone?.[1]?.['triggers']).toHaveLength(1);
+    expect(phone?.[1]).toEqual(island?.[1]);
   });
 
   it('ничего не пишет в консоль: ни SDP, ни ответ', async () => {

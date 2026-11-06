@@ -32,7 +32,7 @@ import type { Listening } from './listen.js';
 import type { Speaker } from './speaker.js';
 import { createSentenceFeed, type FeedSentence, type SentenceFeed } from './speech-queue.js';
 import { spokenPhrase } from './spoken.js';
-import type { VoiceAnalysis, VoiceFrame } from './voice-features.js';
+import type { VoiceAnalysis, VoiceFrame } from '@parley/core/swarm';
 
 /** `speaking` — говорит лицо, `settling` — «Done» 1 с после речи; обе фазы живут только в острове. */
 export type InputPhase = 'idle' | 'listening' | 'transcribing' | 'speaking' | 'settling';

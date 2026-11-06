@@ -100,7 +100,10 @@ const EYES_TAU_S = 0.12;
 
 const clamp = (v: number): number => (v < 0 ? 0 : v > 1 ? 1 : v);
 const smooth = (cur: number, target: number, dt: number, tau: number): number => cur + (target - cur) * (1 - Math.exp(-dt / tau));
-const systemReducedMotion = (): boolean => typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia(REDUCED).matches;
+const systemReducedMotion = (): boolean => {
+  const host = globalThis as { matchMedia?: (query: string) => { matches: boolean } };
+  return typeof host.matchMedia === 'function' && host.matchMedia(REDUCED).matches;
+};
 
 export function createVoiceAnalysis(options: VoiceAnalysisOptions = {}): VoiceAnalysis {
   const sampleRate = options.sampleRate ?? DEFAULT_SAMPLE_RATE;

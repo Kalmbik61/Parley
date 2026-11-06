@@ -18,7 +18,7 @@ import type { IslandModel } from './model.js';
 import { CAPSULE_SIDE, type Notch } from './notch.js';
 import { SwarmIcon } from '../components/SwarmIcon.js';
 import { Swarm } from './swarm/Swarm.js';
-import { liveActive, swarmSpecFor, swarmSpecForLive, type SwarmPulse } from './swarm/spec.js';
+import { liveActive, swarmSpecFor, swarmSpecForLive, type SwarmPulse } from '@parley/core/swarm';
 
 /** Что в капсуле: слева помощник или агенты (`null` — пусто), справа один статус (`null` — пусто). */
 export interface CapsuleContent {

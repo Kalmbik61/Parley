@@ -11,7 +11,12 @@ export default function TabLayout() {
   return (
     // The selected tab is the Parley accent, not system blue (plan A35d).
     <NativeTabs tintColor={colors.tint}>
+      {/* Voice is the first tab and the screen the app opens on (`index`, VO-01); Inbox lives at `/inbox`. */}
       <NativeTabs.Trigger name="index">
+        <NativeTabs.Trigger.Label>Voice</NativeTabs.Trigger.Label>
+        <NativeTabs.Trigger.Icon sf="waveform" />
+      </NativeTabs.Trigger>
+      <NativeTabs.Trigger name="inbox">
         <NativeTabs.Trigger.Label>Inbox</NativeTabs.Trigger.Label>
         <NativeTabs.Trigger.Icon sf="tray" />
         <NativeTabs.Trigger.Badge hidden={needsYou === 0}>{String(needsYou)}</NativeTabs.Trigger.Badge>

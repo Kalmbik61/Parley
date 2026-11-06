@@ -892,6 +892,11 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     const projected = projectPhoneJob(job);
     if (projected !== null) handle.context.broadcast('jobs.changed', { job: projected });
   });
+  // Телефону — проекция карточки на каждую смену состояния (в том числе терминальную); граница `remote` пропускает по REMOTE_EVENTS.
+  assistantService.onCardChanged((change) => {
+    const card = assistantService.phoneCard(change.cardId);
+    if (card !== null) handle.context.broadcast('cards.changed', { card });
+  });
   // Канонические уведомления: события ядра (терминальные jobs, карточки) пишутся в store, прошлые не заливаются.
   // До T4 канала `app` нет, поэтому режим константа TELEGRAM_ONLY: в `app` ничего не копится, Telegram получает прежнее.
   const notificationStore = createNotificationStore(sideDb);
@@ -1026,9 +1031,10 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   const profiler = createProfiler({ dir: path.join(paths.dir, 'diagnostics'), log: handle.context.log });
   handle.context.onShutdown(async () => profiler.stop());
 
-  // Платный голос с телефона (план голоса, B3): значения держатся здесь и меняются только через `settings.set` (ниже).
+  // Платный голос с телефона: открыт, когда на Mac включён «Speak answers» (окно присылает его в `assistant.configure`, ниже)
+  // и сохранён ключ OpenAI (его проверяет сам prepare). Лимит минут меняется через `settings.set`.
   const initialConfig = (await loadConfig()).config;
-  let remoteVoice = initialConfig.remoteVoice;
+  let speakAnswers = false;
   let voiceDailyMinutes = initialConfig.voiceDailyMinutes;
   // Локальная телеметрия голоса (T6): итоговый расход закрытой сессии перезаписывает прежнюю оценку.
   const voiceTelemetry = createVoiceTelemetry({ db: sideDb, requests: assistantRequests, jobs: assistantJobs, usdPerMinute: () => LIVE_USD_PER_MINUTE });
@@ -1121,10 +1127,18 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
         for (const client of handle.context.clients()) if (client.role === 'remote') client.close();
       }
       voiceDailyMinutes = result.config.voiceDailyMinutes;
-      // Переключатель платного голоса меняет `hello.methods` моста: клиентов `remote` закрываем, мост переподключится.
-      if (result.config.remoteVoice !== remoteVoice) {
-        remoteVoice = result.config.remoteVoice;
-        if (!remoteVoice) void closeActiveVoice();
+      return result;
+    };
+  }
+  // «Speak answers» с Mac меняет `hello.methods` моста: выключение рвёт идущий голос, клиентов `remote` закрываем в обе стороны.
+  const assistantConfigureHandler = handlers.methods['assistant.configure'];
+  if (assistantConfigureHandler !== undefined) {
+    handlers.methods['assistant.configure'] = async (params, request) => {
+      const result = await assistantConfigureHandler(params, request);
+      const speak = (params as { speak?: boolean }).speak === true;
+      if (speak !== speakAnswers) {
+        speakAnswers = speak;
+        if (!speak) void closeActiveVoice();
         for (const client of handle.context.clients()) if (client.role === 'remote') client.close();
       }
       return result;
@@ -1138,7 +1152,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     helloTimeoutMs,
     methodHandlers: handlers.methods,
     notificationHandlers: handlers.notifications,
-    remoteVoice: () => remoteVoice,
+    phoneVoice: () => speakAnswers,
     remoteLaunch: {
       enabled: () => remoteCreate,
       workOpen: (projectPath, workId) => {

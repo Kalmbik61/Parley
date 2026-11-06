@@ -1,12 +1,11 @@
 /** Облик роя: таблица «состояние → облик», приоритет ввода, мини-вид и ореол. */
 
 import { describe, expect, it } from 'vitest';
-import type { AssistantState } from '@parley/protocol';
-import { HOST_IDLE } from '../assistant/store.js';
 import { createSwarm } from './engine.js';
-import { EMO, haloFor, liveActive, swarmSpecFor, swarmSpecForLive, type SwarmLive } from './spec.js';
+import { EMO, haloFor, liveActive, swarmSpecFor, swarmSpecForLive, type SwarmHost, type SwarmLive } from './spec.js';
 
-const host = (phase: AssistantState['phase']): AssistantState => ({ ...HOST_IDLE, phase });
+const HOST_IDLE: SwarmHost = { phase: 'idle', mood: 'calm' };
+const host = (phase: SwarmHost['phase']): SwarmHost => ({ ...HOST_IDLE, phase });
 
 describe('swarmSpecFor', () => {
   it('thinking — сфера', () => {

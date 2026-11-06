@@ -8,7 +8,7 @@ import {
   ROOMS_MAIL_FEATURE,
 } from '@parley/protocol';
 import type { Events, SessionRef, WorksSnapshot } from '@parley/protocol';
-import { REMOTE_POLICY_FEATURE } from '@parley/protocol/remote';
+import { REMOTE_POLICY_FEATURE, VOICE_PREPARE_BRIDGE_TIMEOUT_MS, VOICE_PREPARE_METHOD } from '@parley/protocol/remote';
 import type { BridgeLog } from './log.js';
 
 /** Причина, по которой связь не доходит до `online`, если известна. */
@@ -49,7 +49,7 @@ export interface HostLinkOptions {
   backoff?: { initialMs: number; maxMs: number };
   /** Только тесты: фиксированный `bootId`. */
   bootId?: string;
-  /** Тайм-аут на ответ `hello` и `works.list`. */
+  /** Тайм-аут на ответ `hello`, `works.list` и вызовов хоста (кроме `voice.session.prepare`: у него свой, `VOICE_PREPARE_BRIDGE_TIMEOUT_MS`). */
   replyTimeoutMs?: number;
 }
 
@@ -138,6 +138,7 @@ export function createHostLink(options: HostLinkOptions): HostLink {
 
   /** Запрос по сокету конкретной эпохи; ответ чужой эпохи не принимается. */
   function request(sock: net.Socket, method: string, params: unknown): Promise<unknown> {
+    const timeoutMs = method === VOICE_PREPARE_METHOD ? Math.max(replyTimeoutMs, VOICE_PREPARE_BRIDGE_TIMEOUT_MS) : replyTimeoutMs;
     return new Promise((resolve, reject) => {
       if (sock.destroyed) {
         reject(new HostCallError('host_offline'));
@@ -148,7 +149,7 @@ export function createHostLink(options: HostLinkOptions): HostLink {
       entry.timer = setTimeout(() => {
         pending.delete(id);
         reject(new HostCallError('timeout'));
-      }, replyTimeoutMs);
+      }, timeoutMs);
       pending.set(id, entry);
       sock.write(`${JSON.stringify({ id, method, params })}\n`);
     });

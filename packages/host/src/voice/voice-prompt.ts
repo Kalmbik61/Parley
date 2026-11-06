@@ -57,7 +57,10 @@ export const EMOTION_TRIGGER = {
   },
 } as const;
 
-/** Тело `session` для `POST /v1/live/sessions` (остров). Телефон (роль remote) получает прежний конфиг без триггеров. */
+/**
+ * Тело `session` для `POST /v1/live/sessions`. Остров и телефон получают одно и то же: инструкции, клиентскую делегацию
+ * и триггер эмоции (Decisions тарифицируется отдельно).
+ */
 export function liveSessionConfig(): Record<string, unknown> {
   return { model: LIVE_MODEL, instructions: VOICE_PROMPT, delegation: { type: 'client' }, triggers: [EMOTION_TRIGGER] };
 }

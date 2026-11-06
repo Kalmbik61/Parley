@@ -11,6 +11,16 @@ export const REMOTE_ID_RE = /^[\w.:-]{1,64}$/;
 /** Идентификатор голосовой сессии OpenAI длиннее остальных: 1–128 знаков. */
 const VOICE_SESSION_ID_RE = /^[\w.:-]{1,128}$/;
 
+/**
+ * Таймауты `voice.session.prepare` по звеньям. Хост готовит сессию до ~51 с (создание, попытки sideband, паузы), поэтому
+ * мост ждёт его дольше, а телефон дольше моста: иначе ответ теряется, а платная сессия остаётся без владельца. Порядок
+ * «худший случай хоста < мост < телефон» закреплён тестом хоста.
+ */
+export const VOICE_PREPARE_BRIDGE_TIMEOUT_MS = 60_000;
+export const VOICE_PREPARE_PHONE_TIMEOUT_MS = 75_000;
+/** Метод, к которому относятся эти таймауты. */
+export const VOICE_PREPARE_METHOD = 'voice.session.prepare';
+
 const id = z.string().regex(REMOTE_ID_RE);
 const revision = z.number().int().nonnegative();
 
