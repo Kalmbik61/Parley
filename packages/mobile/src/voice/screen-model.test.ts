@@ -7,6 +7,7 @@ import {
   TAB_BAR_HEIGHT,
   decideResult,
   formatRemaining,
+  keyboardOverlap,
   keyForText,
   needsReset,
   latestJob,
@@ -168,5 +169,18 @@ describe('composerSpacing: поле ввода над таб-баром и кл�
   it('клавиатура открыта: страница поднята на клавиатуру, без safe area и бара', () => {
     expect(composerSpacing(34, 336)).toEqual({ pageBottom: 336, composerBottom: 8 });
     expect(composerSpacing(90, 336)).toEqual({ pageBottom: 336, composerBottom: 8 });
+  });
+});
+
+describe('keyboardOverlap: высота клавиатуры от её положения на экране', () => {
+  it('клавиатура открыта: от верхнего края до низа окна', () => {
+    expect(keyboardOverlap(852, 516)).toBe(336);
+  });
+  it('рамка ушла за экран или ниже окна: 0', () => {
+    expect(keyboardOverlap(852, 852)).toBe(0);
+    expect(keyboardOverlap(852, 900)).toBe(0);
+  });
+  it('аппаратная клавиатура: только полоска подсказок', () => {
+    expect(keyboardOverlap(852, 808)).toBe(44);
   });
 });

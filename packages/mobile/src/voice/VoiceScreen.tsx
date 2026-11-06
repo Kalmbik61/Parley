@@ -1,7 +1,7 @@
 // Голосовой экран (вкладка Voice, VO-01): рой душ, подпись, старт/стоп и mute, шаблон R15 с полем текста, ход работы, карточки.
 // Экран всегда тёмный (палитра A), от темы системы не зависит.
 import { useEffect, useMemo, useState } from 'react';
-import { Keyboard, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Dimensions, Keyboard, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SymbolView } from 'expo-symbols';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ConnectionBanner } from '../components/ConnectionBanner';
@@ -10,7 +10,7 @@ import { CardSheet } from './CardSheet';
 import { SwarmFace } from './face/SwarmFace';
 import { phoneSwarmSpec } from './face/phone-spec';
 import { useLiveVoice } from './use-live-voice';
-import { composerSpacing } from './screen-model';
+import { composerSpacing, keyboardOverlap } from './screen-model';
 import { CONNECTING_CAPTION_DELAY_MS } from './voice-model';
 
 /** Подпись «connecting» скрыта первые 150 мс, чтобы быстрое подключение не мигало. */
@@ -26,11 +26,13 @@ function useCaption(caption: string | null): string | null {
   return connecting && !late ? null : caption;
 }
 
-/** Высота открытой клавиатуры; 0, пока она закрыта. Экран вкладки тянется до низа окна, так что это ровно нужный отступ. */
+/** Высота открытой клавиатуры; 0, пока она закрыта. Без анимации раскладки (на Fabric она падает, см. no-layout-animation.test.ts). Экран вкладки тянется до низа окна, так что это ровно нужный отступ. */
 function useKeyboardHeight(): number {
   const [height, setHeight] = useState(0);
   useEffect(() => {
-    const show = Keyboard.addListener(Platform.OS === 'ios' ? 'keyboardWillChangeFrame' : 'keyboardDidShow', (e) => setHeight(e.endCoordinates.height));
+    const show = Keyboard.addListener(Platform.OS === 'ios' ? 'keyboardWillChangeFrame' : 'keyboardDidShow', (e) => {
+      setHeight(keyboardOverlap(Dimensions.get('window').height, e.endCoordinates.screenY));
+    });
     const hide = Keyboard.addListener(Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide', () => setHeight(0));
     return () => {
       show.remove();

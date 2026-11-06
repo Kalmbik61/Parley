@@ -147,6 +147,14 @@ export function keyForText(previous: { text: string; key: string } | null, text:
   return previous !== null && previous.text === text ? previous : { text, key: fresh() };
 }
 
+/**
+ * Сколько экрана занимает клавиатура: от её верхнего края (`screenY`) до низа окна, не меньше 0. Так учтены и
+ * аппаратная клавиатура (видна лишь полоска подсказок), и рамка, ушедшая за экран при скрытии.
+ */
+export function keyboardOverlap(windowHeight: number, screenY: number): number {
+  return Math.max(0, windowHeight - screenY);
+}
+
 /** Высота нативного таб-бара iOS; ниже неё `insets.bottom` — только индикатор «домой», бар в него не входит. */
 export const TAB_BAR_HEIGHT = 56;
 const COMPOSER_GAP = 12;
