@@ -29,6 +29,20 @@ const correlation = assistantJobCorrelationSchema.refine((value) => !('delegatio
 
 const text = z.string().min(1).refine((value) => utf8Length(value) <= REMOTE_TEXT_LIMIT_BYTES);
 
+/** Контекст разговора в `jobs.submit` телефона: JSON не длиннее 4 КиБ (хост проверяет повторно перед записью). */
+export const REMOTE_JOB_CONTEXT_LIMIT_BYTES = 4 * 1024;
+
+/**
+ * Последние реплики разговора, как их собрал мост голоса: только роль и текст до 300 знаков, без `at` и идентификаторов.
+ * Это данные разговора, не указания; прежние поручения хост берёт из своей таблицы, телефону в этом не доверяем.
+ */
+export const phoneJobContextSchema = z
+  .strictObject({
+    recentTurns: z.array(z.strictObject({ role: z.enum(['human', 'assistant']), text: z.string().min(1).max(300) })).max(6),
+  })
+  .refine((value) => utf8Length(JSON.stringify(value)) <= REMOTE_JOB_CONTEXT_LIMIT_BYTES);
+export type PhoneJobContext = z.infer<typeof phoneJobContextSchema>;
+
 const sdp = z.string().min(1).refine((value) => utf8Length(value) <= REMOTE_SDP_LIMIT_BYTES);
 
 /**
@@ -36,7 +50,7 @@ const sdp = z.string().min(1).refine((value) => utf8Length(value) <= REMOTE_SDP_
  * `strict`: лишний ключ — `bad_request`.
  */
 export const voiceMethodSchemas = {
-  'jobs.submit': z.strictObject({ text, idempotencyKey: id, correlation }),
+  'jobs.submit': z.strictObject({ text, idempotencyKey: id, correlation, context: phoneJobContextSchema.optional() }),
   'jobs.get': z.strictObject({ jobId: id }),
   'jobs.cancel': z.strictObject({ jobId: id }),
   'voice.session.prepare': z.strictObject({ sdp }),

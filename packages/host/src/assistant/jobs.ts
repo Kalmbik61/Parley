@@ -8,6 +8,8 @@
 
 import type { DatabaseSync } from 'node:sqlite';
 import type { AssistantJobCorrelation, AssistantJobOrigin } from '@parley/protocol';
+import { REMOTE_JOB_CONTEXT_LIMIT_BYTES, type PhoneJobContext } from '@parley/protocol/remote';
+import { HostError } from '../errors.js';
 import type { JobCardRef, JobToolRef } from './job-tokens.js';
 
 export type JobOrigin = AssistantJobOrigin;
@@ -38,6 +40,8 @@ export interface Job {
   /** Итог прогона; `null` — прогон не кончился успешно или итог не снимался (подтверждение после рестарта). */
   result: JobResult | null;
   provider: string;
+  /** Реплики разговора, пришедшие с телефоном (`jobs.submit`, m-3629); `null` — их не было. */
+  context: PhoneJobContext | null;
   createdAt: number;
   updatedAt: number;
   /** Экран уже показал финал job (`ackInline`): push по этому событию не нужен. Читает раздел уведомлений. */
@@ -80,6 +84,14 @@ export interface SubmitInput {
   idempotencyKey: string;
   correlation: JobCorrelation;
   provider?: string;
+  /** Пишется только при создании job: повторный submit с тем же ключом контекст не меняет. */
+  context?: PhoneJobContext;
+}
+
+/** Окно прежних поручений телефона для промпта: сколько и как давно созданных (m-3629). */
+export interface EarlierMobileQuery {
+  limit: number;
+  windowMs: number;
 }
 
 export type AckInlineResult = { ok: boolean; deliveredInline: boolean; reason: 'acked' | 'already_acked' | 'stale' | 'not_found' };
@@ -87,6 +99,11 @@ export type AckInlineResult = { ok: boolean; deliveredInline: boolean; reason: '
 export interface Jobs {
   submitJob(input: SubmitInput): { jobId: string; revision: number };
   getJob(jobId: string): Job | null;
+  /**
+   * Прежние job телефона (`origin: 'mobile'`) для промпта: созданные в пределах `windowMs` до этого job (по `created_at`,
+   * миллисекунды), без него самого, не больше `limit`, от старых к новым.
+   */
+  earlierMobile(jobId: string, query: EarlierMobileQuery): Job[];
   cancelJob(jobId: string): Job | null;
   /**
    * Отмена внутри чужой транзакции (`link_request`, T5): состояние `cancelled` записывается сразу (одним UPDATE, откатывается
@@ -119,6 +136,7 @@ interface Raw {
   request_text: string;
   result_summary: string | null;
   result_json: string | null;
+  context_json: string | null;
   provider: string;
   created_at: number;
   updated_at: number;
@@ -136,6 +154,7 @@ const fromRaw = (row: Raw): Job => ({
   resultSummary: row.result_summary,
   result: row.result_json === null ? null : (JSON.parse(row.result_json) as JobResult),
   provider: row.provider,
+  context: row.context_json === null ? null : (JSON.parse(row.context_json) as PhoneJobContext),
   createdAt: row.created_at,
   updatedAt: row.updated_at,
   deliveredInline: row.delivered_inline === 1,
@@ -273,11 +292,14 @@ export function createJobs(deps: JobsDeps): Jobs {
 
   return {
     submitJob(input) {
+      const contextJson = input.context === undefined ? null : JSON.stringify(input.context);
+      // Хост не доверяет и схеме моста: длина проверяется ещё раз перед записью.
+      if (contextJson !== null && Buffer.byteLength(contextJson, 'utf8') > REMOTE_JOB_CONTEXT_LIMIT_BYTES) throw new HostError('bad_request', 'job context is too long');
       const stamp = now();
       const jobId = `job-${stamp.toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
       db.prepare(
-        `INSERT INTO assistant_jobs (job_id, idempotency_key, origin, correlation_json, state, revision, request_text, provider, created_at, updated_at) VALUES (?, ?, ?, ?, 'queued', 1, ?, ?, ?, ?) ON CONFLICT(idempotency_key) DO NOTHING`,
-      ).run(jobId, input.idempotencyKey, input.origin, JSON.stringify(input.correlation), input.text, input.provider ?? deps.defaultProvider(), stamp, stamp);
+        `INSERT INTO assistant_jobs (job_id, idempotency_key, origin, correlation_json, state, revision, request_text, provider, context_json, created_at, updated_at) VALUES (?, ?, ?, ?, 'queued', 1, ?, ?, ?, ?, ?) ON CONFLICT(idempotency_key) DO NOTHING`,
+      ).run(jobId, input.idempotencyKey, input.origin, JSON.stringify(input.correlation), input.text, input.provider ?? deps.defaultProvider(), contextJson, stamp, stamp);
       const row = db.prepare('SELECT * FROM assistant_jobs WHERE idempotency_key = ?').get(input.idempotencyKey) as unknown as Raw;
       const job = fromRaw(row);
       // Повторный submit с тем же ключом (reconnect, рестарт) ничего не запускает и не оповещает: job тот же.
@@ -288,6 +310,15 @@ export function createJobs(deps: JobsDeps): Jobs {
       return { jobId: job.jobId, revision: job.revision };
     },
     getJob: get,
+    earlierMobile(jobId, query) {
+      const row = db.prepare('SELECT created_at, rowid AS rid FROM assistant_jobs WHERE job_id = ?').get(jobId) as unknown as { created_at: number; rid: number } | undefined;
+      if (row === undefined) return [];
+      // `created_at` — миллисекунды числом: окно сравнивается числами. Берутся самые свежие из окна, отдаются от старых к новым.
+      const rows = db
+        .prepare(`SELECT * FROM assistant_jobs WHERE origin = 'mobile' AND job_id <> ? AND (created_at < ? OR (created_at = ? AND rowid < ?)) AND created_at >= ? ORDER BY created_at DESC, rowid DESC LIMIT ?`)
+        .all(jobId, row.created_at, row.created_at, row.rid, row.created_at - query.windowMs, query.limit) as unknown as Raw[];
+      return rows.map(fromRaw).reverse();
+    },
     cancelJob(jobId) {
       const run = runs.get(jobId);
       // Карточки, что job уже показал человеку, остаются в итоге отменённого job: их можно найти и отозвать.

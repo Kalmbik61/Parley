@@ -5,7 +5,9 @@ import {
   REMOTE_FORBIDDEN,
   REMOTE_METHODS,
   REMOTE_PARAM_RULES,
+  REMOTE_JOB_CONTEXT_LIMIT_BYTES,
   REMOTE_TEXT_LIMIT_BYTES,
+  phoneJobContextSchema,
   checkRemoteParams,
   isRemoteForbidden,
   projectCardsResult,
@@ -45,6 +47,29 @@ describe('голос и jobs: списки', () => {
 });
 
 describe('голос и jobs: правила параметров', () => {
+  it('jobs.submit: context с последними репликами телефона', () => {
+    const ok = { text: 'add an agent', idempotencyKey: 'k-1', correlation: { mode: 'text' } };
+    const turn = { role: 'human', text: 'Create a room called Alpha' };
+    const withContext = (context: unknown) => ({ ...ok, context });
+    expect(checkRemoteParams('jobs.submit', ok)).toBe(true);
+    expect(checkRemoteParams('jobs.submit', withContext({ recentTurns: [] }))).toBe(true);
+    expect(checkRemoteParams('jobs.submit', withContext({ recentTurns: [turn, { role: 'assistant', text: 'Creating room Alpha now.' }] }))).toBe(true);
+    expect(checkRemoteParams('jobs.submit', withContext({ recentTurns: Array.from({ length: 6 }, () => turn) }))).toBe(true);
+    expect(checkRemoteParams('jobs.submit', withContext({ recentTurns: [{ role: 'human', text: 'x'.repeat(300) }] }))).toBe(true);
+    expect(checkRemoteParams('jobs.submit', withContext({ recentTurns: Array.from({ length: 7 }, () => turn) }))).toBe(false);
+    expect(checkRemoteParams('jobs.submit', withContext({ recentTurns: [{ role: 'human', text: 'x'.repeat(301) }] }))).toBe(false);
+    expect(checkRemoteParams('jobs.submit', withContext({ recentTurns: [{ ...turn, text: '' }] }))).toBe(false);
+    expect(checkRemoteParams('jobs.submit', withContext({ recentTurns: [turn], openRequests: [] }))).toBe(false);
+    expect(checkRemoteParams('jobs.submit', withContext({ recentTurns: [{ ...turn, at: 1 }] }))).toBe(false);
+    expect(checkRemoteParams('jobs.submit', withContext({ recentTurns: [{ ...turn, role: 'system' }] }))).toBe(false);
+    expect(checkRemoteParams('jobs.submit', withContext({}))).toBe(false);
+    // 6 реплик по 300 «日» (3 байта) — больше 4 КиБ в UTF-8, хотя по знакам укладываются
+    const heavy = { recentTurns: Array.from({ length: 6 }, () => ({ role: 'human', text: '日'.repeat(300) })) };
+    expect(phoneJobContextSchema.safeParse(heavy).success).toBe(false);
+    expect(checkRemoteParams('jobs.submit', withContext(heavy))).toBe(false);
+    expect(REMOTE_JOB_CONTEXT_LIMIT_BYTES).toBe(4096);
+  });
+
   it('jobs.submit: текст, ключ и связь', () => {
     const ok = { text: 'run tests', idempotencyKey: 'k-1', correlation: { mode: 'text' } };
     expect(checkRemoteParams('jobs.submit', ok)).toBe(true);

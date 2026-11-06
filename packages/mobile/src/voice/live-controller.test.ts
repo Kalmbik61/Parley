@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { PhoneJob } from '@parley/protocol/remote';
+import { REMOTE_JOB_CONTEXT_LIMIT_BYTES, type PhoneJob } from '@parley/protocol/remote';
 import {
   createLiveController,
   idempotencyKeyOf,
   LEVEL_POLL_MS,
+  phoneContextOf,
   type LiveChannel,
   type LiveController,
   type LiveControllerDeps,
@@ -300,6 +301,108 @@ describe('делегация (a)', () => {
     expect(params.idempotencyKey).toMatch(REMOTE_ID_RE);
     expect(Object.keys(params).sort()).toEqual(['correlation', 'idempotencyKey', 'text']);
     expect(h.events.filter((e) => e.type === 'delegateStart')).toHaveLength(1);
+  });
+
+  describe('контекст разговора (m-3629)', () => {
+    const submitsOf = (h: Harness) => h.calls.filter((c) => c.method === 'jobs.submit').map((c) => c.params as Record<string, unknown>);
+    /** Две прежние реплики, потом поручение: мост собирает из них `recentTurns`. */
+    async function converse(h: Harness, first = 'Create a room called Alpha', reply = 'Creating room Alpha now.'): Promise<void> {
+      h.live(inputText(first, 0, 800));
+      h.live({ type: 'session.output_transcript.delta', delta: reply, start_ms: 1000, end_ms: 1200 });
+      h.live(inputText('and add one more agent there', 2000, 2800));
+      h.live(delegationCreated('d1', 3000));
+      await flush();
+      h.advance(3000);
+    }
+
+    it('phoneContextOf: только human и assistant, без пустых, текст до 300, последние 6, без at', () => {
+      const turns = [
+        { role: 'system', at: 1, text: 'drop me' },
+        { role: 'human', at: 2, text: '' },
+        ...Array.from({ length: 8 }, (_, i) => ({ role: i % 2 === 0 ? 'human' : 'assistant', at: i, text: `turn ${i}` })),
+        { role: 'human', at: 9, text: 'y'.repeat(500) },
+      ];
+      const context = phoneContextOf({ recentTurns: turns, openRequests: [{ requestId: 'r' }] });
+      expect(context?.recentTurns).toHaveLength(6);
+      expect(context?.recentTurns.at(-1)).toEqual({ role: 'human', text: 'y'.repeat(300) });
+      expect(context?.recentTurns[0]).toEqual({ role: 'assistant', text: 'turn 3' });
+      expect(JSON.stringify(context)).not.toContain('"at"');
+      expect(phoneContextOf({ recentTurns: [{ role: 'system', text: 'x' }, { role: 'human', text: '' }] })).toBeUndefined();
+      expect(phoneContextOf({ recentTurns: [] })).toBeUndefined();
+      expect(phoneContextOf(undefined)).toBeUndefined();
+    });
+
+    it('phoneContextOf: 6 реплик по 300 иероглифов укладываются в 4 КиБ, остаются новейшие', () => {
+      const turns = Array.from({ length: 6 }, (_, i) => ({ role: 'human', text: String(i).repeat(1) + '漢'.repeat(299) }));
+      const context = phoneContextOf({ recentTurns: turns });
+      expect(new TextEncoder().encode(JSON.stringify(context)).length).toBeLessThanOrEqual(REMOTE_JOB_CONTEXT_LIMIT_BYTES);
+      expect(context?.recentTurns.length).toBeGreaterThan(0);
+      expect(context?.recentTurns.length).toBeLessThan(6);
+      expect(context?.recentTurns.at(-1)?.text.startsWith('5')).toBe(true);
+    });
+
+    it('phoneContextOf: суррогатная пара на границе 300 не рвётся', () => {
+      const text = 'a'.repeat(299) + '😀' + 'b';
+      const cut = phoneContextOf({ recentTurns: [{ role: 'human', text }] })?.recentTurns[0]?.text;
+      expect(cut).toBe('a'.repeat(299));
+      const whole = phoneContextOf({ recentTurns: [{ role: 'human', text: 'a'.repeat(298) + '😀' + 'b' }] })?.recentTurns[0]?.text;
+      expect(whole).toBe('a'.repeat(298) + '😀');
+    });
+
+    it('jobs.submit несёт context: роль и текст без at, до 300 знаков, не больше 6 реплик', async () => {
+      const h = await started();
+      await converse(h, 'x'.repeat(400));
+      const [params] = submitsOf(h);
+      expect(params?.['text']).toBe('and add one more agent there');
+      const turns = (params?.['context'] as { recentTurns: Array<Record<string, unknown>> }).recentTurns;
+      expect(turns[0]?.['role']).toBe('human');
+      expect(String(turns[0]?.['text']).length).toBeLessThanOrEqual(300);
+      expect(String(turns[0]?.['text']).startsWith('xxxxxxxx')).toBe(true);
+      expect(turns[1]).toEqual({ role: 'assistant', text: 'Creating room Alpha now.' });
+      for (const turn of turns) expect(Object.keys(turn).sort()).toEqual(['role', 'text']);
+      expect(turns.length).toBeLessThanOrEqual(6);
+    });
+
+    it('без реплик ключа context нет', async () => {
+      const h = await started();
+      await delegate(h, 'dlg_1');
+      h.advance(3000);
+      const [params] = submitsOf(h);
+      expect(params).toBeDefined();
+      expect(Object.keys(params ?? {})).not.toContain('context');
+    });
+
+    it('bad_request на вызов с context: один повтор без context, тот же ключ и связь', async () => {
+      const h = await started();
+      h.call.mockImplementation(async (method: string, params: unknown) => {
+        called.push(method);
+        h.calls.push({ method, params });
+        if (method === 'jobs.submit') {
+          if ('context' in (params as object)) throw Object.assign(new Error('bad params'), { code: 'bad_request' });
+          return { jobId: 'job_1', revision: 1 };
+        }
+        return { ok: true };
+      });
+      await converse(h);
+      const submits = submitsOf(h);
+      expect(submits).toHaveLength(2);
+      expect(submits[0]).toHaveProperty('context');
+      expect(submits[1]).toEqual({ text: submits[0]?.['text'], idempotencyKey: submits[0]?.['idempotencyKey'], correlation: submits[0]?.['correlation'] });
+      expect(h.events.filter((e) => e.type === 'delegateStart')).toHaveLength(1);
+    });
+
+    it('bad_request без context повтора не получает', async () => {
+      const h = await started();
+      h.call.mockImplementation(async (method: string, params: unknown) => {
+        called.push(method);
+        h.calls.push({ method, params });
+        if (method === 'jobs.submit') throw Object.assign(new Error('bad params'), { code: 'bad_request' });
+        return { ok: true };
+      });
+      await delegate(h, 'dlg_1');
+      expect(submitsOf(h)).toHaveLength(1);
+      expect(submitsOf(h)[0]).not.toHaveProperty('context');
+    });
   });
 
   it('повтор после потери ответа идёт с тем же ключом', async () => {

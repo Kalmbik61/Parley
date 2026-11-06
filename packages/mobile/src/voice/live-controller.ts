@@ -39,7 +39,8 @@ import {
   type StatusNotifier,
 } from '@parley/core/voice-live';
 import type { SwarmEmotion } from '@parley/core/swarm';
-import type { PhoneJob, VoiceMethodResults, VoicePrepareResult } from '@parley/protocol/remote';
+import { REMOTE_JOB_CONTEXT_LIMIT_BYTES } from '@parley/protocol/remote';
+import type { PhoneJob, PhoneJobContext, VoiceMethodResults, VoicePrepareResult } from '@parley/protocol/remote';
 import { NO_LEVELS, readAudioLevels, type AudioLevels } from './audio-levels';
 import type { VoiceEvent } from './voice-model.js';
 
@@ -52,13 +53,44 @@ export type LiveStartResult = { ok: true; voiceSessionId: string } | { ok: false
 /** Единственные методы хоста, которые зовёт контроллер. `cards.decide` и `jobs.cancel` здесь нет намеренно. */
 export interface PhoneCallMap {
   'jobs.submit': {
-    params: { text: string; idempotencyKey: string; correlation: { voiceSessionId: string; delegationId: string; turnId: string } };
+    params: { text: string; idempotencyKey: string; correlation: { voiceSessionId: string; delegationId: string; turnId: string }; context?: PhoneJobContext };
     result: VoiceMethodResults['jobs.submit'];
   };
   'jobs.ackInline': { params: { jobId: string; revision: number }; result: unknown };
   'voice.session.prepare': { params: { sdp: string }; result: VoicePrepareResult };
   'voice.session.close': { params: { voiceSessionId: string }; result: VoiceMethodResults['voice.session.close'] };
 }
+
+const CONTEXT_TURNS = 6;
+const CONTEXT_TURN_CHARS = 300;
+
+/** Длина строки в байтах UTF-8 (`utf8Length` протокола не выходит из `@parley/protocol/remote`). */
+const utf8Length = (text: string): number => new TextEncoder().encode(text).length;
+
+/**
+ * Реплики моста (`{role, text}`, у части версий ещё `at`) в форму `jobs.submit`: только роль и текст, пустые и чужие
+ * роли отброшены, текст до 300 знаков, последние 6, всё не больше 4 КиБ в UTF-8 (старейшие отбрасываются). Нет ни одной реплики — `undefined`, поле не шлётся.
+ */
+export function phoneContextOf(context: unknown): PhoneJobContext | undefined {
+  const raw = typeof context === 'object' && context !== null ? (context as { recentTurns?: unknown }).recentTurns : undefined;
+  if (!Array.isArray(raw)) return undefined;
+  const recentTurns: PhoneJobContext['recentTurns'] = [];
+  for (const turn of raw as unknown[]) {
+    if (typeof turn !== 'object' || turn === null) continue;
+    const { role, text } = turn as { role?: unknown; text?: unknown };
+    if ((role !== 'human' && role !== 'assistant') || typeof text !== 'string' || text === '') continue;
+    // Обрезка не рвёт суррогатную пару: если на границе старшая половина, она уходит вместе с обрезанным хвостом.
+    const cut = /[\ud800-\udbff]/.test(text.charAt(CONTEXT_TURN_CHARS - 1)) ? CONTEXT_TURN_CHARS - 1 : CONTEXT_TURN_CHARS;
+    recentTurns.push({ role, text: text.slice(0, cut) });
+  }
+  const kept = recentTurns.slice(-CONTEXT_TURNS);
+  // Мост ограничивает контекст 4 КиБ в байтах UTF-8: старейшие реплики отбрасываются, пока не уложимся.
+  while (kept.length > 0 && utf8Length(JSON.stringify({ recentTurns: kept })) > REMOTE_JOB_CONTEXT_LIMIT_BYTES) kept.shift();
+  return kept.length === 0 ? undefined : { recentTurns: kept };
+}
+
+/** Хост на 0.30.0 и старше не знает поле `context` и отвечает `bad_request`; job он при этом не создаёт. */
+const isBadRequest = (error: unknown): boolean => typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 'bad_request';
 
 export interface PhoneHostEvents {
   'jobs.changed': { job: PhoneJob };
@@ -549,11 +581,24 @@ export function createLiveController(deps: LiveControllerDeps): LiveController {
         setTimer: deps.setTimer,
         fallbackText: deps.fallbackText,
         submit: async (input) => {
-          const result = await deps.call('jobs.submit', {
+          const params = {
             text: input.text,
             idempotencyKey: idempotencyKeyOf(voiceSessionId, input.delegationId),
             correlation: { voiceSessionId, delegationId: input.delegationId, turnId: input.delegationId },
-          });
+          };
+          const context = phoneContextOf(input.context);
+          let result: VoiceMethodResults['jobs.submit'];
+          if (context === undefined) {
+            result = await deps.call('jobs.submit', params);
+          } else {
+            try {
+              result = await deps.call('jobs.submit', { ...params, context });
+            } catch (error) {
+              // Мак постарше отверг лишний ключ: один повтор без `context`, тот же ключ и связь. Прочие ошибки — как раньше.
+              if (!isBadRequest(error)) throw error;
+              result = await deps.call('jobs.submit', params);
+            }
+          }
           return { requestId: result.jobId, jobId: result.jobId, created: true };
         },
       },

@@ -181,10 +181,9 @@ afterEach(async () => {
 
 describe('contextFromEnv', () => {
   it('раскладывает PARLEY_WORK_DIR на проект и работу', () => {
-    process.env.PARLEY_WORK_DIR = workPaths(project, workId).dir;
-    process.env.PARLEY_SESSION_ID = 's-01';
+    const env = { PARLEY_WORK_DIR: workPaths(project, workId).dir, PARLEY_SESSION_ID: 's-01' };
 
-    expect(contextFromEnv()).toEqual({
+    expect(contextFromEnv(env)).toEqual({
       projectPath: project,
       workId,
       workDir: workPaths(project, workId).dir,
@@ -204,11 +203,9 @@ describe('contextFromEnv', () => {
   });
 
   it('без PARLEY_SESSION_ID сессии нет, а без PARLEY_WORK_DIR — ошибка', () => {
-    process.env.PARLEY_WORK_DIR = workPaths(project, workId).dir;
-    expect(contextFromEnv().sessionId).toBeNull();
+    expect(contextFromEnv({ PARLEY_WORK_DIR: workPaths(project, workId).dir }).sessionId).toBeNull();
 
-    delete process.env.PARLEY_WORK_DIR;
-    expect(() => contextFromEnv()).toThrow(/PARLEY_WORK_DIR/);
+    expect(() => contextFromEnv({})).toThrow(/PARLEY_WORK_DIR/);
   });
 
   it('отвергает каталог не из раскладки работы', () => {
@@ -3775,7 +3772,7 @@ describe('застрявшая сессия: get_map, wait_for и send_message (
     const description = (name: string): string => tools.find((tool) => tool.name === name)?.description ?? '';
 
     expect(description('wait_for')).toContain(
-      '{"state":"stuck"}: that session waits for the human or its usage limit — do not wait for it again, Parley writes when it is back.',
+      '{"state":"stuck"}: waiting for the human or a usage limit — do not wait for it again, Parley writes when back.',
     );
     expect(description('send_message')).toContain('stuck');
   });
