@@ -1,7 +1,7 @@
 // Сфера голосового помощника (VM0, палитра A): react-native-svg рисует градиенты, reanimated двигает слои на UI-потоке.
 // Параметры и переходы — из orb-spec.ts (порт orb-spec.js). Кадровый цикл повторяет step() из JarvisOrb.dc.html:
 // частоты и амплитуды плавно идут к целевым за `ramp`, фазы копятся как φ += f·dt, поэтому смена состояния не рвёт движение.
-import { useEffect, useId, useMemo, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useState } from 'react';
 import { StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 import Animated, {
   Easing,
@@ -562,6 +562,8 @@ export function Orb({ state, size = 168, level, cutout = voicePalette.bg }: OrbP
     prev: null,
   });
   const fade = useSharedValue(1);
+  // Колбэк на JS-потоке: функцию, созданную на UI-потоке, через аргументы runOnJS передавать нельзя (на JS она придёт не вызываемой).
+  const clearPrev = useCallback(() => setPals((q) => ({ ...q, prev: null })), []);
   useEffect(() => {
     setPals((p) => {
       if (p.cur === c.pal) return p;
@@ -570,12 +572,12 @@ export function Orb({ state, size = 168, level, cutout = voicePalette.bg }: OrbP
         1,
         { duration: c.xf, easing: c.xf <= 100 ? Easing.linear : Easing.inOut(Easing.ease) },
         (done) => {
-          if (done) runOnJS(setPals)((q) => ({ ...q, prev: null }));
+          if (done) runOnJS(clearPrev)();
         },
       );
       return { cur: c.pal, prev: p.cur };
     });
-  }, [c.pal, c.xf, fade]);
+  }, [c.pal, c.xf, fade, clearPrev]);
   const fadeStyle = useAnimatedStyle(() => ({ opacity: fade.value }));
   const rootStyle = useAnimatedStyle(() => ({ opacity: opSv.value }));
 
