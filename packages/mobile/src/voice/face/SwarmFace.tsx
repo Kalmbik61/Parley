@@ -43,7 +43,12 @@ let atlas: Atlas | null = null;
 
 /** Спрайты 12 цветов (строка — палитра, столбец — цвет) в одном изображении; стопы градиента — как в canvas острова. */
 function buildAtlas(): Atlas {
-  const surface = Skia.Surface.MakeOffscreen(SPRITE * 4, SPRITE * PALETTES.length) ?? Skia.Surface.Make(SPRITE * 4, SPRITE * PALETTES.length);
+  // Атлас строится на JS-потоке, а `<Picture>` играет кадр на UI-потоке. В Skia 2.14 контекст Metal свой на каждый поток
+  // (thread_local), и GPU-текстура JS-потока в чужом контексте не рисуется. Поэтому атлас — растровое изображение:
+  // CPU-поверхность `Surface.Make` (192×144, это дёшево), а у GPU-снимка берётся `makeNonTextureImage()`.
+  const width = SPRITE * 4;
+  const height = SPRITE * PALETTES.length;
+  const surface = Skia.Surface.Make(width, height) ?? Skia.Surface.MakeOffscreen(width, height);
   if (surface === null) throw new Error('Skia: no surface for the swarm atlas');
   const canvas = surface.getCanvas();
   const rects: SkRect[] = [];
@@ -72,7 +77,9 @@ function buildAtlas(): Atlas {
     });
   });
   surface.flush();
-  return { image: surface.makeImageSnapshot(), rects };
+  const snapshot = surface.makeImageSnapshot();
+  // У растровой поверхности снимок уже растровый (`makeNonTextureImage` вернёт его же); у GPU-поверхности это копия в память.
+  return { image: snapshot.makeNonTextureImage() ?? snapshot, rects };
 }
 
 /** Пустая картинка до первого кадра. */
