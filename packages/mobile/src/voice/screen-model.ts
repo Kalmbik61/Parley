@@ -146,3 +146,27 @@ export const needsReset = (voice: VoiceModel): boolean => voice.state === 'error
 export function keyForText(previous: { text: string; key: string } | null, text: string, fresh: () => string): { text: string; key: string } {
   return previous !== null && previous.text === text ? previous : { text, key: fresh() };
 }
+
+/** Высота нативного таб-бара iOS; ниже неё `insets.bottom` — только индикатор «домой», бар в него не входит. */
+export const TAB_BAR_HEIGHT = 56;
+const COMPOSER_GAP = 12;
+const COMPOSER_GAP_OVER_KEYBOARD = 8;
+
+export interface ComposerSpacing {
+  /** Нижний отступ всей страницы: высота клавиатуры, когда она открыта, иначе 0. */
+  pageBottom: number;
+  /** Нижний отступ внутри панели с полем ввода. */
+  composerBottom: number;
+}
+
+/**
+ * Куда поставить поле ввода. Таб-бар плавает над контентом, поэтому при закрытой клавиатуре низ панели лежит выше бара
+ * и нижней safe area. Если `insets.bottom` уже включает бар (UIKit добавляет его в safe area вкладки), второй раз бар
+ * не прибавляется. При открытой клавиатуре бар скрыт под ней: страница поднимается на высоту клавиатуры, а safe area
+ * и бар не считаются, иначе между полем и клавиатурой возникнет двойной зазор.
+ */
+export function composerSpacing(insetsBottom: number, keyboardHeight: number): ComposerSpacing {
+  if (keyboardHeight > 0) return { pageBottom: keyboardHeight, composerBottom: COMPOSER_GAP_OVER_KEYBOARD };
+  const clearOfBar = insetsBottom >= TAB_BAR_HEIGHT ? insetsBottom : insetsBottom + TAB_BAR_HEIGHT;
+  return { pageBottom: 0, composerBottom: Math.max(clearOfBar, COMPOSER_GAP) };
+}

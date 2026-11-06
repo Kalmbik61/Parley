@@ -1,7 +1,7 @@
 // Голосовой экран (вкладка Voice, VO-01): сфера, подпись, старт/стоп и mute, шаблон R15 с полем текста, ход работы, карточки.
 // Экран всегда тёмный (палитра A), от темы системы не зависит.
 import { useEffect, useState } from 'react';
-import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Keyboard, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SymbolView } from 'expo-symbols';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ConnectionBanner } from '../components/ConnectionBanner';
@@ -9,6 +9,7 @@ import { typography, voicePalette } from '../theme';
 import { CardSheet } from './CardSheet';
 import { Orb } from './orb/Orb';
 import { useLiveVoice } from './use-live-voice';
+import { composerSpacing } from './screen-model';
 import { CONNECTING_CAPTION_DELAY_MS } from './voice-model';
 
 /** Подпись «connecting» скрыта первые 150 мс, чтобы быстрое подключение не мигало. */
@@ -24,8 +25,24 @@ function useCaption(caption: string | null): string | null {
   return connecting && !late ? null : caption;
 }
 
+/** Высота открытой клавиатуры; 0, пока она закрыта. Экран вкладки тянется до низа окна, так что это ровно нужный отступ. */
+function useKeyboardHeight(): number {
+  const [height, setHeight] = useState(0);
+  useEffect(() => {
+    const show = Keyboard.addListener(Platform.OS === 'ios' ? 'keyboardWillChangeFrame' : 'keyboardDidShow', (e) => setHeight(e.endCoordinates.height));
+    const hide = Keyboard.addListener(Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide', () => setHeight(0));
+    return () => {
+      show.remove();
+      hide.remove();
+    };
+  }, []);
+  return height;
+}
+
 export function VoiceScreen() {
   const insets = useSafeAreaInsets();
+  const keyboardHeight = useKeyboardHeight();
+  const spacing = composerSpacing(insets.bottom, keyboardHeight);
   const v = useLiveVoice();
   const caption = useCaption(v.orb.caption);
   const [text, setText] = useState('');
@@ -38,7 +55,7 @@ export function VoiceScreen() {
   };
 
   return (
-    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={[styles.page, { paddingTop: insets.top }]}>
+    <View style={[styles.page, { paddingTop: insets.top, paddingBottom: spacing.pageBottom }]}>
       <ConnectionBanner />
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         <Text accessibilityRole="header" allowFontScaling style={[typography.largeTitle, styles.title]}>
@@ -114,7 +131,7 @@ export function VoiceScreen() {
         )}
       </ScrollView>
 
-      <View style={[styles.composer, { paddingBottom: Math.max(insets.bottom, 12) }]}>
+      <View style={[styles.composer, { paddingBottom: spacing.composerBottom }]}>
         <TextInput
           accessibilityLabel="Write your request"
           allowFontScaling
@@ -138,7 +155,7 @@ export function VoiceScreen() {
         </Pressable>
       </View>
       <CardSheet card={v.card} visible={v.sheetOpen} mode={v.sheetMode} busy={v.cardBusy} onDecide={v.decide} onLater={v.later} />
-    </KeyboardAvoidingView>
+    </View>
   );
 }
 

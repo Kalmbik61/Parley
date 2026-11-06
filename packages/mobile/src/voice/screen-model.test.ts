@@ -3,6 +3,8 @@ import type { PhoneJob } from '@parley/protocol/remote';
 import {
   appStateEffects,
   chooseFallback,
+  composerSpacing,
+  TAB_BAR_HEIGHT,
   decideResult,
   formatRemaining,
   keyForText,
@@ -152,5 +154,19 @@ describe('m5: ключ текстового запроса', () => {
     const first = keyForText(null, 'close S05', fresh);
     expect(keyForText(first, 'close S05', fresh)).toBe(first);
     expect(keyForText(first, 'other', fresh).key).toBe('k2');
+  });
+});
+
+describe('composerSpacing: поле ввода над таб-баром и клавиатурой', () => {
+  it('клавиатура закрыта, insets без бара: добавляет высоту бара', () => {
+    expect(composerSpacing(34, 0)).toEqual({ pageBottom: 0, composerBottom: 34 + TAB_BAR_HEIGHT });
+    expect(composerSpacing(0, 0).composerBottom).toBe(TAB_BAR_HEIGHT);
+  });
+  it('клавиатура закрыта, insets уже включает бар: бар не считается дважды', () => {
+    expect(composerSpacing(90, 0)).toEqual({ pageBottom: 0, composerBottom: 90 });
+  });
+  it('клавиатура открыта: страница поднята на клавиатуру, без safe area и бара', () => {
+    expect(composerSpacing(34, 336)).toEqual({ pageBottom: 336, composerBottom: 8 });
+    expect(composerSpacing(90, 336)).toEqual({ pageBottom: 336, composerBottom: 8 });
   });
 });
