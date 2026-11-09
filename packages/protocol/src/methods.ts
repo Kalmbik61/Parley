@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { SessionProcessesSnapshot } from './processes.js';
 import { browserAgentResultParams } from './browser-agent.js';
 import { capabilitySkillMethodSchemas } from './capability-skill-actions.js';
 import type { CapabilitySkillMethodResults } from './capability-skill-actions.js';
@@ -244,6 +245,9 @@ export const METHODS = {
   'sessions.resumeInterrupted': z.object({ refs: z.array(sessionRef) }),
   'pty.attach': z.object({ ref: sessionRef }),
   'pty.detach': z.object({ ref: sessionRef }),
+  // Процессы PTY сессии для тулбара: подписка отдаёт начальный снимок, дальше — `processes.changed`.
+  'processes.subscribe': z.object({ ref: sessionRef }),
+  'processes.unsubscribe': z.object({ ref: sessionRef }),
   'wake.pause': z.object({}),
   'wake.resume': z.object({}),
   'wake.state': z.object({}),
@@ -559,6 +563,8 @@ export interface Results extends AssistantMethodResults, VoiceMethodResults, Car
   'sessions.resumeInterrupted': { ok: true };
   'pty.attach': { snapshot: string; cols: number; rows: number };
   'pty.detach': { ok: true };
+  'processes.subscribe': SessionProcessesSnapshot;
+  'processes.unsubscribe': { ok: true };
   'wake.pause': { paused: boolean };
   'wake.resume': { paused: boolean };
   'wake.state': { paused: boolean };

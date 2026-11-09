@@ -76,6 +76,7 @@ export type {
   Result,
   Results,
 } from './methods.js';
+export type { SessionProcess, SessionProcessesSnapshot } from './processes.js';
 export type { EventData, EventName, Events } from './events.js';
 export {
   LineDecoder,

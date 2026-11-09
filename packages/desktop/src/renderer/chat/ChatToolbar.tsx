@@ -19,7 +19,8 @@ import { useFeedUnavailableReason } from '../lib/feed-view.js';
 import type { ReactNode } from 'react';
 import { ChevronDown, LoaderCircle } from 'lucide-react';
 
-import type { EffortOption, LiveMetrics, ModelOption } from '@parley/protocol';
+import type { EffortOption, LiveMetrics, ModelOption, SessionRef } from '@parley/protocol';
+import type { ParleyBridge } from '../../shared/bridge.js';
 import type { TerminalView } from '../../shared/layout-types.js';
 import { S } from '../../shared/strings.js';
 import { useLayoutStore } from '../layout/store.js';
@@ -43,6 +44,7 @@ import {
 } from '../ui/dropdown-menu.js';
 import { ToggleGroup, ToggleGroupItem } from '../ui/toggle-group.js';
 import { MicButton } from '../voice/MicButton.js';
+import { SessionProcessesChip } from './SessionProcessesChip.js';
 import { SessionUsageChip } from './SessionUsageChip.js';
 
 /** Высота тулбара: на столько поверхность терминала опускается под ним. */
@@ -137,6 +139,8 @@ export interface ChatToolbarProps {
   choiceMenu?: ChoiceMenuProps;
   /** Сколько карточек агентов ещё работает; нет — кнопки «N agents running» нет. Клик ведёт ленту к первой из них. */
   agents?: { running: number; onShow: () => void };
+  /** Чип «N shell» (процессы PTY сессии); нет — чипа нет. `active`: вкладка на экране и сессия живая. */
+  processes?: { bridge: ParleyBridge; sessionRef: SessionRef; active: boolean };
   /** Цель диктовки вида Terminal (`terminal:<refKey>`, спека 3.2); нет — кнопки нет. */
   micTargetId?: string;
   /** Живые цифры сессии: значок расхода токенов (спека расхода токенов, 3.4); нет или `null` — значка нет. */
@@ -234,7 +238,7 @@ function ChoiceMenu({ menu }: { menu: ChoiceMenuProps }): JSX.Element {
   );
 }
 
-export function ChatToolbar({ workKey, tabId, view, available, provider, modeLabelText = null, model = null, modeMenu, choiceMenu, agents, micTargetId, metrics = null, contextChip }: ChatToolbarProps): JSX.Element {
+export function ChatToolbar({ workKey, tabId, view, available, provider, modeLabelText = null, model = null, modeMenu, choiceMenu, agents, processes, micTargetId, metrics = null, contextChip }: ChatToolbarProps): JSX.Element {
   const reason = useFeedUnavailableReason(provider);
   const unavailableTitle = reason === 'unknown-version' ? S.chat.versionUnknown
     : reason === 'host-unsupported' ? S.chat.hostFeedUnsupported
@@ -299,6 +303,7 @@ export function ChatToolbar({ workKey, tabId, view, available, provider, modeLab
           {S.chat.agent.running(agents.running)}
         </Button>
       )}
+      {processes === undefined ? null : <SessionProcessesChip bridge={processes.bridge} sessionRef={processes.sessionRef} active={processes.active} />}
       {modeMenu === undefined && modeLabelText !== null ? (
         <span data-testid="chat-mode" title={S.chat.mode.label} className="shrink-0 text-xs text-muted-foreground">
           {modeLabelText}

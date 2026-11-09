@@ -6,6 +6,7 @@ import type { BrowserAgentOpEvent } from './browser-agent.js';
 import type { CapabilitySnapshot } from './capability-snapshot.js';
 import type { FeedItem, SessionActivity } from '@parley/core';
 import type { FeedDecisions } from './feed.js';
+import type { SessionProcessesSnapshot } from './processes.js';
 import type {
   CapacitySnapshot,
   HostNotice,
@@ -35,6 +36,8 @@ export interface Events {
   'activity.changed': { ref: SessionRef; activity: SessionActivity; metrics: LiveMetrics | null };
   'pty.output': { ref: SessionRef; data: string };
   'pty.resync': { ref: SessionRef };
+  /** Заменяющий снимок процессов сессии — только подписчикам `processes.subscribe`. */
+  'processes.changed': SessionProcessesSnapshot;
   'pty.exit': { ref: SessionRef; exitCode: number; signal: number | null };
   'host.notice': HostNotice;
   'wake.changed': { paused: boolean };

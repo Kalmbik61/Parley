@@ -1999,6 +1999,19 @@ export const S = {
     retryDelay: (seconds: number): string => seconds > 0 ? `Retrying in ${seconds}s` : 'Retrying…',
     retryScheduled: (seconds: number): string => `Retry scheduled after ${seconds}s`,
     error: 'Request failed',
+    /** Чип «N shell» в тулбаре сессии и список процессов её PTY (план shell-processes, этап C). */
+    processes: {
+      chip: (count: number): string => `${count} shell`,
+      chipLabel: (count: number): string => (count === 1 ? '1 running process in this session' : `${count} running processes in this session`),
+      title: 'Running processes',
+      list: 'Running processes',
+      loading: 'Loading…',
+      empty: 'No running processes',
+      unavailable: 'Process list unavailable',
+      approximate: 'Approximate list: it may include Codex helper processes and miss some commands.',
+      cpu: (percent: number): string => `${percent.toFixed(1)}% CPU`,
+      memory: (rssKb: number): string => `${Math.max(1, Math.round(rssKb / 1024))} MB`,
+    },
     agent: {
       fallbackTitle: 'Agent',
       toolCalls: (count: number): string => (count === 1 ? '1 tool call' : `${count} tool calls`),

@@ -333,3 +333,26 @@ it('без приёмника агента метода browser.agentResult не
   const { deps } = fakeDeps(Promise.resolve());
   expect(createHostHandlers(deps).methods['browser.agentResult']).toBeUndefined();
 });
+
+it('processes.* регистрируются только при мониторе процессов, снимка работ не ждут, а dropClient снимает подписки клиента', async () => {
+  const names = ['processes.subscribe', 'processes.unsubscribe'] as const;
+  const { deps } = fakeDeps(Promise.resolve());
+  for (const name of names) expect(createHostHandlers(deps).methods).not.toHaveProperty(name);
+
+  const stop = vi.fn();
+  const monitor = { subscribe: vi.fn(() => stop), refresh: vi.fn(async () => {}) };
+  const handlers = createHostHandlers({
+    ...deps,
+    pty: { ...deps.pty, get: () => ({}), on: () => () => {} } as never,
+    processMonitor: monitor,
+  });
+  for (const name of names) {
+    expect(handlers.methods[name]).toBeTypeOf('function');
+    expect(WORKS_GATED_METHODS as readonly string[]).not.toContain(name);
+  }
+  const client = { send: () => true } as never;
+  await handlers.methods['processes.subscribe']!({ ref } as never, { client } as unknown as RequestInfo);
+  expect(monitor.subscribe).toHaveBeenCalledTimes(1);
+  handlers.dropClient(client);
+  expect(stop).toHaveBeenCalledTimes(1);
+});

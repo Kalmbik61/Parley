@@ -516,6 +516,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
           view="chat"
           available
           provider={provider}
+          processes={{ bridge, sessionRef, active: visible && live }}
           metrics={metrics}
           contextChip={
             metrics === null || session === undefined || sessionName === null ? undefined : (
