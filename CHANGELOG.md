@@ -4,15 +4,26 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
-## Unreleased
+## 0.32.0
+
+**Impact**
+
+- **Goal:** See which shell commands a session is running, and stop showing a session that is still in its turn as finished.
+- **Behaviour:** The session toolbar gets a "N shell" chip with the running commands of the open session's terminal: executable name, elapsed time, CPU and memory, never arguments, paths or environment. A Claude turn that stays silent for more than 30 seconds is shown as working everywhere (window, island, phone, assistant, Telegram) for up to 15 minutes of silence, and one finished turn gives one Done. The phone still cannot call `processes.*`. The protocol schema does not change for the activity fix.
+- **Numbers:** Shell chip (PR #196): `ps` median 21.8 ms and maximum 25.3 ms at 993 rows (10 runs); a full poll median 25 ms and maximum 97 ms at 988 rows (162 polls); on 16 real terminals the 13 idle ones gave an empty list; a rewritten `argv[0]` carrying a fake token left no trace in 323 snapshots. Activity fix (PR #198): before it, one workspace had 2145 idle reminders right after a `Stop` against 3354 `Stop`, and 1099 pauses longer than 30 s inside 334 of 2246 turns (14.9%, an upper bound); live check 7 of 7 passed with one Claude Code 2.1.319 session on `haiku`. CI on master at 041f20a7 passed.
+- **Screens:** The chip with its list open, from the E2E run of PR #196: ![The "2 shell" chip with zsh and sleep listed](https://github.com/Kalmbik61/Parley/blob/bfaf1b32f88f/docs/audits/2026-11-09/session-processes-chip.png?raw=true). The activity fix has no new UI.
+- **For the human:** Update the Mac app. Open a session with a long command running and click the "N shell" chip. The chip counts processes, not commands, so one test run can show `17 shell`.
+- **Risk:** Low to medium. For Codex the process list is approximate: startup `git` stays visible for 39–68 s, and a command run directly under `node` is hidden. Long executable names are cut to 16 characters on macOS. A turn that ends with neither `Stop` nor an interrupt record stays working for up to 15 minutes, and a command silent for more than 15 minutes shows one false Done before returning to working. `host.diagnostics` and agent tools still read the raw state, so they can say `unseen` while the window says working.
+- **Cost:** About 25 ms of `ps` every 2 seconds, only while a live session tab is displayed. The activity fix adds no polling. CPU share and tokens not measured.
+- **Verdict:** Ready to release.
 
 ### Added
 
-- **Running shell commands in the session toolbar.** A "N shell" chip appears next to "N agents running" while the session's terminal has running commands; click it for a list with each command's executable name, elapsed time, CPU and memory. Only the executable name is shown, never arguments, paths or environment. The host reads the process tree of each subscribed session with one shared `ps` every 2 seconds and only while the tab is open. Known limitation: for Codex the list is approximate. It may include Codex helper processes (for example `git` at startup) and miss a command that Codex runs directly under `node`, and the list says so.
+- **Running shell commands in the session toolbar** ([#196](https://github.com/Kalmbik61/Parley/pull/196)). A "N shell" chip appears next to "N agents running" while the session's terminal has running commands; click it for a list with each command's executable name, elapsed time, CPU and memory. Only the executable name is shown, never arguments, paths or environment. The host reads the process tree of each subscribed session with one shared `ps` every 2 seconds and only while the tab is open. Known limitation: for Codex the list is approximate. It may include Codex helper processes (for example `git` at startup) and miss a command that Codex runs directly under `node`, and the list says so.
 
 ### Fixed
 
-- **A running session no longer looks finished.** A Claude session in the middle of a turn that stays silent for more than 30 seconds (a long tool call or a slow reply) is shown as working in the window, on the island, on the phone, by the assistant and in Telegram, instead of as done, for up to 15 minutes of silence; after that it counts as finished. A turn interrupted with Esc is shown as done about 30 seconds later. The idle reminder after a finished turn no longer creates a second Done or returns a viewed session to unseen.
+- **A running session no longer looks finished** ([#198](https://github.com/Kalmbik61/Parley/pull/198)). A Claude session in the middle of a turn that stays silent for more than 30 seconds (a long tool call or a slow reply) is shown as working in the window, on the island, on the phone, by the assistant and in Telegram, instead of as done, for up to 15 minutes of silence; after that it counts as finished. A turn interrupted with Esc is shown as done about 30 seconds later. The idle reminder after a finished turn no longer creates a second Done or returns a viewed session to unseen.
 
 ## 0.31.0
 
