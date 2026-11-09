@@ -46,6 +46,11 @@ export interface SessionIndex {
    */
   lastUserRecordAt: string | null;
   /**
+   * Время последней записи пользователя, чей текст начинается с `[Request interrupted by user` (Esc: ни `Stop`, ни
+   * `idle_prompt` после прерывания не приходит). Только лог Claude Code; индекс Codex поле не заполняет (`null`).
+   */
+  lastInterruptAt: string | null;
+  /**
    * Время последней записи человека или ассистента (`message.role`). Служебные записи — итоги хуков
    * (`stop_hook_summary`), `turn_duration`, вложения — Claude Code дописывает и после конца хода: по общему
    * `endedAt` «страховка по логу» считала бы закончившую ход сессию работающей ещё порог тишины, а
@@ -200,6 +205,7 @@ export class ClaudeIndexAccumulator {
   startedAt: string | null = null;
   endedAt: string | null = null;
   lastUserRecordAt: string | null = null;
+  lastInterruptAt: string | null = null;
   lastWorkRecordAt: string | null = null;
   lastApiError: SessionIndex['lastApiError'];
 
@@ -282,6 +288,13 @@ export class ClaudeIndexAccumulator {
       if (this.endedAt === null || at > this.endedAt) this.endedAt = at;
       if (record.role === 'user' && (this.lastUserRecordAt === null || at > this.lastUserRecordAt)) {
         this.lastUserRecordAt = at;
+      }
+      if (
+        record.role === 'user' &&
+        record.text?.startsWith('[Request interrupted by user') === true &&
+        (this.lastInterruptAt === null || at > this.lastInterruptAt)
+      ) {
+        this.lastInterruptAt = at;
       }
       if (record.role !== null && (this.lastWorkRecordAt === null || at > this.lastWorkRecordAt)) {
         this.lastWorkRecordAt = at;
@@ -376,6 +389,7 @@ export class ClaudeIndexAccumulator {
       startedAt,
       endedAt,
       lastUserRecordAt: this.lastUserRecordAt,
+      lastInterruptAt: this.lastInterruptAt,
       lastWorkRecordAt: this.lastWorkRecordAt,
       ...(this.lastApiError === undefined ? {} : { lastApiError: this.lastApiError }),
       durationMs,

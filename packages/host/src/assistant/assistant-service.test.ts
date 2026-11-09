@@ -543,6 +543,18 @@ describe('assistant-service: решение по карточке агента',
     const detail = (await service.tool('parley_detail', { target: 'S03' })).body as { text: string };
     expect(detail.text).toContain('claude · limit — Hit its Claude Code usage limit; the reset time is unknown');
   });
+  it('parley_overview: тишина открытого хода (quietTurn) — сессия working, а не done (false-done, пункт 12)', async () => {
+    const service = createAssistantService({
+      ...deps,
+      activity: { get: (ref) => ({ activity: { activity: ref.sessionId === 's-03' ? 'unseen' : 'working', waitingFor: null, need: null, turnEndedAt: ref.sessionId === 's-03' ? '2026-10-22T10:00:00.000Z' : null, ...(ref.sessionId === 's-03' ? { quietTurn: true } : {}) }, metrics: null }) as never },
+    });
+    await service.ask(ASK);
+    const body = (await service.tool('parley_overview', {})).body as { text: string; overview: { rooms: Array<{ members: Array<{ ref: string; state: string }> }> } };
+    expect(body.text).not.toContain('done · unseen');
+    const states = body.overview.rooms.flatMap((room) => room.members).filter((member) => member.ref.endsWith(':s-03')).map((member) => member.state);
+    expect(states.length).toBeGreaterThan(0);
+    expect(states.every((state) => state === 'working')).toBe(true);
+  });
   it('parley_overview: сбой ленты — обзор без карточек, не ошибка', async () => {
     const service = await started();
     snapshot.mockRejectedValue(new Error('no feed'));

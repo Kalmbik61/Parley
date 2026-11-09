@@ -68,6 +68,7 @@ let snapshot: WorksSnapshot;
 let live: Record<string, string>;
 /** Чего ждёт сессия `s-01` (`SessionActivity.need`); `null` — ничего. */
 let liveNeed: SessionNeed | null;
+let liveQuiet = false;
 let feedItems: FeedItem[];
 let feedTerminal: boolean;
 let worksListener: ((next: WorksSnapshot, previous: WorksSnapshot) => void) | null;
@@ -176,10 +177,11 @@ const snap = (over: Record<string, unknown> = {}): WorksSnapshot => ({ entries: 
 const letter = (): unknown => ({ id: 'm-01', roomId: null, from: 's-01', to: ['human'], at: AT, text: 'hello', kind: 'note', readBy: {} });
 const decisionRoom = (): unknown => ({ id: 'r-01', title: 'Auth', members: ['s-01'], proposal: { id: 'p-01', from: 's-01', text: 'ship it', rev: 0, at: AT } });
 
-const setActivity = (value: string, need: SessionNeed | null = null): void => {
+const setActivity = (value: string, need: SessionNeed | null = null, quietTurn = false): void => {
   live['s-01'] = value;
   liveNeed = need;
-  activityListener?.(REF, { activity: { activity: value, need }, metrics: null });
+  liveQuiet = quietTurn;
+  activityListener?.(REF, { activity: { activity: value, need, ...(quietTurn ? { quietTurn: true } : {}) }, metrics: null });
 };
 /** Потребность сессии (спека застрявших 3.1) с умолчаниями. */
 const needOf = (kind: SessionNeed['kind'], over: Partial<SessionNeed> = {}): SessionNeed => ({
@@ -230,7 +232,7 @@ function make(): TelegramService {
     letters: memoryLetters,
     activity: {
       get: (ref: SessionRef) =>
-        live[ref.sessionId] === undefined ? undefined : { activity: { activity: live[ref.sessionId], need: liveNeed }, metrics: null },
+        live[ref.sessionId] === undefined ? undefined : { activity: { activity: live[ref.sessionId], need: liveNeed, ...(liveQuiet ? { quietTurn: true } : {}) }, metrics: null },
       onChange: (listener: any) => ((activityListener = listener), () => (activityListener = null)),
     },
     feed,
@@ -287,6 +289,7 @@ beforeEach(async () => {
   snapshot = snap();
   live = { 's-01': 'working' };
   liveNeed = null;
+  liveQuiet = false;
   feedItems = [];
   feedTerminal = false;
   worksListener = null;
@@ -782,6 +785,21 @@ describe('createTelegramService: комнаты, письма, помощник'
     expect(sent()).toHaveLength(1);
     expect(sent()[0]?.params.text).toContain(T.finished('Backend', WHERE));
     expect(sent()[0]?.params.disable_notification).toBe(true);
+  });
+
+  it('тишина открытого хода не шлёт «finished»; настоящий Stop — шлёт (false-done, пункт 11)', async () => {
+    await bootLinked();
+    service.configChanged({ ...cfg, telegramFinished: true });
+    setActivity('working');
+    // Сырое unseen с quietTurn: ход открыт, хост отдаёт показанное working.
+    setActivity('unseen', null, true);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(sent()).toEqual([]);
+
+    setActivity('unseen');
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(sent()).toHaveLength(1);
+    expect(sent()[0]?.params.text).toContain(T.finished('Backend', WHERE));
   });
 
   it('напоминание при выключенном помощнике доходит до чата', async () => {

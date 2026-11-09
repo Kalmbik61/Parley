@@ -314,6 +314,7 @@ export class CodexIndexAccumulator {
       startedAt,
       endedAt,
       lastUserRecordAt: this.lastUserRecordAt,
+      lastInterruptAt: null,
       // У Codex служебного хвоста после хода нет в этом смысле: время работы — время последней записи.
       lastWorkRecordAt: endedAt,
       ...(lastTurnEvent === undefined ? {} : { lastTurnEvent }),
