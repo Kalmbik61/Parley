@@ -4,6 +4,12 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
+## Unreleased
+
+### Added
+
+- **Running shell commands in the session toolbar.** A "N shell" chip appears next to "N agents running" while the session's terminal has running commands; click it for a list with each command's executable name, elapsed time, CPU and memory. Only the executable name is shown, never arguments, paths or environment. The host reads the process tree of each subscribed session with one shared `ps` every 2 seconds and only while the tab is open. Known limitation: for Codex the list is approximate. It may include Codex helper processes (for example `git` at startup) and miss a command that Codex runs directly under `node`, and the list says so.
+
 ## 0.31.0
 
 **Impact**

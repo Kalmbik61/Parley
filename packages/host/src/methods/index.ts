@@ -58,7 +58,9 @@ import { createJournalHandlers } from './journal.js';
 import { createMemoryHandlers } from './memory.js';
 import { hostInfo, hostShutdown } from './host.js';
 import { mailMarkRead } from './mail.js';
+import { createProcessesHandlers } from './processes.js';
 import { createPtyHandlers } from './pty.js';
+import type { ProcessMonitor } from '../pty/process-monitor.js';
 import { createCustomProviderHandlers } from './custom-providers.js';
 import {
   createProvidersCheck,
@@ -108,6 +110,8 @@ export interface MethodDeps {
   sweeper?: WorktreeSweeper;
   /** Лента вида «Chat» (`feed.*`); без неё методов ленты у хоста нет. */
   feed?: FeedService;
+  /** Процессы PTY сессий для тулбара (`processes.*`); без монитора методов у хоста нет. */
+  processMonitor?: Pick<ProcessMonitor, 'subscribe' | 'refresh'>;
   /**
    * Кэшированный каталог ролей хоста для `roles.list` и `recipes.list`. Хост отдаёт его же инструментам агентов
    * (`list_roles`), чтобы кэш был один; без него методы заводят свой.
@@ -402,6 +406,13 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     methods['feed.decide'] = feed.feedDecide as AnyHandler;
     methods['feed.interrupt'] = feed.feedInterrupt as AnyHandler;
   }
+  const processes = deps.processMonitor === undefined
+    ? undefined
+    : createProcessesHandlers({ monitor: deps.processMonitor, pty: deps.pty });
+  if (processes !== undefined) {
+    methods['processes.subscribe'] = processes.processesSubscribe as AnyHandler;
+    methods['processes.unsubscribe'] = processes.processesUnsubscribe as AnyHandler;
+  }
   if (deps.browserAgent !== undefined) {
     const endpoint = deps.browserAgent;
     methods['browser.agentResult'] = (async (params: Params<'browser.agentResult'>, request: RequestInfo) => {
@@ -453,5 +464,14 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     }
   }
 
-  return { methods, notifications, counters: { ptyAttached: pty.attachedCount }, dropClient: (client) => { pty.dropClient(client); deps.works.sync?.dropClient(client.id); } };
+  return {
+    methods,
+    notifications,
+    counters: { ptyAttached: pty.attachedCount },
+    dropClient: (client) => {
+      pty.dropClient(client);
+      processes?.dropClient(client);
+      deps.works.sync?.dropClient(client.id);
+    },
+  };
 }

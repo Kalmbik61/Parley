@@ -101,6 +101,7 @@ import { createCliUpdates, type CliUpdatesOptions } from './providers/updates.js
 import { createCliUpdateRunner } from './providers/update-run.js';
 import type { VersionProbe } from './providers/versions.js';
 import { createPtyManager } from './pty/pty-manager.js';
+import { createProcessMonitor } from './pty/process-monitor.js';
 import { createSender } from './pty/send.js';
 import { createFeedService } from './feed/feed-service.js';
 import { ensureCodexHookLauncher } from './feed/codex-hook-launcher.js';
@@ -407,6 +408,9 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   // Живые PTY сессий (1.6). На остановке хоста добиваются вместе с ним —
   // иначе процесс агента остаётся сиротой без хоста, который бы его закрыл.
   const ptyManager = createPtyManager(handle.context, windowCounters);
+  // Процессы PTY для тулбара: один `ps` на тик, опрос только пока есть подписчики.
+  const processMonitor = createProcessMonitor({ log: handle.context.log, livePtys: () => ptyManager.list() });
+  handle.context.onShutdown(async () => processMonitor.stop());
 
   // Состояние сессий codex — по потоку их терминала, а не по хукам (спека комнат Organic, 3.6): менеджер PTY
   // разбирает заголовок окна и уведомления, сервис активности выводит из них состояние.
@@ -1089,6 +1093,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     holds: worktreeHolds,
     sweeper: worktreeSweeper,
     feed: feedService,
+    processMonitor,
     browserAgent: browserEndpoint,
     send,
     assistant: assistantService,
