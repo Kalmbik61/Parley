@@ -63,6 +63,8 @@ describe('белый список против запретного списка
     'works.mailState', 'works.sync',
     // Из ветки s-209 (обновление CLI провайдера из Parley): действие на Маке, телефону не открыто.
     'providers.update', 'providers.skipUpdate',
+    // Процессы сессии для тулбара окна (PR #196): телефону пока не открыты.
+    'processes.subscribe', 'processes.unsubscribe',
   ];
   /** Рукопожатие: хост принимает `hello` у любого клиента, это не метод белого списка. */
   const HANDSHAKE = new Set(['hello']);
