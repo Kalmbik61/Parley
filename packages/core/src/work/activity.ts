@@ -68,6 +68,8 @@ export interface ActivityLog {
    * Только она снимает `blocked` со стороны страховки (раздел 4.3).
    */
   lastUserRecordAt: string | null;
+  /** Время записи прерывания пользователем (`SessionIndex.lastInterruptAt`); нет поля и `null` — прерываний нет. */
+  lastInterruptAt?: string | null;
   /**
    * Самая поздняя запись ассистента с ошибкой API (`SessionIndex.lastApiError`, только лог Claude Code):
    * запасной путь для сессий, у которых `StopFailure` не доходит до журнала, — запущенных до этого хука и на
@@ -119,6 +121,8 @@ export interface SessionActivity {
   runningBackground: string[];
   /** Когда закончился ход; `null` — агент работает или ход не начинался. */
   turnEndedAt: string | null;
+  /** Ход открыт, а `unseen`/`idle` выведены только из тишины (`Stop` ещё должен прийти). Для показа — `presentedActivity`. */
+  quietTurn?: true;
   /**
    * Время последней границы хода в потоке событий: начало хода (`UserPromptSubmit`), его конец (`Stop`, `StopFailure`,
    * `idle_prompt`, который ход действительно кончает) или запуск процесса (`SessionStart` не `compact`). В отличие от
@@ -268,6 +272,12 @@ function tasksOf(
  */
 export const DEFAULT_BACKGROUND_HOLD_MS = 60 * 60 * 1000;
 
+/**
+ * Предел показа тишины открытого хода (`quietTurn`) как `working` — 15 минут (решение человека, false-done). Дольше
+ * ход без единого события и записи считается законченным: `Stop` мог не прийти, и сессия не должна висеть `working`.
+ */
+export const DEFAULT_QUIET_TURN_HOLD_MS = 15 * 60 * 1000;
+
 export interface ActivityOptions {
   /** События журнала в порядке файла; `null` — журнала нет (`hooksMissing`). */
   events?: readonly EventRecord[] | null;
@@ -278,6 +288,8 @@ export interface ActivityOptions {
   silenceThresholdMs?: number;
   /** Сколько фоновый субагент или ожидание держат сессию без единого события и записи лога. */
   backgroundHoldMs?: number;
+  /** Сколько тишина открытого хода показывается как `working` (`quietTurn`); по умолчанию 15 минут. */
+  quietTurnHoldMs?: number;
 }
 
 /**
@@ -292,6 +304,7 @@ export function activityOf({
   now = Date.now(),
   silenceThresholdMs = DEFAULT_CONFIG.silenceThresholdMs,
   backgroundHoldMs = DEFAULT_BACKGROUND_HOLD_MS,
+  quietTurnHoldMs = DEFAULT_QUIET_TURN_HOLD_MS,
 }: ActivityOptions = {}): SessionActivity {
   // `as`: фазу меняют и замыкания `start` и `end`, которых анализ потока не видит, и без приведения он
   // считал бы её в цикле всё ещё `null`.
@@ -319,6 +332,11 @@ export function activityOf({
   // Идущие вызовы `wait_for` в порядке начала: параллельных бывает несколько, и конец снимает своё.
   let waits: ActiveWait[] = [];
   let heldByBackground = false;
+  // Ход окончен в текущем процессе (`end()`), а не унаследован от прежнего: `idle_prompt` после такого конца
+  // напоминает о простое и конец хода не сдвигает. Запуск процесса сбрасывает.
+  let endedInProcess = false;
+  // Тишина открытого хода: `phase` ушёл в `ended` только из-за тишины, хотя `Stop` ещё должен прийти.
+  let quietTurn = false;
   // Чего ждёт сессия: эпизод от появления потребности до её снятия. Как и `phase`, меняется замыканиями.
   let need = null as SessionNeed | null;
   // Время последней записи человека в логе: ею закрывается ожидание человека (`answered`).
@@ -340,6 +358,7 @@ export function activityOf({
   const end = (at: string): void => {
     phase = 'ended';
     turnEndedAt = at;
+    endedInProcess = true;
     source = 'hooks';
     // Ход кончился: ожидание `wait_for` его не переживает, как и обычный субагент —
     // остаются фоновые из последнего снимка.
@@ -432,6 +451,7 @@ export function activityOf({
           // Запущен новый процесс: то, чего ждал прежний (вопрос, лимит, вход), позади.
           need = null;
           if (phase === 'working' || phase === 'blocked') end(event.at);
+          endedInProcess = false;
         }
         break;
       case TERMINAL_WORKING_EVENT:
@@ -455,7 +475,10 @@ export function activityOf({
           // Простой не отменяет вопроса пользователю: blocked снимает только
           // ответ на него или новый промпт.
           turnBoundaryAt = event.at;
-          end(event.at);
+          // Напоминание о простое после уже законченного хода его конец не двигает: иначе новый `turnEndedAt`
+          // породил бы повторный Done. После запуска процесса (`endedInProcess` сброшен) двигает — на этом `pointerAfter`.
+          const keptEnd: string | null = phase === 'ended' && endedInProcess ? turnEndedAt : null;
+          end(keptEnd ?? event.at);
         }
         break;
       }
@@ -576,6 +599,12 @@ export function activityOf({
     need = null;
   }
 
+  // Esc: ни `Stop`, ни `idle_prompt` не приходит, но в логе есть запись прерывания. Ход прерван, если она новее
+  // начала работы и после неё нет записей; такой ход не открыт — тишина считается его концом без `quietTurn`.
+  const interruptAt = msOf(log?.lastInterruptAt ?? null);
+  const interrupted = isNewer(interruptAt, restartAt) && !(recordAt > interruptAt);
+  // Ход открыт, если до разбора тишины сессия `working` (в том числе после ответа на разрешение).
+  const turnOpen = phase === 'working' && !interrupted;
   if (phase !== 'blocked') {
     const recordIsNewer = isNewer(recordAt, eventAt);
     if (recordIsNewer && !errorEndsTurn) {
@@ -609,6 +638,7 @@ export function activityOf({
         heldByBackground = true;
       } else {
         phase = 'ended';
+        quietTurn = turnOpen && now - quietAt <= quietTurnHoldMs;
         turnEndedAt = recordIsNewer ? lastRecordAt : lastEventAt;
         // Источник — та ось, чьё время решило: лога может не быть вовсе.
         source = recordIsNewer ? 'log' : source;
@@ -626,15 +656,19 @@ export function activityOf({
     source = 'hooks';
   }
 
-  // Ход окончен — работать нечему: обычный субагент его не пережил бы, а фоновые уже подняли
-  // бы сессию в `working`. Случай тишины, когда `started` ещё хранит убитого помощника, —
-  // тоже сюда: в списке его нет.
-  const tasks = phase === 'ended' ? [] : tasksOf(started, background);
-
   const ended: Activity = seen ? 'idle' : 'unseen';
   // Ничего не известно — состояние тусклое: после перезапуска харнесса все
   // закончившие ход сессии считаются просмотренными (раздел 4.1).
   const reported: Activity = phase === null ? 'idle' : phase === 'ended' ? ended : phase;
+  const publishedNeed = reportedNeed(need, reported);
+  // Тишина открытого хода: конец выведен только из тишины, `Stop` ещё придёт; с `need` (лимит, вход) ход оборван.
+  const quiet = quietTurn && publishedNeed === null;
+
+  // Ход окончен — работать нечему: обычный субагент его не пережил бы, а фоновые уже подняли
+  // бы сессию в `working`. Случай тишины, когда `started` ещё хранит убитого помощника, —
+  // тоже сюда: в списке его нет. Исключение — тишина открытого хода (`quiet`): ход ещё идёт, агенты в списке остаются.
+  const tasks = phase === 'ended' && !quiet ? [] : tasksOf(started, background);
+
   return {
     activity: reported,
     subagents: tasks.length,
@@ -648,8 +682,22 @@ export function activityOf({
     lastEventAt,
     source,
     hooksMissing: events === null,
-    need: reportedNeed(need, reported),
+    need: publishedNeed,
+    ...(quiet ? { quietTurn: true as const } : {}),
   };
+}
+
+/**
+ * Активность для показа клиентам: тишина открытого хода (`quietTurn`) выглядит как `working`, а не как конец хода.
+ * Сырое значение остаётся для писем, сна и сжатия. Без `quietTurn` возвращает тот же объект.
+ */
+export function presentedActivity(activity: SessionActivity): SessionActivity {
+  if (activity.quietTurn !== true) return activity;
+  const rest: SessionActivity = { ...activity };
+  delete rest.quietTurn;
+  // Вопрос человеку (`blocked`) важнее тишины: статус не трогаем, только убираем служебное поле.
+  if (activity.activity === 'blocked') return rest;
+  return { ...rest, activity: 'working', turnEndedAt: null };
 }
 
 /**

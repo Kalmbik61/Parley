@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { SessionActivity } from './activity.js';
+import { activityOf as foldActivity, presentedActivity, type SessionActivity } from './activity.js';
+import { bareEvent } from './events.js';
 import { oneLine } from '../counters.js';
 import {
   deliveryAction,
@@ -638,6 +639,21 @@ describe('deliveryAction', () => {
     expect(deliveryAction({ ...base, activity: activityOf('idle') })).toMatchObject({
       kind: 'type-pointer',
     });
+  });
+
+  it('10. тишина открытого хода (false-done): письмо печатается по сырому значению, показанное — busy', () => {
+    // Настоящая свёртка: `UserPromptSubmit`, последняя запись +5 с, сейчас +45 с, `Stop` не приходил.
+    const at = (s: number): string => new Date(Date.parse('2026-09-05T10:00:00.000Z') + s * 1000).toISOString();
+    const raw = foldActivity({
+      events: [bareEvent(at(0), 'UserPromptSubmit')],
+      log: { lastRecordAt: at(5), lastUserRecordAt: null },
+      now: Date.parse(at(45)),
+      silenceThresholdMs: 30_000,
+    });
+    expect(raw.quietTurn).toBe(true);
+    expect(deliveryAction({ ...base, activity: raw })).toMatchObject({ kind: 'type-pointer' });
+    // Клиентам тот же ход показан как идущий: на доставку это не влияет, она читает сырое значение.
+    expect(deliveryAction({ ...base, activity: presentedActivity(raw) })).toEqual({ kind: 'none', reason: 'busy' });
   });
 });
 

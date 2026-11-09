@@ -115,6 +115,7 @@ describe('createLogIndex', () => {
       // Не `endedAt`: служебные записи после конца хода работой не считаются.
       lastRecordAt: found?.lastWorkRecordAt ?? null,
       lastUserRecordAt: found?.lastUserRecordAt ?? null,
+      lastInterruptAt: null,
     });
   });
 
@@ -155,6 +156,7 @@ describe('createLogIndex', () => {
     expect(idx.log(session({ providerSessionId: 'limited' }))).toEqual({
       lastRecordAt: '2026-10-12T10:01:00.000Z',
       lastUserRecordAt: '2026-10-12T10:00:00.000Z',
+      lastInterruptAt: null,
       lastApiError: { at: '2026-10-12T10:01:00.000Z', error: 'rate_limit', text },
     });
     expect(idx.log(session({ providerSessionId: 'plain' }))).not.toHaveProperty('lastApiError');

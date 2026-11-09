@@ -10,6 +10,10 @@ All notable changes to Parley are documented in this file.
 
 - **Running shell commands in the session toolbar.** A "N shell" chip appears next to "N agents running" while the session's terminal has running commands; click it for a list with each command's executable name, elapsed time, CPU and memory. Only the executable name is shown, never arguments, paths or environment. The host reads the process tree of each subscribed session with one shared `ps` every 2 seconds and only while the tab is open. Known limitation: for Codex the list is approximate. It may include Codex helper processes (for example `git` at startup) and miss a command that Codex runs directly under `node`, and the list says so.
 
+### Fixed
+
+- **A running session no longer looks finished.** A Claude session in the middle of a turn that stays silent for more than 30 seconds (a long tool call or a slow reply) is shown as working in the window, on the island, on the phone, by the assistant and in Telegram, instead of as done, for up to 15 minutes of silence; after that it counts as finished. A turn interrupted with Esc is shown as done about 30 seconds later. The idle reminder after a finished turn no longer creates a second Done or returns a viewed session to unseen.
+
 ## 0.31.0
 
 **Impact**

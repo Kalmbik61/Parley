@@ -407,6 +407,7 @@ export function createLogIndex(roots: LogIndexRoots = {}, options: LogIndexOptio
           {
             lastRecordAt: found.lastWorkRecordAt,
             lastUserRecordAt: found.lastUserRecordAt,
+            lastInterruptAt: found.lastInterruptAt,
             ...(found.lastApiError === undefined ? {} : { lastApiError: found.lastApiError }),
           };
     },

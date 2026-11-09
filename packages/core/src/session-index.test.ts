@@ -838,3 +838,38 @@ describe('indexSessionFile со срезом по окнам (спека рас�
     }
   });
 });
+
+describe('indexSessionFile: прерывание пользователем (false-done, этап D)', () => {
+  // Настоящая форма записи Claude Code при Esc: реплика пользователя с текстовым блоком.
+  const user = (at: string, text: string, asString = false): string =>
+    line({
+      type: 'user',
+      sessionId: 'i1',
+      timestamp: at,
+      message: { role: 'user', content: asString ? text : [{ type: 'text', text }] },
+    });
+  const prompt = user('2026-11-09T10:00:00.000Z', 'сделай');
+
+  it('обе формы текста дают lastInterruptAt; побеждает самая поздняя', async () => {
+    const plain = await writeSession('-Users-me-proj', 'i1', prompt + user('2026-11-09T10:00:10.000Z', '[Request interrupted by user]'));
+    expect((await indexSessionFile(plain, root)).lastInterruptAt).toBe('2026-11-09T10:00:10.000Z');
+    const tool = await writeSession(
+      '-Users-me-proj',
+      'i2',
+      prompt +
+        user('2026-11-09T10:00:10.000Z', '[Request interrupted by user]') +
+        user('2026-11-09T10:00:20.000Z', '[Request interrupted by user for tool use]'),
+    );
+    expect((await indexSessionFile(tool, root)).lastInterruptAt).toBe('2026-11-09T10:00:20.000Z');
+  });
+
+  it('строка не в начале текста и обычная реплика прерыванием не считаются', async () => {
+    const file = await writeSession(
+      '-Users-me-proj',
+      'i3',
+      prompt + user('2026-11-09T10:00:10.000Z', 'он написал: [Request interrupted by user]'),
+    );
+    expect((await indexSessionFile(file, root)).lastInterruptAt).toBeNull();
+  });
+});
+

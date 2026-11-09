@@ -14,6 +14,7 @@ import {
   providerLabel,
   secretHint,
   TELEGRAM_TOKEN_RE,
+  presentedActivity,
   telegramBotId,
   telegramTokenFingerprint,
 } from '@parley/core';
@@ -72,6 +73,10 @@ import { T } from './texts.js';
 import type { ReceiptKind } from './texts.js';
 import type { CardRecord, InlineKeyboard, TgUpdate } from './types.js';
 import { createVoiceTranscriber } from './voice.js';
+
+/** Показанная активность: тишина открытого хода — `working`, а не конец хода (false-done). */
+const presentedOf = (activity: SessionActivity | undefined): SessionActivity | undefined =>
+  activity === undefined ? undefined : presentedActivity(activity);
 
 export interface TelegramServiceDeps {
   home: string;
@@ -558,7 +563,7 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
     for (const entry of snapshot.entries) {
       for (const session of entry.map.sessions) {
         const ref: SessionRef = { projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id };
-        activityTransition(memory, ref, session, deps.activity.get(ref)?.activity ?? null);
+        activityTransition(memory, ref, session, presentedOf(deps.activity.get(ref)?.activity) ?? null);
       }
     }
   }
@@ -817,7 +822,7 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
      * берётся на момент сообщения, а не перехода: хук и время сброса ложатся чуть позже активности. Без `need` — пусто.
      */
     const reason = async (): Promise<string> => {
-      const need = sessionNeed(session, deps.activity.get(ref)?.activity ?? triggered);
+      const need = sessionNeed(session, presentedOf(deps.activity.get(ref)?.activity) ?? triggered);
       if (need === null) return '';
       const registry = await deps.providers?.().catch(() => undefined);
       return ` — ${needReason(need, new Date(now()), providerLabel(registry?.[session.provider] ?? { id: session.provider, label: '' }))}`;
@@ -1368,7 +1373,7 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
       unsubs.push(
         deps.works.onChange((snapshot) => onWorks(snapshot)),
         deps.works.onMail((notice) => onMail(notice)),
-        deps.activity.onChange((ref, live) => onActivity(ref, live)),
+        deps.activity.onChange((ref, live) => onActivity(ref, { activity: presentedActivity(live.activity) })),
       );
       if (deps.consents !== undefined) unsubs.push(deps.consents.onChange((change) => onConsentsChanged(change)));
       begin(T.restarted);

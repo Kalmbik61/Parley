@@ -18,10 +18,12 @@ import { appendFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
   DEFAULT_BACKGROUND_HOLD_MS,
+  DEFAULT_QUIET_TURN_HOLD_MS,
   PARLEY_STARTUP_NOTIFICATION,
   PERMISSION_ANSWERED_EVENT,
   TERMINAL_WORKING_EVENT,
   activityOf,
+  presentedActivity,
   claudeProjectRoots,
   applyAutoTitle,
   autoTitleOf,
@@ -107,6 +109,8 @@ export interface ActivityServiceOptions extends MetricsRoots {
   silenceThresholdMs?: number;
   /** Предел удержания фоновыми субагентами и ожиданием `wait_for` (`activityOf`); по умолчанию — час. */
   backgroundHoldMs?: number;
+  /** Предел показа тишины открытого хода как `working` (`activityOf`); по умолчанию 15 минут. */
+  quietTurnHoldMs?: number;
   /**
    * Чтение `meta.json` субагента — сверх интерфейса плана: тест подставляет читателя-счётчика и видит, что и
    * когда спросили. По умолчанию — `readSubagentMeta`.
@@ -467,6 +471,7 @@ export function createActivityService(
   const nowFn = options.now ?? Date.now;
   let silenceThresholdMs = options.silenceThresholdMs ?? 30_000;
   const backgroundHoldMs = options.backgroundHoldMs ?? DEFAULT_BACKGROUND_HOLD_MS;
+  const quietTurnHoldMs = options.quietTurnHoldMs ?? DEFAULT_QUIET_TURN_HOLD_MS;
   const trustWaitMs = options.trustWaitMs ?? DEFAULT_TRUST_WAIT_MS;
   const startupWaitMs = options.startupWaitMs ?? DEFAULT_STARTUP_WAIT_MS;
   const codexCallGraceMs = options.codexCallGraceMs ?? CODEX_CALL_GRACE_MS;
@@ -748,7 +753,8 @@ export function createActivityService(
     now: number,
   ): void {
     clearSilenceTimer(key);
-    if (activity.activity !== 'working') return;
+    // Тишина открытого хода (`quietTurn`) тоже ждёт своего предела `quietTurnHoldMs`, иначе он не сработал бы.
+    if (activity.activity !== 'working' && activity.quietTurn !== true) return;
 
     const eventAt = activity.lastEventAt === null ? Number.NaN : Date.parse(activity.lastEventAt);
     const recordAt = log?.lastRecordAt == null ? Number.NaN : Date.parse(log.lastRecordAt);
@@ -758,7 +764,8 @@ export function createActivityService(
     );
     if (!Number.isFinite(quietAt)) return;
     const silenceAt = quietAt + silenceThresholdMs;
-    const holdAt = quietAt + backgroundHoldMs;
+    // Тишина открытого хода снимается раньше предела фоновых задач.
+    const holdAt = quietAt + (activity.quietTurn === true ? quietTurnHoldMs : backgroundHoldMs);
     const deadline = silenceAt >= now ? silenceAt : holdAt >= now ? holdAt : null;
     if (deadline === null) return;
 
@@ -1192,6 +1199,7 @@ export function createActivityService(
       now,
       silenceThresholdMs: threshold,
       backgroundHoldMs,
+      quietTurnHoldMs,
     });
     const seen = isSeen(seenAt.get(key), draft.turnEndedAt);
     const folded = activityOf({
@@ -1201,6 +1209,7 @@ export function createActivityService(
       now,
       silenceThresholdMs: threshold,
       backgroundHoldMs,
+      quietTurnHoldMs,
     });
     // Пока от нынешнего процесса не пришло ни одной строки, свёртка видит прошлое (журнал прошлого запуска) и то, что
     // дописал хост: границу процесса (`withLaunchBoundary`) и экран старта (`startupEventOf`). Хука нового процесса в них
@@ -1317,7 +1326,12 @@ export function createActivityService(
     const previous = live.get(key);
     live.set(key, value);
     if (previous === undefined || !sameLive(previous, value)) {
-      host.broadcast('activity.changed', { ref, activity: published, metrics });
+      // Клиентам уходит показанное значение: тишина открытого хода выглядит как `working`. Рассылка — только когда
+      // изменилось оно; слушатели хоста (письма, сон, сжатие) читают сырое.
+      const shown = presentedActivity(published);
+      if (previous === undefined || !sameLive({ ...previous, activity: presentedActivity(previous.activity) }, { ...value, activity: shown })) {
+        host.broadcast('activity.changed', { ref, activity: shown, metrics });
+      }
       for (const listener of listeners) listener(ref, value);
     }
 
@@ -1814,7 +1828,7 @@ export function createActivityService(
             sessionId: session.id,
           };
           const value = live.get(refKey(ref));
-          if (value !== undefined) result.push({ ref, activity: value.activity, metrics: value.metrics });
+          if (value !== undefined) result.push({ ref, activity: presentedActivity(value.activity), metrics: value.metrics });
         }
       }
       return result;

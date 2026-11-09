@@ -1232,6 +1232,32 @@ describe('createActivityService: субагенты и ожидание (Parley 
     expect(a.get(ref)?.metrics?.tasks).toEqual([]);
   }, 20_000);
 
+  it('тишина открытого хода: get — сырое unseen, current и рассылка — working; по пределу одно unseen (false-done)', async () => {
+    const { ref } = await activeSession();
+    const w = await works();
+    // Предел тишины открытого хода короче часового предела фоновых задач: таймер ждёт именно его.
+    const a = activity(w, { silenceThresholdMs: 300, quietTurnHoldMs: 1500 });
+    await a.start();
+    await settle();
+
+    await appendFile(journalOf(ref), hook('UserPromptSubmit'));
+    await waitFor(() => a.get(ref)?.activity.activity === 'working');
+    const base = activityChanges(ref).length;
+
+    // Порог тишины прошёл, ход не закончен: сырое значение — unseen, клиентам — по-прежнему working.
+    await waitFor(() => a.get(ref)?.activity.activity === 'unseen', 5000);
+    expect(a.get(ref)?.activity.quietTurn).toBe(true);
+    const shown = a.current().find((item) => item.ref.sessionId === ref.sessionId);
+    expect(shown?.activity.activity).toBe('working');
+    expect(shown?.activity.quietTurn).toBeUndefined();
+    expect(activityChanges(ref).length).toBe(base);
+
+    // Предел `quietTurnHoldMs`: ход считается законченным, одно широковещание unseen.
+    await waitFor(() => activityChanges(ref).at(-1)?.activity === 'unseen', 5000);
+    expect(activityChanges(ref).length).toBe(base + 1);
+    expect(a.get(ref)?.activity.quietTurn).toBeUndefined();
+  }, 20_000);
+
   it('порог тишины давно прошёл, а сессию держит фоновая задача: таймер тишины не крутится вхолостую', async () => {
     const { ref } = await activeSession();
     let calls = 0;

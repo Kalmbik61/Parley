@@ -482,7 +482,7 @@ export {
   telegramTokenFingerprint,
   maskTelegramTokens,
 } from './telegram.js';
-export { DEFAULT_BACKGROUND_HOLD_MS, activityOf, hookedSince } from './work/activity.js';
+export { DEFAULT_BACKGROUND_HOLD_MS, DEFAULT_QUIET_TURN_HOLD_MS, activityOf, hookedSince, presentedActivity } from './work/activity.js';
 export type {
   Activity,
   ActivityLog,

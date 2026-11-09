@@ -39,6 +39,7 @@ import {
   type RoleSummary,
   type SessionLifecycle,
   type WorkMap,
+  presentedActivity,
 } from '@parley/core';
 import { createMoodStripper, matchConfirm, type AssistantGender, type AssistantMood, type MoodMark, type MoodStrip } from '@parley/core/assistant';
 import { feedDecision, refKey, type ActionsReport, type AssistantCardChanged, type AssistantDetail, type AssistantProposal, type AssistantOrigin, type HumanOverviewV1, type AssistantSettings, type AssistantState, type EventData, type CardDecideResult, type EventName, type Params, type SendResult, type SessionRef } from '@parley/protocol';
@@ -429,7 +430,10 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
   };
   const source = (): OverviewSource => ({
     entries: deps.works.snapshot().entries,
-    live: (ref) => deps.activity.get(ref),
+    live: (ref) => {
+      const value = deps.activity.get(ref);
+      return value === undefined ? undefined : { ...value, activity: presentedActivity(value.activity) };
+    },
     roomTail: roomTailOf,
     home: homedir(),
   });
