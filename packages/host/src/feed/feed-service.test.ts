@@ -1087,11 +1087,18 @@ describe('снимок и дельты', () => {
     expect(full.items.length).toBeGreaterThan(cut.items.length);
     expect(ofKind(full.items, 'text')).toHaveLength(3);
     expect(cut).toMatchObject({ revision: full.revision, schemaVersion: full.schemaVersion, mode: full.mode });
-    expect(fakes.log.info).toHaveBeenLastCalledWith('лента: снимок', expect.objectContaining({
-      scope: 'attention',
-      items: 3,
-      sentBytes: expect.any(Number),
-    }));
+    // Лёгкий вызов `scope: 'attention'` на живой ленте без сева строку не пишет (D5-2): последняя строка — от полного снимка.
+    expect(fakes.log.info).toHaveBeenLastCalledWith('лента: снимок', expect.objectContaining({ scope: null }));
+  });
+
+  it('scope attention: живая лента без сева — строки журнала нет; тот же вызов без scope — строка есть', async () => {
+    start();
+    send(prompt('go'));
+    await service.snapshot(REF, undefined, 'attention');
+    expect(fakes.log.info.mock.calls.filter(([msg]) => msg === 'лента: снимок')).toHaveLength(0);
+
+    await service.snapshot(REF);
+    expect(fakes.log.info.mock.calls.filter(([msg]) => msg === 'лента: снимок')).toHaveLength(1);
   });
 
   it('scope attention: пустая лента — пусто; без prompt — последний text вообще; без text — только карточки', async () => {
@@ -1874,6 +1881,18 @@ describe('сев из журнала', () => {
     expect(lines).toHaveLength(2);
     expect(lines[0]?.[1]).toMatchObject({ sessionId: REF.sessionId, workId: REF.workId, seedMs: expect.any(Number) });
     expect(lines[1]?.[1]).toMatchObject({ seedMs: null });
+  });
+
+  it('scope attention с севом из журнала пишет строку: seedMs числом, scope и sentBytes', async () => {
+    const { root } = await history();
+    fakes.setLogFile(path.join(root, '-proj', 'write.jsonl'));
+    start({ roots: () => [root], readRecords: countingReader().read });
+
+    await service.snapshot(REF, undefined, 'attention');
+
+    const lines = fakes.log.info.mock.calls.filter(([msg]) => msg === 'лента: снимок');
+    expect(lines).toHaveLength(1);
+    expect(lines[0]?.[1]).toMatchObject({ scope: 'attention', sentBytes: expect.any(Number), seedMs: expect.any(Number) });
   });
 
   it('журнал ещё не известен индексу — следующий снимок сеет, когда он появится', async () => {

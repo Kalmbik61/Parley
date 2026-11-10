@@ -104,6 +104,12 @@ export const DONE_HOLD_MS = 20000;
 /** Сколько форма сжимается в брусок: та же длительность, что у перехода сжатия `island-morph-shrink` (`island.css`). */
 export const RETRACT_MORPH_MS = 300;
 
+/**
+ * Страховочный опрос видимой карточки одобрения (D5-2). На ленты остров не подписан, поэтому новые карточки и
+ * ответы в терминале он узнаёт по смене активности сессии, фокусу окна и взятию клавиатуры; опрос — только страховка.
+ */
+export const REQUEST_REVALIDATE_MS = 15_000;
+
 /** Системная настройка уменьшенного движения. */
 const REDUCED_MOTION = '(prefers-reduced-motion: reduce)';
 
@@ -794,7 +800,7 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
     if (!requestVisible || selectedKey === null) return undefined;
     const refresh = (): void => useIslandRequests.getState().revalidate();
     refresh();
-    const timer = setInterval(refresh, 1000);
+    const timer = setInterval(refresh, REQUEST_REVALIDATE_MS);
     window.addEventListener('focus', refresh);
     return () => {
       clearInterval(timer);
