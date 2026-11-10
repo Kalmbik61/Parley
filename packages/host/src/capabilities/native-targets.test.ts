@@ -47,8 +47,8 @@ describe('native MCP selectors', () => {
 
 
 import { createHash } from 'node:crypto';
-import { chmod, symlink } from 'node:fs/promises';
-import { CLAUDE_ACTION_BUILD, readBinaryIdentity, verifiedClaudeActionBinary, claudeDestinationsBound } from './native-targets.js';
+import { chmod, symlink, utimes } from 'node:fs/promises';
+import { CLAUDE_ACTION_BUILD, binaryHashCount, readBinaryIdentity, verifiedClaudeActionBinary, claudeDestinationsBound } from './native-targets.js';
 
 it('hashes the actual executable/canonical target with bounded regular-file reads and detects byte changes', async () => {
  const executable = path.join(root, 'native-cli'); await writeFile(executable, 'fixture bytes'); await chmod(executable, 0o700);
@@ -78,4 +78,57 @@ it('binds the configured read destinations to the actual native HOME/config envi
 it('permits a native declared User destination before the first config file is created', async () => {
  await rm(file); const proof = await codexUserMcpProof(context, native([layer('user')])); expect(proof?.add).toBe(true);
  context.env = { HOME: context.homeDir, CODEX_HOME: '/foreign' }; expect(await codexUserMcpProof(context, native([layer('user')]))).toBeNull();
+});
+
+describe('кэш хэша бинаря', () => {
+ const makeBinary = async (name: string, bytes: string): Promise<string> => {
+  const executable = path.join(root, name); await writeFile(executable, bytes); await chmod(executable, 0o700); return executable;
+ };
+ it('четыре вызова readBinaryIdentity для одного файла хэшируют один раз', async () => {
+  const executable = await makeBinary('cached-cli', 'cache me'); const before = binaryHashCount();
+  const results = [];
+  for (let index = 0; index < 4; index++) results.push(await readBinaryIdentity(executable, context));
+  expect(binaryHashCount() - before).toBe(1);
+  expect(new Set(results.map(result => result?.sha256)).size).toBe(1);
+  expect(results[0]?.sha256).toBe(createHash('sha256').update('cache me').digest('hex'));
+ });
+ it('параллельные вызовы делят один проход', async () => {
+  const executable = await makeBinary('parallel-cli', 'shared pass'); const before = binaryHashCount();
+  const results = await Promise.all(Array.from({ length: 4 }, () => readBinaryIdentity(executable, context)));
+  expect(binaryHashCount() - before).toBe(1);
+  expect(results.every(result => result?.sha256 === results[0]?.sha256 && result !== null)).toBe(true);
+ });
+ it('тот же путь, другое содержимое того же размера: новый хэш, а не старый', async () => {
+  const executable = await makeBinary('swapped-cli', 'AAAA'); const first = await readBinaryIdentity(executable, context);
+  await writeFile(executable, 'BBBB'); await utimes(executable, new Date(Date.now() + 5000), new Date(Date.now() + 5000));
+  const second = await readBinaryIdentity(executable, context);
+  expect(first?.sha256).toBe(createHash('sha256').update('AAAA').digest('hex'));
+  expect(second?.sha256).toBe(createHash('sha256').update('BBBB').digest('hex'));
+ });
+ it('изменение размера даёт новый хэш', async () => {
+  const executable = await makeBinary('grown-cli', 'short'); await readBinaryIdentity(executable, context); const before = binaryHashCount();
+  await writeFile(executable, 'a much longer body');
+  expect((await readBinaryIdentity(executable, context))?.sha256).toBe(createHash('sha256').update('a much longer body').digest('hex'));
+  expect(binaryHashCount() - before).toBe(1);
+ });
+ it('возврат старого mtime после правки не возвращает старый хэш (ctime меняется)', async () => {
+  const executable = await makeBinary('rewound-cli', 'CCCC'); const old = new Date(Date.now() - 60_000); await utimes(executable, old, old);
+  const first = await readBinaryIdentity(executable, context);
+  await new Promise(resolve => setTimeout(resolve, 20)); await writeFile(executable, 'DDDD'); await utimes(executable, old, old);
+  const second = await readBinaryIdentity(executable, context);
+  expect(second?.sha256).not.toBe(first?.sha256);
+ });
+ it('отказ не кэшируется: после починки бинаря хэш считается', async () => {
+  const executable = await makeBinary('late-cli', 'ok'); await chmod(executable, 0o600);
+  expect(await readBinaryIdentity(executable, context)).toBeNull();
+  await chmod(executable, 0o700);
+  expect((await readBinaryIdentity(executable, context))?.sha256).toBe(createHash('sha256').update('ok').digest('hex'));
+ });
+ it('держит не более 8 файлов: девятый вытесняет первый', async () => {
+  const files = []; for (let index = 0; index < 9; index++) files.push(await makeBinary(`lru-${index}`, `body ${index}`));
+  for (const executable of files) await readBinaryIdentity(executable, context);
+  const before = binaryHashCount();
+  await readBinaryIdentity(files[8]!, context); expect(binaryHashCount() - before).toBe(0);
+  await readBinaryIdentity(files[0]!, context); expect(binaryHashCount() - before).toBe(1);
+ });
 });
