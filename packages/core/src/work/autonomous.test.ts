@@ -1129,6 +1129,42 @@ describe('автономные правила', () => {
     expect(auto(second).attempts).toHaveLength(2);
   });
 
+  it('resume после no_progress возвращает пункт в returned, и третья попытка стартует', () => {
+    const first = returned(submitted().plan);
+    const second = returned(submitted(running(first)).plan);
+    expect(second.items[0]!.status).toBe('blocked');
+    const resumed = resume(second, { ...context(second), requestedBy: HUMAN });
+    expect(auto(resumed).halted).toBeNull();
+    expect(resumed.items[0]!.status).toBe('returned');
+    expect(resumed.items[0]!.note).toBe('Resumed by human');
+    expect(resumed.items[0]!.log.at(-1)).toMatchObject({
+      by: ENGINE,
+      status: 'returned',
+      note: 'Resumed by human',
+    });
+    expect(() => running(resumed)).not.toThrow();
+    expect(auto(running(resumed)).attempts).toHaveLength(3);
+  });
+
+  it('resume после исчерпания attemptsPerItem снова останавливает план с причиной budget', () => {
+    const plan = fixture();
+    auto(plan).budget.limits.attemptsPerItem = 1;
+    const blocked = returned(submitted(running(plan)).plan);
+    expect(blocked.items[0]!.status).toBe('blocked');
+    const resumed = resume(blocked, { ...context(blocked), requestedBy: HUMAN });
+    expect(resumed.items[0]!.status).toBe('returned');
+    const again = startAttempt(resumed, {
+      ...context(resumed),
+      item: 1,
+      branch: 'attempt-2',
+      baseSha: auto(resumed).integration.verifiedHead,
+    });
+    expect(auto(again).halted?.reason).toBe('budget');
+    expect(again.items[0]!.status).toBe('blocked');
+    expect(again.items[0]!.note).toBe('budget');
+    expect(auto(again).attempts).toHaveLength(1);
+  });
+
   it('разные сигнатуры считаются прогрессом и позволяют продолжение', () => {
     const first = returned(submitted().plan);
     const second = returned(submitted(running(first)).plan, 'failure-b');

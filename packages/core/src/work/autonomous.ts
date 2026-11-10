@@ -1409,6 +1409,8 @@ export function resume(plan: RoomPlan, input: Context & { requestedBy: string })
   if (!a.halted) throw new RoomRuleError('plan-not-halted');
   appendOp(next, 'resume', null, { requestedBy: HUMAN }, input.now);
   a.halted = null;
+  for (const item of next.items)
+    if (item.status === 'blocked') itemStatus(item, 'returned', input.now, 'Resumed by human');
   recalculate(next);
   return next;
 }
