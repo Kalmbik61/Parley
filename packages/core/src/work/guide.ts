@@ -79,7 +79,7 @@ agents do not create or close autonomous workers/verifiers themselves.
 The lead decomposes the goal into items with criteria and check specifications, assigns
 ENGINE (engine) as every owner and verifier, and proposes the plan and budget through
 propose_decision(room, text, plan). plan.autonomous contains budget limits,
-checks (id, item, argv, cwd, env, input paths, timeoutMs), and coverage. Give every criterion
+checks (id, item, argv, cwd, env, input paths, timeoutMs; a check runs at most 30 minutes), and coverage. Give every criterion
 nonempty coverage with that item's check IDs and/or verifier. Retry with the same draft and decision text;
 core derives the idempotency key automatically. For an amendment,
 include the current plan id and rev (or top-level planId/rev); the host preserves execution
@@ -117,15 +117,17 @@ load it through your native CLI when available; role and human rules still apply
 Submit truthful evidence with plan_submit(planId, rev, item, evidence: {text, artifacts}); artifacts are paths, never fabricated verification.
 Checklist submission completes an item. In verified mode the independent verifier
 calls plan_verify(planId, rev, item, verdict: verified|returned, note). The owner
-cannot verify their own work. Without a named verifier the live lead may verify if
-independent. A returned item is reworked and submitted again. Closed/deleted owners
-block unsatisfied work; the human or lead proposes an amendment to reassign it.
+cannot verify their own work. If the named verifier is closed or left the room, the live
+lead gets the verify letter and may verify if independent, or proposes an amendment with
+another verifier. A returned item is reworked and submitted again. A submitted item stays
+open for verification when its owner closes; other unfinished work of a closed or deleted
+owner is blocked, and the human or lead proposes an amendment to reassign it.
 Once verified work is complete, the live lead collects outstanding findings into
 backlog suggestions and calls propose_completion(planId, rev, summary). Equivalent:
 propose_decision(room, text: summary, kind: completion, planId, rev). Only the human
 accepts completion. A return keeps evidence/history and asks for a corrected summary.
-Parley sends durable assignments within the existing message and wake limits.
-The host drains rate-held queues and performs auto-wake. Without the host, MCP reserves
+Parley sends plan letters under their own limit of 120 per room per hour, apart from other
+Parley letters. The host drains held queues and performs auto-wake. Without the host, MCP reserves
 and flushes immediately; held assignments remain pending until a later plan mutation or
 host startup. Standalone CLI auto-wake is not provided by these tools. Snapshot
 exports and linked backlog closures are captured separately from the map transaction;
