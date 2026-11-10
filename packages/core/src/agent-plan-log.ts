@@ -52,14 +52,43 @@ function outcome(
   }
   return object && (engine === 'claude' || object.success === true) ? 'done' : null;
 }
+// Свёрнутое состояние + хвост с первого незавершённого вызова: не проигрываем весь журнал на каждый снимок.
+const PENDING_MAX = 64;
+const SEEN_MAX = 1024;
 class Collector implements PlanCollector {
-  private calls = new Map<string, PlanCall>();
+  private base: AgentPlanState | null = null;
+  private pending = new Map<string, PlanCall>();
+  private seen = new Set<string>();
   constructor(private readonly engine: 'claude' | 'codex') {}
   clone(): PlanCollector {
     const copy = new Collector(this.engine);
-    // Entries are replaced, never modified; input/results are read-only log values.
-    copy.calls = new Map(this.calls);
+    // Состояния и записи заменяются, не мутируются: base и вызовы можно делить по ссылке.
+    copy.base = this.base;
+    copy.pending = new Map(this.pending);
+    copy.seen = new Set(this.seen);
     return copy;
+  }
+  private remember(id: string): void {
+    this.seen.add(id);
+    if (this.seen.size > SEEN_MAX) {
+      const oldest = this.seen.values().next().value;
+      if (oldest !== undefined) this.seen.delete(oldest);
+    }
+  }
+  // Сворачиваем голову хвоста, пока она не `running`; слишком длинный хвост бросает брошенную голову.
+  private fold(): void {
+    for (;;) {
+      const head = this.pending.entries().next().value;
+      if (!head) return;
+      const [id, call] = head;
+      if (call.status === 'running') {
+        if (this.pending.size <= PENDING_MAX) return;
+      } else {
+        this.base = applyPlanCall(this.base, call);
+      }
+      this.pending.delete(id);
+      this.remember(id);
+    }
   }
   private call(id: unknown, name: unknown, input: unknown, at: unknown): void {
     if (
@@ -67,25 +96,30 @@ class Collector implements PlanCollector {
       !id ||
       typeof name !== 'string' ||
       !names.has(name) ||
-      this.calls.has(id)
+      this.pending.has(id) ||
+      this.seen.has(id)
     )
       return;
     const object = record(input);
     if (object)
-      this.calls.set(id, {
+      this.pending.set(id, {
         name,
         input: object,
         at: typeof at === 'string' ? at : '',
         status: 'running',
       });
+    this.fold();
   }
   private result(id: unknown, value: unknown, error?: unknown): void {
     if (typeof id !== 'string') return;
-    const call = this.calls.get(id);
+    const call = this.pending.get(id);
     if (!call || call.status !== 'running') return;
     const result = output(value);
     const status = outcome(result, error, this.engine);
-    if (status) this.calls.set(id, { ...call, result, status });
+    if (status) {
+      this.pending.set(id, { ...call, result, status });
+      this.fold();
+    }
   }
   onRecord(raw: Record<string, unknown>): void {
     if (this.engine === 'claude') {
@@ -113,8 +147,8 @@ class Collector implements PlanCollector {
     }
   }
   finish(): AgentPlan | null {
-    let plan: AgentPlanState | null = null;
-    for (const call of this.calls.values()) plan = applyPlanCall(plan, call);
+    let plan = this.base;
+    for (const call of this.pending.values()) plan = applyPlanCall(plan, call);
     return plan ? capPlan(plan) : null;
   }
 }
