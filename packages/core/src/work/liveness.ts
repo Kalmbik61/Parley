@@ -140,12 +140,17 @@ export interface ReconcileOptions extends MetricsRoots {
   lockTimeoutMs?: number;
   /** Pid процессов, которые держит PTY этого хоста: у `active` сессий с такими pid время старта у ОС не спрашивают (`owned`). */
   ownedPids?: ReadonlySet<number>;
+  /** Лог сессии из индекса логов хоста: без него лог ищется по истории (`readSessionMetrics`). */
+  logFileOf?: (session: WorkSession) => string | null;
 }
 
 /** Время последней записи лога сессии; `null` — лога такого провайдера мы не читаем. */
-async function lastRecordOf(session: WorkSession, roots: MetricsRoots): Promise<string | null> {
+async function lastRecordOf(
+  session: WorkSession,
+  roots: MetricsRoots & Pick<ReconcileOptions, 'logFileOf'>,
+): Promise<string | null> {
   if (session.providerSessionId === null) return null;
-  const live = await readSessionMetrics(session.provider, session.providerSessionId, roots);
+  const live = await readSessionMetrics(session.provider, session.providerSessionId, roots, roots.logFileOf?.(session) ?? null);
   return live?.lastRecordAt ?? null;
 }
 

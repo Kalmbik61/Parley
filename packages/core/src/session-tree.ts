@@ -5,6 +5,7 @@ import {
   discoverSessions,
   type DiscoveredSession,
 } from './discover.js';
+import { reuseOrIndex, type IndexReuse } from './index-reuse.js';
 import { INDEX_READ_CONCURRENCY, mapLimited } from './map-limited.js';
 import { indexSessionFile, type SessionIndex } from './session-index.js';
 import { oneLine } from './counters.js';
@@ -144,15 +145,23 @@ export async function buildIndex(
   root: string = defaultRoot(),
   adapter: SchemaAdapter = adapterV1,
   signal?: AbortSignal,
+  reuse?: IndexReuse,
 ): Promise<SessionIndex[]> {
   const discovered = await discoverSessions(root);
   // Не больше INDEX_READ_CONCURRENCY файлов разом: история бывает в тысячи файлов (lane-r3, п. 1).
   const index = await mapLimited(discovered, INDEX_READ_CONCURRENCY, (session) =>
-    indexSessionFile(session.file, root, {
-      adapter,
-      subagents: session.subagents,
-      ...(signal === undefined ? {} : { signal }),
-    }),
+    reuseOrIndex(
+      reuse,
+      // Запись зависит от главного файла и всех файлов подагентов (`usage`, `subsessionCount`).
+      [session.file, ...session.subagents.map((subagent) => subagent.file).sort()],
+      () =>
+        indexSessionFile(session.file, root, {
+          adapter,
+          subagents: session.subagents,
+          ...(signal === undefined ? {} : { signal }),
+        }),
+      root,
+    ),
   );
   index.sort((a, b) => String(b.endedAt ?? '').localeCompare(String(a.endedAt ?? '')));
   return index;

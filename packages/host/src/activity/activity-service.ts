@@ -1777,7 +1777,10 @@ export function createActivityService(
       // (`~/.claude/projects`), а старт хоста ждать это не должен — до готовности
       // индекса activity просто не видит страховки по логу и живёт одними хуками.
       // Готовый индекс заводит свои наблюдатели, и журналы перечитываются ещё раз.
-      void logIndex.start().then(() => catchUp.schedule(), (error: unknown) => {
+      void logIndex.start().then((stats) => {
+        if (stats !== null) host.log.info('индекс логов провайдера построен', stats);
+        catchUp.schedule();
+      }, (error: unknown) => {
         host.log.error('индекс логов провайдера не построился', { error: String(error) });
       });
       unsubscribeWorks = works.onChange((snapshot) => handleWorksChange(snapshot));

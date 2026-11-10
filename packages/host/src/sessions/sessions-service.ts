@@ -683,10 +683,17 @@ export function createSessionsService(
     const done = (starting.get(key) ?? Promise.resolve())
       .then(async () => {
         try {
-          await finishExited(ref.projectPath, ref.workId, ref.sessionId, {
-            exitCode: exit.exitCode,
-            signal: exit.signal ?? undefined,
-          });
+          await finishExited(
+            ref.projectPath,
+            ref.workId,
+            ref.sessionId,
+            {
+              exitCode: exit.exitCode,
+              signal: exit.signal ?? undefined,
+            },
+            // Лог берётся из индекса логов хоста: поиск по всей истории на выходе процесса (и на выключении хоста) не нужен.
+            { logFileOf: () => activity.logFile(ref) },
+          );
         } finally {
           if (issuedGitGrant === true) await checkGit(ref);
           else if (issuedGitGrant === undefined) {

@@ -63,11 +63,13 @@ export { claudeSource, codexSource, watchSessions } from './watch.js';
 export type { SessionChange, SessionWatcher, WatchOptions, WatchSource } from './watch.js';
 export { gitBranch } from './git.js';
 export { buildAllSessions } from './all-sessions.js';
+export type { IndexReuse } from './index-reuse.js';
 export type { AllSessionsOptions } from './all-sessions.js';
-export { defaultCodexRoot, discoverCodexSessions } from './codex/discover.js';
+export { codexLogId, defaultCodexRoot, discoverCodexSessions } from './codex/discover.js';
 export type { DiscoveredCodexSession } from './codex/discover.js';
 export { buildCodexIndex, indexCodexSession } from './codex/index-session.js';
-export { readCodexLimits } from './codex/limits.js';
+export { CODEX_LIMITS_DAY_DIRS, createCodexLimitsReader, readCodexLimits } from './codex/limits.js';
+export type { CodexLimitsReader } from './codex/limits.js';
 export { dropExpiredWindows, mergeLimits, readWorkLimits } from './limits.js';
 export type { LimitWindow, ProviderLimits } from './limits.js';
 export {
@@ -539,6 +541,14 @@ export {
   textOf,
   watchEvents,
 } from './work/events.js';
+export {
+  JOURNAL_CUT_SEARCH,
+  JOURNAL_ROTATE_BUDGET_MS,
+  JOURNAL_ROTATE_BYTES,
+  rotateJournal,
+  rotateWorkJournals,
+} from './work/journal-rotate.js';
+export type { JournalRotation } from './work/journal-rotate.js';
 export type {
   BackgroundTask,
   EventRecord,

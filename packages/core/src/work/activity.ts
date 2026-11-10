@@ -199,7 +199,7 @@ const restartsWork = (event: EventRecord): boolean =>
 /** `SessionStart.source`, с которых сессия начинается заново; пусто — прежняя версия без поля. */
 const LAUNCH_SOURCES = new Set(['startup', 'resume', 'clear']);
 
-const isLaunchSource = (source: string | null): boolean =>
+export const isLaunchSource = (source: string | null): boolean =>
   source === null || LAUNCH_SOURCES.has(source);
 
 /** Ход: агент работает, ждёт человека или закончил. `null` — ничего не известно. */

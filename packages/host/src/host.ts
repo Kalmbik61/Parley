@@ -47,6 +47,7 @@ import {
   readSecret,
   rewriteArtifactRefs,
   roleSummaries,
+  rotateWorkJournals,
   socketIsAlive,
   versionAtLeast,
   workPaths,
@@ -339,6 +340,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     sync: { enabled: true },
     // `ptyManager` создаётся ниже, поэтому набор берётся лениво, на каждую сверку живости.
     ownedPids: () => new Set(ptyManager.list().map((h) => h.pid)),
+    // Служба активности создаётся позже: лог сессии берётся из её индекса лениво, на каждую сверку живости.
+    logFileOf: (ref) => activityService.logFile(ref),
   });
   // Сервис зовёт onFailure по разу на каждый код сбоя (конфликт снимка, журнал решения), а у человека одна карточка
   // с одним текстом: повтор для той же работы только вытеснял бы из строки статуса прежние уведомления.
@@ -386,7 +389,12 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   // 30 секунд; окну — в `providers.list` и событием `providers.limitsChanged`. Запускается в конце
   // старта, когда снимок работ уже прочитан. Создаётся до активности: время сброса лимита сессии она берёт
   // у этой службы (спека «Застрявшие сессии», 3.4).
-  const limitsService = createLimitsService(handle.context, worksService, options.limits);
+  // Живые rollout-файлы Codex берутся лениво, после старта: `ptyManager` и активность создаются ниже.
+  const limitsService = createLimitsService(handle.context, worksService, {
+    liveCodexLogs: () =>
+      ptyManager.list().filter((h) => h.provider === 'codex').flatMap((h) => activityService.codexLogFiles(h.ref)),
+    ...options.limits,
+  });
   handle.context.onShutdown(async () => limitsService.stop());
 
   // Активность живёт поверх работ: точка статуса и строка метрик окна (1.5).
@@ -1299,6 +1307,11 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   // пустая таблица иначе сошла бы за «работ нет» и окно не показало бы причину (`works-unreadable`).
   const worksFailure = migration.unreadable ?? startFailure;
   if (worksFailure === null) {
+    // Журналы хуков спящих и закрытых сессий сжимаются здесь: сверка живости прошла, а читателей журнала (список
+    // прерванных ниже, служба активности и будильник позже) ещё нет — позиции их массивов события не сдвинутся. Срок
+    // ограничен `JOURNAL_ROTATE_BUDGET_MS`, остаток доберётся следующий старт.
+    const trimmed = await rotateWorkJournals(worksService.snapshot().entries).catch(() => ({ rotated: 0, freedBytes: 0 }));
+    if (trimmed.rotated > 0) log.info('журналы хуков сжаты', trimmed);
     // Сверка живости уже прошла на первом чтении работ: те, чей журнал оборван
     // посреди хода, прерваны падением прошлого хоста (спека 10).
     await sessionsService.collectInterrupted().catch((error: unknown) => {

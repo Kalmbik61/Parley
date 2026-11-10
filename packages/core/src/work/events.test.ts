@@ -111,6 +111,21 @@ describe('openEvents', () => {
     expect(second).not.toBe(first);
   });
 
+  it('чтение без новых строк отдаёт тот же массив, а записи в нём — те же объекты', async () => {
+    await writeFile(journal(), line('UserPromptSubmit') + line('Stop'), 'utf8');
+    const log = openEvents(dir);
+
+    const first = await log.read(SESSION);
+    const again = await log.read(SESSION);
+    await appendFile(journal(), line('UserPromptSubmit'), 'utf8');
+    const grown = await log.read(SESSION);
+
+    expect(again).toBe(first);
+    expect(grown).not.toBe(first);
+    expect(grown?.[0]).toBe(first?.[0]);
+    expect(grown?.at(-2)).toBe(first?.at(-1));
+  });
+
   it('переписанный с нуля журнал читается заново', async () => {
     await writeFile(journal(), line('UserPromptSubmit') + line('Stop'), 'utf8');
     const log = openEvents(dir);

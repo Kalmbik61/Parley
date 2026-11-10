@@ -95,7 +95,7 @@ interface Journal {
   offset: number;
   /** Хвост без перевода строки: строку дописывают не за одну операцию. */
   tail: Buffer;
-  events: EventRecord[];
+  events: readonly EventRecord[];
 }
 
 export interface EventsLog {
@@ -103,8 +103,11 @@ export interface EventsLog {
    * Все события сессии в порядке файла. `null` — каталога `events/` нет: хуков
    * не будет совсем, состояние ведёт одна страховка (раздел 4.3).
    *
-   * Каждое чтение отдаёт СВОЙ массив: подписчик сравнивает его по ссылке
-   * (`useMemo`, `React.memo` — раздел 8.2), а внутренний растёт на месте.
+   * Новые строки — новый массив (внутренний не растёт на месте: подписчик, сравнивающий
+   * по ссылке — `useMemo`, `React.memo`, раздел 8.2, — свой массив не увидит выросшим).
+   * Чтение без новых строк отдаёт тот же массив без копии, а записи в нём — те же объекты
+   * (`sameJournal` службы активности сравнивает длину и последнюю запись по ссылке).
+   * Массив только для чтения: менять его нельзя.
    */
   read(sessionId: string): Promise<readonly EventRecord[] | null>;
 }
@@ -291,7 +294,7 @@ export function openEvents(eventsDir: string): EventsLog {
         journal = { offset: 0, tail: Buffer.alloc(0), events: [] };
         journals.set(sessionId, journal);
       }
-      if (info.size === journal.offset) return journal.events.slice();
+      if (info.size === journal.offset) return journal.events;
 
       const chunk = Buffer.alloc(info.size - journal.offset);
       const { bytesRead } = await handle.read(chunk, 0, chunk.length, journal.offset);
@@ -300,15 +303,18 @@ export function openEvents(eventsDir: string): EventsLog {
       const data = Buffer.concat([journal.tail, chunk.subarray(0, bytesRead)]);
       const cut = data.lastIndexOf(NEWLINE);
       journal.tail = cut === -1 ? data : data.subarray(cut + 1);
-      if (cut === -1) return journal.events.slice();
+      if (cut === -1) return journal.events;
 
       const at = info.mtime.toISOString();
+      const fresh: EventRecord[] = [];
       for (const line of data.subarray(0, cut).toString('utf8').split('\n')) {
         if (line.trim() === '') continue;
         const event = parseEvent(line, at);
-        if (event !== null) journal.events.push(event);
+        if (event !== null) fresh.push(event);
       }
-      return journal.events.slice();
+      // Новый массив только при новых событиях: выданный раньше не меняется, а без новых строк уходит прежний.
+      if (fresh.length > 0) journal.events = [...journal.events, ...fresh];
+      return journal.events;
     } finally {
       await handle.close();
     }

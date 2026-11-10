@@ -2,6 +2,7 @@ import { adapterV1 } from './adapter-v1.js';
 import { defaultCodexRoot } from './codex/discover.js';
 import { buildCodexIndex } from './codex/index-session.js';
 import { defaultRoot } from './discover.js';
+import type { IndexReuse } from './index-reuse.js';
 import type { SessionIndex } from './session-index.js';
 import { buildIndex } from './session-tree.js';
 
@@ -13,6 +14,8 @@ export interface AllSessionsOptions {
    * закрываются, промис отклоняется `AbortError`.
    */
   signal?: AbortSignal;
+  /** Записи прошлого запуска: файл с совпавшим ключом не читается (кэш индекса хоста). */
+  reuse?: IndexReuse;
 }
 
 /**
@@ -26,12 +29,13 @@ export async function buildAllSessions({
   claudeRoot = defaultRoot(),
   codexRoot = defaultCodexRoot(),
   signal,
+  reuse,
 }: AllSessionsOptions = {}): Promise<SessionIndex[]> {
   // Источники — по очереди, а не `Promise.all`: у каждого свой предел в
   // INDEX_READ_CONCURRENCY файлов, и вместе они держали бы вдвое больше чтений
   // в пуле libuv хоста (раунд lane-r3, п. 1).
-  const claude = await buildIndex(claudeRoot, adapterV1, signal);
-  const codex = await buildCodexIndex(codexRoot, signal);
+  const claude = await buildIndex(claudeRoot, adapterV1, signal, reuse);
+  const codex = await buildCodexIndex(codexRoot, signal, reuse);
 
   return [...claude, ...codex].sort((a, b) =>
     String(b.endedAt ?? '').localeCompare(String(a.endedAt ?? '')),

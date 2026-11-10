@@ -11,11 +11,11 @@
  * читаются не все файлы и не файл целиком, а хвост самых свежих (`readCodexLimits`).
  */
 
-import { open, stat, type FileHandle } from 'node:fs/promises';
+import { open, readdir, stat, type FileHandle } from 'node:fs/promises';
 import path from 'node:path';
 import { limitWindow, type LimitWindow, type ProviderLimits } from '../limits.js';
 import { INDEX_READ_CONCURRENCY, mapLimited } from '../map-limited.js';
-import { defaultCodexRoot, discoverCodexSessions } from './discover.js';
+import { defaultCodexRoot } from './discover.js';
 
 /** Длины окон, минуты: 300 — пять часов, 10080 — неделя. */
 const FIVE_HOURS_MINUTES = 5 * 60;
@@ -146,31 +146,104 @@ async function tailLimits(file: string): Promise<ProviderLimits | null> {
  */
 const MAX_FILES = 5;
 
+/** Сколько самых новых каталогов дня просматриваем: сессия, начатая перед полуночью, пишет во вчерашний. */
+export const CODEX_LIMITS_DAY_DIRS = 2;
+
+const isRollout = (name: string): boolean => name.startsWith('rollout-') && name.endsWith('.jsonl');
+
+async function namesDesc(dir: string, directories: boolean): Promise<string[]> {
+  try {
+    const entries = await readdir(dir, { withFileTypes: true });
+    return entries
+      .filter((entry) => (directories ? entry.isDirectory() : entry.isFile() && isRollout(entry.name)))
+      .map((entry) => entry.name)
+      .sort()
+      .reverse();
+  } catch {
+    // Каталога нет (Codex не установлен) или он исчез — это не ошибка обхода.
+    return [];
+  }
+}
+
+/** Rollout-файлы `CODEX_LIMITS_DAY_DIRS` новейших каталогов дня: год, месяц, день — по убыванию имени. */
+async function recentRollouts(root: string): Promise<string[]> {
+  const days: string[] = [];
+  for (const year of await namesDesc(root, true)) {
+    for (const month of await namesDesc(path.join(root, year), true)) {
+      for (const day of await namesDesc(path.join(root, year, month), true)) {
+        days.push(path.join(root, year, month, day));
+        if (days.length >= CODEX_LIMITS_DAY_DIRS) break;
+      }
+      if (days.length >= CODEX_LIMITS_DAY_DIRS) break;
+    }
+    if (days.length >= CODEX_LIMITS_DAY_DIRS) break;
+  }
+  const files: string[] = [];
+  for (const dir of days) for (const name of await namesDesc(dir, false)) files.push(path.join(dir, name));
+  return files;
+}
+
+export interface CodexLimitsReader {
+  /** `live` — rollout-файлы идущих сессий Codex: они кандидаты и в старом каталоге дня. */
+  read(live?: readonly string[]): Promise<ProviderLimits | null>;
+}
+
+interface SeenFile {
+  size: number;
+  mtimeMs: number;
+  limits: ProviderLimits | null;
+}
+
 /**
- * Лимиты Codex: последнее событие `token_count` с `rate_limits` корзины `codex` из самого свежего
- * rollout-лога (по времени изменения файла: `codex resume` дописывает старый лог, а каталог дня
- * остаётся прежним). Записи чужих корзин пропускаются. Нет корня, логов или подходящих событий —
- * `null`. Окна с прошедшим сбросом здесь ещё есть: их снимает хост (`dropExpiredWindows`).
+ * Читатель лимитов Codex с памятью между опросами. Кандидаты — rollout-файлы двух новейших каталогов
+ * дня и живых сессий; из них по времени изменения берутся `MAX_FILES` свежайших (равное время — по
+ * имени: в нём время начала сессии, позднее значит свежее). Стоимость опроса — `stat` по кандидатам,
+ * не по всей истории. Неизменившийся (размер и mtime, снятые до чтения) файл не открывается: берутся
+ * найденные в прошлый раз лимиты. Память держит только файлы текущего опроса.
+ */
+export function createCodexLimitsReader(root: string = defaultCodexRoot()): CodexLimitsReader {
+  let seen = new Map<string, SeenFile>();
+  return {
+    async read(live = []) {
+      const candidates = [...new Set([...(await recentRollouts(root)), ...live.filter((file) => isRollout(path.basename(file)))])];
+      const stamped = (
+        await mapLimited(candidates, INDEX_READ_CONCURRENCY, async (file) => {
+          const info = await stat(file).catch(() => null);
+          return info === null ? null : { file, size: info.size, mtimeMs: info.mtimeMs };
+        })
+      ).filter((item) => item !== null);
+      stamped.sort((a, b) => b.mtimeMs - a.mtimeMs || (a.file < b.file ? 1 : -1));
+
+      const next = new Map<string, SeenFile>();
+      let result: ProviderLimits | null = null;
+      for (const { file, size, mtimeMs } of stamped.slice(0, MAX_FILES)) {
+        const before = seen.get(file);
+        const entry: SeenFile =
+          before !== undefined && before.size === size && before.mtimeMs === mtimeMs
+            ? before
+            : { size, mtimeMs, limits: await tailLimits(file) };
+        next.set(file, entry);
+        if (entry.limits !== null) {
+          result = entry.limits;
+          break;
+        }
+      }
+      seen = next;
+      return result;
+    },
+  };
+}
+
+/**
+ * Лимиты Codex одним чтением без памяти: последнее событие `token_count` с `rate_limits` корзины
+ * `codex` из самого свежего rollout-лога новейших каталогов дня и `live` (по времени изменения
+ * файла: `codex resume` дописывает старый лог, а каталог дня остаётся прежним). Записи чужих корзин
+ * пропускаются. Нет корня, логов или подходящих событий — `null`. Окна с прошедшим сбросом здесь
+ * ещё есть: их снимает хост (`dropExpiredWindows`).
  */
 export async function readCodexLimits(
   root: string = defaultCodexRoot(),
+  live?: readonly string[],
 ): Promise<ProviderLimits | null> {
-  const rollouts = (await discoverCodexSessions(root)).filter(({ file }) =>
-    path.basename(file).startsWith('rollout-'),
-  );
-  const stamped = await mapLimited(rollouts, INDEX_READ_CONCURRENCY, async ({ file }) => ({
-    file,
-    modified: await stat(file).then(
-      (info) => info.mtimeMs,
-      () => 0,
-    ),
-  }));
-  // Равное время — по имени: в нём время начала сессии, и позднее значит свежее.
-  stamped.sort((a, b) => b.modified - a.modified || (a.file < b.file ? 1 : -1));
-
-  for (const { file } of stamped.slice(0, MAX_FILES)) {
-    const found = await tailLimits(file);
-    if (found !== null) return found;
-  }
-  return null;
+  return createCodexLimitsReader(root).read(live);
 }

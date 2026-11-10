@@ -55,7 +55,7 @@ import { buildSessionLayer, developerInstructions, validateLayerArguments, type 
 import { addSession, isCodexThreadBinding, removeSession, transitionSession, type NewSession } from './map.js';
 import { NEW_LABEL } from './names.js';
 import { mcpConfigValue, writeMcpConfig, type AgentChannel } from './mcp-config.js';
-import { finishSession, linkProviderSession, type MetricsRoots } from './metrics.js';
+import { finishSession, linkProviderSession, type FinishOptions, type MetricsRoots } from './metrics.js';
 import { writeWorkSettings } from './settings-file.js';
 import { CLAUDE_SKILL_BUDGET_ENV, CODEX_SKILL_CATALOG_OVERRIDE, claudeSkillReduction, codexSkillRoute } from './skill-reduction.js';
 import { isPointerText } from './delivery.js';
@@ -981,7 +981,7 @@ export async function finishExited(
   workId: string,
   sessionId: string,
   exit: { exitCode: number; signal: number | undefined },
-  roots: MetricsRoots = {},
+  roots: MetricsRoots & Pick<FinishOptions, 'logFileOf'> = {},
 ): Promise<void> {
   const session = (await readMap(projectPath, workId)).sessions.find(
     (candidate) => candidate.id === sessionId,
