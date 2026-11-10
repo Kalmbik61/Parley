@@ -79,6 +79,8 @@ export interface WakeServiceOptions {
    * списка вводит живую сессию в wake-blocked. По умолчанию `POINTER_REARM_MS`. Рычаг тестов.
    */
   pointerRearmMs?: readonly number[];
+  /** Сколько непрочитанная почта и текст в поле ввода держатся подряд до уведомления человеку; по умолчанию `DRAFT_NOTICE_MS`. Рычаг тестов. */
+  draftNoticeMs?: number;
   /** Лимит подъёмов; по умолчанию — `resumeRate` из настроек. Тесты подставляют свой. */
   limiter?: ResumeLimiter;
   /** Поднятая сессия вышла раньше этого срока без единого хука — подъём не удался (спека 10). */
@@ -129,6 +131,10 @@ const DEFAULT_POINTER_TIMEOUT_MS = 10_000;
 const DEFAULT_RESUME_FAIL_WINDOW_MS = 5_000;
 /** Пауза перед повторным указателем после первого и второго таймаута подряд; третий таймаут — wake-blocked живой сессии. */
 const POINTER_REARM_MS: readonly number[] = [30_000, 120_000];
+/** Непрочитанная почта и текст в поле ввода (черновик человека или наш указатель) столько подряд — уведомление; печати поверх текста нет. */
+const DRAFT_NOTICE_MS = 300_000;
+/** Уведомление о черновике — не чаще раза в час на сессию. */
+const DRAFT_NOTICE_EVERY_MS = 3_600_000;
 /** Уведомление о лимите подъёмов — не чаще раза в час на сессию (план, кусок 3.4). */
 const LIMIT_NOTICE_EVERY_MS = 60 * 60 * 1000;
 /** Пауза между просьбами о слоте после отказа бюджета работы (P37). */
@@ -308,6 +314,12 @@ interface AttemptState {
   leftover: { pid: number; ids: string[]; idleSeen: boolean } | null;
   /** Сколько писем было непрочитано в момент печати последнего указателя; `null` — проверка брошенного чтения не нужна. */
   unreadAtPointer: number | null;
+  /** С какого момента почта и текст в поле держатся подряд; `null` — не держатся. */
+  draftSince: number | null;
+  /** Когда ушло последнее уведомление о черновике; не обнуляется выходом процесса: час считается на сессию. */
+  draftNoticedAt: number | null;
+  /** Срок ближайшего уведомления о черновике. */
+  draftTimer: NodeJS.Timeout | undefined;
 }
 
 
@@ -360,6 +372,7 @@ export function createWakeService(
   const enterDelayMs = options.enterDelayMs ?? DEFAULT_ENTER_DELAY_MS;
   const pointerTimeoutMs = options.pointerTimeoutMs ?? DEFAULT_POINTER_TIMEOUT_MS;
   const pointerRearmMs = options.pointerRearmMs ?? POINTER_REARM_MS;
+  const draftNoticeMs = options.draftNoticeMs ?? DRAFT_NOTICE_MS;
   const resumeFailWindowMs = options.resumeFailWindowMs ?? DEFAULT_RESUME_FAIL_WINDOW_MS;
   const limitGraceMs = options.limitReturn?.graceMs ?? LIMIT_RETURN_GRACE_MS;
   const limitRetryMs = options.limitReturn?.retryMs ?? LIMIT_RETRY_MS;
@@ -425,6 +438,9 @@ export function createWakeService(
         promptIds: [],
         leftover: null,
         unreadAtPointer: null,
+        draftSince: null,
+        draftNoticedAt: null,
+        draftTimer: undefined,
       };
       attempts.set(key, state);
     }
@@ -444,6 +460,10 @@ export function createWakeService(
     if (state.rearmTimer !== undefined) {
       clearTimeout(state.rearmTimer);
       state.rearmTimer = undefined;
+    }
+    if (state.draftTimer !== undefined) {
+      clearTimeout(state.draftTimer);
+      state.draftTimer = undefined;
     }
     if (state.pasteRetry !== undefined) {
       clearTimeout(state.pasteRetry);
@@ -1015,6 +1035,37 @@ export function createWakeService(
     for (const message of unread) state.pointed.delete(message.id);
   }
 
+  /**
+   * Почта ждёт, а в поле ввода текст (черновик человека или наш `leftover`): печатать поверх нельзя, поэтому человеку —
+   * одно уведомление через `draftNoticeMs` подряд и повтор не чаще раза в час. Отправителям ничего. Пересчёт зовёт это на
+   * каждом проходе живой ветки; таймер (`unref`) будит пересчёт к сроку, а снятый `clearTimers` взводится следующим проходом.
+   */
+  function trackDraft(ref: SessionRef, state: AttemptState, held: boolean): void {
+    if (state.draftTimer !== undefined) {
+      clearTimeout(state.draftTimer);
+      state.draftTimer = undefined;
+    }
+    if (!held) {
+      state.draftSince = null;
+      return;
+    }
+    const now = Date.now();
+    state.draftSince ??= now;
+    let dueAt = state.draftSince + draftNoticeMs;
+    if (state.draftNoticedAt !== null) dueAt = Math.max(dueAt, state.draftNoticedAt + DRAFT_NOTICE_EVERY_MS);
+    if (now >= dueAt) {
+      notice('pointer-cancelled', ref, `Mail for ${sessionTag(ref.sessionId)} is waiting: unsent text in its terminal blocks delivery.`);
+      state.draftNoticedAt = now;
+      dueAt = Math.max(state.draftSince + draftNoticeMs, now + DRAFT_NOTICE_EVERY_MS);
+    }
+    state.draftTimer = setTimeout(() => {
+      state.draftTimer = undefined;
+      recompute(ref);
+    }, dueAt - now);
+    // Таймер черновика не держит процесс хоста на выходе.
+    state.draftTimer.unref();
+  }
+
   /** Эпизод лимита кончился или сессии больше нет: таймер возврата снимается, ничего не печатается. */
   function dropLimit(state: AttemptState): void {
     if (state.limit === undefined) return;
@@ -1377,6 +1428,7 @@ export function createWakeService(
       state.timeouts = 0;
       state.unreadAtPointer = null;
     }
+    trackDraft(ref, state, hasUnread(entry, session.id) && (handle.hasDraft() || state.leftover !== null));
     // Наш текст лежит в поле ввода, либо живую сессию заблокировали три указателя без хода: ничего не печатаем.
     if (state.leftover !== null && hasUnread(entry, session.id)) {
       publishWaiting(ref, state, 'draft');
@@ -1583,6 +1635,7 @@ export function createWakeService(
       state.promptIds = [];
       state.leftover = null;
       state.unreadAtPointer = null;
+      state.draftSince = null;
       recompute(ref);
     },
 
@@ -1654,6 +1707,7 @@ export function createWakeService(
         state.leftover = null;
         state.timeouts = 0;
         state.unreadAtPointer = null;
+        state.draftSince = null;
         // Уснувшую будят новые письма, а не те, что лежали при выходе: иначе
         // «Остановить» при непрочитанном тут же поднимало бы сессию обратно, а
         // провалившийся подъём без промпта повторялся бы до конца лимита. Кроме усыплённой хостом (спека сна агентов 4.1):

@@ -2765,3 +2765,38 @@ describe('WakeService: повтор указателя', () => {
     expect((stream().match(/echo: /g) ?? []).length).toBe(1);
   }, 30_000);
 });
+
+describe('WakeService: черновик держит почту', () => {
+  const draftNotice = (sessionId: string): string =>
+    `Mail for ${sessionTag(sessionId)} is waiting: unsent text in its terminal blocks delivery.`;
+
+  it('черновик дольше срока — одно уведомление, отправителю ничего', async () => {
+    const { workId, sessionId } = await activeSession();
+    const { ref, pty } = await rig(sessionId, workId, {}, { draftNoticeMs: 200 });
+
+    pty.input(ref, 'пр');
+    await sendLetter(workId, sessionId);
+    await waitFor(() => noticeTexts('pointer-cancelled').length === 1, 3000);
+    expect(noticeTexts('pointer-cancelled')).toEqual([draftNotice(sessionId)]);
+
+    // Повтор не чаще часа: дольше срока второго уведомления нет.
+    await settle(600);
+    expect(noticeTexts('pointer-cancelled')).toEqual([draftNotice(sessionId)]);
+    const map = readStoredMap(project, workId);
+    expect(map.messages.some((m) => m.from === SYSTEM || m.from === PARLEY)).toBe(false);
+  }, 30_000);
+
+  it('черновик отправлен до срока — уведомления нет', async () => {
+    const { workId, sessionId } = await activeSession();
+    const { ref, pty, stream } = await rig(sessionId, workId, {}, { draftNoticeMs: 600 });
+
+    pty.input(ref, 'пр');
+    await sendLetter(workId, sessionId);
+    await settle(100);
+    pty.input(ref, '\r');
+    await waitFor(() => stream().includes(pointer(1)), 3000);
+
+    await settle(800);
+    expect(noticeTexts('pointer-cancelled')).toEqual([]);
+  }, 30_000);
+});
