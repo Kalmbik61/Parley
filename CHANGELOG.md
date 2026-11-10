@@ -8,6 +8,7 @@ All notable changes to Parley are documented in this file.
 
 ### Fixed
 
+- Large workspaces stay responsive while agents exchange messages: a message is saved without rebuilding the workspace map, Parley no longer freezes while an agent's write holds the database, only the room that received a message has its history file rebuilt, and get_map list pages keep working while the workspace changes.
 - Plans no longer get stuck: a submitted item can still be verified after its owner closes, a closed verifier's review goes to the room lead, assignments are sent again when a workspace is reopened, Resume retries blocked items of an autonomous plan, plan letters no longer wait behind other Parley messages, and old delivery records are pruned. Cancelling an autonomous plan or quitting no longer waits for a running check, and the host recalculates plans only for workspaces that changed.
 - Continuing a session on another provider no longer leaves it unable to start when its role belongs to the old provider: Parley picks the matching role (or none) and tells you which one it took.
 - A session that failed to start twice in a row is no longer resumed on every new letter: you get one notice, and the room lead and the senders of its unread mail get one letter saying the session cannot be woken.
