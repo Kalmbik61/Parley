@@ -65,7 +65,7 @@ export { gitBranch } from './git.js';
 export { buildAllSessions } from './all-sessions.js';
 export type { IndexReuse } from './index-reuse.js';
 export type { AllSessionsOptions } from './all-sessions.js';
-export { defaultCodexRoot, discoverCodexSessions } from './codex/discover.js';
+export { codexLogId, defaultCodexRoot, discoverCodexSessions } from './codex/discover.js';
 export type { DiscoveredCodexSession } from './codex/discover.js';
 export { buildCodexIndex, indexCodexSession } from './codex/index-session.js';
 export { readCodexLimits } from './codex/limits.js';

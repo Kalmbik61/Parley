@@ -35,6 +35,11 @@ export interface DiscoveredCodexSession {
  */
 const ROLLOUT = /^rollout-.*?-([0-9a-f-]{36})(?:_[0-9a-f-]{36})?\.jsonl$/;
 
+/** Id сессии по имени rollout-файла; не rollout-имя — имя без `.jsonl`. */
+export function codexLogId(fileName: string): string {
+  return ROLLOUT.exec(fileName)?.[1] ?? path.basename(fileName, '.jsonl');
+}
+
 async function readDirSafe(dir: string): Promise<import('node:fs').Dirent[]> {
   try {
     return await readdir(dir, { withFileTypes: true });
@@ -66,8 +71,7 @@ export async function discoverCodexSessions(
       }
       if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue;
 
-      const match = ROLLOUT.exec(entry.name);
-      found.push({ file: full, id: match?.[1] ?? path.basename(entry.name, '.jsonl') });
+      found.push({ file: full, id: codexLogId(entry.name) });
     }
   };
 

@@ -339,6 +339,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     sync: { enabled: true },
     // `ptyManager` создаётся ниже, поэтому набор берётся лениво, на каждую сверку живости.
     ownedPids: () => new Set(ptyManager.list().map((h) => h.pid)),
+    // Служба активности создаётся позже: лог сессии берётся из её индекса лениво, на каждую сверку живости.
+    logFileOf: (ref) => activityService.logFile(ref),
   });
   // Сервис зовёт onFailure по разу на каждый код сбоя (конфликт снимка, журнал решения), а у человека одна карточка
   // с одним текстом: повтор для той же работы только вытеснял бы из строки статуса прежние уведомления.

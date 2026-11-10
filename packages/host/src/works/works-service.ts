@@ -52,7 +52,7 @@ import {
 } from '@parley/core';
 import type { HostLease, LetterReader, MapWrittenEvent, Message, WindowWorkEntry, WindowWorkMap, WorkEntry, WorkMap, WorksWatcher } from '@parley/core';
 import { COMPACT_WORKS_FEATURE, LEGACY_SNAPSHOT_MAX_BYTES, ROOMS_MAIL_FEATURE, WORKS_SYNC_FEATURE, encodeLine } from '@parley/protocol';
-import type { RoomsMailEvent, WorksSnapshot, WorksSyncWorkKey } from '@parley/protocol';
+import type { RoomsMailEvent, SessionRef, WorksSnapshot, WorksSyncWorkKey } from '@parley/protocol';
 import type { Client } from '../client.js';
 import type { HostContext } from '../context.js';
 import type { WindowCounters } from '../health/window-counters.js';
@@ -93,6 +93,8 @@ export interface WorksServiceOptions {
    * Функция, а не набор: PTY заводятся позже сервиса и меняются, набор берётся заново на каждую сверку живости.
    */
   ownedPids?: () => ReadonlySet<number>;
+  /** Лог сессии из индекса логов хоста: сверка живости читает его без поиска по истории (`reconcileMap`, `logFileOf`). */
+  logFileOf?: (ref: SessionRef) => string | null;
   /**
    * Сколько пачка писем копится до рассылки, мс; по умолчанию `MAIL_BATCH_MS`. Только для тестов: большое значение, чтобы
    * пачку выпускал снимок, а не таймер. Выше `MAIL_HOLD_MAX_MS` потолком ожидания пачки, которую держит снимок, становится
@@ -597,6 +599,7 @@ export function createWorksService(
     // сверка всё равно увидит по самому pid.
     const ownedPids = options.ownedPids?.();
     const reconcileOptions = { ...lockOptions, ...(ownedPids === undefined ? {} : { ownedPids }) };
+    const logFileOf = options.logFileOf;
     for (const work of works) {
       const hasLiveCandidate = work.map.sessions.some(
         (session) =>
@@ -606,7 +609,15 @@ export function createWorksService(
       if (!hasLiveCandidate) continue;
 
       try {
-        await reconcileMap(work.projectPath, work.map.work.id, reconcileOptions);
+        await reconcileMap(work.projectPath, work.map.work.id, {
+          ...reconcileOptions,
+          ...(logFileOf === undefined
+            ? {}
+            : {
+                logFileOf: (session) =>
+                  logFileOf({ projectPath: work.projectPath, workId: work.map.work.id, sessionId: session.id }),
+              }),
+        });
         // Карта перечитывается всегда, а не только когда эта сверка нашла мёртвых: список
         // наблюдателя мог быть прочитан до записи прошлой сверки (sleeping уже на диске,
         // мёртвых больше нет), и без перечитывания снимок откатился бы к active мёртвой
