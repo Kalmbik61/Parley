@@ -117,6 +117,16 @@ const hook = (name: string, extra: Record<string, unknown> = {}): string =>
   `${JSON.stringify({ hook_event_name: name, ...extra })}\n`;
 
 /**
+ * Толчок пересчёта сессии правкой её же записи в карте: проход работ пересчитывает только сессии с изменившимся входом,
+ * и работа, заведённая рядом (`createWork`), чужую сессию уже не толкает.
+ */
+const nudge = (ref: SessionRef, task: string): Promise<unknown> =>
+  updateMap(project, ref.workId, (map) => {
+    const session = map.sessions.find((item) => item.id === ref.sessionId);
+    if (session !== undefined) session.task = task;
+  });
+
+/**
  * Заводит активную сессию `s-01` в новой работе и готовит каталог `events/`. `label: NEW_LABEL` — карта старой
  * сборки (метка на диске: `addSession` сама её уже не оставляет), `label: ''` — имя по умолчанию.
  */
@@ -665,7 +675,7 @@ describe('createActivityService', () => {
   }, 60_000);
 
   it('7: hooks-missing приходит один раз для сессии хоста без журнала', async () => {
-    await activeSession({ launchedBy: 'host', createEventsDir: false });
+    const { ref } = await activeSession({ launchedBy: 'host', createEventsDir: false });
     const w = await works();
     const a = activity(w);
     await a.start();
@@ -681,8 +691,8 @@ describe('createActivityService', () => {
       /^Claude Code hooks did not arrive for session s-\d+ — status comes from the log$/,
     );
 
-    // Дальнейшие пересчёты (например, works.changed от другой работы) второго не дают.
-    await createWork(project, { title: 'Толчок' });
+    // Дальнейшие пересчёты (например, правка записи самой сессии) второго не дают.
+    await nudge(ref, 'другая задача');
     await settle(200);
     expect(
       broadcasts.filter(
@@ -825,8 +835,8 @@ describe('createActivityService', () => {
     const afterFirst = activityChanges(ref).length;
     expect(afterFirst).toBeGreaterThan(0);
 
-    // Толчок works.changed без изменения активности самой сессии.
-    await createWork(project, { title: 'Ещё одна' });
+    // Пересчёт от правки записи сессии без изменения её активности.
+    await nudge(ref, 'другая задача');
     await settle(200);
 
     expect(activityChanges(ref).length).toBe(afterFirst);
@@ -1547,7 +1557,7 @@ describe('need: потребность сессии (спека «Застряв
     // Пересчёт через 30 с: правило «сейчас» дало бы новое время, а эпизод держит первое.
     const broadcast = activityChanges(ref).length;
     clock += 30_000;
-    await createWork(project, { title: 'Ещё одна' });
+    await nudge(ref, 'другая задача');
     await settle(300);
     expect(a.get(ref)?.activity.need?.resetsAt).toBe(first);
     expect(activityChanges(ref).length).toBe(broadcast);
@@ -1571,7 +1581,7 @@ describe('need: потребность сессии (спека «Застряв
     // Сброс прошёл: служба лимитов окно уже не отдаёт (`dropExpiredWindows`), а эпизод всё ещё идёт.
     clock = Date.parse(firstReset) + 1000;
     fake.set(null);
-    await createWork(project, { title: 'Ещё одна' });
+    await nudge(ref, 'другая задача');
     await settle(300);
     expect(a.get(ref)?.activity.need).toMatchObject({ resetsAt: firstReset, window: 'session' });
 
@@ -1583,6 +1593,25 @@ describe('need: потребность сессии (спека «Застряв
     await appendFile(journal(ref), failure(LIMIT_NO_TIME));
     await waitFor(() => a.get(ref)?.activity.need?.kind === 'limit');
     expect(a.get(ref)?.activity.need).toMatchObject({ resetsAt: secondReset, window: 'session' });
+  }, 20_000);
+
+  // Служба лимитов не уведомляет: окно провайдера, пришедшее позже удара, доезжает проходом списка работ.
+  it('лимит без времени сброса досчитывается на проходе работ', async () => {
+    const { ref } = await activeSession();
+    const w = await works();
+    const fake = fakeLimits();
+    const a = activity(w, { limits: fake.limits });
+    await a.start();
+    await settle();
+
+    await appendFile(journal(ref), hook('UserPromptSubmit') + failure(LIMIT_NO_TIME));
+    await waitFor(() => a.get(ref)?.activity.need?.kind === 'limit');
+    expect(a.get(ref)?.activity.need?.resetsAt).toBeNull();
+
+    const reset = new Date(Date.now() + 3_600_000).toISOString();
+    fake.set(exhausted(reset));
+    await createWork(project, { title: 'Ещё одна' });
+    await waitFor(() => a.get(ref)?.activity.need?.resetsAt === reset);
   }, 20_000);
 
   it('спящая сессия с ошибкой лимита в журнале — need: null; пока она жива, он есть', async () => {
