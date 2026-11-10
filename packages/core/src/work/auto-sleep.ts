@@ -4,7 +4,7 @@
  * решение по снимку состояния, как у `deliveryAction`.
  */
 
-import type { SessionActivity } from './activity.js';
+import { presentedActivity, type SessionActivity } from './activity.js';
 import type { LetterTx } from './letter-store.js';
 import type { Message, WorkSession } from './types.js';
 
@@ -50,7 +50,7 @@ export interface AutoSleepInput {
  * - `pointer` — указатель на письма в полёте;
  * - `unread` — есть непрочитанные письма;
  * - `compacting` — идёт сжатие контекста;
- * - `working` — агент работает или о конце его хода ничего не известно;
+ * - `working` — агент работает, ход открыт и молчит (`quietTurn`) или о конце хода ничего не известно;
  * - `waiter-start-unknown` — агент ждёт в `wait_for`, а начала ожидания хост не видел;
  * - `waiters-off` — ждущих в `wait_for` не усыпляют;
  * - `too-soon` — простой короче порога.
@@ -87,7 +87,9 @@ export type AutoSleepVerdict =
  * хост; ход окончен (`idle`, `unseen`) — часы от `turnEndedAt`. Остальное — `working`.
  */
 export function autoSleepVerdict(input: AutoSleepInput): AutoSleepVerdict {
-  const { session, activity, now } = input;
+  const { session, now } = input;
+  // Тишина открытого хода — `working`, как в окне: одно правило на показ и на сон.
+  const activity = input.activity === null ? null : presentedActivity(input.activity);
   const no = (block: AutoSleepBlock): AutoSleepVerdict => ({ sleep: false, block });
   // Порог 0 — без порога: метка конца хода чуть впереди часов хоста «рано» не даёт.
   const tooSoon = (idleSince: number): boolean => input.thresholdMs > 0 && now - idleSince < input.thresholdMs;

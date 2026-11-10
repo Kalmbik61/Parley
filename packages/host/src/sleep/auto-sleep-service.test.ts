@@ -1276,6 +1276,16 @@ describe('сервис сна: по давлению и ради слота', ()
     expect(sessionOf(newest).lifecycle).toBe('active');
   });
 
+  it('тишина открытого хода не усыпляет и при critical', async () => {
+    await startSession({ activity: idleActivity(NOW - 10 * MIN, { activity: 'unseen', quietTurn: true }) });
+    boot({ pressure: sensor });
+
+    await reading('critical', NOW);
+    await reading('critical', NOW + PRESSURE_PACE_MS.critical);
+
+    expect(stops).toEqual([]);
+  });
+
   it('при critical — одна сессия за 10 с', async () => {
     const oldest = await idleFor(30);
     const middle = await idleFor(20);
