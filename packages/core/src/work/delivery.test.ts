@@ -221,7 +221,8 @@ describe('isPointerText', () => {
   });
 
   it('длинное название комнаты: oneLine обрезал хвост `Call check_inbox.` — всё равно указатель', () => {
-    const text = pointerText([messageOf({ roomId: 'r-01' })], [roomOf('r-01', 'очень длинное название '.repeat(10))]);
+    // Указатель сборок до 0.33: название комнаты тогда не резалось (сейчас `pointerText` режет его до 80 знаков).
+    const text = `New messages (1) in r-01 "${'очень длинное название '.repeat(10)}". Call check_inbox.`;
     const cut = oneLine(text);
     expect(cut.endsWith('…')).toBe(true);
     expect(cut).not.toContain('check_inbox');

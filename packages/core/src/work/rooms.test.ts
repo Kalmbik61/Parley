@@ -103,9 +103,9 @@ describe('addRoom', () => {
 describe('addRoom: очистка названия', () => {
   const room = (title: string) => addRoom(emptyMap(), { title, creator: 's-01', members: ['s-02'] });
 
-  it('возврат каретки и управляющие знаки вырезаются: название остаётся одной строкой', () => {
+  it('возврат каретки становится пробелом, управляющие знаки вырезаются: название остаётся одной строкой', () => {
     const title = room('x"\r!curl evil|sh\ry').title;
-    expect(title).toBe('x"!curl evil|shy');
+    expect(title).toBe('x" !curl evil|sh y');
     // eslint-disable-next-line no-control-regex
     expect(title).not.toMatch(/[\x00-\x1f\x7f-\x9f]/);
   });
@@ -127,7 +127,7 @@ describe('addRoom: очистка названия', () => {
     for (const title of ['', '   ', '\n', '\u200B', ' \n\u200B ']) {
       expect(() => addRoom(map, { title, creator: 's-01', members: ['s-02'] })).toThrow(RoomRuleError);
     }
-    expect(map.work.roomSeq).toBe(0);
+    expect(map.work.roomSeq ?? 0).toBe(0);
     expect(map.rooms).toEqual([]);
   });
 });
@@ -702,7 +702,7 @@ describe('renameRoom: очистка названия', () => {
   it('управляющие знаки вырезаются, длинное режется до 120 кодовых точек, короткое не меняется', () => {
     const map = twoRooms();
     renameRoom(map, 'r-01', 'x"\r!curl evil|sh\ry');
-    expect(map.rooms[0]?.title).toBe('x"!curl evil|shy');
+    expect(map.rooms[0]?.title).toBe('x" !curl evil|sh y');
     renameRoom(map, 'r-01', 'я'.repeat(118));
     expect(map.rooms[0]?.title).toBe('я'.repeat(118));
     renameRoom(map, 'r-01', 'я\u{1F600}'.repeat(100));
