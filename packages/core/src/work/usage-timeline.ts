@@ -67,7 +67,7 @@ function emptyTimeline(file: string, family: 'claude' | 'codex'): UsageTimeline 
  * подмена файла (другой `ino`) — чтение с нуля, шкала целиком новая. Иначе новые наблюдения, точки стоимости и
  * `sidechain` копятся в буфере и ПОСЛЕ удачного чтения дописываются в массивы прежней шкалы на месте (без копии
  * на каждое дописывание); чтение, упавшее посреди хвоста, шкалу не меняет. Прежний объект шкалы после вызова
- * заменяется возвращённым: держать его для сравнения нельзя. Оборванная последняя строка ждёт следующего
+ * обновляется на месте и возвращается же: держать его для сравнения нельзя. Оборванная последняя строка ждёт следующего
  * вызова; целая (JSON-объект) без `\n` принимается сразу, как у readline. Само чтение — `readJsonlTail`.
  * `adapter` разбирает записи Claude так же, как в полном чтении индексатора.
  */
@@ -161,7 +161,7 @@ export async function extendUsageTimeline(
     lastStamp = buffer.lastStamp ?? prior.lastStamp;
   }
   const { cursor: next } = result;
-  return {
+  const updated: UsageTimeline = {
     file,
     family,
     offset: next.offset,
@@ -174,6 +174,11 @@ export async function extendUsageTimeline(
     ...(family === 'claude' && lastStamp !== undefined ? { lastStamp } : {}),
     ...(next.unterminated ? { unterminated: true } : {}),
   };
+  if (prior === null || restarted) return updated;
+  // Массивы прежней шкалы уже выросли на месте: курсор обновляется в том же объекте, чтобы смещение и массивы
+  // не расходились, если вызывающий не успеет принять результат (упало чтение соседнего подагента).
+  if (updated.unterminated === undefined) delete prior.unterminated;
+  return Object.assign(prior, updated);
 }
 
 /** Срез расхода Claude по окнам: тот же итог, что у индексатора с `usageWindows`, без чтения файлов. */

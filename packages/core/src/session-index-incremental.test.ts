@@ -4,7 +4,9 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { extendCodexSessionIndex, indexCodexSession, type CodexIndexState } from './codex/index-session.js';
 import type { DiscoveredSubagent } from './discover.js';
+import { DEFAULT_TIMELINE_READER, type TimelineReader } from './jsonl-tail.js';
 import { extendClaudeSessionIndex, indexSessionFile, type ClaudeIndexState } from './session-index.js';
+import { extendUsageTimeline } from './work/usage-timeline.js';
 
 // Счётчики вызовов: сколько наблюдений ушло в ledger и сколько раз историю проигрывали заново.
 const counts = vi.hoisted(() => ({ observe: 0, replay: 0 }));
@@ -272,6 +274,41 @@ describe('Codex: расход по новым записям', () => {
       const next = await extendCodexSessionIndex(state, file);
       state = next.state;
       expect(next.index, `срез ${cut}`).toEqual(await indexCodexSession(file));
+    }
+  });
+});
+
+describe('Claude: шаг, упавший на втором подагенте', () => {
+  it('шкала первого подагента не расходится с курсором: следующий шаг не дублирует строки', async () => {
+    const dir = path.join(root, '-Users-me-proj');
+    const file = path.join(dir, 's1.jsonl');
+    const first = path.join(dir, 's1', 'subagents', 'agent-a1.jsonl');
+    const second = path.join(dir, 's1', 'subagents', 'agent-a2.jsonl');
+    await mkdir(path.dirname(first), { recursive: true });
+    const zero = { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+    const side = (id: string, n: number, agentId: string): string => reply(id, n, zero, { isSidechain: true, agentId });
+    const subagents = [subagentOf(first, 'a1'), subagentOf(second, 'a2')];
+    await writeFile(file, jsonl(parentLines()));
+    await writeFile(first, jsonl([side('a1-1', 10, 'a1')]));
+    await writeFile(second, jsonl([side('a2-1', 11, 'a2')]));
+    const cold = await extendClaudeSessionIndex(null, file, root, { subagents });
+
+    await appendFile(first, jsonl([side('a1-2', 12, 'a1'), side('a1-3', 13, 'a1')]));
+    await appendFile(second, jsonl([side('a2-2', 14, 'a2')]));
+    const failing: TimelineReader = {
+      stat: async (target) => {
+        if (target === second) throw new Error('boom');
+        return DEFAULT_TIMELINE_READER.stat(target);
+      },
+      open: (target, start) => DEFAULT_TIMELINE_READER.open(target, start),
+    };
+    await expect(extendClaudeSessionIndex(cold.state, file, root, { subagents, reader: failing })).rejects.toThrow('boom');
+
+    const next = await extendClaudeSessionIndex(cold.state, file, root, { subagents });
+    expect(next.index).toEqual(await indexSessionFile(file, root, { subagents }));
+    for (const subFile of [first, second]) {
+      const scratch = await extendUsageTimeline(null, subFile, 'claude');
+      expect(next.state.subagents.get(subFile)).toEqual(scratch);
     }
   });
 });
