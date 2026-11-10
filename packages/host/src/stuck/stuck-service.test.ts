@@ -559,6 +559,51 @@ describe('служба «застрял» — доклад (спека заст�
     expect(sent.some((letter) => letter.to.includes(second))).toBe(false);
   });
 
+  it('нет комнаты и непрочитанного: письмо о лимите создателю, roomId null; «back» тоже ему', async () => {
+    const [first, , third] = await makeWork((map, [a, , c]) => {
+      sessionOf(map, c).createdBy = a;
+    });
+    boot({ alternatives: async () => [] });
+    const need = needOf('limit');
+    await emit(third, need);
+    await until(async () => (await stuckOf(third)) != null);
+    await emit(third, null);
+    await until(async () => (await stuckOf(third)) === null);
+    const map = readStoredMap(project, workId);
+    expect(lines(map)).toHaveLength(0);
+    expect(letters(map).map((letter) => [letter.to, letter.roomId, letter.text])).toEqual([
+      [[first], null, stuckLetter(whoOf(third), need, after(0), [])],
+      [[first], null, backLetter(third, 'limit')],
+    ]);
+  });
+
+  it('застрял ведущий: письмо владельцу комнаты с roomId null', async () => {
+    const [lead, , third] = await makeWork((map, [a, b, c]) => {
+      addRoom(map, { title: 'Комната', creator: HUMAN, members: [a, b], lead: a, ownerId: c });
+    });
+    boot({ alternatives: async () => [] });
+    const need = needOf('limit');
+    await emit(lead, need);
+    await until(async () => (await stuckOf(lead)) != null);
+    const map = readStoredMap(project, workId);
+    expect(letters(map).map((letter) => [letter.to, letter.roomId, letter.text])).toEqual([
+      [[third], null, stuckLetter(whoOf(lead), need, after(0), [])],
+    ]);
+  });
+
+  it('создатель и ведущий — одна сессия: одно письмо, в комнате', async () => {
+    const [lead, worker] = await makeWork((map, [a, b]) => {
+      inRoom(a, b)(map);
+      sessionOf(map, b).createdBy = a;
+    });
+    boot({ alternatives: async () => [] });
+    const need = needOf('limit');
+    await emit(worker, need);
+    await until(async () => (await stuckOf(worker)) != null);
+    const map = readStoredMap(project, workId);
+    expect(letters(map).map((letter) => [letter.to, letter.roomId])).toEqual([[[lead], 'r-01']]);
+  });
+
   it('архивная комната: stuck записан, ни строки, ни писем', async () => {
     const [, worker] = await makeWork((map, [a, b], tx) => {
       inRoom(a, b)(map);

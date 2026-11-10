@@ -131,6 +131,7 @@ import { createVoiceTelemetry, LIVE_USD_PER_MINUTE } from './voice/telemetry.js'
 import { dailyBudget } from './voice/budget.js';
 import { AGENT_BROWSER_PATH, createBrowserEndpoint } from './agent/browser-endpoint.js';
 import { createHookServer } from './hooks/hook-server.js';
+import { createSilentEndings } from './endings/silent-endings.js';
 import { createSessionsService } from './sessions/sessions-service.js';
 import { providerLaunchEnv } from './sessions/provider-env.js';
 import { createReadyJournal } from './sessions/ready-journal.js';
@@ -420,6 +421,10 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   // Живые PTY сессий (1.6). На остановке хоста добиваются вместе с ним —
   // иначе процесс агента остаётся сиротой без хоста, который бы его закрыл.
   const ptyManager = createPtyManager(handle.context, windowCounters);
+  // Сторож тихих концовок (работы, активность и PTY уже есть). Его `stop` — раньше `sessionsService.stopAll` (хуки идут по
+  // порядку регистрации): выключение хоста гасит процессы, и ни одно письмо о «тихом конце» не должно за ним последовать.
+  const silentEndings = createSilentEndings(handle.context, { works: worksService, activity: activityService, pty: ptyManager });
+  handle.context.onShutdown(async () => silentEndings.stop());
   // Процессы PTY для тулбара: один `ps` на тик, опрос только пока есть подписчики.
   const processMonitor = createProcessMonitor({ log: handle.context.log, livePtys: () => ptyManager.list() });
   handle.context.onShutdown(async () => processMonitor.stop());
@@ -673,6 +678,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     ptyManager,
     activityService,
     {
+      endings: silentEndings,
       capacity: capacityService,
       consents: consentsService,
       projectMcp,
@@ -750,6 +756,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     sessions: sessionsService,
     wake: wakeService,
     compacting: (ref) => compactionService?.holds(ref) === true,
+    silentTurns: silentEndings,
     config: async () => (await loadConfig()).config,
     // Сон по давлению памяти и ради слота очереди (спека, 4.2) читает тот же датчик, что и сервис ёмкости.
     pressure: pressureSensor,
@@ -838,8 +845,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     },
     resume: (ref, prompt) => sessionsService.launch(ref, 'resume', { by: 'human', ...(prompt === null ? {} : { prompt }) }),
     interrupt: (ref) => feedService.interrupt(ref),
-    stopSession: (ref) => sessionsService.stop(ref),
-    closeSession: (ref) => sessionsService.close(ref),
+    stopSession: (ref) => sessionsService.stop(ref, 'human'),
+    closeSession: (ref) => sessionsService.close(ref, 'human'),
     addRoomMember: (input) => addRoomMember(input),
     roles: async (projectPath) => roleSummaries(await roleCatalog(projectPath, { codex: true })).roles,
     leanAgents: async () => (await loadConfig()).config.leanAgents,
@@ -1326,6 +1333,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   // До активности: сверка эпизодов с картой идёт по первому изменению каждой сессии (спека застрявших 4.4), а оно
   // приходит из самого `activityService.start()`.
   stuckService.start();
+  silentEndings.start();
   // Состояние входа аккаунтов (К5): в фоне, `providers.changed` придёт, когда ответы CLI будут разобраны.
   void authService.refreshAll();
   await activityService.start();

@@ -22,7 +22,7 @@ import type { EventData, EventName, SessionRef } from '@parley/protocol';
 import type { HostContext } from '../context.js';
 import { swarmsCancel, swarmsSeen } from '../methods/swarms.js';
 import type { WorksService } from '../works/works-service.js';
-import { SWARM_EXPIRY_GRACE_MS, SWARM_TICK_MS, createSwarmsService } from './swarms-service.js';
+import { DRONE_SILENT_MS, SWARM_EXPIRY_GRACE_MS, SWARM_TICK_MS, createSwarmsService } from './swarms-service.js';
 import type { SwarmsService, SwarmsServiceOptions } from './swarms-service.js';
 
 const START = '2026-10-28T12:00:00.000Z';
@@ -327,6 +327,57 @@ describe('переходы', () => {
     expect(swarmOf().status).toBe('collecting');
     expect(sessionOf(queen).lifecycle).toBe('sleeping');
     expect(lettersTo(queen)).toHaveLength(1);
+  });
+
+  it('все сдали — прежний текст письма королеве', async () => {
+    const { queen, drones } = await makeSwarm({ drones: 2 });
+    boot();
+    await report(drones[0]!, 'done', 'a');
+    await report(drones[1]!, 'done', 'b');
+    await emit();
+
+    expect(lettersTo(queen).map((letter) => letter.text)).toEqual([
+      'All members of swarm sw-01 have handed in. Write the summary: call report with the combined result.',
+    ]);
+  });
+
+  it('трутень спит без итога: до DRONE_SILENT_MS рой идёт и писем нет, с него — collecting и текст с именем трутня', async () => {
+    expect(DRONE_SILENT_MS).toBe(120_000);
+    for (const age of [0, 60_000, 119_999, 120_000, 600_000]) {
+      const { queen, drones } = await makeSwarm({ drones: 1 });
+      await updateMap(project, workId, (map) => {
+        transitionSession(map, drones[0]!, 'sleeping', { at: new Date(Date.parse(START) - age).toISOString() });
+      });
+      boot();
+      await emit();
+
+      if (age < DRONE_SILENT_MS) {
+        expect(swarmOf().status, `${age}`).toBe('running');
+        expect(lettersTo(queen), `${age}`).toHaveLength(0);
+      } else {
+        expect(swarmOf().status, `${age}`).toBe('collecting');
+        expect(lettersTo(queen).map((letter) => letter.text), `${age}`).toEqual([
+          `All members of swarm sw-01 have finished; 1 of 1 did not hand in: ${drones[0]}. ` +
+            'Write the summary: call report with the combined result and say what is missing.',
+        ]);
+      }
+      await stoppers.pop()?.();
+      listeners = [];
+    }
+  });
+
+  it('закрытый человеком трутень назван в письме, сдавший — нет', async () => {
+    const { queen, drones } = await makeSwarm({ drones: 2 });
+    boot();
+    await report(drones[0]!, 'done', 'a');
+    await setLifecycle(drones[1]!, 'closed');
+    await emit();
+
+    expect(swarmOf().status).toBe('collecting');
+    expect(lettersTo(queen).map((letter) => letter.text)).toEqual([
+      `All members of swarm sw-01 have finished; 1 of 2 did not hand in: ${drones[1]}. ` +
+        'Write the summary: call report with the combined result and say what is missing.',
+    ]);
   });
 
   it('сданный трутень, чью сессию ещё не закрыли, не держит рой: handedAt терминален сам по себе', async () => {

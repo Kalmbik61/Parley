@@ -556,7 +556,16 @@ export {
   wakesAtOnce,
 } from './work/delivery.js';
 export type { DeliveryAction, DeliveryInput } from './work/delivery.js';
-export { reportRecipients } from './work/task-giver.js';
+export { isTaskLetter, reportRecipients } from './work/task-giver.js';
+export {
+  lastTaskLetter,
+  nudgeText,
+  silentEndingText,
+  silentTurnEnd,
+  silentTurnStep,
+  tellSilentEnding,
+} from './work/silent-endings.js';
+export type { SilentEnding, SilentEndingKind, SilentEndingMark } from './work/silent-endings.js';
 export type { ReportRecipient } from './work/task-giver.js';
 export {
   autoSleepVerdict,

@@ -283,9 +283,10 @@ export interface SessionsService {
    * выходе (запуск уже идёт, процесс жив).
    */
   launch(ref: SessionRef, mode: LaunchMode, options?: LaunchChoice): Promise<LaunchOutcome>;
-  stop(ref: SessionRef): Promise<void>;
-  /** Насовсем: `closed` в карте и остановка PTY, если он жив. */
-  close(ref: SessionRef): Promise<void>;
+  /** `cause: 'human'` — остановка по действию человека: сторож тихих концовок пишет об этом письмо; без причины — молча. */
+  stop(ref: SessionRef, cause?: 'human'): Promise<void>;
+  /** Насовсем: `closed` в карте и остановка PTY, если он жив. `by: 'human'` — закрыл человек (письмо сторожа). */
+  close(ref: SessionRef, by?: 'human'): Promise<void>;
   /** `force` — грязный worktree отбрасывается вместе с сессией; без него — `conflict` (спека 8.3). */
   delete(ref: SessionRef, force?: boolean): Promise<void>;
   live(ref: SessionRef): boolean;
@@ -409,6 +410,15 @@ export interface SessionsFeedOptions {
     settle(ref: SessionRef): void;
     pump(): void;
   };
+  /**
+   * Сторож тихих концовок (план 07, задача 4): ему сообщают выход процесса и Stop/Close человеком. Тип структурный, как у
+   * `capacity`: службу сессии не импортируют. Нет сторожа — писем нет (изолированные тесты).
+   */
+  endings?: {
+    exited(ref: SessionRef, exit: { exitCode: number; signal?: number }, launch: { by: string; runMs: number } | null): Promise<void>;
+    stoppedByHuman(ref: SessionRef): Promise<void>;
+    closedByHuman(ref: SessionRef): Promise<void>;
+  };
 }
 
 
@@ -474,7 +484,7 @@ export function createSessionsService(
   activity: ActivityService,
   feed: SessionsFeedOptions = {},
 ): SessionsService {
-  const { hooks, providerVersions, capacity } = feed;
+  const { hooks, providerVersions, capacity, endings } = feed;
   const spawnLimits = feed.spawnLimits ?? querySpawnLimits;
   const warned = new Set<string>();
   const creationWarnings = new Set<string>();
@@ -546,6 +556,13 @@ export function createSessionsService(
   // дописанным файлом. Промис по каждой сессии живёт здесь до своего
   // завершения, `stop()` его дожидается следом за самим выходом процесса.
   const finalizing = new Map<string, Promise<void>>();
+
+  // Почему процесс остановлен хостом: `human` — действие человека (Stop), `quiet` — служебная остановка (смена модели и
+  // агента, сон, архив, закрытие, выключение хоста). Записывается до `pty.stop`, обработчик `exit` забирает синхронно.
+  // Выход без записи — процесс вышел или упал сам; о нём сторож тихих концовок пишет письмо.
+  const exitCauses = new Map<string, 'human' | 'quiet'>();
+  // Кто поднял живой процесс и когда: подъём будильником (`wake`), упавший сразу, — забота «did not resume» будильника.
+  const launchActors = new Map<string, { by: string; startedAt: number }>();
 
   // Запись `active` после старта процесса идёт позже самого `pty.start`: между
   // ними — await-ы (время старта процесса из ОС, запись карты). Процесс, который
@@ -656,6 +673,10 @@ export function createSessionsService(
   pty.on('exit', (ref, exit) => {
     const key = refKey(ref);
     const issuedGitGrant = gitWriteGrants.get(key);
+    const cause = exitCauses.get(key);
+    exitCauses.delete(key);
+    const launchActor = launchActors.get(key);
+    launchActors.delete(key);
     // Токен приёмника живёт, пока жив процесс: `SessionEnd` приходит до выхода, позже хуков нет.
     hooks?.unregister(ref);
     feed.agent?.unregister(ref);
@@ -672,6 +693,15 @@ export function createSessionsService(
             const map = await readMap(ref.projectPath, ref.workId);
             if (needsGitCheck(map.sessions.find(session => session.id === ref.sessionId), undefined)) await checkGit(ref);
           }
+        }
+        // Сторож тихих концовок: письмо только о Stop человека и о выходе без причины; служебная остановка молчит.
+        if (cause === 'human') await endings?.stoppedByHuman(ref);
+        else if (cause === undefined) {
+          await endings?.exited(
+            ref,
+            { exitCode: exit.exitCode, ...(exit.signal === null ? {} : { signal: exit.signal }) },
+            launchActor === undefined ? null : { by: launchActor.by, runMs: Date.now() - launchActor.startedAt },
+          );
         }
       })
       .catch((error: unknown) => {
@@ -1266,6 +1296,7 @@ export function createSessionsService(
             provider: session.provider,
           });
           processStarted = true;
+          launchActors.set(key, { by: options.by ?? 'human', startedAt: spawned.startedAt });
           // Слот теперь держит сам процесс: резерв машины снимается сразу, пока его никто не посчитал дважды.
           if (machineReserved) {
             machineReserved = false;
@@ -1622,8 +1653,11 @@ export function createSessionsService(
     }
   }
 
-  async function stop(ref: SessionRef): Promise<void> {
-    if (pty.get(ref) !== undefined) await pty.stop(ref);
+  async function stop(ref: SessionRef, cause?: 'human'): Promise<void> {
+    if (pty.get(ref) !== undefined) {
+      exitCauses.set(refKey(ref), cause ?? 'quiet');
+      await pty.stop(ref);
+    }
     // Само событие `exit` уже прошло (см. выше) — если запись карты ещё
     // пишется, дожидаемся её, чтобы вызывающая сторона не читала гонку.
     await finalizing.get(refKey(ref));
@@ -2302,7 +2336,7 @@ export function createSessionsService(
     }
   }
 
-  async function close(ref: SessionRef): Promise<void> {
+  async function close(ref: SessionRef, by?: 'human'): Promise<void> {
     const key = refKey(ref);
     closing.add(key);
     try {
@@ -2319,6 +2353,7 @@ export function createSessionsService(
     } finally {
       closing.delete(key);
     }
+    if (by === 'human') await endings?.closedByHuman(ref);
   }
 
   async function del(ref: SessionRef, force = false): Promise<void> {

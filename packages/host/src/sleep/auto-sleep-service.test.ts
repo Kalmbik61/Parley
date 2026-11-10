@@ -530,6 +530,18 @@ describe('сервис сна агентов', () => {
     expect(sessionOf(codex).lifecycle).toBe('active');
   });
 
+  it('сторож держит сон: holdsSleep истинно — сессия старше порога не засыпает; ложно — засыпает', async () => {
+    const held = await startSession();
+    const free = await startSession();
+    boot({ silentTurns: { holdsSleep: (ref) => ref.sessionId === held.sessionId } });
+    clock = T0 + 61 * MIN;
+    await advance(AUTO_SLEEP_TICK_MS);
+
+    expect(slept()).toEqual([free.sessionId]);
+    expect(sessionOf(held).lifecycle).toBe('active');
+    expect(hasMarkKey(held)).toBe(false);
+  });
+
   it('сессию в смене агента (switching) не трогает', async () => {
     const ref = await startSession({
       patch: (session) => {
@@ -1399,6 +1411,24 @@ describe('сервис сна: по давлению и ради слота', ()
     expect(slept()).toEqual([other.sessionId]);
     expect(sessionOf(awake).lifecycle).toBe('active');
     expect(hasMarkKey(awake)).toBe(false);
+  });
+
+  it('сторож держит сон и под давлением, и ради слота: пока held — никто не засыпает, отпустил — засыпает', async () => {
+    const ref = await idleFor(30);
+    let held = true;
+    const service = boot({ pressure: sensor, silentTurns: { holdsSleep: () => held } });
+    await quiet();
+
+    await reading('critical', NOW);
+    expect(service.slotCandidate()).toBe(false);
+    expect(await service.freeSlot()).toBe(false);
+    expect(stops).toEqual([]);
+    expect(sessionOf(ref).lifecycle).toBe('active');
+
+    held = false;
+    expect(service.slotCandidate()).toBe(true);
+    expect(await service.freeSlot()).toBe(true);
+    expect(slept()).toEqual([ref.sessionId]);
   });
 
   // Работающих агентов хост не трогает никогда; полный набор причин проверяет `autoSleepVerdict` в core.

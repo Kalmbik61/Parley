@@ -44,6 +44,8 @@ import type { WorksService } from '../works/works-service.js';
 export const SWARM_TICK_MS = 30_000;
 /** Сколько после `expiredAt` ждать `report` королевы, прежде чем отдать итог без сводки (3.0). */
 export const SWARM_EXPIRY_GRACE_MS = 10 * 60_000;
+/** Трутень спит без итога столько от `endedAt`: считается сданным с неудачей, рой не ждёт его до конца срока. */
+export const DRONE_SILENT_MS = 2 * 60_000;
 
 export interface SwarmsServiceOptions {
   /** Часы; тесты подставляют свои. */
@@ -94,9 +96,11 @@ function elapsed(swarm: WorkSwarm, endMs: number): string {
 const isLive = (session: WorkSession | undefined): session is WorkSession =>
   session !== undefined && session.lifecycle !== 'closed';
 
-/** Участник уже не работает: сдал, упал, закрыт или удалён. */
-function isSettled(session: WorkSession | undefined, handedAt: string | null): boolean {
-  return handedAt !== null || session === undefined || session.lifecycle === 'closed' || session.result === 'failed';
+/** Участник уже не работает: сдал, упал, закрыт, удалён или спит без итога не меньше `DRONE_SILENT_MS` от `endedAt`. */
+function isSettled(session: WorkSession | undefined, handedAt: string | null, nowMs: number): boolean {
+  if (handedAt !== null || session === undefined || session.lifecycle === 'closed' || session.result === 'failed') return true;
+  return session.lifecycle === 'sleeping' && session.result === null && session.endedAt !== null &&
+    nowMs - Date.parse(session.endedAt) >= DRONE_SILENT_MS;
 }
 
 /** Итог просроченного роя ушёл без сводки, а королева потом сдала `report` со сводкой. */
@@ -252,10 +256,19 @@ export function createSwarmsService(
       } else if (
         swarm.status === 'running' &&
         workers.length > 0 &&
-        workers.every((member) => isSettled(sessionOf(member.sessionId), member.handedAt))
+        workers.every((member) => isSettled(sessionOf(member.sessionId), member.handedAt, nowMs))
       ) {
         swarm.status = 'collecting';
-        noteQueen(letters, queen, `All members of swarm ${swarm.id} have handed in. Write the summary: call report with the combined result.`, at);
+        const missing = workers.filter((member) => member.handedAt === null).map((member) => member.sessionId);
+        noteQueen(
+          letters,
+          queen,
+          missing.length === 0
+            ? `All members of swarm ${swarm.id} have handed in. Write the summary: call report with the combined result.`
+            : `All members of swarm ${swarm.id} have finished; ${missing.length} of ${workers.length} did not hand in: ${missing.join(', ')}. ` +
+                'Write the summary: call report with the combined result and say what is missing.',
+          at,
+        );
       }
     }
 

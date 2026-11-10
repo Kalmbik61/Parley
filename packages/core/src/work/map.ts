@@ -836,4 +836,10 @@ function normalizeAgentFields(session: Record<string, unknown>): void {
     !(isRecord(wakeBlocked) && typeof wakeBlocked['since'] === 'string' && typeof wakeBlocked['reason'] === 'string')) {
     delete session['wakeBlocked'];
   }
+  const silentEnding = session['silentEnding'];
+  if (silentEnding !== undefined && silentEnding !== null && !(isRecord(silentEnding) &&
+    nullableString(silentEnding['assignment']) && nullableString(silentEnding['nudgedAt']) &&
+    Array.isArray(silentEnding['told']) && silentEnding['told'].every((kind) => kind === 'exit' || kind === 'stop' || kind === 'close' || kind === 'turn'))) {
+    delete session['silentEnding'];
+  }
 }
