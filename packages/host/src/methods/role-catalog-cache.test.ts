@@ -14,7 +14,8 @@ const unverified: CodexRoleContext = { verified: false, layers: [], diagnostics:
 /** Каталог, который, как настоящий, читает конфигурацию Codex через переданный адаптер. */
 const catalogWith = (log: { catalogs: number }) => async (cwd: string, options: SessionRoleCatalogOptions = {}) => {
   log.catalogs++;
-  await options.context?.(codexOptions(cwd));
+  // Как настоящий sessionRoleCatalog: отказ чтения Codex не роняет каталог, он даёт непроверенный ответ.
+  try { await options.context?.(codexOptions(cwd)); } catch { /* каталог без native-ролей */ }
   return buildRoleCatalog();
 };
 
