@@ -518,3 +518,71 @@ describe('PtyManager: сигналы терминала codex (спека ком
     await manager.stop(sessionRef, { graceMs: 200 });
   });
 });
+
+describe('PtyManager: изоляция слушателей', () => {
+  function spyHost(): { host: HostContext; errors: string[] } {
+    const errors: string[] = [];
+    const base = fakeHost();
+    const host: HostContext = {
+      ...base,
+      log: { info: () => {}, warn: () => {}, error: (message: string) => void errors.push(message) },
+    };
+    return { host, errors };
+  }
+
+  it('бросивший слушатель выхода не мешает остальным и не вешает stop()', async () => {
+    const { host, errors } = spyHost();
+    const manager = createPtyManager(host);
+    const sessionRef = ref();
+    let second = 0;
+    manager.on('exit', () => {
+      throw new Error('boom');
+    });
+    manager.on('exit', () => {
+      second += 1;
+    });
+    manager.start(sessionRef, launch());
+    await waitFor(() => manager.snapshot(sessionRef).snapshot.includes('STUB READY'));
+
+    await manager.stop(sessionRef, { graceMs: 200 });
+    expect(second).toBe(1);
+    expect(errors).toHaveLength(1);
+  });
+
+  it('бросивший слушатель старта не отменяет запуск', async () => {
+    const { host, errors } = spyHost();
+    const manager = createPtyManager(host);
+    const sessionRef = ref();
+    let second = 0;
+    manager.on('start', () => {
+      throw new Error('boom');
+    });
+    manager.on('start', () => {
+      second += 1;
+    });
+    const handle = manager.start(sessionRef, launch());
+
+    expect(handle).toBeDefined();
+    expect(manager.get(sessionRef)).toBeDefined();
+    expect(second).toBe(1);
+    expect(errors).toHaveLength(1);
+    await manager.stop(sessionRef, { graceMs: 200 });
+  });
+
+  it('сбой рассылки pty.exit всё равно разрешает stop()', async () => {
+    const base = fakeHost();
+    const host: HostContext = {
+      ...base,
+      broadcast: (event, data) => {
+        if (event === 'pty.exit') throw new Error('broadcast failed');
+        base.broadcast(event, data);
+      },
+    };
+    const manager = createPtyManager(host);
+    const sessionRef = ref();
+    manager.start(sessionRef, launch());
+    await waitFor(() => manager.snapshot(sessionRef).snapshot.includes('STUB READY'));
+
+    await expect(manager.stop(sessionRef, { graceMs: 200 })).resolves.toBeDefined();
+  });
+});

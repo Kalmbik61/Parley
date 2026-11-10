@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  BadFrameError,
   LineDecoder,
   LineTooLongError,
   MAX_LINE_BYTES,
@@ -52,6 +53,25 @@ describe('LineDecoder', () => {
     const decoder = new LineDecoder();
     const huge = Buffer.alloc(MAX_LINE_BYTES + 1, 'a');
     expect(() => decoder.push(huge)).toThrow(LineTooLongError);
+  });
+
+  it('бросает BadFrameError, а не SyntaxError, на любой нечитаемой строке', () => {
+    for (const variant of ['garbage', '{', '{"id":1,', ']', '\u0000\u0001', 'undefined']) {
+      let thrown: unknown;
+      try {
+        new LineDecoder().push(Buffer.from(`${variant}\n`));
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(BadFrameError);
+      expect(thrown).not.toBeInstanceOf(SyntaxError);
+      expect((thrown as Error).message).not.toContain(variant);
+    }
+  });
+
+  it('BadFrameError не прячет LineTooLongError', () => {
+    const huge = Buffer.concat([Buffer.alloc(MAX_LINE_BYTES + 1, 'a'), Buffer.from('\n')]);
+    expect(() => new LineDecoder().push(huge)).toThrow(LineTooLongError);
   });
 });
 

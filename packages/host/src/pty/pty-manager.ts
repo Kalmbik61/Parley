@@ -183,16 +183,39 @@ export function createPtyManager(host: HostContext, windowCounters?: WindowCount
       host.busy(key, false);
       session.batcher.dispose();
       session.screen.dispose();
-      host.broadcast('pty.exit', { ref, exitCode: exit.exitCode, signal: exit.signal });
-      for (const listener of exitListeners) listener(ref, exit);
-      for (const resolve of session.stopWaiters) resolve(exit);
+      try {
+        try {
+          host.broadcast('pty.exit', { ref, exitCode: exit.exitCode, signal: exit.signal });
+        } catch (error) {
+          host.log.error('рассылка pty.exit упала', { ref, error: String(error) });
+        }
+        notifyListeners(Array.from(exitListeners), 'слушатель выхода терминала упал', ref, exit);
+      } finally {
+        // Даже сбой рассылки не должен повесить stop().
+        for (const resolve of session.stopWaiters) resolve(exit);
+      }
     });
 
     // Последним: слушатель (methods/pty.ts) шлёт окнам pty.resync, и их pty.attach должен
     // уже застать ручку и обработчики процесса.
-    for (const listener of Array.from(startListeners)) listener(ref);
+    notifyListeners(Array.from(startListeners), 'слушатель старта терминала упал', ref);
 
     return toHandle(session);
+  }
+
+  /** Каждый слушатель — в своём try/catch: один упавший не мешает остальным и пути выхода PTY. */
+  function notifyListeners<Args extends unknown[]>(
+    listeners: Iterable<(...args: Args) => void>,
+    label: string,
+    ...args: Args
+  ): void {
+    for (const listener of listeners) {
+      try {
+        listener(...args);
+      } catch (error) {
+        host.log.error(label, { ref: args[0], error: String(error) });
+      }
+    }
   }
 
   function get(ref: SessionRef): PtyHandle | undefined {

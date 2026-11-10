@@ -22,13 +22,17 @@ export function createLog(file: string, options?: { maxBytes?: number }): Log {
       : Object.fromEntries(Object.entries(data).map(([key, value]) => [key, typeof value === 'string' ? maskTelegramTokens(value) : value]));
 
   const write = (level: string, rawMsg: string, rawData?: object): void => {
-    const msg = maskTelegramTokens(rawMsg);
-    const data = mask(rawData);
-    if (existsSync(file) && statSync(file).size >= maxBytes) {
-      renameSync(file, `${file}.1`);
+    try {
+      const msg = maskTelegramTokens(rawMsg);
+      const data = mask(rawData);
+      if (existsSync(file) && statSync(file).size >= maxBytes) {
+        renameSync(file, `${file}.1`);
+      }
+      const line = `${JSON.stringify({ time: new Date().toISOString(), level, msg, ...data })}\n`;
+      appendFileSync(file, line, 'utf8');
+    } catch {
+      // Журнал не должен ронять вызывающего: диск полон или каталога нет — строка теряется.
     }
-    const line = `${JSON.stringify({ time: new Date().toISOString(), level, msg, ...data })}\n`;
-    appendFileSync(file, line, 'utf8');
   };
 
   return {

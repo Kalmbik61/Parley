@@ -79,6 +79,7 @@ export type {
 export type { SessionProcess, SessionProcessesSnapshot } from './processes.js';
 export type { EventData, EventName, Events } from './events.js';
 export {
+  BadFrameError,
   LineDecoder,
   LineTooLongError,
   MAX_LINE_BYTES,

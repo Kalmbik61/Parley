@@ -7,6 +7,7 @@ import { hostToolContext, mapChangeSignal, turnBoundarySource } from './agent/to
 import { createToolsEndpoint } from './agent/tools-endpoint.js';
 import { randomBytes } from 'node:crypto';
 import { mkdir, chmod, link, rename, rm, writeFile } from 'node:fs/promises';
+import type { Socket } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -137,6 +138,7 @@ import { createAutoSleepService } from './sleep/auto-sleep-service.js';
 import { limitAlternatives } from './stuck/limit-alternatives.js';
 import { createStuckService, stuckReportFromEnv } from './stuck/stuck-service.js';
 import { limitReturnFromEnv } from './wake/limit-return.js';
+import { withDeadline } from './deadline.js';
 import { createWakeService } from './wake/wake-service.js';
 import { createWorktreeHolds } from './worktrees/holds.js';
 import { createWorktreesService } from './worktrees/worktrees-service.js';
@@ -150,6 +152,10 @@ export interface HostOptions {
   home?: string;
   idleMs?: number;
   helloTimeoutMs?: number;
+  /** Срок одного хука остановки, мс (по умолчанию 5 с); тесты ставят короче. */
+  shutdownHookMs?: number;
+  /** Срок всей остановки, мс (по умолчанию 15 с). */
+  shutdownTotalMs?: number;
   version?: string;
   /**
    * Проба версии CLI провайдеров на старте (`<команда> --version`, одна на команду). Без неё
@@ -218,6 +224,10 @@ export class SocketPathTooLong extends Error {
 
 const DEFAULT_IDLE_MS = 300_000;
 const DEFAULT_HELLO_TIMEOUT_MS = 5_000;
+const SHUTDOWN_HOOK_MS = 5_000;
+const SHUTDOWN_TOTAL_MS = 15_000;
+/** Сколько `server.close` ждёт, пока клиенты закроются сами, прежде чем их сокеты уничтожаются. */
+const CLIENT_CLOSE_GRACE_MS = 1_000;
 
 export async function startHost(options: HostOptions = {}): Promise<RunningHost> {
   const resolvedHome = options.home ?? parleyHome();
@@ -294,6 +304,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   const hostVersion = options.version ?? readHostVersion();
   const idleMs = options.idleMs ?? DEFAULT_IDLE_MS;
   const helloTimeoutMs = options.helloTimeoutMs ?? DEFAULT_HELLO_TIMEOUT_MS;
+  const shutdownHookMs = options.shutdownHookMs ?? SHUTDOWN_HOOK_MS;
+  const shutdownTotalMs = options.shutdownTotalMs ?? SHUTDOWN_TOTAL_MS;
 
   let resolveClosed!: (reason: string) => void;
   const closed = new Promise<string>((resolve) => {
@@ -690,6 +702,10 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       },
     },
   );
+  // Будильник и сон — до остановки сессий: письмо, пришедшее посреди `stopAll`, не должно поднять сессию снова.
+  // Сервисы создаются ниже, замыкания читают их позже; у обоих `stop()` идемпотентен.
+  handle.context.onShutdown(async () => wakeService.stop());
+  handle.context.onShutdown(async () => autoSleepService.stop());
   handle.context.onShutdown(() => sessionsService.stopAll());
   // Жизненный цикл роёв (спека роя v1, 3): сверка на каждом снимке работ и раз в 30 с; стартует после чтения работ.
   // Королеву завершённого роя усыпляет сервис сна: он создаётся ниже, замыкание читает его позже.
@@ -724,7 +740,6 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       limitReturn: limitReturnFromEnv(process.env),
     },
   );
-  handle.context.onShutdown(async () => wakeService.stop());
 
   // Сон агентов (спека 2026-10-30, 4.1): усыпляет простаивающих агентов Claude Code, а письмо поднимает их будильником.
   // Сжатие создаётся ниже: замыкание читает его позже, как у будильника.
@@ -739,7 +754,6 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     // Сон по давлению памяти и ради слота очереди (спека, 4.2) читает тот же датчик, что и сервис ёмкости.
     pressure: pressureSensor,
   });
-  handle.context.onShutdown(async () => autoSleepService.stop());
 
   compactionService = createCompactionService({
     host: handle.context,
@@ -1236,6 +1250,13 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     },
   });
 
+  // Все соединения, в том числе не прошедшие `hello`: на остановке не закрывшиеся сами уничтожаются.
+  const sockets = new Set<Socket>();
+  server.on('connection', (socket: Socket) => {
+    sockets.add(socket);
+    socket.once('close', () => sockets.delete(socket));
+  });
+
   // 5. `listen`, затем сокет переводится на 0600 (изначально его создаёт `listen`).
   try {
     await new Promise<void>((resolve, reject) => {
@@ -1339,24 +1360,55 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     process.off('SIGTERM', onSignal);
     process.off('SIGINT', onSignal);
 
-    for (const hook of shutdownHooks) {
-      // Хуки останавливают сессии по очереди, не параллельно — await в цикле намеренный.
-      await hook().catch((error: unknown) => {
-        log.error('хук остановки упал', { error: String(error) });
-      });
-    }
-    // База работ — после всех хуков, службу работ (опрос базы) в их числе: журнал WAL сводится в файл базы здесь, а не
-    // восстанавливается следующим стартом (спека хранилища 6.1).
-    try {
-      closeWorkDb();
-    } catch (error) {
-      log.error('база работ не закрылась', { error: String(error) });
-    }
+    let dbClosed = false;
+    const closeDb = (): void => {
+      if (dbClosed) return;
+      dbClosed = true;
+      try {
+        closeWorkDb();
+      } catch (error) {
+        log.error('база работ не закрылась', { error: String(error) });
+      }
+    };
+    // После общего срока шаги в фоне новых хуков не начинают.
+    let abandoned = false;
+    const steps = async (): Promise<void> => {
+      for (const [index, hook] of shutdownHooks.entries()) {
+        if (abandoned) return;
+        // Хуки останавливают сессии по очереди, не параллельно — await в цикле намеренный.
+        try {
+          const outcome = await withDeadline(
+            (async () => hook())(),
+            shutdownHookMs,
+          );
+          if (outcome === 'timeout') log.warn('shutdown hook timed out', { hook: index, ms: shutdownHookMs });
+        } catch (error) {
+          log.error('хук остановки упал', { error: String(error) });
+        }
+      }
+      if (abandoned) return;
+      // База работ — после всех хуков, службу работ (опрос базы) в их числе: журнал WAL сводится в файл базы здесь, а не
+      // восстанавливается следующим стартом (спека хранилища 6.1).
+      closeDb();
 
-    // `server.close()` дожидается закрытия всех соединений — без явного
-    // разрыва клиенты, которые сами не отключились, повесили бы остановку.
-    for (const client of handle.context.clients()) client.close();
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+      // `server.close()` дожидается закрытия всех соединений — без явного
+      // разрыва клиенты, которые сами не отключились, повесили бы остановку.
+      for (const client of handle.context.clients()) client.close();
+      await withDeadline(new Promise<void>((resolve) => server.close(() => resolve())), CLIENT_CLOSE_GRACE_MS);
+      for (const socket of sockets) socket.destroy();
+    };
+    const outcome = await withDeadline(steps(), shutdownTotalMs).catch((error: unknown) => {
+      log.error('остановка хоста упала', { error: String(error) });
+      return 'done' as const;
+    });
+    if (outcome === 'timeout') {
+      abandoned = true;
+      log.error('shutdown deadline exceeded', { ms: shutdownTotalMs });
+      for (const socket of sockets) socket.destroy();
+      // steps() брошен вместе с server.close(): без этого сервер слушает уже снятый сокет.
+      server.close();
+      closeDb();
+    }
     // Замок — последним: пока он держится, новый хост не стартует и не застанет сокет и токен
     // уходящего (lane-r4).
     await Promise.all([paths.socket, paths.token].map((file) => rm(file, { force: true })));

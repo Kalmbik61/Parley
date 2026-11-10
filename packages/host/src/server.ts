@@ -263,11 +263,13 @@ function handleConnection(socket: Socket, options: ServerOptions): void {
     try {
       messages = decoder.push(chunk);
     } catch (error) {
-      if (error instanceof LineTooLongError) {
-        socket.destroy();
-        return;
-      }
-      throw error;
+      // Битая строка закрывает только это соединение: тела кадра в логе нет.
+      options.context.log.warn('bad frame from client', {
+        client: client?.role ?? client?.name ?? 'before-hello',
+        kind: error instanceof LineTooLongError ? 'line-too-long' : 'bad-json',
+      });
+      socket.destroy();
+      return;
     }
     for (const raw of messages) {
       if (rejected) return;
