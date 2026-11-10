@@ -19,6 +19,7 @@ All notable changes to Parley are documented in this file.
 - **An agent is no longer put to sleep in the middle of its turn.** A Claude turn that stayed silent during a long command or tool call counted as finished after 30 seconds, and when memory was tight Parley could stop the agent 5 minutes later, killing the command. Sleep now follows the window: a silent open turn counts as working for up to 15 minutes of silence.
 - The host log no longer reports "invalid transition sleeping → sleeping" when an agent falls asleep.
 - A session added to a room now gets a short note instead of the room's whole history, and a large inbox arrives in pages instead of one answer the agent could not read. Closed sessions no longer collect unread messages.
+- When an agent with a task stops, crashes or is stopped or closed by you without a result, or ends its turn without reporting, the session that gave the task and the room lead now get a letter. Stuck notices also reach the task giver, and a swarm no longer waits for a crashed drone until its time limit.
 
 ### Changed
 

@@ -96,6 +96,8 @@ export interface AutoSleepServiceDeps {
   wake: Pick<WakeService, 'inFlight' | 'retry'>;
   /** Идёт или ждёт сжатие контекста (`CompactionService.holds`). */
   compacting: (ref: SessionRef) => boolean;
+  /** Сторож тихих концов (`SilentEndings.holdsSleep`): пока он ждёт закрытия хода сессии, сон не берёт её ни по какой причине. */
+  silentTurns?: { holdsSleep(ref: SessionRef): boolean };
   /** Настройки читаются на каждой проверке: человек меняет пороги на ходу. */
   config: () => Promise<AutoSleepConfig>;
   /** Датчик памяти; нет — давление `normal`, сна по давлению нет. Структурный тип: `PressureSensor` из `capacity/`. */
@@ -244,6 +246,8 @@ export function createAutoSleepService(host: HostContext, deps: AutoSleepService
     handle: PtyHandle,
     rule: { enabled: boolean; thresholdMs: number; reason: AutoSleepReason },
   ): Plan | null {
+    // Обычный проход, просьба, давление и слот идут через `planFor`: сторож держит сон на всех четырёх путях.
+    if (deps.silentTurns?.holdsSleep(ref) === true) return null;
     const key = refKey(ref);
     const live = deps.activity.get(ref);
     const verdict = autoSleepVerdict({
