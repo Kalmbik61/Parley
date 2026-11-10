@@ -4,6 +4,7 @@ import { bareEvent } from './events.js';
 import { oneLine } from '../counters.js';
 import {
   deliveryAction,
+  heldWarning,
   isPointerText,
   LIMIT_RETURN_TEXT,
   limitReturnText,
@@ -1015,5 +1016,51 @@ describe('письмо-обновление итога — не срочное',
     expect(deliveryAction(idle)).toEqual({ kind: 'none', reason: 'settling', retryInMs: SETTLE_MS });
     const regular = { ...report(false), id: 'm-02' };
     expect(deliveryAction({ ...idle, unread: [report(true), regular] }).kind).toBe('type-pointer');
+  });
+});
+
+describe('heldWarning — send_message предупреждает об адресате, которого письмо не поднимет', () => {
+  const asleep = (patch: Partial<WorkSession> = {}): WorkSession =>
+    sessionOf({ id: 's-02', lifecycle: 'sleeping', providerSessionId: 'p-1', ...patch });
+
+  it('wakeBlocked: предупреждение с причиной', () => {
+    const blocked = sessionOf({ id: 's-02', wakeBlocked: { since: '2026-11-10T10:00:00.000Z', reason: 'role-provider-mismatch' } });
+    expect(heldWarning(blocked, 0, 6)).toBe('@s02 cannot be woken (role-provider-mismatch): it reads this when the human resumes it');
+  });
+
+  it('wakeBlocked идёт раньше прочих: спящая без id и с исчерпанным часом всё равно называет причину', () => {
+    const blocked = asleep({ providerSessionId: null, wakeBlocked: { since: '2026-11-10T10:00:00.000Z', reason: 'x' } });
+    expect(heldWarning(blocked, 6, 6)).toBe('@s02 cannot be woken (x): it reads this when the human resumes it');
+  });
+
+  it('спит без providerSessionId и без прежних агентов: поднимать нечем', () => {
+    expect(heldWarning(asleep({ providerSessionId: null }), 0, 6)).toBe(
+      '@s02 is asleep with no conversation to resume: it reads this when the human starts it',
+    );
+  });
+
+  it('спит без providerSessionId, но после замены агента: будильник её поднимает — предупреждения нет', () => {
+    const switched = asleep({ providerSessionId: null, previousAgents: [{ provider: 'codex' } as NonNullable<WorkSession['previousAgents']>[number]] });
+    expect(heldWarning(switched, 0, 6)).toBeNull();
+  });
+
+  it('спит не по решению хоста, час подъёмов исчерпан: предупреждение о лимите', () => {
+    expect(heldWarning(asleep(), 6, 6)).toBe(
+      '@s02 reached its hourly resume limit: it reads this when the limit frees or the human resumes it',
+    );
+  });
+
+  it('ровно resumeRate - 1 подъёмов: предупреждения нет', () => {
+    expect(heldWarning(asleep(), 5, 6)).toBeNull();
+  });
+
+  it('усыплённая хостом при исчерпанном часе: предупреждения нет', () => {
+    const slept = asleep({ autoSleep: { reason: 'idle', at: '2026-11-10T10:00:00.000Z', waitTarget: null } });
+    expect(heldWarning(slept, 6, 6)).toBeNull();
+  });
+
+  it('живая и ожидающая сессия: предупреждения нет', () => {
+    expect(heldWarning(sessionOf({ id: 's-02', lifecycle: 'active' }), 99, 6)).toBeNull();
+    expect(heldWarning(sessionOf({ id: 's-02', lifecycle: 'pending' }), 99, 6)).toBeNull();
   });
 });

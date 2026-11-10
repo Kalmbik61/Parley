@@ -50,7 +50,7 @@ import {
   TOPOLOGY_FIELDS,
   type TopologyField,
 } from '../work/context-pages.js';
-import { settleDelayMs } from '../work/delivery.js';
+import { heldWarning, settleDelayMs } from '../work/delivery.js';
 import { guide, GUIDE_TOPICS, guideTopic } from '../work/guide.js';
 import { mapLetterTx, storeLetterReader, unreadLetters, writeLetters, type LetterReads } from '../work/letter-store.js';
 import { recipientsOf } from '../work/letters.js';
@@ -74,6 +74,7 @@ import {
   limitsFromConfig,
   RESOURCE_WINDOW_MS,
   ResourceDeniedError,
+  resumesInWindow,
   type ResourceLimits,
 } from '../work/resource-policy.js';
 import { capacityReport, type CapacityReport } from '../work/capacity-report.js';
@@ -1322,6 +1323,7 @@ async function sendMessage(
   const limits = await limitsOf(context);
   let created = '';
   let stuckNotes: string[] = [];
+  const resumeRate = context.resumeRate ?? DEFAULT_CONFIG.resumeRate;
   writeLetters(context.projectPath, context.workId, (letters, current) => {
     // Отправителя проверяем наравне с получателем: сервер удалённой сессии ещё
     // жив, и без проверки в карту легло бы письмо от несуществующего адресата,
@@ -1390,8 +1392,11 @@ async function sendMessage(
     // Адресат (явный или по рассылке комнаты) застрял: письмо уже записано, но прочтёт он его по возвращении (5.3).
     const now = new Date();
     stuckNotes = recipientsOf(sent, current).flatMap((id) => {
-      const need = current.sessions.find((candidate) => candidate.id === id)?.stuck;
-      return need == null ? [] : [stuckWarning(id, need, now)];
+      const recipient = current.sessions.find((candidate) => candidate.id === id);
+      if (recipient?.stuck != null) return [stuckWarning(id, recipient.stuck, now)];
+      // Застрявшему — только предупреждение о застрявшем. Остальные: письмо записано, но поднять адресата нечем или нельзя.
+      const held = recipient === undefined ? null : heldWarning(recipient, resumesInWindow(current, id, now.getTime()), resumeRate);
+      return held === null ? [] : [held];
     });
   });
   const warnings = [

@@ -3829,6 +3829,52 @@ describe('застрявшая сессия: get_map, wait_for и send_message (
       'unknown parameters ignored: reply_to (did you mean replyTo?); @s02 is stuck (waiting for approval): it reads this when it is back',
     );
   });
+
+  const setBlocked = (id: string): Promise<unknown> =>
+    updateMap(project, workId, (map) => {
+      session(map, id).wakeBlocked = { since: '2026-11-10T10:00:00.000Z', reason: 'role-provider-mismatch' };
+    });
+
+  it('wakeBlocked у адресата: warning с причиной, письмо записано', async () => {
+    const lead = await stuckSetup();
+    await setBlocked('s-02');
+
+    const sent = await callOk(lead, 'send_message', { to: 's-02', text: 'Проснись' });
+
+    expect(sent['warning']).toBe('@s02 cannot be woken (role-provider-mismatch): it reads this when the human resumes it');
+    expect((await readMapFile()).messages.find((message) => message.id === sent['messageId'])).toMatchObject({ text: 'Проснись' });
+  });
+
+  it('застрявший и заблокированный адресат: только предупреждение о застрявшем', async () => {
+    const lead = await stuckSetup();
+    await setStuck('s-02', need());
+    await setBlocked('s-02');
+
+    const sent = await callOk(lead, 'send_message', { to: 's-02', text: 'Лично' });
+
+    expect(sent['warning']).toBe('@s02 is stuck (waiting for approval): it reads this when it is back');
+  });
+
+  it('спящий адресат без providerSessionId и без прежних агентов: warning о сессии без разговора', async () => {
+    const lead = await stuckSetup();
+    await updateMap(project, workId, (map) => {
+      session(map, 's-02').lifecycle = 'sleeping';
+    });
+
+    const sent = await callOk(lead, 'send_message', { to: 's-02', text: 'Лично' });
+
+    expect(sent['warning']).toBe('@s02 is asleep with no conversation to resume: it reads this when the human starts it');
+  });
+
+  it('спящий адресат с разговором и свободным часом: ответ прежний', async () => {
+    const lead = await stuckSetup();
+    await updateMap(project, workId, (map) => {
+      session(map, 's-02').lifecycle = 'sleeping';
+      session(map, 's-02').providerSessionId = 'conv-1';
+    });
+
+    expect(await callOk(lead, 'send_message', { to: 's-02', text: 'Лично' })).toEqual({ messageId: expect.any(String) });
+  });
 });
 
 describe('createToolRunner: инструменты Parley без транспорта (спека хранилища 6.9)', () => {
