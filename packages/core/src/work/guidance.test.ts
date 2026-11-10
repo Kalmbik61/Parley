@@ -918,8 +918,8 @@ it('uses personal plans for quiet progress and reserves owner pings for material
   const text = stableGuidance();
   expect(text).toContain('Before multi-step work, publish_agent_plan');
   expect(text).toContain('Personal plans do not message anyone');
-  expect(text).toContain('blockers needing intervention');
-  expect(text).toContain('skip routine steps, test counts and acknowledgements');
+  expect(text).toContain("A lead's report reaches the room owner");
+  expect(text).toContain('only about blockers, changed agreements or cross-room dependencies, not routine steps');
 });
 
 describe('профиль short, примеры для Codex и правило остановки', () => {

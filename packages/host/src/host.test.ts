@@ -8,7 +8,7 @@ import path from 'node:path';
 import { connect } from 'node:net';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
-import { connectRaw, hello, removeHome, tempHome, waitClosed, waitConnected } from '../test/helpers.js';
+import { connectRaw, hello, removeHome, tempHome, waitConnected } from '../test/helpers.js';
 import { processStartedAt } from '@parley/core';
 import { HostAlreadyRunning, SocketPathTooLong, startHost } from './host.js';
 import type { RunningHost } from './host.js';
@@ -338,10 +338,27 @@ describe('сроки остановки хоста', () => {
     );
     expect(response.error).toBeUndefined();
 
+    // Хост закрывает свою сторону уже во время остановки, за секунду до `closed`: слушатели ставим до неё.
+    socket.resume();
+    const released = new Promise<string>((resolve) => {
+      for (const event of ['end', 'close', 'error']) socket.once(event, () => resolve(event));
+    });
+
     await running.context.shutdown('t');
     await running.closed;
-    await waitClosed(socket, 3000);
-    expect(socket.destroyed).toBe(true);
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      await Promise.race([
+        released,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error('хост не отпустил соединение вовремя')), 3000);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+    socket.destroy();
+    expect(await released).toMatch(/end|close|error/);
   });
 });
 
