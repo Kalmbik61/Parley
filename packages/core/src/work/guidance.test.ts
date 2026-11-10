@@ -368,14 +368,16 @@ describe('подробный гид', () => {
     expect(tools).not.toMatch(/it does not change a sleeping session that a message woke up/);
   });
 
-  it('комнаты: add_to_room — только ведущий, одна комната на сессию, строка «joined the room», письма новому нет', () => {
+  it('комнаты: add_to_room — только ведущий, одна комната на сессию, строка «joined the room», новичку — записка, а не история', () => {
     const lead = sectionOf('### The lead and the decision', '### Room participant');
 
     expect(lead).toContain('`add_to_room(room, session)`');
     expect(lead).toContain('an existing executor');
     expect(lead).toMatch(/one room per\s+session/);
     expect(lead).toContain('`@s04 joined the room`');
-    expect(lead).toMatch(/The new participant does not get a message about\s+being added/);
+    expect(lead).toContain(
+      'The new participant gets a short note from Parley — who added it, the lead, how many earlier messages there are and that `read_room` reads them — not the room\'s history',
+    );
     expect(lead).toMatch(
       /A non-lead, a closed\s+room, a foreign or closed session, and an existing participant are an error/,
     );

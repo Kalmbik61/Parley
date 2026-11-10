@@ -378,8 +378,8 @@ with what to do. If you are the lead, the workflow below is for Free mode; in pl
 The lead can also bring one more session of this workspace into the room —
 \`add_to_room(room, session)\`: for example, an existing executor whose part needs to be discussed together with everyone. The session
 leaves the workspace's other rooms (one room per session), and a line
-\`@s04 joined the room\` appears in the feed. The new participant does not get a message about
-being added: write to it in the room yourself, saying what you expect. A non-lead, a closed
+\`@s04 joined the room\` appears in the feed. The new participant gets a short note from Parley — who added it, the lead, how many earlier
+messages there are and that \`read_room\` reads them — not the room's history: write to it in the room yourself, saying what you expect. A non-lead, a closed
 room, a foreign or closed session, and an existing participant are an error; the map does
 not change.
 
@@ -662,7 +662,7 @@ The line "New messages (N). Call check_inbox." (with a room name or without) is 
 Parley itself between your turns — it is not a message from the human and not your own line.
 In sessions started by the window, messages are announced only this way: there will be no
 \`<channel source="parley">\` tag there. There is one answer to the line: call \`check_inbox\`
-and work out what came.
+and work out what came. If its answer has \`remaining\`, call it again: one answer holds at most 50 messages and 32 KiB.
 
 If a session was started as a Claude Code role agent, its definition with a trimmed \`tools\`
 list must include \`mcp__parley__*\`: otherwise the role can neither write to a colleague nor

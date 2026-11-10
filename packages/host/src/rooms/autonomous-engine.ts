@@ -229,7 +229,7 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
   function joinCreated(map: WorkMap, letters: LetterTx, plan: RoomPlan, sessionId: string) {
     const room = map.rooms.find(row => row.id === plan.roomId)!;
     const session = map.sessions.find(row => row.id === sessionId);
-    if (session && session.lifecycle !== 'closed' && !room.members.includes(sessionId)) addMember(map, letters, room.id, sessionId, at());
+    if (session && session.lifecycle !== 'closed' && !room.members.includes(sessionId)) addMember(map, letters, room.id, sessionId, at(), ENGINE);
   }
   async function effect(loc: Location, op: AutonomousOp, execute: () => Promise<Record<string, unknown>>): Promise<AutonomousOp> {
     if (op.state !== 'intended') return op;

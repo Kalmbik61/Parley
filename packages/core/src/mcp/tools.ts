@@ -103,6 +103,7 @@ import {
 } from '../work/types.js';
 import { BROWSER_UNAVAILABLE, createBrowserTools } from './browser-tools.js';
 import type { McpContext } from './context.js';
+import { inboxPage, type InboxExtras } from './inbox-page.js';
 import { watchInbox, type Ring } from './inbox-watch.js';
 import { waitForMap } from './watch-map.js';
 
@@ -515,7 +516,7 @@ export const TOOLS: Tool[] = [
     name: 'wait_for',
     annotations: WRITES,
     description:
-      'Wait for a session (target = its id) or mail (target = "inbox"); mail is marked read; no check_inbox needed. Timeout returns {"state":"running"}. {"state":"stuck"}: waiting for the human or a usage limit — do not wait for it again, Parley writes when back. A session that already handed in its report returns the old result at once by id: wait for its answer to a new job via "inbox": its next report arrives there as a letter.',
+      'Wait for a session (target = its id) or mail (target = "inbox"); mail is marked read. Timeout returns {"state":"running"}. {"state":"stuck"}: waiting for the human or a usage limit — do not wait for it again, Parley writes when back. A session that already handed in its report returns the old result at once by id: wait for its answer to a new job via "inbox": its next report arrives there as a letter.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -562,7 +563,7 @@ export const TOOLS: Tool[] = [
     name: 'check_inbox',
     annotations: WRITES,
     description:
-      "Return this session's unread messages (direct and from its rooms) and mark them read.",
+      "Return a page of this session's unread messages (direct and from its rooms) and mark it read.",
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
   {
@@ -591,7 +592,7 @@ export const TOOLS: Tool[] = [
     name: 'add_to_room',
     annotations: WRITES,
     description:
-      "Bring another session of this workspace into the room. Lead only. One room per session: it leaves its other rooms and the feed shows \"@s04 joined the room\". The new participant gets no message: tell it in the room what you expect.",
+      "Bring another session of this workspace into the room. Lead only. One room per session: it leaves its other rooms and the feed shows \"@s04 joined the room\". The new participant gets a note, not the history: tell it in the room what you expect.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -1275,8 +1276,8 @@ async function waitFor(
     if (context.turnBoundarySince?.(startedAt) === true) return { state: 'running' };
     // Хост поставил отметку, пока шло ожидание: письмо остаётся непрочитанным. `takeInbox` проверяет это ещё раз в своей записи.
     if (fenced()) return { state: 'running' };
-    const { messages, notice } = takeInbox(context, sessionId);
-    if (messages.length > 0) return { state: 'message', messages, ...notice };
+    const { messages, extras } = takeInbox(context, sessionId);
+    if (messages.length > 0) return { state: 'message', messages, ...extras };
     // Письма успел забрать параллельный `check_inbox`: пустой `message` не отдаём, ждём остаток таймаута. Пауза перед
     // новым ожиданием — на случай, если проба и `takeInbox` разойдутся: без неё цикл крутился бы в микрозадачах до таймаута.
     const remaining = endsAt - Date.now();
@@ -1410,7 +1411,7 @@ async function sendMessage(
 function takeInbox(
   context: McpContext,
   sessionId: string,
-): { messages: ReturnType<typeof inboxView>[]; notice: ReturnType<typeof openAssignmentsNotice> } {
+): { messages: ReturnType<typeof inboxView>[]; extras: InboxExtras } {
   const at = new Date().toISOString();
   return writeLetters(context.projectPath, context.workId, (letters, current) => {
     requireSession(current, sessionId);
@@ -1420,17 +1421,21 @@ function takeInbox(
     if (revision !== null && revision !== context.agentRevision) throw new Error(STALE_AGENT);
     // Сессию усыпляет хост или уже усыпил (`inboxFenced`): письма не выдаются и не помечаются, но и ошибки нет — они поднимут её
     // после сна. Тоже в этой записи: отметка, поставленная после проверки в `waitFor`, письма не заберёт.
-    if (inboxFenced(requireSession(current, sessionId))) return { messages: [], notice: {} };
-    const inbox = letters.unreadFor(sessionId);
-    const views = inbox.map((message) => inboxView(message, current, sessionId, (id) => letters.byId(id)));
-    letters.markRead(sessionId, inbox.map((message) => message.id), at);
-    return { messages: views, notice: openAssignmentsNotice(current, sessionId) };
+    if (inboxFenced(requireSession(current, sessionId))) return { messages: [], extras: {} };
+    // Одна страница (`inboxPage`): прочитанными помечается только отданное, остальное ждёт следующего вызова.
+    const page = inboxPage(
+      letters.unreadFor(sessionId),
+      (message) => inboxView(message, current, sessionId, (id) => letters.byId(id)),
+      openAssignmentsNotice(current, sessionId),
+    );
+    letters.markRead(sessionId, page.ids, at);
+    return { messages: page.messages, extras: page.extras };
   });
 }
 
 async function checkInbox(context: McpContext, sessionId: string): Promise<unknown> {
-  const { messages, notice } = takeInbox(context, sessionId);
-  return { messages, ...notice };
+  const { messages, extras } = takeInbox(context, sessionId);
+  return { messages, ...extras };
 }
 
 /** Сессия роя в комнату не входит (спека роя v1, 4): проверка по карте, `code: message` как у остальных отказов роя. */
@@ -1519,9 +1524,10 @@ async function addToRoom(
     // Правила — ведущий, живая комната, закрытая или чужая сессия, уже участник, одна комната на сессию —
     // держит `addMemberByLead`. Его `RoomRuleError` уходит агенту текстом ошибки, как у `propose_decision`,
     // а исключение из мутатора не даёт `updateMap` записать карту: после отказа она не меняется.
-    // Допуска бюджета здесь нет намеренно (P37): `addMemberByLead` пишет только системную строку «joined the room»
-    // (`from: system`, адресат — человек), она никого не будит, не рассылается и в бюджет писем не входит. Письма
-    // приглашённому здесь нет, в отличие от `create_room`; разговорная квота управление комнатой не блокирует.
+    // Допуска бюджета здесь нет намеренно (P37): `addMemberByLead` пишет системную строку «joined the room»
+    // (`from: system`, адресат — человек) и одно прямое письмо новичку от `system` (кто ввёл, ведущий, число прежних
+    // писем): они не рассылаются и в бюджет писем `parley` не входят; письмо будит новичка сразу. Разговорная квота
+    // управление комнатой не блокирует.
     assertNotSwarmMember(current, target);
     assertNotInHumanRoom(current, sessionId, target, roomId);
     messageId = addMemberByLead(current, letters, roomId, sessionId, target).id;
@@ -1817,7 +1823,7 @@ async function dispatch(
  * при подключении, поэтому он короткий и весь про поведение: этикет тут —
  * половина защиты от переписки двух вежливых агентов до конца лимита (4.7).
  */
-export const CHANNEL_INSTRUCTIONS = `Colleagues' messages in this workspace are announced with the tag <channel source="parley">: in it from is the sender session's id, from_label is its role, kind is the kind of message. The tag has no message text: if you see the tag, call check_inbox, it returns all unread messages at once.
+export const CHANNEL_INSTRUCTIONS = `Colleagues' messages in this workspace are announced with the tag <channel source="parley">: in it from is the sender session's id, from_label is its role, kind is the kind of message. The tag has no message text: if you see the tag, call check_inbox; it returns the oldest unread messages, and while its answer has remaining, call it again.
 Answer with send_message(to=<from>) only to a \`question\`; a note and a decision need no answer, do not write "thanks" or "agreed". Record an agreement with one message with kind: decision to the one you agreed with.
 Each message is announced once; check_inbox and wait_for("inbox") are a safety net in case the channel is silent.`;
 

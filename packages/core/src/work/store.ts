@@ -21,7 +21,7 @@ import { BUSY_TIMEOUT_MS, WORK_DB_FILE, workDb } from './db.js';
 import { diffRows, isPlainJsonTree, mapToRows, rowIndex, rowsToMap, type StoredRow } from './map-rows.js';
 import { bumpWorkId, nextWorkId, normalizeMap } from './map.js';
 import type { LetterJournal, LetterTx } from './letter-store.js';
-import { createTableLetterTx, loadAllLetters, replaceLetters } from './letter-tables.js';
+import { createTableLetterTx, dropReaderCandidates, loadAllLetters, replaceLetters } from './letter-tables.js';
 import { isAlive } from './pid-alive.js';
 import { sql } from './sql-statements.js';
 import { PRE_JOURNAL_STATE_IGNORE, PRE_MEMORY_STATE_IGNORE, PRE_RECIPES_STATE_IGNORE, ensureStateDir, stateDir, SHARED_STATE_IGNORE } from './state-dir.js';
@@ -1057,9 +1057,13 @@ export function applyMapUpdate(
       throw new Error(`map ${source} belongs to workspace ${current.work.id}, not ${workId}`);
     }
     const { letters, wrote, journal } = createTableLetterTx(db, projectPath, workId, current);
+    const closedBefore = new Set(current.sessions.filter((session) => session.lifecycle === 'closed').map((session) => session.id));
     mutate(current, letters);
     // Мутация могла дать карту, которую нормализация не примет: бросает — запись откатывается.
     normalizeMap(current, source);
+    // Закрытая сессия писем не читает и не копит: её кандидаты уходят в той же записи, где она закрылась.
+    const closedNow = current.sessions.filter((session) => session.lifecycle === 'closed' && !closedBefore.has(session.id)).map((session) => session.id);
+    dropReaderCandidates(db, projectPath, workId, closedNow);
 
     // Сдвиг `updatedAt` — после проверки на пустоту: пустая запись его не трогает (спека хранилища 6.2).
     const next = mapToRows(current, previous.index);

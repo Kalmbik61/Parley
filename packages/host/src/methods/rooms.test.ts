@@ -637,7 +637,8 @@ describe('rooms.addMember', () => {
 
     const map = readStoredMap(dir, workId);
     expect(map.rooms[0]?.members).toContain(fourth);
-    const line = map.messages.find((message) => message.from === SYSTEM);
+    // Первым от system идёт прямая записка новичку (roomId null), строка ленты — в комнате.
+    const line = map.messages.find((message) => message.from === SYSTEM && message.roomId === 'r-01');
     expect(response.result).toEqual({ messageId: line?.id });
     expect(line).toMatchObject({ roomId: 'r-01', kind: 'note', text: '@s04 joined the room' });
   });
@@ -655,17 +656,21 @@ describe('rooms.addMember', () => {
     expect(homes.map((room) => room.id)).toEqual(['r-02']);
   });
 
-  it('системная строка никого не будит: непрочитанных у сессий не прибавилось', async () => {
+  it('системная строка никого не будит; новичку приходит одна записка от system, остальным непрочитанного не прибавилось', async () => {
     const { client, dir, workId, ids, fourth } = await withRooms();
     const before = (readStoredMap(dir, workId)).messages.length;
 
     await call(client, 'rooms.addMember', { projectPath: dir, workId, roomId: 'r-01', sessionId: fourth });
 
     const map = readStoredMap(dir, workId);
-    expect(map.messages).toHaveLength(before + 1);
-    for (const id of [...ids, fourth]) {
+    // Два письма: записка новичку и строка ленты.
+    expect(map.messages).toHaveLength(before + 2);
+    for (const id of ids) {
       expect(unreadFor(map, id).every((message) => message.from !== SYSTEM)).toBe(true);
     }
+    const mine = unreadFor(map, fourth);
+    expect(mine).toHaveLength(1);
+    expect(mine[0]).toMatchObject({ from: SYSTEM, roomId: null, to: [fourth] });
   });
 
   it('уже участник, закрытая сессия, нет комнаты, сессии или работы — bad_request, карта не тронута', async () => {

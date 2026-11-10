@@ -178,3 +178,39 @@ describe('recipientsOf — письма архивной комнаты (арх�
     expect(recipientsOf(plain, mapWith('2026-10-08T12:00:00.000Z'))).toEqual(['s-02']);
   });
 });
+
+// Порог входа (`room.joinedSeq`): копия `recipientsOf` в окне держит правило core — рассылка не адресована участнику,
+// вошедшему не раньше неё; письма с явным `to` порог не трогает.
+describe('recipientsOf — порог входа участника', () => {
+  const map = {
+    ...entryWith([session('s-01', 'план'), session('s-02', 'бэкенд'), session('s-03', 'ревью')], []).map,
+    rooms: [
+      {
+        id: 'r-01',
+        title: 'R',
+        creator: 'human',
+        members: ['s-01', 's-02', 's-03'],
+        createdAt: '2026-01-01',
+        lead: null,
+        proposal: null,
+        ownerId: null,
+        joinedSeq: { 's-03': 2 },
+      },
+    ],
+  };
+  const at = '2026-01-01T10:00:00.000Z';
+  const old = message({ id: 'm-2', from: 's-01', to: [], at, roomId: 'r-01' });
+  const fresh = message({ id: 'm-3', from: 's-01', to: [], at, roomId: 'r-01' });
+  const direct = message({ id: 'm-1', from: 's-01', to: ['s-03'], at, roomId: 'r-01' });
+
+  it('рассылка с номером не больше порога позднего участника ему не адресована, новее — адресована', () => {
+    expect(recipientsOf(old, map)).toEqual(['s-02']);
+    expect(recipientsOf(fresh, map)).toEqual(['s-02', 's-03']);
+    expect(isUnreadFor(old, 's-03', map)).toBe(false);
+    expect(isUnreadFor(fresh, 's-03', map)).toBe(true);
+  });
+
+  it('письмо с явным to порог не трогает', () => {
+    expect(recipientsOf(direct, map)).toEqual(['s-03']);
+  });
+});

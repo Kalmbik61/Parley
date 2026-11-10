@@ -80,8 +80,6 @@ export interface LetterTx {
   count(q: Omit<LetterQuery, 'limit'>): number;
   /** Непрочитанное читателем: у сессии — правила `isUnreadFor` (`letters.ts`), у `human` — `isHumanUnread`. */
   unreadFor(reader: string): Message[];
-  /** Сессия вошла в комнату: все рассылки комнаты без её отметки и не от неё становятся ей непрочитанными. */
-  joined(roomId: string, reader: string): void;
   /** Сессия вышла из комнаты: рассылки комнаты ей больше не непрочитанные (письма с явным `to` остаются адресату). */
   left(roomId: string, reader: string): void;
   /** Комната ушла в архив: у неё нет адресатов-сессий, человеку её письма остаются непрочитанными. */
@@ -208,7 +206,7 @@ function channelStatsOf(map: Pick<WindowWorkMap, 'messages'>): Record<string, { 
 /**
  * `LetterTx` над картой с письмами в памяти `map` (ссылку на `map.messages` не держим: `deleteRoom` подменяет массив) и
  * признак «письма были записаны». Для тестов правил комнат и планов и для читателей без базы: письма в базе кладёт
- * `createTableLetterTx`. Непрочитанное считается по всем письмам карты, поэтому `joined`, `left`, `archived` и
+ * `createTableLetterTx`. Непрочитанное считается по всем письмам карты, поэтому `left`, `archived` и
  * `effectCancelled` здесь ничего не делают.
  *
  * `savepoint` ведёт журнал отмен только своих методов: объекты, которые держит вызывающий, остаются теми же, а
@@ -266,7 +264,6 @@ export function mapLetterTx(map: WindowWorkMap): { letters: LetterTx; wrote: () 
     count: (q) => countLetters(map, q),
     unreadFor: (reader) => unreadOf(map, reader),
 
-    joined() {},
     left() {},
     archived() {},
     effectCancelled() {},
@@ -501,7 +498,6 @@ export function previewLetterTx(projectPath: string, workId: string, map: WorkMa
     query: (q) => readLetters(projectPath, workId, q),
     count: (q) => letterCount(projectPath, workId, q),
     unreadFor: (reader) => unreadLetters(projectPath, workId, reader, { map }),
-    joined() {},
     left() {},
     archived() {},
     reopened() {},

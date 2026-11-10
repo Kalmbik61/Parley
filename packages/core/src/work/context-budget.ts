@@ -43,6 +43,10 @@ export const BRIEF_MAX_BYTES = 32768;
 export const READ_GUIDE_MAX_BYTES = 65536;
 /** Ответ `find_skill` целиком. */
 export const FIND_SKILL_MAX_BYTES = 8192;
+/** Страница почты (`check_inbox`, `wait_for("inbox")`): письма и байты результата MCP; письмо, не влезшее первым, урезается до `INBOX_CUT_BYTES`. */
+export const INBOX_MAX_BYTES = 32 * 1024;
+export const INBOX_MAX_LETTERS = 50;
+export const INBOX_CUT_BYTES = 14 * 1024;
 /** Блок открытых заданий комнаты в слое сессии (`assignmentsBlock`): напоминание, а не список — за списком идут в `plan_tasks`. */
 export const ASSIGNMENTS_BLOCK_MAX_BYTES = 1024;
 

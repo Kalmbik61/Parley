@@ -686,6 +686,10 @@ function isRecipeSnapshot(value: unknown): boolean {
 
 const isIsoTime = (value: unknown): value is string => typeof value === 'string' && !Number.isNaN(Date.parse(value));
 
+/** Пороги входа комнаты: id сессии → неотрицательное целое. */
+const isJoinedSeq = (value: unknown): boolean =>
+  isRecord(value) && Object.values(value).every((seq) => Number.isInteger(seq) && (seq as number) >= 0);
+
 /** Журнал участия комнаты: записи с id сессии, моментом входа и уходом (`null` — ещё в комнате). */
 function isMemberLog(value: unknown): boolean {
   return Array.isArray(value) && value.every((entry) =>
@@ -719,6 +723,8 @@ function migrateRoom(room: unknown, sessions: WorkSession[]): void {
   // Журнал участия (спека расхода токенов, 4.1): битый убирается — комната читается как созданная до журнала,
   // а карта из-за него не становится нечитаемой.
   if (room['memberLog'] !== undefined && !isMemberLog(room['memberLog'])) delete room['memberLog'];
+  // Пороги входа (`joinedSeq`): битое поле убирается, комната читается как без порогов.
+  if (room['joinedSeq'] !== undefined && !isJoinedSeq(room['joinedSeq'])) delete room['joinedSeq'];
 }
 
 /**

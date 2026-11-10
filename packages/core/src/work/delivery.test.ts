@@ -326,6 +326,19 @@ describe('deliveryAction', () => {
     ).toEqual({ kind: 'none', reason: 'already-pointed' });
   });
 
+  it('2б-1. частичное чтение: указанные письма нового указателя не дают, новое письмо — один указатель на всё', () => {
+    const ids = Array.from({ length: 70 }, (_, index) => `m-${String(index + 1).padStart(2, '0')}`);
+    const unread = ids.map((id) => messageOf({ id }));
+    const pointed = new Set(ids);
+    expect(deliveryAction({ ...base, unread, pointed })).toEqual({ kind: 'none', reason: 'already-pointed' });
+    const fresh = messageOf({ id: 'm-71' });
+    expect(deliveryAction({ ...base, unread: [...unread, fresh], pointed })).toEqual({
+      kind: 'type-pointer',
+      text: 'New messages (71). Call check_inbox.',
+      letterIds: [...ids, 'm-71'],
+    });
+  });
+
   it('2в. удалённые письма в счёт не идут', () => {
     const deleted = messageOf({ id: 'm-01', deleted: true });
     expect(deliveryAction({ ...base, unread: [deleted] })).toEqual({

@@ -180,7 +180,7 @@ describe('send_message и приглашения: допуск', () => {
     expect(fan.text).toContain('delivery limit reached');
   });
 
-  it('add_to_room: пишет только системную строку, бюджет писем не расходует и исчерпанной квотой не блокируется', async () => {
+  it('add_to_room: пишет системную строку и записку новичку от system, бюджет писем не расходует и исчерпанной квотой не блокируется', async () => {
     await updateMap(project, workId, (map, letters) => {
       addRoom(map, { title: 'r', creator: 's-01', members: ['s-01', 's-02'], lead: 's-01' });
       for (let i = 0; i < 3; i += 1) letters.add({ roomId: null, kind: 'note', from: 's-02', to: ['s-01'], text: `шум ${i}` });
@@ -193,11 +193,14 @@ describe('send_message и приглашения: допуск', () => {
     expect(added.isError).toBe(false);
 
     const map = readStoredMap(project, workId);
-    expect(map.messages).toHaveLength(before + 1);
+    // Два письма: прямая записка новичку (system, to s-03), следом строка ленты (system, to human).
+    expect(map.messages).toHaveLength(before + 2);
+    const note = map.messages[map.messages.length - 2];
+    expect(note).toMatchObject({ from: 'system', roomId: null, to: ['s-03'] });
     const line = map.messages[map.messages.length - 1];
     expect(line?.from).toBe('system');
     expect(line?.to).toEqual([HUMAN]);
-    // Агентских писем не прибавилось: бюджет писем остался прежним, письмо приглашённому не создано.
+    // Агентских писем не прибавилось: записка и строка от system, бюджет писем остался прежним.
     expect(map.messages.filter((message) => message.from.startsWith('s-'))).toHaveLength(3);
   });
 
