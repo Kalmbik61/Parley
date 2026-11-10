@@ -6,7 +6,7 @@ import { DEFAULT_TIMELINE_READER, readJsonlTail, type TailCursor, type TimelineR
 import { INDEX_READ_CONCURRENCY, mapLimited } from '../map-limited.js';
 import { missingFileError, type SessionIndex } from '../session-index.js';
 import { isPointerText } from '../work/delivery.js';
-import { createUsageLedger, type UsageCounters, type UsageObservation, type UsageWindow } from '../work/usage-ledger.js';
+import { createUsageLedger, type UsageCounters, type UsageObservation, type UsageSummary, type UsageWindow } from '../work/usage-ledger.js';
 import { codexUsageObservation } from '../work/usage-observations.js';
 import { assistantCwd } from '../discover.js';
 import { defaultCodexRoot, discoverCodexSessions } from './discover.js';
@@ -117,8 +117,9 @@ export class CodexIndexAccumulator {
   firstUserMessage: string | null = null;
   lastUserRecordAt: string | null = null;
   lastCounters = null as UsageCounters | null;
-  // Наблюдения копятся и проигрываются в ledger при сборке: сам ledger копировать нельзя.
+  // Наблюдения копятся ради среза по окнам (проигрыш); итог без окон растёт по ходу в `ledger`.
   observations: UsageObservation[] = [];
+  ledger = createUsageLedger();
   lastTurnEvent: SessionIndex['lastTurnEvent'];
   // Открытые вызовы code mode по call_id (разбор 2026-10-16).
   openCalls = new Map<string, { name: 'exec' | 'wait'; at: string; yieldMs: number | null; cellId: string | null; active: boolean }>();
@@ -130,20 +131,6 @@ export class CodexIndexAccumulator {
   /** Записей-объектов и битых строк среди принятых целыми строками. */
   parsed = 0;
   malformed = 0;
-
-  /** Независимая копия: счётчики, наблюдения и открытые вызовы копируются, прежнее состояние не мутируется. */
-  clone(): CodexIndexAccumulator {
-    return Object.assign(new CodexIndexAccumulator(), this, {
-      planCollector: this.planCollector.clone(),
-      models: this.models.clone(),
-      tools: this.tools.clone(),
-      roles: this.roles.clone(),
-      recordTypes: this.recordTypes.clone(),
-      observations: [...this.observations],
-      openCalls: new Map(this.openCalls),
-      runningCells: new Map(this.runningCells),
-    });
-  }
 
   feed(raw: RawRecord): void {
     this.planCollector.onRecord(raw);
@@ -223,7 +210,7 @@ export class CodexIndexAccumulator {
           this.lastTurnEvent = error === null ? { type: kind, at } : { type: kind, at, error };
         }
         // После конца хода вызов не сторожится, но его поздний ответ ещё может завершить ячейку.
-        // Значения заменяются, чтобы дочитывание не мутировало предыдущий снимок накопителя.
+        // Вызовы остаются в таблице (поздний ответ ещё может завершить ячейку), но больше не сторожатся.
         if (kind === 'task_complete') {
           for (const [id, call] of this.openCalls) this.openCalls.set(id, { ...call, active: false });
         }
@@ -246,6 +233,7 @@ export class CodexIndexAccumulator {
         if (observation !== null) {
           this.lastCounters = observation.counters;
           this.observations.push(observation);
+          this.ledger.observe(observation);
         }
         break;
       }
@@ -264,8 +252,14 @@ export class CodexIndexAccumulator {
     { usageWindows, pendingMalformed = false }: { usageWindows?: readonly UsageWindow[]; pendingMalformed?: boolean } = {},
   ): SessionIndex {
     const { cwd, startedAt, endedAt, lastCounters, firstUserMessage, lastTurnEvent, spawned, parentId, forkedFrom } = this;
-    const ledger = createUsageLedger(usageWindows === undefined ? {} : { windows: usageWindows });
-    for (const observation of this.observations) ledger.observe(observation);
+    let usage: UsageSummary;
+    if (usageWindows === undefined) {
+      usage = this.ledger.summary();
+    } else {
+      const sliced = createUsageLedger({ windows: usageWindows });
+      for (const observation of this.observations) sliced.observe(observation);
+      usage = sliced.summary();
+    }
 
     const durationMs =
       startedAt !== null && endedAt !== null
@@ -331,7 +325,7 @@ export class CodexIndexAccumulator {
       // Субагентов у Codex нет как явления.
       subsessionCount: 0,
       tokens,
-      usage: ledger.summary(),
+      usage,
       provider: 'codex',
       ...(spawned ? { spawned: true } : {}),
       ...(parentId === null ? {} : { parentId }),
@@ -369,8 +363,11 @@ export interface CodexIndexState {
 
 /**
  * То же, что `indexCodexSession`, но дочитывает только дописанное с места `previous` (нет новых байт — файл не
- * открывается). Возвращает НОВОЕ состояние (прежнее не меняется) и SessionIndex, равный полному чтению текущего
- * содержимого, включая момент, когда последняя строка оборвана. Файла нет — ошибка ENOENT, как у полного чтения.
+ * открывается) и возвращает SessionIndex, равный полному чтению текущего содержимого, включая момент, когда
+ * последняя строка оборвана. Накопитель `previous.acc` дополняется НА МЕСТЕ: прежнее состояние после вызова
+ * заменяется возвращённым. Новые записи копятся в буфере и применяются только после удачного чтения — упавшее
+ * чтение состояние не трогает. Сброс (усечение, подмена файла, первый вызов) заводит новый накопитель. Файла
+ * нет — ошибка ENOENT, как у полного чтения.
  */
 export async function extendCodexSessionIndex(
   previous: CodexIndexState | null,
@@ -378,24 +375,23 @@ export async function extendCodexSessionIndex(
   { reader = DEFAULT_TIMELINE_READER, usageWindows }: { reader?: TimelineReader; usageWindows?: readonly UsageWindow[] } = {},
 ): Promise<{ state: CodexIndexState; index: SessionIndex }> {
   let draft: CodexIndexAccumulator | null = null;
+  let pending: RawRecord[] = [];
   const result = await readJsonlTail(previous?.cursor ?? null, file, reader, {
     reset: () => {
       draft = new CodexIndexAccumulator();
+      pending = [];
     },
     record: (raw) => {
-      draft ??= (previous as CodexIndexState).acc.clone();
-      draft.feed(raw);
+      if (draft !== null) (draft as CodexIndexAccumulator).feed(raw);
+      else pending.push(raw);
     },
   });
   if (result.missing) throw missingFileError(file);
 
-  // Счётчики строк входят в состояние, только если появились целые строки; прежнее не трогаем.
-  let acc = (draft as CodexIndexAccumulator | null) ?? (previous as CodexIndexState).acc;
-  if (result.parsed > 0 || result.malformed > 0) {
-    if (acc === (previous as CodexIndexState | null)?.acc) acc = acc.clone();
-    acc.parsed += result.parsed;
-    acc.malformed += result.malformed;
-  }
+  const acc = (draft as CodexIndexAccumulator | null) ?? (previous as CodexIndexState).acc;
+  for (const raw of pending) acc.feed(raw);
+  acc.parsed += result.parsed;
+  acc.malformed += result.malformed;
   const index = acc.build(file, {
     pendingMalformed: result.cursor.pendingMalformed,
     ...(usageWindows === undefined ? {} : { usageWindows }),

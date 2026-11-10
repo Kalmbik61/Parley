@@ -27,14 +27,11 @@ describe('plan log collectors', () => {
     expect(c.finish()?.items).toHaveLength(1);
     expect(c.finish()?.items[0]?.status).toBe('in_progress');
   });
-  it('replays old calls before snapshots and clones independently with repeatable finish', () => {
+  it('replays old calls before snapshots with repeatable finish', () => {
     const c = createClaudePlanCollector();
     c.onRecord(call('a', 'TaskCreate', { subject: 'A' }));
     c.onRecord(call('b', 'TodoWrite', todo('B')));
     c.onRecord(result('b'));
-    const clone = c.clone();
-    clone.onRecord(result('a', 'Task #1 created successfully: A'));
-    expect(clone.finish()?.items.map((i) => i.subject)).toEqual(['B']);
     expect(c.finish()).toEqual(c.finish());
     c.onRecord(result('a', 'Task #2 created successfully: A'));
     expect(c.finish()?.items.map((i) => i.subject)).toEqual(['B']);
@@ -87,10 +84,6 @@ describe('plan log collectors', () => {
     });
     c.onRecord(cc('a', 'A'));
     expect(c.finish()).toBeNull();
-    const clone = c.clone();
-    clone.onRecord(cr('a', 'Plan updated'));
-    expect(c.finish()).toBeNull();
-    expect(clone.finish()?.items[0]?.subject).toBe('A');
     c.onRecord(cr('a', 'Plan updated'));
     c.onRecord(cc('b', 'B'));
     c.onRecord(cr('b', '{"success":false}'));
@@ -145,15 +138,5 @@ describe('plan log collectors', () => {
     }
     c.onRecord(result('lost'));
     expect(c.finish()?.items.map((i) => i.subject)).toEqual(['S69']);
-  });
-  it('clone независим от оригинала', () => {
-    const c = createClaudePlanCollector();
-    c.onRecord(call('a', 'TodoWrite', todo('A')));
-    c.onRecord(result('a'));
-    const clone = c.clone();
-    clone.onRecord(call('b', 'TodoWrite', todo('B')));
-    clone.onRecord(result('b'));
-    expect(c.finish()?.items.map((i) => i.subject)).toEqual(['A']);
-    expect(clone.finish()?.items.map((i) => i.subject)).toEqual(['B']);
   });
 });

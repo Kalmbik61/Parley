@@ -219,9 +219,6 @@ describe('паритет с полным чтением', () => {
       await writeFile(file, text);
       const second = await extendClaudeSessionIndex(first.state, file, root, { subagents });
       expect(second.index, `остаток после ${cut}`).toEqual(await indexSessionFile(file, root, { subagents }));
-      // Прежнее состояние не изменилось: тот же шаг из него даёт тот же результат.
-      const again = await extendClaudeSessionIndex(first.state, file, root, { subagents });
-      expect(again.index).toEqual(second.index);
     }
   });
 
@@ -253,8 +250,6 @@ describe('паритет с полным чтением', () => {
       await writeFile(file, text);
       const second = await extendCodexSessionIndex(first.state, file);
       expect(second.index, `остаток после ${cut}`).toEqual(await indexCodexSession(file));
-      const again = await extendCodexSessionIndex(first.state, file);
-      expect(again.index).toEqual(second.index);
     }
     const final = await indexCodexSession(file);
     expect(final.records).toBe(18);
@@ -358,6 +353,76 @@ describe('что читается', () => {
     const second = await extendClaudeSessionIndex(first.state, file, root, { subagents: [] });
     expect(second.state.subagents.size).toBe(0);
     expect(second.index).toEqual(await indexSessionFile(file, root));
+  });
+});
+
+/** Читатель, у которого чтение файла `target` обрывается после первой строки, отданной с места `start` (одна запись уже прочитана). */
+function failingMidTail(target: string): TimelineReader {
+  return {
+    stat: DEFAULT_TIMELINE_READER.stat,
+    open: (file, start) => {
+      const inner = DEFAULT_TIMELINE_READER.open(file, start);
+      if (file !== target) return inner;
+      return Readable.from(
+        (async function* () {
+          for await (const chunk of inner) {
+            const bytes = chunk as Buffer;
+            const firstLine = bytes.indexOf(0x0a);
+            yield bytes.subarray(0, firstLine === -1 ? bytes.length : firstLine + 1);
+            throw new Error('чтение оборвано');
+          }
+        })(),
+      );
+    },
+  };
+}
+
+describe('сбой чтения посреди дописанного', () => {
+  it('Claude: главный файл — следующий вызов даёт паритет с полным чтением, записи не удвоены', async () => {
+    const dir = path.join(root, '-Users-me-proj');
+    await mkdir(path.join(dir, 's1', 'subagents'), { recursive: true });
+    const file = path.join(dir, 's1.jsonl');
+    const subFile = path.join(dir, 's1', 'subagents', 'agent-a1.jsonl');
+    const subagents = [subagentOf(subFile)];
+    const lines = claudeLines();
+    await writeFile(subFile, subagentLines()[0] + '\n');
+    await writeFile(file, lines.slice(0, 7).join('\n') + '\n');
+    const first = await extendClaudeSessionIndex(null, file, root, { subagents });
+
+    await appendFile(file, lines.slice(7).join('\n') + '\n');
+    await expect(extendClaudeSessionIndex(first.state, file, root, { subagents, reader: failingMidTail(file) })).rejects.toThrow('чтение оборвано');
+    const retry = await extendClaudeSessionIndex(first.state, file, root, { subagents });
+    expect(retry.index).toEqual(await indexSessionFile(file, root, { subagents }));
+  });
+
+  it('Claude: упал подагент после успешного чтения главного файла — состояние главного не тронуто', async () => {
+    const dir = path.join(root, '-Users-me-proj');
+    await mkdir(path.join(dir, 's1', 'subagents'), { recursive: true });
+    const file = path.join(dir, 's1.jsonl');
+    const subFile = path.join(dir, 's1', 'subagents', 'agent-a1.jsonl');
+    const subagents = [subagentOf(subFile)];
+    const lines = claudeLines();
+    await writeFile(subFile, subagentLines()[0] + '\n');
+    await writeFile(file, lines.slice(0, 7).join('\n') + '\n');
+    const first = await extendClaudeSessionIndex(null, file, root, { subagents });
+
+    await appendFile(file, lines.slice(7).join('\n') + '\n');
+    await appendFile(subFile, subagentLines()[1] + '\n');
+    await expect(extendClaudeSessionIndex(first.state, file, root, { subagents, reader: failingMidTail(subFile) })).rejects.toThrow('чтение оборвано');
+    const retry = await extendClaudeSessionIndex(first.state, file, root, { subagents });
+    expect(retry.index).toEqual(await indexSessionFile(file, root, { subagents }));
+  });
+
+  it('Codex: следующий вызов даёт паритет с полным чтением', async () => {
+    const file = path.join(root, 'rollout.jsonl');
+    const lines = codexLines();
+    await writeFile(file, lines.slice(0, 8).join('\n') + '\n');
+    const first = await extendCodexSessionIndex(null, file);
+
+    await appendFile(file, lines.slice(8).join('\n') + '\n');
+    await expect(extendCodexSessionIndex(first.state, file, { reader: failingMidTail(file) })).rejects.toThrow('чтение оборвано');
+    const retry = await extendCodexSessionIndex(first.state, file);
+    expect(retry.index).toEqual(await indexCodexSession(file));
   });
 });
 
@@ -500,8 +565,6 @@ describe('plan incremental parity', () => {
         const second = await extendClaudeSessionIndex(first.state, file, root);
         expect(second.index.plan).toEqual((await indexSessionFile(file, root)).plan);
         expect(second.index.plan?.summary.current?.subject).toBe('A');
-        expect(first.state.acc.build(root).plan).toBeNull();
-        expect((await extendClaudeSessionIndex(first.state, file, root)).index.plan).toEqual(second.index.plan);
         await writeFile(file, jsonl([result]));
         expect((await extendClaudeSessionIndex(second.state, file, root)).index.plan).toBeNull();
       } else {
@@ -511,8 +574,6 @@ describe('plan incremental parity', () => {
         const second = await extendCodexSessionIndex(first.state, file);
         expect(second.index.plan).toEqual((await indexCodexSession(file)).plan);
         expect(second.index.plan?.summary.current?.subject).toBe('A');
-        expect(first.state.acc.build(file).plan).toBeNull();
-        expect((await extendCodexSessionIndex(first.state, file)).index.plan).toEqual(second.index.plan);
         await writeFile(file, jsonl([result]));
         expect((await extendCodexSessionIndex(second.state, file)).index.plan).toBeNull();
       }
