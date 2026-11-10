@@ -5,9 +5,10 @@ import { mkdir, readFile, stat, utimes, writeFile } from 'node:fs/promises';
 import { uptime } from 'node:os';
 import { createRequire } from 'node:module';
 import path from 'node:path';
+import { connect } from 'node:net';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
-import { connectRaw, hello, removeHome, tempHome, waitConnected } from '../test/helpers.js';
+import { connectRaw, hello, removeHome, tempHome, waitClosed, waitConnected } from '../test/helpers.js';
 import { processStartedAt } from '@parley/core';
 import { HostAlreadyRunning, SocketPathTooLong, startHost } from './host.js';
 import type { RunningHost } from './host.js';
@@ -260,6 +261,77 @@ describe('startHost', () => {
     expect(refused).toBeInstanceOf(SocketPathTooLong);
     expect((refused as Error).message).toMatch(/^socket path is longer than 103 bytes: /);
     expect(existsSync(longHome)).toBe(false);
+  });
+});
+
+describe('сроки остановки хоста', () => {
+  async function bootWith(options: { shutdownHookMs?: number; shutdownTotalMs?: number }): Promise<RunningHost> {
+    const home = await tempTrackedHome();
+    const running = await startHost({ home, ...options });
+    hosts.push(running);
+    return running;
+  }
+
+  it('хук, что не завершается, не держит остановку дольше своего срока', async () => {
+    const running = await bootWith({ shutdownHookMs: 50 });
+    running.context.onShutdown(() => new Promise<void>(() => {}));
+
+    await running.context.shutdown('t');
+    await running.closed;
+
+    expect(existsSync(running.paths.socket)).toBe(false);
+    expect(existsSync(running.paths.token)).toBe(false);
+    expect(existsSync(running.paths.pid)).toBe(false);
+    expect(await readFile(running.paths.log, 'utf8')).toContain('shutdown hook timed out');
+  });
+
+  it('общий срок обрывает остановку с несколькими зависшими хуками', async () => {
+    const running = await bootWith({ shutdownHookMs: 100, shutdownTotalMs: 250 });
+    for (let i = 0; i < 5; i += 1) running.context.onShutdown(() => new Promise<void>(() => {}));
+
+    await running.context.shutdown('t');
+    await running.closed;
+
+    expect(await readFile(running.paths.log, 'utf8')).toContain('shutdown deadline exceeded');
+    expect(existsSync(running.paths.pid)).toBe(false);
+    expect(existsSync(running.paths.socket)).toBe(false);
+  });
+
+  it('зависший хук, что бросает после остановки, не оставляет необработанных отказов', async () => {
+    const running = await bootWith({ shutdownHookMs: 100, shutdownTotalMs: 250 });
+    for (let i = 0; i < 5; i += 1) running.context.onShutdown(() => new Promise<void>(() => {}));
+    running.context.onShutdown(
+      () => new Promise<void>((_resolve, reject) => setTimeout(() => reject(new Error('поздний отказ')), 400)),
+    );
+    const rejections: unknown[] = [];
+    const spy = (reason: unknown): void => void rejections.push(reason);
+    process.on('unhandledRejection', spy);
+    try {
+      await running.context.shutdown('t');
+      await running.closed;
+      await new Promise((resolve) => setTimeout(resolve, 600));
+    } finally {
+      process.off('unhandledRejection', spy);
+    }
+    expect(rejections).toEqual([]);
+  });
+
+  it('клиент, не закрывающий свою сторону, не держит server.close', async () => {
+    const running = await bootWith({});
+    const token = await readFile(running.paths.token, 'utf8');
+    const socket = connect({ path: running.paths.socket, allowHalfOpen: true });
+    await waitConnected(socket);
+    const client = { socket, send: (m: unknown) => void socket.write(`${JSON.stringify(m)}\n`) };
+    const response = await hello(
+      { ...client, next: () => new Promise((resolve) => socket.once('data', (d: Buffer) => resolve(JSON.parse(d.toString('utf8').split('\n')[0] ?? '{}')))), close: () => socket.end() },
+      token,
+    );
+    expect(response.error).toBeUndefined();
+
+    await running.context.shutdown('t');
+    await running.closed;
+    await waitClosed(socket, 3000);
+    expect(socket.destroyed).toBe(true);
   });
 });
 
