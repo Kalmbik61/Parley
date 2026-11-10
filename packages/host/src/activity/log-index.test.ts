@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile, appendFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rename, rm, writeFile, appendFile, stat, utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -899,5 +899,147 @@ describe('createLogIndex', () => {
         await rm(lateRoot, { recursive: true, force: true });
       }
     });
+  });
+});
+
+describe('кэш индекса между запусками', () => {
+  let cacheDir = '';
+  let cacheFile = '';
+
+  beforeEach(async () => {
+    // Временный каталог вместо домашнего: ~/.parley тесты не трогают.
+    cacheDir = await mkdtemp(path.join(tmpdir(), 'parley-log-cache-'));
+    cacheFile = path.join(cacheDir, 'log-index-cache.json');
+  });
+  afterEach(async () => {
+    await rm(cacheDir, { recursive: true, force: true });
+  });
+
+  const cached = (version = 'v1') => index({ cache: { file: cacheFile, version } });
+  const titled = (id: string, title: string): string =>
+    `${JSON.stringify({ type: 'user', sessionId: id, timestamp: '2026-09-05T09:00:00.000Z', message: { role: 'user', content: 'привет' } })}\n` +
+    `${JSON.stringify({ type: 'custom-title', customTitle: title, sessionId: id })}\n`;
+  const titleOf = (idx: LogIndex, id: string): string | null | undefined => idx.index(session({ providerSessionId: id }))?.title;
+  /** Три сессии Claude и один rollout Codex. */
+  async function writeHistory(): Promise<string[]> {
+    const files = [
+      await writeClaudeSession('a', titled('a', 'title-a')),
+      await writeClaudeSession('b', titled('b', 'title-b')),
+      await writeClaudeSession('c', titled('c', 'title-c')),
+    ];
+    const dir = path.join(codexRoot, '2026', '10', '04');
+    await mkdir(dir, { recursive: true });
+    const rollout = path.join(dir, 'rollout-2026-10-04T12-00-01-x1.jsonl');
+    await writeFile(
+      rollout,
+      `${JSON.stringify({ timestamp: '2026-10-04T12:00:01.000Z', type: 'session_meta', payload: { id: 'x1', cwd: '/tmp/p' } })}\n`,
+    );
+    return [...files, rollout];
+  }
+  const readCache = async (): Promise<{ format: number; version: string; entries: Record<string, { key: string; index: { title?: string } }> }> =>
+    JSON.parse(await readFile(cacheFile, 'utf8'));
+
+  it('первый старт пишет файл: format 1, версия, ключи — пути всех логов', async () => {
+    const files = await writeHistory();
+    const stats = await cached().start();
+
+    expect(stats).toEqual({ files: 4, parsed: 4 });
+    const written = await readCache();
+    expect(written.format).toBe(1);
+    expect(written.version).toBe('v1');
+    expect(Object.keys(written.entries).sort()).toEqual([...files].sort());
+    expect((await stat(cacheFile)).mode & 0o777).toBe(0o600);
+  });
+
+  it('второй старт по неизменённому дереву ничего не разбирает; запись берётся из кэша', async () => {
+    await writeHistory();
+    await cached().start();
+    const written = await readCache();
+    const entry = Object.values(written.entries).find((value) => value.index.title === 'title-b');
+    if (entry === undefined) throw new Error('нет записи b');
+    entry.index.title = 'из кэша';
+    await writeFile(cacheFile, JSON.stringify(written));
+
+    const second = cached();
+    expect(await second.start()).toEqual({ files: 4, parsed: 0 });
+    expect(titleOf(second, 'b')).toBe('из кэша');
+    expect(titleOf(second, 'a')).toBe('title-a');
+  });
+
+  it('дописанный файл разбирается заново', async () => {
+    const [a] = await writeHistory();
+    await cached().start();
+    await appendFile(a as string, `${JSON.stringify({ type: 'custom-title', customTitle: 'новый', sessionId: 'a' })}\n`);
+
+    const second = cached();
+    expect(await second.start()).toEqual({ files: 4, parsed: 1 });
+    expect(titleOf(second, 'a')).toBe('новый');
+  });
+
+  it('усечённый файл разбирается заново', async () => {
+    const [a] = await writeHistory();
+    await cached().start();
+    await writeFile(a as string, titled('a', 'short').split('\n')[0] + '\n');
+
+    const second = cached();
+    expect((await second.start())?.parsed).toBe(1);
+    expect(titleOf(second, 'a')).not.toBe('title-a');
+  });
+
+  it('файл заменён другим того же размера с возвращённым mtime — разбирается заново', async () => {
+    const [a] = await writeHistory();
+    await cached().start();
+    const before = await stat(a as string);
+    const replacement = `${a}.new`;
+    await writeFile(replacement, titled('a', 'title-Z'));
+    expect((await stat(replacement)).size).toBe(before.size);
+    await utimes(replacement, before.atime, before.mtime);
+    await rename(replacement, a as string);
+
+    const second = cached();
+    expect((await second.start())?.parsed).toBe(1);
+    expect(titleOf(second, 'a')).toBe('title-Z');
+  });
+
+  it('исчезнувший файл выпадает из нового кэша', async () => {
+    const [a] = await writeHistory();
+    await cached().start();
+    await rm(a as string);
+
+    const second = cached();
+    expect(await second.start()).toEqual({ files: 3, parsed: 0 });
+    expect(Object.keys((await readCache()).entries)).not.toContain(a);
+    expect(titleOf(second, 'a')).toBeUndefined();
+  });
+
+  it.each([
+    ['битый JSON', () => '{"format":1,'],
+    ['чужой format', (text: string) => text.replace('"format":1', '"format":2')],
+    ['чужая версия', (text: string) => text.replace('"version":"v1"', '"version":"v0"')],
+    ['не объект', () => '[]'],
+    ['запись с чужим путём в index.file', (text: string) => text.replaceAll('"file":"', '"file":"/elsewhere')],
+  ])('%s: полный разбор, файл переписан годным', async (_name, damage) => {
+    await writeHistory();
+    await cached().start();
+    await writeFile(cacheFile, damage(await readFile(cacheFile, 'utf8')));
+
+    expect(await cached().start()).toEqual({ files: 4, parsed: 4 });
+    const written = await readCache();
+    expect(written.version).toBe('v1');
+    expect(Object.keys(written.entries)).toHaveLength(4);
+    expect(await cached().start()).toEqual({ files: 4, parsed: 0 });
+  });
+
+  it('другая версия хоста при годном файле — полный разбор', async () => {
+    await writeHistory();
+    await cached().start();
+    expect(await cached('v2').start()).toEqual({ files: 4, parsed: 4 });
+    expect((await readCache()).version).toBe('v2');
+  });
+
+  it('cache: null — файл не пишется', async () => {
+    await writeHistory();
+    await index({ cache: null }).start();
+    await expect(stat(cacheFile)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });

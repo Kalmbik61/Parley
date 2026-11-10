@@ -3,6 +3,7 @@ import path from 'node:path';
 import { Counter, oneLine, type TokenTotals } from '../counters.js';
 import { forEachJsonlRecord, type RawRecord } from '../jsonl.js';
 import { DEFAULT_TIMELINE_READER, readJsonlTail, type TailCursor, type TimelineReader } from '../jsonl-tail.js';
+import { reuseOrIndex, type IndexReuse } from '../index-reuse.js';
 import { INDEX_READ_CONCURRENCY, mapLimited } from '../map-limited.js';
 import { missingFileError, type SessionIndex } from '../session-index.js';
 import { isPointerText } from '../work/delivery.js';
@@ -407,11 +408,12 @@ export async function extendCodexSessionIndex(
 export async function buildCodexIndex(
   root: string = defaultCodexRoot(),
   signal?: AbortSignal,
+  reuse?: IndexReuse,
 ): Promise<SessionIndex[]> {
   const discovered = await discoverCodexSessions(root);
   // Не больше INDEX_READ_CONCURRENCY файлов разом — как у истории Claude (lane-r3, п. 1).
   const index = await mapLimited(discovered, INDEX_READ_CONCURRENCY, (session) =>
-    indexCodexSession(session.file, signal),
+    reuseOrIndex(reuse, [session.file], () => indexCodexSession(session.file, signal)),
   );
   const own = index.filter((session) => session.cwd !== assistantCwd());
   own.sort((a, b) => String(b.endedAt ?? '').localeCompare(String(a.endedAt ?? '')));

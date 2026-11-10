@@ -28,6 +28,7 @@ import {
   type ActivityLog,
   type DescendantUsage,
   type DiscoveredSubagent,
+  type IndexReuse,
   type MetricsRoots,
   type SessionChange,
   type SessionIndex,
@@ -42,6 +43,15 @@ import {
   usageKey,
   withDescendants,
 } from '@parley/core';
+import { hostPaths } from '../paths.js';
+import { readHostVersion } from '../version.js';
+import { LOG_INDEX_CACHE_FILE, loadLogIndexCache, saveLogIndexCache, type LogIndexCacheEntry } from './log-index-cache.js';
+
+/** Итог первой сборки: сколько файлов в индексе и сколько из них разобрано заново (остальные взяты из кэша). */
+export interface LogIndexStartStats {
+  files: number;
+  parsed: number;
+}
 
 /**
  * Что изменилось в индексе: подписчику, который пересчитывает свои сессии, нет смысла трогать остальные.
@@ -56,7 +66,8 @@ export interface LogChange {
 }
 
 export interface LogIndex {
-  start(): Promise<void>;
+  /** `null` — остановлен до конца сборки. */
+  start(): Promise<LogIndexStartStats | null>;
   /** Запись индекса по `providerSessionId` сессии; `undefined` — лога нет. */
   index(session: WorkSession): SessionIndex | undefined;
   /**
@@ -130,6 +141,11 @@ export interface LogIndexOptions {
   timelineCacheSize?: number;
   subagentTtlMs?: number;
   now?: () => number;
+  /**
+   * Кэш индекса между запусками: файл и версия хоста. `null` — без кэша. По умолчанию кэш включён, только когда
+   * корни истории Claude и Codex не подменены (тесты и E2E уводят хост от истории человека).
+   */
+  cache?: { file: string; version: string } | null;
 }
 
 /** Корни истории: к основным добавляются корни своих провайдеров (по умолчанию — найденные на диске). */
@@ -337,6 +353,33 @@ export function createLogIndex(roots: LogIndexRoots = {}, options: LogIndexOptio
       return (byParent.get(logKey('codex', root.id)) ?? []).map((child) => ({ threadId: child.id, file: child.file }));
     },
     async start() {
+      const hostVersion = readHostVersion();
+      // Версия не определилась (`unknown`) — кэш не включаем: он пережил бы обновление.
+      const cacheOptions =
+        options.cache !== undefined
+          ? options.cache
+          : roots.claudeRoot === undefined && roots.codexRoot === undefined && hostVersion !== 'unknown'
+            ? { file: path.join(hostPaths().dir, LOG_INDEX_CACHE_FILE), version: hostVersion }
+            : null;
+      const previous = cacheOptions === null ? new Map<string, LogIndexCacheEntry>() : await loadLogIndexCache(cacheOptions.file, cacheOptions.version);
+      // Новая карта кэша — ровно файлы этой сборки: исчезнувшие выпадают. Порядок записей в индексе кэш не хранит:
+      // список строит та же сборка (обход, сортировка по `endedAt`), так что победитель среди файлов с одним id тот же.
+      const next = new Map<string, LogIndexCacheEntry>();
+      let reused = 0;
+      const reuse: IndexReuse | undefined =
+        cacheOptions === null
+          ? undefined
+          : {
+              get(file, key) {
+                const entry = previous.get(file);
+                if (entry === undefined || entry.key !== key) return undefined;
+                reused += 1;
+                return entry.index;
+              },
+              put(file, key, index) {
+                next.set(file, { key, index });
+              },
+            };
       // Полный список могут читать гигабайты истории (`~/.claude/projects`) —
       // вызывающий (`ActivityService`) не ждёт эту функцию, чтобы не задерживать
       // старт хоста; `stopped` здесь ловит остановку, случившуюся, пока список
@@ -346,21 +389,21 @@ export function createLogIndex(roots: LogIndexRoots = {}, options: LogIndexOptio
       // Корни, чьи сессии уже в `built`: `watchClaudeRoot` может добавить корень, пока список строится.
       const builtRoots = new Set<string>([mainRoot]);
       try {
-        built = await buildAllSessions({ ...roots, signal: building.signal });
+        built = await buildAllSessions({ ...roots, signal: building.signal, ...(reuse === undefined ? {} : { reuse }) });
         // Корни своих провайдеров — только Claude-формат; Codex в общем списке уже один раз.
         // Цикл ловит и корни, появившиеся за время самой сборки: после последней проверки `await` нет.
         for (let pending = unbuiltRoots(builtRoots); pending.length > 0; pending = unbuiltRoots(builtRoots)) {
           for (const root of pending) {
             builtRoots.add(root);
-            built = [...built, ...(await buildIndex(root, adapterV1, building.signal))];
+            built = [...built, ...(await buildIndex(root, adapterV1, building.signal, reuse))];
           }
           built.sort((a, b) => String(b.endedAt ?? '').localeCompare(String(a.endedAt ?? '')));
         }
       } catch (error) {
-        if (stopped) return;
+        if (stopped) return null;
         throw error;
       }
-      if (stopped) return;
+      if (stopped) return null;
       rebuild(built);
       // Наблюдатели и `started` — без `await` после последней проверки корней: `watchClaudeRoot` не теряет корень.
       watcher = watchSessions(
@@ -381,6 +424,12 @@ export function createLogIndex(roots: LogIndexRoots = {}, options: LogIndexOptio
       // случиться (план, кусок 1.5 — автозаголовок и привязка «на изменениях
       // логов»).
       for (const listener of listeners) listener();
+      const stats: LogIndexStartStats = { files: next.size, parsed: next.size - reused };
+      if (cacheOptions !== null && !stopped && (stats.parsed > 0 || next.size !== previous.size)) {
+        // Кэш — ускорение, не данные: сбой записи не должен ронять индекс.
+        await saveLogIndexCache(cacheOptions.file, cacheOptions.version, next).catch(() => undefined);
+      }
+      return stats;
     },
     watchClaudeRoot(root) {
       if (stopped || claudeRoots.has(root)) return;
