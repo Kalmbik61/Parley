@@ -106,12 +106,15 @@ describe('machineCapacity', () => {
     }
   });
 
-  it('порог давления при warn/critical или очереди, обычный — при normal/unknown без очереди', () => {
-    expect(machineCapacity(input({ pressure: 'warn' })).sleepMinutes).toBe(5);
+  it('порог давления при critical или очереди, при warn не ниже 30, обычный — при normal/unknown без очереди', () => {
+    expect(machineCapacity(input({ pressure: 'warn' })).sleepMinutes).toBe(30);
+    expect(machineCapacity(input({ pressure: 'critical' })).sleepMinutes).toBe(5);
     expect(machineCapacity(input({ pressure: 'normal', queued: 2 })).sleepMinutes).toBe(5);
     expect(machineCapacity(input({ pressure: 'unknown' })).sleepMinutes).toBe(60);
     expect(machineCapacity(input({ pressure: 'normal' })).sleepMinutes).toBe(60);
     expect(machineCapacity(input({ sleepAfterMinutes: 3, pressure: 'critical' })).sleepMinutes).toBe(3);
+    expect(machineCapacity(input({ sleepAfterMinutes: 20, pressure: 'warn' })).sleepMinutes).toBe(20);
+    expect(machineCapacity(input({ sleepUnderPressureMinutes: 45, pressure: 'warn' })).sleepMinutes).toBe(45);
   });
 
   it('своп до десятых; live — занятое', () => {
@@ -243,7 +246,7 @@ describe('capacityReport', () => {
     expect(report(map, ids[0]!, null).swarm).toMatchObject({ live: '3/8', members: '4/16' });
   });
 
-  it('you: подсессии по createdBy, закрытые не в счёт; wakesHour считает только подъёмы письмом за час без windowFree', () => {
+  it('you: подсессии по createdBy, закрытые не в счёт; wakesHour считает подъёмы письмом за час, в том числе с windowFree', () => {
     const map = emptyMap();
     const me = addActive(map);
     const other = addActive(map);
@@ -273,7 +276,7 @@ describe('capacityReport', () => {
       children: { running: 2, asleep: 1, queued: 1 },
       subagents: 2,
       background: {},
-      wakesHour: '2/6',
+      wakesHour: '3/6',
       keepAwake: true,
     });
   });

@@ -2,9 +2,10 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { SessionActivity } from './activity.js';
-import { autoSleepVerdict, deliveredSince, inboxFenced, type AutoSleepBlock, type AutoSleepInput } from './auto-sleep.js';
+import { activityOf, type SessionActivity } from './activity.js';
+import { autoSleepVerdict, deliveredSince, hurriedSleepMinutes, inboxFenced, type AutoSleepBlock, type AutoSleepInput } from './auto-sleep.js';
 import { closeWorkDb } from './db.js';
+import { bareEvent, type EventRecord } from './events.js';
 import { mapLetterTx, writeLetters } from './letter-store.js';
 import { addRoom } from './rooms.js';
 import { createWork, updateMap } from './store.js';
@@ -65,6 +66,33 @@ const base: AutoSleepInput = {
 };
 
 const blocked = (block: AutoSleepBlock): { sleep: false; block: AutoSleepBlock } => ({ sleep: false, block });
+
+describe('autoSleepVerdict: тишина открытого хода', () => {
+  it.each([0, 5 * MIN, 15 * MIN, 60 * MIN])(
+    'working: тишина открытого хода не сон при любом пороге (%i мс)',
+    (thresholdMs) => {
+      const activity = idleActivity({ activity: 'unseen', quietTurn: true, turnEndedAt: iso(NOW - 14 * MIN) });
+      expect(autoSleepVerdict({ ...base, activity, thresholdMs })).toEqual(blocked('working'));
+    },
+  );
+
+  it('из activityOf: команда молчит — не сон до конца удержания, после — сон', () => {
+    const T = Date.parse('2026-10-31T10:00:00.000Z');
+    const record = (name: string, at: number, source: string | null = null): EventRecord => ({
+      ...bareEvent(iso(at), name),
+      source,
+    });
+    const events = [record('SessionStart', T, 'startup'), record('UserPromptSubmit', T + 1000)];
+    const log = { lastRecordAt: iso(T + MIN), lastUserRecordAt: iso(T + 1000) };
+    const verdictAt = (now: number) =>
+      autoSleepVerdict({ ...base, activity: activityOf({ events, log, now }), now, thresholdMs: 5 * MIN });
+
+    for (let m = 1; m <= 15; m += 1) {
+      expect(verdictAt(T + MIN + m * MIN)).toEqual(blocked('working'));
+    }
+    expect(verdictAt(T + MIN + 15 * MIN + 1)).toEqual({ sleep: true, idleSince: T + MIN, waitTarget: null });
+  });
+});
 
 describe('autoSleepVerdict: сессия простаивает — спит', () => {
   it('ход окончен дольше порога назад: спит, часы — от turnEndedAt, цели ожидания нет', () => {
@@ -278,6 +306,19 @@ describe('autoSleepVerdict: порядок проверок', () => {
     expect(autoSleepVerdict(started)).toEqual(blocked('waiters-off'));
     expect(autoSleepVerdict({ ...started, allowWaiters: true })).toEqual(blocked('too-soon'));
     expect(autoSleepVerdict({ ...started, allowWaiters: true, waitStartedAt: NOW - 61 * MIN })).toMatchObject({ sleep: true });
+  });
+});
+
+describe('hurriedSleepMinutes: инварианты на 1…60', () => {
+  it('critical и slot дают настройку, warn — не меньше 30, поднятая после сна — не меньше 15', () => {
+    for (let v = 1; v <= 60; v += 1) {
+      expect(hurriedSleepMinutes(v, 'critical'), `critical ${v}`).toBe(v);
+      expect(hurriedSleepMinutes(v, 'slot'), `slot ${v}`).toBe(v);
+      expect(hurriedSleepMinutes(v, 'warn'), `warn ${v}`).toBe(Math.max(v, 30));
+      for (const hurry of ['warn', 'critical', 'slot'] as const) {
+        expect(hurriedSleepMinutes(v, hurry, true), `${hurry} resumed ${v}`).toBe(Math.max(hurriedSleepMinutes(v, hurry), 15));
+      }
+    }
   });
 });
 

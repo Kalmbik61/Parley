@@ -41,7 +41,7 @@ describe('loadConfig', () => {
       messageRate: 20,
       resumeRate: 6,
       sleepAfterMinutes: 60,
-      sleepUnderPressureMinutes: 5,
+      sleepUnderPressureMinutes: 15,
       machineConcurrent: 'auto',
       agentSkills: true,
       skillNavigator: true,
@@ -87,7 +87,7 @@ describe('loadConfig', () => {
       messageRate: 5,
       resumeRate: 6,
       sleepAfterMinutes: 60,
-      sleepUnderPressureMinutes: 5,
+      sleepUnderPressureMinutes: 15,
       machineConcurrent: 'auto',
       agentSkills: true,
       skillNavigator: true,
@@ -118,7 +118,7 @@ describe('loadConfig', () => {
       messageRate: 7,
       resumeRate: 6,
       sleepAfterMinutes: 60,
-      sleepUnderPressureMinutes: 5,
+      sleepUnderPressureMinutes: 15,
       machineConcurrent: 'auto',
       agentSkills: true,
       skillNavigator: true,
@@ -793,9 +793,9 @@ describe('sleepAfterMinutes setting', () => {
 describe('sleepUnderPressureMinutes setting', () => {
   const EXPECTED = 'expected an integer from 1 to 60';
 
-  it('по умолчанию 5; файл и окружение задают порог, окружение запирает ключ', async () => {
-    expect(DEFAULT_CONFIG.sleepUnderPressureMinutes).toBe(5);
-    expect((await loadConfig(file(), {})).config.sleepUnderPressureMinutes).toBe(5);
+  it('по умолчанию 15; файл и окружение задают порог, окружение запирает ключ', async () => {
+    expect(DEFAULT_CONFIG.sleepUnderPressureMinutes).toBe(15);
+    expect((await loadConfig(file(), {})).config.sleepUnderPressureMinutes).toBe(15);
 
     // Путь `settings.set` хоста: parseSetting → saveConfig → loadConfig.
     expect(parseSetting('sleepUnderPressureMinutes', '20')).toEqual({ value: 20 });
@@ -805,8 +805,8 @@ describe('sleepUnderPressureMinutes setting', () => {
     expect(fromFile.warning).toBeNull();
     expect(fromFile.fromEnv).toEqual([]);
 
-    const fromEnv = await loadConfig(file(), { PARLEY_SLEEP_UNDER_PRESSURE_MINUTES: '15' });
-    expect(fromEnv.config.sleepUnderPressureMinutes).toBe(15);
+    const fromEnv = await loadConfig(file(), { PARLEY_SLEEP_UNDER_PRESSURE_MINUTES: '25' });
+    expect(fromEnv.config.sleepUnderPressureMinutes).toBe(25);
     // Ключ пришёл из окружения: файл его не перекроет, хост покажет замок с именем переменной.
     expect(fromEnv.fromEnv).toEqual(['sleepUnderPressureMinutes']);
     expect(fromEnv.warning).toBeNull();
@@ -827,7 +827,7 @@ describe('sleepUnderPressureMinutes setting', () => {
     for (const bad of [0, 61]) {
       await write({ sleepUnderPressureMinutes: bad });
       const fromFile = await loadConfig(file(), {});
-      expect(fromFile.config.sleepUnderPressureMinutes, String(bad)).toBe(5);
+      expect(fromFile.config.sleepUnderPressureMinutes, String(bad)).toBe(15);
       expect(fromFile.warning, String(bad)).toBe(`sleepUnderPressureMinutes: ${EXPECTED}`);
     }
 
@@ -835,7 +835,7 @@ describe('sleepUnderPressureMinutes setting', () => {
     // Пробелы вместо числа — не ноль и не «выключено»: Number('  ') === 0 вне границ.
     for (const bad of ['0', 'abc', '  ']) {
       const fromEnv = await loadConfig(file(), { PARLEY_SLEEP_UNDER_PRESSURE_MINUTES: bad });
-      expect(fromEnv.config.sleepUnderPressureMinutes, JSON.stringify(bad)).toBe(5);
+      expect(fromEnv.config.sleepUnderPressureMinutes, JSON.stringify(bad)).toBe(15);
       expect(fromEnv.warning, JSON.stringify(bad)).toBe(`PARLEY_SLEEP_UNDER_PRESSURE_MINUTES: ${EXPECTED}`);
       expect(fromEnv.fromEnv, JSON.stringify(bad)).toEqual([]);
     }

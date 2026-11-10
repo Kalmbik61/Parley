@@ -188,19 +188,34 @@ describe('reserveAttempt: окно запусков, слоты и повтор'
 describe('reserveAttempt: подъём сессии, которую усыпил хост, идёт вне окон запусков', () => {
   const owner = 'host-A';
   /** Подъём будильником, как его берёт `sessions-service`: с порогом `resumeRate`, исход — `spent`. */
-  const wake = (map: WorkMap, session: string, patch: Partial<ResourceLimits>, at: number) => {
-    const attempt = reserveAttempt(map, { kind: 'resume', actor: 'wake', session, owner, limits: limits(patch), sessionResumeRate: 6, now: at });
+  const wake = (map: WorkMap, session: string, patch: Partial<ResourceLimits>, at: number, rate = 6) => {
+    const attempt = reserveAttempt(map, { kind: 'resume', actor: 'wake', session, owner, limits: limits(patch), sessionResumeRate: rate, now: at });
     settleAttempt(map, attempt.id, owner, 'spent', at);
     return attempt;
   };
 
-  it('усыплённую хостом будильник поднимает сверх resumeRate', () => {
+  it('усыплённую хостом будильник поднимает не чаще resumeRate в час', () => {
     const map = emptyMap();
     const target = addHostSlept(map);
-    // Семь подъёмов за час при пороге шесть: все резервы взяты, у каждой попытки отметка «вне окна».
-    const attempts = Array.from({ length: 7 }, (_, i) => wake(map, target, {}, NOW + i));
-    expect(attempts.map((attempt) => attempt.windowFree)).toEqual(Array(7).fill(true));
-    expect(map.resources?.attempts).toHaveLength(7);
+    // Шесть подъёмов за час при пороге шесть проходят вне окон запусков, у каждой попытки отметка «вне окна».
+    const attempts = Array.from({ length: 6 }, (_, i) => wake(map, target, {}, NOW + i));
+    expect(attempts.map((attempt) => attempt.windowFree)).toEqual(Array(6).fill(true));
+    const refusal = denied(() => wake(map, target, {}, NOW + 10));
+    expect([refusal.code, refusal.scope, refusal.used, refusal.limit]).toEqual(['resume-rate', 'session', 6, 6]);
+    expect(map.resources?.attempts).toHaveLength(6);
+    // Окно скользит: через час подъём снова проходит.
+    expect(wake(map, target, {}, NOW + RESOURCE_WINDOW_MS).windowFree).toBe(true);
+  });
+
+  it('подъёмы после сна хоста и после остановки человеком — один час сессии', () => {
+    const map = emptyMap();
+    const target = addHostSlept(map);
+    for (let i = 0; i < 3; i += 1) wake(map, target, {}, NOW + i);
+    // Человек остановил ту же сессию: отметка сна снята, подъёмы идут по-старому, но час общий.
+    delete map.sessions.find((session) => session.id === target)!.autoSleep;
+    for (let i = 3; i < 6; i += 1) wake(map, target, {}, NOW + i);
+    const refusal = denied(() => wake(map, target, {}, NOW + 10));
+    expect([refusal.code, refusal.scope, refusal.used, refusal.limit]).toEqual(['resume-rate', 'session', 6, 6]);
   });
 
   it('подъёмы после сна не тратят workLaunches и roomLaunches', () => {
@@ -211,7 +226,7 @@ describe('reserveAttempt: подъём сессии, которую усыпил
     const other = addSession(map, { provider: 'claude', label: 'o', task: 't' }).id;
     const room = addRoom(map, { title: 'r', creator: peer, members: [sleeper, peer, fresh, other] }).id;
     // Шестьдесят подъёмов при умолчаниях: окно работы (60) и окно комнаты (20) исчерпали бы их задолго до конца.
-    for (let i = 0; i < 60; i += 1) wake(map, sleeper, {}, NOW + i);
+    for (let i = 0; i < 60; i += 1) wake(map, sleeper, {}, NOW + i, 60);
     const status = resourceStatus(map, limits(), NOW + 100, room);
     expect([status.work.launches.used, status.room?.launches.used]).toEqual([0, 0]);
 

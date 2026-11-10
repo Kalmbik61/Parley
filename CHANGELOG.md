@@ -11,10 +11,14 @@ All notable changes to Parley are documented in this file.
 - Parley's background host no longer dies when a connected program sends a malformed message, when an internal error slips through, or when a log write fails, so running agents keep working; stopping the host now always finishes within 15 seconds and releases its lock.
 - Room titles can no longer carry line breaks or terminal control codes into other agents' terminals; the phone can no longer send shell commands (`!…`) to a session.
 - When a room member hands in its result with `report`, the room lead now gets a letter, and a room lead's result reaches the room owner; the session that created the reporter is told too. The `report` answer names who was told, and the same result repeated within a minute does not wake them again.
+- **An agent is no longer put to sleep in the middle of its turn.** A Claude turn that stayed silent during a long command or tool call counted as finished after 30 seconds, and when memory was tight Parley could stop the agent 5 minutes later, killing the command. Sleep now follows the window: a silent open turn counts as working for up to 15 minutes of silence.
+- The host log no longer reports "invalid transition sleeping → sleeping" when an agent falls asleep.
 
 ### Changed
 
 - An agent can create at most five rooms per hour and can no longer take a session out of a room you set up unless it leads that room.
+- **Idle agents are put to sleep for memory less eagerly.** "Sleep idle agents sooner when the machine is busy" now defaults to 15 minutes (was 5) and applies when memory is critical or a queued launch needs a slot; on a memory warning agents fall asleep after at least 30 minutes. An agent woken by a letter or Resume stays awake at least 15 minutes after its last turn before memory can put it to sleep. A value you set yourself still applies.
+- **Wakes after a Parley sleep count toward "Session wake-ups per hour".** Two agents writing to each other can no longer wake each other without limit: a session put to sleep by Parley is woken by mail at most that many times per hour (6 by default); further mail waits and the window says so.
 
 ## 0.32.0
 
