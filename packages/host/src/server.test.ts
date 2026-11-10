@@ -115,6 +115,73 @@ describe('рукопожатие', () => {
 
     await waitClosed(client.socket, 1000);
   });
+
+  async function badFrameLogLines(home: string): Promise<string[]> {
+    const text = await readFile(hostPaths(home).log, 'utf8');
+    return text.split('\n').filter((line) => line.includes('bad frame from client'));
+  }
+
+  it('битая строка закрывает только это соединение, хост отвечает другим', async () => {
+    const { home, token } = await boot();
+    const broken = connectRaw(hostPaths(home).socket);
+    const healthy = connectRaw(hostPaths(home).socket);
+    await waitConnected(broken.socket);
+    await waitConnected(healthy.socket);
+    await hello(broken, token);
+    await hello(healthy, token);
+
+    broken.socket.write('garbage\n');
+    await waitClosed(broken.socket);
+
+    healthy.send({ id: 400, method: 'host.info', params: {} });
+    expect((await healthy.next()).id).toBe(400);
+    const lines = await badFrameLogLines(home);
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0] as string)).toMatchObject({ level: 'warn', client: 'test', kind: 'bad-json' });
+    expect(await readFile(hostPaths(home).log, 'utf8')).not.toContain('garbage');
+    healthy.close();
+  });
+
+  it('битая строка до hello тоже закрывает соединение', async () => {
+    const { home, token } = await boot();
+    const broken = connectRaw(hostPaths(home).socket);
+    await waitConnected(broken.socket);
+
+    broken.socket.write('garbage\n');
+    await waitClosed(broken.socket);
+
+    const healthy = connectRaw(hostPaths(home).socket);
+    await waitConnected(healthy.socket);
+    await hello(healthy, token);
+    healthy.send({ id: 401, method: 'host.info', params: {} });
+    expect((await healthy.next()).id).toBe(401);
+    const lines = await badFrameLogLines(home);
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0] as string)).toMatchObject({ client: 'before-hello', kind: 'bad-json' });
+    healthy.close();
+  });
+
+  it('валидный кадр и битая строка одним write: кадр не исполняется, соединение закрыто, хост жив', async () => {
+    const { home, token } = await boot();
+    const broken = connectRaw(hostPaths(home).socket);
+    const healthy = connectRaw(hostPaths(home).socket);
+    await waitConnected(broken.socket);
+    await waitConnected(healthy.socket);
+    await hello(broken, token);
+    await hello(healthy, token);
+
+    let received = 0;
+    broken.socket.on('data', () => {
+      received += 1;
+    });
+    broken.socket.write(`${JSON.stringify({ id: 402, method: 'host.info', params: {} })}\ngarbage\n`);
+    await waitClosed(broken.socket);
+    expect(received).toBe(0);
+
+    healthy.send({ id: 403, method: 'host.info', params: {} });
+    expect((await healthy.next()).id).toBe(403);
+    healthy.close();
+  });
 });
 
 describe('методы куска 1.3', () => {
