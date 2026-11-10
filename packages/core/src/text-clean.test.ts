@@ -48,6 +48,15 @@ describe('cleanInline', () => {
     expect(Array.from(cleanInline('я'.repeat(200)))).toHaveLength(80);
   });
 
+  it('управляющий или невидимый знак между пробелами не оставляет двойного пробела', () => {
+    expect(cleanInline('a \x03 b')).toBe('a b');
+    expect(cleanInline('a \u200B b')).toBe('a b');
+    expect(cleanInline('a\x03b')).toBe('ab');
+    for (const input of ['a \x03 b', 'a \u200B b', 'a\x03b']) {
+      expect(cleanInline(cleanInline(input)), JSON.stringify(input)).toBe(cleanInline(input));
+    }
+  });
+
   it('max = Infinity не режет', () => {
     expect(Array.from(cleanInline('я'.repeat(500), Number.POSITIVE_INFINITY))).toHaveLength(500);
   });

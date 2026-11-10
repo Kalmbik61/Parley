@@ -26,10 +26,12 @@ export function stripEscapes(data: string): string {
 
 /** Текст в одну строку для всего, что хост печатает в терминал сам: без управляющих знаков, переводов строк и невидимок. */
 export function cleanInline(text: string, max = 80): string {
+  // Порядок важен: знак вырезается до схлопывания пробелов, иначе от `a \x03 b` остаётся двойной пробел.
   const clean = stripEscapes(text)
-    .replace(/\s+/g, ' ')
+    .replace(/\s/g, ' ')
     .replace(CONTROL, '')
     .replace(INVISIBLE, '')
+    .replace(/ {2,}/g, ' ')
     .trim();
   return Array.from(clean).slice(0, max).join('').trim();
 }
