@@ -33,6 +33,8 @@ let project = '';
 let workId = '';
 let listeners: Array<() => void> = [];
 let stoppers: Array<() => Promise<void>> = [];
+/** Запущенные в тесте службы: `emit` ждёт конца их сверки, а не фиксированные 80 мс. */
+let booted: SwarmsService[] = [];
 let notices: Array<{ event: EventName; data: EventData<EventName> }> = [];
 let closeCalls: string[] = [];
 let logErrors: string[] = [];
@@ -45,6 +47,7 @@ beforeEach(async () => {
   process.env['PARLEY_HOME'] = home;
   listeners = [];
   stoppers = [];
+  booted = [];
   notices = [];
   closeCalls = [];
   logErrors = [];
@@ -118,6 +121,8 @@ const fakeAutoSleep = {
 
 async function emit(): Promise<void> {
   for (const listener of listeners) listener();
+  // Сверка идёт на настоящем диске, и на загруженной машине 80 мс не хватает: ждём сам проход (идущий или новый).
+  await Promise.all(booted.map((service) => service.reconcile()));
   await quiet();
 }
 
@@ -125,6 +130,7 @@ function boot(options: SwarmsServiceOptions = { limits: async () => ({ swarmMinu
   const service = createSwarmsService(fakeHost(), fakeWorks, fakeSessions, options, fakeAutoSleep);
   service.start();
   stoppers.push(() => service.stop());
+  booted.push(service);
   return service;
 }
 
