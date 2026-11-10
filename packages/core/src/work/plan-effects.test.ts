@@ -249,7 +249,7 @@ describe("durable accepted-plan delivery", () => {
     expect(reservePlanEffects(map, lt(map), 20, AT).changed).toBe(true);
     expect(map.messages.filter((row) => row.from === PARLEY)).toHaveLength(2);
   });
-  it("blocks a closed owner awaiting verification, preserves evidence, and cancels verifier wake", () => {
+  it("a submitted item stays verifiable when its owner closes", () => {
     const map = fixture();
     submitPlanItem(
       map,
@@ -265,13 +265,13 @@ describe("durable accepted-plan delivery", () => {
     const verify = map.messages.find((row) => row.from === PARLEY)!;
     transitionSession(map, "s-02", "closed", { at: AT });
     reservePlanEffects(map, lt(map), 20, AT);
-    expect(map.plans![0]!.items[0]!.status).toBe("blocked");
+    expect(map.plans![0]!.items[0]!.status).toBe("done");
     expect(map.plans![0]!.items[0]!.evidence!.text).toBe("Measured");
-    expect(resumablePlanLetter(map, verify, "s-03", lookupIn(map))).toBe(false);
-    expect(cancelledPlanLetter(map, verify, lookupIn(map))).toBe(true);
-    expect(map.planEffects!.find((row) => row.kind === "blocked")!.target).toBe(
-      "s-01",
-    );
+    expect(resumablePlanLetter(map, verify, "s-03", lookupIn(map))).toBe(true);
+    expect(cancelledPlanLetter(map, verify, lookupIn(map))).toBe(false);
+    expect(map.planEffects!.some((row) => row.kind === "blocked")).toBe(false);
+    verifyPlanItem(map, lt(map), "pl-01", 0, 1, "s-03", "verified", "Checked", AT);
+    expect(map.plans![0]!.items[0]!.status).toBe("verified");
   });
   it("keeps genuinely verified and completed Checklist results when their owners close", () => {
     for (const mode of ["checklist", "verified"] as const) {
@@ -665,7 +665,7 @@ it("flushes a real temp Markdown file only after captured map completion, withou
   }
 });
 
-it("owned obsolete verification is hidden immediately when an unsatisfied owner closes, before persistence reconciliation", () => {
+it("a submitted item keeps its verification letter current when its owner closes, before persistence reconciliation", () => {
   const map = fixture();
   submitPlanItem(
     map,
@@ -683,11 +683,11 @@ it("owned obsolete verification is hidden immediately when an unsatisfied owner 
   expect(resumablePlanLetter(map, message, proof.target, lookupIn(map))).toBe(true);
   transitionSession(map, "s-02", "closed", { at: AT });
   expect(proof.status).toBe("sent");
-  expect(resumablePlanLetter(map, message, proof.target, lookupIn(map))).toBe(false);
-  expect(cancelledPlanLetter(map, message, lookupIn(map))).toBe(true);
+  expect(resumablePlanLetter(map, message, proof.target, lookupIn(map))).toBe(true);
+  expect(cancelledPlanLetter(map, message, lookupIn(map))).toBe(false);
   expect(
     unreadFor(map, proof.target).some((row) => row.id === message.id),
-  ).toBe(false);
+  ).toBe(true);
 });
 it("closed work never reserves or resumes a plan assignment, but retains captured export intents", () => {
   const map = fixture();

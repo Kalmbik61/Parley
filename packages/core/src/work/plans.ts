@@ -949,6 +949,7 @@ export function setRoomMode(
     return written;
   }, letters);
 }
+const OWNER_CLOSED_NOTE = "Owner is closed or deleted.";
 /** P23 consumes transitions for delivery; closed owners never retain an actionable assignment. */
 export function reconcileRoomPlans(
   map: WorkMap,
@@ -966,13 +967,25 @@ export function reconcileRoomPlans(
         capturePlanSnapshot(draft, plan, "cancelled");
         continue;
       }
-      for (const item of plan.items)
-        if (
-          !liveOwner(draft, room, item.owner, plan.mode) &&
-          item.status !== "blocked" &&
-          !planItemSatisfied(plan, item)
-        )
-          log(item, "system", "blocked", "Owner is closed or deleted.", at);
+      for (const item of plan.items) {
+        if (liveOwner(draft, room, item.owner, plan.mode)) continue;
+        // Сданный пункт ждёт проверяющего: закрытие исполнителя его не блокирует.
+        if (item.status === "done") continue;
+        if (item.status === "blocked") {
+          // Пункт, который 0.32.0 заблокировал при ожидании проверки, возвращается в `done` с прежними уликами.
+          const last = item.log[item.log.length - 1];
+          if (
+            last?.by === "system" &&
+            last.status === "blocked" &&
+            last.note === OWNER_CLOSED_NOTE &&
+            item.log[item.log.length - 2]?.status === "done"
+          )
+            log(item, "system", "done", null, at);
+          continue;
+        }
+        if (!planItemSatisfied(plan, item))
+          log(item, "system", "blocked", OWNER_CLOSED_NOTE, at);
+      }
     }
   });
 }

@@ -94,7 +94,8 @@ function itemEffect(
   if (
     !planItemSatisfied(plan, item) &&
     !actionable(map, room, item.owner) &&
-    item.status !== "blocked"
+    item.status !== "blocked" &&
+    item.status !== "done"
   )
     return null;
   const header = `Accepted plan ${plan.id}, revision ${plan.rev}, item ${item.id}: ${item.title}`;

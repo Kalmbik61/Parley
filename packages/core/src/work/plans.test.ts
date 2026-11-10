@@ -633,6 +633,61 @@ describe("room plan state and permissions", () => {
     reconcileRoomPlans(map, AT);
     expect(map.plans![0]!.status).toBe("cancelled");
   });
+  it("a submitted item stays done when its owner closes", () => {
+    const map = fixture("verified");
+    const plan = accept(map);
+    submitPlanItem(map, lt(map), plan.id, 0, 1, "s-02", evidence, AT);
+    const before = JSON.stringify(map.plans![0]!.items[0]);
+    transitionSession(map, "s-02", "closed", { at: AT });
+    reconcileRoomPlans(map, AT);
+    expect(JSON.stringify(map.plans![0]!.items[0])).toBe(before);
+    expect(map.plans![0]!.items[0]!.status).toBe("done");
+    verifyPlanItem(map, lt(map), plan.id, 0, 1, "s-03", "verified", "Checked", AT);
+    expect(map.plans![0]!.items[0]!.status).toBe("verified");
+  });
+  it("returned work of a closed owner is still blocked", () => {
+    const map = fixture("verified");
+    const plan = accept(map);
+    submitPlanItem(map, lt(map), plan.id, 0, 1, "s-02", evidence, AT);
+    verifyPlanItem(map, lt(map), plan.id, 0, 1, "s-03", "returned", "Fix it", AT);
+    expect(map.plans![0]!.items[0]!.status).toBe("returned");
+    transitionSession(map, "s-02", "closed", { at: AT });
+    reconcileRoomPlans(map, AT);
+    const item = map.plans![0]!.items[0]!;
+    expect(item.status).toBe("blocked");
+    expect(item.note).toBe("Owner is closed or deleted.");
+    expect(item.log.at(-1)).toEqual({
+      by: "system",
+      status: "blocked",
+      note: "Owner is closed or deleted.",
+      at: AT,
+    });
+  });
+  it("a 0.32.0 item blocked while awaiting verification returns to done, once", () => {
+    const map = fixture("verified");
+    const plan = accept(map);
+    submitPlanItem(map, lt(map), plan.id, 0, 1, "s-02", evidence, AT);
+    transitionSession(map, "s-02", "closed", { at: AT });
+    const stored = map.plans![0]!.items[0]!;
+    // Состояние, которое оставила сверка 0.32.0.
+    stored.status = "blocked";
+    stored.note = "Owner is closed or deleted.";
+    stored.log.push({
+      by: "system",
+      status: "blocked",
+      note: "Owner is closed or deleted.",
+      at: AT,
+    });
+    reconcileRoomPlans(map, AT);
+    const item = map.plans![0]!.items[0]!;
+    expect(item.status).toBe("done");
+    expect(item.note).toBeNull();
+    expect(item.evidence).toEqual(evidence);
+    expect(item.log.at(-1)).toEqual({ by: "system", status: "done", note: null, at: AT });
+    const repaired = JSON.stringify(map);
+    reconcileRoomPlans(map, AT);
+    expect(JSON.stringify(map)).toBe(repaired);
+  });
   it("Human Free transition requires cancellation confirmation and captures cancellation once", () => {
     const map = fixture();
     const plan = accept(map);
