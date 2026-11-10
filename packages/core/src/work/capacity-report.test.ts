@@ -243,7 +243,7 @@ describe('capacityReport', () => {
     expect(report(map, ids[0]!, null).swarm).toMatchObject({ live: '3/8', members: '4/16' });
   });
 
-  it('you: подсессии по createdBy, закрытые не в счёт; wakesHour считает только подъёмы письмом за час без windowFree', () => {
+  it('you: подсессии по createdBy, закрытые не в счёт; wakesHour считает подъёмы письмом за час, в том числе с windowFree', () => {
     const map = emptyMap();
     const me = addActive(map);
     const other = addActive(map);
@@ -273,7 +273,7 @@ describe('capacityReport', () => {
       children: { running: 2, asleep: 1, queued: 1 },
       subagents: 2,
       background: {},
-      wakesHour: '2/6',
+      wakesHour: '3/6',
       keepAwake: true,
     });
   });

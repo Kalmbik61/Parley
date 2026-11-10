@@ -111,11 +111,11 @@ function childrenOf(map: WindowWorkMap, sessionId: string): { running: number; a
   return children;
 }
 
-/** Подъёмы сессии письмом за час: тот же отбор, что у окна запусков в бюджете (без `windowFree` и отменённых). */
+/** Подъёмы сессии письмом за час: тот же отбор, что у частоты `resumeRate` в бюджете (с `windowFree`, без отменённых). */
 function wakesInHour(map: WindowWorkMap, sessionId: string, now: number): number {
   return (map.resources?.attempts ?? []).filter(
     (attempt) =>
-      attempt.actor === 'wake' && attempt.session === sessionId && attempt.kind !== 'spawn' && attempt.windowFree !== true &&
+      attempt.actor === 'wake' && attempt.session === sessionId && attempt.kind !== 'spawn' &&
       attempt.state !== 'released' && now - Date.parse(attempt.at) < RESOURCE_WINDOW_MS,
   ).length;
 }
