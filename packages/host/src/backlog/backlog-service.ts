@@ -1,5 +1,6 @@
 import { watch } from 'node:fs';
 import { lstat } from 'node:fs/promises';
+import path from 'node:path';
 import { sharedProjectPaths } from '@parley/core';
 import type { BacklogChanged, BacklogSnapshot } from '@parley/protocol';
 import { HostError } from '../errors.js';
@@ -12,10 +13,13 @@ interface Entry {
   key: string; projectPath: string; dir: string; root: WatchHandle; directory: WatchHandle | null;
   directoryIdentity: string | null; subscribers: Map<string, Subscriber>; timer: ReturnType<typeof setTimeout> | null;
   arming: Promise<void> | null; rootIdentity: string; reading: boolean; dirty: boolean; closed: boolean; version: string;
+  lastReadAt: number; fallback: ReturnType<typeof setTimeout> | null;
 }
 export interface BacklogServiceOptions {
   debounceMs?: number;
-  watchDirectory?: (directory: string, changed: () => void) => WatchHandle;
+  /** Минимум между началами двух чтений снимка; по умолчанию 1000. */
+  minIntervalMs?: number;
+  watchDirectory?: (directory: string, changed: (filename?: string | null) => void) => WatchHandle;
   snapshot?: typeof readBacklogSnapshot;
 }
 export interface BacklogService {
@@ -28,12 +32,24 @@ const unavailable = (): HostError => new HostError('internal', 'Live backlog upd
 /** `file` is part of the fingerprint: a new file choice or a new TODOS.md changes the snapshot while the backlog version stays. */
 const fingerprint = (snapshot: BacklogSnapshot): string => JSON.stringify({ version: snapshot.version, boardVersion: snapshot.boardVersion, file: snapshot.file, suggestions: snapshot.suggestions, rule: snapshot.rule, diagnostics: snapshot.diagnostics });
 
+/** Страховочный повтор после событий корня с посторонним именем: единственное чтение, а не поток. */
+const IGNORED_EVENT_FALLBACK_MS = 30_000;
+/**
+ * Имена событий корня, от которых может измениться снимок: каталог состояния (свой, а также `.parley`/`.harnas` на случай переноса), файл дел человека (`TODOS.md`/`TODO.md`
+ * в любом регистре; имя временного файла редактора, содержащее его, тоже годится), `.git` (git init, смена контекста)
+ * и `.gitignore` (диагностика игнорирования). Событие без имени значимо всегда.
+ */
+const relevantRootName = (name: string, stateName: string): boolean =>
+  name === stateName || name === '.parley' || name === '.harnas' || name === '.git' || name === '.gitignore' || /todos?\.md/i.test(name);
+
 /** Watches only proven project/state directories. OS event names are hints, never trusted paths or data. */
 export function createBacklogService(options: BacklogServiceOptions = {}): BacklogService {
-  const watchDirectory = options.watchDirectory ?? ((directory, changed) => watch(directory, { persistent: false }, changed));
+  const watchDirectory = options.watchDirectory ?? ((directory, changed) => watch(directory, { persistent: false }, (_event, filename) => changed(filename === null || filename === undefined ? null : String(filename))));
   const snapshot = options.snapshot ?? readBacklogSnapshot;
   const debounceMs = options.debounceMs ?? 100;
   if (!Number.isFinite(debounceMs) || debounceMs < 0 || debounceMs > 1000) throw unavailable();
+  const minIntervalMs = options.minIntervalMs ?? 1000;
+  if (!Number.isFinite(minIntervalMs) || minIntervalMs < 0 || minIntervalMs > 10_000) throw unavailable();
   const entries = new Map<string, Entry>();
   const subscribers = new Map<string, Entry>();
   const pending = new Map<string, Subscriber>();
@@ -43,6 +59,7 @@ export function createBacklogService(options: BacklogServiceOptions = {}): Backl
     if (entry.closed) return;
     entry.closed = true;
     if (entry.timer !== null) clearTimeout(entry.timer);
+    if (entry.fallback !== null) clearTimeout(entry.fallback);
     entry.root.close(); entry.directory?.close(); entries.delete(entry.key);
     for (const key of entry.subscribers.keys()) subscribers.delete(key);
     entry.subscribers.clear();
@@ -63,7 +80,9 @@ export function createBacklogService(options: BacklogServiceOptions = {}): Backl
     if (entry.closed || closed) return;
     entry.dirty = true;
     if (entry.timer !== null || entry.reading) return;
-    entry.timer = setTimeout(() => { entry.timer = null; void refresh(entry); }, debounceMs);
+    // Повтор откладывается, но не теряется: пока идёт чтение или таймер, новые события лишь ставят `dirty`.
+    const wait = Math.max(debounceMs, entry.lastReadAt + minIntervalMs - Date.now());
+    entry.timer = setTimeout(() => { entry.timer = null; void refresh(entry); }, wait);
     entry.timer.unref?.();
   };
   const arm = async (entry: Entry): Promise<void> => {
@@ -91,7 +110,7 @@ export function createBacklogService(options: BacklogServiceOptions = {}): Backl
   };
   const refresh = async (entry: Entry): Promise<void> => {
     if (entry.closed || closed) return;
-    entry.reading = true; entry.dirty = false;
+    entry.reading = true; entry.dirty = false; entry.lastReadAt = Date.now();
     try {
       await arm(entry);
       const current = await snapshot(entry.projectPath);
@@ -122,10 +141,20 @@ export function createBacklogService(options: BacklogServiceOptions = {}): Backl
           if (!entry) {
             if (closed || pending.get(key) !== token || entries.size >= 32) throw unavailable();
             let root: WatchHandle;
-            try { root = watchDirectory(paths.context.projectPath, () => { if (entry) schedule(entry); }); }
-            catch { throw unavailable(); }
+            const stateName = path.basename(paths.dir);
+            try {
+              root = watchDirectory(paths.context.projectPath, filename => {
+                if (!entry) return;
+                if (filename === null || filename === undefined || relevantRootName(filename, stateName)) { schedule(entry); return; }
+                // Постороннее имя читать не нужно; если платформа назвала событие иначе, чем мы ждём, один повтор через 30 с его подберёт.
+                if (entry.fallback !== null || entry.closed) return;
+                const target = entry;
+                target.fallback = setTimeout(() => { target.fallback = null; schedule(target); }, IGNORED_EVENT_FALLBACK_MS);
+                target.fallback.unref?.();
+              });
+            } catch { throw unavailable(); }
             entry = { key: paths.context.projectPath, projectPath: paths.context.projectPath, dir: paths.dir, root, directory: null, directoryIdentity: null,
-              subscribers: new Map(), timer: null, arming: null, rootIdentity: `${rootInfo.dev}:${rootInfo.ino}`, reading: false, dirty: false, closed: false, version: '' };
+              subscribers: new Map(), timer: null, arming: null, rootIdentity: `${rootInfo.dev}:${rootInfo.ino}`, reading: false, dirty: false, closed: false, version: '', lastReadAt: Date.now(), fallback: null };
             entries.set(entry.key, entry); root.on('error', () => { if (entry) fail(entry); });
           }
         }
