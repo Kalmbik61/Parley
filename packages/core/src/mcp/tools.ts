@@ -1438,6 +1438,21 @@ function assertNotSwarmMember(map: WorkMap, sessionId: string): void {
   if (swarmOfSession(map, sessionId) !== null) throw new Error(`swarm-member: ${sessionId} is a member of a swarm and cannot join a room.`);
 }
 
+/** Сколько комнат одна сессия может завести за скользящий час (`RESOURCE_WINDOW_MS`). */
+const ROOMS_PER_HOUR = 5;
+
+/**
+ * Сессию из открытой комнаты, которую завёл человек, уводит только человек или живой ведущий этой комнаты.
+ * `exceptRoomId` — комната, куда сессию зовут: её саму отказом не считаем.
+ */
+function assertNotInHumanRoom(map: WorkMap, caller: string, memberId: string, exceptRoomId: string | null): void {
+  const room = map.rooms.find((row) => row.creator === HUMAN && !isRoomArchived(row) && isMember(row, memberId)
+    && row.id !== exceptRoomId && liveLead(map, row) !== caller);
+  if (room !== undefined) {
+    throw new Error(`session ${memberId} works in room ${room.id}, which the human set up: only the human or that room's lead can move it`);
+  }
+}
+
 async function createRoom(
   context: McpContext,
   sessionId: string,
@@ -1452,6 +1467,11 @@ async function createRoom(
   let roomId = '';
   await updateMap(context.projectPath, context.workId, (current, letters) => {
     requireSession(current, sessionId);
+    const since = Date.now() - RESOURCE_WINDOW_MS;
+    const recent = current.rooms.filter((row) => row.creator === sessionId && Date.parse(row.createdAt) > since).length;
+    if (recent >= ROOMS_PER_HOUR) {
+      throw new Error(`too many rooms: ${recent} created by this session in the last hour (limit ${ROOMS_PER_HOUR}); reuse a room with add_to_room or ask the human`);
+    }
     const members = [...new Set(membersInput)];
     const invited = members.filter((id) => id !== sessionId);
     for (const memberId of members) {
@@ -1460,6 +1480,7 @@ async function createRoom(
         throw new Error(`session ${memberId} is closed: it cannot be added to the room`);
       }
       assertNotSwarmMember(current, memberId);
+      assertNotInHumanRoom(current, sessionId, memberId, null);
     }
     // Приглашение — письмо от создателя каждому участнику: оно расходует тот же бюджет писем, что и `send_message`,
     // иначе исчерпанный лимит обходился бы созданием комнаты.
@@ -1502,6 +1523,7 @@ async function addToRoom(
     // (`from: system`, адресат — человек), она никого не будит, не рассылается и в бюджет писем не входит. Письма
     // приглашённому здесь нет, в отличие от `create_room`; разговорная квота управление комнатой не блокирует.
     assertNotSwarmMember(current, target);
+    assertNotInHumanRoom(current, sessionId, target, roomId);
     messageId = addMemberByLead(current, letters, roomId, sessionId, target).id;
   });
   return { messageId };
