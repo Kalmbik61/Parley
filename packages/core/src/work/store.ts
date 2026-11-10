@@ -331,6 +331,9 @@ export const DELETE_ENTRY =
   'DELETE FROM entries WHERE project_path = ? AND work_id = ? AND kind = ? AND key = ?';
 const INSERT_WORK = `INSERT INTO works (project_path, id, title, status, updated_at, version, work_json, extra_json)
   VALUES (?, ?, ?, ?, ?, ?, ?, ?)`;
+/** Запись только писем: от них зависят `updated_at` и `work_json` (`updatedAt`, `messageSeq`); название, статус и `extra` те же. */
+const UPDATE_WORK_HEAD = `UPDATE works SET updated_at = ?, work_json = ?, version = version + 1
+  WHERE project_path = ? AND id = ? RETURNING version`;
 const UPDATE_WORK = `UPDATE works SET title = ?, status = ?, updated_at = ?, work_json = ?, extra_json = ?,
   version = version + 1 WHERE project_path = ? AND id = ? RETURNING version`;
 
@@ -428,6 +431,12 @@ interface CachedMap {
   work: string;
   extra: string;
   index: ReadonlyMap<string, StoredRow>;
+  /**
+   * `true` — `work`, `extra` и `index` записи равны тому, что дал бы `mapToRows(map)`: запись положила кэш после своей записи,
+   * строки в базе — ровно эти. У записи, разобранной из базы (`loadMap`), признака нет: `normalizeMap` мог перевести старую
+   * карту в другой вид, и общая запись должна сперва записать его. Запись только писем идёт по кэшу лишь при признаке.
+   */
+  clean?: true;
 }
 
 const mapCache = new Map<string, CachedMap>();
@@ -992,6 +1001,12 @@ interface ApplyMapOptions extends UpdateMapOptions {
    * разбираются (спека хранилища 6.9, план 4, задача 5).
    */
   keepResult?: boolean;
+  /**
+   * `true` (`writeLetters`) — мутатор пишет только письма и карту не меняет, кроме `work.messageSeq` через `LetterTx`. При
+   * попадании в кэш с признаком `clean` запись не зовёт `normalizeMap`, `mapToRows`, `rowsToMap` и `isPlainJsonTree` и
+   * пишет письма и одну строку `works`. Без попадания или без признака идёт общий путь.
+   */
+  lettersOnly?: boolean;
 }
 
 /**
@@ -1022,7 +1037,7 @@ export function applyMapUpdate(
   projectPath: string,
   workId: string,
   mutate: (map: WorkMap, letters: LetterTx) => void,
-  { lockTimeoutMs = DEFAULT_LOCK_TIMEOUT_MS, touch = true, keepResult = false }: ApplyMapOptions = {},
+  { lockTimeoutMs = DEFAULT_LOCK_TIMEOUT_MS, touch = true, keepResult = false, lettersOnly = false }: ApplyMapOptions = {},
 ): MapUpdate {
   const db = storeDb();
   const key = cacheKey(projectPath, workId);
@@ -1035,10 +1050,40 @@ export function applyMapUpdate(
       mapCache.delete(key);
       throw notFound(projectPath, workId);
     }
+    const hit = cachedEntry(key, stored, identity!.incarnation);
+    // Быстрый путь писем (`lettersOnly`): карта из кэша без `normalizeMap`, `mapToRows` и `isPlainJsonTree`. Закрыть сессию и
+    // изменить строки списков мутатор писем не может (карту он только читает), поэтому не нужны ни `dropReaderCandidates`, ни
+    // дифф строк; от писем меняются лишь `work.updatedAt` и `work.messageSeq` (`LetterTx.deleteRoom`).
+    if (lettersOnly && hit !== undefined && hit.clean === true) {
+      mapCache.delete(key);
+      const { letters, wrote, journal } = createTableLetterTx(db, projectPath, workId, hit.map);
+      mutate(hit.map, letters);
+      if (!wrote()) {
+        // Карта в кэше: мутатор писем её не менял (откат `savepoint` возвращает `messageSeq`).
+        rememberMap(key, hit);
+        return { empty: true as const, current: hit.map, shared: true };
+      }
+      // До `touch`: сдвиг `updatedAt` запись структурной не делает, как и в общем пути.
+      const structural = JSON.stringify(hit.map.work) !== hit.work;
+      if (touch) hit.map.work.updatedAt = new Date().toISOString();
+      const work = JSON.stringify(hit.map.work);
+      const updated = sql(db, UPDATE_WORK_HEAD).get(hit.map.work.updatedAt, work, projectPath, workId);
+      return {
+        empty: false as const,
+        current: hit.map,
+        fast: true as const,
+        work,
+        entry: hit,
+        version: Number(updated?.['version']),
+        incarnation: identity!.incarnation,
+        prevVersion: stored,
+        structural,
+        journal: journal(),
+      };
+    }
     // Карта из кэша процесса — без загрузки и без копии: запись из кэша снимается, после записи ниже кэш получит новую.
     let current: WorkMap;
     let previous: { work: string; extra: string; index: ReadonlyMap<string, StoredRow> };
-    const hit = cachedEntry(key, stored, identity!.incarnation);
     if (hit !== undefined) {
       mapCache.delete(key);
       current = hit.map;
@@ -1098,6 +1143,7 @@ export function applyMapUpdate(
     );
     return {
       empty: false as const,
+      fast: false as const,
       current,
       next,
       version: Number(updated?.['version']),
@@ -1108,6 +1154,21 @@ export function applyMapUpdate(
     };
   });
   if (written.empty) return { map: written.current, shared: written.shared };
+
+  if (written.fast) {
+    // Карта и строки те же, что были, — новы только версия и текст работы.
+    rememberMap(key, { ...written.entry, version: written.version, work: written.work });
+    emitMapWritten({
+      projectPath,
+      workId,
+      version: written.version,
+      incarnation: written.incarnation,
+      prevVersion: written.prevVersion,
+      structural: written.structural,
+      journal: written.journal,
+    });
+    return { map: written.current, shared: true };
+  }
 
   // В кэш — после коммита (спека хранилища 6.9): карта, структурно равная свежему разбору записанных строк, иначе писавший
   // процесс читал бы карту иначе, чем любой другой. Не вышло — запись снимаем и молчим: карта уже записана, ошибка заставила бы
@@ -1127,6 +1188,7 @@ export function applyMapUpdate(
       work: written.next.work,
       extra: written.next.extra,
       index: rowIndex(written.next.rows),
+      clean: true,
     });
     shared = own;
   } catch {

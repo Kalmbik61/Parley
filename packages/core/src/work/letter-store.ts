@@ -32,6 +32,7 @@ import {
 } from './letter-tables.js';
 import { recipientsOf, unreadFor, unreadForHuman } from './letters.js';
 import { addMessage, maxNumber } from './map.js';
+import { deepFreeze, freezeMaps } from './works.js';
 import { applyMapUpdate, letterDb, readMapView, readTransaction, storeDb, type UpdateMapOptions } from './store.js';
 import { HUMAN, type Message, type MessageKind, type MessageVia, type WindowWorkMap, type WorkMap } from './types.js';
 
@@ -336,7 +337,8 @@ export function mapLetterTx(map: WindowWorkMap): { letters: LetterTx; wrote: () 
  * чтения (правила и комнаты). Ничего не записала — версия работы, `updatedAt` и подписчики `onMapWritten` не
  * шевелятся. `touch: false` — `updatedAt` не сдвигается, когда запись всё же была.
  *
- * `fn` не должна возвращать части `map` (саму карту, комнаты, сессии): при пустой записи карта — тот же объект, что лежит
+ * Правки `map` из `fn` не записываются: запись писем не пересобирает карту (`lettersOnly`); меняющим карту нужен
+ * `updateMap`. `fn` не должна возвращать части `map` (саму карту, комнаты, сессии): при пустой записи карта — тот же объект, что лежит
  * в кэше карт, и результат, который вызывающий потом изменит, испортил бы кэш. Письма из `letters` — свои копии.
  */
 export function writeLetters<T>(
@@ -347,8 +349,10 @@ export function writeLetters<T>(
 ): T {
   let result: T | undefined;
   applyMapUpdate(projectPath, workId, (map, letters) => {
-    result = fn(letters, map);
-  }, options);
+    // В тестах `fn` видит замороженную копию: правка карты из неё не записывается (быстрый путь её не увидит) и должна
+    // быть `TypeError`, а не тихой потерей. `LetterTx` работает с настоящей картой — `deleteRoom` двигает `messageSeq`.
+    result = fn(letters, freezeMaps ? deepFreeze(structuredClone(map)) : map);
+  }, { ...options, lettersOnly: true });
   return result as T;
 }
 
