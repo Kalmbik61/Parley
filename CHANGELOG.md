@@ -9,6 +9,7 @@ All notable changes to Parley are documented in this file.
 ### Fixed
 
 - Room titles can no longer carry line breaks or terminal control codes into other agents' terminals; the phone can no longer send shell commands (`!…`) to a session.
+- Parley's background host no longer dies when a connected program sends a malformed message, when an internal error slips through, or when a log write fails, so running agents keep working; stopping the host now always finishes within 15 seconds and releases its lock.
 
 ## 0.32.0
 

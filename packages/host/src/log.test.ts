@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createLog } from './log.js';
@@ -57,5 +57,25 @@ describe('createLog', () => {
     expect(text).not.toContain(token);
     expect(text).not.toContain('AAAAAAAAAAAAAAAA');
     expect(JSON.parse(text.trim())).toMatchObject({ count: 3, url: 'https://api.telegram.org/bot<redacted>/getMe' });
+  });
+
+  it('не бросает, когда каталог журнала не существует', () => {
+    const log = createLog(path.join(dir, 'нет-такого', 'host.log'));
+    expect(() => {
+      log.info('старт');
+      log.warn('осторожно');
+      log.error('упало', { code: 'internal' });
+    }).not.toThrow();
+  });
+
+  it('не бросает, когда место файла журнала занято каталогом', async () => {
+    const file = path.join(dir, 'host.log');
+    await mkdir(file);
+    const log = createLog(file);
+    expect(() => {
+      log.info('старт');
+      log.warn('осторожно');
+      log.error('упало', { code: 'internal' });
+    }).not.toThrow();
   });
 });
