@@ -36,7 +36,7 @@ export const CODEX_TOOL_EXAMPLES = [
   'Parley tools in Codex code mode are called as tools.mcp__parley__<name>(args). Examples:',
   '  const map = await tools.mcp__parley__get_map({});',
   '  await tools.mcp__parley__send_message({ to: "s-02", kind: "question", text: "Which branch do I build on?" });',
-  '  const inbox = await tools.mcp__parley__check_inbox({});                 // once per "New messages (N)" pointer',
+  '  const inbox = await tools.mcp__parley__check_inbox({});                 // per pointer; again while remaining',
   '  await tools.mcp__parley__wait_for({ target: "inbox", timeoutSec: 1500 }); // returns and marks messages read; on running repeat once',
   '  await tools.mcp__parley__report({ status: "done", summary: "What was done, what was found, what is left." });',
   'Call report at the end (status failed if the task is not done): it notifies your room lead, room owner or task giver, so no separate "done" message is needed. Then stop: end the turn, do not poll get_map or check_inbox, do not start unrelated work. New messages reach you as the pointer after your turn.',

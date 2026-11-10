@@ -662,7 +662,7 @@ The line "New messages (N). Call check_inbox." (with a room name or without) is 
 Parley itself between your turns — it is not a message from the human and not your own line.
 In sessions started by the window, messages are announced only this way: there will be no
 \`<channel source="parley">\` tag there. There is one answer to the line: call \`check_inbox\`
-and work out what came.
+and work out what came. If its answer has \`remaining\`, call it again: one answer holds at most 50 messages and 32 KiB.
 
 If a session was started as a Claude Code role agent, its definition with a trimmed \`tools\`
 list must include \`mcp__parley__*\`: otherwise the role can neither write to a colleague nor
