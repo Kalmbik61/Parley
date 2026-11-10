@@ -6,7 +6,7 @@
  * каталогах.
  */
 
-import { mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rename, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -28,6 +28,8 @@ let codexRoot = '';
 let now = T0;
 let broadcasts: Array<{ event: EventName; data: unknown }> = [];
 let services: LimitsService[] = [];
+/** Своя метка mtime каталога после каждой записи: на грубых файловых системах две записи подряд дали бы одну. */
+let dirStamp = 0;
 
 /** Минимальный `HostContext`: сервису нужны только `log` и `broadcast`. */
 const fakeHost = (): HostContext => ({
@@ -97,10 +99,12 @@ async function putLimits(
   }
   const dir = workPaths(project, map.work.id).limits;
   await mkdir(dir, { recursive: true });
-  await writeFile(
-    path.join(dir, `${sessionId}.json`),
-    JSON.stringify({ at: new Date(at).toISOString(), rateLimits }),
-  );
+  // Как скрипт строки статуса: во временный файл и `rename` — хост узнаёт о записи по mtime каталога.
+  const tmp = path.join(dir, `${sessionId}.json.tmp`);
+  await writeFile(tmp, JSON.stringify({ at: new Date(at).toISOString(), rateLimits }));
+  await rename(tmp, path.join(dir, `${sessionId}.json`));
+  dirStamp += 10;
+  await utimes(dir, 1_700_000_000 + dirStamp, 1_700_000_000 + dirStamp);
 }
 
 /** Сервис на подменённых часах и таймере; снимок работ — те карты, что передал тест. */
@@ -476,10 +480,65 @@ describe('Codex: по логу', () => {
     expect(limits.get('claude')?.fiveHour?.usedPercent).toBe(58);
   });
 
+  it('живые логи из liveCodexLogs: файл из старого каталога дня даёт лимиты Codex', async () => {
+    await rollout(T0 - 30_000, 22, 7);
+    for (const day of ['27', '28']) {
+      const dir = path.join(codexRoot, '2026', '09', day);
+      await mkdir(dir, { recursive: true });
+      await writeFile(path.join(dir, `rollout-2026-09-${day}T10-00-00-019a0000-0000-7000-8000-0000000000${day}.jsonl`), '{}\n');
+    }
+    const oldDir = path.join(codexRoot, '2026', '08', '01');
+    await mkdir(oldDir, { recursive: true });
+    const live = path.join(oldDir, 'rollout-2026-08-01T10-00-00-019a0000-0000-7000-8000-000000000099.jsonl');
+    await writeFile(
+      live,
+      `${JSON.stringify({
+        timestamp: new Date(T0 - 10_000).toISOString(),
+        type: 'event_msg',
+        payload: {
+          type: 'token_count',
+          info: null,
+          rate_limits: { primary: { used_percent: 91, window_minutes: 300, resets_at: sec(T0) + 3600 } },
+        },
+      })}\n`,
+    );
+    await utimes(live, new Date(T0 - 10_000), new Date(T0 - 10_000));
+
+    const { limits } = service([], { liveCodexLogs: () => [live] });
+    await limits.start();
+    expect(limits.get('codex')?.fiveHour?.usedPercent).toBe(91);
+
+    const without = service([]);
+    await without.limits.start();
+    expect(without.limits.get('codex')?.fiveHour?.usedPercent).toBe(22);
+  });
+
   it('лога нет — null, и хост не падает', async () => {
     const { limits } = service([]);
     await limits.start();
     expect(limits.get('codex')).toBeNull();
+  });
+});
+
+describe('файлы лимитов работ: каталог читается, только когда сменился его mtime', () => {
+  it('запись на месте не видна до смены mtime каталога; rename скрипта — видна', async () => {
+    const a = await work(projectA, ['claude']);
+    const id = a.ids[0]!;
+    await putLimits(projectA, a.map, id, T0 - 1000, 10);
+    const { limits } = service([{ project: projectA, map: a.map }]);
+    await limits.start();
+    expect(limits.get('claude')?.fiveHour?.usedPercent).toBe(10);
+
+    const file = path.join(workPaths(projectA, a.map.work.id).limits, `${id}.json`);
+    const dirBefore = (await stat(path.dirname(file))).mtimeMs;
+    await writeFile(file, JSON.stringify({ at: new Date(T0).toISOString(), rateLimits: { five_hour: { used_percentage: 99, resets_at: sec(T0) + 3600 } } }));
+    expect((await stat(path.dirname(file))).mtimeMs).toBe(dirBefore);
+    await limits.refresh();
+    expect(limits.get('claude')?.fiveHour?.usedPercent).toBe(10);
+
+    await putLimits(projectA, a.map, id, T0, 33);
+    await limits.refresh();
+    expect(limits.get('claude')?.fiveHour?.usedPercent).toBe(33);
   });
 });
 
