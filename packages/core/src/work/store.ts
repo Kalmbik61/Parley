@@ -847,25 +847,34 @@ export async function pruneWorksIndex({
   }
   if (gone.length === 0) return gone;
   const removed: WorkIndexEntry[] = [];
+  // Копия — до замка (чтение и запись файла не держат писателей), с версией и номером создания, под которыми она снята.
+  const copied: { entry: WorkIndexEntry; version: number; incarnation: number }[] = [];
+  for (const entry of gone) {
+    try {
+      const at = savePrunedCopy(entry);
+      copied.push({ entry, version: at.version, incarnation: at.incarnation });
+    } catch (error) {
+      report(`workspace ${entry.id} (${entry.projectPath}) kept: its copy could not be saved (${(error as Error).message})`);
+    }
+  }
   const events = writeTransaction(db, lockTimeoutMs, () => {
     const versions: MapWrittenEvent[] = [];
-    for (const entry of gone) {
-      // Копия и снятие в одной транзакции записи: между ними карту никто не изменит.
-      try {
-        savePrunedCopy(entry);
-      } catch (error) {
-        report(`workspace ${entry.id} (${entry.projectPath}) kept: its copy could not be saved (${(error as Error).message})`);
+    for (const { entry, version: copiedVersion, incarnation: copiedIncarnation } of copied) {
+      const identity = workIdentity(entry.projectPath, entry.id);
+      // Работа изменилась между копией и замком: копия устарела, а снятие стёрло бы свежее. Остаётся (файл копии лежит в
+      // `pruned/` как был: это снимок прежней версии, лишним он не мешает). Работы уже нет — снимать нечего, как и раньше.
+      if (identity !== undefined && (identity.version !== copiedVersion || identity.incarnation !== copiedIncarnation)) {
+        report(`workspace ${entry.id} (${entry.projectPath}) kept: it changed while its copy was saved`);
         continue;
       }
-      const version = versionOf(db, entry.projectPath, entry.id);
       sql(db, 'DELETE FROM works WHERE project_path = ? AND id = ?').run(
         entry.projectPath,
         entry.id,
       );
       mapCache.delete(cacheKey(entry.projectPath, entry.id));
       removed.push(entry);
-      if (version !== undefined) {
-        versions.push({ projectPath: entry.projectPath, workId: entry.id, version, removed: true });
+      if (identity !== undefined) {
+        versions.push({ projectPath: entry.projectPath, workId: entry.id, version: identity.version, removed: true });
       }
     }
     return versions;
@@ -876,14 +885,22 @@ export async function pruneWorksIndex({
 
 /**
  * Пишет карту работы (то, что отдаёт `readStoredMap`) в `<дом>/pruned/<номер>-<время UTC без двоеточий>.json`; существующий
- * файл не затирает. Вызывается внутри транзакции записи — читает на её снимке.
+ * файл не затирает. Карту и личность работы (версия, номер создания) читает с одного снимка базы и возвращает личность:
+ * `pruneWorksIndex` сверяет её под замком.
  */
-function savePrunedCopy(entry: WorkIndexEntry): void {
-  const map = readStoredMap(entry.projectPath, entry.id);
+function savePrunedCopy(entry: WorkIndexEntry): { version: number; incarnation: number } {
+  const db = storeDb();
+  const { map, at } = readTransaction(db, () => {
+    const identity = workIdentity(entry.projectPath, entry.id);
+    const stored = readStoredMap(entry.projectPath, entry.id);
+    if (identity === undefined) throw notFound(entry.projectPath, entry.id);
+    return { map: stored, at: identity };
+  });
   const dir = path.join(parleyHome(), PRUNED_DIR);
   mkdirSync(dir, { recursive: true });
   const stamp = new Date().toISOString().replace(/:/g, '');
   writeFileSync(path.join(dir, `${entry.id}-${stamp}.json`), `${JSON.stringify(map, null, 2)}\n`, { flag: 'wx' });
+  return at;
 }
 
 export interface NewWork {
@@ -1043,6 +1060,25 @@ export function applyMapUpdate(
   const key = cacheKey(projectPath, workId);
   const source = mapSource(projectPath, workId);
 
+  // Промах кэша: карта грузится и разбирается до замка (чтение в WAL писателей не ждёт). Под замком версия и номер создания
+  // сверяются заново: совпали — это та же карта, что прочла бы загрузка под замком; нет — загрузка под замком, как раньше.
+  // Отказ загрузки (работы нет, битая строка) здесь не разбирается: причину назовёт загрузка под замком. Кэш не считаем.
+  let preloaded: { stored: Stored; map: WorkMap } | undefined;
+  const before = workIdentity(projectPath, workId);
+  if (before !== undefined) {
+    const entry = mapCache.get(key);
+    if (entry === undefined || entry.version !== before.version || entry.incarnation !== before.incarnation) {
+      try {
+        const loaded = loadStored(db, projectPath, workId);
+        if (loaded !== undefined) {
+          preloaded = { stored: loaded, map: normalizeMap(rowsToMap(loaded.work, loaded.extra, loaded.rows), source) };
+        }
+      } catch {
+        preloaded = undefined;
+      }
+    }
+  }
+
   const written = writeTransaction(db, lockTimeoutMs, () => {
     const identity = workIdentity(projectPath, workId);
     const stored = identity?.version;
@@ -1088,6 +1124,15 @@ export function applyMapUpdate(
       mapCache.delete(key);
       current = hit.map;
       previous = hit;
+    } else if (
+      preloaded !== undefined &&
+      preloaded.stored.version === stored &&
+      preloaded.stored.incarnation === identity!.incarnation
+    ) {
+      const { stored: loaded, map } = preloaded;
+      preloaded = undefined;
+      current = map;
+      previous = { work: loaded.work, extra: loaded.extra, index: rowIndex(loaded.rows) };
     } else {
       const loaded = loadStored(db, projectPath, workId);
       if (loaded === undefined) {
