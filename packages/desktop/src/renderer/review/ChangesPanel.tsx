@@ -13,7 +13,7 @@
  * помнит его в сторе ревью и показывает своё состояние, а не ошибку git (перенос 8.2b).
  */
 
-import { useState, type CSSProperties } from 'react';
+import { useRef, useState, type CSSProperties } from 'react';
 import { MoreHorizontal } from 'lucide-react';
 import { toast } from 'sonner';
 import type { BranchCommit, DiffFile, WindowWorkEntry } from '@parley/core';
@@ -138,6 +138,9 @@ export function ChangesPanel({ bridge, workKey, entry, sendDeps }: ChangesPanelP
   const [collapsed, setCollapsed] = useState<Partial<Record<SectionKey, boolean>>>({});
   const [discardFirst, setDiscardFirst] = useState(false);
   const [discardSecond, setDiscardSecond] = useState(false);
+  // Замок Discard (D7-12): повтор после успеха падал на отсутствующей ветке и давал ложный тост.
+  // Ставится до закрытия вкладок, снимается при отказе диалога о буферах и по завершении вызова.
+  const discarding = useRef(false);
   // Прокрутчик секций — элементом в состоянии: см. `VirtualRows`.
   const [scroller, setScroller] = useState<HTMLDivElement | null>(null);
 
@@ -172,25 +175,38 @@ export function ChangesPanel({ bridge, workKey, entry, sendDeps }: ChangesPanelP
   const branchDeleted = source?.kind === 'worktree' && source.diff.branchDeleted === true;
   const canDiscard = ref !== null && worktree !== null && worktree.createdAt !== null && !discarded && !branchDeleted;
   const discard = (force: boolean): void => {
-    if (ref === null || key === null) return;
+    if (ref === null || key === null || discarding.current) return;
+    discarding.current = true;
     // Вкладки файлов этого worktree — сначала, с вопросом о несохранённых (раунд fix-final-c, п. 3),
     // как у «Delete» сессии: иначе папка уходит из-под буферов с правками молча. «Отмена» — worktree
     // не отбрасывается.
     const store = useLayoutStore.getState();
     const own = fileTabIds(store.layouts[workKey], (root) => root.kind === 'worktree' && root.sessionId === ref.sessionId);
     const closing = own.length === 0 ? Promise.resolve(true) : store.requestCloseTabs(workKey, own);
-    void closing.then((closed) => {
-      if (closed) callDiscard(ref, key, force);
-    });
+    void closing.then(
+      (closed) => {
+        if (closed) callDiscard(ref, key, force);
+        else discarding.current = false;
+      },
+      () => {
+        discarding.current = false;
+      },
+    );
   };
   const callDiscard = (ref: SessionRef, key: string, force: boolean): void => {
     bridge.call('worktrees.discard', { ref, force }).then(
       // Своё обновление не нужно: отброшенному worktree `worktrees.diff` отвечать нечем — состояние из стора.
-      () => useReviewStore.getState().markDiscarded(key),
+      () => {
+        discarding.current = false;
+        useReviewStore.getState().markDiscarded(key);
+      },
       (err: unknown) => {
+        discarding.current = false;
         const info = decodeIpcError(err);
         console.warn('[parley] worktrees.discard', info.code, info.message);
         toast.error(errorText(info.code, S.errors.actions.discardWorktree));
+        // Первый вызов мог уже отбросить worktree (таймаут): обновление даст `worktreeMissing`.
+        refresh();
       },
     );
   };

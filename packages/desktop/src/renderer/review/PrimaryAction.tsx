@@ -143,24 +143,36 @@ export function PrimaryAction({ bridge, workKey, sessionRef, source, working, se
     );
   };
 
+  // Слияние гасится так же, как коммит (D7-12): ref-замок ставится до перерисовки, общий `busy` делает
+  // кнопку неактивной. `onChanged()` — при любом исходе: ошибка вызова (таймаут при уже выполненном
+  // слиянии) и отказ `ok: false` тоже могли поменять репозиторий, вид не должен показывать старое.
+  const merging = useRef(false);
+  const mergeDone = (): void => {
+    merging.current = false;
+    setBusy(false);
+    onChanged();
+  };
+
   const merge = (): void => {
-    if (source.kind !== 'worktree') return;
+    if (source.kind !== 'worktree' || merging.current) return;
     const base = source.base;
+    merging.current = true;
+    setBusy(true);
     bridge.call('worktrees.merge', { ref: sessionRef }).then(
       (result) => {
         const shown = mergeResultText(result, base);
-        if (result.ok) {
-          toast(shown.text);
-          onChanged();
-          return;
+        if (result.ok) toast(shown.text);
+        else {
+          toast.error(shown.text);
+          if (shown.conflicts !== null) onConflicts(shown.conflicts);
         }
-        toast.error(shown.text);
-        if (shown.conflicts !== null) onConflicts(shown.conflicts);
+        mergeDone();
       },
       (error: unknown) => {
         const info = decodeIpcError(error);
         console.warn('[parley] worktrees.merge', info.code, info.message);
         toast.error(errorText(info.code, S.errors.actions.merge));
+        mergeDone();
       },
     );
   };
@@ -202,7 +214,7 @@ export function PrimaryAction({ bridge, workKey, sessionRef, source, working, se
           : action.kind === 'ask-agent'
             ? S.changes.askAgent
             : S.changes.noChanges;
-  const disabled = action.kind === 'nothing' || (withMessage && (message.trim() === '' || busy));
+  const disabled = action.kind === 'nothing' || (withMessage && (message.trim() === '' || busy)) || (action.kind === 'merge' && busy);
 
   const commitDescription = sentences(
     source.kind === 'project' ? S.changes.projectFolderWarning : null,
