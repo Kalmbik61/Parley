@@ -292,7 +292,7 @@ describe('useChanges (кусок 8.2a, тест 8)', () => {
     expect(source?.kind === 'worktree' && source.branch).toBe('harnas/w-a/s03');
   });
 
-  it('каждая загрузка — новый объект source', async () => {
+  it('refresh() даёт новый объект source даже при равном ответе', async () => {
     const { result } = renderHook(() => useChanges({ bridge, entry: work(), sessionId: 's-02' }));
     await flush();
     const first = result.current.source;
@@ -300,8 +300,114 @@ describe('useChanges (кусок 8.2a, тест 8)', () => {
       result.current.refresh();
     });
     await flush();
+    expect(count('worktrees.diff')).toBe(2);
     expect(result.current.source).not.toBe(first);
     expect(result.current.source).toEqual(first);
+  });
+
+  it('равный ответ автоматического обновления не меняет объект source, отличающийся — меняет', async () => {
+    let files = [{ path: 'a.ts', status: 'M' as const, oldPath: null, additions: 1, deletions: 0 }];
+    bridge.setHandler('worktrees.diff', () => diff({ commits: [commit], files, patch: 'ignored' }));
+    const { result } = renderHook(() => useChanges({ bridge, entry: work(), sessionId: 's-02' }));
+    await flush();
+    const first = result.current.source;
+    emitWorks([work('t1')]);
+    await flush(2100);
+    expect(count('worktrees.diff')).toBe(2);
+    expect(result.current.source).toBe(first);
+    expect(result.current.loading).toBe(false);
+
+    // Поле patch в сравнении не участвует.
+    bridge.setHandler('worktrees.diff', () => diff({ commits: [commit], files, patch: 'other' }));
+    emitWorks([work('t2')]);
+    await flush(2100);
+    expect(count('worktrees.diff')).toBe(3);
+    expect(result.current.source).toBe(first);
+
+    files = [{ path: 'a.ts', status: 'M', oldPath: null, additions: 2, deletions: 0 }];
+    emitWorks([work('t3')]);
+    await flush(2100);
+    expect(count('worktrees.diff')).toBe(4);
+    expect(result.current.source).not.toBe(first);
+    expect(result.current.source?.kind === 'worktree' && result.current.source.diff.files[0]?.additions).toBe(2);
+  });
+
+  it('конец хода агента даёт новый объект source и при равном ответе (содержимое могло смениться)', async () => {
+    const { result } = renderHook(() => useChanges({ bridge, entry: work(), sessionId: 's-02' }));
+    await flush(2500);
+    const first = result.current.source;
+    act(() => {
+      useActivityStore.setState({ byRef: activityMap([makeActivity(ref, 'working')]) });
+    });
+    act(() => {
+      useActivityStore.setState({ byRef: activityMap([makeActivity(ref, 'idle')]) });
+    });
+    await flush();
+    expect(count('worktrees.diff')).toBe(2);
+    expect(result.current.source).not.toBe(first);
+  });
+
+  /** `worktrees.diff`, чей первый вызов висит, пока тест его не отпустит; остальные отвечают сразу. */
+  function hangFirstDiff(): { release(value?: WorktreeDiff): void } {
+    let calls = 0;
+    let release: (value: WorktreeDiff) => void = () => {};
+    bridge.setHandler('worktrees.diff', () => {
+      calls += 1;
+      if (calls > 1) return diff({ commits: [commit], files: [{ path: 'a.ts', status: 'M', oldPath: null, additions: 1, deletions: 0 }] });
+      return new Promise<WorktreeDiff>((resolve) => {
+        release = resolve;
+      });
+    });
+    return {
+      release: (value = diff({ commits: [commit], files: [{ path: 'a.ts', status: 'M', oldPath: null, additions: 1, deletions: 0 }] })) =>
+        act(() => {
+          release(value);
+        }),
+    };
+  }
+
+  it('пока запрос идёт, второй не стартует: триггеры дают один повтор, через 2 с от конца', async () => {
+    const hung = hangFirstDiff();
+    renderHook(() => useChanges({ bridge, entry: work(), sessionId: 's-02' }));
+    await flush();
+    expect(count('worktrees.diff')).toBe(1);
+    emitWorks([work('t1')]);
+    await flush(3000);
+    emitWorks([work('t2')]);
+    await flush(3000);
+    act(() => {
+      useHostStore.setState((state) => ({ connections: state.connections + 1 }));
+    });
+    await flush(3000);
+    expect(count('worktrees.diff')).toBe(1);
+
+    hung.release();
+    await flush();
+    expect(count('worktrees.diff')).toBe(1);
+    await flush(1900);
+    expect(count('worktrees.diff')).toBe(1);
+    await flush(200);
+    expect(count('worktrees.diff')).toBe(2);
+    await flush(5000);
+    expect(count('worktrees.diff')).toBe(2);
+  });
+
+  it('явный refresh во время запроса: повтор сразу после ответа, устаревший ответ не применяется', async () => {
+    const hung = hangFirstDiff();
+    const { result } = renderHook(() => useChanges({ bridge, entry: work(), sessionId: 's-02' }));
+    await flush();
+    act(() => {
+      result.current.refresh();
+    });
+    await flush(100);
+    expect(count('worktrees.diff')).toBe(1);
+
+    hung.release(diff({ commits: [commit], files: [{ path: 'stale.ts', status: 'A', oldPath: null, additions: 1, deletions: 0 }] }));
+    await flush();
+    expect(count('worktrees.diff')).toBe(2);
+    const source = result.current.source;
+    expect(source?.kind === 'worktree' && source.diff.files.map((f) => f.path)).toEqual(['a.ts']);
+    expect(result.current.loading).toBe(false);
   });
 
   it('возврат связи с хостом — загрузка заново', async () => {

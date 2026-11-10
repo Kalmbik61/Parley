@@ -18,6 +18,12 @@ import { useReviewStore } from './store.js';
 /** Спека 11.1: обновление не чаще раза в 2 с — кроме `refresh()`. */
 const THROTTLE_MS = 2000;
 
+/** Сравнение ответов без `patch` (окно всегда просит `patch: false`, но чужой хост мог его прислать). */
+function sameSource(prev: ChangesSource, next: ChangesSource): boolean {
+  const text = (source: ChangesSource): string => JSON.stringify(source, (name, value: unknown) => (name === 'patch' ? undefined : value));
+  return text(prev) === text(next);
+}
+
 type Mode = 'none' | 'pending' | 'worktree' | 'project';
 
 /** Загрузка diff/mergeCheck или changes.project по сессии, всегда с patch: false; обновление по правилам 11.1, не чаще раза в 2 с. */
@@ -68,9 +74,18 @@ export function useChanges(input: {
     const ref: SessionRef = { projectPath, workId, sessionId };
     const key = refKey(ref);
     let disposed = false;
-    let seq = 0;
-    let lastAt = Number.NEGATIVE_INFINITY;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    // Один запрос в полёте на цель (D7-3): триггер во время запроса ставит один отложенный повтор.
+    let running = false;
+    let pending: 'none' | 'throttled' | 'now' = 'none';
+    // Дроссель считается от конца предыдущего запроса, а не от начала.
+    let lastEnd = Number.NEGATIVE_INFINITY;
+    // Ответ, поставленный под явный refresh() во время запроса, устарел: его не применяем.
+    let stale = false;
+    // Следующий ответ отдаётся новым объектом даже при равных данных (refresh и конец хода агента):
+    // содержимое файла могло смениться при тех же числах строк, а вкладка диффа по объекту перечитывает стороны.
+    let forceNew = false;
+    let lastSource: ChangesSource | null = null;
     setSource(null);
 
     const fetchSource = async (): Promise<ChangesSource> => {
@@ -90,45 +105,71 @@ export function useChanges(input: {
       return { kind: 'worktree', branch, base, diff, check };
     };
 
-    const run = (): void => {
-      if (timer !== null) clearTimeout(timer);
-      timer = null;
-      lastAt = Date.now();
-      seq += 1;
-      const mine = seq;
-      setLoading(true);
-      // Ответ прежнего запроса (другой сессии или устаревший) отбрасывается: победил свежий.
-      const current = (): boolean => !disposed && mine === seq;
-      fetchSource().then(
-        (next) => {
-          if (!current()) return;
-          // Каждая загрузка — новый объект: по нему вкладка диффа перечитывает стороны (8.3).
-          setSource(next);
+    const finish = (outcome: { next: ChangesSource } | { err: unknown }, force: boolean): void => {
+      running = false;
+      lastEnd = Date.now();
+      if (disposed) return;
+      if (!stale) {
+        if ('next' in outcome) {
+          // Равный ответ оставляет прежний объект: вкладка диффа не перечитывает файлы (D7-2).
+          if (force || lastSource === null || !sameSource(lastSource, outcome.next)) {
+            lastSource = outcome.next;
+            setSource(outcome.next);
+          }
           setError(null);
           setLoading(false);
-        },
-        (err: unknown) => {
-          if (!current()) return;
-          const info = decodeIpcError(err);
+        } else {
+          const info = decodeIpcError(outcome.err);
           if (info.data?.['reason'] === HOST_ERROR_REASONS.worktreeMissing) {
             // Папки worktree нет (отброшен не из этого окна или до перезапуска): признак в сторе —
             // вкладки показывают своё состояние и снимают загрузку, повторов нет (раунд 8, пункт 1).
             console.warn('[parley] changes', info.code, info.message);
             useReviewStore.getState().markDiscarded(key);
-            setLoading(false);
-            return;
+          } else {
+            setError(changesErrorText(info));
           }
-          setError(changesErrorText(info));
           setLoading(false);
-        },
-      );
+        }
+      }
+      stale = false;
+      const next = pending;
+      pending = 'none';
+      if (next === 'now') run();
+      else if (next === 'throttled') request();
     };
 
-    const request = (): void => {
+    function run(): void {
+      if (timer !== null) clearTimeout(timer);
+      timer = null;
+      running = true;
+      stale = false;
+      const force = forceNew;
+      forceNew = false;
+      setLoading(true);
+      fetchSource().then(
+        (next) => finish({ next }, force),
+        (err: unknown) => finish({ err }, force),
+      );
+    }
+
+    function request(): void {
+      if (running) {
+        if (pending === 'none') pending = 'throttled';
+        return;
+      }
       if (timer !== null) return;
-      const wait = lastAt + THROTTLE_MS - Date.now();
+      const wait = lastEnd + THROTTLE_MS - Date.now();
       if (wait <= 0) run();
       else timer = setTimeout(run, wait);
+    }
+
+    // Явный refresh не ждёт дросселя, но и не накладывается на идущий запрос: тот ответ устарел.
+    const refreshNow = (): void => {
+      forceNew = true;
+      if (running) {
+        pending = 'now';
+        stale = true;
+      } else run();
     };
 
     // Событие несёт весь снимок, объекты у каждого события новые, а карты малы: сравнение
@@ -144,7 +185,10 @@ export function useChanges(input: {
     });
 
     const offActivity = useActivityStore.subscribe((state, prev) => {
-      if (workingEnded(prev.byRef[key]?.activity, state.byRef[key]?.activity)) request();
+      if (workingEnded(prev.byRef[key]?.activity, state.byRef[key]?.activity)) {
+        forceNew = true;
+        request();
+      }
     });
 
     // Связь вернулась — заново (fix-7.3): оболочка при обрыве не перемонтируется.
@@ -152,7 +196,7 @@ export function useChanges(input: {
       if (state.connections !== prev.connections) request();
     });
 
-    refreshRef.current = run;
+    refreshRef.current = refreshNow;
     run();
 
     return () => {

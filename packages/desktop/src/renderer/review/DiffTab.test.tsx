@@ -355,6 +355,9 @@ describe('DiffTab: обновление (тест 7)', () => {
     editor.original.scrollTop = 80;
     const reads = bridge.readTextCalls.filter((call) => call.path === 'a.ts').length;
 
+    // Ответ хоста изменился (числа строк): новый source, живой редактор перечитывает сторону.
+    // Равный ответ source не меняет и файлы не перечитывает — отдельный тест ниже.
+    bridge.setHandler('worktrees.diff', () => diff([{ ...file('a.ts'), additions: 2 }, file('b.ts')]));
     bridge.setFile(WT, 'a.ts', text('v2\n'));
     act(() => bridge.emit('works.changed', { entries: [work('renamed')], branches: {} }));
     await flush(500);
@@ -374,6 +377,23 @@ describe('DiffTab: обновление (тест 7)', () => {
     expect(document.querySelector('[data-diff-path="a.ts"]')).toBeNull();
     expect(editor.disposed).toBe(true);
     expect(section('b.ts')).toBeTruthy();
+  });
+
+  it('works.changed с равным ответом хоста: worktrees.diff зовётся, а файлы не перечитываются', async () => {
+    bridge.setHandler('worktrees.diff', () => diff([file('a.ts')]));
+    bridge.setGitShow(WT, BASE, 'a.ts', text('base\n'));
+    bridge.setFile(WT, 'a.ts', text('v1\n'));
+    renderTab();
+    await flush();
+    intersect(['a.ts']);
+    await flush();
+    expect(liveFor('v1\n')).toBeDefined();
+    const reads = bridge.readTextCalls.filter((call) => call.path === 'a.ts').length;
+
+    act(() => bridge.emit('works.changed', { entries: [work('renamed')], branches: {} }));
+    await flush(2500);
+    expect(count('worktrees.diff')).toBe(2);
+    expect(bridge.readTextCalls.filter((call) => call.path === 'a.ts').length).toBe(reads);
   });
 
   it('режим коммита не обновляется', async () => {
