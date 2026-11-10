@@ -109,7 +109,7 @@ export function AgentsPanelView({ bridge, sessionRef, hasFeed, tasks, plan, link
   return (
     <div className="flex min-h-0 flex-col gap-2 overflow-y-auto px-1">
       {planHeader}
-      <FeedSubscription sessionRef={sessionRef} />
+      <FeedSubscription sessionRef={sessionRef} eager />
       {pick !== null ? (
         <div data-testid="agents-panel" className="flex min-h-0 flex-col">
           <AgentDetail bridge={bridge} sessionRef={sessionRef} items={feed?.items ?? []} pick={pick} onBack={() => select(key, null)} />

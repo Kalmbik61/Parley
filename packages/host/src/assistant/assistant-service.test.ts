@@ -522,11 +522,10 @@ describe('assistant-service: решение по карточке агента',
     snapshots = { 's-03': { items: [card('c1', 'rm -rf dist')] } };
   });
 
-  it('parley_overview проверяет карточки всех активных сессий', async () => {
+  it('parley_overview берёт карточки из памяти (peekAttention) и не зовёт feed.snapshot', async () => {
     const service = await started();
     const reply = await service.tool('parley_overview', {});
-    expect(snapshot).toHaveBeenCalledTimes(4);
-    expect(snapshot).toHaveBeenCalledWith({ projectPath: '/p', workId: 'w-1', sessionId: 's-03' }, undefined, 'attention');
+    expect(snapshot).not.toHaveBeenCalled();
     expect(reply).toMatchObject({ status: 200, body: { overview: { coverage: { cardsAvailable: true }, rooms: expect.arrayContaining([expect.objectContaining({ group: 'needsHuman' })]) } } });
   });
   it('parley_overview: сессия с need (лимит) — ждущая, причина с именем провайдера; детали — то же (итоговое ревью, находка 1)', async () => {
@@ -2228,45 +2227,23 @@ describe('assistant-service: human overview contract', () => {
     service.stop();
   });
 
-  it('marks card coverage unknown on failure, and collects pending cards even with working activity', async () => {
+  it('peekAttention отдаёт undefined у ленты, что есть в памяти, но ещё не готова, — cardsAvailable: false, карточки остальных на месте', async () => {
     const items = [{ kind: 'permission', cardId: 'permission', id: 'permission', state: 'pending', toolName: 'Bash', toolInput: {}, suggestions: [], at: null }];
-    const snapshot = vi.fn(async (ref: { sessionId: string }) => {
-      if (ref.sessionId === 's-02') throw new Error('unavailable');
-      return { revision: 1, items };
-    });
-    const service = createAssistantService({ ...deps, feed: { snapshot, decide: vi.fn(), peekAttention: () => pendingCards(items as never) } as never });
+    const peekAttention = (ref: { sessionId: string }) => (ref.sessionId === 's-02' ? undefined : pendingCards(items as never));
+    const service = createAssistantService({ ...deps, feed: { snapshot: vi.fn(), decide: vi.fn(), peekAttention } as never });
     const { overview } = bodyOf(await service.tool('parley_overview', {}, { kind: 'job', jobId: 'job-overview' }));
     expect(overview.coverage.cardsAvailable).toBe(false);
     expect(overview.rooms.find((room) => room.title === 'Auth')).toMatchObject({ group: 'needsHuman' });
-    expect(snapshot).toHaveBeenCalledTimes(4);
     service.stop();
   });
 
-  it.each(['archive', 'remove', 'card', 'activity'])('revalidates %s during asynchronous collection', async (change) => {
-    const map = structuredClone(MAP);
-    let calls = 0;
-    let activity = 'working';
-    const card = { kind: 'permission', cardId: 'stale-card', id: 'stale-card', state: 'pending', toolName: 'Bash', toolInput: {}, suggestions: [], at: null };
-    const snapshot = vi.fn(async () => {
-      calls++;
-      if (calls === 3) {
-        if (change === 'archive') map.rooms[0]!.archivedAt = '2026-11-04T00:00:00Z';
-        if (change === 'remove') map.sessions = map.sessions.filter((session) => session.id !== 's-03');
-        if (change === 'activity') activity = 'idle';
-      }
-      return { revision: change === 'card' && calls >= 3 ? 2 : 1, items: calls < 3 ? [card] : [] };
-    });
-    const service = createAssistantService({
-      ...deps,
-      works: { snapshot: () => ({ entries: [{ projectPath: '/p', map }] as WorkEntry[], branches: {} }) },
-      activity: { get: () => ({ activity: { activity, waitingFor: null }, metrics: null }) as never },
-      feed: { snapshot, decide: vi.fn() } as never,
-    });
+  it('обзор не зовёт feed.snapshot ни у одной сессии', async () => {
+    const snapshot = vi.fn();
+    const peekAttention = () => [] as never;
+    const service = createAssistantService({ ...deps, feed: { snapshot, decide: vi.fn(), peekAttention } as never });
     const { overview } = bodyOf(await service.tool('parley_overview', {}, { kind: 'job', jobId: 'job-overview' }));
-    expect(JSON.stringify(overview)).not.toContain('stale-card');
-    if (change === 'archive') expect(overview.rooms.some((room) => room.title === 'Auth')).toBe(false);
-    if (change === 'remove') expect(overview.rooms.flatMap((room) => room.members).filter((member) => member.ref.endsWith(':s-03')).every((member) => member.lifecycle === null && member.state === 'unknown')).toBe(true);
-    if (change === 'archive' || change === 'remove') expect(overview.coverage.mapComplete).toBe(false);
+    expect(snapshot).not.toHaveBeenCalled();
+    expect(overview.coverage.cardsAvailable).toBe(true);
     service.stop();
   });
 
@@ -2291,33 +2268,5 @@ it('records only names from the job overview for final-answer cleanup', async ()
   const overview = (reply.body as { overview: HumanOverviewV1 }).overview;
   const member = overview.rooms.flatMap((room) => room.members).find((member) => member.ref.endsWith(':s-03'))!;
   expect(tokens.peek('job-overview').humanRefs).toMatchObject({ [member.ref]: member.displayName, 's-03': member.displayName, S03: member.displayName, '@s03': member.displayName });
-  service.stop();
-});
-
-it('does not publish a settled A card while the second B snapshot is delayed', async () => {
-  const card = { kind: 'permission', cardId: 'stale-A', id: 'stale-A', state: 'pending', toolName: 'Bash', toolInput: {}, suggestions: [] };
-  let current: unknown[] = [card];
-  const counts = new Map<string, number>();
-  let releaseB: () => void = () => {};
-  let notifyB: () => void = () => {};
-  const waitingB = new Promise<void>((resolve) => { notifyB = resolve; });
-  const delayedB = new Promise<void>((resolve) => { releaseB = resolve; });
-  const snapshot = vi.fn(async (ref: { sessionId: string }) => {
-    const count = (counts.get(ref.sessionId) ?? 0) + 1;
-    counts.set(ref.sessionId, count);
-    if (ref.sessionId === 's-02' && count === 2) { notifyB(); await delayedB; }
-    return { revision: 1, items: ref.sessionId === 's-03' ? [...current] : [] };
-  });
-  const peekAttention = (ref: { sessionId: string }) => pendingCards((ref.sessionId === 's-03' ? current : []) as never);
-  const service = createAssistantService({ ...deps, feed: { snapshot, decide: vi.fn(), peekAttention } as never });
-  const pending = service.tool('parley_overview', {}, { kind: 'job', jobId: 'job-overview' });
-  await waitingB;
-  expect(counts.get('s-03')).toBe(2);
-  current = []; // A settles without any live-activity change or batched revision flush.
-  releaseB();
-  const { overview } = (await pending).body as { overview: HumanOverviewV1 };
-  expect(overview.coverage.cardsAvailable).toBe(false);
-  expect(overview.rooms.find((room) => room.title === 'Auth')!.group).toBe('working');
-  expect(JSON.stringify(overview)).not.toContain('stale-A');
   service.stop();
 });

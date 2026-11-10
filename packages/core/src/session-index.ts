@@ -10,7 +10,14 @@ import { blocksText } from './feed/reduce.js';
 import { isPointerText } from './work/delivery.js';
 import { createUsageLedger, type UsageObservation, type UsageSummary, type UsageWindow } from './work/usage-ledger.js';
 import { extendUsageTimeline, type UsageTimeline } from './work/usage-timeline.js';
-import { claudeUsageObservation, noteClaudeSidechain, replayClaudeUsage, type ClaudeSidechain } from './work/usage-observations.js';
+import {
+  claudeUsageObservation,
+  noteClaudeSidechain,
+  observeClaudeChild,
+  replayClaudeUsage,
+  type ClaudeSidechain,
+  type UsageLedger,
+} from './work/usage-observations.js';
 import { isRecord, textOf } from './work/events.js';
 
 export type Provider = 'claude' | 'codex' | 'glm';
@@ -193,10 +200,18 @@ export class ClaudeIndexAccumulator {
   tools = new Counter();
   roles = new Counter();
   recordTypes = new Counter();
-  // Наблюдения копятся и проигрываются в ledger в конце (usage-observations): один ответ модели приходит
-  // несколькими записями, склейка по message.id — в учёте токенов.
+  // Наблюдения копятся ради полного проигрыша (срез по окнам, смена sidechain, пропавший подагент): один ответ
+  // модели приходит несколькими записями, склейка по message.id — в учёте токенов.
   observations: UsageObservation[] = [];
   sidechain: ClaudeSidechain = { agents: new Set(), unidentified: false };
+  // Итог без окон растёт по ходу: `feed` отдаёт наблюдение сразу, `build` не проигрывает историю заново.
+  own: UsageLedger = createUsageLedger();
+  /** Итог с подагентами; null — ещё не собирался или подагентов не было. */
+  withAgents: UsageLedger | null = null;
+  /** Сколько наблюдений каждого подагента (по массиву шкалы) уже в `withAgents`. */
+  agentsSeen = new Map<readonly UsageObservation[], number>();
+  /** Состояние sidechain на момент сборки `withAgents`: оно решает, какие записи подагентов не учитываются. */
+  private agentsSidechain: { size: number; unidentified: boolean } | null = null;
 
   sessionId: string | null = null;
   cwd: string | null = null;
@@ -224,19 +239,6 @@ export class ClaudeIndexAccumulator {
     readonly adapter: SchemaAdapter = adapterV1,
   ) {}
 
-  /** Независимая копия: счётчики и наблюдения копируются, прежнее состояние не мутируется. */
-  clone(): ClaudeIndexAccumulator {
-    return Object.assign(new ClaudeIndexAccumulator(this.file, this.adapter), this, {
-      planCollector: this.planCollector.clone(),
-      models: this.models.clone(),
-      tools: this.tools.clone(),
-      roles: this.roles.clone(),
-      recordTypes: this.recordTypes.clone(),
-      observations: [...this.observations],
-      sidechain: { agents: new Set(this.sidechain.agents), unidentified: this.sidechain.unidentified },
-    });
-  }
-
   feed(raw: RawRecord, lineNo: number): void {
     this.planCollector.onRecord(raw);
     const record: SessionRecord = this.adapter.toSessionRecord(raw);
@@ -249,6 +251,8 @@ export class ClaudeIndexAccumulator {
     const observation = claudeUsageObservation(record, this.file, lineNo);
     if (observation !== null) {
       this.observations.push(observation);
+      this.own.observe(observation);
+      this.withAgents?.observe(observation);
       noteClaudeSidechain(this.sidechain, record);
     }
 
@@ -318,6 +322,55 @@ export class ClaudeIndexAccumulator {
     }
   }
 
+  private dropAgents(): void {
+    this.withAgents = null;
+    this.agentsSeen.clear();
+    this.agentsSidechain = null;
+  }
+
+  /**
+   * Итог с подагентами без окон. Проигрыш с нуля — если ledger ещё нет, массив наблюдений подагента пропал из
+   * списка или стал короче (шкала начата заново), либо изменился sidechain родителя (он решает, какие записи
+   * подагентов не учитываются). Иначе дочитываются только наблюдения подагентов после уже учтённых.
+   */
+  private usageWithAgents(subagents: readonly SubagentObservations[]): UsageSummary {
+    const { observations, sidechain } = this;
+    const lengthOf = new Map<readonly UsageObservation[], number>();
+    for (const subagent of subagents) lengthOf.set(subagent.observations, subagent.observations.length);
+    let ledger = this.withAgents;
+    let stale =
+      ledger === null ||
+      this.agentsSidechain === null ||
+      this.agentsSidechain.size !== sidechain.agents.size ||
+      this.agentsSidechain.unidentified !== sidechain.unidentified;
+    if (!stale) {
+      for (const [list, seen] of this.agentsSeen) {
+        const length = lengthOf.get(list);
+        if (length === undefined || length < seen) {
+          stale = true;
+          break;
+        }
+      }
+    }
+    if (stale || ledger === null) {
+      ledger = createUsageLedger();
+      replayClaudeUsage(ledger, { observations, sidechain }, subagents);
+      this.agentsSeen.clear();
+      for (const subagent of subagents) this.agentsSeen.set(subagent.observations, subagent.observations.length);
+    } else {
+      for (const subagent of subagents) {
+        const list = subagent.observations;
+        for (let n = this.agentsSeen.get(list) ?? 0; n < list.length; n++) {
+          observeClaudeChild(ledger, sidechain, subagent.agentId, list[n]!);
+        }
+        this.agentsSeen.set(list, list.length);
+      }
+    }
+    this.withAgents = ledger;
+    this.agentsSidechain = { size: sidechain.agents.size, unidentified: sidechain.unidentified };
+    return ledger.summary();
+  }
+
   /**
    * Собирает SessionIndex. `pendingMalformed` — оборванная последняя строка: полное чтение считает её битой,
    * хотя в состояние она ещё не вошла.
@@ -355,15 +408,23 @@ export class ClaudeIndexAccumulator {
     }
 
     // `tokens` и `usage` собственного лога снимаются до подагентов: прежние потребители ждут его одного.
-    const usageOptions = usageWindows === undefined ? {} : { windows: usageWindows };
-    const ownLedger = createUsageLedger(usageOptions);
-    replayClaudeUsage(ownLedger, { observations, sidechain }, []);
-    const own = ownLedger.summary();
-    let usage = own;
-    if (subagents.length > 0) {
-      const ledger = createUsageLedger(usageOptions);
-      replayClaudeUsage(ledger, { observations, sidechain }, subagents);
-      usage = ledger.summary();
+    let own: UsageSummary;
+    let usage: UsageSummary;
+    if (usageWindows === undefined) {
+      own = this.own.summary();
+      usage = subagents.length > 0 ? this.usageWithAgents(subagents) : own;
+      if (subagents.length === 0) this.dropAgents();
+    } else {
+      // Срез по окнам считается проигрышем, как раньше; живые ledger-ы при этом не трогаются.
+      const ownLedger = createUsageLedger({ windows: usageWindows });
+      replayClaudeUsage(ownLedger, { observations, sidechain }, []);
+      own = ownLedger.summary();
+      usage = own;
+      if (subagents.length > 0) {
+        const ledger = createUsageLedger({ windows: usageWindows });
+        replayClaudeUsage(ledger, { observations, sidechain }, subagents);
+        usage = ledger.summary();
+      }
     }
     // `tokens` — для показа (лента, строка метрик): неизвестное поле показывается нулём, а в `usage` остаётся null.
     const tokens: TokenTotals | null = observations.length > 0
@@ -458,8 +519,11 @@ export function missingFileError(file: string): NodeJS.ErrnoException {
 
 /**
  * То же, что `indexSessionFile`, но дочитывает только дописанное с места `previous` (ноль байт — файл не
- * открывается). Возвращает НОВОЕ состояние (прежнее не меняется) и SessionIndex, равный полному чтению
- * текущего содержимого, включая момент, когда последняя строка оборвана. Подагенты — хвостом через
+ * открывается) и возвращает SessionIndex, равный полному чтению текущего содержимого, включая момент, когда
+ * последняя строка оборвана. Накопитель `previous.acc` дополняется НА МЕСТЕ, без копий: прежнее состояние после
+ * вызова заменяется возвращённым, держать его для сравнения нельзя. Новые записи копятся в буфере и применяются
+ * только после того, как удались и чтение главного файла, и дочитывание подагентов, — упавшее чтение состояние не
+ * трогает. Сброс (усечение, подмена файла, первый вызов) заводит новый накопитель. Подагенты — хвостом через
  * `extendUsageTimeline`. Файла нет — ошибка ENOENT, как у полного чтения.
  */
 export async function extendClaudeSessionIndex(
@@ -469,24 +533,18 @@ export async function extendClaudeSessionIndex(
   { adapter = adapterV1, subagents = [], subsessionCount = subagents.length, reader = DEFAULT_TIMELINE_READER }: ExtendClaudeOptions = {},
 ): Promise<{ state: ClaudeIndexState; index: SessionIndex }> {
   let draft: ClaudeIndexAccumulator | null = null;
+  let pending: Array<{ raw: RawRecord; lineNo: number }> = [];
   const result = await readJsonlTail(previous?.cursor ?? null, file, reader, {
     reset: () => {
       draft = new ClaudeIndexAccumulator(file, adapter);
+      pending = [];
     },
     record: (raw, lineNo) => {
-      draft ??= (previous as ClaudeIndexState).acc.clone();
-      draft.feed(raw, lineNo);
+      if (draft !== null) (draft as ClaudeIndexAccumulator).feed(raw, lineNo);
+      else pending.push({ raw, lineNo });
     },
   });
   if (result.missing) throw missingFileError(file);
-
-  // Счётчики строк входят в состояние, только если появились целые строки; прежнее не трогаем.
-  let acc = (draft as ClaudeIndexAccumulator | null) ?? (previous as ClaudeIndexState).acc;
-  if (result.parsed > 0 || result.malformed > 0) {
-    if (acc === (previous as ClaudeIndexState | null)?.acc) acc = acc.clone();
-    acc.parsed += result.parsed;
-    acc.malformed += result.malformed;
-  }
 
   const timelines = new Map<string, UsageTimeline>();
   const subagentObservations: SubagentObservations[] = [];
@@ -495,6 +553,12 @@ export async function extendClaudeSessionIndex(
     timelines.set(subagent.file, timeline);
     subagentObservations.push({ agentId: subagent.agentId, observations: timeline.observations });
   }
+
+  // Всё прочитано: теперь буфер входит в накопитель.
+  const acc = (draft as ClaudeIndexAccumulator | null) ?? (previous as ClaudeIndexState).acc;
+  for (const { raw, lineNo } of pending) acc.feed(raw, lineNo);
+  acc.parsed += result.parsed;
+  acc.malformed += result.malformed;
 
   const index = acc.build(root, {
     subagents: subagentObservations,

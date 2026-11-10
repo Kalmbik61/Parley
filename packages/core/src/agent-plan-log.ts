@@ -9,7 +9,6 @@ import {
 export interface PlanCollector {
   onRecord(raw: Record<string, unknown>): void;
   finish(): AgentPlan | null;
-  clone(): PlanCollector;
 }
 const names = new Set(['TaskCreate', 'TaskUpdate', 'TodoWrite', 'update_plan']);
 function record(value: unknown): Record<string, unknown> | null {
@@ -60,14 +59,6 @@ class Collector implements PlanCollector {
   private pending = new Map<string, PlanCall>();
   private seen = new Set<string>();
   constructor(private readonly engine: 'claude' | 'codex') {}
-  clone(): PlanCollector {
-    const copy = new Collector(this.engine);
-    // Состояния и записи заменяются, не мутируются: base и вызовы можно делить по ссылке.
-    copy.base = this.base;
-    copy.pending = new Map(this.pending);
-    copy.seen = new Set(this.seen);
-    return copy;
-  }
   private remember(id: string): void {
     this.seen.add(id);
     if (this.seen.size > SEEN_MAX) {

@@ -25,7 +25,10 @@ type ActivityListener = (
   value: { activity: { activity: string }; metrics: null },
 ) => void;
 type ExitListener = (ref: SessionRef) => void;
-type FakeSession = { ref: SessionRef; provider?: string };
+/** `lifecycle` — жизненный цикл сессии в карте; `archived` — работа сессии в архиве (`work.status`). */
+type FakeSession = { ref: SessionRef; provider?: string; lifecycle?: string; archived?: boolean };
+/** Что индекс логов сообщает слушателям: какие сессии задела запись. */
+export type FakeLogChange = { affects(session: { id: string }): boolean };
 type WorksListener = (snapshot: unknown, previous: unknown) => void;
 
 export interface FakeFeedDeps {
@@ -33,14 +36,19 @@ export interface FakeFeedDeps {
   log: ReturnType<typeof silentLog>;
   /** Журнал сессии, который отдаёт «индекс логов». */
   setLogFile(file: string | null): void;
+  /** Журнал одной сессии; у остальных — общий `setLogFile`. */
+  setSessionLogFile(sessionId: string, file: string | null): void;
   /** Журнал субагента Codex по id его треда (`activity.childLogFile`); `null` — убрать. */
   setChildLogFile(threadId: string, file: string | null): void;
   emitActivity(ref: SessionRef, activity: string): void;
   emitExit(ref: SessionRef): void;
   /** Процесс сессии запущен (`pty.on('start')`): запуск или возобновление. */
   emitStart(ref: SessionRef): void;
-  /** Индекс логов сообщил об изменении журнала (`activity.onLogChange`). */
-  emitLog(): void;
+  /**
+   * Индекс логов сообщил об изменении журнала (`activity.onLogChange`). Без аргумента — как первый полный
+   * список (задеты все); с `change` — задеты сессии, для которых `affects` отдаёт `true`.
+   */
+  emitLog(change?: FakeLogChange): void;
   /** Меняет сессии в работах и шлёт `works.onChange` со снимком по ним. */
   setSessions(next: FakeSession[]): void;
   /** Всё, что служба напечатала в терминал сессии (`pty.write`). */
@@ -74,9 +82,10 @@ function worksSnapshotOf(sessions: FakeSession[]): { entries: FakeEntry[] } {
 export function fakeFeedDeps(initial: FakeSession[] = [{ ref: REF }]): FakeFeedDeps {
   let sessions = initial;
   let logFile: string | null = null;
+  const sessionLogFiles = new Map<string, string>();
   const childLogFiles = new Map<string, string>();
   const activityListeners = new Set<ActivityListener>();
-  const logListeners = new Set<() => void>();
+  const logListeners = new Set<(change?: FakeLogChange) => void>();
   const exitListeners = new Set<ExitListener>();
   const startListeners = new Set<ExitListener>();
   const worksListeners = new Set<WorksListener>();
@@ -95,10 +104,11 @@ export function fakeFeedDeps(initial: FakeSession[] = [{ ref: REF }]): FakeFeedD
         return {
           projectPath,
           map: {
-            work: { id: workId },
+            work: { id: workId, ...(own.some((session) => session.archived === true) ? { status: 'archived' } : {}) },
             sessions: own.map((session) => ({
               id: session.ref.sessionId,
               provider: session.provider ?? 'claude',
+              ...(session.lifecycle === undefined ? {} : { lifecycle: session.lifecycle }),
             })),
           },
         };
@@ -109,7 +119,7 @@ export function fakeFeedDeps(initial: FakeSession[] = [{ ref: REF }]): FakeFeedD
       },
     },
     activity: {
-      logFile: () => logFile,
+      logFile: (ref: SessionRef) => sessionLogFiles.get(ref.sessionId) ?? logFile,
       childLogFile: (_ref: SessionRef, threadId: string) => childLogFiles.get(threadId) ?? null,
       questionHeld: vi.fn(),
       permissionAnswered: vi.fn(),
@@ -117,7 +127,7 @@ export function fakeFeedDeps(initial: FakeSession[] = [{ ref: REF }]): FakeFeedD
         activityListeners.add(listener);
         return () => activityListeners.delete(listener);
       },
-      onLogChange: (listener: () => void) => {
+      onLogChange: (listener: (change?: FakeLogChange) => void) => {
         logListeners.add(listener);
         return () => logListeners.delete(listener);
       },
@@ -144,6 +154,10 @@ export function fakeFeedDeps(initial: FakeSession[] = [{ ref: REF }]): FakeFeedD
     setLogFile(file) {
       logFile = file;
     },
+    setSessionLogFile(sessionId, file) {
+      if (file === null) sessionLogFiles.delete(sessionId);
+      else sessionLogFiles.set(sessionId, file);
+    },
     setChildLogFile(threadId, file) {
       if (file === null) childLogFiles.delete(threadId);
       else childLogFiles.set(threadId, file);
@@ -165,8 +179,8 @@ export function fakeFeedDeps(initial: FakeSession[] = [{ ref: REF }]): FakeFeedD
     emitStart(ref) {
       for (const listener of startListeners) listener(ref);
     },
-    emitLog() {
-      for (const listener of logListeners) listener();
+    emitLog(change) {
+      for (const listener of logListeners) listener(change);
     },
     setSessions(next) {
       const previous = worksSnapshotOf(sessions);
@@ -179,20 +193,23 @@ export function fakeFeedDeps(initial: FakeSession[] = [{ ref: REF }]): FakeFeedD
 
 type EventMessage = { event: EventName; data: unknown };
 
-export function fakeClient(sendResult: () => boolean = () => true): Client & {
+export function fakeClient(
+  sendResult: () => boolean = () => true,
+  options: { features?: readonly string[]; writableLength?: () => number } = {},
+): Client & {
   sent: Array<ResponseMessage | EventMessage>;
 } {
   const sent: Array<ResponseMessage | EventMessage> = [];
   return {
     id: randomUUID(),
     name: 'test',
-    features: new Set<string>(),
+    features: new Set<string>(options.features ?? []),
     sent,
     send(message) {
       sent.push(message);
       return sendResult();
     },
-    writableLength: () => 0,
+    writableLength: options.writableLength ?? (() => 0),
     close() {},
   };
 }

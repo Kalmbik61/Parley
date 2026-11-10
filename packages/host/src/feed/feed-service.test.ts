@@ -6,7 +6,7 @@
 
 import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
-import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -26,13 +26,13 @@ import {
   parleyHome,
   readJsonlRecords,
 } from '@parley/core';
-import { FEED_SCHEMA_VERSION, progressResult } from '@parley/protocol';
-import type { EventData } from '@parley/protocol';
+import { FEED_RESYNC_FEATURE, FEED_SCHEMA_VERSION, progressResult } from '@parley/protocol';
+import type { EventData, SessionRef } from '@parley/protocol';
 import { fakeClient, fakeFeedDeps, hookRequest, REF } from '../../test/feed-fakes.js';
 import type { FakeFeedDeps } from '../../test/feed-fakes.js';
 import { makePng } from '../../test/png.js';
 import { HostError } from '../errors.js';
-import { createFeedService, FEED_MAX_ITEMS, readRecordsTail } from './feed-service.js';
+import { createFeedService, FEED_CLIENT_DROP_BYTES, FEED_IDLE_EVICT_MS, FEED_MAX_ITEMS, FEED_SEED_CONCURRENCY, readRecordsTail, SEED_RECORD_WINDOW } from './feed-service.js';
 import type { FeedService, FeedServiceOptions } from './feed-service.js';
 import * as progressModule from './progress.js';
 import * as codexSource from './codex-source.js';
@@ -1206,6 +1206,68 @@ describe('снимок и дельты', () => {
     ]);
   });
 
+  describe('буфер окна выше FEED_CLIENT_DROP_BYTES', () => {
+    const MIB = 1024 * 1024;
+    const resyncs = (client: ReturnType<typeof fakeClient>) =>
+      client.sent.filter((message) => 'event' in message && message.event === 'feed.resync');
+
+    it('окно с признаком и буфером 40 МиБ: подписки сняты, feed.resync на каждую, дельта ушла раньше', () => {
+      vi.useFakeTimers();
+      const other = { ...REF, sessionId: 's-02' };
+      fakes = fakeFeedDeps([{ ref: REF }, { ref: other }]);
+      start();
+      const window = fakeClient(() => true, { features: [FEED_RESYNC_FEATURE], writableLength: () => 40 * MIB });
+      service.subscribe(REF, window);
+      service.subscribe(other, window);
+      const stays = fakeClient();
+      service.subscribe(REF, stays);
+
+      send(prompt('a'));
+      vi.advanceTimersByTime(50);
+
+      expect(feedChanged(window)).toHaveLength(1);
+      expect(window.sent.map((message) => ('event' in message ? message.event : null))).toEqual(['feed.changed', 'feed.resync', 'feed.resync']);
+      expect(resyncs(window).map((message) => (message as { data: EventData<'feed.resync'> }).data.ref.sessionId).sort()).toEqual([other.sessionId, REF.sessionId].sort());
+      expect(fakes.log.info).toHaveBeenCalledWith('лента: клиент отписан по буферу', { op: 'feed.clientDropped', client: 'test', queuedBytes: 40 * MIB, feeds: 2 });
+
+      send(prompt('b'));
+      vi.advanceTimersByTime(50);
+      expect(feedChanged(window)).toHaveLength(1);
+      expect(feedChanged(stays)).toHaveLength(2);
+    });
+
+    it('без признака feed-resync подписка остаётся (старое окно, мост телефона)', () => {
+      vi.useFakeTimers();
+      start();
+      const old = fakeClient(() => true, { writableLength: () => 40 * MIB });
+      service.subscribe(REF, old);
+
+      send(prompt('a'));
+      vi.advanceTimersByTime(50);
+      send(prompt('b'));
+      vi.advanceTimersByTime(50);
+
+      expect(feedChanged(old)).toHaveLength(2);
+      expect(resyncs(old)).toHaveLength(0);
+    });
+
+    it('ровно 32 МиБ — подписка остаётся', () => {
+      vi.useFakeTimers();
+      start();
+      const edge = fakeClient(() => true, { features: [FEED_RESYNC_FEATURE], writableLength: () => FEED_CLIENT_DROP_BYTES });
+      service.subscribe(REF, edge);
+
+      send(prompt('a'));
+      vi.advanceTimersByTime(50);
+      send(prompt('b'));
+      vi.advanceTimersByTime(50);
+
+      expect(FEED_CLIENT_DROP_BYTES).toBe(32 * MIB);
+      expect(feedChanged(edge)).toHaveLength(2);
+      expect(resyncs(edge)).toHaveLength(0);
+    });
+  });
+
   it('снимок и подписка неизвестной сессии — not_found', async () => {
     start();
     const ref = { ...REF, sessionId: 's-99' };
@@ -1851,6 +1913,27 @@ describe('сев из журнала', () => {
     expect(reader.files).toHaveLength(1);
   });
 
+  it('сессия без providerSessionId, активная: журнал появился — сеется, а изменение, её не задевшее, не сеет', async () => {
+    const { root } = await history();
+    const reader = countingReader();
+    start({ roots: () => [root], readRecords: reader.read });
+    const client = fakeClient();
+    service.subscribe(REF, client);
+    await expect(service.snapshot(REF)).resolves.toMatchObject({ items: [] });
+
+    fakes.setLogFile(path.join(root, '-proj', 'write.jsonl'));
+    // Чужое изменение: индекс сообщает, что запись эту сессию не задела.
+    fakes.emitLog({ affects: () => false });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(reader.files).toHaveLength(0);
+    expect(feedChanged(client)).toHaveLength(0);
+
+    fakes.emitLog({ affects: (session) => session.id === REF.sessionId });
+    await vi.waitFor(() => expect(feedChanged(client)).toHaveLength(1));
+    expect(ofKind(feedChanged(client)[0]?.upsert ?? [], 'tool').length).toBeGreaterThan(0);
+    expect(reader.files).toHaveLength(1);
+  });
+
   it('снимок без живых событий сеет из журнала один раз: вызовы и дифф на месте', async () => {
     const { root } = await history();
     fakes.setLogFile(path.join(root, '-proj', 'write.jsonl'));
@@ -2071,6 +2154,186 @@ describe('сев из журнала', () => {
       Array.from({ length: 10 }, (_, i) => i + 15),
     );
     expect(await readRecordsTail(file, 100)).toHaveLength(25);
+  });
+
+  it('readRecordsTail с maxBytes меньше файла: записи последних байт по порядку, неполная первая отброшена', async () => {
+    const dir = await tempRoot();
+    const file = path.join(dir, 'big.jsonl');
+    const lines = Array.from({ length: 25 }, (_, i) => JSON.stringify({ type: 'user', i }));
+    await writeFile(file, `${lines.join('\n')}\n`);
+    // Каждая строка `{"type":"user","i":N}` — 20 байт с переводом для N < 10 и 21 для N >= 10.
+    const tail = await readRecordsTail(file, SEED_RECORD_WINDOW, 100);
+    const got = tail.map((record) => record['i'] as number);
+    expect(got.length).toBeGreaterThan(0);
+    expect(got.length).toBeLessThan(25);
+    expect(got).toEqual(Array.from({ length: got.length }, (_, i) => 25 - got.length + i));
+    expect(await readRecordsTail(file, SEED_RECORD_WINDOW, 100_000)).toHaveLength(25);
+  });
+
+  /** Журнал из строк JSON; `prompt` — запись пользователя, `filler` — запись, из которой лента не делает элементов. */
+  const userLine = (n: number, text = `prompt ${n}`) =>
+    JSON.stringify({
+      sessionId: 's',
+      type: 'user',
+      uuid: `u${n}`,
+      timestamp: `2026-10-02T10:00:${String(n % 60).padStart(2, '0')}.000Z`,
+      message: { role: 'user', content: text },
+    });
+  const fillerLine = (n: number) => JSON.stringify({ sessionId: 's', type: 'attachment', uuid: `f${n}`, pad: 'x'.repeat(2000) });
+
+  async function writeLog(lines: string[]): Promise<{ root: string; file: string }> {
+    const dir = await tempRoot();
+    const root = path.join(dir, 'projects');
+    await mkdir(path.join(root, '-proj'), { recursive: true });
+    const file = path.join(root, '-proj', 'tail.jsonl');
+    await writeFile(file, `${lines.join('\n')}\n`);
+    return { root, file };
+  }
+
+  function sizedReader() {
+    const sizes: (number | undefined)[] = [];
+    const read = (file: string, maxBytes?: number): Promise<RawRecord[]> => {
+      sizes.push(maxBytes);
+      return readRecordsTail(file, SEED_RECORD_WINDOW, maxBytes);
+    };
+    return { sizes, read };
+  }
+
+  it('хвост растёт вдвое, пока лента не полна: результат равен чтению целиком', async () => {
+    const lines = [userLine(1), userLine(2), userLine(3), ...Array.from({ length: 40 }, (_, i) => fillerLine(i))];
+    const { root, file } = await writeLog(lines);
+    fakes.setLogFile(file);
+    const reader = sizedReader();
+    start({ roots: () => [root], readRecords: reader.read, seedTailBytes: 1024 });
+
+    const grown = await service.snapshot(REF);
+    const size = (await stat(file)).size;
+    expect(reader.sizes[0]).toBe(1024);
+    reader.sizes.forEach((bytes, index) => expect(bytes).toBe(1024 * 2 ** index));
+    expect(reader.sizes.at(-1) as number).toBeGreaterThanOrEqual(size);
+    expect(reader.sizes.at(-2) as number).toBeLessThan(size);
+    const whole = await createFeedService(fakes.deps, { roots: () => [root] }).snapshot(REF);
+    expect(grown.items).toEqual(whole.items);
+    expect(ofKind(grown.items, 'prompt')).toHaveLength(3);
+  });
+
+  it('полная лента из первого хвоста — одно чтение', async () => {
+    const { root, file } = await writeLog(Array.from({ length: 40 }, (_, i) => userLine(i)));
+    fakes.setLogFile(file);
+    const reader = sizedReader();
+    start({ roots: () => [root], readRecords: reader.read, seedTailBytes: 1024, maxItems: 3 });
+
+    const snapshot = await service.snapshot(REF);
+    expect(reader.sizes).toEqual([1024]);
+    expect(snapshot.items).toHaveLength(3);
+  });
+
+  it('запись длиннее хвоста попадает в ленту следующим шагом', async () => {
+    const big = 'я'.repeat(5000);
+    const { root, file } = await writeLog([userLine(1, 'first'), userLine(2, big)]);
+    fakes.setLogFile(file);
+    const reader = sizedReader();
+    start({ roots: () => [root], readRecords: reader.read, seedTailBytes: 1024 });
+
+    const snapshot = await service.snapshot(REF);
+    expect(reader.sizes.length).toBeGreaterThan(1);
+    expect(ofKind(snapshot.items, 'prompt').map((item) => item.text)).toEqual(['first', big]);
+  });
+
+  describe('очередь посевов', () => {
+    const refOf = (n: number) => ({ ...REF, sessionId: `q-${n}` });
+
+    /** Читатель на отложенных промисах: помнит порядок обращений (по имени файла сессии) и число идущих разом. */
+    async function queueSetup(count: number) {
+      const { root, file } = await history().then(async (h) => ({ root: h.root, file: path.join(h.root, '-proj', 'write.jsonl') }));
+      const refs = Array.from({ length: count }, (_, i) => refOf(i + 1));
+      fakes.setSessions(refs.map((ref) => ({ ref })));
+      for (const ref of refs) {
+        const own = path.join(root, '-proj', `${ref.sessionId}.jsonl`);
+        await copyFile(file, own);
+        fakes.setSessionLogFile(ref.sessionId, own);
+      }
+      const order: string[] = [];
+      const gates = new Map<string, () => void>();
+      let active = 0;
+      let peak = 0;
+      const read = async (own: string): Promise<RawRecord[]> => {
+        const name = path.basename(own, '.jsonl');
+        order.push(name);
+        active += 1;
+        peak = Math.max(peak, active);
+        await new Promise<void>((resolve) => gates.set(name, resolve));
+        active -= 1;
+        return [];
+      };
+      const release = (name: string) => {
+        const gate = gates.get(name);
+        expect(gate, `читатель ${name} ещё не обратился`).toBeDefined();
+        gates.delete(name);
+        gate?.();
+      };
+      start({ roots: () => [root], readRecords: read });
+      return { refs, order, release, peak: () => peak, running: () => active, gates };
+    }
+
+    it('не больше двух посевов разом, все сеются', async () => {
+      const q = await queueSetup(5);
+      for (const ref of q.refs) fakes.emitStart(ref);
+      await vi.waitFor(() => expect(q.order).toHaveLength(FEED_SEED_CONCURRENCY));
+      expect(q.running()).toBe(2);
+      while (q.order.length < 5 || q.gates.size > 0) {
+        const name = q.order.find((candidate) => q.gates.has(candidate));
+        if (name === undefined) {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          continue;
+        }
+        q.release(name);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      expect(q.order).toHaveLength(5);
+      expect(q.peak()).toBeLessThanOrEqual(2);
+    });
+
+    it('снимок окна обгоняет фоновые посевы', async () => {
+      const q = await queueSetup(5);
+      for (const ref of q.refs.slice(0, 4)) fakes.emitStart(ref);
+      await vi.waitFor(() => expect(q.order).toEqual(['q-1', 'q-2']));
+      const snapshot = service.snapshot(q.refs[4] as typeof REF);
+      q.release('q-1');
+      await vi.waitFor(() => expect(q.order).toEqual(['q-1', 'q-2', 'q-5']));
+      q.release('q-2');
+      q.release('q-5');
+      await snapshot;
+      await vi.waitFor(() => expect(q.order.slice(3).sort()).toEqual(['q-3', 'q-4']));
+      for (const name of ['q-3', 'q-4']) await vi.waitFor(() => q.release(name));
+    });
+
+    it('снимок поднимает свой фоновый посев', async () => {
+      const q = await queueSetup(4);
+      for (const ref of q.refs) fakes.emitStart(ref);
+      await vi.waitFor(() => expect(q.order).toEqual(['q-1', 'q-2']));
+      const snapshot = service.snapshot(q.refs[3] as typeof REF);
+      q.release('q-1');
+      await vi.waitFor(() => expect(q.order).toEqual(['q-1', 'q-2', 'q-4']));
+      q.release('q-2');
+      q.release('q-4');
+      await snapshot;
+      await vi.waitFor(() => expect(q.order).toHaveLength(4));
+      expect(q.order.filter((name) => name === 'q-4')).toHaveLength(1);
+      await vi.waitFor(() => q.release('q-3'));
+    });
+
+    it('stop() отпускает очередь: ждущий снимок завершается пустой лентой', async () => {
+      const q = await queueSetup(3);
+      for (const ref of q.refs.slice(0, 2)) fakes.emitStart(ref);
+      await vi.waitFor(() => expect(q.order).toEqual(['q-1', 'q-2']));
+      const waiting = service.snapshot(q.refs[2] as typeof REF);
+      await service.stop();
+      await expect(waiting).resolves.toMatchObject({ items: [] });
+      expect(q.order).toEqual(['q-1', 'q-2']);
+      q.release('q-1');
+      q.release('q-2');
+    });
   });
 
   it('снимок субагента по agentId — из его журнала, revision 0', async () => {
@@ -2325,6 +2588,47 @@ describe('прерывание Esc по записи журнала (решен�
 
   const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 30));
 
+  describe('изменение журнала будит только ленты своих сессий', () => {
+    const REF_B: SessionRef = { ...REF, sessionId: 's-02' };
+    const only = (sessionId: string) => ({ affects: (session: { id: string }) => session.id === sessionId });
+
+    /** Две сессии с открытым ходом; шпион пишет, у какой сессии спросили журнал при проверке прерываний. */
+    async function twoOpenTurns(): Promise<string[]> {
+      fakes = fakeFeedDeps([{ ref: REF }, { ref: REF_B }]);
+      const root = await tempRoot();
+      await logUnder(root);
+      const asked: string[] = [];
+      const logFile = fakes.deps.activity.logFile;
+      vi.spyOn(fakes.deps.activity, 'logFile').mockImplementation((ref) => {
+        asked.push(ref.sessionId);
+        return logFile(ref);
+      });
+      start({ roots: () => [root] });
+      service.onHook(hookRequest(prompt('go'), REF));
+      service.onHook(hookRequest(prompt('go'), REF_B));
+      asked.length = 0;
+      return asked;
+    }
+
+    it('изменение журнала A не трогает ленту B', async () => {
+      const asked = await twoOpenTurns();
+      // Вторая рассылка идёт сразу за первой: если бы первая задела B, B спросили бы дважды.
+      fakes.emitLog(only(REF.sessionId));
+      fakes.emitLog(only(REF_B.sessionId));
+      await vi.waitFor(() => expect(asked.length).toBeGreaterThanOrEqual(2));
+      await settle();
+      expect(asked).toEqual([REF.sessionId, REF_B.sessionId]);
+    });
+
+    it('без аргумента (первый полный список) — все ленты', async () => {
+      const asked = await twoOpenTurns();
+      fakes.emitLog();
+      await vi.waitFor(() => expect(asked.length).toBeGreaterThanOrEqual(2));
+      await settle();
+      expect([...asked].sort()).toEqual([REF.sessionId, REF_B.sessionId]);
+    });
+  });
+
   it('запись о прерывании новее начала хода: черта interrupted, вызов отклонён, удержанный вопрос — {} и questionHeld(false)', async () => {
     const root = await tempRoot();
     const file = await logUnder(root);
@@ -2482,6 +2786,47 @@ describe('лента Codex', () => {
     });
     const sub = await service.snapshot(REF, 'th-child');
     expect(sub.items.some((entry) => entry.kind === 'tool' && entry.toolUseId === 'cc1')).toBe(true);
+  });
+
+  it('сессия Codex без providerSessionId, активная: журнал появился — сеется по изменению, задевшему её', async () => {
+    await writeRollout(file, [meta('th-main'), started(1)]);
+    fakes.setLogFile(null);
+    start();
+    const client = fakeClient();
+    service.subscribe(REF, client);
+    await service.snapshot(REF);
+
+    fakes.setLogFile(file);
+    fakes.emitLog({ affects: () => false });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(feedChanged(client)).toHaveLength(0);
+
+    await appendRollout(file, [userMessage(2, 'um1', 'go')]);
+    fakes.emitLog({ affects: (session) => session.id === REF.sessionId });
+    await vi.waitFor(() =>
+      expect(feedChanged(client).flatMap((delta) => delta.upsert.map((entry) => entry.kind))).toContain('prompt'),
+    );
+  });
+
+  it('журнал порождённого треда задел родителя (affects по предкам): лента родителя перечитывает агента', async () => {
+    await writeRollout(file, [meta('th-main'), started(1), subagent(2, 'th-child', 'started')]);
+    const childFile = path.join(dir, 'child.jsonl');
+    await writeRollout(childFile, [childMeta('th-child', 'th-main', 3), parentCopy(1), parentCopy(2), task(3, 'Найди newAgent'), command(4, 'cc1', 'rg newAgent', 'th-child')]);
+    fakes.setChildLogFile('th-child', childFile);
+    start();
+    await service.snapshot(REF);
+    await vi.waitFor(async () => {
+      const card = (await service.snapshot(REF)).items.find((entry) => entry.kind === 'agent');
+      expect(card).toMatchObject({ toolCount: 1 });
+    });
+
+    // Дописан журнал ребёнка; индекс сообщает об изменении, которое задело сессию родителя (запись в цепочке предков).
+    await appendRollout(childFile, [command(5, 'cc2', 'rg other', 'th-child')]);
+    fakes.emitLog({ affects: (session) => session.id === REF.sessionId });
+    await vi.waitFor(async () => {
+      const card = (await service.snapshot(REF)).items.find((entry) => entry.kind === 'agent');
+      expect(card).toMatchObject({ toolCount: 2 });
+    });
   });
 
   it('Stop у Codex — только Esc, без стирания промпта', () => {
@@ -3394,6 +3739,9 @@ describe('картинки результатов инструментов (пл
 it('attention peek reads settled reducer cards before the batched delta flush', async () => {
   vi.useFakeTimers();
   start();
+  // Ленты нет в памяти — карточек нет; лента есть, но не посеяна и не живая — неизвестно.
+  expect(service.peekAttention(REF)).toEqual([]);
+  service.noteMode(REF, 'plan');
   expect(service.peekAttention(REF)).toBeUndefined();
   send(prompt('go'));
   send(pre('t1', 'Bash', { command: 'ls' }));
@@ -3403,4 +3751,115 @@ it('attention peek reads settled reducer cards before the batched delta flush', 
   service.decide(REF, 'permission:t1', { kind: 'permission', behavior: 'allow' });
   expect(service.peekAttention(REF)).toEqual([]);
   expect(snapshot.items.some((item) => item.kind === 'permission' && item.state === 'pending')).toBe(true);
+});
+
+describe('выгрузка лент (решение 5)', () => {
+  const MINUTE = 60_000;
+
+  /** Журнал без процесса: чтения считает счётчик; часы и обход — на фальшивых таймерах (файлы читаются обычным путём). */
+  async function evictSetup(): Promise<{ reads: string[] }> {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
+    const root = path.join(await tempRoot(), 'projects');
+    await mkdir(path.join(root, '-proj'), { recursive: true });
+    const file = path.join(root, '-proj', 'write.jsonl');
+    await copyFile(path.join(FIXTURES, 'transcript-p5b-write.jsonl'), file);
+    fakes.setLogFile(file);
+    fakes.setProcess(null);
+    const reads: string[] = [];
+    start({
+      roots: () => [root],
+      readRecords: async (own) => {
+        reads.push(own);
+        return (await readJsonlRecords(own)).records;
+      },
+    });
+    return { reads };
+  }
+
+  it('закрытая сессия — лента уходит сразу, следующий снимок сеет заново', async () => {
+    const { reads } = await evictSetup();
+    const first = await service.snapshot(REF);
+    expect(first.items.length).toBeGreaterThan(0);
+    await service.snapshot(REF);
+    expect(reads).toHaveLength(1);
+    fakes.setSessions([{ ref: REF, lifecycle: 'closed' }]);
+    expect(fakes.log.info).toHaveBeenCalledWith('лента выгружена', { op: 'feed.evicted', sessionId: REF.sessionId, reason: 'closed' });
+    const again = await service.snapshot(REF);
+    expect(reads).toHaveLength(2);
+    expect(again.items).toEqual(first.items);
+  });
+
+  it('работа в архиве — лента уходит сразу', async () => {
+    const { reads } = await evictSetup();
+    await service.snapshot(REF);
+    fakes.setSessions([{ ref: REF, archived: true }]);
+    await service.snapshot(REF);
+    expect(reads).toHaveLength(2);
+  });
+
+  it('без подписчиков 10 минут — уходит, 9 — нет', async () => {
+    const stays = await evictSetup();
+    await service.snapshot(REF);
+    vi.advanceTimersByTime(9 * MINUTE);
+    await service.snapshot(REF);
+    expect(stays.reads).toHaveLength(1);
+    await service.stop();
+
+    fakes = fakeFeedDeps();
+    const leaves = await evictSetup();
+    await service.snapshot(REF);
+    vi.advanceTimersByTime(FEED_IDLE_EVICT_MS);
+    await service.snapshot(REF);
+    expect(leaves.reads).toHaveLength(2);
+  });
+
+  it('не уходит при подписчике; после ухода последнего закрытая лента уходит сразу', async () => {
+    const { reads } = await evictSetup();
+    const client = fakeClient();
+    service.subscribe(REF, client);
+    await service.snapshot(REF);
+    fakes.setSessions([{ ref: REF, lifecycle: 'closed' }]);
+    vi.advanceTimersByTime(20 * MINUTE);
+    await service.snapshot(REF);
+    expect(reads).toHaveLength(1);
+    service.unsubscribe(REF, client);
+    await service.snapshot(REF);
+    expect(reads).toHaveLength(2);
+  });
+
+  it('не уходит при удержанном хуке (карточка ждёт человека)', async () => {
+    await evictSetup();
+    send(prompt('go'));
+    send(pre('t1', 'Bash', { command: 'ls' }));
+    send(permission('Bash', { command: 'ls' }));
+    fakes.setSessions([{ ref: REF, lifecycle: 'closed' }]);
+    vi.advanceTimersByTime(20 * MINUTE);
+    expect(service.peekAttention(REF)?.map((card) => card.cardId)).toEqual(['permission:t1']);
+  });
+
+  it('не уходит при живом процессе', async () => {
+    const { reads } = await evictSetup();
+    fakes.setProcess({ pid: 1 });
+    await service.snapshot(REF);
+    fakes.setSessions([{ ref: REF, lifecycle: 'closed' }]);
+    vi.advanceTimersByTime(20 * MINUTE);
+    await service.snapshot(REF);
+    expect(reads).toHaveLength(1);
+  });
+
+  it('peekAttention без ленты — пустой список; после выгрузки тоже', async () => {
+    await evictSetup();
+    expect(service.peekAttention(REF)).toEqual([]);
+    await service.snapshot(REF);
+    fakes.setSessions([{ ref: REF, lifecycle: 'closed' }]);
+    expect(service.peekAttention(REF)).toEqual([]);
+  });
+
+  it('обход не держит процесс и снимается в stop()', async () => {
+    await evictSetup();
+    const before = vi.getTimerCount();
+    expect(before).toBeGreaterThan(0);
+    await service.stop();
+    expect(vi.getTimerCount()).toBe(0);
+  });
 });

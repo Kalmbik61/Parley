@@ -453,7 +453,7 @@ describe('indexCodexSession: вызов code mode без ответа (стор�
     expect(indexed.pendingCodeCell).toEqual({ id: '58', at: AT });
   });
 
-  it('incremental reads retain pending cells and late results without changing previous snapshots', async () => {
+  it('incremental reads retain pending cells and late results', async () => {
     const file = await writeRollout('2026-10-18', 'incremental-cell', meta() +
       exec(AT, CHECK_INBOX) + yielded() + wait(AT, '{"cell_id":"58"}'));
     const before = await extendCodexSessionIndex(null, file);
@@ -463,12 +463,10 @@ describe('indexCodexSession: вызов code mode без ответа (стор�
     expect(ended.index).toEqual(await indexCodexSession(file));
     expect(ended.index.pendingCodeCell).toEqual({ id: '58', at: AT });
     expect(ended.index.openCodeCall).toBeUndefined();
-    expect(before.state.acc.build(file)).toEqual(before.index);
     await appendFile(file, item(AT, { type: 'function_call_output', call_id: 'call_wait', output: 'Script completed\nOutput:\n' }));
     const completed = await extendCodexSessionIndex(ended.state, file);
     expect(completed.index).toEqual(await indexCodexSession(file));
     expect(completed.index.pendingCodeCell).toBeUndefined();
-    expect(ended.state.acc.build(file)).toEqual(ended.index);
   });
 
   it.each(['Script completed\nOutput:\n', 'Script terminated'])('wait result %s clears only its own cell', async (output) => {

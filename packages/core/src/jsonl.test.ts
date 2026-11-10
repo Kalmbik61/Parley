@@ -95,3 +95,14 @@ describe('forEachJsonlRecord — остановка (2026-10-06)', () => {
     expect(seen).toEqual([]);
   });
 });
+
+describe('forEachJsonlRecord — чтение со start', () => {
+  it('start посреди строки: только целые строки после неё, номера строк от start', async () => {
+    // Каждая строка — 8 байт с переводом: `{"i":N}\n`.
+    const file = await write('start.jsonl', '{"i":0}\n{"i":1}\n{"i":2}\n');
+    const seen: Array<[unknown, number]> = [];
+    const stats = await forEachJsonlRecord(file, (record, lineNo) => seen.push([record, lineNo]), undefined, { start: 3 });
+    expect(seen).toEqual([[{ i: 1 }, 1], [{ i: 2 }, 2]]);
+    expect(stats).toMatchObject({ parsed: 2, malformed: 0 });
+  });
+});
