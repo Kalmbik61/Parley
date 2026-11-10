@@ -753,6 +753,7 @@ export function createWakeService(
     const wasFresh = state.fresh;
     state.fresh = false;
     state.freshRunning = wasFresh;
+    let failed = false;
     try {
       const registry = await loadProviders();
       const template = registry[session.provider]?.runner.resumeArgs;
@@ -833,11 +834,15 @@ export function createWakeService(
         limitNotice(ref, `the workspace budget is exhausted (${(error as Error).message})`);
         publishWaiting(ref, state, 'resume-limit');
       } else {
+        failed = true;
         await resumeFailed(ref, state, action.letterIds, (error as Error).message);
       }
     } finally {
       state.resuming = false;
     }
+    // Сбой подъёма: ожидание «resuming» осталось с начала попытки, а карта могла не измениться (у свежей попытки после
+    // перезапуска хоста `wakeBlocked` уже записан) — без пересчёта окно так и показало бы «resuming».
+    if (failed) recompute(ref);
   }
 
   /** Процесс поднятой сессии вышел в срок сбоя: ни одного нового хука — не ожил. */
@@ -850,6 +855,8 @@ export function createWakeService(
   ): Promise<void> {
     if ((await journalLength(ref)) > base) return;
     await resumeFailed(ref, state, letterIds, `the process exited with code ${exitCode} before starting work`);
+    // Как в конце неудачного `resumeSession`: `resuming` уже снят, а карта могла не измениться.
+    recompute(ref);
   }
 
   /**
