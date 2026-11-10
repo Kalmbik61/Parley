@@ -10,15 +10,20 @@ export const REPORT_UPDATE_WINDOW_MS = 60_000;
 export type ReportRecipientRole = 'giver' | 'lead' | 'owner';
 export interface ReportRecipient { id: string; as: ReportRecipientRole; roomId?: string }
 
-/** Отправитель самого нового прямого письма-задания: не вопрос, не служебное, не сам и не свой ребёнок. */
+/** Письмо-задание сессии: адресовано ей по имени, не от неё, SYSTEM и PARLEY, не вопрос, не от её ребёнка. */
+export function isTaskLetter(map: WorkMap, sessionId: string, letter: Message): boolean {
+  return letter.to.includes(sessionId) && letter.from !== sessionId &&
+    letter.from !== SYSTEM && letter.from !== PARLEY && letter.kind !== 'question' &&
+    !map.sessions.some((sender) => sender.id === letter.from && sender.createdBy === sessionId);
+}
+
+/** Отправитель самого нового прямого письма-задания (`isTaskLetter`). */
 function latestTaskSender(map: WorkMap, letters: LetterReads, sessionId: string): string | null {
   let beforeSeq: number | undefined;
   for (;;) {
     const page = letters.query({ involving: [sessionId], roomId: null, newestFirst: true, limit: 50,
       ...(beforeSeq === undefined ? {} : { beforeSeq }) });
-    const task = page.find((letter) => letter.to.includes(sessionId) && letter.from !== sessionId &&
-      letter.from !== SYSTEM && letter.from !== PARLEY && letter.kind !== 'question' &&
-      !map.sessions.some((sender) => sender.id === letter.from && sender.createdBy === sessionId));
+    const task = page.find((letter) => isTaskLetter(map, sessionId, letter));
     if (task !== undefined) return task.from;
     if (page.length < 50) return null;
     beforeSeq = letterSeq(page[page.length - 1]!.id);

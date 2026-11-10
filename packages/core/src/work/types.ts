@@ -167,6 +167,15 @@ export interface AgentBinding {
   role?: SessionRole | null;
 }
 
+/** Вид тихой концовки: выход процесса, Stop, Close человеком, конец хода без `report`. */
+export type SilentEndingKind = 'exit' | 'stop' | 'close' | 'turn';
+
+/**
+ * Отметка «уже сказано»: `assignment` — id письма-задания, под которое она стоит (`null` — задание из создания);
+ * `told` — виды, о которых получатели уже знают; `nudgedAt` — когда сессию саму попросили сдать итог.
+ */
+export interface SilentEndingMark { assignment: string | null; told: SilentEndingKind[]; nudgedAt: string | null }
+
 export interface WorkSession {
   id: string;
   /** Explicit personal steps, published by this session; separate from accepted room assignments. */
@@ -283,6 +292,11 @@ export interface WorkSession {
    * снимают поле. Нет поля — то же, что `null`: старые карты читаются как есть.
    */
   wakeBlocked?: { since: string; reason: string } | null;
+  /**
+   * Что о тихих концовках сессии уже сказано (`silent-endings.ts`): под какое задание и какие виды. Пишет только хост
+   * под замком карты. Нет поля — то же, что `null`: ничего не сказано, миграции карты не нужно.
+   */
+  silentEnding?: SilentEndingMark | null;
 }
 
 /**
