@@ -40,6 +40,11 @@ const ENTER_MS = 30;
 /** Запас таймера окна тишины сверх срока (`SETTLE_SLACK_MS` будильника) с поправкой на паузу Enter. */
 const PAST = 200;
 const SECOND = 1000;
+/**
+ * Эти тесты про окно тишины, а не про повтор указателя: пауза повтора после таймаута уведена за пределы любого из них (сутки),
+ * иначе указатель без хода (мок не начинает ход) через 10 с и 30 с набрался бы второй раз. Сам повтор — в wake-service.test.ts.
+ */
+const REARM_OFF_MS = 24 * 60 * 60 * 1000;
 const TITLE = 'Ревью';
 
 const pointerOf = (count: number): string => `New messages (${count}) in r-01 "${TITLE}". Call check_inbox.`;
@@ -184,7 +189,7 @@ async function settleRig(
   const launch = vi.fn<SessionsService['launch']>(async () => 'started');
   const limiter = new ResumeLimiter(() => 6);
 
-  const wake = createWakeService(host, works, activity, pty, { launch }, { enterDelayMs: ENTER_MS, limiter, ...options.wake });
+  const wake = createWakeService(host, works, activity, pty, { launch }, { enterDelayMs: ENTER_MS, limiter, pointerRearmMs: [REARM_OFF_MS], ...options.wake });
   wakes.push(wake);
   if (options.start !== false) wake.start();
 
