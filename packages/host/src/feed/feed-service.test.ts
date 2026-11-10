@@ -6,7 +6,7 @@
 
 import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
-import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -32,7 +32,7 @@ import { fakeClient, fakeFeedDeps, hookRequest, REF } from '../../test/feed-fake
 import type { FakeFeedDeps } from '../../test/feed-fakes.js';
 import { makePng } from '../../test/png.js';
 import { HostError } from '../errors.js';
-import { createFeedService, FEED_MAX_ITEMS, readRecordsTail } from './feed-service.js';
+import { createFeedService, FEED_MAX_ITEMS, FEED_SEED_CONCURRENCY, readRecordsTail, SEED_RECORD_WINDOW } from './feed-service.js';
 import type { FeedService, FeedServiceOptions } from './feed-service.js';
 import * as progressModule from './progress.js';
 import * as codexSource from './codex-source.js';
@@ -2071,6 +2071,186 @@ describe('сев из журнала', () => {
       Array.from({ length: 10 }, (_, i) => i + 15),
     );
     expect(await readRecordsTail(file, 100)).toHaveLength(25);
+  });
+
+  it('readRecordsTail с maxBytes меньше файла: записи последних байт по порядку, неполная первая отброшена', async () => {
+    const dir = await tempRoot();
+    const file = path.join(dir, 'big.jsonl');
+    const lines = Array.from({ length: 25 }, (_, i) => JSON.stringify({ type: 'user', i }));
+    await writeFile(file, `${lines.join('\n')}\n`);
+    // Каждая строка `{"type":"user","i":N}` — 20 байт с переводом для N < 10 и 21 для N >= 10.
+    const tail = await readRecordsTail(file, SEED_RECORD_WINDOW, 100);
+    const got = tail.map((record) => record['i'] as number);
+    expect(got.length).toBeGreaterThan(0);
+    expect(got.length).toBeLessThan(25);
+    expect(got).toEqual(Array.from({ length: got.length }, (_, i) => 25 - got.length + i));
+    expect(await readRecordsTail(file, SEED_RECORD_WINDOW, 100_000)).toHaveLength(25);
+  });
+
+  /** Журнал из строк JSON; `prompt` — запись пользователя, `filler` — запись, из которой лента не делает элементов. */
+  const userLine = (n: number, text = `prompt ${n}`) =>
+    JSON.stringify({
+      sessionId: 's',
+      type: 'user',
+      uuid: `u${n}`,
+      timestamp: `2026-10-02T10:00:${String(n % 60).padStart(2, '0')}.000Z`,
+      message: { role: 'user', content: text },
+    });
+  const fillerLine = (n: number) => JSON.stringify({ sessionId: 's', type: 'attachment', uuid: `f${n}`, pad: 'x'.repeat(2000) });
+
+  async function writeLog(lines: string[]): Promise<{ root: string; file: string }> {
+    const dir = await tempRoot();
+    const root = path.join(dir, 'projects');
+    await mkdir(path.join(root, '-proj'), { recursive: true });
+    const file = path.join(root, '-proj', 'tail.jsonl');
+    await writeFile(file, `${lines.join('\n')}\n`);
+    return { root, file };
+  }
+
+  function sizedReader() {
+    const sizes: (number | undefined)[] = [];
+    const read = (file: string, maxBytes?: number): Promise<RawRecord[]> => {
+      sizes.push(maxBytes);
+      return readRecordsTail(file, SEED_RECORD_WINDOW, maxBytes);
+    };
+    return { sizes, read };
+  }
+
+  it('хвост растёт вдвое, пока лента не полна: результат равен чтению целиком', async () => {
+    const lines = [userLine(1), userLine(2), userLine(3), ...Array.from({ length: 40 }, (_, i) => fillerLine(i))];
+    const { root, file } = await writeLog(lines);
+    fakes.setLogFile(file);
+    const reader = sizedReader();
+    start({ roots: () => [root], readRecords: reader.read, seedTailBytes: 1024 });
+
+    const grown = await service.snapshot(REF);
+    const size = (await stat(file)).size;
+    expect(reader.sizes[0]).toBe(1024);
+    reader.sizes.forEach((bytes, index) => expect(bytes).toBe(1024 * 2 ** index));
+    expect(reader.sizes.at(-1) as number).toBeGreaterThanOrEqual(size);
+    expect(reader.sizes.at(-2) as number).toBeLessThan(size);
+    const whole = await createFeedService(fakes.deps, { roots: () => [root] }).snapshot(REF);
+    expect(grown.items).toEqual(whole.items);
+    expect(ofKind(grown.items, 'prompt')).toHaveLength(3);
+  });
+
+  it('полная лента из первого хвоста — одно чтение', async () => {
+    const { root, file } = await writeLog(Array.from({ length: 40 }, (_, i) => userLine(i)));
+    fakes.setLogFile(file);
+    const reader = sizedReader();
+    start({ roots: () => [root], readRecords: reader.read, seedTailBytes: 1024, maxItems: 3 });
+
+    const snapshot = await service.snapshot(REF);
+    expect(reader.sizes).toEqual([1024]);
+    expect(snapshot.items).toHaveLength(3);
+  });
+
+  it('запись длиннее хвоста попадает в ленту следующим шагом', async () => {
+    const big = 'я'.repeat(5000);
+    const { root, file } = await writeLog([userLine(1, 'first'), userLine(2, big)]);
+    fakes.setLogFile(file);
+    const reader = sizedReader();
+    start({ roots: () => [root], readRecords: reader.read, seedTailBytes: 1024 });
+
+    const snapshot = await service.snapshot(REF);
+    expect(reader.sizes.length).toBeGreaterThan(1);
+    expect(ofKind(snapshot.items, 'prompt').map((item) => item.text)).toEqual(['first', big]);
+  });
+
+  describe('очередь посевов', () => {
+    const refOf = (n: number) => ({ ...REF, sessionId: `q-${n}` });
+
+    /** Читатель на отложенных промисах: помнит порядок обращений (по имени файла сессии) и число идущих разом. */
+    async function queueSetup(count: number) {
+      const { root, file } = await history().then(async (h) => ({ root: h.root, file: path.join(h.root, '-proj', 'write.jsonl') }));
+      const refs = Array.from({ length: count }, (_, i) => refOf(i + 1));
+      fakes.setSessions(refs.map((ref) => ({ ref })));
+      for (const ref of refs) {
+        const own = path.join(root, '-proj', `${ref.sessionId}.jsonl`);
+        await copyFile(file, own);
+        fakes.setSessionLogFile(ref.sessionId, own);
+      }
+      const order: string[] = [];
+      const gates = new Map<string, () => void>();
+      let active = 0;
+      let peak = 0;
+      const read = async (own: string): Promise<RawRecord[]> => {
+        const name = path.basename(own, '.jsonl');
+        order.push(name);
+        active += 1;
+        peak = Math.max(peak, active);
+        await new Promise<void>((resolve) => gates.set(name, resolve));
+        active -= 1;
+        return [];
+      };
+      const release = (name: string) => {
+        const gate = gates.get(name);
+        expect(gate, `читатель ${name} ещё не обратился`).toBeDefined();
+        gates.delete(name);
+        gate?.();
+      };
+      start({ roots: () => [root], readRecords: read });
+      return { refs, order, release, peak: () => peak, running: () => active, gates };
+    }
+
+    it('не больше двух посевов разом, все сеются', async () => {
+      const q = await queueSetup(5);
+      for (const ref of q.refs) fakes.emitStart(ref);
+      await vi.waitFor(() => expect(q.order).toHaveLength(FEED_SEED_CONCURRENCY));
+      expect(q.running()).toBe(2);
+      while (q.order.length < 5 || q.gates.size > 0) {
+        const name = q.order.find((candidate) => q.gates.has(candidate));
+        if (name === undefined) {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          continue;
+        }
+        q.release(name);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      expect(q.order).toHaveLength(5);
+      expect(q.peak()).toBeLessThanOrEqual(2);
+    });
+
+    it('снимок окна обгоняет фоновые посевы', async () => {
+      const q = await queueSetup(5);
+      for (const ref of q.refs.slice(0, 4)) fakes.emitStart(ref);
+      await vi.waitFor(() => expect(q.order).toEqual(['q-1', 'q-2']));
+      const snapshot = service.snapshot(q.refs[4] as typeof REF);
+      q.release('q-1');
+      await vi.waitFor(() => expect(q.order).toEqual(['q-1', 'q-2', 'q-5']));
+      q.release('q-2');
+      q.release('q-5');
+      await snapshot;
+      await vi.waitFor(() => expect(q.order.slice(3).sort()).toEqual(['q-3', 'q-4']));
+      for (const name of ['q-3', 'q-4']) await vi.waitFor(() => q.release(name));
+    });
+
+    it('снимок поднимает свой фоновый посев', async () => {
+      const q = await queueSetup(4);
+      for (const ref of q.refs) fakes.emitStart(ref);
+      await vi.waitFor(() => expect(q.order).toEqual(['q-1', 'q-2']));
+      const snapshot = service.snapshot(q.refs[3] as typeof REF);
+      q.release('q-1');
+      await vi.waitFor(() => expect(q.order).toEqual(['q-1', 'q-2', 'q-4']));
+      q.release('q-2');
+      q.release('q-4');
+      await snapshot;
+      await vi.waitFor(() => expect(q.order).toHaveLength(4));
+      expect(q.order.filter((name) => name === 'q-4')).toHaveLength(1);
+      await vi.waitFor(() => q.release('q-3'));
+    });
+
+    it('stop() отпускает очередь: ждущий снимок завершается пустой лентой', async () => {
+      const q = await queueSetup(3);
+      for (const ref of q.refs.slice(0, 2)) fakes.emitStart(ref);
+      await vi.waitFor(() => expect(q.order).toEqual(['q-1', 'q-2']));
+      const waiting = service.snapshot(q.refs[2] as typeof REF);
+      await service.stop();
+      await expect(waiting).resolves.toMatchObject({ items: [] });
+      expect(q.order).toEqual(['q-1', 'q-2']);
+      q.release('q-1');
+      q.release('q-2');
+    });
   });
 
   it('снимок субагента по agentId — из его журнала, revision 0', async () => {

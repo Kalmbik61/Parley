@@ -23,7 +23,7 @@
  * редьюсер не идёт — из него читаются только ретраи и прерывания, — поэтому картинок там не ищут.
  */
 
-import { lstat, open } from 'node:fs/promises';
+import { lstat, open, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import {
@@ -93,6 +93,13 @@ export const FEED_BATCH_MS = 50;
  * больше пары элементов), а память не растёт с файлом — журналы долгих сессий весят десятки мегабайт.
  */
 export const SEED_RECORD_WINDOW = 10_000;
+/** Сколько посевов лент идёт разом: остальные ждут в очереди (передний — снимок для окна). */
+export const FEED_SEED_CONCURRENCY = 2;
+/**
+ * Сколько байт хвоста журнала Claude читается при севе сначала; хвост удваивается, пока не накрыл файл, не набралось
+ * `SEED_RECORD_WINDOW` записей и лента после редьюсера не дошла до `maxItems` или `maxBytes`.
+ */
+export const SEED_TAIL_BYTES = 16 * 1024 * 1024;
 /** Сколько байт хвоста журнала читается в поисках записи о прерывании: несколько последних записей. */
 const INTERRUPT_TAIL_BYTES = 64 * 1024;
 
@@ -150,8 +157,10 @@ export interface FeedServiceOptions {
   now?: () => number;
   /** Корни истории Claude Code, внутри которых читаются журналы; по умолчанию — `claudeProjectRoots()`. */
   roots?: () => readonly string[];
-  /** Чтение записей журнала; тесты подставляют счётчик. */
-  readRecords?: (file: string) => Promise<RawRecord[]>;
+  /** Чтение записей журнала (последних `maxBytes` байт); тесты подставляют счётчик. */
+  readRecords?: (file: string, maxBytes?: number) => Promise<RawRecord[]>;
+  /** Первый хвост журнала Claude при севе; по умолчанию `SEED_TAIL_BYTES`. */
+  seedTailBytes?: number;
   /** Каталог файлов картинок ленты; по умолчанию `<дом Parley>/feed-images`. */
   imagesDir?: string;
 }
@@ -335,19 +344,30 @@ function insideRoots(file: string, roots: readonly string[]): boolean {
   });
 }
 
-/** Последние `window` записей файла по порядку: кольцевой буфер, файл целиком в память не ложится. */
+/**
+ * Последние `window` записей файла по порядку: кольцевой буфер, файл целиком в память не ложится. С `maxBytes`
+ * меньше файла читаются только его последние байты (первая, неполная строка отбрасывается).
+ */
 export async function readRecordsTail(
   file: string,
   window: number = SEED_RECORD_WINDOW,
+  maxBytes: number = Number.POSITIVE_INFINITY,
 ): Promise<RawRecord[]> {
   const ring: RawRecord[] = [];
   let next = 0;
   let count = 0;
-  await forEachJsonlRecord(file, (record) => {
-    ring[next] = record;
-    next = (next + 1) % window;
-    count += 1;
-  });
+  const { size } = await stat(file);
+  const start = size > maxBytes ? size - maxBytes : 0;
+  await forEachJsonlRecord(
+    file,
+    (record) => {
+      ring[next] = record;
+      next = (next + 1) % window;
+      count += 1;
+    },
+    undefined,
+    { start },
+  );
   return count < window ? ring : [...ring.slice(next), ...ring.slice(0, next)];
 }
 
@@ -378,7 +398,8 @@ export function createFeedService(
   const codexHooks =
     options.codexHooks ?? (async (): Promise<boolean> => codexHooksWanted((await loadConfig()).config));
   const roots = options.roots ?? (() => claudeProjectRoots());
-  const readRecords = options.readRecords ?? readRecordsTail;
+  const readRecords = options.readRecords ?? ((file: string, bytes?: number) => readRecordsTail(file, SEED_RECORD_WINDOW, bytes));
+  const seedTailBytes = options.seedTailBytes ?? SEED_TAIL_BYTES;
 
   const imageStore = createFeedImageStore({
     dir: options.imagesDir ?? path.join(parleyHome(), 'feed-images'),
@@ -398,6 +419,10 @@ export function createFeedService(
   const feeds = new Map<string, SessionFeed>();
   // Это lock underlying cold seed, не кэш ответа. Removal/timeout не освобождают незавершённый I/O.
   const coldReads = new Map<string, Promise<void>>();
+  // Очередь посевов: не больше `FEED_SEED_CONCURRENCY` разом; впереди — посев для окна (`foreground`), затем по порядку.
+  type SeedWaiter = { key: string; foreground: boolean; start: () => void };
+  const seedWaiters: SeedWaiter[] = [];
+  let seedRunning = 0;
   const progressClients = new Map<Client, ProgressClient>();
   /** Граница запуска живёт до удаления сессии, даже если feed ещё нет или pending уже подтверждён. */
   const progressStarts = new Map<string, ProgressStart>();
@@ -760,12 +785,13 @@ export function createFeedService(
    * известен индексу (он строится после старта хоста, не дожидаясь окна) — сев не состоялся, и его
    * повторит следующий снимок или изменение журналов (`seedAside`).
    */
-  function seed(feed: SessionFeed, provider: string): Promise<void> {
+  function seed(feed: SessionFeed, provider: string, foreground = false): Promise<void> {
     if (stopped) return Promise.resolve();
     const key = refKey(feed.ref);
+    if (foreground) promoteSeed(key);
     const existing = coldReads.get(key);
     if (existing !== undefined) return existing;
-    const run = provider === 'codex' ? seedCodex(feed) : seedClaude(feed, provider);
+    const run = provider === 'codex' ? seedCodex(feed, foreground) : seedClaude(feed, provider, foreground);
     if (feed.seeding === undefined) return run;
     const held = run.finally(() => {
       if (coldReads.get(key) === held) coldReads.delete(key);
@@ -774,16 +800,49 @@ export function createFeedService(
     return held;
   }
 
-  function seedClaude(feed: SessionFeed, provider: string): Promise<void> {
+  /**
+   * Место в очереди посевов; ответ — функция освобождения (можно звать повторно). Освободившееся место берёт первый
+   * ждущий с `foreground`, иначе первый по порядку; после `stop()` места не ждут.
+   */
+  function seedSlot(key: string, foreground: boolean): Promise<() => void> {
+    let released = false;
+    const release = (): void => {
+      if (released) return;
+      released = true;
+      seedRunning -= 1;
+      while (seedRunning < FEED_SEED_CONCURRENCY && seedWaiters.length > 0) {
+        const index = seedWaiters.findIndex((waiter) => waiter.foreground);
+        seedWaiters.splice(index === -1 ? 0 : index, 1)[0]?.start();
+      }
+    };
+    return new Promise((resolve) => {
+      const start = (): void => {
+        seedRunning += 1;
+        resolve(release);
+      };
+      if (stopped || (seedRunning < FEED_SEED_CONCURRENCY && seedWaiters.length === 0)) start();
+      else seedWaiters.push({ key, foreground, start });
+    });
+  }
+
+  /** Снимок для окна поднимает уже ждущий в очереди посев той же ленты. */
+  function promoteSeed(key: string): void {
+    for (const waiter of seedWaiters) if (waiter.key === key) waiter.foreground = true;
+  }
+
+  function seedClaude(feed: SessionFeed, provider: string, foreground: boolean): Promise<void> {
     if (feed.seeding !== undefined) return feed.seeding;
     const file = isClaudeCode(provider) ? deps.activity.logFile(feed.ref) : null;
     if (file === null) return Promise.resolve();
     const proof = captureProgress(feed);
+    const key = refKey(feed.ref);
     feed.seeding = (async () => {
+      const release = await seedSlot(key, foreground);
       try {
-        const records = await readTranscript(file);
-        if (records === null || feed.live || !feedCurrent(feed)) return;
-        const seeded = closeBrokenTurn(feedFromTranscript(stashClaude(records), { limit: maxItems }));
+        if (feed.live || !feedCurrent(feed)) return;
+        const grown = await readFeedTail(file);
+        if (grown === null || feed.live || !feedCurrent(feed)) return;
+        const seeded = closeBrokenTurn(grown);
         // Режим, который хост уже сверил по подвалу (`noteMode`), свежее записи журнала.
         const state = { ...seeded, permissionMode: feed.state.permissionMode ?? seeded.permissionMode };
         feed.state = state;
@@ -802,6 +861,7 @@ export function createFeedService(
           error: String(error),
         });
       } finally {
+        release();
         feed.seeded = true;
         feed.seeding = undefined;
       }
@@ -810,7 +870,7 @@ export function createFeedService(
   }
 
   /** Сев ленты Codex из журнала сессии; потом — журналы её агентов. Хвост остаётся для опроса. */
-  function seedCodex(feed: SessionFeed): Promise<void> {
+  function seedCodex(feed: SessionFeed, foreground = false): Promise<void> {
     if (feed.seeding !== undefined) return feed.seeding;
     const file = deps.activity.logFile(feed.ref);
     if (file === null) return Promise.resolve();
@@ -820,7 +880,9 @@ export function createFeedService(
     // Привязка сменилась, пока журнал читался: прочитанное принадлежит прежнему журналу, сев повторяется.
     let stale = false;
     const run = (async () => {
+      const release = await seedSlot(refKey(feed.ref), foreground);
       try {
+        if (!feedCurrent(feed)) return;
         const tail = createRolloutTail(file);
         const records = await tail.read();
         if (!feedCurrent(feed)) return;
@@ -861,12 +923,13 @@ export function createFeedService(
           error: String(error),
         });
       } finally {
+        release();
         feed.seeded = true;
         feed.seeding = undefined;
       }
       if (feedCurrent(feed)) await serialCodex(feed, () => syncCodexAgents(feed));
     })();
-    feed.seeding = run.then(() => (stale && feedCurrent(feed) ? seedCodex(feed) : undefined));
+    feed.seeding = run.then(() => (stale && feedCurrent(feed) ? seedCodex(feed, foreground) : undefined));
     return feed.seeding;
   }
 
@@ -1014,15 +1077,42 @@ export function createFeedService(
    * Записи журнала; `null` — читать нельзя или нечего: путь не абсолютный или вне корней истории
    * Claude Code, файла нет или это не обычный файл (ссылка, FIFO). Проверки — до открытия файла.
    */
-  async function readTranscript(file: string): Promise<RawRecord[] | null> {
+  async function readTranscript(
+    file: string,
+    maxBytes?: number,
+  ): Promise<{ records: RawRecord[]; size: number } | null> {
     if (!path.isAbsolute(file) || !insideRoots(file, roots())) return null;
+    let size: number;
     try {
       const info = await lstat(file);
       if (!info.isFile()) return null;
+      size = info.size;
     } catch {
       return null;
     }
-    return readRecords(file);
+    return { records: await readRecords(file, maxBytes), size };
+  }
+
+  /**
+   * Лента из хвоста журнала Claude (сессии или субагента): сначала `seedTailBytes`, потом вдвое больше, пока не
+   * выполнено одно из трёх — хвост накрыл файл, набрано `SEED_RECORD_WINDOW` записей или лента после редьюсера
+   * дошла до `maxItems` либо `maxBytes`. В первых двух случаях результат равен чтению файла целиком, в третьем
+   * могут отличаться только самые старые элементы у края хвоста. `null` — читать нельзя (см. `readTranscript`).
+   */
+  async function readFeedTail(file: string): Promise<FeedState | null> {
+    let bytes = seedTailBytes;
+    for (;;) {
+      const read = await readTranscript(file, bytes);
+      if (read === null) return null;
+      const state = feedFromTranscript(stashClaude(read.records), { limit: maxItems });
+      if (bytes >= read.size || read.records.length >= SEED_RECORD_WINDOW || state.items.length >= maxItems) return state;
+      let total = 0;
+      for (const item of state.items) {
+        total += itemBytes(item);
+        if (total >= maxBytes) return state;
+      }
+      bytes *= 2;
+    }
   }
 
   /**
@@ -1300,9 +1390,8 @@ export function createFeedService(
     const base = deps.activity.logFile(ref) ?? feeds.get(refKey(ref))?.transcriptPath ?? null;
     if (base === null) throw notFound();
     const file = path.join(base.replace(/\.jsonl$/, ''), 'subagents', `agent-${agentId}.jsonl`);
-    const records = await readTranscript(file);
-    if (records === null) throw notFound();
-    const state = feedFromTranscript(stashClaude(records), { limit: maxItems });
+    const state = await readFeedTail(file);
+    if (state === null) throw notFound();
     return {
       items: tailByBytes(state.items, maxBytes),
       revision: 0,
@@ -1579,7 +1668,7 @@ export function createFeedService(
       let seedMs: number | null = null;
       if (!feed.live && !feed.seeded) {
         const seedStartedAt = performance.now();
-        await seed(feed, session.provider);
+        await seed(feed, session.provider, scope === undefined);
         seedMs = Math.round(performance.now() - seedStartedAt);
       }
       // Накопленная пачка уходит до снимка: следующая дельта подписчику — ровно `revision + 1`.
@@ -1731,6 +1820,8 @@ export function createFeedService(
       unsubscribeWorks();
       unsubscribeLogs();
       clearInterval(imageSweep);
+      // Ждущие посевы запускаются и сразу выходят (`stopped`): снимок, ждавший место, завершается пустой лентой.
+      for (const waiter of seedWaiters.splice(0)) waiter.start();
       for (const feed of feeds.values()) {
         if (feed.timer !== undefined) clearTimeout(feed.timer);
         feed.timer = undefined;

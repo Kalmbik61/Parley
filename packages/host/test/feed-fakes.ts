@@ -33,6 +33,8 @@ export interface FakeFeedDeps {
   log: ReturnType<typeof silentLog>;
   /** Журнал сессии, который отдаёт «индекс логов». */
   setLogFile(file: string | null): void;
+  /** Журнал одной сессии; у остальных — общий `setLogFile`. */
+  setSessionLogFile(sessionId: string, file: string | null): void;
   /** Журнал субагента Codex по id его треда (`activity.childLogFile`); `null` — убрать. */
   setChildLogFile(threadId: string, file: string | null): void;
   emitActivity(ref: SessionRef, activity: string): void;
@@ -74,6 +76,7 @@ function worksSnapshotOf(sessions: FakeSession[]): { entries: FakeEntry[] } {
 export function fakeFeedDeps(initial: FakeSession[] = [{ ref: REF }]): FakeFeedDeps {
   let sessions = initial;
   let logFile: string | null = null;
+  const sessionLogFiles = new Map<string, string>();
   const childLogFiles = new Map<string, string>();
   const activityListeners = new Set<ActivityListener>();
   const logListeners = new Set<() => void>();
@@ -109,7 +112,7 @@ export function fakeFeedDeps(initial: FakeSession[] = [{ ref: REF }]): FakeFeedD
       },
     },
     activity: {
-      logFile: () => logFile,
+      logFile: (ref: SessionRef) => sessionLogFiles.get(ref.sessionId) ?? logFile,
       childLogFile: (_ref: SessionRef, threadId: string) => childLogFiles.get(threadId) ?? null,
       questionHeld: vi.fn(),
       permissionAnswered: vi.fn(),
@@ -143,6 +146,10 @@ export function fakeFeedDeps(initial: FakeSession[] = [{ ref: REF }]): FakeFeedD
     log,
     setLogFile(file) {
       logFile = file;
+    },
+    setSessionLogFile(sessionId, file) {
+      if (file === null) sessionLogFiles.delete(sessionId);
+      else sessionLogFiles.set(sessionId, file);
     },
     setChildLogFile(threadId, file) {
       if (file === null) childLogFiles.delete(threadId);
