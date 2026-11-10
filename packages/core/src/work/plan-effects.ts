@@ -4,7 +4,6 @@ import type { SharedWriteOptions, UpdateMapOptions } from "./store.js";
 import type { LetterTx } from "./letter-store.js";
 import { isMember, isRoomClosed, liveLead, RoomRuleError } from "./rooms.js";
 import {
-  PLAN_ITEM_MAX,
   planItemSatisfied,
   planVerifierUnavailable,
   reconcileRoomPlans,
@@ -26,8 +25,12 @@ const EFFECT_LIMIT = 30_000;
 const EFFECT_BYTES = 4 * 1024 * 1024;
 /** Сколько живут отменённые эффекты и записанные строки закончившихся планов (решение 6 части 08). */
 const PLAN_EFFECTS_KEEP_MS = 7 * 24 * 60 * 60 * 1000;
-/** Письма плана на комнату за скользящий час: каждый из пунктов может получить ready, verify, returned и blocked (решение 5 части 08). */
-export const PLAN_LETTERS_PER_HOUR = 4 * PLAN_ITEM_MAX;
+/**
+ * Письма плана на комнату за скользящий час: четыре письма (ready, verify, returned, blocked)
+ * на каждый из PLAN_ITEM_MAX (30) пунктов (решение 5 части 08). Это литерал намеренно:
+ * цикл импортов с plans.ts — при другом порядке загрузки PLAN_ITEM_MAX ещё не инициализирован.
+ */
+export const PLAN_LETTERS_PER_HOUR = 120;
 const KINDS = [
   "ready",
   "verify",

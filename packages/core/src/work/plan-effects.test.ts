@@ -7,7 +7,12 @@ import {
   resolveProposal,
   setProposal,
 } from "./proposals.js";
-import { setRoomMode, submitPlanItem, verifyPlanItem } from "./plans.js";
+import {
+  PLAN_ITEM_MAX,
+  setRoomMode,
+  submitPlanItem,
+  verifyPlanItem,
+} from "./plans.js";
 import { lookupIn, unreadFor } from "./letters.js";
 import {
   capturePlanNotice,
@@ -122,6 +127,8 @@ describe("durable accepted-plan delivery", () => {
   });
   it("the plan letter budget is 120 per room per hour", () => {
     expect(PLAN_LETTERS_PER_HOUR).toBe(120);
+    // литерал не должен разойтись с пунктами плана
+    expect(PLAN_LETTERS_PER_HOUR).toBe(4 * PLAN_ITEM_MAX);
   });
   it("other Parley letters do not use up the plan letter budget", () => {
     const map = fixture("checklist", 1);
