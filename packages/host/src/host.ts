@@ -47,6 +47,7 @@ import {
   readSecret,
   rewriteArtifactRefs,
   roleSummaries,
+  rotateWorkJournals,
   socketIsAlive,
   versionAtLeast,
   workPaths,
@@ -1306,6 +1307,11 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   // пустая таблица иначе сошла бы за «работ нет» и окно не показало бы причину (`works-unreadable`).
   const worksFailure = migration.unreadable ?? startFailure;
   if (worksFailure === null) {
+    // Журналы хуков спящих и закрытых сессий сжимаются здесь: сверка живости прошла, а читателей журнала (список
+    // прерванных ниже, служба активности и будильник позже) ещё нет — позиции их массивов события не сдвинутся. Срок
+    // ограничен `JOURNAL_ROTATE_BUDGET_MS`, остаток доберётся следующий старт.
+    const trimmed = await rotateWorkJournals(worksService.snapshot().entries).catch(() => ({ rotated: 0, freedBytes: 0 }));
+    if (trimmed.rotated > 0) log.info('журналы хуков сжаты', trimmed);
     // Сверка живости уже прошла на первом чтении работ: те, чей журнал оборван
     // посреди хода, прерваны падением прошлого хоста (спека 10).
     await sessionsService.collectInterrupted().catch((error: unknown) => {

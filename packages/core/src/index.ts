@@ -541,6 +541,14 @@ export {
   textOf,
   watchEvents,
 } from './work/events.js';
+export {
+  JOURNAL_CUT_SEARCH,
+  JOURNAL_ROTATE_BUDGET_MS,
+  JOURNAL_ROTATE_BYTES,
+  rotateJournal,
+  rotateWorkJournals,
+} from './work/journal-rotate.js';
+export type { JournalRotation } from './work/journal-rotate.js';
 export type {
   BackgroundTask,
   EventRecord,
