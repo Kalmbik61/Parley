@@ -193,20 +193,23 @@ export function fakeFeedDeps(initial: FakeSession[] = [{ ref: REF }]): FakeFeedD
 
 type EventMessage = { event: EventName; data: unknown };
 
-export function fakeClient(sendResult: () => boolean = () => true): Client & {
+export function fakeClient(
+  sendResult: () => boolean = () => true,
+  options: { features?: readonly string[]; writableLength?: () => number } = {},
+): Client & {
   sent: Array<ResponseMessage | EventMessage>;
 } {
   const sent: Array<ResponseMessage | EventMessage> = [];
   return {
     id: randomUUID(),
     name: 'test',
-    features: new Set<string>(),
+    features: new Set<string>(options.features ?? []),
     sent,
     send(message) {
       sent.push(message);
       return sendResult();
     },
-    writableLength: () => 0,
+    writableLength: options.writableLength ?? (() => 0),
     close() {},
   };
 }

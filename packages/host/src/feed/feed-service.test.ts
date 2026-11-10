@@ -26,13 +26,13 @@ import {
   parleyHome,
   readJsonlRecords,
 } from '@parley/core';
-import { FEED_SCHEMA_VERSION, progressResult } from '@parley/protocol';
+import { FEED_RESYNC_FEATURE, FEED_SCHEMA_VERSION, progressResult } from '@parley/protocol';
 import type { EventData, SessionRef } from '@parley/protocol';
 import { fakeClient, fakeFeedDeps, hookRequest, REF } from '../../test/feed-fakes.js';
 import type { FakeFeedDeps } from '../../test/feed-fakes.js';
 import { makePng } from '../../test/png.js';
 import { HostError } from '../errors.js';
-import { createFeedService, FEED_IDLE_EVICT_MS, FEED_MAX_ITEMS, FEED_SEED_CONCURRENCY, readRecordsTail, SEED_RECORD_WINDOW } from './feed-service.js';
+import { createFeedService, FEED_CLIENT_DROP_BYTES, FEED_IDLE_EVICT_MS, FEED_MAX_ITEMS, FEED_SEED_CONCURRENCY, readRecordsTail, SEED_RECORD_WINDOW } from './feed-service.js';
 import type { FeedService, FeedServiceOptions } from './feed-service.js';
 import * as progressModule from './progress.js';
 import * as codexSource from './codex-source.js';
@@ -1204,6 +1204,68 @@ describe('снимок и дельты', () => {
       'b',
       'c',
     ]);
+  });
+
+  describe('буфер окна выше FEED_CLIENT_DROP_BYTES', () => {
+    const MIB = 1024 * 1024;
+    const resyncs = (client: ReturnType<typeof fakeClient>) =>
+      client.sent.filter((message) => 'event' in message && message.event === 'feed.resync');
+
+    it('окно с признаком и буфером 40 МиБ: подписки сняты, feed.resync на каждую, дельта ушла раньше', () => {
+      vi.useFakeTimers();
+      const other = { ...REF, sessionId: 's-02' };
+      fakes = fakeFeedDeps([{ ref: REF }, { ref: other }]);
+      start();
+      const window = fakeClient(() => true, { features: [FEED_RESYNC_FEATURE], writableLength: () => 40 * MIB });
+      service.subscribe(REF, window);
+      service.subscribe(other, window);
+      const stays = fakeClient();
+      service.subscribe(REF, stays);
+
+      send(prompt('a'));
+      vi.advanceTimersByTime(50);
+
+      expect(feedChanged(window)).toHaveLength(1);
+      expect(window.sent.map((message) => ('event' in message ? message.event : null))).toEqual(['feed.changed', 'feed.resync', 'feed.resync']);
+      expect(resyncs(window).map((message) => (message as { data: EventData<'feed.resync'> }).data.ref.sessionId).sort()).toEqual([other.sessionId, REF.sessionId].sort());
+      expect(fakes.log.info).toHaveBeenCalledWith('лента: клиент отписан по буферу', { op: 'feed.clientDropped', client: 'test', queuedBytes: 40 * MIB, feeds: 2 });
+
+      send(prompt('b'));
+      vi.advanceTimersByTime(50);
+      expect(feedChanged(window)).toHaveLength(1);
+      expect(feedChanged(stays)).toHaveLength(2);
+    });
+
+    it('без признака feed-resync подписка остаётся (старое окно, мост телефона)', () => {
+      vi.useFakeTimers();
+      start();
+      const old = fakeClient(() => true, { writableLength: () => 40 * MIB });
+      service.subscribe(REF, old);
+
+      send(prompt('a'));
+      vi.advanceTimersByTime(50);
+      send(prompt('b'));
+      vi.advanceTimersByTime(50);
+
+      expect(feedChanged(old)).toHaveLength(2);
+      expect(resyncs(old)).toHaveLength(0);
+    });
+
+    it('ровно 32 МиБ — подписка остаётся', () => {
+      vi.useFakeTimers();
+      start();
+      const edge = fakeClient(() => true, { features: [FEED_RESYNC_FEATURE], writableLength: () => FEED_CLIENT_DROP_BYTES });
+      service.subscribe(REF, edge);
+
+      send(prompt('a'));
+      vi.advanceTimersByTime(50);
+      send(prompt('b'));
+      vi.advanceTimersByTime(50);
+
+      expect(FEED_CLIENT_DROP_BYTES).toBe(32 * MIB);
+      expect(feedChanged(edge)).toHaveLength(2);
+      expect(resyncs(edge)).toHaveLength(0);
+    });
   });
 
   it('снимок и подписка неизвестной сессии — not_found', async () => {

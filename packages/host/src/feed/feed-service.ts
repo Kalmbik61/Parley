@@ -65,7 +65,7 @@ import type {
   RolloutRecord,
   WorkSession,
 } from '@parley/core';
-import { FEED_SCHEMA_VERSION, FEED_PROGRESS_RETRY_AFTER_MAX_MS, refKey, sessionRef } from '@parley/protocol';
+import { FEED_SCHEMA_VERSION, FEED_PROGRESS_RETRY_AFTER_MAX_MS, FEED_RESYNC_FEATURE, refKey, sessionRef } from '@parley/protocol';
 import type { FeedDecisions, ProgressResult, Result, SessionRef } from '@parley/protocol';
 import { projectProgress } from './progress.js';
 import type { ActivityService } from '../activity/activity-service.js';
@@ -98,6 +98,12 @@ export const SEED_RECORD_WINDOW = 10_000;
 export const FEED_SEED_CONCURRENCY = 2;
 /** Лента без подписчиков, которой не пользовались столько, уходит из памяти (решение 5 плана 11). */
 export const FEED_IDLE_EVICT_MS = 10 * 60_000;
+/**
+ * Буфер записи окна с признаком `feed-resync` выше этого — хост снимает все его подписки на ленты и шлёт
+ * `feed.resync` на каждую. Вдвое ниже потолка соединения (`CLIENT_HARD_CAP_BYTES`, 64 МиБ), чтобы окно успело
+ * переподписаться до закрытия сокета.
+ */
+export const FEED_CLIENT_DROP_BYTES = 32 * 1024 * 1024;
 /** Как часто обход ищет простаивающие ленты. */
 const FEED_EVICT_SWEEP_MS = 60_000;
 /**
@@ -633,11 +639,49 @@ export function createFeedService(
       ...(feed.decisions === null ? {} : { decisions: feed.decisions }),
     };
     for (const client of Array.from(clients)) {
-      // В отличие от `pty.output`, подписку по буферу не снимаем: он обычно полон собственным большим ответом
-      // окну (снимок ленты на мегабайты), а дельты мелкие и идут пачками раз в 50 мс. Окно об отписке не
-      // узнало бы и ждало дельт вечно; ушедшего клиента снимает `dropClient`.
       client.send({ event: 'feed.changed', data });
+      // Подписку по буферу снимаем только у окна, которое умеет переподписаться: без `feed.resync` оно об отписке
+      // не узнало бы и ждало дельт вечно (буфер обычно полон собственным большим ответом, снимком ленты на
+      // мегабайты, а дельты мелкие и идут пачками раз в 50 мс), поэтому старому окну и мосту телефона остаётся
+      // только потолок соединения. 32 МиБ — вдвое ниже потолка: окно успевает переподписаться до закрытия сокета.
+      // Зациклиться нельзя: `feed.resync` стоит в конце очереди записи, окно прочтёт его, лишь вычитав весь
+      // накопленный буфер (подписку и снимок оно шлёт уже после этого), а ответ-снимок идёт в тот же буфер — следующая
+      // отписка возможна, лишь когда окно снова накопит больше 32 МиБ.
+      const queuedBytes = client.writableLength();
+      if (client.features.has(FEED_RESYNC_FEATURE) && queuedBytes > FEED_CLIENT_DROP_BYTES) {
+        const refs = removeSubscriptions(client);
+        for (const ref of refs) client.send({ event: 'feed.resync', data: { ref } });
+        log.info('лента: клиент отписан по буферу', {
+          op: 'feed.clientDropped',
+          client: client.name,
+          queuedBytes,
+          feeds: refs.length,
+        });
+      }
     }
+  }
+
+  /** Подписчик ленты ушёл последним: опрос Codex стоит, лента простаивает с этого момента и, возможно, уходит из памяти. */
+  function subscribersGone(key: string): void {
+    subscribers.delete(key);
+    const feed = feeds.get(key);
+    if (feed === undefined) return;
+    stopCodexPoll(feed);
+    feed.usedAt = now();
+    evictIfIdle(feed);
+  }
+
+  /** Снимает клиента со всех лент; возвращает ссылки на сессии, на которые он был подписан. */
+  function removeSubscriptions(client: Client): SessionRef[] {
+    const refs: SessionRef[] = [];
+    // Копия: `evictIfIdle` внутри `subscribersGone` может выгрузить ленту, но подписчиков других лент не трогает.
+    for (const [key, clients] of Array.from(subscribers)) {
+      if (!clients.delete(client)) continue;
+      const [projectPath = '', workId = '', sessionId = ''] = key.split('\u0000');
+      refs.push({ projectPath, workId, sessionId });
+      if (clients.size === 0) subscribersGone(key);
+    }
+    return refs;
   }
 
   /** Снимает ждущие карточки сессии без решения: в ленте — `outcome`, хукам — `{}`. */
@@ -1787,32 +1831,13 @@ export function createFeedService(
       const key = refKey(ref);
       const clients = subscribers.get(key);
       clients?.delete(client);
-      if (clients?.size === 0) {
-        subscribers.delete(key);
-        const feed = feeds.get(key);
-        if (feed !== undefined) {
-          stopCodexPoll(feed);
-          feed.usedAt = now();
-          evictIfIdle(feed);
-        }
-      }
+      if (clients?.size === 0) subscribersGone(key);
     },
 
     dropClient(client) {
       progressClients.get(client)?.active?.cancel();
       progressClients.delete(client);
-      for (const [key, clients] of subscribers) {
-        clients.delete(client);
-        if (clients.size === 0) {
-          subscribers.delete(key);
-          const feed = feeds.get(key);
-          if (feed !== undefined) {
-            stopCodexPoll(feed);
-            feed.usedAt = now();
-            evictIfIdle(feed);
-          }
-        }
-      }
+      removeSubscriptions(client);
     },
 
     peekAttention(ref) {
