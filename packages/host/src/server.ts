@@ -338,9 +338,12 @@ function handleHello(
 
   // Роль — только здесь и один раз: повторный `hello` уходит в handleMessage и получает `unknown_method`.
   const remote = hello.client === 'remote';
+  const onOverflow = (queuedBytes: number): void => {
+    options.context.log.warn('клиент отключён: буфер записи выше потолка', { op: 'client.overflow', client: hello.client, queuedBytes });
+  };
   const registered = remote
-    ? createClient(socket, hello.client, (hello.features ?? []).filter((name) => REMOTE_CLIENT_FEATURES.has(name)), 'remote')
-    : createClient(socket, hello.client, hello.features);
+    ? createClient(socket, hello.client, (hello.features ?? []).filter((name) => REMOTE_CLIENT_FEATURES.has(name)), 'remote', onOverflow)
+    : createClient(socket, hello.client, hello.features, undefined, onOverflow);
   const methods = supportedMethods(options);
   writeRaw(socket, {
     id,

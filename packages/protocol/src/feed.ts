@@ -43,6 +43,11 @@ export const FEED_MIN_VERSION = '2.1.286';
 export const CODEX_FEED_MIN_VERSION = '0.160.0';
 /** Признак `hello.features` хоста, который строит ленту Codex из журнала. */
 export const FEED_CODEX_FEATURE = 'feed-codex';
+/**
+ * Признак `hello.features` клиента: он понимает событие `feed.resync` (хост снял его подписки на ленты из-за
+ * затора и просит взять снимок заново). Клиенту без признака подписки не снимаются.
+ */
+export const FEED_RESYNC_FEATURE = 'feed-resync';
 /** Может ли окно отвечать на одобрения сессии (`window`) или только терминал (`terminal`); спека 5.7. */
 export const feedDecisions = z.enum(['window', 'terminal']);
 export type FeedDecisions = z.infer<typeof feedDecisions>;

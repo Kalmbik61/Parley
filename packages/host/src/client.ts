@@ -7,6 +7,9 @@ import { REMOTE_EVENTS } from '@parley/protocol/remote';
 /** Буфер записи сокета выше этого порога — клиент, скорее всего, не успевает читать. */
 const HIGH_WATER_MARK = 4 * 1024 * 1024;
 
+/** Жёсткий потолок: буфер записи выше него — сокет закрывается, а не растёт без предела. */
+export const CLIENT_HARD_CAP_BYTES = 64 * 1024 * 1024;
+
 /** `remote` — мост телефонов (спека мобильного приложения 4.1): только белый список этапа. */
 export type ClientRole = 'remote';
 
@@ -59,11 +62,23 @@ export function createClient(
   name: string,
   features: readonly string[] = [],
   role?: ClientRole,
+  onOverflow?: (queuedBytes: number) => void,
 ): Client {
   const writeLine = (line: string): boolean => {
     if (socket.destroyed) return false;
     socket.write(line);
-    return socket.writableLength <= HIGH_WATER_MARK;
+    const queued = socket.writableLength;
+    if (queued > CLIENT_HARD_CAP_BYTES) {
+      // Клиент не читает вовсе: закрываем сокет, окно и мост переподключаются и берут снимки заново.
+      socket.destroy();
+      try {
+        onOverflow?.(queued);
+      } catch {
+        // журнал не должен мешать закрытию
+      }
+      return false;
+    }
+    return queued <= HIGH_WATER_MARK;
   };
   // Отброшенный кадр — не переполнение буфера: `true`, чтобы вызывающая сторона не сочла клиента медленным.
   const remote = role === 'remote';
