@@ -1156,6 +1156,83 @@ describe('выход процесса', () => {
     expect(exitEvent).toBeDefined();
     expect((exitEvent?.data as { ref: SessionRef }).ref).toEqual(ref);
   });
+
+  /** Сторож тихих концовок — шпионы на трёх методах; сессии создаются заглушкой, которая живёт, пока её не остановят. */
+  function endingsSpy() {
+    return {
+      exited: vi.fn<(ref: SessionRef, exit: { exitCode: number; signal?: number }, launch: { by: string; runMs: number } | null) => Promise<void>>().mockResolvedValue(undefined),
+      stoppedByHuman: vi.fn<(ref: SessionRef) => Promise<void>>().mockResolvedValue(undefined),
+      closedByHuman: vi.fn<(ref: SessionRef) => Promise<void>>().mockResolvedValue(undefined),
+    };
+  }
+  const createLive = (sessions: SessionsService, workId: string, label: string): Promise<SessionRef> =>
+    sessions.create({ projectPath: project, workId, provider: 'claude', label, task: 'т', parent: null });
+
+  it('сам вышел (код 3): сторожу уходит exited с кодом, без причины запуска «wake»; Stop и Close молчат', async () => {
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    setEnv('STUB_EXIT_AFTER_MS', '100');
+    const endings = endingsSpy();
+    const sessions = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity(), { endings });
+    const ref = await createLive(sessions, work.work.id, 'бэкенд');
+    await waitFor(() => endings.exited.mock.calls.length > 0, REAL_PROCESS_WAIT_MS);
+    expect(endings.exited).toHaveBeenCalledTimes(1);
+    expect(endings.exited).toHaveBeenCalledWith(ref, expect.objectContaining({ exitCode: 3 }), { by: 'human', runMs: expect.any(Number) });
+    expect(endings.stoppedByHuman).not.toHaveBeenCalled();
+    expect(endings.closedByHuman).not.toHaveBeenCalled();
+  }, REAL_PROCESS_WAIT_MS);
+
+  it("stop(ref, 'human') — stoppedByHuman и ни одного exited; stop(ref) без причины — ничего", async () => {
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    const endings = endingsSpy();
+    const sessions = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity(), { endings });
+    const quiet = await createLive(sessions, work.work.id, 'a');
+    await sessions.stop(quiet);
+    expect(sessions.live(quiet)).toBe(false);
+    expect(endings.exited).not.toHaveBeenCalled();
+    expect(endings.stoppedByHuman).not.toHaveBeenCalled();
+
+    const human = await createLive(sessions, work.work.id, 'b');
+    await sessions.stop(human, 'human');
+    expect(endings.stoppedByHuman).toHaveBeenCalledTimes(1);
+    expect(endings.stoppedByHuman).toHaveBeenCalledWith(human);
+    expect(endings.exited).not.toHaveBeenCalled();
+  }, REAL_PROCESS_WAIT_MS);
+
+  it("close(ref, 'human') — closedByHuman после записи closed, без exited и stoppedByHuman; close(ref) — ничего", async () => {
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    const lifecycles: Array<string | undefined> = [];
+    const endings = endingsSpy();
+    endings.closedByHuman.mockImplementation(async (ref) => {
+      lifecycles.push((await readMap(project, work.work.id)).sessions.find((s) => s.id === ref.sessionId)?.lifecycle);
+    });
+    const sessions = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity(), { endings });
+    const quiet = await createLive(sessions, work.work.id, 'a');
+    await sessions.close(quiet);
+    expect(endings.closedByHuman).not.toHaveBeenCalled();
+
+    const human = await createLive(sessions, work.work.id, 'b');
+    await sessions.close(human, 'human');
+    expect(endings.closedByHuman).toHaveBeenCalledTimes(1);
+    expect(endings.closedByHuman).toHaveBeenCalledWith(human);
+    expect(lifecycles).toEqual(['closed']);
+    expect(endings.exited).not.toHaveBeenCalled();
+    expect(endings.stoppedByHuman).not.toHaveBeenCalled();
+  }, REAL_PROCESS_WAIT_MS);
+
+  it('stopAll (выключение хоста): сторожу не сообщается ничего', async () => {
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    const endings = endingsSpy();
+    const pty = createPtyManager(fakeHost());
+    const sessions = createSessionsService(fakeHost(), fakeWorks(), pty, fakeActivity(), { endings });
+    const first = await createLive(sessions, work.work.id, 'a');
+    const second = await createLive(sessions, work.work.id, 'b');
+    await sessions.stopAll();
+    expect(sessions.live(first)).toBe(false);
+    expect(sessions.live(second)).toBe(false);
+    expect(endings.exited).not.toHaveBeenCalled();
+    expect(endings.stoppedByHuman).not.toHaveBeenCalled();
+    expect(endings.closedByHuman).not.toHaveBeenCalled();
+  }, REAL_PROCESS_WAIT_MS);
 });
 
 function service(options: Parameters<typeof createWorksService>[1] = {}): WorksService {

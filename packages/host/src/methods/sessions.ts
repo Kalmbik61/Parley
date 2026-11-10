@@ -89,7 +89,7 @@ export function createSessionHandlers(deps: SessionMethodDeps): SessionHandlers 
     },
 
     sessionsStop: async (params) => {
-      await deps.sessions.stop(params.ref);
+      await deps.sessions.stop(params.ref, 'human');
       return { ok: true };
     },
 
@@ -101,7 +101,7 @@ export function createSessionHandlers(deps: SessionMethodDeps): SessionHandlers 
     sessionsClose: async (params) => {
       // До закрытия: сверка роёв может прийти раньше, чем метод вернётся.
       deps.swarms?.humanClosed(params.ref);
-      await deps.sessions.close(params.ref);
+      await deps.sessions.close(params.ref, 'human');
       return { ok: true };
     },
 
