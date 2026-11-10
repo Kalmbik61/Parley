@@ -11,7 +11,8 @@ import { useHostStore } from '../store/host.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { activityMap, makeActivity, makeSession, makeWork } from '../test-utils/work-fixtures.js';
 import { useReviewStore } from './store.js';
-import { useChanges } from './use-changes.js';
+import { REQUIRED_METHODS } from '../lib/capabilities.js';
+import { canSkipReload, useChanges } from './use-changes.js';
 
 const commit = { hash: 'b'.repeat(40), subject: 'feat', author: 'agent', at: '2026-09-27T09:00:00Z' };
 
@@ -74,6 +75,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  useHostStore.setState({ status: { state: 'connecting' } });
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
@@ -430,5 +432,199 @@ describe('useChanges (кусок 8.2a, тест 8)', () => {
     await flush(3000);
     expect(result.current.source).toBeNull();
     expect(bridge.calls).toEqual([]);
+  });
+
+  /** Хост, знающий методы версии (по умолчанию, как и хост без поля, окно их не спрашивает). */
+  function supportVersion(): void {
+    useHostStore.setState({
+      status: {
+        state: 'connected',
+        hostVersion: '0.0.0-test',
+        methods: [...REQUIRED_METHODS, 'worktrees.version', 'changes.version'],
+      },
+    });
+  }
+
+  it('хост без метода версии: версия не спрашивается, работает путь без неё', async () => {
+    bridge.setHandler('worktrees.version', () => ({ version: 'v1' }));
+    renderHook(() => useChanges({ bridge, entry: work(), sessionId: 's-02' }));
+    await flush(2500);
+    emitWorks([work('t1')]);
+    await flush(2100);
+    expect(count('worktrees.version')).toBe(0);
+    expect(count('worktrees.diff')).toBe(2);
+  });
+
+  it('равная версия: diff и mergeCheck не зовутся, source тот же', async () => {
+    supportVersion();
+    bridge.setHandler('worktrees.version', () => ({ version: 'v1' }));
+    const { result } = renderHook(() => useChanges({ bridge, entry: work(), sessionId: 's-02' }));
+    await flush();
+    // Первая загрузка: версия снята до полного запроса.
+    expect(count('worktrees.version')).toBe(1);
+    expect(count('worktrees.diff')).toBe(1);
+    expect(count('worktrees.mergeCheck')).toBe(1);
+    const first = result.current.source;
+
+    emitWorks([work('t1')]);
+    await flush(2100);
+    expect(count('worktrees.version')).toBe(2);
+    expect(count('worktrees.diff')).toBe(1);
+    expect(count('worktrees.mergeCheck')).toBe(1);
+    expect(result.current.source).toBe(first);
+    expect(result.current.loading).toBe(false);
+  });
+
+  it('другая версия: полный запрос, новый source', async () => {
+    supportVersion();
+    let version = 'v1';
+    let additions = 1;
+    bridge.setHandler('worktrees.version', () => ({ version }));
+    bridge.setHandler('worktrees.diff', () =>
+      diff({ commits: [commit], files: [{ path: 'a.ts', status: 'M', oldPath: null, additions, deletions: 0 }] }),
+    );
+    const { result } = renderHook(() => useChanges({ bridge, entry: work(), sessionId: 's-02' }));
+    await flush();
+    const first = result.current.source;
+    version = 'v2';
+    additions = 2;
+    emitWorks([work('t1')]);
+    await flush(2100);
+    expect(count('worktrees.diff')).toBe(2);
+    expect(result.current.source).not.toBe(first);
+    expect(result.current.source?.kind === 'worktree' && result.current.source.diff.files[0]?.additions).toBe(2);
+  });
+
+  it('явный refresh при равной версии всё равно зовёт diff и версию не спрашивает', async () => {
+    supportVersion();
+    bridge.setHandler('worktrees.version', () => ({ version: 'v1' }));
+    const { result } = renderHook(() => useChanges({ bridge, entry: work(), sessionId: 's-02' }));
+    await flush();
+    expect(count('worktrees.version')).toBe(1);
+    act(() => {
+      result.current.refresh();
+    });
+    await flush();
+    expect(count('worktrees.diff')).toBe(2);
+    expect(count('worktrees.version')).toBe(1);
+
+    // После refresh запомненная версия сброшена: следующий автоматический запуск идёт полным запросом
+    // и снова запоминает версию, а ещё следующий уже пропускается.
+    emitWorks([work('t1')]);
+    await flush(2100);
+    expect(count('worktrees.diff')).toBe(3);
+    emitWorks([work('t2')]);
+    await flush(2100);
+    expect(count('worktrees.diff')).toBe(3);
+  });
+
+  it('конец хода агента — безусловный полный запрос даже при равной версии', async () => {
+    supportVersion();
+    bridge.setHandler('worktrees.version', () => ({ version: 'v1' }));
+    renderHook(() => useChanges({ bridge, entry: work(), sessionId: 's-02' }));
+    await flush(2500);
+    act(() => {
+      useActivityStore.setState({ byRef: activityMap([makeActivity(ref, 'working')]) });
+    });
+    act(() => {
+      useActivityStore.setState({ byRef: activityMap([makeActivity(ref, 'idle')]) });
+    });
+    await flush();
+    expect(count('worktrees.diff')).toBe(2);
+  });
+
+  it('правка между вызовом версии и полным запросом не пропускается при следующем запуске', async () => {
+    supportVersion();
+    let current = 'v1';
+    // Версия отвечает значением на момент вызова; правка попадает уже после неё, во время полного запроса.
+    bridge.setHandler('worktrees.version', () => ({ version: current }));
+    bridge.setHandler('worktrees.diff', () => {
+      current = 'v2';
+      return diff({ commits: [commit] });
+    });
+    renderHook(() => useChanges({ bridge, entry: work(), sessionId: 's-02' }));
+    await flush();
+    expect(count('worktrees.diff')).toBe(1);
+    emitWorks([work('t1')]);
+    await flush(2100);
+    // Запомнена v1 (до запроса), сейчас v2: полный запрос обязан пройти.
+    expect(count('worktrees.diff')).toBe(2);
+    // Теперь запомнена v2, дальше без правок — пропуск.
+    emitWorks([work('t2')]);
+    await flush(2100);
+    expect(count('worktrees.diff')).toBe(2);
+  });
+
+  it('ошибка версии, изменчивая версия и ошибка полного запроса — всегда полный запрос', async () => {
+    supportVersion();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    let mode: 'fail' | 'volatile' | 'ok' = 'ok';
+    bridge.setHandler('worktrees.version', () => {
+      if (mode === 'fail') throw { code: 'bad_request', message: 'нет папки', data: { reason: 'worktree-missing' } };
+      return { version: mode === 'volatile' ? 'volatile:1' : 'v1' };
+    });
+    renderHook(() => useChanges({ bridge, entry: work(), sessionId: 's-02' }));
+    await flush();
+    expect(count('worktrees.diff')).toBe(1);
+    mode = 'fail';
+    emitWorks([work('t1')]);
+    await flush(2100);
+    expect(count('worktrees.diff')).toBe(2);
+    // Запомненная версия после ответа с ошибкой версии не осталась: даже равная версия не пропускает.
+    mode = 'ok';
+    emitWorks([work('t2')]);
+    await flush(2100);
+    expect(count('worktrees.diff')).toBe(3);
+    emitWorks([work('t3')]);
+    await flush(2100);
+    expect(count('worktrees.diff')).toBe(3);
+    mode = 'volatile';
+    emitWorks([work('t4')]);
+    await flush(2100);
+    expect(count('worktrees.diff')).toBe(4);
+    emitWorks([work('t5')]);
+    await flush(2100);
+    expect(count('worktrees.diff')).toBe(5);
+  });
+
+  it('смена сессии не берёт версию другой цели', async () => {
+    supportVersion();
+    bridge.setHandler('worktrees.version', () => ({ version: 'same' }));
+    const entry = work();
+    const { rerender } = renderHook(({ id }: { id: string }) => useChanges({ bridge, entry, sessionId: id }), {
+      initialProps: { id: 's-02' },
+    });
+    await flush();
+    rerender({ id: 's-03' });
+    await flush();
+    expect(count('worktrees.diff')).toBe(2);
+  });
+
+  it('режим проекта спрашивает changes.version', async () => {
+    supportVersion();
+    bridge.setHandler('changes.version', () => ({ version: 'p1' }));
+    renderHook(() => useChanges({ bridge, entry: work(), sessionId: 's-04' }));
+    await flush();
+    emitWorks([work('t1')]);
+    await flush(2100);
+    expect(count('changes.version')).toBe(2);
+    expect(count('worktrees.version')).toBe(0);
+    expect(count('changes.project')).toBe(1);
+  });
+});
+
+describe('canSkipReload', () => {
+  const remembered = { kind: 'k', version: 'v1' };
+  const base = { supported: true, fetched: 'v1', remembered, kind: 'k', shownOk: true };
+
+  it('пропускает только когда выполнено всё', () => {
+    expect(canSkipReload(base)).toBe(true);
+    expect(canSkipReload({ ...base, supported: false })).toBe(false);
+    expect(canSkipReload({ ...base, fetched: null })).toBe(false);
+    expect(canSkipReload({ ...base, fetched: 'volatile:1', remembered: { kind: 'k', version: 'volatile:1' } })).toBe(false);
+    expect(canSkipReload({ ...base, fetched: 'v2' })).toBe(false);
+    expect(canSkipReload({ ...base, remembered: null })).toBe(false);
+    expect(canSkipReload({ ...base, kind: 'other' })).toBe(false);
+    expect(canSkipReload({ ...base, shownOk: false })).toBe(false);
   });
 });

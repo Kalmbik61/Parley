@@ -9,6 +9,7 @@ import type { MergeCheck, WindowWorkEntry } from '@parley/core';
 import { HOST_ERROR_REASONS, refKey, type SessionRef } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
+import { useHostSupports } from '../lib/capabilities.js';
 import { workingEnded } from '../lib/turn-end.js';
 import { useActivityStore } from '../store/activity.js';
 import { useHostStore } from '../store/host.js';
@@ -23,6 +24,29 @@ function sameSource(prev: ChangesSource, next: ChangesSource): boolean {
   const text = (source: ChangesSource): string => JSON.stringify(source, (name, value: unknown) => (name === 'patch' ? undefined : value));
   return text(prev) === text(next);
 }
+
+/**
+ * Можно ли пропустить полный запрос по версии набора изменений. Неверный пропуск хуже лишнего запроса,
+ * поэтому любое сомнение (нет метода, ошибка версии, изменчивая версия, другая цель или вид запроса,
+ * нечего показывать) — полный запрос.
+ */
+export function canSkipReload(input: {
+  supported: boolean;
+  /** Версия, которую вернул хост; `null` — вызов не удался. */
+  fetched: string | null;
+  /** Версия, снятая ДО полного запроса, ответ которого сейчас показан. */
+  remembered: { kind: string; version: string } | null;
+  /** Цель (ref) и вид запроса; чужая запомненная версия не годится. */
+  kind: string;
+  /** Показанный ответ получен успешно. */
+  shownOk: boolean;
+}): boolean {
+  if (!input.supported || input.fetched === null || input.remembered === null || !input.shownOk) return false;
+  if (input.fetched.startsWith('volatile:')) return false;
+  return input.remembered.kind === input.kind && input.remembered.version === input.fetched;
+}
+
+type Outcome = { next: ChangesSource; version: string | null } | { skip: true } | { err: unknown };
 
 type Mode = 'none' | 'pending' | 'worktree' | 'project';
 
@@ -44,6 +68,11 @@ export function useChanges(input: {
     session === undefined ? 'none' : worktree === null ? 'project' : worktree.createdAt === null ? 'pending' : 'worktree';
   const branch = worktree?.branch ?? '';
   const base = worktree?.base ?? '';
+
+  // Поддержка метода версии читается через ref: обрыв связи не должен перезапускать эффект и сбрасывать вид.
+  const hasVersion = useHostSupports(mode === 'project' ? 'changes.version' : 'worktrees.version');
+  const hasVersionRef = useRef(hasVersion);
+  hasVersionRef.current = hasVersion;
 
   const [source, setSource] = useState<ChangesSource | null>(null);
   const [loading, setLoading] = useState(false);
@@ -86,6 +115,10 @@ export function useChanges(input: {
     // содержимое файла могло смениться при тех же числах строк, а вкладка диффа по объекту перечитывает стороны.
     let forceNew = false;
     let lastSource: ChangesSource | null = null;
+    // Версия набора изменений, снятая ДО полного запроса, чей ответ показан (после запроса снятая версия
+    // потеряла бы правку, попавшую между ними). Привязана к цели и виду запроса.
+    const kind = `${key}|${mode}|${withCheck ? 'check' : 'plain'}`;
+    let remembered: { kind: string; version: string } | null = null;
     setSource(null);
 
     const fetchSource = async (): Promise<ChangesSource> => {
@@ -105,12 +138,46 @@ export function useChanges(input: {
       return { kind: 'worktree', branch, base, diff, check };
     };
 
-    const finish = (outcome: { next: ChangesSource } | { err: unknown }, force: boolean): void => {
+    const fetchVersion = async (): Promise<string | null> => {
+      try {
+        const answer =
+          mode === 'project'
+            ? await bridge.call('changes.version', { ref })
+            : await bridge.call('worktrees.version', { ref });
+        return typeof answer.version === 'string' && answer.version !== '' ? answer.version : null;
+      } catch {
+        // Любая ошибка версии (в том числе worktree-missing): полный запрос скажет, что на самом деле.
+        return null;
+      }
+    };
+
+    const execute = async (force: boolean): Promise<Outcome> => {
+      let version: string | null = null;
+      if (force) {
+        // Явный refresh и конец хода версию не проверяют; запомненная версия больше не описывает показанное.
+        remembered = null;
+      } else if (hasVersionRef.current) {
+        version = await fetchVersion();
+        if (canSkipReload({ supported: true, fetched: version, remembered, kind, shownOk: lastSource !== null })) {
+          return { skip: true };
+        }
+      }
+      return { next: await fetchSource(), version };
+    };
+
+    const finish = (outcome: Outcome, force: boolean): void => {
       running = false;
       lastEnd = Date.now();
       if (disposed) return;
       if (!stale) {
-        if ('next' in outcome) {
+        if ('skip' in outcome) {
+          // Версия та же: показанный ответ верен, запрос не делался.
+          setLoading(false);
+        } else if ('next' in outcome) {
+          remembered =
+            outcome.version === null || outcome.version.startsWith('volatile:')
+              ? null
+              : { kind, version: outcome.version };
           // Равный ответ оставляет прежний объект: вкладка диффа не перечитывает файлы (D7-2).
           if (force || lastSource === null || !sameSource(lastSource, outcome.next)) {
             lastSource = outcome.next;
@@ -119,6 +186,7 @@ export function useChanges(input: {
           setError(null);
           setLoading(false);
         } else {
+          remembered = null;
           const info = decodeIpcError(outcome.err);
           if (info.data?.['reason'] === HOST_ERROR_REASONS.worktreeMissing) {
             // Папки worktree нет (отброшен не из этого окна или до перезапуска): признак в сторе —
@@ -146,8 +214,8 @@ export function useChanges(input: {
       const force = forceNew;
       forceNew = false;
       setLoading(true);
-      fetchSource().then(
-        (next) => finish({ next }, force),
+      execute(force).then(
+        (outcome) => finish(outcome, force),
         (err: unknown) => finish({ err }, force),
       );
     }
