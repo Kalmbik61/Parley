@@ -25,7 +25,8 @@ type ActivityListener = (
   value: { activity: { activity: string }; metrics: null },
 ) => void;
 type ExitListener = (ref: SessionRef) => void;
-type FakeSession = { ref: SessionRef; provider?: string };
+/** `lifecycle` — жизненный цикл сессии в карте; `archived` — работа сессии в архиве (`work.status`). */
+type FakeSession = { ref: SessionRef; provider?: string; lifecycle?: string; archived?: boolean };
 /** Что индекс логов сообщает слушателям: какие сессии задела запись. */
 export type FakeLogChange = { affects(session: { id: string }): boolean };
 type WorksListener = (snapshot: unknown, previous: unknown) => void;
@@ -103,10 +104,11 @@ export function fakeFeedDeps(initial: FakeSession[] = [{ ref: REF }]): FakeFeedD
         return {
           projectPath,
           map: {
-            work: { id: workId },
+            work: { id: workId, ...(own.some((session) => session.archived === true) ? { status: 'archived' } : {}) },
             sessions: own.map((session) => ({
               id: session.ref.sessionId,
               provider: session.provider ?? 'claude',
+              ...(session.lifecycle === undefined ? {} : { lifecycle: session.lifecycle }),
             })),
           },
         };

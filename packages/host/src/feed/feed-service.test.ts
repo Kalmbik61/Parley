@@ -32,7 +32,7 @@ import { fakeClient, fakeFeedDeps, hookRequest, REF } from '../../test/feed-fake
 import type { FakeFeedDeps } from '../../test/feed-fakes.js';
 import { makePng } from '../../test/png.js';
 import { HostError } from '../errors.js';
-import { createFeedService, FEED_MAX_ITEMS, FEED_SEED_CONCURRENCY, readRecordsTail, SEED_RECORD_WINDOW } from './feed-service.js';
+import { createFeedService, FEED_IDLE_EVICT_MS, FEED_MAX_ITEMS, FEED_SEED_CONCURRENCY, readRecordsTail, SEED_RECORD_WINDOW } from './feed-service.js';
 import type { FeedService, FeedServiceOptions } from './feed-service.js';
 import * as progressModule from './progress.js';
 import * as codexSource from './codex-source.js';
@@ -3677,6 +3677,9 @@ describe('картинки результатов инструментов (пл
 it('attention peek reads settled reducer cards before the batched delta flush', async () => {
   vi.useFakeTimers();
   start();
+  // Ленты нет в памяти — карточек нет; лента есть, но не посеяна и не живая — неизвестно.
+  expect(service.peekAttention(REF)).toEqual([]);
+  service.noteMode(REF, 'plan');
   expect(service.peekAttention(REF)).toBeUndefined();
   send(prompt('go'));
   send(pre('t1', 'Bash', { command: 'ls' }));
@@ -3686,4 +3689,115 @@ it('attention peek reads settled reducer cards before the batched delta flush', 
   service.decide(REF, 'permission:t1', { kind: 'permission', behavior: 'allow' });
   expect(service.peekAttention(REF)).toEqual([]);
   expect(snapshot.items.some((item) => item.kind === 'permission' && item.state === 'pending')).toBe(true);
+});
+
+describe('выгрузка лент (решение 5)', () => {
+  const MINUTE = 60_000;
+
+  /** Журнал без процесса: чтения считает счётчик; часы и обход — на фальшивых таймерах (файлы читаются обычным путём). */
+  async function evictSetup(): Promise<{ reads: string[] }> {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
+    const root = path.join(await tempRoot(), 'projects');
+    await mkdir(path.join(root, '-proj'), { recursive: true });
+    const file = path.join(root, '-proj', 'write.jsonl');
+    await copyFile(path.join(FIXTURES, 'transcript-p5b-write.jsonl'), file);
+    fakes.setLogFile(file);
+    fakes.setProcess(null);
+    const reads: string[] = [];
+    start({
+      roots: () => [root],
+      readRecords: async (own) => {
+        reads.push(own);
+        return (await readJsonlRecords(own)).records;
+      },
+    });
+    return { reads };
+  }
+
+  it('закрытая сессия — лента уходит сразу, следующий снимок сеет заново', async () => {
+    const { reads } = await evictSetup();
+    const first = await service.snapshot(REF);
+    expect(first.items.length).toBeGreaterThan(0);
+    await service.snapshot(REF);
+    expect(reads).toHaveLength(1);
+    fakes.setSessions([{ ref: REF, lifecycle: 'closed' }]);
+    expect(fakes.log.info).toHaveBeenCalledWith('лента выгружена', { op: 'feed.evicted', sessionId: REF.sessionId, reason: 'closed' });
+    const again = await service.snapshot(REF);
+    expect(reads).toHaveLength(2);
+    expect(again.items).toEqual(first.items);
+  });
+
+  it('работа в архиве — лента уходит сразу', async () => {
+    const { reads } = await evictSetup();
+    await service.snapshot(REF);
+    fakes.setSessions([{ ref: REF, archived: true }]);
+    await service.snapshot(REF);
+    expect(reads).toHaveLength(2);
+  });
+
+  it('без подписчиков 10 минут — уходит, 9 — нет', async () => {
+    const stays = await evictSetup();
+    await service.snapshot(REF);
+    vi.advanceTimersByTime(9 * MINUTE);
+    await service.snapshot(REF);
+    expect(stays.reads).toHaveLength(1);
+    await service.stop();
+
+    fakes = fakeFeedDeps();
+    const leaves = await evictSetup();
+    await service.snapshot(REF);
+    vi.advanceTimersByTime(FEED_IDLE_EVICT_MS);
+    await service.snapshot(REF);
+    expect(leaves.reads).toHaveLength(2);
+  });
+
+  it('не уходит при подписчике; после ухода последнего закрытая лента уходит сразу', async () => {
+    const { reads } = await evictSetup();
+    const client = fakeClient();
+    service.subscribe(REF, client);
+    await service.snapshot(REF);
+    fakes.setSessions([{ ref: REF, lifecycle: 'closed' }]);
+    vi.advanceTimersByTime(20 * MINUTE);
+    await service.snapshot(REF);
+    expect(reads).toHaveLength(1);
+    service.unsubscribe(REF, client);
+    await service.snapshot(REF);
+    expect(reads).toHaveLength(2);
+  });
+
+  it('не уходит при удержанном хуке (карточка ждёт человека)', async () => {
+    await evictSetup();
+    send(prompt('go'));
+    send(pre('t1', 'Bash', { command: 'ls' }));
+    send(permission('Bash', { command: 'ls' }));
+    fakes.setSessions([{ ref: REF, lifecycle: 'closed' }]);
+    vi.advanceTimersByTime(20 * MINUTE);
+    expect(service.peekAttention(REF)?.map((card) => card.cardId)).toEqual(['permission:t1']);
+  });
+
+  it('не уходит при живом процессе', async () => {
+    const { reads } = await evictSetup();
+    fakes.setProcess({ pid: 1 });
+    await service.snapshot(REF);
+    fakes.setSessions([{ ref: REF, lifecycle: 'closed' }]);
+    vi.advanceTimersByTime(20 * MINUTE);
+    await service.snapshot(REF);
+    expect(reads).toHaveLength(1);
+  });
+
+  it('peekAttention без ленты — пустой список; после выгрузки тоже', async () => {
+    await evictSetup();
+    expect(service.peekAttention(REF)).toEqual([]);
+    await service.snapshot(REF);
+    fakes.setSessions([{ ref: REF, lifecycle: 'closed' }]);
+    expect(service.peekAttention(REF)).toEqual([]);
+  });
+
+  it('обход не держит процесс и снимается в stop()', async () => {
+    await evictSetup();
+    const before = vi.getTimerCount();
+    expect(before).toBeGreaterThan(0);
+    await service.stop();
+    expect(vi.getTimerCount()).toBe(0);
+  });
 });

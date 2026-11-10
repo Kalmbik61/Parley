@@ -1007,7 +1007,8 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
   async function collectOverview(detailed = false, jobId?: string): Promise<{ text: string; overview: HumanOverviewV1 }> {
     const context = await reasonContext();
     // Дальше ни одного await: карта, активность и карточки берутся из памяти за один проход. Карточки — из лент,
-    // уже собранных в памяти (`peekAttention`); снимков и чтения журналов обзор не запускает.
+    // уже собранных в памяти (`peekAttention`); снимков и чтения журналов обзор не запускает. Ленты нет в памяти —
+    // карточек нет (`[]`): их держит только живой хук, а с ним лента не выгружается.
     const src = source();
     const feed = deps.feed;
     const overview = humanOverview(

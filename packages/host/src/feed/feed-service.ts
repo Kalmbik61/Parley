@@ -96,6 +96,10 @@ export const FEED_BATCH_MS = 50;
 export const SEED_RECORD_WINDOW = 10_000;
 /** Сколько посевов лент идёт разом: остальные ждут в очереди (передний — снимок для окна). */
 export const FEED_SEED_CONCURRENCY = 2;
+/** Лента без подписчиков, которой не пользовались столько, уходит из памяти (решение 5 плана 11). */
+export const FEED_IDLE_EVICT_MS = 10 * 60_000;
+/** Как часто обход ищет простаивающие ленты. */
+const FEED_EVICT_SWEEP_MS = 60_000;
 /**
  * Сколько байт хвоста журнала Claude читается при севе сначала; хвост удваивается, пока не накрыл файл, не набралось
  * `SEED_RECORD_WINDOW` записей и лента после редьюсера не дошла до `maxItems` или `maxBytes`.
@@ -177,7 +181,11 @@ export interface FeedService {
    * (нет `prompt` — последний `text` вообще); с `agentId` игнорируется.
    */
   snapshot(ref: SessionRef, agentId?: string, scope?: 'attention'): Promise<FeedSnapshot>;
-  /** Current pending cards after snapshot preparation; reads reducer state before batched flush. */
+  /**
+   * Current pending cards after snapshot preparation; reads reducer state before batched flush. `[]` — the feed is not
+   * in memory (a card exists only with a held hook, and such a feed is never evicted); `undefined` — the feed is in
+   * memory but not ready to answer.
+   */
   peekAttention(ref: SessionRef): readonly FeedCard[] | undefined;
   /** Ограниченная проекция существующей ленты, без подписки и дополнительного source polling. */
   progress(ref: SessionRef, client: Client): Promise<ProgressResult>;
@@ -286,6 +294,8 @@ interface SessionFeed {
   /** Сев из журнала уже был (удачный или нет) — второй раз не сеем. */
   seeded: boolean;
   seeding: Promise<void> | undefined;
+  /** Когда лентой пользовались в последний раз (`feedOf`, уход последнего подписчика); от него считается простой. */
+  usedAt: number;
   /** Provenance только для progress; существующая лента и подписчики не сбрасываются. */
   observedSource: SourceStamp | null;
   progressEpoch: ProgressEpoch | null;
@@ -507,6 +517,7 @@ export function createFeedService(
         live: false,
         seeded: false,
         seeding: undefined,
+        usedAt: now(),
         observedSource: sourceOf(ref),
         progressEpoch: null,
         sourceGeneration: progressStarts.has(key) ? 1 : 0,
@@ -515,6 +526,7 @@ export function createFeedService(
       };
       feeds.set(key, feed);
     }
+    feed.usedAt = now();
     return feed;
   }
 
@@ -1426,20 +1438,64 @@ export function createFeedService(
     if (ids.length > 0) settle(feed.ref, 'elsewhere', ids);
   });
 
+  /**
+   * Лента уходит из памяти: таймеры пачки и ожидания хука Codex, опрос Codex, эпоха прогресса. Работа, что уже
+   * держит объект ленты (круг `checkInterrupts`, опрос Codex, отложенный `flush`), в него не пишет:
+   * `commit` и `flush` сверяются с `feeds` (`feedCurrent`) и ничего не делают.
+   */
+  function dropFeed(key: string): void {
+    const feed = feeds.get(key);
+    if (feed === undefined) return;
+    if (feed.timer !== undefined) clearTimeout(feed.timer);
+    feed.timer = undefined;
+    clearCodexGrace(feed);
+    stopCodexPoll(feed);
+    pending.settle(feed.ref);
+    feed.progressEpoch?.eligible.clear();
+    feed.progressEpoch = null;
+    feeds.delete(key);
+  }
+
+  /** Сессия закрыта или её работа в архиве (сессии, которой нет в работах, касается `forget`). */
+  function sessionRetired(ref: SessionRef): boolean {
+    const entry = deps.works.entry(ref.projectPath, ref.workId);
+    const session = entry?.map.sessions.find((candidate) => candidate.id === ref.sessionId);
+    return entry !== undefined && session !== undefined &&
+      (entry.map.work.status === 'archived' || session.lifecycle === 'closed');
+  }
+
+  /**
+   * Решение 5: лента уходит, если у неё нет подписчиков, удержанных хуков, живого процесса, идущего посева и
+   * холодного чтения, и при этом сессия закрыта или её работа в архиве, либо лентой не пользовались
+   * `FEED_IDLE_EVICT_MS`. Ленту работающей сессии (живой процесс) не трогаем никогда.
+   */
+  function evictable(feed: SessionFeed): 'closed' | 'idle' | null {
+    const key = refKey(feed.ref);
+    if ((subscribers.get(key)?.size ?? 0) > 0) return null;
+    if (feed.seeding !== undefined || coldReads.has(key)) return null;
+    if (deps.pty.get(feed.ref) !== undefined) return null;
+    if (pending.list(feed.ref).length > 0) return null;
+    if (sessionRetired(feed.ref)) return 'closed';
+    return now() - feed.usedAt >= FEED_IDLE_EVICT_MS ? 'idle' : null;
+  }
+
+  function evictIfIdle(feed: SessionFeed): void {
+    if (stopped || !feedCurrent(feed)) return;
+    const reason = evictable(feed);
+    if (reason === null) return;
+    dropFeed(refKey(feed.ref));
+    log.info('лента выгружена', { op: 'feed.evicted', sessionId: feed.ref.sessionId, reason });
+  }
+
+  const evictSweep = setInterval(() => {
+    for (const feed of Array.from(feeds.values())) evictIfIdle(feed);
+  }, FEED_EVICT_SWEEP_MS);
+  evictSweep.unref();
+
   /** Сессии больше нет в работах: её лента, подписчики и удержанные хуки никому не нужны. */
   function forget(key: string): void {
     progressStarts.delete(key);
-    const feed = feeds.get(key);
-    if (feed !== undefined) {
-      if (feed.timer !== undefined) clearTimeout(feed.timer);
-      feed.timer = undefined;
-      clearCodexGrace(feed);
-      stopCodexPoll(feed);
-      pending.settle(feed.ref);
-      feed.progressEpoch?.eligible.clear();
-      feed.progressEpoch = null;
-      feeds.delete(key);
-    }
+    dropFeed(key);
     lastActivity.delete(key);
     sentAt.delete(key);
     subscribers.delete(key);
@@ -1461,6 +1517,7 @@ export function createFeedService(
       if (!alive.has(key)) forget(key);
     }
     for (const start of progressStarts.values()) confirmStart(start.ref);
+    for (const feed of Array.from(feeds.values())) evictIfIdle(feed);
     for (const feed of feeds.values()) {
       const stamp = observeSource(feed);
       if (feed.codex !== undefined) {
@@ -1533,6 +1590,8 @@ export function createFeedService(
     commit(feed, settleCards(feed.state, 'stale', time));
     pending.settle(feed.ref);
     commit(feed, closeFeedTurn(feed.state, time));
+    // Процесс ушёл: лента закрытой сессии больше никому не нужна.
+    evictIfIdle(feed);
   });
 
   /**
@@ -1731,7 +1790,11 @@ export function createFeedService(
       if (clients?.size === 0) {
         subscribers.delete(key);
         const feed = feeds.get(key);
-        if (feed !== undefined) stopCodexPoll(feed);
+        if (feed !== undefined) {
+          stopCodexPoll(feed);
+          feed.usedAt = now();
+          evictIfIdle(feed);
+        }
       }
     },
 
@@ -1743,14 +1806,20 @@ export function createFeedService(
         if (clients.size === 0) {
           subscribers.delete(key);
           const feed = feeds.get(key);
-          if (feed !== undefined) stopCodexPoll(feed);
+          if (feed !== undefined) {
+            stopCodexPoll(feed);
+            feed.usedAt = now();
+            evictIfIdle(feed);
+          }
         }
       }
     },
 
     peekAttention(ref) {
       const feed = feeds.get(refKey(ref));
-      if (!feed || !feedCurrent(feed) || (!feed.live && !feed.seeded) || feed.seeding) return undefined;
+      // Ленты нет в памяти — карточек нет: их держит только живой хук, а с ним лента не выгружается (`evictable`).
+      if (!feed) return [];
+      if (!feedCurrent(feed) || (!feed.live && !feed.seeded) || feed.seeding) return undefined;
       const current = sourceOf(ref);
       if (feed.observedSource === null ? current !== null : !sameSource(feed.observedSource, current)) return undefined;
       return feed.state.items.filter(isPendingCard) as FeedCard[];
@@ -1834,6 +1903,7 @@ export function createFeedService(
       unsubscribeWorks();
       unsubscribeLogs();
       clearInterval(imageSweep);
+      clearInterval(evictSweep);
       // Ждущие посевы запускаются и сразу выходят (`stopped`): снимок, ждавший место, завершается пустой лентой.
       for (const waiter of seedWaiters.splice(0)) waiter.start();
       for (const feed of feeds.values()) {

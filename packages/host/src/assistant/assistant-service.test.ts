@@ -2227,7 +2227,7 @@ describe('assistant-service: human overview contract', () => {
     service.stop();
   });
 
-  it('peekAttention отдаёт undefined у одной сессии — cardsAvailable: false, карточки остальных на месте', async () => {
+  it('peekAttention отдаёт undefined у ленты, что есть в памяти, но ещё не готова, — cardsAvailable: false, карточки остальных на месте', async () => {
     const items = [{ kind: 'permission', cardId: 'permission', id: 'permission', state: 'pending', toolName: 'Bash', toolInput: {}, suggestions: [], at: null }];
     const peekAttention = (ref: { sessionId: string }) => (ref.sessionId === 's-02' ? undefined : pendingCards(items as never));
     const service = createAssistantService({ ...deps, feed: { snapshot: vi.fn(), decide: vi.fn(), peekAttention } as never });
