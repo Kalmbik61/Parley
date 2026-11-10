@@ -1553,13 +1553,42 @@ export function createWakeService(
   const mailDirty = new Map<string, SessionRef>();
   let mailFlushQueued = false;
 
-  /** Все сессии всех работ: живые получают указатель, спящие — подъём. */
-  function recomputeAll(): void {
+  /** Версия и создание работы на прошлом проходе по всем работам: те же — карта та же, пересчитывать нечего. */
+  const seenWorks = new Map<string, { version: number; incarnation: number }>();
+
+  /**
+   * Сессия работы ждёт того, что со временем проходит само и не зовёт пересчёт: час подъёмов и отказ бюджета (нет таймера).
+   * Такую работу проход пересчитывает, как раньше, а не пропускает.
+   */
+  const waitsOnClock = (entry: WorkEntry): boolean =>
+    entry.map.sessions.some((session) => {
+      const state = attempts.get(refKey({ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id }));
+      return state !== undefined && (state.waiting === 'resume-limit' || state.budgetDeniedAt !== null);
+    });
+
+  /**
+   * Все сессии всех работ: живые получают указатель, спящие — подъём. `skipUnchanged` — только проход по изменению работ:
+   * работа с той же определённой версией и тем же созданием, что на прошлом проходе, пропускается. Старт и снятие паузы
+   * пересчитывают всё; таймеры, события активности, PTY и хуков зовут `recompute(ref)` напрямую и под пропуск не попадают.
+   */
+  function recomputeAll(skipUnchanged = false): void {
+    const present = new Set<string>();
     for (const entry of works.snapshot().entries) {
+      const key = workKeyOf(entry.projectPath, entry.map.work.id);
+      present.add(key);
+      const { version, incarnation } = entry;
+      if (version === undefined || incarnation === undefined) {
+        seenWorks.delete(key);
+      } else {
+        const before = seenWorks.get(key);
+        seenWorks.set(key, { version, incarnation });
+        if (skipUnchanged && before?.version === version && before.incarnation === incarnation && !waitsOnClock(entry)) continue;
+      }
       for (const session of entry.map.sessions) {
         recompute({ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id });
       }
     }
+    for (const key of seenWorks.keys()) if (!present.has(key)) seenWorks.delete(key);
   }
 
   /**
@@ -1659,7 +1688,7 @@ export function createWakeService(
       for (const entry of works.snapshot().entries) ensureKnown(entry);
       unsubscribeWorks = works.onChange(() => {
         deliverRecipes();
-        recomputeAll();
+        recomputeAll(true);
       });
       unsubscribeMail = works.onMail(recomputeAddressees);
       unsubscribeActivity = activity.onChange((ref, value) => {
@@ -1761,6 +1790,7 @@ export function createWakeService(
       unsubscribeHostDraft?.();
       unsubscribeExit?.();
       mailDirty.clear();
+      seenWorks.clear();
       for (const state of attempts.values()) {
         clearTimers(state);
         dropLimit(state);
