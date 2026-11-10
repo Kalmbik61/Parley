@@ -41,6 +41,7 @@ vi.mock('./map.js', async (importOriginal) => {
 const require = createRequire(import.meta.url);
 const { DatabaseSync: Database } = require('node:sqlite') as typeof import('node:sqlite');
 const realMap = await vi.importActual<typeof import('./map.js')>('./map.js');
+const realRows = await vi.importActual<typeof import('./map-rows.js')>('./map-rows.js');
 
 let home = '';
 let project = '';
@@ -53,6 +54,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   vi.mocked(normalizeMap).mockImplementation(realMap.normalizeMap);
+  vi.mocked(rowsToMap).mockImplementation(realRows.rowsToMap);
   vi.useRealTimers();
   closeWorkDb();
   delete process.env.PARLEY_HOME;
@@ -292,12 +294,16 @@ describe('writeLetters: тот же результат, что у общего �
 });
 
 describe('applyMapUpdate: разбор карты до замка', () => {
-  /** Список событий: `begin` — `BEGIN IMMEDIATE` у соединения хранилища (перед ним вызывается `onBegin`), `normalize` — `normalizeMap`. */
+  /**
+   * Список событий: `begin` — `BEGIN IMMEDIATE` у соединения хранилища (перед ним вызывается `onBegin`), `parse` — `rowsToMap`,
+   * сборка карты из строк (разбор до замка зовёт её перед `normalizeMap`). Наблюдаем `rowsToMap`, а не `normalizeMap`: подмену
+   * `normalizeMap` через `vi.mock('./map.js')` код хранилища не видел — в CI она не записала ни одного вызова, даже под замком.
+   */
   const watch = (onBegin: () => void = () => undefined): string[] => {
     const events: string[] = [];
-    vi.mocked(normalizeMap).mockImplementation((...args) => {
-      events.push('normalize');
-      return realMap.normalizeMap(...args);
+    vi.mocked(rowsToMap).mockImplementation((...args) => {
+      events.push('parse');
+      return realRows.rowsToMap(...args);
     });
     const db = workDb();
     const exec = db.exec.bind(db);
@@ -335,7 +341,7 @@ describe('applyMapUpdate: разбор карты до замка', () => {
       letters.add(note());
     });
 
-    expect(events.slice(0, 2)).toEqual(['normalize', 'begin']);
+    expect(events.slice(0, 2)).toEqual(['parse', 'begin']);
     expect(events.indexOf('begin')).toBe(1);
     expect(rowsToMap).toHaveBeenCalledTimes(1);
     closeWorkDb();
@@ -359,10 +365,9 @@ describe('applyMapUpdate: разбор карты до замка', () => {
       map.sessions.find((session) => session.id === 's-02')!.summary = 'mine';
     });
 
-    expect(events[0]).toBe('normalize');
-    expect(events[1]).toBe('begin');
-    // Разобрано дважды: до замка (версия устарела) и под замком.
-    expect(rowsToMap).toHaveBeenCalledTimes(2);
+    // Разбор до замка, `BEGIN IMMEDIATE`, разбор под замком (версия устарела); третий — свежая сборка кэша после записи (`keepResult`).
+    expect(events).toEqual(['parse', 'begin', 'parse', 'parse']);
+    expect(rowsToMap).toHaveBeenCalledTimes(3);
     closeWorkDb();
     const fresh = await readMap(project, workId);
     const by = (id: string) => fresh.sessions.find((session) => session.id === id)!;
