@@ -64,10 +64,13 @@ export interface FeedState {
   notes: Record<string, CardNote>;
   /** Мост подключения и подписка на `feed.changed`; возвращает отписку. Зовётся на каждый `connected`. */
   init(bridge: ParleyBridge): () => void;
-  /** Вкладка сессии открыла вид «Chat». */
-  open(ref: SessionRef): void;
-  /** Вкладка закрылась или ушла в терминал. */
-  close(ref: SessionRef): void;
+  /**
+   * Потребитель открыл ленту. `eager` — он на экране сам по себе (панель агентов): лента такой сессии берёт
+   * снимок сразу, даже когда вкладка Chat не показана. `close` зовётся с тем же `eager`.
+   */
+  open(ref: SessionRef, eager?: boolean): void;
+  /** Потребитель закрылся (вкладка закрылась, ушла в терминал, панель отпущена). */
+  close(ref: SessionRef, eager?: boolean): void;
   /** Повторить subscribe → snapshot открытой ленты (кнопка «Retry» после ошибки). */
   retry(ref: SessionRef): void;
   /** Решение человека по карточке (`feed.decide`); ждёт ответа хоста, но не дельты. */
@@ -77,13 +80,15 @@ export interface FeedState {
 interface Opened {
   ref: SessionRef;
   count: number;
+  /** Сколько из `count` — потребители, что на экране сами по себе (не зависят от `visibleSessionRefs`). */
+  eager: number;
   /** Растёт на каждую загрузку и закрытие: ответ устаревшей загрузки отбрасывается. */
   generation: number;
   /** Снимок в пути — дельты копятся в `queued`. */
   loading: boolean;
   /** Дельты, пришедшие, пока снимок в пути; `load` и исход снимка очищают. */
   queued: EventData<'feed.changed'>[];
-  /** Хост забыл подписку, а лента не показана: снимок берётся, когда её покажут (`load` снимает признак). */
+  /** Хост забыл подписку, а лента не показана: снимок берётся, когда её покажут (`load` снимает признак); запись ленты при этом `loading`. */
   stale: boolean;
 }
 
@@ -205,16 +210,19 @@ export const useFeedStore = create<FeedState>((set, get) => {
       });
   };
 
-  const isVisible = (key: string): boolean => key in useUiStore.getState().visibleSessionRefs;
+  /** Ленту видно: показана вкладка Chat сессии или есть потребитель, что на экране сам по себе. */
+  const isShown = (key: string, feed: Opened): boolean => key in useUiStore.getState().visibleSessionRefs || feed.eager > 0;
 
   /**
    * Хост забыл подписку на ленту (переподключение, `feed.resync`): показанная лента берёт снимок сразу, скрытая
-   * ждёт показа. Загрузка, что была в пути, отбрасывается: её подписку хост уже снял.
+   * ждёт показа и до тех пор `loading` с прежними элементами: готовой её считать нельзя (очередь отправки тогда
+   * судит по активности сессии, а не по замороженным элементам). Загрузка, что была в пути, отбрасывается:
+   * её подписку хост уже снял.
    */
   const refresh = (key: string): void => {
     const feed = opened.get(key);
     if (feed === undefined) return;
-    if (isVisible(key)) {
+    if (isShown(key, feed)) {
       load(key);
       return;
     }
@@ -222,6 +230,8 @@ export const useFeedStore = create<FeedState>((set, get) => {
     feed.loading = false;
     feed.queued = [];
     feed.stale = true;
+    const entry = get().feeds[key];
+    if (entry !== undefined && entry.status !== 'loading') patch(key, { ...entry, status: 'loading' });
   };
 
   /** Применяет дельту revision+1 к открытой ленте: элементы, revision, режим, решения и карточки. */
@@ -268,7 +278,7 @@ export const useFeedStore = create<FeedState>((set, get) => {
       // Ленту, ждущую показа, грузим, как только сессию показали.
       const offVisible = useUiStore.subscribe((state, prev) => {
         if (state.visibleSessionRefs === prev.visibleSessionRefs) return;
-        for (const [key, feed] of opened) if (feed.stale && key in state.visibleSessionRefs) load(key);
+        for (const [key, feed] of opened) if (feed.stale && isShown(key, feed)) load(key);
       });
       return () => {
         off();
@@ -277,22 +287,24 @@ export const useFeedStore = create<FeedState>((set, get) => {
         if (bridge === next) bridge = null;
       };
     },
-    open: (ref) => {
+    open: (ref, eager = false) => {
       const key = refKey(ref);
       const feed = opened.get(key);
       if (feed !== undefined) {
         feed.count += 1;
+        if (eager) feed.eager += 1;
         if (feed.stale) load(key);
         return;
       }
-      opened.set(key, { ref, count: 1, generation: 0, loading: false, queued: [], stale: false });
+      opened.set(key, { ref, count: 1, eager: eager ? 1 : 0, generation: 0, loading: false, queued: [], stale: false });
       load(key);
     },
-    close: (ref) => {
+    close: (ref, eager = false) => {
       const key = refKey(ref);
       const feed = opened.get(key);
       if (feed === undefined) return;
       feed.count -= 1;
+      if (eager) feed.eager = Math.max(0, feed.eager - 1);
       if (feed.count > 0) return;
       opened.delete(key);
       feed.generation += 1;

@@ -282,7 +282,7 @@ describe('переподключение', () => {
     ]);
     // Скрытая лента держит прежние элементы и дельт не применяет.
     const hidden = (): FeedEntryLike | undefined => useFeedStore.getState().feeds[refKey(other)];
-    expect(hidden()?.items).toEqual([prompt('a'), prompt('b')]);
+    expect(hidden()).toEqual({ items: [prompt('a'), prompt('b')], revision: 5, mode: null, decisions: null, status: 'loading' });
     next.emit('feed.changed', { mode: null, ref: other, revision: 6, upsert: [prompt('late')], removed: [] });
     expect(hidden()?.items).toEqual([prompt('a'), prompt('b')]);
     show(other);
@@ -312,7 +312,7 @@ describe('feed.resync', () => {
     bridge.emit('feed.resync', { ref: other });
     await flush();
     expect(feedCalls(bridge)).toHaveLength(6);
-    expect(useFeedStore.getState().feeds[refKey(other)]?.items).toEqual([prompt('a'), prompt('b')]);
+    expect(useFeedStore.getState().feeds[refKey(other)]).toMatchObject({ items: [prompt('a'), prompt('b')], status: 'loading' });
     show(other);
     await flush();
     expect(feedCalls(bridge).slice(6)).toEqual(['feed.subscribe', 'feed.snapshot']);
@@ -342,6 +342,75 @@ describe('feed.resync', () => {
     useFeedStore.getState().open(REF);
     await flush();
     expect(feedCalls(bridge)).toEqual(['feed.subscribe', 'feed.snapshot', 'feed.subscribe', 'feed.snapshot']);
+  });
+});
+
+describe('eager-потребитель и скрытая лента', () => {
+  const reconnect = (): FakeBridge => {
+    dispose?.();
+    const next = createFakeBridge();
+    next.setHandler('feed.subscribe', () => ({ ok: true }));
+    setSnapshots(next, [{ items: [prompt('fresh')], revision: 9 }]);
+    dispose = useFeedStore.getState().init(next);
+    return next;
+  };
+
+  it('скрытая лента после переподключения — loading с прежними элементами, ревизией, режимом и решениями', async () => {
+    setSnapshots(bridge, [{ items: [prompt('a')], revision: 5, mode: 'plan', decisions: 'terminal' }]);
+    useFeedStore.getState().open(REF);
+    await flush();
+    const next = reconnect();
+    await flush();
+    expect(feedCalls(next)).toEqual([]);
+    expect(feed()).toEqual({ items: [prompt('a')], revision: 5, mode: 'plan', decisions: 'terminal', status: 'loading' });
+  });
+
+  it('записи, которой нет, resync не создаёт', async () => {
+    bridge.emit('feed.resync', { ref: REF });
+    await flush();
+    expect(feed()).toBeUndefined();
+  });
+
+  it('eager-потребитель скрытой ленты грузит её сразу после переподключения', async () => {
+    useFeedStore.getState().open(REF);
+    useFeedStore.getState().open(REF, true);
+    await flush();
+    const next = reconnect();
+    await flush();
+    expect(feedCalls(next)).toEqual(['feed.subscribe', 'feed.snapshot']);
+    expect(feed()).toEqual({ items: [prompt('fresh')], revision: 9, mode: null, decisions: null, status: 'ready' });
+  });
+
+  it('eager-потребитель скрытой ленты грузит её сразу после feed.resync; без него — нет', async () => {
+    useFeedStore.getState().open(REF);
+    await flush();
+    bridge.emit('feed.resync', { ref: REF });
+    await flush();
+    expect(feedCalls(bridge)).toEqual(['feed.subscribe', 'feed.snapshot']);
+    expect(feed()?.status).toBe('loading');
+    useFeedStore.getState().open(REF, true);
+    await flush();
+    expect(feedCalls(bridge)).toHaveLength(4);
+    expect(feed()?.status).toBe('ready');
+    setSnapshots(bridge, [{ items: [prompt('fresh')], revision: 9 }]);
+    bridge.emit('feed.resync', { ref: REF });
+    await flush();
+    expect(feedCalls(bridge)).toHaveLength(6);
+  });
+
+  it('счётчики сходятся: пока есть eager, лента живая; последний close отписывает и забывает её', async () => {
+    useFeedStore.getState().open(REF);
+    useFeedStore.getState().open(REF, true);
+    await flush();
+    useFeedStore.getState().close(REF, true);
+    // Eager ушёл: скрытая лента снова ждёт показа.
+    bridge.emit('feed.resync', { ref: REF });
+    await flush();
+    expect(feedCalls(bridge)).toHaveLength(2);
+    expect(feed()?.status).toBe('loading');
+    useFeedStore.getState().close(REF);
+    expect(feed()).toBeUndefined();
+    expect(feedCalls(bridge).at(-1)).toBe('feed.unsubscribe');
   });
 });
 

@@ -313,6 +313,14 @@ describe('chatOutbox — затвор на время хода', () => {
     });
   });
 
+  it('скрытая лента ждёт показа (loading, элементы заморожены с идущим ходом), активность idle: сообщение уходит', async () => {
+    live();
+    useFeedStore.setState({ feeds: { [KEY]: { items: [prompt('p1', 'go')], revision: 3, mode: null, decisions: null, status: 'loading' } } });
+    chatOutbox.enqueue(KEY, payload('later'));
+    await flush();
+    expect(sentTexts()).toEqual(['later']);
+  });
+
   it('лента грузится (loading), активность idle: сообщение уходит', async () => {
     live();
     useFeedStore.setState({ feeds: { [KEY]: { items: [], revision: 0, mode: null, decisions: null, status: 'loading' } } });
