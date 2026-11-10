@@ -74,8 +74,9 @@ export interface ParleyConfig extends ResourceLimits {
    */
   sleepAfterMinutes: number;
   /**
-   * Сколько минут простоя хватает, чтобы хост усыпил агента ради памяти или свободного слота, когда машине тесно
-   * (спека сна агентов и ёмкости, 4.2). Работает только при включённом сне (`sleepAfterMinutes > 0`). 1…60.
+   * Сколько минут простоя хватает, чтобы хост усыпил агента ради памяти (`critical`) или свободного слота, когда машине
+   * тесно (спека сна агентов и ёмкости, 4.2); при `warn` порог не ниже 30, для поднятой после сна сессии не ниже 15
+   * (`hurriedSleepMinutes`). Умолчание 15. Работает только при включённом сне (`sleepAfterMinutes > 0`). 1…60.
    */
   sleepUnderPressureMinutes: number;
   /**
@@ -138,7 +139,7 @@ export const DEFAULT_CONFIG: Readonly<ParleyConfig> = {
   messageRate: 20,
   resumeRate: 6,
   sleepAfterMinutes: 60,
-  sleepUnderPressureMinutes: 5,
+  sleepUnderPressureMinutes: 15,
   machineConcurrent: 'auto',
   agentSkills: true,
   skillNavigator: true,

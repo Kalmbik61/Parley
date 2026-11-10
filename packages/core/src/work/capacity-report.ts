@@ -4,6 +4,7 @@
  * остальное. Считает одно место, показывают двое: окно (сегмент строки состояния) и агент (`get_capacity`).
  */
 
+import { hurriedSleepMinutes, type SleepHurry } from './auto-sleep.js';
 import {
   RESOURCE_WINDOW_MS,
   resourceStatus,
@@ -40,14 +41,18 @@ export interface MachineCapacity {
 }
 
 /**
- * Числа машины. Порог сна — как у сервиса сна: при давлении `warn`/`critical` (сон по давлению) или непустой очереди
- * (сон ради слота) действует меньший из двух порогов, иначе обычный; `sleepAfterMinutes` = 0 выключает сон совсем.
+ * Числа машины. Порог сна — как у сервиса сна: при `critical` или непустой очереди (сон ради слота) действует меньший из
+ * `sleepAfterMinutes` и порога давления, при `warn` — меньший из `sleepAfterMinutes` и порога давления не ниже 30 минут
+ * (`hurriedSleepMinutes`), иначе обычный; `sleepAfterMinutes` = 0 выключает сон совсем.
  */
 export function machineCapacity(input: MachineInput): MachineCapacity {
-  const hurry = input.pressure === 'warn' || input.pressure === 'critical' || input.queued > 0;
+  const hurry: SleepHurry | null =
+    input.pressure === 'critical' || input.queued > 0 ? 'critical' : input.pressure === 'warn' ? 'warn' : null;
   const sleepMinutes = input.sleepAfterMinutes === 0
     ? null
-    : hurry ? Math.min(input.sleepAfterMinutes, input.sleepUnderPressureMinutes) : input.sleepAfterMinutes;
+    : hurry !== null
+      ? Math.min(input.sleepAfterMinutes, hurriedSleepMinutes(input.sleepUnderPressureMinutes, hurry))
+      : input.sleepAfterMinutes;
   return {
     live: input.occupied,
     limit: input.limit,

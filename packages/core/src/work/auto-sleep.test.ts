@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { activityOf, type SessionActivity } from './activity.js';
-import { autoSleepVerdict, deliveredSince, inboxFenced, type AutoSleepBlock, type AutoSleepInput } from './auto-sleep.js';
+import { autoSleepVerdict, deliveredSince, hurriedSleepMinutes, inboxFenced, type AutoSleepBlock, type AutoSleepInput } from './auto-sleep.js';
 import { closeWorkDb } from './db.js';
 import { bareEvent, type EventRecord } from './events.js';
 import { mapLetterTx, writeLetters } from './letter-store.js';
@@ -306,6 +306,19 @@ describe('autoSleepVerdict: порядок проверок', () => {
     expect(autoSleepVerdict(started)).toEqual(blocked('waiters-off'));
     expect(autoSleepVerdict({ ...started, allowWaiters: true })).toEqual(blocked('too-soon'));
     expect(autoSleepVerdict({ ...started, allowWaiters: true, waitStartedAt: NOW - 61 * MIN })).toMatchObject({ sleep: true });
+  });
+});
+
+describe('hurriedSleepMinutes: инварианты на 1…60', () => {
+  it('critical и slot дают настройку, warn — не меньше 30, поднятая после сна — не меньше 15', () => {
+    for (let v = 1; v <= 60; v += 1) {
+      expect(hurriedSleepMinutes(v, 'critical'), `critical ${v}`).toBe(v);
+      expect(hurriedSleepMinutes(v, 'slot'), `slot ${v}`).toBe(v);
+      expect(hurriedSleepMinutes(v, 'warn'), `warn ${v}`).toBe(Math.max(v, 30));
+      for (const hurry of ['warn', 'critical', 'slot'] as const) {
+        expect(hurriedSleepMinutes(v, hurry, true), `${hurry} resumed ${v}`).toBe(Math.max(hurriedSleepMinutes(v, hurry), 15));
+      }
+    }
   });
 });
 

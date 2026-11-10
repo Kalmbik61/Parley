@@ -12,9 +12,10 @@
  *    отметку снимает сервис: иначе письма этой сессии застряли бы за оградой;
  * 4. будильнику велено перепроверить письма уснувшей сессии (`wake.retry`), затем запись в журнал хоста.
  *
- * Те же четыре шага — у сна по давлению памяти и ради слота (спека, 4.2); меняются порог (`sleepUnderPressureMinutes`) и
- * выбор: из простаивающих берётся самая давняя. На каждое чтение датчика с давлением `warn` или `critical` засыпает одна
- * сессия (причина `pressure`), не чаще `PRESSURE_PACE_MS`; `freeSlot` усыпляет одну ради запуска из очереди (причина
+ * Те же четыре шага — у сна по давлению памяти и ради слота (спека, 4.2); меняются порог и выбор: из простаивающих
+ * берётся самая давняя. Порог — `sleepUnderPressureMinutes` при `critical` и ради слота, не меньше 30 минут при `warn`, не
+ * меньше 15 для сессии, которую уже усыпляли (`hurriedSleepMinutes`). На каждое чтение датчика с давлением `warn` или
+ * `critical` засыпает одна сессия (причина `pressure`), не чаще `PRESSURE_PACE_MS`; `freeSlot` усыпляет одну ради запуска из очереди (причина
  * `slot`). Работающего агента ни тот, ни другой сон не берёт: его `autoSleepVerdict` не пропустит при любом пороге. Сон
  * выключен (`sleepAfterMinutes = 0`) — нет ни давления, ни слота.
  *
@@ -33,6 +34,7 @@ import {
   deliveredSince,
   finishedState,
   hookedSince,
+  hurriedSleepMinutes,
   isClaudeCode,
   sessionTag,
   SYSTEM,
@@ -42,6 +44,7 @@ import {
   type AutoSleepReason,
   type MemoryPressure,
   type SessionActivity,
+  type SleepHurry,
   type WorkEntry,
   type WorkSession,
 } from '@parley/core';
@@ -76,7 +79,7 @@ export const PRESSURE_PACE_MS: Readonly<Record<'warn' | 'critical', number>> = {
 export interface AutoSleepConfig {
   /** Обычный порог простоя в минутах; 0 — сон выключен, а с ним и сон по давлению и ради слота. */
   sleepAfterMinutes: number;
-  /** Порог простоя, когда машине тесно (давление `warn` или `critical`, нужен слот), в минутах. */
+  /** Порог простоя, когда машине тесно (`critical`, нужен слот; при `warn` не ниже 30), в минутах. */
   sleepUnderPressureMinutes: number;
 }
 
@@ -115,7 +118,7 @@ export interface AutoSleepService {
   /** Сейчас, без порога, при первом простое (королева завершённого роя); повтор безвреден. */
   requestSleep(ref: SessionRef, reason: 'swarm-done'): void;
   /**
-   * Усыпить одну сессию ради слота: дольше всех простаивающую, не меньше `sleepUnderPressureMinutes`. `true` — уснула;
+   * Усыпить одну сессию ради слота: дольше всех простаивающую, не меньше порога слота (`sleepUnderPressureMinutes`, для поднятой после сна — не меньше 15). `true` — уснула;
    * сон выключен, кандидатов нет или сон отменился у всех — `false`. Не бросает.
    */
   freeSlot(): Promise<boolean>;
@@ -463,7 +466,7 @@ export function createAutoSleepService(host: HostContext, deps: AutoSleepService
    * кандидат: просьба `requestSleep` остаётся за обычным проходом, сессия в замене агента или с отметкой «засыпает» не
    * трогается, остальное решает `autoSleepVerdict`. Без `await`: решение видит то же состояние хоста, что и отметка в карте.
    */
-  function candidatePlan(ref: SessionRef, reason: 'pressure' | 'slot', config: AutoSleepConfig): Plan | null {
+  function candidatePlan(ref: SessionRef, hurry: SleepHurry, config: AutoSleepConfig): Plan | null {
     if (requested.has(refKey(ref))) return null;
     const found = locate(ref);
     const handle = deps.pty.get(ref);
@@ -472,8 +475,14 @@ export function createAutoSleepService(host: HostContext, deps: AutoSleepService
     if (session.switching != null || session.autoSleepPending != null) return null;
     return planFor(ref, entry, session, handle, {
       enabled: config.sleepAfterMinutes > 0,
-      thresholdMs: config.sleepUnderPressureMinutes * 60_000,
-      reason,
+      // Поднятая после сна (в истории уже есть `sleeping`) не засыпает раньше 15 минут: иначе карусель сна и подъёма.
+      thresholdMs:
+        hurriedSleepMinutes(
+          config.sleepUnderPressureMinutes,
+          hurry,
+          session.history.some((step) => step.event === 'sleeping'),
+        ) * 60_000,
+      reason: hurry === 'slot' ? 'slot' : 'pressure',
     });
   }
 
@@ -481,11 +490,11 @@ export function createAutoSleepService(host: HostContext, deps: AutoSleepService
    * Кандидаты на сон по давлению или ради слота: самая давняя простаивающая сессия первой. Ту, что проверяют или усыпляют
    * сейчас (`inWork`), пропускаем.
    */
-  function candidates(reason: 'pressure' | 'slot', config: AutoSleepConfig): SessionRef[] {
+  function candidates(hurry: SleepHurry, config: AutoSleepConfig): SessionRef[] {
     const found: Array<{ ref: SessionRef; idleSince: number }> = [];
     for (const { ref } of deps.pty.list()) {
       if (inWork.has(refKey(ref))) continue;
-      const plan = candidatePlan(ref, reason, config);
+      const plan = candidatePlan(ref, hurry, config);
       if (plan !== null) found.push({ ref, idleSince: plan.idleSince });
     }
     return found.sort((a, b) => a.idleSince - b.idleSince).map((candidate) => candidate.ref);
@@ -496,17 +505,17 @@ export function createAutoSleepService(host: HostContext, deps: AutoSleepService
    * кандидат. Порядок берётся один раз, а каждого перед сном решают заново: пока усыпляли прежних, он мог взяться за работу
    * или получить черновик. `true` — сессия уснула.
    */
-  async function sleepOne(reason: 'pressure' | 'slot', config: AutoSleepConfig): Promise<boolean> {
-    for (const ref of candidates(reason, config)) {
+  async function sleepOne(hurry: SleepHurry, config: AutoSleepConfig): Promise<boolean> {
+    for (const ref of candidates(hurry, config)) {
       if (stopped) return false;
       const key = refKey(ref);
       if (inWork.has(key)) continue;
       inWork.add(key);
       try {
-        const plan = candidatePlan(ref, reason, config);
+        const plan = candidatePlan(ref, hurry, config);
         if (plan !== null && (await sleepSession(ref, plan))) return true;
       } catch (error) {
-        host.log.error('сон агентов: усыпить кандидата не удалось', { ref, reason, error: String(error) });
+        host.log.error('сон агентов: усыпить кандидата не удалось', { ref, hurry, error: String(error) });
       } finally {
         inWork.delete(key);
       }
@@ -526,7 +535,7 @@ export function createAutoSleepService(host: HostContext, deps: AutoSleepService
       const config = await readConfig();
       if (stopped || config.sleepAfterMinutes <= 0) return;
       // Темп считается от сна, а не от решения: память освобождается, когда процесс вышел.
-      if (await sleepOne('pressure', config)) lastPressureSleepAt = now();
+      if (await sleepOne(level, config)) lastPressureSleepAt = now();
     } catch (error) {
       host.log.error('сон агентов: сон по давлению не удался', { error: String(error) });
     } finally {

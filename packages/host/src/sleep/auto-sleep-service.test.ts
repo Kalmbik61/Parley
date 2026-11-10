@@ -1249,8 +1249,8 @@ describe('сервис сна: по давлению и ради слота', ()
   });
 
   it('при warn — не больше одной сессии за 30 с, самая давняя первой', async () => {
-    const middle = await idleFor(20);
-    const oldest = await idleFor(30);
+    const middle = await idleFor(34);
+    const oldest = await idleFor(38);
     const newest = await idleFor(10);
     boot({ pressure: sensor });
 
@@ -1262,7 +1262,7 @@ describe('сервис сна: по давлению и ради слота', ()
     expect(logs).toContainEqual({
       level: 'info',
       msg: 'агент усыплён',
-      data: { ref: oldest, reason: 'pressure', idleMin: 30 },
+      data: { ref: oldest, reason: 'pressure', idleMin: 38 },
     });
 
     // Следующая — не раньше чем через 30 с после прошлого сна по давлению.
@@ -1318,8 +1318,8 @@ describe('сервис сна: по давлению и ради слота', ()
     },
   );
 
-  it('простой 4 мин при warn не засыпает, ровно на пороге в 5 мин — засыпает', async () => {
-    const ref = await idleFor(4);
+  it('при warn: 29 мин не засыпает, 30 — засыпает', async () => {
+    const ref = await idleFor(29);
     boot({ pressure: sensor });
 
     await reading('warn', NOW);
@@ -1327,6 +1327,34 @@ describe('сервис сна: по давлению и ради слота', ()
 
     await reading('warn', NOW + MIN);
     expect(slept()).toEqual([ref.sessionId]);
+  });
+
+  it('при critical: 4 мин не засыпает, 5 — засыпает', async () => {
+    const ref = await idleFor(4);
+    boot({ pressure: sensor });
+
+    await reading('critical', NOW);
+    expect(stops).toEqual([]);
+
+    await reading('critical', NOW + MIN);
+    expect(slept()).toEqual([ref.sessionId]);
+  });
+
+  it('поднятая после сна при critical не засыпает раньше 15 мин', async () => {
+    const ref = await startSession({
+      activity: idleActivity(NOW - 14 * MIN),
+      patch: (session) => {
+        session.history.push({ event: 'sleeping', at: iso(T0) }, { event: 'active', at: iso(T0 + MIN) });
+      },
+    });
+    boot({ pressure: sensor });
+
+    await reading('critical', NOW);
+    expect(stops).toEqual([]);
+
+    await reading('critical', NOW + MIN);
+    expect(slept()).toEqual([ref.sessionId]);
+    expect(sessionOf(ref).autoSleep?.reason).toBe('pressure');
   });
 
   it('порог давления берётся из настройки на каждом чтении', async () => {

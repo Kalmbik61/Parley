@@ -132,6 +132,24 @@ export function autoSleepVerdict(input: AutoSleepInput): AutoSleepVerdict {
   return no('working');
 }
 
+/** Нижний предел порога сна при давлении `warn`, минуты: при нём память тесна всегда, и короткий порог крутил бы карусель. */
+export const WARN_SLEEP_MINUTES = 30;
+/** Нижний предел порога для сессии, которую уже усыпляли (поднята письмом или Resume), минуты. */
+export const RESUMED_SLEEP_FLOOR_MINUTES = 15;
+
+/** Повод торопить сон: давление памяти `warn`, `critical` или нужный слот. */
+export type SleepHurry = 'warn' | 'critical' | 'slot';
+
+/**
+ * Порог простоя для сна по давлению или ради слота, минуты: `critical` и слот — настройка, `warn` — не меньше
+ * `WARN_SLEEP_MINUTES`; поднятая после сна сессия — не меньше `RESUMED_SLEEP_FLOOR_MINUTES`. Ограничение обычным порогом
+ * `sleepAfterMinutes` — у вызывающего.
+ */
+export function hurriedSleepMinutes(sleepUnderPressureMinutes: number, hurry: SleepHurry, resumed = false): number {
+  const base = hurry === 'warn' ? Math.max(sleepUnderPressureMinutes, WARN_SLEEP_MINUTES) : sleepUnderPressureMinutes;
+  return resumed ? Math.max(base, RESUMED_SLEEP_FLOOR_MINUTES) : base;
+}
+
 /**
  * Письмо выдано сессии (метка `readBy`) позже `sinceIso`: модель его ещё не видела. Прямые письма ищет `involving`, но
  * рассылка комнаты (`to` пуст) под него не попадает, хотя выдаётся сессии так же, — её ищет вторая выборка, по новейшим
