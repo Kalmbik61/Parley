@@ -322,7 +322,10 @@ export {
   parsePorcelainPaths,
   plannedWorktree,
   projectChanges,
+  projectVersion,
+  VERSION_MAX_PATHS,
   worktreeDiff,
+  worktreeVersion,
 } from './work/worktree.js';
 export type {
   BranchCommit,

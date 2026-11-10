@@ -38,6 +38,23 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   };
 });
 
+// Счётчики настоящих запусков git: дедупликация общего запроса считается по вызовам функций core, а не по ответам.
+const coreCalls = vi.hoisted(() => ({ diff: 0, project: 0 }));
+vi.mock('@parley/core', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@parley/core')>();
+  return {
+    ...actual,
+    worktreeDiff: (...args: Parameters<typeof actual.worktreeDiff>) => {
+      coreCalls.diff += 1;
+      return actual.worktreeDiff(...args);
+    },
+    projectChanges: (...args: Parameters<typeof actual.projectChanges>) => {
+      coreCalls.project += 1;
+      return actual.projectChanges(...args);
+    },
+  };
+});
+
 const run = promisify(execFile);
 const git = (dir: string, args: string[]) => run('git', ['-C', dir, ...args]);
 
@@ -106,6 +123,8 @@ function stubSessions(): Pick<SessionsService, 'stop' | 'checkWorktreeGit' | 'af
 
 beforeEach(() => {
   stopped = [];
+  coreCalls.diff = 0;
+  coreCalls.project = 0;
 });
 
 describe('available', () => {
@@ -409,6 +428,53 @@ describe('ревью изменений (кусок 8.1)', () => {
     expect(bare.files).toEqual([{ path: 'draft.md', status: 'A', oldPath: null, additions: 1, deletions: 0 }]);
     expect(bare.stats).toEqual({ additions: 1, deletions: 0 });
     expect((await service.diff(ref)).patch).toContain('черновик');
+  });
+
+  it('два параллельных diff с тем же ref и patch — один запуск worktreeDiff; после конца — новый', async () => {
+    const { ref, info } = await sessionWithWorktree();
+    const service = createWorktreesService(stubSessions());
+    await writeFile(path.join(info.path, 'draft.md'), 'черновик\n', 'utf8');
+
+    const [first, second] = await Promise.all([service.diff(ref, false), service.diff(ref, false)]);
+    expect(coreCalls.diff).toBe(1);
+    expect(second).toBe(first);
+    await service.diff(ref, false);
+    expect(coreCalls.diff).toBe(2);
+    // Другой patch — другой запрос.
+    await Promise.all([service.diff(ref, false), service.diff(ref, true)]);
+    expect(coreCalls.diff).toBe(4);
+  });
+
+  it('отказавший общий запрос не запоминается: второй вызов стартует заново', async () => {
+    const plain = await mkdtemp(path.join(tmpdir(), 'parley-worktrees-svc-plain-'));
+    try {
+      const ref = await plainSession(plain);
+      const service = createWorktreesService(stubSessions());
+      const results = await Promise.allSettled([service.projectChanges(ref, false), service.projectChanges(ref, false)]);
+      expect(results.map((result) => result.status)).toEqual(['rejected', 'rejected']);
+      expect(coreCalls.project).toBe(1);
+      await expect(service.projectChanges(ref, false)).rejects.toMatchObject({ code: 'bad_request' });
+      expect(coreCalls.project).toBe(2);
+    } finally {
+      await rm(plain, { recursive: true, force: true });
+    }
+  });
+
+  it('version и projectVersion: стабильны без правок, меняются после правки', async () => {
+    const { ref, info } = await sessionWithWorktree();
+    const service = createWorktreesService(stubSessions());
+    const before = await service.version(ref);
+    expect(await service.version(ref)).toBe(before);
+    await writeFile(path.join(info.path, 'draft.md'), 'черновик\n', 'utf8');
+    expect(await service.version(ref)).not.toBe(before);
+    await expect(service.projectVersion(ref)).rejects.toMatchObject({ code: 'bad_request' });
+
+    const plain = await plainSession();
+    const projectBefore = await service.projectVersion(plain);
+    expect(await service.projectVersion(plain)).toBe(projectBefore);
+    await writeFile(path.join(project, 'README.md'), 'старт\nещё\n', 'utf8');
+    expect(await service.projectVersion(plain)).not.toBe(projectBefore);
+    await expect(service.version(plain)).rejects.toMatchObject({ code: 'bad_request' });
   });
 
   it('mergeCheck сессии с worktree — clean; без worktree — bad_request', async () => {

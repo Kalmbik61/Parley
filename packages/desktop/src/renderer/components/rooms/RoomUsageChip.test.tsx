@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RoomUsage, UsageTotal } from '@parley/core';
 import { useActivityStore } from '../../store/activity.js';
 import { useHostStore } from '../../store/host.js';
+import { useUiStore } from '../../store/ui.js';
 import { createFakeBridge, type FakeBridge } from '../../test-utils/fake-bridge.js';
 import { activityMap, makeActivity, makeSession, makeWork } from '../../test-utils/work-fixtures.js';
 import { ROOM_USAGE_MIN_INTERVAL_MS, ROOM_USAGE_REFRESH_MIN_MS, RoomUsageChip } from './RoomUsageChip.js';
@@ -83,6 +84,7 @@ beforeEach(() => {
   bridge = createFakeBridge();
   useHostStore.setState({ status: { state: 'connected', hostVersion: 'fixture', methods: ['rooms.usage'] }, connections: 1 });
   useActivityStore.setState({ byRef: {} });
+  useUiStore.setState({ documentVisible: true });
 });
 afterEach(() => {
   cleanup();
@@ -213,6 +215,53 @@ describe('RoomUsageChip (спека расхода токенов, 3.1–3.3)', 
       await vi.advanceTimersByTimeAsync(0);
     });
     expect(usageCalls()).toHaveLength(2);
+  });
+
+  it('скрытое окно не опрашивает; возврат видимости даёт один вызов', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+    useUiStore.setState({ documentVisible: false });
+    bridge.setHandler('rooms.usage', () => USAGE);
+    render(show());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3 * 60_000);
+    });
+    expect(usageCalls()).toHaveLength(0);
+    act(() => useUiStore.setState({ documentVisible: true }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(usageCalls()).toHaveLength(1);
+  });
+
+  it('пачка смен состава за секунду даёт один вызов', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+    bridge.setHandler('rooms.usage', () => USAGE);
+    const view = render(show());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    for (const extra of ['s-03', 's-04', 's-05']) {
+      const grown = { ...entry, map: { ...entry.map, rooms: entry.map.rooms.map((room) => ({ ...room, members: [...room.members, extra] })) } };
+      view.rerender(<RoomUsageChip bridge={bridge} entry={grown} roomId="r-01" active providers={PROVIDERS} />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(300);
+      });
+    }
+    expect(usageCalls()).toHaveLength(1);
+  });
+
+  it('два значка одной комнаты на одном мосту дают один вызов, значки разных комнат — по одному', async () => {
+    bridge.setHandler('rooms.usage', () => USAGE);
+    const second = { ...entry, map: { ...entry.map, rooms: [...entry.map.rooms, { ...entry.map.rooms[0]!, id: 'r-02' }] } };
+    render(
+      <>
+        <RoomUsageChip bridge={bridge} entry={second} roomId="r-01" active providers={PROVIDERS} />
+        <RoomUsageChip bridge={bridge} entry={second} roomId="r-01" active providers={PROVIDERS} />
+        <RoomUsageChip bridge={bridge} entry={second} roomId="r-02" active providers={PROVIDERS} />
+      </>,
+    );
+    await waitFor(() => expect(screen.getAllByText('↑1.2M ↓84k')).toHaveLength(3));
+    expect(usageCalls().map((call) => (call.params as { roomId: string }).roomId).sort()).toEqual(['r-01', 'r-02']);
   });
 
   it('Copy кладёт в буфер таблицу Markdown', async () => {

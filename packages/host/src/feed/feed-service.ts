@@ -1591,16 +1591,21 @@ export function createFeedService(
         mode: feed.state.permissionMode,
         ...(feed.decisions === null ? {} : { decisions: feed.decisions }),
       };
-      log.info('лента: снимок', {
-        sessionId: ref.sessionId,
-        workId: ref.workId,
-        items: snapshot.items.length,
-        bytes: feed.bytes,
-        scope: scope ?? null,
-        sentBytes: scope === 'attention' ? Buffer.byteLength(JSON.stringify(snapshot.items)) : feed.bytes,
-        seedMs,
-        totalMs: Math.round(performance.now() - startedAt),
-      });
+      // Лёгкий опрос острова (`scope: 'attention'`) раз в 15 с не пишется: строка нужна для разбора
+      // медленных снимков — с севом или от 250 мс она остаётся.
+      const totalMs = Math.round(performance.now() - startedAt);
+      if (scope !== 'attention' || seedMs !== null || totalMs >= 250) {
+        log.info('лента: снимок', {
+          sessionId: ref.sessionId,
+          workId: ref.workId,
+          items: snapshot.items.length,
+          bytes: feed.bytes,
+          scope: scope ?? null,
+          sentBytes: scope === 'attention' ? Buffer.byteLength(JSON.stringify(snapshot.items)) : feed.bytes,
+          seedMs,
+          totalMs,
+        });
+      }
       return snapshot;
     },
 

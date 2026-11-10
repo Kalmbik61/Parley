@@ -33,7 +33,7 @@ import { createFakeBridge } from '../test-utils/fake-bridge.js';
 import { worksSyncLifecycle } from '../test-utils/works-sync-lifecycle.js';
 import { S } from '../../shared/strings.js';
 import { makeActivity, makeRoom, makeSession, makeWork } from '../test-utils/work-fixtures.js';
-import { DONE_HOLD_MS, IDLE_RETRACT_MS, INITIAL_CONFIG, IslandApp, presentationEvent, RETRACT_MORPH_MS } from './IslandApp.js';
+import { DONE_HOLD_MS, IDLE_RETRACT_MS, INITIAL_CONFIG, IslandApp, presentationEvent, REQUEST_REVALIDATE_MS, RETRACT_MORPH_MS } from './IslandApp.js';
 import { createSpeaker } from './assistant/speaker.js';
 import { HOST_IDLE, useAssistantStore } from './assistant/store.js';
 import type { LiveController, LiveControllerEvent, LiveStartResult } from './live/controller.js';
@@ -1794,7 +1794,7 @@ describe('перепроверка выбранного запроса T1a', () 
     expect(screen.getByText('1 of 2')).toBeTruthy();
   });
 
-  it('раз в 1000ms замечает ответ извне, хотя та же сессия всё ещё ждёт другую карточку', async () => {
+  it('раз в REQUEST_REVALIDATE_MS замечает ответ извне, хотя та же сессия всё ещё ждёт другую карточку', async () => {
     const { fake, bridge, blocked } = setup();
     let cards = [permission('c-1', 'first'), permission('c-2', 'second')];
     fake.setHandler('feed.snapshot', () => ({ items: cards, revision: 1, mode: null, decisions: 'window' }));
@@ -1804,9 +1804,14 @@ describe('перепроверка выбранного запроса T1a', () 
     await flush();
     expect(screen.queryByTitle('Run: first')).not.toBeNull();
     cards = [cards[1]!];
-    await act(async () => { await vi.advanceTimersByTimeAsync(999); });
+    const snapshots = () => fake.calls.filter((call) => call.method === 'feed.snapshot').length;
+    const before = snapshots();
+    await act(async () => { await vi.advanceTimersByTimeAsync(REQUEST_REVALIDATE_MS - 1); });
+    // За 14,999 с нового снимка нет, карточка прежняя.
+    expect(snapshots()).toBe(before);
     expect(screen.queryByTitle('Run: first')).not.toBeNull();
     await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(snapshots()).toBe(before + 1);
     expect(screen.queryByTitle('Run: first')).toBeNull();
     expect(screen.queryByTitle('Run: second')).not.toBeNull();
     expect(fake.calls.filter((call) => call.method === 'feed.decide')).toHaveLength(0);

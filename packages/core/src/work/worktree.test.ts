@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { access, chmod, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, truncate, utimes, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { BRANCH_PREFIX, DEFAULT_WORKTREE_ROOT, STATE_DIRS } from '../names.js';
 import {
   baseBranchOf,
+  capPatch,
   commitProject,
   commitWorktree,
   createWorktree,
@@ -21,6 +22,10 @@ import {
   mergeCheck,
   mergeWorktree,
   NothingToCommitError,
+  PATCH_FILE_MAX_BYTES,
+  PATCH_TOTAL_MAX_BYTES,
+  UNTRACKED_READ_MAX_BYTES,
+  VERSION_MAX_PATHS,
   parseCommits,
   parseMergeTree,
   parseNameStatusZ,
@@ -29,8 +34,10 @@ import {
   plannedWorktree,
   prepareWorktreeGitWrites,
   projectChanges,
+  projectVersion,
   removeWorktreeCopy,
   worktreeDiff,
+  worktreeVersion,
 } from './worktree.js';
 
 const run = promisify(execFile);
@@ -1555,4 +1562,223 @@ describe('много неотслеживаемых (раунд fix-final-c, п.
     expect(small.files).toEqual([{ path: 'one.txt', status: 'A', oldPath: null, additions: 1, deletions: 0 }]);
     expect(small.uncountedUntracked).toBe(0);
   }, 60_000);
+});
+
+/** Кусок патча одного файла ровно из `bytes` байт (заголовок + строка содержимого из `x`). */
+function patchPiece(name: string, bytes: number): string {
+  const head = `diff --git a/${name} b/${name}\n`;
+  const filler = '+'.repeat(bytes - Buffer.byteLength(head) - 1);
+  return `${head}${filler}\n`;
+}
+
+const NOTE = /^# parley: patch omitted, too large to show \(\d+ KiB\)$/;
+
+describe('capPatch (C1b-7)', () => {
+  it('кусок ровно PATCH_FILE_MAX_BYTES остаётся, на байт больше — заглушка с тем же заголовком', () => {
+    const exact = patchPiece('exact.txt', PATCH_FILE_MAX_BYTES);
+    expect(Buffer.byteLength(exact)).toBe(PATCH_FILE_MAX_BYTES);
+    expect(capPatch(exact)).toBe(exact);
+
+    const over = patchPiece('over.txt', PATCH_FILE_MAX_BYTES + 1);
+    const lines = capPatch(over).split('\n');
+    expect(lines[0]).toBe('diff --git a/over.txt b/over.txt');
+    expect(lines[1]).toMatch(NOTE);
+    expect(lines[1]).toBe('# parley: patch omitted, too large to show (401 KiB)');
+    expect(lines[2]).toBe('');
+  });
+
+  it('сумма не превышает предел, а каждый заменённый файл виден заглушкой', () => {
+    const names = Array.from({ length: 12 }, (_, i) => `f${i}.txt`);
+    const patch = names.map((name, i) => patchPiece(name, 200 * 1024 + i * 1000)).join('');
+    const capped = capPatch(patch);
+    const headers = capped.split('\n').filter((line) => line.startsWith('diff --git '));
+    expect(headers).toHaveLength(names.length);
+    const notes = capped.split('\n').filter((line) => NOTE.test(line));
+    expect(notes.length).toBeGreaterThan(0);
+    // Всё, что не заглушка, — не больше предела суммы.
+    const kept = capped.split(/(?=^diff --git )/m).filter((piece) => !NOTE.test(piece.split('\n')[1] ?? ''));
+    const keptBytes = kept.reduce((sum, piece) => sum + Buffer.byteLength(piece), 0);
+    expect(keptBytes).toBeLessThanOrEqual(PATCH_TOTAL_MAX_BYTES);
+    expect(kept.length + notes.length).toBe(names.length);
+  });
+
+  it('префикс до первого заголовка и патч без заголовков остаются как есть', () => {
+    expect(capPatch('')).toBe('');
+    expect(capPatch('просто текст\n')).toBe('просто текст\n');
+    const prefixed = `заметка\n${patchPiece('a.txt', 100)}`;
+    expect(capPatch(prefixed)).toBe(prefixed);
+  });
+
+  it('строка, похожая на заголовок внутри содержимого, границей не считается', () => {
+    const big = '+x'.repeat(PATCH_FILE_MAX_BYTES / 2 + 10);
+    // «diff --git» в содержимом файла всегда с префиксом `+`/`-`/` `; \u2028 и \r строку не разделяют.
+    const piece = `diff --git a/a.txt b/a.txt\n+diff --git a/fake b/fake\n-diff --git a/fake2 b/fake2\n diff --git a/fake3 b/fake3\n+x\u2028diff --git a/f b/f\r\n+${big}\n`;
+    const capped = capPatch(piece);
+    const kib = Math.ceil(Buffer.byteLength(piece) / 1024);
+    expect(capped.split('\n')).toEqual([
+      'diff --git a/a.txt b/a.txt',
+      `# parley: patch omitted, too large to show (${kib} KiB)`,
+      '',
+    ]);
+    // Малый файл с теми же строками остаётся целым.
+    const small = 'diff --git a/a.txt b/a.txt\n+diff --git a/fake b/fake\n+x\u2028diff --git a/f b/f\r\n';
+    expect(capPatch(`${small}${patchPiece('b.txt', 100)}`)).toBe(`${small}${patchPiece('b.txt', 100)}`);
+  });
+
+  it('имена с пробелами, кавычками, не-ASCII и переименование: заголовок заглушки целиком из заголовка куска', () => {
+    const names = ['с пробелом и юникодом.txt', '"quoted".txt'];
+    const rename = `diff --git a/old name.txt b/new name.txt\nsimilarity index 90%\nrename from old name.txt\nrename to new name.txt\n${'+'.repeat(PATCH_FILE_MAX_BYTES)}\n`;
+    const patch = `${names.map((name) => patchPiece(name, PATCH_FILE_MAX_BYTES + 5)).join('')}${rename}`;
+    const lines = capPatch(patch).split('\n');
+    expect(lines.filter((line) => line.startsWith('diff --git '))).toEqual([
+      'diff --git a/с пробелом и юникодом.txt b/с пробелом и юникодом.txt',
+      'diff --git a/"quoted".txt b/"quoted".txt',
+      'diff --git a/old name.txt b/new name.txt',
+    ]);
+    expect(lines.filter((line) => NOTE.test(line))).toHaveLength(3);
+  });
+});
+
+describe('огромный неотслеживаемый файл (C1b-7)', () => {
+  /** git через обёртку, которая пишет аргументы каждого запуска: был ли запущен git на большом файле. */
+  async function loggedGitArgs<T>(action: () => Promise<T>): Promise<{ result: T; log: string }> {
+    const real = (await run('sh', ['-c', 'command -v git'])).stdout.trim();
+    const bin = path.join(root, 'args-bin');
+    const log = path.join(root, 'git-args');
+    await mkdir(bin, { recursive: true });
+    await writeFile(path.join(bin, 'git'), `#!/bin/sh\necho "$@" >> '${log}'\nexec '${real}' "$@"\n`, 'utf8');
+    await chmod(path.join(bin, 'git'), 0o755);
+    await writeFile(log, '', 'utf8');
+    const saved = process.env.PATH;
+    process.env.PATH = `${bin}${path.delimiter}${saved ?? ''}`;
+    try {
+      const result = await action();
+      return { result, log: await readFile(log, 'utf8') };
+    } finally {
+      process.env.PATH = saved;
+    }
+  }
+
+  it('worktreeDiff: файл больше предела — в files без чисел, git на нём не запускается, в патче заглушка', async () => {
+    await initProject();
+    const info = await freshWorktree();
+    await writeFile(path.join(info.path, 'big file.bin'), '', 'utf8');
+    await truncate(path.join(info.path, 'big file.bin'), UNTRACKED_READ_MAX_BYTES + 1);
+    await writeFile(path.join(info.path, 'small.txt'), 'a\nb\n', 'utf8');
+
+    const { result: diff, log } = await loggedGitArgs(() => worktreeDiff(project, info, { patch: true }));
+
+    const big = diff.files.find((file) => file.path === 'big file.bin');
+    expect(big).toEqual({ path: 'big file.bin', status: 'A', oldPath: null, additions: null, deletions: null });
+    expect(diff.files.find((file) => file.path === 'small.txt')?.additions).toBe(2);
+    expect(log).not.toContain('big file.bin');
+    expect(log).toContain('small.txt');
+    expect(diff.patch).toContain('diff --git a/big file.bin b/big file.bin\n# parley: patch omitted, too large to show (8193 KiB)\n');
+    expect(diff.patch).toContain('+a\n+b\n');
+  });
+
+  it('projectChanges: то же для папки проекта', async () => {
+    await initProject();
+    await writeFile(path.join(project, 'big.bin'), '', 'utf8');
+    await truncate(path.join(project, 'big.bin'), UNTRACKED_READ_MAX_BYTES + 1);
+    const { result: changes, log } = await loggedGitArgs(() => projectChanges(project, { patch: true }));
+    expect(changes.files).toEqual([{ path: 'big.bin', status: 'A', oldPath: null, additions: null, deletions: null }]);
+    expect(log).not.toContain('big.bin');
+    expect(changes.patch).toContain('# parley: patch omitted');
+  });
+
+  it('закоммиченный файл больше предела патча: остаётся в files с числами, патч — заглушка', async () => {
+    await initProject();
+    const info = await freshWorktree();
+    const name = 'большой файл.txt';
+    await writeFile(path.join(info.path, name), 'строка\n'.repeat(80_000), 'utf8');
+    await git(info.path, ['add', '-A']);
+    await git(info.path, ['commit', '-m', 'большой']);
+    const diff = await worktreeDiff(project, info, { patch: true });
+    expect(diff.files.find((file) => file.path === name)).toMatchObject({ additions: 80_000, deletions: 0 });
+    expect(diff.patch).toMatch(/# parley: patch omitted, too large to show \(\d+ KiB\)/);
+    expect(Buffer.byteLength(diff.patch)).toBeLessThan(2000);
+  }, 30_000);
+});
+
+describe('worktreeVersion и projectVersion', () => {
+  async function versioned() {
+    await initProject();
+    const info = plannedWorktree(project, 'w-0001', 's-02', 'main', worktreeRoot);
+    await createWorktree(project, info);
+    return info;
+  }
+
+  it('повторный вызов без изменений даёт то же значение', async () => {
+    const info = await versioned();
+    await writeFile(path.join(info.path, 'a.txt'), 'один\n', 'utf8');
+    expect(await worktreeVersion(project, info)).toBe(await worktreeVersion(project, info));
+    expect(await projectVersion(project)).toBe(await projectVersion(project));
+  });
+
+  it('правка уже изменённого файла с тем же размером и тем же статусом меняет версию', async () => {
+    const info = await versioned();
+    const file = path.join(info.path, 'README.md');
+    await writeFile(file, 'новое\n', 'utf8');
+    const before = await worktreeVersion(project, info);
+    await writeFile(file, 'иное!\n', 'utf8');
+    await utimes(file, new Date(), new Date(Date.now() + 10_000));
+    expect((await git(info.path, ['status', '--porcelain'])).stdout.trim()).toBe('M README.md');
+    expect(await worktreeVersion(project, info)).not.toBe(before);
+  });
+
+  it('новый и удалённый неотслеживаемый файл, коммит меняют версию', async () => {
+    const info = await versioned();
+    const v0 = await worktreeVersion(project, info);
+    await writeFile(path.join(info.path, 'new.txt'), 'x\n', 'utf8');
+    const v1 = await worktreeVersion(project, info);
+    expect(v1).not.toBe(v0);
+    await rm(path.join(info.path, 'new.txt'));
+    expect(await worktreeVersion(project, info)).toBe(v0);
+    await writeFile(path.join(info.path, 'new.txt'), 'x\n', 'utf8');
+    await git(info.path, ['add', 'new.txt']);
+    const v2 = await worktreeVersion(project, info);
+    expect(v2).not.toBe(v1);
+    await git(info.path, ['commit', '-m', 'новый']);
+    expect(await worktreeVersion(project, info)).not.toBe(v2);
+  });
+
+  it('изменение грязности базы меняет версию worktree', async () => {
+    const info = await versioned();
+    const clean = await worktreeVersion(project, info);
+    await writeFile(path.join(project, 'README.md'), 'правка базы\n', 'utf8');
+    expect(await worktreeVersion(project, info)).not.toBe(clean);
+  });
+
+  it('projectVersion: правка, новый файл и коммит меняют значение', async () => {
+    await initProject();
+    const v0 = await projectVersion(project);
+    await writeFile(path.join(project, 'u.txt'), '1\n', 'utf8');
+    const v1 = await projectVersion(project);
+    expect(v1).not.toBe(v0);
+    await git(project, ['add', 'u.txt']);
+    await git(project, ['commit', '-m', 'u']);
+    expect(await projectVersion(project)).not.toBe(v1);
+  });
+
+  it('больше VERSION_MAX_PATHS путей — летучая версия, два вызова различаются', async () => {
+    const info = await versioned();
+    const dir = path.join(info.path, 'many');
+    await mkdir(dir);
+    const names = Array.from({ length: VERSION_MAX_PATHS + 1 }, (_, index) => `f${index}.txt`);
+    for (let from = 0; from < names.length; from += 200) {
+      await Promise.all(names.slice(from, from + 200).map((name) => writeFile(path.join(dir, name), '', 'utf8')));
+    }
+    const first = await worktreeVersion(project, info);
+    const second = await worktreeVersion(project, info);
+    expect(first.startsWith('volatile:')).toBe(true);
+    expect(second.startsWith('volatile:')).toBe(true);
+    expect(first).not.toBe(second);
+  }, 60_000);
+
+  it('исчезнувшая папка worktree — летучая версия, а не стабильное значение', async () => {
+    const info = await versioned();
+    await rm(info.path, { recursive: true, force: true });
+    expect((await worktreeVersion(project, info)).startsWith('volatile:')).toBe(true);
+  });
 });
