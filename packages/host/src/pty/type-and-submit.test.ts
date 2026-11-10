@@ -215,9 +215,9 @@ describe('typeAndSubmit', () => {
       expect(pty.writes).toEqual([`${START}привет${END}`]);
     });
 
-    it('codex: текст на `/` получает префикс `- `', () => {
+    it('codex: текст на `/` получает префикс `- ` и хвостовой пробел', () => {
       typeAndSubmit(deps(), ref, '/x', false, { wrap: 'codex' });
-      expect(pty.writes).toEqual([`${START}- /x${END}`]);
+      expect(pty.writes).toEqual([`${START}- /x ${END}`]);
     });
 
     it('multiline: true сохраняет \\n, по умолчанию переводов строк нет', () => {
