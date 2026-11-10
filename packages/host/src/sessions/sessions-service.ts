@@ -115,7 +115,7 @@ import {
   updateMap,
   workPaths,
   writeBrief,
-  writeLetters,
+  writeLettersAsync,
   type CodexWriteApprovals,
   type EffortLevel,
   type ParleyConfig,
@@ -596,7 +596,7 @@ export function createSessionsService(
       if (parentId !== null) {
         try {
           // Только письмо: без разбора карты (спека хранилища 6.2).
-          writeLetters(ref.projectPath, ref.workId, (letters, current) => {
+          await writeLettersAsync(ref.projectPath, ref.workId, (letters, current) => {
             if (current.sessions.some((candidate) => candidate.id === parentId)) {
               letters.add({ roomId: null, from: SYSTEM, to: [parentId], text, kind: 'note' });
             }
@@ -1095,7 +1095,7 @@ export function createSessionsService(
           const parentId = session.parent;
           if (parentId !== null) {
             try {
-              writeLetters(ref.projectPath, ref.workId, (letters, current) => {
+              await writeLettersAsync(ref.projectPath, ref.workId, (letters, current) => {
                 if (current.sessions.some((candidate) => candidate.id === parentId)) {
                   letters.add({ roomId: null, from: SYSTEM, to: [parentId], text, kind: 'note' });
                 }

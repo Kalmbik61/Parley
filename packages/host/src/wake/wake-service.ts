@@ -40,7 +40,7 @@ import {
   updateMap,
   viewMap,
   workPaths,
-  writeLetters,
+  writeLettersAsync,
   type DeliveryAction,
   type DeliveryInput,
   type Message,
@@ -649,7 +649,7 @@ export function createWakeService(
     const ids = new Set(letterIds);
     try {
       // Только письма: отправители ожидавших писем читаются запросом, карта целиком не разбирается (спека хранилища 6.2).
-      writeLetters(ref.projectPath, ref.workId, (letters, map) => {
+      await writeLettersAsync(ref.projectPath, ref.workId, (letters, map) => {
         const senders = new Set(letters.query({ ids: [...ids], limit: ids.size }).map((message) => message.from));
         // Человек узнаёт из уведомления, системе писать незачем, себе — тоже.
         senders.delete(HUMAN);

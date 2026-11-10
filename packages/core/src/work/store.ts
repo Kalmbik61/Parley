@@ -278,15 +278,20 @@ function asLockTimeout(error: unknown, timeoutMs: number): unknown {
  * (в том числе после отказа) возвращается к `BUSY_TIMEOUT_MS`: иначе чтения и следующие записи ждали бы столько, сколько
  * попросила последняя.
  */
-function writeTransaction<T>(db: DatabaseSync, lockTimeoutMs: number, body: () => T): T {
+function writeTransaction<T>(db: DatabaseSync, lockTimeoutMs: number, body: () => T, sliceMs?: number): T {
   const timeoutMs = Number.isFinite(lockTimeoutMs)
     ? Math.max(0, Math.trunc(lockTimeoutMs))
     : DEFAULT_LOCK_TIMEOUT_MS;
   try {
     try {
-      db.exec(`PRAGMA busy_timeout = ${timeoutMs}`);
+      // С `sliceMs` (`retryLocked`) попытка ждёт чужой замок не дольше среза и при отказе бросает `LockNotTakenError`:
+      // тело не исполнялось, и повторить попытку безопасно. Без него — прежнее ожидание до `lockTimeoutMs`.
+      db.exec(`PRAGMA busy_timeout = ${sliceMs === undefined ? timeoutMs : Math.max(0, Math.trunc(sliceMs))}`);
       db.exec('BEGIN IMMEDIATE');
     } catch (error) {
+      if (sliceMs !== undefined && (sqliteCode(error) & 0xff) === SQLITE_BUSY) {
+        throw new LockNotTakenError(path.join(parleyHome(), WORK_DB_FILE), sliceMs);
+      }
       throw asLockTimeout(error, timeoutMs);
     }
     try {
@@ -303,6 +308,37 @@ function writeTransaction<T>(db: DatabaseSync, lockTimeoutMs: number, body: () =
     }
   } finally {
     db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
+  }
+}
+
+/** Срез одной попытки записи хоста и пауза между попытками (`retryLocked`): дольше цикл событий не спит. */
+const LOCK_SLICE_MS = 10;
+const LOCK_RETRY_MS = 10;
+
+/** Отказ `BEGIN IMMEDIATE` за срез: замок не взят, тело не исполнялось. Не экспортируется — наружу идёт `MapLockTimeoutError`. */
+class LockNotTakenError extends MapLockTimeoutError {}
+
+/**
+ * Запись хоста под чужим замком без сна цикла событий: `node:sqlite` синхронен, и `busy_timeout` внутри `BEGIN IMMEDIATE` держал
+ * бы весь хост. Попытка ждёт не дольше `LOCK_SLICE_MS`, между попытками — асинхронная пауза, общий срок прежний (`lockTimeoutMs`,
+ * по умолчанию 3000). Повторяется только `LockNotTakenError`; ошибки тела и прочие отказы идут как есть. Срок вышел — тот же
+ * `MapLockTimeoutError`, что у синхронной записи. Писатели одного процесса не мешают друг другу: тело живёт между `BEGIN` и
+ * `COMMIT` без `await`.
+ */
+export async function retryLocked<T>(lockTimeoutMs: number | undefined, attempt: (sliceMs: number) => T): Promise<T> {
+  const timeoutMs = lockTimeoutMs !== undefined && Number.isFinite(lockTimeoutMs)
+    ? Math.max(0, Math.trunc(lockTimeoutMs))
+    : DEFAULT_LOCK_TIMEOUT_MS;
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    try {
+      return attempt(Math.max(0, Math.min(LOCK_SLICE_MS, deadline - Date.now())));
+    } catch (error) {
+      if (!(error instanceof LockNotTakenError)) throw error;
+    }
+    const left = deadline - Date.now();
+    if (left <= 0) throw new MapLockTimeoutError(path.join(parleyHome(), WORK_DB_FILE), timeoutMs);
+    await delay(Math.min(LOCK_RETRY_MS, left));
   }
 }
 
@@ -331,6 +367,9 @@ export const DELETE_ENTRY =
   'DELETE FROM entries WHERE project_path = ? AND work_id = ? AND kind = ? AND key = ?';
 const INSERT_WORK = `INSERT INTO works (project_path, id, title, status, updated_at, version, work_json, extra_json)
   VALUES (?, ?, ?, ?, ?, ?, ?, ?)`;
+/** Запись только писем: от них зависят `updated_at` и `work_json` (`updatedAt`, `messageSeq`); название, статус и `extra` те же. */
+const UPDATE_WORK_HEAD = `UPDATE works SET updated_at = ?, work_json = ?, version = version + 1
+  WHERE project_path = ? AND id = ? RETURNING version`;
 const UPDATE_WORK = `UPDATE works SET title = ?, status = ?, updated_at = ?, work_json = ?, extra_json = ?,
   version = version + 1 WHERE project_path = ? AND id = ? RETURNING version`;
 
@@ -428,6 +467,12 @@ interface CachedMap {
   work: string;
   extra: string;
   index: ReadonlyMap<string, StoredRow>;
+  /**
+   * `true` — `work`, `extra` и `index` записи равны тому, что дал бы `mapToRows(map)`: запись положила кэш после своей записи,
+   * строки в базе — ровно эти. У записи, разобранной из базы (`loadMap`), признака нет: `normalizeMap` мог перевести старую
+   * карту в другой вид, и общая запись должна сперва записать его. Запись только писем идёт по кэшу лишь при признаке.
+   */
+  clean?: true;
 }
 
 const mapCache = new Map<string, CachedMap>();
@@ -756,11 +801,11 @@ export async function deleteWorkFiles(
   { lockTimeoutMs = DEFAULT_LOCK_TIMEOUT_MS }: WriteOptions = {},
 ): Promise<void> {
   const db = storeDb();
-  const version = writeTransaction(db, lockTimeoutMs, () => {
+  const version = await retryLocked(lockTimeoutMs, (sliceMs) => writeTransaction(db, lockTimeoutMs, () => {
     const last = versionOf(db, projectPath, workId);
     sql(db, 'DELETE FROM works WHERE project_path = ? AND id = ?').run(projectPath, workId);
     return last;
-  });
+  }, sliceMs));
   mapCache.delete(cacheKey(projectPath, workId));
   // Снятие — тоже запись базы: без события хост этого процесса не узнал бы об удалении (файлов, за которыми он следил, нет).
   if (version !== undefined) emitMapWritten({ projectPath, workId, version, removed: true });
@@ -838,25 +883,34 @@ export async function pruneWorksIndex({
   }
   if (gone.length === 0) return gone;
   const removed: WorkIndexEntry[] = [];
+  // Копия — до замка (чтение и запись файла не держат писателей), с версией и номером создания, под которыми она снята.
+  const copied: { entry: WorkIndexEntry; version: number; incarnation: number }[] = [];
+  for (const entry of gone) {
+    try {
+      const at = savePrunedCopy(entry);
+      copied.push({ entry, version: at.version, incarnation: at.incarnation });
+    } catch (error) {
+      report(`workspace ${entry.id} (${entry.projectPath}) kept: its copy could not be saved (${(error as Error).message})`);
+    }
+  }
   const events = writeTransaction(db, lockTimeoutMs, () => {
     const versions: MapWrittenEvent[] = [];
-    for (const entry of gone) {
-      // Копия и снятие в одной транзакции записи: между ними карту никто не изменит.
-      try {
-        savePrunedCopy(entry);
-      } catch (error) {
-        report(`workspace ${entry.id} (${entry.projectPath}) kept: its copy could not be saved (${(error as Error).message})`);
+    for (const { entry, version: copiedVersion, incarnation: copiedIncarnation } of copied) {
+      const identity = workIdentity(entry.projectPath, entry.id);
+      // Работа изменилась между копией и замком: копия устарела, а снятие стёрло бы свежее. Остаётся (файл копии лежит в
+      // `pruned/` как был: это снимок прежней версии, лишним он не мешает). Работы уже нет — снимать нечего, как и раньше.
+      if (identity !== undefined && (identity.version !== copiedVersion || identity.incarnation !== copiedIncarnation)) {
+        report(`workspace ${entry.id} (${entry.projectPath}) kept: it changed while its copy was saved`);
         continue;
       }
-      const version = versionOf(db, entry.projectPath, entry.id);
       sql(db, 'DELETE FROM works WHERE project_path = ? AND id = ?').run(
         entry.projectPath,
         entry.id,
       );
       mapCache.delete(cacheKey(entry.projectPath, entry.id));
       removed.push(entry);
-      if (version !== undefined) {
-        versions.push({ projectPath: entry.projectPath, workId: entry.id, version, removed: true });
+      if (identity !== undefined) {
+        versions.push({ projectPath: entry.projectPath, workId: entry.id, version: identity.version, removed: true });
       }
     }
     return versions;
@@ -867,14 +921,22 @@ export async function pruneWorksIndex({
 
 /**
  * Пишет карту работы (то, что отдаёт `readStoredMap`) в `<дом>/pruned/<номер>-<время UTC без двоеточий>.json`; существующий
- * файл не затирает. Вызывается внутри транзакции записи — читает на её снимке.
+ * файл не затирает. Карту и личность работы (версия, номер создания) читает с одного снимка базы и возвращает личность:
+ * `pruneWorksIndex` сверяет её под замком.
  */
-function savePrunedCopy(entry: WorkIndexEntry): void {
-  const map = readStoredMap(entry.projectPath, entry.id);
+function savePrunedCopy(entry: WorkIndexEntry): { version: number; incarnation: number } {
+  const db = storeDb();
+  const { map, at } = readTransaction(db, () => {
+    const identity = workIdentity(entry.projectPath, entry.id);
+    const stored = readStoredMap(entry.projectPath, entry.id);
+    if (identity === undefined) throw notFound(entry.projectPath, entry.id);
+    return { map: stored, at: identity };
+  });
   const dir = path.join(parleyHome(), PRUNED_DIR);
   mkdirSync(dir, { recursive: true });
   const stamp = new Date().toISOString().replace(/:/g, '');
   writeFileSync(path.join(dir, `${entry.id}-${stamp}.json`), `${JSON.stringify(map, null, 2)}\n`, { flag: 'wx' });
+  return at;
 }
 
 export interface NewWork {
@@ -910,7 +972,7 @@ export async function createWork(
   // Каталог состояния — до путей работы: новый `.parley` получает свой `.gitignore` (R5).
   await ensureStateDir(projectPath);
   const db = storeDb();
-  const created = writeTransaction(db, lockTimeoutMs, () => {
+  const created = await retryLocked(lockTimeoutMs, (sliceMs) => writeTransaction(db, lockTimeoutMs, () => {
     let id = nextWorkId({ schemaVersion: 1, works: listWorks(db) });
     while (existsSync(workPaths(projectPath, id).map)) id = bumpWorkId(id);
     map.work.id = id;
@@ -942,7 +1004,7 @@ export async function createWork(
     mkdirSync(paths.briefs, { recursive: true });
     mkdirSync(paths.artifacts, { recursive: true });
     return { workId: id, version, incarnation: workIdentity(projectPath, id)!.incarnation };
-  });
+  }, sliceMs));
   emitMapWritten({ projectPath, ...created });
   return map;
 }
@@ -973,8 +1035,32 @@ export async function updateMap(
   options: UpdateMapOptions = {},
 ): Promise<WorkMap> {
   // Карта уходит вызывающему, и он её меняет: кэшу нужен свой объект — свежая сборка строк, а не эта карта.
-  const update = applyMapUpdate(projectPath, workId, mutate, { ...options, keepResult: true });
+  const carry: PreloadCarry = {};
+  const update = await retryLocked(options.lockTimeoutMs, (sliceMs) =>
+    applyMapUpdate(projectPath, workId, mutate, { ...options, keepResult: true, sliceMs, carry }),
+  );
   return update.shared ? structuredClone(update.map) : update.map;
+}
+
+/**
+ * Асинхронная `writeLetters` для хоста: то же тело, но чужой замок ждётся срезами с паузой цикла событий (`retryLocked`).
+ * Мутатор письма исполняется только внутри взятой транзакции, неудачная попытка следов не оставляет.
+ */
+export function applyLettersAsync(
+  projectPath: string,
+  workId: string,
+  mutate: (map: WorkMap, letters: LetterTx) => void,
+  options: Pick<UpdateMapOptions, 'touch' | 'lockTimeoutMs'> = {},
+): Promise<MapUpdate> {
+  const carry: PreloadCarry = {};
+  return retryLocked(options.lockTimeoutMs, (sliceMs) =>
+    applyMapUpdate(projectPath, workId, mutate, { ...options, lettersOnly: true, sliceMs, carry }),
+  );
+}
+
+/** Разобранная до замка карта, переживающая повторные попытки одной записи: промах кэша не парсит карту на каждой паузе. */
+interface PreloadCarry {
+  preloaded?: { stored: Stored; map: WorkMap } | undefined;
 }
 
 /** Результат `applyMapUpdate`: карта и признак, что объект принадлежит кэшу (запись была пустой или кэш взял саму карту) и наружу идёт копией. */
@@ -992,6 +1078,16 @@ interface ApplyMapOptions extends UpdateMapOptions {
    * разбираются (спека хранилища 6.9, план 4, задача 5).
    */
   keepResult?: boolean;
+  /**
+   * `true` (`writeLetters`) — мутатор пишет только письма и карту не меняет, кроме `work.messageSeq` через `LetterTx`. При
+   * попадании в кэш с признаком `clean` запись не зовёт `normalizeMap`, `mapToRows`, `rowsToMap` и `isPlainJsonTree` и
+   * пишет письма и одну строку `works`. Без попадания или без признака идёт общий путь.
+   */
+  lettersOnly?: boolean;
+  /** Срез ожидания чужого замка одной попыткой (`retryLocked`); без него — ожидание до `lockTimeoutMs`, как раньше. */
+  sliceMs?: number;
+  /** Предзагрузка, общая для попыток одной асинхронной записи. */
+  carry?: PreloadCarry;
 }
 
 /**
@@ -1022,11 +1118,31 @@ export function applyMapUpdate(
   projectPath: string,
   workId: string,
   mutate: (map: WorkMap, letters: LetterTx) => void,
-  { lockTimeoutMs = DEFAULT_LOCK_TIMEOUT_MS, touch = true, keepResult = false }: ApplyMapOptions = {},
+  { lockTimeoutMs = DEFAULT_LOCK_TIMEOUT_MS, touch = true, keepResult = false, lettersOnly = false, sliceMs, carry }: ApplyMapOptions = {},
 ): MapUpdate {
   const db = storeDb();
   const key = cacheKey(projectPath, workId);
   const source = mapSource(projectPath, workId);
+
+  // Промах кэша: карта грузится и разбирается до замка (чтение в WAL писателей не ждёт). Под замком версия и номер создания
+  // сверяются заново: совпали — это та же карта, что прочла бы загрузка под замком; нет — загрузка под замком, как раньше.
+  // Отказ загрузки (работы нет, битая строка) здесь не разбирается: причину назовёт загрузка под замком. Кэш не считаем.
+  let preloaded: { stored: Stored; map: WorkMap } | undefined = carry?.preloaded;
+  const before = workIdentity(projectPath, workId);
+  if (before !== undefined && preloaded === undefined) {
+    const entry = mapCache.get(key);
+    if (entry === undefined || entry.version !== before.version || entry.incarnation !== before.incarnation) {
+      try {
+        const loaded = loadStored(db, projectPath, workId);
+        if (loaded !== undefined) {
+          preloaded = { stored: loaded, map: normalizeMap(rowsToMap(loaded.work, loaded.extra, loaded.rows), source) };
+        }
+      } catch {
+        preloaded = undefined;
+      }
+      if (carry !== undefined) carry.preloaded = preloaded;
+    }
+  }
 
   const written = writeTransaction(db, lockTimeoutMs, () => {
     const identity = workIdentity(projectPath, workId);
@@ -1035,14 +1151,53 @@ export function applyMapUpdate(
       mapCache.delete(key);
       throw notFound(projectPath, workId);
     }
+    const hit = cachedEntry(key, stored, identity!.incarnation);
+    // Быстрый путь писем (`lettersOnly`): карта из кэша без `normalizeMap`, `mapToRows` и `isPlainJsonTree`. Закрыть сессию и
+    // изменить строки списков мутатор писем не может (карту он только читает), поэтому не нужны ни `dropReaderCandidates`, ни
+    // дифф строк; от писем меняются лишь `work.updatedAt` и `work.messageSeq` (`LetterTx.deleteRoom`).
+    if (lettersOnly && hit !== undefined && hit.clean === true) {
+      mapCache.delete(key);
+      const { letters, wrote, journal } = createTableLetterTx(db, projectPath, workId, hit.map);
+      mutate(hit.map, letters);
+      if (!wrote()) {
+        // Карта в кэше: мутатор писем её не менял (откат `savepoint` возвращает `messageSeq`).
+        rememberMap(key, hit);
+        return { empty: true as const, current: hit.map, shared: true };
+      }
+      // До `touch`: сдвиг `updatedAt` запись структурной не делает, как и в общем пути.
+      const structural = JSON.stringify(hit.map.work) !== hit.work;
+      if (touch) hit.map.work.updatedAt = new Date().toISOString();
+      const work = JSON.stringify(hit.map.work);
+      const updated = sql(db, UPDATE_WORK_HEAD).get(hit.map.work.updatedAt, work, projectPath, workId);
+      return {
+        empty: false as const,
+        current: hit.map,
+        fast: true as const,
+        work,
+        entry: hit,
+        version: Number(updated?.['version']),
+        incarnation: identity!.incarnation,
+        prevVersion: stored,
+        structural,
+        journal: journal(),
+      };
+    }
     // Карта из кэша процесса — без загрузки и без копии: запись из кэша снимается, после записи ниже кэш получит новую.
     let current: WorkMap;
     let previous: { work: string; extra: string; index: ReadonlyMap<string, StoredRow> };
-    const hit = cachedEntry(key, stored, identity!.incarnation);
     if (hit !== undefined) {
       mapCache.delete(key);
       current = hit.map;
       previous = hit;
+    } else if (
+      preloaded !== undefined &&
+      preloaded.stored.version === stored &&
+      preloaded.stored.incarnation === identity!.incarnation
+    ) {
+      const { stored: loaded, map } = preloaded;
+      preloaded = undefined;
+      current = map;
+      previous = { work: loaded.work, extra: loaded.extra, index: rowIndex(loaded.rows) };
     } else {
       const loaded = loadStored(db, projectPath, workId);
       if (loaded === undefined) {
@@ -1098,6 +1253,7 @@ export function applyMapUpdate(
     );
     return {
       empty: false as const,
+      fast: false as const,
       current,
       next,
       version: Number(updated?.['version']),
@@ -1106,8 +1262,23 @@ export function applyMapUpdate(
       structural,
       journal: journal(),
     };
-  });
+  }, sliceMs);
   if (written.empty) return { map: written.current, shared: written.shared };
+
+  if (written.fast) {
+    // Карта и строки те же, что были, — новы только версия и текст работы.
+    rememberMap(key, { ...written.entry, version: written.version, work: written.work });
+    emitMapWritten({
+      projectPath,
+      workId,
+      version: written.version,
+      incarnation: written.incarnation,
+      prevVersion: written.prevVersion,
+      structural: written.structural,
+      journal: written.journal,
+    });
+    return { map: written.current, shared: true };
+  }
 
   // В кэш — после коммита (спека хранилища 6.9): карта, структурно равная свежему разбору записанных строк, иначе писавший
   // процесс читал бы карту иначе, чем любой другой. Не вышло — запись снимаем и молчим: карта уже записана, ошибка заставила бы
@@ -1127,6 +1298,7 @@ export function applyMapUpdate(
       work: written.next.work,
       extra: written.next.extra,
       index: rowIndex(written.next.rows),
+      clean: true,
     });
     shared = own;
   } catch {
