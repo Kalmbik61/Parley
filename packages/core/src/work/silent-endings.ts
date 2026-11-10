@@ -4,7 +4,7 @@ import { hookedSince, type SessionActivity } from './activity.js';
 import { liveLead, isRoomArchived } from './rooms.js';
 import { swarmOfSession } from './swarms.js';
 import { isTaskLetter, reportRecipients } from './task-giver.js';
-import { PARLEY, type Message, type SilentEndingMark, type WorkMap, type WorkSession } from './types.js';
+import { HUMAN, PARLEY, type Message, type SilentEndingMark, type WorkMap, type WorkSession } from './types.js';
 
 export type { SilentEndingKind, SilentEndingMark } from './types.js';
 
@@ -126,7 +126,8 @@ function coordinates(map: WorkMap, session: WorkSession): boolean {
  * Один шаг сторожа конца хода без `report` (хост зовёт его под замком карты через `SILENT_TURN_MS` после конца хода).
  * Первый раз пишет напоминание самой сессии (`'nudged'`); следующий раз — письмо получателям (`'told'`), если после
  * напоминания сессия не написала ни одного письма (написала — отметка без письма). Дальше в задании — `null`.
- * Черновик человека хост проверяет сам.
+ * Сессия без письма-задания, которую завёл человек (не `create_session` другой сессии), не получает напоминания:
+ * она ещё ждёт свою часть от ведущего или решения человека, задания у неё нет. Черновик человека хост проверяет сам.
  */
 export function silentTurnStep(map: WorkMap, letters: LetterTx, sessionId: string, at: string): 'nudged' | 'told' | null {
   const session = sessionOf(map, sessionId);
@@ -134,6 +135,7 @@ export function silentTurnStep(map: WorkMap, letters: LetterTx, sessionId: strin
   if (swarmOfSession(map, sessionId) !== null || coordinates(map, session)) return null;
   if (letters.unreadFor(sessionId).length > 0) return null;
   const task = lastTaskLetter(map, letters, sessionId);
+  if (task === null && (session.createdBy == null || session.createdBy === '' || session.createdBy === HUMAN)) return null;
   if (hasCurrentResult(session, task)) return null;
   const to = reportRecipients(map, letters, sessionId).map((recipient) => recipient.id);
   if (to.length === 0) return null;

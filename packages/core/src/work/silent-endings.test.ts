@@ -178,9 +178,26 @@ describe('silentTurnStep', () => {
     done.map.sessions[1]!.resultAt = iso(NOW - MIN);
     expect(silentTurnStep(done.map, done.letters, 's-02', iso(NOW))).toBeNull();
 
-    for (const one of [lead, parent, stuck, done]) expect(one.map.messages).toHaveLength(0);
+    // Участник комнаты, которого завёл человек: письма-задания нет, создателя нет — задания у него нет.
+    const member = live();
+    delete member.map.sessions[1]!.createdBy;
+    expect(silentTurnStep(member.map, member.letters, 's-02', iso(NOW))).toBeNull();
+
+    for (const one of [lead, parent, stuck, done, member]) expect(one.map.messages).toHaveLength(0);
     expect(unread.map.messages).toHaveLength(1);
     expect(unread.map.sessions[1]!.silentEnding).toBeUndefined();
+    expect(member.map.sessions[1]!.silentEnding).toBeUndefined();
+  });
+
+  it('участник комнаты, которого завёл человек: напоминание появляется с письмом-заданием', () => {
+    const { map, letters } = live();
+    delete map.sessions[1]!.createdBy;
+    expect(silentTurnStep(map, letters, 's-02', iso(NOW))).toBeNull();
+    // Ведущий s-01 даёт часть s-02; читаем письмо, чтобы непрочитанного не осталось (id m-01).
+    letters.add({ roomId: 'r-01', from: 's-01', to: ['s-02'], text: 'your part', kind: 'note', at: iso(NOW + MIN) });
+    letters.markRead('s-02', [map.messages[0]!.id], iso(NOW + 2 * MIN));
+    expect(silentTurnStep(map, letters, 's-02', iso(NOW + 5 * MIN))).toBe('nudged');
+    expect(map.messages[1]).toMatchObject({ from: PARLEY, to: ['s-02'], text: nudgeText(['s-01']) });
   });
 });
 
