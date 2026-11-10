@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 import type { CheckSpec } from '@parley/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { attemptsEngineGitPath } from '../agent/attempts-endpoint.js';
-import { run } from './check-runner.js';
+import { CHECK_TIMEOUT_MAX_MS, run } from './check-runner.js';
 
 // Only the unavailable macOS boundary is simulated; clones and candidate processes are real.
 const boundary = vi.hoisted(() => ({ native: false, unavailable: '', kernelOnly: false, logs: '', dirty: false, wrongHead: false, postLogFailure: false, delayedLogs: false, logFailureAt: 0, orphanMarker: '', orphanExitCode: 0, orphanScanUnavailable: false, queries: 0, stamps: [] as string[] }));
@@ -330,4 +330,57 @@ it('keeps different long IDs and a short lookalike in distinct safe directories'
   }
   expect(new Set(paths).size).toBe(3);
   for (const file of paths) expect(await readFile(file, 'utf8')).toBe('ok\n');
+});
+
+describe('прерывание и срок проверки', () => {
+  const groups: number[] = [];
+  afterEach(() => {
+    vi.restoreAllMocks();
+    // Если тест упал до проверки, группа процессов не должна пережить его.
+    for (const pid of groups.splice(0)) { try { process.kill(-pid, 'SIGKILL'); } catch { /* уже нет */ } }
+  });
+  const gone = (target: number) => { try { process.kill(target, 0); return false; } catch (error) { return (error as NodeJS.ErrnoException).code === 'ESRCH'; } };
+
+  it('signal stops a running check: summary cancelled, sandbox log not read after launch', async () => {
+    const f = await fixture();
+    const marker = path.join(f.ctx.projectPath, 'child.pid');
+    f.spec.timeoutMs = 60_000;
+    f.spec.argv = [process.execPath, '-e', `require('fs').writeFileSync(${JSON.stringify(marker)},String(process.pid));setInterval(()=>{},1000)`];
+    const controller = new AbortController();
+    const pending = run({ ...f.ctx, signal: controller.signal }, f.spec, f.sha, 'at-01');
+    await vi.waitFor(async () => { expect(Number(await readFile(marker, 'utf8'))).toBeGreaterThan(0); }, { timeout: 15_000 });
+    const pid = Number(await readFile(marker, 'utf8')); groups.push(pid);
+    controller.abort();
+    const result = await pending;
+    expect(result).toMatchObject({ verdict: 'error', summary: 'cancelled' });
+    // Журнал песочницы читался один раз — зондом до запуска; после запуска ни разу.
+    expect(boundary.queries).toBe(1);
+    await vi.waitFor(() => { expect(gone(pid)).toBe(true); expect(gone(-pid)).toBe(true); });
+    await expect(access(path.join(f.checkDir, 'checkout'))).rejects.toThrow();
+  }, 30_000);
+
+  it('a signal aborted before the run starts nothing', async () => {
+    const f = await fixture();
+    const controller = new AbortController(); controller.abort();
+    expect(await run({ ...f.ctx, signal: controller.signal }, f.spec, f.sha, 'at-01')).toMatchObject({ verdict: 'error', summary: 'cancelled', outputTail: null });
+    expect(boundary.queries).toBe(0);
+    await expect(access(f.checkDir)).rejects.toThrow();
+  });
+
+  it.each([
+    [CHECK_TIMEOUT_MAX_MS + 1, CHECK_TIMEOUT_MAX_MS],
+    [2_147_483_647, CHECK_TIMEOUT_MAX_MS],
+    [1000, 1000],
+  ])('child deadline is min(timeoutMs, CHECK_TIMEOUT_MAX_MS): %i gives %i', async (timeoutMs, expected) => {
+    const f = await fixture(); f.spec.timeoutMs = timeoutMs;
+    const delays: number[] = [];
+    const real = globalThis.setTimeout;
+    vi.spyOn(globalThis, 'setTimeout').mockImplementation(((handler: TimerHandler, delay?: number, ...rest: unknown[]) => {
+      delays.push(Number(delay));
+      return real(handler as () => void, delay, ...rest);
+    }) as typeof setTimeout);
+    expect(await run(f.ctx, f.spec, f.sha, 'at-01')).toMatchObject({ verdict: 'pass' });
+    expect(delays).toContain(expected);
+    if (expected !== timeoutMs) expect(delays).not.toContain(timeoutMs);
+  });
 });

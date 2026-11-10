@@ -71,10 +71,23 @@ const attemptOf = (plan: RoomPlan, id: string) => {
 };
 // Shared by every engine instance in this host process: sandbox log windows cannot overlap.
 let checkQueue: Promise<unknown> = Promise.resolve();
-function serialCheck<T>(effect: () => Promise<T>): Promise<T> {
-  const result = checkQueue.then(effect, effect);
+// Отмена снимает проверку с ожидания в очереди сразу; уже запущенную дожидается (её прерывает сам runner), чтобы работа
+// не пошла дальше, пока проверка ещё убирает за собой. Отменённый эффект, дошедший до очереди, не стартует никогда.
+const CHECK_CANCELLED = 'check-cancelled';
+function serialCheck<T>(effect: () => Promise<T>, signal: AbortSignal): Promise<T> {
+  let started = false;
+  const run = () => {
+    if (signal.aborted) throw new Error(CHECK_CANCELLED);
+    started = true;
+    return effect();
+  };
+  const result = checkQueue.then(run, run);
   checkQueue = result.catch(() => {});
-  return result;
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => { if (!started) reject(new Error(CHECK_CANCELLED)); };
+    signal.addEventListener('abort', onAbort, { once: true });
+    result.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
+  });
 }
 interface WorkState {
   tail: Promise<unknown>;
@@ -86,6 +99,8 @@ interface WorkState {
   seenVersion?: number;
   /** Карта, прочитанная при этой версии; читать её можно, менять нельзя (правки идут через `change`). */
   cached?: { version: number; map: WorkMap };
+  /** Прерыватель проверки, которую сейчас ведёт работа (ждёт в очереди или идёт); одна за раз. */
+  checkAbort?: AbortController;
 }
 interface Location { projectPath: string; workId: string; planId: string }
 class NoEngineChange extends Error {}
@@ -171,6 +186,14 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
     // Observe rejection without turning the durable recovery barrier into a successful tail.
     void result.catch(() => {});
     return result;
+  }
+  /** Проверка работы в общей очереди с прерывателем в состоянии работы: `cancel` и `stop` дотягиваются до него. */
+  async function cancellable(loc: Location, effect: (signal: AbortSignal) => () => Promise<void>): Promise<void> {
+    const current = state(loc.projectPath, loc.workId);
+    const controller = new AbortController();
+    current.checkAbort = controller;
+    try { await serialCheck(effect(controller.signal), controller.signal); }
+    finally { if (current.checkAbort === controller) delete current.checkAbort; }
   }
   const recovering = (projectPath: string, workId: string) => !started || state(projectPath, workId).recovering.size > 0;
   function requireRecovered(projectPath: string, workId: string) {
@@ -569,18 +592,21 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
       plan = await load(loc); attempt = attemptOf(plan, attemptId);
       if (plan.autonomous!.halted || fenced.has(attempt.status)) return;
       if (thisResults(plan, attempt).some(row => row.specId === spec.id)) continue;
-      await serialCheck(async () => {
+      await cancellable(loc, signal => async () => {
         const current = await load(loc);
         if (stopped || current.autonomous!.halted) return;
         const resultId = nextCheckId(current);
         const op = await intend(loc, 'check', attemptId, { phase: 'attempt', sha: attempt.sha, specId: spec.id, resultId });
         let result: CheckResult;
-        try { result = await io.runner({ projectPath: loc.projectPath, workId: loc.workId, planId: loc.planId, resultId, now: io.now }, spec, attempt.sha!, attemptId); }
+        try { result = await io.runner({ projectPath: loc.projectPath, workId: loc.workId, planId: loc.planId, resultId, now: io.now, signal }, spec, attempt.sha!, attemptId); }
         catch (error) {
+          // Прерванная проверка не вина работы: ни settled, ни halt, пункт попыткой не считается.
+          if (signal.aborted) throw new Error(CHECK_CANCELLED);
           await settled(loc, op, 'failed', { reason: errorText(error) });
           await change(loc, row => halt(row, { ...context(row, at()), reason: 'human', detail: `check: ${errorText(error)}` }));
           throw error;
         }
+        if (signal.aborted) throw new Error(CHECK_CANCELLED);
         await record(loc, attemptId, op, result);
       });
     }
@@ -889,19 +915,21 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
           plan = await load(loc);
           if (plan.autonomous!.halted) return;
           if (integrationResults(plan, operation).some(result => result.attemptId === owner.id && result.specId === spec.id)) continue;
-          await serialCheck(async () => {
+          await cancellable(loc, signal => async () => {
             const current = await load(loc);
             if (stopped || current.autonomous!.halted) return;
             const resultId = nextCheckId(current);
             const sha = current.autonomous!.integration.candidateHead!;
             const op = await intend(loc, 'check', owner.id, { phase: 'integration', integrationOp: operation!.key, sha, specId: spec.id, resultId });
             let result: CheckResult;
-            try { result = await io.runner({ projectPath: loc.projectPath, workId: loc.workId, planId: loc.planId, resultId, now: io.now }, spec, sha, owner.id); }
+            try { result = await io.runner({ projectPath: loc.projectPath, workId: loc.workId, planId: loc.planId, resultId, now: io.now, signal }, spec, sha, owner.id); }
             catch (error) {
+              if (signal.aborted) throw new Error(CHECK_CANCELLED);
               await settled(loc, op, 'failed', { reason: errorText(error) });
               await change(loc, current => halt(current, { ...context(current, at()), reason: 'human', detail: `integration check: ${errorText(error)}` }));
               throw error;
             }
+            if (signal.aborted) throw new Error(CHECK_CANCELLED);
             await record(loc, owner.id, op, result);
           });
           plan = await load(loc);
@@ -1140,7 +1168,7 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
     void exclusive(projectPath, workId, async () => {
       current.scheduled = false;
       await processWork(projectPath, workId);
-    }).catch(error => { delete current.seenVersion; options.onFailure?.(error); });
+    }).catch(error => { delete current.seenVersion; if (errorText(error) !== CHECK_CANCELLED) options.onFailure?.(error); });
   }
   return {
     start() {
@@ -1157,9 +1185,19 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
       const poll = () => { if (stopped) return; scan(true); timer = setTimeout(poll, ENGINE_SAFETY_TICK_MS); timer.unref?.(); };
       poll();
     },
-    async stop() { stopped = true; off?.(); if (timer) clearTimeout(timer); await Promise.allSettled([...states.values()].map(value => value.tail)); },
+    async stop() {
+      stopped = true; off?.(); if (timer) clearTimeout(timer);
+      // Сначала прервать проверки: хвост работы иначе ждал бы их до срока (хуки остановки хоста ограничены 5 с).
+      for (const value of states.values()) value.checkAbort?.abort();
+      await Promise.allSettled([...states.values()].map(value => value.tail));
+    },
     flush: (projectPath, workId) => exclusive(projectPath, workId, () => processWork(projectPath, workId, true)),
-    cancel: input => exclusive(input.projectPath, input.workId, async () => {
+    cancel: async input => {
+      // Проверку нужно прервать до очереди работы: сама очередь занята этой проверкой.
+      const mapNow = await read(input.projectPath, input.workId);
+      const live = mapNow.plans?.find(row => row.id === input.planId);
+      if (live && live.rev === input.rev && active(live)) state(input.projectPath, input.workId).checkAbort?.abort();
+      return exclusive(input.projectPath, input.workId, async () => {
       const { projectPath, workId, planId, rev } = input;
       requireRecovered(projectPath, workId);
       const map = await read(projectPath, workId);
@@ -1184,7 +1222,8 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
           current.autonomous.ops.some(op => op.state === 'intended')) throw new PlanConflictError();
         cancelRoomPlan(draft, letters, planId, rev, HUMAN, at());
       });
-    }),
+      });
+    },
     async submit(ref, planId, rev, request) {
       if (recovering(ref.projectPath, ref.workId)) return denied(new Error('engine-recovering'));
       return exclusive(ref.projectPath, ref.workId, async () => {
