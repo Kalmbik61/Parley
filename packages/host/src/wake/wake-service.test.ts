@@ -14,6 +14,7 @@ import {
   DEFAULT_RESOURCE_LIMITS,
   HUMAN,
   LIMIT_RETURN_TEXT,
+  PARLEY,
   readStoredMap,
   reserveAttempt,
   saveConfig,
@@ -2422,4 +2423,139 @@ describe('возврат после сброса лимита', () => {
     await rig.advance(CODEX_SUBMIT_DELAY_MS);
     expect(rig.written.at(-1)).toBe('\r');
   });
+});
+
+describe('WakeService: wake-blocked', () => {
+  const REASON = 'role-provider-mismatch';
+
+  /** Спящая `s-01`, отправитель `s-02` и ведущий `s-03` общей комнаты с адресатом; подъём всегда падает с `REASON`. */
+  async function blockedSetup(): Promise<{
+    workId: string;
+    target: string;
+    sender: string;
+    lead: string;
+    roomId: string;
+    ref: SessionRef;
+    launches: () => number;
+    rig: ResumeRig;
+  }> {
+    const { workId, target, sender } = await sleepingPair();
+    let lead = '';
+    let roomId = '';
+    await updateMap(project, workId, (map) => {
+      lead = addSession(map, { provider: 'claude', label: 'ведущий', task: 'вести' }).id;
+      roomId = addRoom(map, { title: 'Комната', creator: HUMAN, members: [target, lead], lead }).id;
+    });
+    let launched = 0;
+    const rig = await resumeRig({}, (real) => ({
+      ...real,
+      launch: async () => {
+        launched += 1;
+        throw new Error(REASON);
+      },
+    }));
+    return { workId, target, sender, lead, roomId, ref: { projectPath: project, workId, sessionId: target }, launches: () => launched, rig };
+  }
+
+  const parleyLetters = (workId: string) =>
+    readStoredMap(project, workId)
+      .messages.filter((m) => m.from === PARLEY)
+      .map((m) => ({ to: m.to, roomId: m.roomId, text: m.text }))
+      .sort((a, b) => String(a.to[0]).localeCompare(String(b.to[0])));
+
+  it('два сбоя подряд — поле, одно уведомление, по письму ведущему и отправителю; третье письмо не поднимает', async () => {
+    const { workId, target, sender, lead, roomId, ref, launches, rig } = await blockedSetup();
+
+    await sendLetter(workId, target, 'первое', sender);
+    await waitFor(() => notices('resume-failed').length === 1, 8000);
+    // Первый сбой — как раньше: письмо `system` отправителю и обычное уведомление, поля ещё нет.
+    expect(noticeTexts('resume-failed')).toEqual([`S01 did not resume: ${REASON}`]);
+    expect(readStoredMap(project, workId).sessions.find((s) => s.id === target)?.wakeBlocked ?? null).toBeNull();
+    expect(parleyLetters(workId)).toEqual([]);
+
+    await sendLetter(workId, target, 'второе', sender);
+    await waitFor(() => notices('resume-failed').length === 2, 8000);
+    await settle(300);
+
+    expect(launches()).toBe(2);
+    expect(readStoredMap(project, workId).sessions.find((s) => s.id === target)?.wakeBlocked?.reason).toBe(REASON);
+    expect(noticeTexts('resume-failed')[1]).toBe(
+      `S01 cannot be woken (${REASON}); messages to it are held. Resume it by hand or continue it on another provider.`,
+    );
+    expect(parleyLetters(workId)).toEqual([
+      { to: [sender], roomId: null, text: `@s01 cannot be woken (${REASON}); your message is held.` },
+      { to: [lead], roomId, text: `@s01 cannot be woken (${REASON}); messages to it are held.` },
+    ]);
+    expect(rig.activity.get(ref)?.metrics?.mailWaiting).toBe('wake-blocked');
+
+    // Третье письмо: ни подъёма, ни писем `parley`, ни уведомлений.
+    await sendLetter(workId, target, 'третье', sender);
+    await settle(500);
+    expect(launches()).toBe(2);
+    expect(parleyLetters(workId)).toHaveLength(2);
+    expect(notices('resume-failed')).toHaveLength(2);
+    expect(rig.activity.get(ref)?.metrics?.mailWaiting).toBe('wake-blocked');
+  }, 30_000);
+
+  it('старт процесса снимает: после active и сна новое письмо поднимает снова', async () => {
+    const { workId, target, sender, launches } = await blockedSetup();
+    await sendLetter(workId, target, 'первое', sender);
+    await waitFor(() => notices('resume-failed').length === 1, 8000);
+    await sendLetter(workId, target, 'второе', sender);
+    await waitFor(() => notices('resume-failed').length === 2, 8000);
+    expect(launches()).toBe(2);
+
+    await updateMap(project, workId, (map) => {
+      transitionSession(map, target, 'active');
+      transitionSession(map, target, 'sleeping');
+    });
+    expect(readStoredMap(project, workId).sessions.find((s) => s.id === target)?.wakeBlocked ?? null).toBeNull();
+
+    await sendLetter(workId, target, 'третье', sender);
+    await waitFor(() => launches() === 3, 8000);
+  }, 30_000);
+
+  it('перезапуск хоста — одна свежая попытка; её сбой не пишет писем и уведомлений, дальше подъёма нет', async () => {
+    const { workId, target, sender, ref, rig: first } = await blockedSetup();
+    await sendLetter(workId, target, 'первое', sender);
+    await waitFor(() => notices('resume-failed').length === 1, 8000);
+    await sendLetter(workId, target, 'второе', sender);
+    await waitFor(() => notices('resume-failed').length === 2, 8000);
+    await waitFor(() => first.works.entry(project, workId)?.map.sessions.find((s) => s.id === target)?.wakeBlocked != null, 5000);
+
+    // «Перезапуск»: прежнего будильника нет, новый стартует над той же картой с полем `wakeBlocked`.
+    first.wake.stop();
+    let launched = 0;
+    const second = createWakeService(
+      fakeHost(),
+      first.works,
+      first.activity,
+      first.pty,
+      {
+        launch: async () => {
+          launched += 1;
+          throw new Error(REASON);
+        },
+      },
+      { enterDelayMs: 30 },
+    );
+    stoppers.push(async () => second.stop());
+    second.start();
+    await settle(300);
+    expect(launched).toBe(0);
+
+    await sendLetter(workId, target, 'после перезапуска', sender);
+    await waitFor(() => launched === 1, 8000);
+    await settle(500);
+    expect(parleyLetters(workId)).toHaveLength(2);
+    expect(notices('resume-failed')).toHaveLength(2);
+    expect(readStoredMap(project, workId).sessions.find((s) => s.id === target)?.wakeBlocked?.reason).toBe(REASON);
+    expect(first.activity.get(ref)?.metrics?.mailWaiting).toBe('wake-blocked');
+
+    await sendLetter(workId, target, 'ещё одно', sender);
+    await settle(500);
+    expect(launched).toBe(1);
+    expect(parleyLetters(workId)).toHaveLength(2);
+    expect(notices('resume-failed')).toHaveLength(2);
+  }, 40_000);
 });

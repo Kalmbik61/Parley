@@ -1273,6 +1273,7 @@ export const S = {
       settling: 'batched, waits for a quiet room',
       'provider-missing': 'Provider removed — continue the session on another provider',
       queued: 'queued for a free agent slot',
+      'wake-blocked': "can't be woken — resume it by hand",
     } satisfies Record<MailWait, string>,
     /** Причина, которой окно не знает (хост новее окна): вместо пустой скобки (`mailWaitText`). */
     mailWaitUnknown: 'waiting',

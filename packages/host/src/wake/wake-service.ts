@@ -20,12 +20,16 @@ import {
   deliveryAction,
   hookedSince,
   HUMAN,
+  isRoomArchived,
   LIMIT_RETRY_MS,
   LIMIT_RETURN_GRACE_MS,
   limitReturnText,
+  liveLead,
   loadConfig,
   loadProviders,
   openEvents,
+  parleyNote,
+  sessionMention,
   sessionTag,
   SYSTEM,
   PARLEY,
@@ -33,6 +37,7 @@ import {
   resumablePlanLetter,
   unreadCount,
   unreadLetters,
+  updateMap,
   viewMap,
   workPaths,
   writeLetters,
@@ -168,7 +173,12 @@ interface LimitEpisode {
 
 /** Состояние одной попытки доставки указателя, живёт между пересчётами сессии. */
 /** Причины, при которых письма живой сессии лежат и ждут сами по себе: о них — строка в логе. */
-const LOGGED_REASONS: ReadonlySet<MailWait> = new Set<MailWait>(['busy', 'draft', 'in-flight', 'no-hooks', 'stuck', 'folder-trust']);
+const LOGGED_REASONS: ReadonlySet<MailWait> = new Set<MailWait>(['busy', 'draft', 'in-flight', 'no-hooks', 'stuck', 'folder-trust', 'wake-blocked']);
+
+/** Сколько подъёмов подряд должны не удаться, чтобы сессия вошла в wake-blocked: первый сбой как раньше, второй — вход. */
+const WAKE_BLOCK_AFTER = 2;
+/** Причина в письме и уведомлении — одной строкой и не длиннее этого: текст ошибки запуска бывает многострочным. */
+const WAKE_BLOCK_REASON_MAX = 200;
 
 interface AttemptState {
   /** Id писем, на которые указатель уже печатали, — второй раз не набираем. */
@@ -261,6 +271,15 @@ interface AttemptState {
   returns: number;
   /** Ход по нашему возврату: напечатан и не начался (`pending`), идёт (`running`); `null` — такого хода нет. */
   returnTurn: 'pending' | 'running' | null;
+  /** Подряд неудавшихся подъёмов (`resumeFailed`); обнуляется, когда новый процесс дал хоть один хук, и заменой агента. */
+  failures: number;
+  /**
+   * Сессия с `wakeBlocked` в карте после перезапуска хоста: одна свежая попытка подъёма. Снимается самой попыткой; её
+   * сбой возвращает состояние без новых писем (поле в карте уже стоит).
+   */
+  fresh: boolean;
+  /** Запись `wakeBlocked` в карту не удалась: состояние держится в памяти, иначе каждое новое письмо снова билось бы о подъём. */
+  blockedLocal: boolean;
 }
 
 
@@ -367,6 +386,9 @@ export function createWakeService(
         limit: undefined,
         returns: 0,
         returnTurn: null,
+        failures: 0,
+        fresh: false,
+        blockedLocal: false,
       };
       attempts.set(key, state);
     }
@@ -527,6 +549,12 @@ export function createWakeService(
     for (const session of entry.map.sessions) {
       const ref = { projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id };
       if (pty.get(ref) === undefined && session.autoSleep == null) markUnreadPointed(ref, stateFor(refKey(ref)), true);
+      // Хост перезапущен, а сессия заблокирована с прошлого раза: одна свежая попытка; её сбой — второй подряд.
+      if (session.wakeBlocked != null) {
+        const state = stateFor(refKey(ref));
+        state.fresh = true;
+        state.failures = WAKE_BLOCK_AFTER - 1;
+      }
     }
   }
 
@@ -552,6 +580,11 @@ export function createWakeService(
     reason: string,
   ): Promise<void> {
     for (const id of letterIds) state.pointed.add(id);
+    state.failures += 1;
+    if (state.failures >= WAKE_BLOCK_AFTER) {
+      await enterBlocked(ref, state, reason);
+      return;
+    }
     const text = `${sessionTag(ref.sessionId)} did not resume: ${reason}`;
     const ids = new Set(letterIds);
     try {
@@ -574,6 +607,64 @@ export function createWakeService(
     notice('resume-failed', ref, text);
   }
 
+  /**
+   * Вход в wake-blocked (решение 3): одна запись карты ставит `session.wakeBlocked` и пишет письма `parley` живым ведущим
+   * открытых комнат сессии и отправителям её непрочитанных писем, затем — одно уведомление. Поле уже стоит (второй вход,
+   * сбой свежей попытки после перезапуска хоста) — выход без писем и без уведомления: проверка внутри записи, под замком карты.
+   * Запись не удалась — состояние держится в памяти (`blockedLocal`), будильник сессию больше не поднимает.
+   */
+  async function enterBlocked(ref: SessionRef, state: AttemptState, reason: string): Promise<void> {
+    const oneLine = reason.replace(/\s+/g, ' ').trim();
+    const shown = oneLine.length > WAKE_BLOCK_REASON_MAX ? `${oneLine.slice(0, WAKE_BLOCK_REASON_MAX)}...` : oneLine;
+    let entered = false;
+    try {
+      await updateMap(ref.projectPath, ref.workId, (map, letters) => {
+        entered = false;
+        const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
+        if (session === undefined || session.wakeBlocked != null) return;
+        const at = new Date().toISOString();
+        session.wakeBlocked = { since: at, reason: shown };
+        entered = true;
+        // Получатели, как у `notifyWaiting` в sessions-service: ведущий комнаты получает письмо в ней, отправитель — в общей
+        // комнате или прямое; без самой сессии, закрытых и не-сессий (человек, система, `parley`).
+        const rooms = map.rooms.filter((room) => room.members.includes(ref.sessionId) && !isRoomArchived(room));
+        const to = new Map<string, string | null>();
+        for (const room of rooms) {
+          const lead = liveLead(map, room);
+          if (lead !== null && !to.has(lead)) to.set(lead, room.id);
+        }
+        const senders = new Set<string>();
+        for (const message of letters.unreadFor(ref.sessionId)) {
+          if (message.deleted === true) continue;
+          senders.add(message.from);
+          if (to.has(message.from)) continue;
+          to.set(message.from, message.roomId !== null && rooms.some((room) => room.id === message.roomId) ? message.roomId : null);
+        }
+        to.delete(ref.sessionId);
+        const mention = sessionMention(ref.sessionId);
+        for (const [id, roomId] of to) {
+          if (!map.sessions.some((candidate) => candidate.id === id && candidate.lifecycle !== 'closed')) continue;
+          const text = senders.has(id)
+            ? `${mention} cannot be woken (${shown}); your message is held.`
+            : `${mention} cannot be woken (${shown}); messages to it are held.`;
+          if (roomId !== null) parleyNote(map, letters, roomId, id, text, at);
+          else letters.add({ roomId: null, from: PARLEY, to: [id], text, kind: 'note', at });
+        }
+      });
+    } catch (error) {
+      host.log.error('wake-blocked не записался в карту', { ref, error: String(error) });
+      state.blockedLocal = true;
+      entered = true;
+    }
+    if (entered) {
+      notice(
+        'resume-failed',
+        ref,
+        `${sessionTag(ref.sessionId)} cannot be woken (${shown}); messages to it are held. Resume it by hand or continue it on another provider.`,
+      );
+    }
+  }
+
   /** Возвращает слот часа, если под этот подъём он был взят: подъёма не было, и час не должен платить за него. */
   function releaseSlot(ref: SessionRef, state: AttemptState): void {
     if (!state.slotTaken) return;
@@ -593,6 +684,9 @@ export function createWakeService(
     action: { text: string; letterIds: string[]; launchClass: 'human' | 'mail' } & DeliveryTrace,
   ): Promise<void> {
     state.resuming = true;
+    // Свежая попытка после перезапуска хоста тратится на этот подъём; если подъёма не вышло (нечем, удержан, бюджет), она возвращается.
+    const wasFresh = state.fresh;
+    state.fresh = false;
     try {
       const registry = await loadProviders();
       const template = registry[session.provider]?.runner.resumeArgs;
@@ -602,6 +696,7 @@ export function createWakeService(
       // Без id у провайдера core запустил бы новый процесс по брифу, а не `resume`.
       if (template === undefined || (session.providerSessionId === null && !awaiting)) {
         state.resumeUnavailable = true;
+        state.fresh = wasFresh;
         // Подъёма не будет — слот часа, взятый под него, не потрачен.
         releaseSlot(ref, state);
         // Окно уже видит «resuming»: пересчёт покажет, что письма ждут (`sleeping`). `resuming` снимается до него, иначе
@@ -638,6 +733,7 @@ export function createWakeService(
         state.pointerAfter = null;
         releaseSlot(ref, state);
         for (const id of action.letterIds) state.pointed.delete(id);
+        state.fresh = wasFresh;
         if (outcome === 'held') state.trustHeld = true;
         else state.queued = action.launchClass;
         // `resuming` снимается до публикации: вложенный пересчёт, который она вызывает, иначе записал бы «resuming».
@@ -658,6 +754,7 @@ export function createWakeService(
         // непрочитанными и ждут, а счёт часа возвращается, чтобы отказ не расходовал его впустую.
         releaseSlot(ref, state);
         for (const id of action.letterIds) state.pointed.delete(id);
+        state.fresh = wasFresh;
         state.budgetDeniedAt = Date.now();
         limitNotice(ref, `the workspace budget is exhausted (${(error as Error).message})`);
         publishWaiting(ref, state, 'resume-limit');
@@ -1049,6 +1146,12 @@ export function createWakeService(
         publishWaiting(ref, state, reason);
         return;
       }
+      // Два подъёма подряд не удались: сессию поднимает только человек. Ни подъёма, ни слота часа, ни писем; свежая попытка
+      // после перезапуска хоста (`fresh`) проходит дальше.
+      if ((session.wakeBlocked != null || state.blockedLocal) && !state.fresh) {
+        publishWaiting(ref, state, letters ? 'wake-blocked' : null);
+        return;
+      }
       // Провайдера нет в реестре: сессия ждёт человека. До лимита часа — слот под подъём, которого не будет, не берём.
       if (letters) {
         void checkProvider(ref, state, session.provider).catch((error: unknown) => {
@@ -1138,7 +1241,10 @@ export function createWakeService(
     state.resumeUnavailable = false;
     state.trustHeld = false;
     state.queued = null;
+    state.blockedLocal = false;
     const live = activity.get(ref);
+    // Новый процесс дал хоть один хук — подъём удался, счёт сбоев начинается заново.
+    if (hookedSince(live?.activity, handle.startedAt)) state.failures = 0;
     if (state.pointerAfter !== null) {
       const endedAt = live?.activity.turnEndedAt ?? null;
       if (endedAt === null || Date.parse(endedAt) < state.pointerAfter) {
@@ -1328,6 +1434,9 @@ export function createWakeService(
       state.budgetDeniedAt = null;
       state.returns = 0;
       state.returnTurn = null;
+      state.failures = 0;
+      state.fresh = false;
+      state.blockedLocal = false;
       recompute(ref);
     },
 
