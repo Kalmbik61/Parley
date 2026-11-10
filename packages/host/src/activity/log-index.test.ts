@@ -646,6 +646,127 @@ describe('createLogIndex', () => {
     });
   });
 
+  describe('reindex: карты по одному файлу равны полной сборке', () => {
+    interface Meta {
+      id: string;
+      parent?: string;
+    }
+    const AT = '2026-10-04T12:00:00.000Z';
+
+    async function put(name: string, meta: Meta): Promise<string> {
+      const dir = path.join(codexRoot, '2026', '10', '04');
+      await mkdir(dir, { recursive: true });
+      const file = path.join(dir, name);
+      await writeFile(
+        file,
+        `${JSON.stringify({
+          type: 'session_meta',
+          timestamp: AT,
+          payload: { id: meta.id, cwd: '/codex', source: 'cli', ...(meta.parent === undefined ? {} : { parent_thread_id: meta.parent }) },
+        })}\n`,
+      );
+      return file;
+    }
+
+    /** Индексатор без памяти: файл, переписанный под другим id, читается заново, а не дочитывается с прежнего состояния. */
+    const stateless = (): ReturnType<typeof createSessionIndexer> => ({
+      claude: (...args) => createSessionIndexer().claude(...args),
+      codex: (file) => createSessionIndexer().codex(file),
+    });
+
+    const codexSession = (id: string): WorkSession => session({ provider: 'codex', providerSessionId: id });
+
+    it('reindex: из двух файлов с одним id побеждает перечитанный последним; удалён победитель — виден оставшийся', async () => {
+      const first = await put('rollout-2026-10-04T12-00-00-dup.jsonl', { id: 'dup' });
+      const second = await put('rollout-2026-10-04T12-00-00-dup_other.jsonl', { id: 'dup' });
+      const idx = index({ indexer: stateless() });
+      await idx.start();
+
+      await idx.reindex(first);
+      await idx.reindex(second);
+      expect(idx.index(codexSession('dup'))?.file).toBe(second);
+      await idx.reindex(first);
+      expect(idx.index(codexSession('dup'))?.file).toBe(first);
+
+      await rm(first);
+      await idx.reindex(first);
+      expect(idx.index(codexSession('dup'))?.file).toBe(second);
+      await rm(second);
+      await idx.reindex(second);
+      expect(idx.index(codexSession('dup'))).toBeUndefined();
+    });
+
+    it('reindex: потомок с другим parent_thread_id переходит к новому родителю; удалённый пропадает из childLogs', async () => {
+      await put('rollout-2026-10-04T12-00-00-pa.jsonl', { id: 'pa' });
+      await put('rollout-2026-10-04T12-00-00-pb.jsonl', { id: 'pb' });
+      const child = await put('rollout-2026-10-04T12-00-00-kid.jsonl', { id: 'kid', parent: 'pa' });
+      const idx = index({ indexer: stateless() });
+      await idx.start();
+      const threads = (parent: string): string[] => idx.childLogs(codexSession(parent)).map((entry) => entry.threadId);
+      expect(threads('pa')).toEqual(['kid']);
+
+      await put('rollout-2026-10-04T12-00-00-kid.jsonl', { id: 'kid', parent: 'pb' });
+      await idx.reindex(child);
+      expect(threads('pa')).toEqual([]);
+      expect(threads('pb')).toEqual(['kid']);
+
+      await rm(child);
+      await idx.reindex(child);
+      expect(threads('pb')).toEqual([]);
+    });
+
+    it('последовательность правок по одному файлу даёт то же, что полная сборка по файлам в порядке перечитывания', async () => {
+      const names = ['f1', 'f2', 'f3', 'kid'].map((name) => `rollout-2026-10-04T12-00-00-${name}.jsonl`);
+      const [f1, f2, f3, kid] = names as [string, string, string, string];
+      const initial: Array<[string, Meta]> = [
+        [f1, { id: 'A' }],
+        [f2, { id: 'dupe' }],
+        [kid, { id: 'K', parent: 'A' }],
+      ];
+      // Модель: файлы в порядке последнего перечитывания; полная сборка — победитель по id последний, дети — по parent.
+      const model = new Map<string, Meta>();
+      for (const [name, meta] of initial) {
+        await put(name, meta);
+        model.set(name, meta);
+      }
+      const idx = index({ indexer: stateless() });
+      await idx.start();
+      const file = (name: string): string => path.join(codexRoot, '2026', '10', '04', name);
+
+      const check = (): void => {
+        const winners = new Map<string, string>();
+        for (const [name, meta] of model) winners.set(meta.id, file(name));
+        for (const id of ['A', 'B', 'K', 'dupe']) {
+          expect(idx.index(codexSession(id))?.file, `индекс ${id}`).toBe(winners.get(id));
+        }
+        for (const parent of ['A', 'B']) {
+          const expected = winners.has(parent)
+            ? [...model].filter(([, meta]) => meta.parent === parent).map(([name, meta]) => `${meta.id}\u0000${file(name)}`).sort()
+            : [];
+          const actual = idx.childLogs(codexSession(parent)).map((entry) => `${entry.threadId}\u0000${entry.file}`).sort();
+          expect(actual, `дети ${parent}`).toEqual(expected);
+        }
+      };
+      const change = async (name: string, meta: Meta | null): Promise<void> => {
+        if (meta === null) await rm(file(name));
+        else await put(name, meta);
+        model.delete(name);
+        if (meta !== null) model.set(name, meta);
+        await idx.reindex(file(name));
+        check();
+      };
+
+      check();
+      await change(f3, { id: 'dupe' }); // второй файл с тем же id: побеждает перечитанный последним
+      await change(f2, { id: 'dupe' }); // перечитан первый: победитель теперь он
+      await change(f2, { id: 'B' }); // у файла сменился id: dupe вернулся к f3
+      await change(kid, { id: 'K', parent: 'B' }); // ребёнок переехал к другому родителю
+      await change(f3, null); // файл пропал: у dupe победителя нет
+      await change(f1, null); // пропал родитель A
+      await change(f1, { id: 'A' }); // вернулся
+    });
+  });
+
   // Несколько корней Claude: свои провайдеры пишут историю в свою папку (спека своих провайдеров 5.6).
   describe('корни своих провайдеров', () => {
     const answer = (id: string, msg: string, at: string, input: number): string =>

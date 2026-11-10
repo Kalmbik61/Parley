@@ -21,6 +21,7 @@ All notable changes to Parley are documented in this file.
 - The host log no longer reports "invalid transition sleeping → sleeping" when an agent falls asleep.
 - A session added to a room now gets a short note instead of the room's whole history, and a large inbox arrives in pages instead of one answer the agent could not read. Closed sessions no longer collect unread messages.
 - When an agent with a task stops, crashes or is stopped or closed by you without a result, or ends its turn without reporting, the session that gave the task and the room lead now get a letter. Stuck notices also reach the task giver, and a swarm no longer waits for a crashed drone until its time limit.
+- **The host stays responsive with many sessions.** A change in one workspace no longer makes the host recompute every session of every workspace, and archived or idle workspaces no longer hold file watchers. A session whose log is written without pause now gets its token numbers refreshed at least every few seconds.
 
 ### Changed
 

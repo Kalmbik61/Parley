@@ -8,8 +8,11 @@
  * Опроса нет: пересчёт идёт по событиям наблюдателей (журнал хуков, лог
  * провайдера, список работ), по одному таймеру на сессию — на момент, когда
  * истечёт порог тишины, если сессия сейчас `working`, — и по дочитыванию
- * журналов после новых наблюдателей (`watch-settle`). Планового `setInterval`
- * в файле нет и не должно быть (приёмка куска 1.5).
+ * журналов после новых наблюдателей (`watch-settle`). Проход списка работ
+ * пересчитывает только сессии с изменившимся входом (`changedSessions`), а не
+ * все сессии всех работ. Единственный периодический таймер — страховка
+ * `SAFETY_RESCAN_MS`: она перечитывает журналы активных сессий, если
+ * наблюдатель потерял запись без уведомления.
  */
 
 import { latestAgentPlan } from '@parley/core/agent-plan';
@@ -67,6 +70,7 @@ import {
   type UsageResolver,
   type UsageSummary,
   type WorkEntry,
+  type WorkMap,
   type WorkSession,
 } from '@parley/core';
 import {
@@ -207,6 +211,42 @@ export interface ActivityService {
 }
 
 const workKeyOf = (projectPath: string, workId: string): string => `${projectPath}\u0000${workId}`;
+
+/**
+ * Страховка от потерянных записей: журналы активных сессий перечитываются раз в этот срок, даже если наблюдатель
+ * ничего не принёс (`createSettler` даёт только разовую серию пауз после нового наблюдателя).
+ */
+export const SAFETY_RESCAN_MS = 30_000;
+
+const isLive = (session: WorkSession): boolean => session.lifecycle === 'active';
+
+/**
+ * Общий вход пересчёта всех сессий работы: что читают правила непрочитанного (`isUnreadFor`, `recipientsOf`,
+ * `cancelledPlanLetter`, `currentPlanEffect`, `actionable`, `liveLead`, `isRoomClosed`) и автозаголовок. Состав сессий
+ * идёт целиком (id и признак закрытой): удаление сессии помечает её письма удалёнными, а список писем адресатов
+ * (`pendingLetters`) читается заново.
+ */
+const sharedPrint = (map: WorkMap): string =>
+  JSON.stringify([
+    map.work.title,
+    map.work.status,
+    map.rooms,
+    map.plans ?? null,
+    map.planEffects ?? null,
+    map.sessions.map((session) => [session.id, session.lifecycle === 'closed']),
+  ]);
+
+/** Тот же журнал: чтение без новых строк отдаёт те же записи (`openEvents` копирует массив, но не записи). */
+const sameJournal = (a: readonly EventRecord[] | null, b: readonly EventRecord[] | null): boolean =>
+  a === b || (a !== null && b !== null && a.length === b.length && a.at(-1) === b.at(-1));
+
+/** Что проход работ видел у работы в прошлый раз: версия строки и отпечатки входов. */
+interface SeenWork {
+  version: number | undefined;
+  incarnation: number | undefined;
+  shared: string;
+  sessions: Map<string, string>;
+}
 
 /**
  * Неудачное чтение `meta.json` субагента повторяется не чаще: Claude пишет файл рядом со стартом, а пересчётов
@@ -527,6 +567,13 @@ export function createActivityService(
   const linkInFlight = new Set<string>();
   const terminals = new Map<string, TerminalState>();
   const workWatches = new Map<string, WorkWatch>();
+  /** Что проход работ видел у каждой работы (`changedSessions`), по ключу работы. */
+  const seenWorks = new Map<string, SeenWork>();
+  /**
+   * Сессии с `need` лимита, у которых время сброса ещё не защёлкнуто (`publishedNeed`): окно провайдера может прийти
+   * позже удара и службы лимитов никто не слушает, поэтому такая сессия пересчитывается на каждом проходе работ.
+   */
+  const limitPending = new Set<string>();
   const listeners = new Set<(ref: SessionRef, value: SessionLive) => void>();
   /**
    * `meta.json` субагентов, у которых снимок хуков не назвал описания: прочитанное и неудачи по ключу
@@ -549,14 +596,15 @@ export function createActivityService(
   const mailDirty = new Map<string, { ref: SessionRef; journal: EventsLog }>();
   let mailFlushQueued = false;
   let unsubscribeLog: (() => void) | undefined;
+  let safetyTimer: NodeJS.Timeout | undefined;
   /**
    * На macOS fs.watch каталогов живёт в одном на процесс потоке FSEvents, и libuv пересоздаёт его на каждом
    * новом наблюдателе: запись, сделанная в этот миг, не доходит ни до одного наблюдателя процесса (опыт
    * 2026-10-06: 3 записи из 150, если в миг записи заводится наблюдатель другого каталога). Поэтому после
-   * новых наблюдателей — своих журналов и индекса логов — перечитываются журналы всех работ, а не только той,
-   * чей наблюдатель заведён.
+   * новых наблюдателей — своих журналов и индекса логов — перечитываются журналы активных сессий всех работ, а не
+   * только той, чей наблюдатель заведён (`rescanLive`).
    */
-  const catchUp = createSettler(() => settleAllJournals());
+  const catchUp = createSettler(() => rescanLive());
 
   function clearSilenceTimer(key: string): void {
     const timer = silenceTimers.get(key);
@@ -937,10 +985,11 @@ export function createActivityService(
         const usage = await currentSegmentUsage(session, resolver);
         const cost = (await resolver.cost?.(session, { from: lastEnd, to: null })) ?? null;
         const changed = JSON.stringify([usage, cost]) !== JSON.stringify([entry.usage, entry.cost]);
-        currentSegments.set(key, { lastEnd, usage, cost, at: nowFn(), running: false });
+        // Запись сессии, ушедшей из карты за время чтения, чистка уже убрала: заново она не заводится.
+        if (currentSegments.get(key) === entry) currentSegments.set(key, { lastEnd, usage, cost, at: nowFn(), running: false });
         if (changed && !stopped) recompute(ref);
       } catch (error) {
-        currentSegments.set(key, { lastEnd, usage: entry.usage, cost: entry.cost, at: nowFn(), running: false });
+        if (currentSegments.get(key) === entry) currentSegments.set(key, { lastEnd, usage: entry.usage, cost: entry.cost, at: nowFn(), running: false });
         host.log.warn('расход текущего отрезка не посчитался', { sessionId: session.id, error: String(error) });
       }
     })();
@@ -1361,10 +1410,12 @@ export function createActivityService(
   ): SessionNeed | null {
     if (need === null || session.lifecycle !== 'active') {
       limitResets.delete(key);
+      limitPending.delete(key);
       return null;
     }
     if (need.kind !== 'limit') {
       limitResets.delete(key);
+      limitPending.delete(key);
       return need;
     }
     let reset = limitResets.get(key);
@@ -1373,6 +1424,9 @@ export function createActivityService(
       reset = { resetsAt: picked.resetsAt, window: picked.window };
       if (reset.resetsAt !== null) limitResets.set(key, reset);
     }
+    // Времени сброса нет: окно лимита доедет позже без событий сессии, и её досчитает проход работ.
+    if (reset.resetsAt === null) limitPending.add(key);
+    else limitPending.delete(key);
     return { ...need, ...reset };
   }
 
@@ -1438,7 +1492,16 @@ export function createActivityService(
       watch = { journal: openEvents(eventsDir), watcher: null };
       workWatches.set(wk, watch);
     }
-    if (watch.watcher !== null || !existsSync(eventsDir)) return { watch, renewed: false };
+    // Наблюдатель нужен работе не в архиве с активной сессией: хуки пишет только живой процесс. Он заводится лениво и при
+    // засыпании сессий остаётся — каждый новый наблюдатель пересоздаёт поток FSEvents процесса и теряет записи
+    // (комментарий у `catchUp`). Читатель журналов остаётся и у архивной работы.
+    if (entry.map.work.status === 'archived') {
+      watch.watcher?.close();
+      watch.watcher = null;
+      return { watch, renewed: false };
+    }
+    if (watch.watcher !== null) return { watch, renewed: false };
+    if (!entry.map.sessions.some(isLive) || !existsSync(eventsDir)) return { watch, renewed: false };
 
     const current = watch;
     let failed = false;
@@ -1472,12 +1535,25 @@ export function createActivityService(
     return { watch, renewed: true };
   }
 
-  /** Дочитывание журналов работы после включения наблюдателя: чтение без новых байт состояния не меняет. */
-  function settleJournals(projectPath: string, workId: string): void {
-    const current = works.entry(projectPath, workId);
-    const watch = workWatches.get(workKeyOf(projectPath, workId));
-    if (stopped || current === undefined || watch === undefined) return;
-    for (const session of current.map.sessions) void readJournal(projectPath, workId, watch.journal, session.id);
+  /**
+   * Дочитывание журналов активных сессий всех работ: после новых наблюдателей (`catchUp`) и по страховочному таймеру
+   * (`SAFETY_RESCAN_MS`). Чтение без новых байт состояния не меняет. Спящие и закрытые сессии хуков не пишут.
+   * Заодно индексу логов отдаются логи этих сессий, кроме Codex (его дочитывает `codex-log-poll.ts`): потерянное
+   * событие наблюдателя логов иначе дождалось бы следующей записи в файл. Без изменений это один `stat` на файл.
+   */
+  function rescanLive(): void {
+    if (stopped) return;
+    const logs: string[] = [];
+    for (const entry of works.snapshot().entries) {
+      const watch = workWatches.get(workKeyOf(entry.projectPath, entry.map.work.id));
+      for (const session of entry.map.sessions) {
+        if (!isLive(session)) continue;
+        if (watch !== undefined) void readJournal(entry.projectPath, entry.map.work.id, watch.journal, session.id);
+        const file = session.provider === 'codex' ? undefined : logIndex.index(session)?.file;
+        if (file !== undefined) logs.push(file);
+      }
+    }
+    if (logs.length > 0) logIndex.rescan(logs);
   }
 
   async function readJournal(
@@ -1490,17 +1566,12 @@ export function createActivityService(
     const events = await journal.read(sessionId).catch(() => null);
     if (stopped) return;
     const ref: SessionRef = { projectPath, workId, sessionId };
-    journals.set(refKey(ref), events);
-    recompute(ref);
-  }
-
-  /**
-   * Дочитывание всех журналов после новых наблюдателей (`catchUp`): иначе потерянная строка ждала бы
-   * следующей записи того же журнала — у свежей сессии это первый хук, без которого хост не пускает
-   * отправку из окна (`hookedSince`).
-   */
-  function settleAllJournals(): void {
-    for (const entry of works.snapshot().entries) settleJournals(entry.projectPath, entry.map.work.id);
+    const key = refKey(ref);
+    const known = journals.has(key);
+    const previous = journals.get(key) ?? null;
+    journals.set(key, events);
+    // Журнал без новых строк состояния не меняет: пересчёт только у нового журнала или изменившегося.
+    if (!known || !sameJournal(previous, events)) recompute(ref);
   }
 
   /** Работы и сессии, которых в свежем снимке больше нет: состояние не копится вечно. */
@@ -1521,6 +1592,9 @@ export function createActivityService(
       watch.watcher?.close();
       workWatches.delete(wk);
     }
+    for (const wk of Array.from(seenWorks.keys())) if (!validWorks.has(wk)) seenWorks.delete(wk);
+    for (const key of Array.from(limitPending)) if (!validSessions.has(key)) limitPending.delete(key);
+    for (const key of Array.from(currentSegments.keys())) if (!validSessions.has(key)) currentSegments.delete(key);
 
     for (const [key] of Array.from(journals)) if (!validSessions.has(key)) journals.delete(key);
     for (const [key] of Array.from(live)) if (!validSessions.has(key)) live.delete(key);
@@ -1571,25 +1645,67 @@ export function createActivityService(
     for (const [key] of Array.from(startupTimers)) if (!validSessions.has(key)) clearStartupTimer(key);
   }
 
+  /**
+   * Сессии работы, чей вход пересчёта изменился с прошлого прохода. Входы `recompute`, и кто видит их изменение:
+   * - своя запись карты (`JSON.stringify(session)`: жизненный цикл, метки, снимок метрик, переводы, план, привязки);
+   * - общее по работе (`sharedPrint`: название, статус, комнаты с порогами входа, планы и их эффекты, состав сессий) —
+   *   изменилось, пересчитываются все сессии работы;
+   * - письма и отметки прочтения в базе — уведомление `onMail` (`handleMail`); отметка, записанная другим процессом, —
+   *   исключение: сессия обновится на своём следующем событии (журнал лога → `LogChange.affects`);
+   * - журнал хуков, индекс логов, терминал, запуск процесса, просмотр, контекст, сжатие, вопрос, причина ожидания,
+   *   расход отрезка, `meta.json` субагентов, таймеры тишины, старта и сторожа — каждый зовёт `recompute` сам;
+   * - служба лимитов не уведомляет: сессию с `need` лимита без времени сброса досчитывает `limitPending`.
+   * Та же определённая версия и та же `incarnation`, что в прошлый раз, — карта та же, и ничего не сериализуется; без
+   * точной версии решают отпечатки.
+   */
+  function changedSessions(entry: WorkEntry): ReadonlySet<string> {
+    const wk = workKeyOf(entry.projectPath, entry.map.work.id);
+    const seen = seenWorks.get(wk);
+    if (
+      seen !== undefined &&
+      entry.version !== undefined &&
+      seen.version === entry.version &&
+      seen.incarnation === entry.incarnation
+    ) {
+      return new Set();
+    }
+    const shared = sharedPrint(entry.map);
+    const sessions = new Map<string, string>();
+    const changed = new Set<string>();
+    for (const session of entry.map.sessions) {
+      const print = JSON.stringify(session);
+      sessions.set(session.id, print);
+      if (seen === undefined || seen.shared !== shared || seen.sessions.get(session.id) !== print) changed.add(session.id);
+    }
+    seenWorks.set(wk, { version: entry.version, incarnation: entry.incarnation, shared, sessions });
+    return changed;
+  }
+
   function handleWorksChange(snapshot: WorksView): void {
     if (stopped) return;
-    // Комнаты и участники карты решают, чьё письмо непрочитано (`isUnreadFor`): список писем читается заново.
-    pendingLetters.clear();
     for (const entry of snapshot.entries) {
       const { watch, renewed } = ensureWorkWatch(entry);
+      const changed = changedSessions(entry);
       for (const session of entry.map.sessions) {
         const ref: SessionRef = {
           projectPath: entry.projectPath,
           workId: entry.map.work.id,
           sessionId: session.id,
         };
-        if (journals.has(refKey(ref)) && !renewed) recompute(ref);
-        // Журнал читается и у уже известной сессии: событие, дописанное в окно между созданием fs-наблюдателя
-        // и его реальным включением, наблюдатель теряет, и до следующей записи хука его не увидел бы никто.
-        // Чтение инкрементальное — без новых байт это один stat. Первое чтение журнала новой сессии —
-        // читатель мог появиться раньше её (работа известна, сессия только что добавлена); после нового
-        // наблюдателя — всё, что хуки дописали без него.
-        void readJournal(entry.projectPath, entry.map.work.id, watch.journal, session.id);
+        const key = refKey(ref);
+        const known = journals.has(key);
+        if (changed.has(session.id)) {
+          // Комнаты и участники карты решают, чьё письмо непрочитано (`isUnreadFor`): список писем читается заново.
+          pendingLetters.delete(key);
+          if (known) recompute(ref);
+        } else if (limitPending.has(key)) {
+          recompute(ref);
+        }
+        // Журнал читается у сессии без прочитанного журнала (читатель мог появиться раньше её), у изменившейся и после
+        // нового наблюдателя: всё, что хуки дописали без него, и событие, дописанное в окно между созданием
+        // fs-наблюдателя и его реальным включением, никто не увидел бы до следующей записи хука. Чтение
+        // инкрементальное — без новых байт это один stat, а пересчёт идёт только при изменившемся журнале.
+        if (!known || renewed || changed.has(session.id)) void readJournal(entry.projectPath, entry.map.work.id, watch.journal, session.id);
       }
     }
     pruneRemoved(snapshot);
@@ -1597,7 +1713,7 @@ export function createActivityService(
 
   /**
    * Запись писем без записи карты (спека rooms.mail 6.7): `unread` в метриках меняется только у адресатов новых писем и
-   * читателей, и `onChange` её уже не приносит. Как `handleWorksChange` для всех сессий, здесь для названных: журнал
+   * читателей, и `onChange` её уже не приносит. Как `handleWorksChange` для изменившихся сессий, здесь для названных: журнал
    * перечитывается (чтение инкрементальное, без новых байт — один stat), и наблюдатель за каталогом журналов, появившимся
    * после старта, заводится. Без этого указатель будильника ждал бы потерянного хука адресата до дочитывания по таймеру
    * (`catchUp`), а хуки его ответа остались бы без наблюдателя до следующей записи карты.
@@ -1667,6 +1783,9 @@ export function createActivityService(
       unsubscribeWorks = works.onChange((snapshot) => handleWorksChange(snapshot));
       unsubscribeMail = works.onMail(handleMail);
       handleWorksChange(works.snapshot());
+      // Страховка: наблюдатель бывает слеп без уведомления (поток FSEvents пересоздан в миг записи).
+      safetyTimer = setInterval(rescanLive, SAFETY_RESCAN_MS);
+      safetyTimer.unref();
     },
     get: (ref) => live.get(refKey(ref)),
     mailWaiting(ref, reason) {
@@ -1841,6 +1960,8 @@ export function createActivityService(
       unsubscribeMail?.();
       unsubscribeLog?.();
       catchUp.cancel();
+      if (safetyTimer !== undefined) clearInterval(safetyTimer);
+      safetyTimer = undefined;
       for (const timer of silenceTimers.values()) clearTimeout(timer);
       silenceTimers.clear();
       for (const timer of trustWaitTimers.values()) clearTimeout(timer);
