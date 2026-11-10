@@ -26,6 +26,7 @@ All notable changes to Parley are documented in this file.
 
 - An agent can create at most five rooms per hour and can no longer take a session out of a room you set up unless it leads that room.
 - **Idle agents are put to sleep for memory less eagerly.** "Sleep idle agents sooner when the machine is busy" now defaults to 15 minutes (was 5) and applies when memory is critical or a queued launch needs a slot; on a memory warning agents fall asleep after at least 30 minutes. An agent woken by a letter or Resume stays awake at least 15 minutes after its last turn before memory can put it to sleep. A value you set yourself still applies.
+- Parley starts fewer duplicate helper processes when many agents share a project: Codex role lookups, CLI version checks, binary verification, the Codex skill catalog read at launch and git queries are cached or shared, the window asks for role summaries once per project, and the backlog panel ignores unrelated file changes. The window should stay more responsive with dozens of sessions.
 - **Wakes after a Parley sleep count toward "Session wake-ups per hour".** Two agents writing to each other can no longer wake each other without limit: a session put to sleep by Parley is woken by mail at most that many times per hour (6 by default); further mail waits and the window says so.
 
 ## 0.32.0
