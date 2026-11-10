@@ -69,6 +69,7 @@ import { FEED_SCHEMA_VERSION, FEED_PROGRESS_RETRY_AFTER_MAX_MS, refKey, sessionR
 import type { FeedDecisions, ProgressResult, Result, SessionRef } from '@parley/protocol';
 import { projectProgress } from './progress.js';
 import type { ActivityService } from '../activity/activity-service.js';
+import type { LogChange } from '../activity/log-index.js';
 import type { Client } from '../client.js';
 import type { HostContext } from '../context.js';
 import { HostError } from '../errors.js';
@@ -1540,20 +1541,22 @@ export function createFeedService(
    * журнала хост читает его хвост у лент с идущим ходом и, найдя запись новее начала хода, закрывает
    * ход чертой `interrupted`: идущие вызовы отклонены, ждущие карточки — `elsewhere`, их хукам `{}`.
    * Из того же хвоста читаются `system/api_error`: ретраи не присылают хуков, но должны появляться
-   * в живой ленте. Проверка одна за раз; пришедшее за время чтения изменение — ещё один круг.
+   * в живой ленте. Проверка одна за раз; пришедшее за время чтения изменение — ещё один круг. Изменение
+   * журнала будит только ленты задетых им сессий (`LogChange.affects`): ключи лент ждут в очереди.
    */
   let checkingInterrupts = false;
-  let recheckInterrupts = false;
+  const interruptQueue = new Set<string>();
   async function checkInterrupts(): Promise<void> {
-    if (checkingInterrupts) {
-      recheckInterrupts = true;
-      return;
-    }
+    // Идущий разбор доберёт и ключи, пришедшие за время чтения: очередь он разбирает, пока она не пуста.
+    if (checkingInterrupts) return;
     checkingInterrupts = true;
     try {
-      do {
-        recheckInterrupts = false;
-        for (const feed of Array.from(feeds.values())) {
+      while (interruptQueue.size > 0) {
+        const keys = Array.from(interruptQueue);
+        interruptQueue.clear();
+        for (const key of keys) {
+          const feed = feeds.get(key);
+          if (feed === undefined) continue;
           if (stopped) return;
           const started = feed.state.turnStartedAt;
           if (started === null) continue;
@@ -1585,16 +1588,27 @@ export function createFeedService(
           if (latest === undefined || latest <= started) continue;
           commit(feed, closeFeedTurn(feed.state, at(), { interrupted: true }));
         }
-      } while (recheckInterrupts);
+      }
     } finally {
       checkingInterrupts = false;
     }
   }
-  const unsubscribeLogs = deps.activity.onLogChange(() => {
+  /** Задело ли изменение журнала сессию ленты; сессии в работах нет — не задело. */
+  function touchedBy(change: LogChange, ref: SessionRef): boolean {
+    try {
+      return change.affects(sessionOf(ref));
+    } catch {
+      return false;
+    }
+  }
+  const unsubscribeLogs = deps.activity.onLogChange((change) => {
     if (stopped) return;
+    // Без аргумента (первый полный список) — все ленты; иначе только задетые.
+    const woken = Array.from(feeds.values()).filter((feed) => change === undefined || touchedBy(change, feed.ref));
+    for (const feed of woken) interruptQueue.add(refKey(feed.ref));
     void checkInterrupts();
     // Индекс узнал журнал позже снимка или запуска — ленты без сева сеются сейчас.
-    for (const feed of Array.from(feeds.values())) void seedAside(feed.ref);
+    for (const feed of woken) void seedAside(feed.ref);
   });
 
   return {

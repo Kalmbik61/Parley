@@ -26,6 +26,8 @@ type ActivityListener = (
 ) => void;
 type ExitListener = (ref: SessionRef) => void;
 type FakeSession = { ref: SessionRef; provider?: string };
+/** Что индекс логов сообщает слушателям: какие сессии задела запись. */
+export type FakeLogChange = { affects(session: { id: string }): boolean };
 type WorksListener = (snapshot: unknown, previous: unknown) => void;
 
 export interface FakeFeedDeps {
@@ -41,8 +43,11 @@ export interface FakeFeedDeps {
   emitExit(ref: SessionRef): void;
   /** Процесс сессии запущен (`pty.on('start')`): запуск или возобновление. */
   emitStart(ref: SessionRef): void;
-  /** Индекс логов сообщил об изменении журнала (`activity.onLogChange`). */
-  emitLog(): void;
+  /**
+   * Индекс логов сообщил об изменении журнала (`activity.onLogChange`). Без аргумента — как первый полный
+   * список (задеты все); с `change` — задеты сессии, для которых `affects` отдаёт `true`.
+   */
+  emitLog(change?: FakeLogChange): void;
   /** Меняет сессии в работах и шлёт `works.onChange` со снимком по ним. */
   setSessions(next: FakeSession[]): void;
   /** Всё, что служба напечатала в терминал сессии (`pty.write`). */
@@ -79,7 +84,7 @@ export function fakeFeedDeps(initial: FakeSession[] = [{ ref: REF }]): FakeFeedD
   const sessionLogFiles = new Map<string, string>();
   const childLogFiles = new Map<string, string>();
   const activityListeners = new Set<ActivityListener>();
-  const logListeners = new Set<() => void>();
+  const logListeners = new Set<(change?: FakeLogChange) => void>();
   const exitListeners = new Set<ExitListener>();
   const startListeners = new Set<ExitListener>();
   const worksListeners = new Set<WorksListener>();
@@ -120,7 +125,7 @@ export function fakeFeedDeps(initial: FakeSession[] = [{ ref: REF }]): FakeFeedD
         activityListeners.add(listener);
         return () => activityListeners.delete(listener);
       },
-      onLogChange: (listener: () => void) => {
+      onLogChange: (listener: (change?: FakeLogChange) => void) => {
         logListeners.add(listener);
         return () => logListeners.delete(listener);
       },
@@ -172,8 +177,8 @@ export function fakeFeedDeps(initial: FakeSession[] = [{ ref: REF }]): FakeFeedD
     emitStart(ref) {
       for (const listener of startListeners) listener(ref);
     },
-    emitLog() {
-      for (const listener of logListeners) listener();
+    emitLog(change) {
+      for (const listener of logListeners) listener(change);
     },
     setSessions(next) {
       const previous = worksSnapshotOf(sessions);

@@ -204,7 +204,7 @@ export interface ActivityService {
    * Журнал какой-то сессии изменился (индекс логов; живая лента по нему ловит прерывание Esc —
    * запись «[Request interrupted by user…]», план 2026-10-01, решение 5). Возвращает отписку.
    */
-  onLogChange(listener: () => void): () => void;
+  onLogChange(listener: (change?: LogChange) => void): () => void;
   /** Источник цифр итога комнаты (спека расхода токенов, 5.2): итог сессии целиком, границы её лога и срез по окнам. */
   usageResolver(): UsageResolver;
   stop(): Promise<void>;

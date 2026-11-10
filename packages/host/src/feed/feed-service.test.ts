@@ -27,7 +27,7 @@ import {
   readJsonlRecords,
 } from '@parley/core';
 import { FEED_SCHEMA_VERSION, progressResult } from '@parley/protocol';
-import type { EventData } from '@parley/protocol';
+import type { EventData, SessionRef } from '@parley/protocol';
 import { fakeClient, fakeFeedDeps, hookRequest, REF } from '../../test/feed-fakes.js';
 import type { FakeFeedDeps } from '../../test/feed-fakes.js';
 import { makePng } from '../../test/png.js';
@@ -1851,6 +1851,27 @@ describe('сев из журнала', () => {
     expect(reader.files).toHaveLength(1);
   });
 
+  it('сессия без providerSessionId, активная: журнал появился — сеется, а изменение, её не задевшее, не сеет', async () => {
+    const { root } = await history();
+    const reader = countingReader();
+    start({ roots: () => [root], readRecords: reader.read });
+    const client = fakeClient();
+    service.subscribe(REF, client);
+    await expect(service.snapshot(REF)).resolves.toMatchObject({ items: [] });
+
+    fakes.setLogFile(path.join(root, '-proj', 'write.jsonl'));
+    // Чужое изменение: индекс сообщает, что запись эту сессию не задела.
+    fakes.emitLog({ affects: () => false });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(reader.files).toHaveLength(0);
+    expect(feedChanged(client)).toHaveLength(0);
+
+    fakes.emitLog({ affects: (session) => session.id === REF.sessionId });
+    await vi.waitFor(() => expect(feedChanged(client)).toHaveLength(1));
+    expect(ofKind(feedChanged(client)[0]?.upsert ?? [], 'tool').length).toBeGreaterThan(0);
+    expect(reader.files).toHaveLength(1);
+  });
+
   it('снимок без живых событий сеет из журнала один раз: вызовы и дифф на месте', async () => {
     const { root } = await history();
     fakes.setLogFile(path.join(root, '-proj', 'write.jsonl'));
@@ -2505,6 +2526,47 @@ describe('прерывание Esc по записи журнала (решен�
 
   const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 30));
 
+  describe('изменение журнала будит только ленты своих сессий', () => {
+    const REF_B: SessionRef = { ...REF, sessionId: 's-02' };
+    const only = (sessionId: string) => ({ affects: (session: { id: string }) => session.id === sessionId });
+
+    /** Две сессии с открытым ходом; шпион пишет, у какой сессии спросили журнал при проверке прерываний. */
+    async function twoOpenTurns(): Promise<string[]> {
+      fakes = fakeFeedDeps([{ ref: REF }, { ref: REF_B }]);
+      const root = await tempRoot();
+      await logUnder(root);
+      const asked: string[] = [];
+      const logFile = fakes.deps.activity.logFile;
+      vi.spyOn(fakes.deps.activity, 'logFile').mockImplementation((ref) => {
+        asked.push(ref.sessionId);
+        return logFile(ref);
+      });
+      start({ roots: () => [root] });
+      service.onHook(hookRequest(prompt('go'), REF));
+      service.onHook(hookRequest(prompt('go'), REF_B));
+      asked.length = 0;
+      return asked;
+    }
+
+    it('изменение журнала A не трогает ленту B', async () => {
+      const asked = await twoOpenTurns();
+      // Вторая рассылка идёт сразу за первой: если бы первая задела B, B спросили бы дважды.
+      fakes.emitLog(only(REF.sessionId));
+      fakes.emitLog(only(REF_B.sessionId));
+      await vi.waitFor(() => expect(asked.length).toBeGreaterThanOrEqual(2));
+      await settle();
+      expect(asked).toEqual([REF.sessionId, REF_B.sessionId]);
+    });
+
+    it('без аргумента (первый полный список) — все ленты', async () => {
+      const asked = await twoOpenTurns();
+      fakes.emitLog();
+      await vi.waitFor(() => expect(asked.length).toBeGreaterThanOrEqual(2));
+      await settle();
+      expect([...asked].sort()).toEqual([REF.sessionId, REF_B.sessionId]);
+    });
+  });
+
   it('запись о прерывании новее начала хода: черта interrupted, вызов отклонён, удержанный вопрос — {} и questionHeld(false)', async () => {
     const root = await tempRoot();
     const file = await logUnder(root);
@@ -2662,6 +2724,47 @@ describe('лента Codex', () => {
     });
     const sub = await service.snapshot(REF, 'th-child');
     expect(sub.items.some((entry) => entry.kind === 'tool' && entry.toolUseId === 'cc1')).toBe(true);
+  });
+
+  it('сессия Codex без providerSessionId, активная: журнал появился — сеется по изменению, задевшему её', async () => {
+    await writeRollout(file, [meta('th-main'), started(1)]);
+    fakes.setLogFile(null);
+    start();
+    const client = fakeClient();
+    service.subscribe(REF, client);
+    await service.snapshot(REF);
+
+    fakes.setLogFile(file);
+    fakes.emitLog({ affects: () => false });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(feedChanged(client)).toHaveLength(0);
+
+    await appendRollout(file, [userMessage(2, 'um1', 'go')]);
+    fakes.emitLog({ affects: (session) => session.id === REF.sessionId });
+    await vi.waitFor(() =>
+      expect(feedChanged(client).flatMap((delta) => delta.upsert.map((entry) => entry.kind))).toContain('prompt'),
+    );
+  });
+
+  it('журнал порождённого треда задел родителя (affects по предкам): лента родителя перечитывает агента', async () => {
+    await writeRollout(file, [meta('th-main'), started(1), subagent(2, 'th-child', 'started')]);
+    const childFile = path.join(dir, 'child.jsonl');
+    await writeRollout(childFile, [childMeta('th-child', 'th-main', 3), parentCopy(1), parentCopy(2), task(3, 'Найди newAgent'), command(4, 'cc1', 'rg newAgent', 'th-child')]);
+    fakes.setChildLogFile('th-child', childFile);
+    start();
+    await service.snapshot(REF);
+    await vi.waitFor(async () => {
+      const card = (await service.snapshot(REF)).items.find((entry) => entry.kind === 'agent');
+      expect(card).toMatchObject({ toolCount: 1 });
+    });
+
+    // Дописан журнал ребёнка; индекс сообщает об изменении, которое задело сессию родителя (запись в цепочке предков).
+    await appendRollout(childFile, [command(5, 'cc2', 'rg other', 'th-child')]);
+    fakes.emitLog({ affects: (session) => session.id === REF.sessionId });
+    await vi.waitFor(async () => {
+      const card = (await service.snapshot(REF)).items.find((entry) => entry.kind === 'agent');
+      expect(card).toMatchObject({ toolCount: 2 });
+    });
   });
 
   it('Stop у Codex — только Esc, без стирания промпта', () => {
