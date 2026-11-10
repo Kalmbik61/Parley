@@ -156,7 +156,7 @@ try {
   const bumpVersion = foreign.prepare('UPDATE works SET version = version + 1 WHERE project_path = ? AND id = ?');
   const touchEntry = foreign.prepare(
     `UPDATE entries SET json = json_set(json, '$.summary', ?) WHERE rowid =
-       (SELECT MIN(rowid) FROM entries WHERE project_path = ? AND work_id = ? AND kind = 'sessions')`,
+       (SELECT MIN(rowid) FROM entries WHERE project_path = ? AND work_id = ? AND kind = 'session')`,
   );
   const foreignLetter = (): void => {
     bumpVersion.run(project, workId);
