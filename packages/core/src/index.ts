@@ -555,6 +555,8 @@ export {
   wakesAtOnce,
 } from './work/delivery.js';
 export type { DeliveryAction, DeliveryInput } from './work/delivery.js';
+export { reportRecipients } from './work/task-giver.js';
+export type { ReportRecipient } from './work/task-giver.js';
 export { autoSleepVerdict, deliveredSince, inboxFenced } from './work/auto-sleep.js';
 export type { AutoSleepBlock, AutoSleepInput, AutoSleepVerdict } from './work/auto-sleep.js';
 export {
