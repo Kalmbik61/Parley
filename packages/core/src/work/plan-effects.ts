@@ -23,6 +23,8 @@ import type {
 const WINDOW_MS = 60 * 60 * 1000;
 const EFFECT_LIMIT = 30_000;
 const EFFECT_BYTES = 4 * 1024 * 1024;
+/** Сколько живут отменённые эффекты и записанные строки закончившихся планов (решение 6 части 08). */
+const PLAN_EFFECTS_KEEP_MS = 7 * 24 * 60 * 60 * 1000;
 const KINDS = [
   "ready",
   "verify",
@@ -308,6 +310,33 @@ export function reservePlanEffects(
     });
   return result;
 }
+/**
+ * Чистка хранилища эффектов. Без `all`: отменённые эффекты старше срока по `createdAt`, записанные экспорты и намерения
+ * бэклога планов, закончившихся (`completedAt ?? cancelledAt`) раньше срока. С `all` (перед ошибкой предела): возраст не
+ * важен для эффектов и экспортов; намерения планов, завершённых позже срока, остаются — `reserve` создал бы их заново.
+ * План без обеих дат и строки без плана остаются.
+ */
+function prune(map: WorkMap, now: number, all: boolean): void {
+  const cut = now - PLAN_EFFECTS_KEEP_MS;
+  const endedAt = (planId: string, rev: number): number | null => {
+    const plan = map.plans?.find((row) => row.id === planId && row.rev === rev);
+    const value = plan?.completedAt ?? plan?.cancelledAt ?? null;
+    const time = value === null ? NaN : Date.parse(value);
+    return Number.isFinite(time) ? time : null;
+  };
+  map.planEffects = (map.planEffects ?? []).filter(
+    (row) =>
+      row.status !== "cancelled" || (!all && !(Date.parse(row.createdAt) < cut)),
+  );
+  map.planExports = (map.planExports ?? []).filter((row) => {
+    const ended = endedAt(row.planId, row.rev);
+    return row.status !== "written" || ended === null || (!all && !(ended < cut));
+  });
+  map.planBacklogIntents = (map.planBacklogIntents ?? []).filter((row) => {
+    const ended = endedAt(row.planId, row.rev);
+    return row.status !== "written" || ended === null || !(ended < cut);
+  });
+}
 function reserve(
   map: WorkMap,
   letters: LetterTx,
@@ -325,14 +354,35 @@ function reserve(
   reconcileRoomPlans(map, at);
   map.planEffects ??= [];
   map.planBacklogIntents ??= [];
-  const append = (value: PlanEffect | null): void => {
-    if (value && !map.planEffects!.some((row) => row.key === value.key))
+  const now = Date.parse(at);
+  // Сюда приходят только эффекты пунктов и завершения: разовые `mode` и `completion-returned` не оживают, их ставит
+  // `capturePlanNotice`.
+  const append = (value: NewEffect | null): void => {
+    if (!value) return;
+    const row = map.planEffects!.find((found) => found.key === value.key);
+    if (row === undefined) {
       map.planEffects!.push(value);
+      return;
+    }
+    // Отменённый эффект снова текущий с тем же текстом: оживает и письмо уходит заново (новое, старое не трогаем).
+    // Другой текст — формат сменился обновлением, и повторной рассылки не будет.
+    if (row.status === "cancelled" && effectTextIs(row, value.text)) {
+      row.status = "queued";
+      row.text = value.text;
+      delete row.textSha256;
+      row.messageId = null;
+      row.createdAt = value.createdAt;
+    }
   };
   for (const plan of map.plans ?? []) {
     for (const item of plan.items) append(itemEffect(map, plan, item, at));
     append(completionEffect(map, plan, at));
-    if (plan.status === "completed" && plan.completedAt !== null)
+    // Намерение завершения старше срока чистки не создаём заново: `prune` удалил бы записанное и оно вернулось бы.
+    if (
+      plan.status === "completed" &&
+      plan.completedAt !== null &&
+      !(Date.parse(plan.completedAt) < now - PLAN_EFFECTS_KEEP_MS)
+    )
       for (const backlogId of plan.backlog) {
         const key = `${plan.id}/${plan.rev}/${backlogId}/${plan.completedAt}`;
         if (!map.planBacklogIntents.some((row) => row.key === key))
@@ -346,15 +396,20 @@ function reserve(
           });
       }
   }
-  if (
-    map.planEffects.length > EFFECT_LIMIT ||
-    map.planBacklogIntents.length > EFFECT_LIMIT ||
+  const overLimit = (): boolean =>
+    map.planEffects!.length > EFFECT_LIMIT ||
+    map.planBacklogIntents!.length > EFFECT_LIMIT ||
     Buffer.byteLength(
       JSON.stringify([map.planEffects, map.planBacklogIntents]),
-    ) > EFFECT_BYTES
-  )
-    throw new RoomRuleError("plan effect storage limit reached");
-  const now = Date.parse(at);
+    ) > EFFECT_BYTES;
+  prune(map, now, false);
+  if (overLimit()) {
+    prune(map, now, true);
+    if (overLimit())
+      throw new RoomRuleError(
+        "plan effect storage limit reached: too many open plan letters in this workspace; ask the human to complete or cancel plans that are no longer worked on",
+      );
+  }
   // Письма `parley` за последний час: окно считается запросом `sinceAt`, а не обходом всей ленты (спека хранилища 6.2).
   const recentQuery = {
     from: PARLEY,

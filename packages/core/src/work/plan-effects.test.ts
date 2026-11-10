@@ -17,7 +17,7 @@ import {
   validatePlanEffects,
 } from "./plan-effects.js";
 import { HUMAN, PARLEY } from "./types.js";
-import type { PlanDraft, WorkMap } from "./types.js";
+import type { PlanDraft, PlanEffect, WorkMap } from "./types.js";
 import type { BacklogDocument } from "./backlog.js";
 import type { PlanEffectsIO } from "./plan-effects.js";
 import { mapLetterTx, type LetterTx, type NewLetter } from "./letter-store.js";
@@ -858,5 +858,148 @@ describe("effect texts live only in the letter once an effect is sent or cancell
     reservePlanEffects(map, lt(map), 20, AT);
     delete map.planEffects![0]!.textSha256;
     expect(() => validatePlanEffects(map)).toThrow("invalid plan effect");
+  });
+});
+
+describe("cancelled effects come back to life and old rows are pruned", () => {
+  const T2 = "2026-10-04T02:00:00.000Z";
+  const KEEP = 7 * 24 * 60 * 60 * 1000;
+  const DAY = 24 * 60 * 60 * 1000;
+  const NOW = Date.parse(AT);
+  const iso = (age: number) => new Date(NOW - age).toISOString();
+  const parleyLetters = (map: WorkMap) => map.messages.filter((row) => row.from === PARLEY);
+  /** Эффект отменён тем, что работа ушла в архив; затем работа открыта снова. */
+  function archiveAndReopen(map: WorkMap) {
+    map.work.status = "archived";
+    reservePlanEffects(map, lt(map), 20, AT);
+    map.work.status = "active";
+  }
+  it("an assignment cancelled while the workspace was archived is sent again after reopening", () => {
+    const map = fixture("checklist");
+    reservePlanEffects(map, lt(map), 20, AT);
+    const oldLetter = parleyLetters(map)[0]!;
+    archiveAndReopen(map);
+    expect(map.planEffects![0]!.status).toBe("cancelled");
+    reservePlanEffects(map, lt(map), 20, T2);
+    // Одна строка эффекта, два письма: оживший эффект пишет новое письмо, старое не трогает.
+    expect(map.planEffects).toHaveLength(1);
+    const row = map.planEffects![0]!;
+    expect(row.status).toBe("sent");
+    expect(row.createdAt).toBe(T2);
+    const letters = parleyLetters(map);
+    expect(letters).toHaveLength(2);
+    expect(row.messageId).toBe(letters[1]!.id);
+    expect(row.messageId).not.toBe(oldLetter.id);
+    expect(letters[1]!.text).toBe(oldLetter.text);
+    expect(resumablePlanLetter(map, oldLetter, "s-02", lookupIn(map))).toBe(false);
+    expect(resumablePlanLetter(map, letters[1]!, "s-02", lookupIn(map))).toBe(true);
+    // Повторный проход без изменений не даёт ни эффектов, ни писем.
+    expect(reservePlanEffects(map, lt(map), 20, T2).changed).toBe(false);
+    expect(map.planEffects).toHaveLength(1);
+    expect(parleyLetters(map)).toHaveLength(2);
+  });
+  it("a cancelled effect is revived only with the same text", () => {
+    const map = fixture("checklist");
+    reservePlanEffects(map, lt(map), 20, AT);
+    archiveAndReopen(map);
+    // Формат письма сменился обновлением: хэш отменённого эффекта не совпадает с текстом текущего.
+    map.planEffects![0]!.textSha256 = createHash("sha256").update("an older format").digest("hex");
+    reservePlanEffects(map, lt(map), 20, T2);
+    expect(map.planEffects).toHaveLength(1);
+    expect(map.planEffects![0]!.status).toBe("cancelled");
+    expect(parleyLetters(map)).toHaveLength(1);
+  });
+  it("a mode notice stays cancelled after the workspace is archived and reopened", () => {
+    const map = fixture();
+    setRoomMode(map, lt(map), "r-01", HUMAN, "checklist", "Human choice", {}, AT);
+    capturePlanNotice(map, lt(map), "r-01", "mode", map.messages.at(-1)!.id);
+    reservePlanEffects(map, lt(map), 20, AT);
+    expect(map.planEffects!.find((row) => row.kind === "mode")!.status).toBe("sent");
+    archiveAndReopen(map);
+    reservePlanEffects(map, lt(map), 20, T2);
+    expect(map.planEffects!.find((row) => row.kind === "mode")!.status).toBe("cancelled");
+    expect(parleyLetters(map).filter((row) => row.text.startsWith("Room mode changed."))).toHaveLength(1);
+  });
+  /** Отменённая строка нужного возраста: копия настоящего эффекта с другим ключом, текст свёрнут в хэш. */
+  const cancelledRow = (source: PlanEffect, name: string, age: number): PlanEffect => {
+    return {
+      ...source,
+      key: `${source.key}/${name}`,
+      status: "cancelled",
+      messageId: null,
+      createdAt: iso(age),
+      textSha256: "0".repeat(64),
+    };
+  };
+  it("prunes cancelled effects older than seven days and leaves queued and sent ones alone", () => {
+    const map = fixture("checklist", 2);
+    reservePlanEffects(map, lt(map), 1, AT);
+    expect(map.planEffects!.map((row) => row.status)).toEqual(["sent", "queued"]);
+    const source = map.planEffects![0]!;
+    for (const [name, age] of [["age-0", 0], ["age-keep", KEEP], ["age-keep-1", KEEP + 1], ["age-30d", 30 * DAY]] as const)
+      map.planEffects!.push(cancelledRow(source, name, age));
+    reservePlanEffects(map, lt(map), 1, AT);
+    expect(map.planEffects!.map((row) => row.status)).toEqual(["sent", "queued", "cancelled", "cancelled"]);
+    expect(map.planEffects!.slice(2).map((row) => row.key.split("/").at(-1))).toEqual(["age-0", "age-keep"]);
+  });
+  /** Закончившийся план: единственный план фикстуры завершён `age` назад; строки бэклога и экспортов разных статусов. */
+  function endedPlan(age: number): WorkMap {
+    const map = fixture("checklist");
+    const plan = map.plans![0]!;
+    plan.status = "completed";
+    plan.completedAt = iso(age);
+    plan.backlog = ["b-001"];
+    const intent = (backlogId: string, status: "pending" | "written" | "conflict") => ({
+      key: `${plan.id}/${plan.rev}/${backlogId}/${plan.completedAt}`,
+      planId: plan.id,
+      rev: plan.rev,
+      backlogId,
+      completedAt: plan.completedAt!,
+      status,
+    });
+    map.planBacklogIntents = [intent("b-001", "written"), intent("b-002", "pending"), intent("b-003", "conflict")];
+    const file = (event: "accepted" | "completed") => `w-0001-r-01-${plan.id}-rev-0-${event}.md`;
+    map.planExports = [
+      { file: file("accepted"), planId: plan.id, rev: plan.rev, event: "accepted", status: "written" },
+      { file: file("completed"), planId: plan.id, rev: plan.rev, event: "completed", status: "pending" },
+    ];
+    return map;
+  }
+  it.each([
+    [0, true],
+    [KEEP, true],
+    [KEEP + 1, false],
+    [30 * DAY, false],
+  ])("written rows of a plan that ended %d ms ago: kept = %s, pending and conflict rows always kept", (age, kept) => {
+    const map = endedPlan(age);
+    reservePlanEffects(map, lt(map), 20, AT);
+    expect(map.planBacklogIntents!.map((row) => row.status)).toEqual(
+      kept ? ["written", "pending", "conflict"] : ["pending", "conflict"],
+    );
+    expect(map.planExports!.map((row) => row.status)).toEqual(kept ? ["written", "pending"] : ["pending"]);
+  });
+  it("rows of a plan with neither date stay", () => {
+    const map = endedPlan(30 * DAY);
+    map.plans![0]!.completedAt = null;
+    map.plans![0]!.status = "active";
+    reservePlanEffects(map, lt(map), 20, AT);
+    expect(map.planBacklogIntents!.map((row) => row.status)).toEqual(["written", "pending", "conflict"]);
+    expect(map.planExports!.map((row) => row.status)).toEqual(["written", "pending"]);
+  });
+  it("at the limit cancelled rows of any age go before the error", () => {
+    const map = fixture("checklist");
+    reservePlanEffects(map, lt(map), 20, AT);
+    const source = map.planEffects![0]!;
+    for (let i = 0; i < 30_001; i++) map.planEffects!.push(cancelledRow(source, `n-${i}`, 0));
+    expect(() => reservePlanEffects(map, lt(map), 20, AT)).not.toThrow();
+    expect(map.planEffects!.map((row) => row.status)).toEqual(["sent"]);
+  });
+  it("the limit error says what to do", () => {
+    const map = fixture("checklist");
+    reservePlanEffects(map, lt(map), 20, AT);
+    const source = map.planEffects![0]!;
+    for (let i = 0; i < 30_001; i++) map.planEffects!.push({ ...source, key: `${source.key}/n-${i}` });
+    expect(() => reservePlanEffects(map, lt(map), 20, AT)).toThrow(/complete or cancel plans/);
+    expect(map.planEffects).toHaveLength(30_002);
   });
 });
