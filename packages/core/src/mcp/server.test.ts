@@ -1949,16 +1949,15 @@ describe('send_message и check_inbox в комнате', () => {
       expect(fromWait?.roomTask).toEqual(fromInbox?.roomTask);
     });
 
-    it('в комнате нет живых участников — roomTask нет, письмо и toEveryone остаются', async () => {
+    it('в комнате нет живых участников — закрытая сессия писем не получает', async () => {
       const { a } = await roomSetup();
       await humanSays();
       await callOk(await connect('s-02'), 'close_session', { target: 's-02' });
       await callOk(await connect('s-03'), 'close_session', { target: 's-03' });
       await callOk(await connect('s-01'), 'close_session', { target: 's-01' });
 
-      const [letter] = await inboxOf(a);
-      expect(letter).toMatchObject({ text: TASK, toEveryone: true });
-      expect(letter).not.toHaveProperty('roomTask');
+      // Закрытую сессию не возобновить, поэтому непрочитанных писем у неё нет (isClosedReader в work/letters.ts).
+      expect(await inboxOf(a)).toEqual([]);
     });
 
     it('ведущий закрыт: роль считается по живому ведущему, а не по записи комнаты', async () => {

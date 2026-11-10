@@ -207,8 +207,10 @@ export async function prepareSessionRole(cwd: string, entry: ProviderEntry, choi
 }
 
 /**
- * Роль, с которой сессию можно запустить на `entry`: прежняя, если она подходит; иначе одноимённая роль семейства
- * цели; иначе `null` (умолчания провайдера). Ловит только `RoleChoiceError`, остальные ошибки идут наружу.
+ * Роль, с которой сессию можно запустить на `entry`: прежняя, если она того же семейства, что цель, и принимается;
+ * иначе одноимённая роль семейства цели; иначе `null` (умолчания провайдера). Семейство решает первым и без каталога:
+ * в режиме `existing` отсутствующая в каталоге роль не отказ, и ответ зависел бы от того, что в каталоге есть.
+ * Ловит только `RoleChoiceError`, остальные ошибки идут наружу.
  */
 export async function roleForProvider(cwd: string, entry: ProviderEntry, role: SessionRole | null, catalog?: RoleCatalog): Promise<SessionRole | null> {
   if (role === null || role.source === 'builtin') return role;
@@ -221,9 +223,9 @@ export async function roleForProvider(cwd: string, entry: ProviderEntry, role: S
       throw error;
     }
   };
-  if (await accepts(role, 'existing')) return role;
   const source = entry.id === 'codex' ? 'codex' : isClaudeCode(entry) ? 'claude' : null;
-  if (source === null || source === role.source) return null;
+  if (source === role.source) return await accepts(role, 'existing') ? role : null;
+  if (source === null) return null;
   const sameName: SessionRole = { source, name: role.name };
   return await accepts(sameName, 'create') ? sameName : null;
 }

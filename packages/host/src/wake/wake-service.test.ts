@@ -1779,7 +1779,14 @@ describe('WakeService: комнаты (3.5)', () => {
     const { workId, ids } = await trio();
     const [a, b, c] = ids;
     const roomId = await createHumanRoom({ projectPath: project, workId, title: 'Созвон', members: [a, b] });
-    const streams = await trioRig(workId, ids);
+    const streams = await trioRig(workId, ids, { pointerTimeoutMs: 300 });
+
+    // Новый процесс получает указатель на письма, ждавшие его: у приглашения в комнату свой указатель при старте.
+    // Стаб хода не начинает, указатель выходит по таймауту; приглашение так и не прочитано, поэтому следующий его считает.
+    const invitation = `echo: ${inRoom(1, roomId, 'Созвон')}`;
+    await waitFor(() => streams.get(a)?.().includes(invitation) === true, 3000);
+    await waitFor(() => streams.get(b)?.().includes(invitation) === true, 3000);
+    await settle(500);
 
     await sendHumanLetter({ projectPath: project, workId, roomId, to: [], text: 'всем', kind: 'decision' });
 
