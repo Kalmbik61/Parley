@@ -338,20 +338,27 @@ describe('сроки остановки хоста', () => {
     );
     expect(response.error).toBeUndefined();
 
+    // Хост закрывает свою сторону уже во время остановки, за секунду до `closed`: слушатели ставим до неё.
+    socket.resume();
+    const released = new Promise<string>((resolve) => {
+      for (const event of ['end', 'close', 'error']) socket.once(event, () => resolve(event));
+    });
+
     await running.context.shutdown('t');
     await running.closed;
-    socket.resume();
-    const released = await new Promise<string>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('хост не отпустил соединение вовремя')), 3000);
-      for (const event of ['end', 'close', 'error']) {
-        socket.once(event, () => {
-          clearTimeout(timer);
-          resolve(event);
-        });
-      }
-    });
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      await Promise.race([
+        released,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error('хост не отпустил соединение вовремя')), 3000);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
     socket.destroy();
-    expect(released).toMatch(/end|close|error/);
+    expect(await released).toMatch(/end|close|error/);
   });
 });
 
