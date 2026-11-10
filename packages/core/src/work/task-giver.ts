@@ -25,15 +25,6 @@ function latestTaskSender(map: WorkMap, letters: LetterReads, sessionId: string)
   }
 }
 
-/** Последняя прямая задача; комнатные участники и рои отчитываются своим протоколом. */
-export function lastTaskGiver(map: WorkMap, letters: LetterReads, sessionId: string): string | null {
-  if (map.rooms.some((room) => !isRoomArchived(room) && room.members.includes(sessionId)) ||
-    swarmOfSession(map, sessionId) !== null) return null;
-  const giver = latestTaskSender(map, letters, sessionId) ?? map.sessions.find((session) => session.id === sessionId)?.createdBy;
-  if (giver == null || giver === sessionId || giver === HUMAN) return null;
-  return map.sessions.some((session) => session.id === giver && session.lifecycle !== 'closed') ? giver : null;
-}
-
 /**
  * Кто ждёт итог сессии: в каждой открытой комнате докладчика — живой ведущий (а если докладчик сам ведёт — владелец),
  * затем создатель и самый новый давший задание. Дубликаты — по первому вхождению: роль в комнате важнее «task giver».

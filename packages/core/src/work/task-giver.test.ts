@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { reportLetterText, isReportLetterAbout, isReportUpdateLetter, lastTaskGiver, reportRecipients } from './task-giver.js';
+import { reportLetterText, isReportLetterAbout, isReportUpdateLetter, reportRecipients } from './task-giver.js';
 import { addSession } from './map.js';
 import { addRoom, archiveRoom } from './rooms.js';
 import { mapLetterTx } from './letter-store.js';
@@ -23,21 +23,6 @@ describe('report letter matcher', () => {
     expect(isReportLetterAbout({ ...message, from: 's-01' }, 's-02')).toBe(false);
     expect(isReportLetterAbout({ ...message, roomId: 'r-01' }, 's-02')).toBe(false);
   });
-});
-
-it('defers swarm members to their own reporting protocol', () => {
-  const map: WindowWorkMap = { schemaVersion: 3,
-    work: { id: 'w-0001', title: '', goal: '', status: 'active', createdAt: '', updatedAt: '' },
-    sessions: [], rooms: [], messages: [],
-  };
-  addSession(map, { provider: 'claude', label: 'giver', task: '' });
-  addSession(map, { provider: 'claude', label: 'worker', task: '', createdBy: 's-01' });
-  const { letters } = mapLetterTx(map);
-  expect(lastTaskGiver(map, letters, 's-02')).toBe('s-01');
-  map.swarms = [{ id: 'sw-01', tag: 'Work', creator: { kind: 'human' }, objective: '', queen: 's-01',
-    members: [{ sessionId: 's-02', role: 'drone', n: 1, addedAt: '', handedAt: null }],
-    status: 'running', createdAt: '', endedAt: null, result: null, failure: null, seenAt: null, expiredAt: null }];
-  expect(lastTaskGiver(map, letters, 's-02')).toBeNull();
 });
 
 describe('reportRecipients', () => {

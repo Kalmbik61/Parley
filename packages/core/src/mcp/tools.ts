@@ -52,7 +52,7 @@ import {
 } from '../work/context-pages.js';
 import { settleDelayMs } from '../work/delivery.js';
 import { guide, GUIDE_TOPICS, guideTopic } from '../work/guide.js';
-import { storeLetterReader, unreadLetters, writeLetters, type LetterReads } from '../work/letter-store.js';
+import { mapLetterTx, storeLetterReader, unreadLetters, writeLetters, type LetterReads } from '../work/letter-store.js';
 import { recipientsOf } from '../work/letters.js';
 import { isCodexThreadBinding, transitionSession } from '../work/map.js';
 import { boardTake, markBoardReview, planBacklogIds, readBoardItems, type BoardSkipReason } from '../work/board.js';
@@ -64,7 +64,7 @@ import { readProjectMemory } from '../work/project-memory.js';
 import type { MemoryKind } from '../work/project-memory.js';
 import { readProjectPreferences } from '../work/project-preferences.js';
 import { finishSession } from '../work/metrics.js';
-import { isReportLetterAbout, lastTaskGiver, reportLetterText } from '../work/task-giver.js';
+import { REPORT_UPDATE_WINDOW_MS, isReportLetterAbout, reportLetterText, reportRecipients, type ReportRecipient } from '../work/task-giver.js';
 import { SHORT_PROFILE_HIDDEN_TOOLS } from '../work/mcp-config.js';
 import { PROPOSAL_TEXT_MAX } from '../work/proposals.js';
 import {
@@ -97,6 +97,7 @@ import {
   type Artifact,
   type Message,
   type Room,
+  type SessionResult,
   type WorkMap,
   type WorkSession,
 } from '../work/types.js';
@@ -486,7 +487,7 @@ export const TOOLS: Tool[] = [
     name: 'report',
     annotations: WRITES,
     description:
-      'Report your result (done/failed; stays reachable, not closed) or progress. Replaces summary and artifacts. Done/failed also mails the session that last tasked you directly or via create_session.',
+      'Report your result (done/failed; stays reachable, not closed) or progress. Replaces summary and artifacts. Done/failed mails your room lead, room owner or task giver; the answer names them.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -642,7 +643,7 @@ export const TOOLS: Tool[] = [
     name: 'close_session',
     annotations: CLOSES,
     description:
-      "Close yourself after the human's explicit consent or, if work.closeFinished, once accepted; ones you created: when accepted.",
+      "Close yourself after the human's explicit consent or, if work.closeFinished, after report(done); ones you created: when accepted.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -878,6 +879,7 @@ async function report(
 
   // Резюме пишем до смены статуса: ждущий `wait_for` просыпается на статусе и
   // должен увидеть уже готовое резюме, а не пустое поле.
+  const previous: { result?: SessionResult | null; summary?: string | null } = {};
   let map = await updateMap(context.projectPath, context.workId, (current) => {
     const session = requireSession(current, sessionId);
     // Закрытая сессия ничего больше не сдаёт (спецификация 7.1) — проверяем
@@ -885,27 +887,32 @@ async function report(
     if (session.lifecycle === 'closed') {
       throw new Error(`session ${sessionId} is closed: report not accepted`);
     }
+    previous.result = session.result;
+    previous.summary = session.summary;
     session.summary = summary;
     session.summarySource = 'agent';
     session.artifacts = artifacts;
   });
+  let notice: string | null = null;
+  let notified: string[] | undefined;
+  let warning: string | undefined;
   if (status !== 'progress') {
     // Письмо уже лежит, когда смена результата разбудит ожидающего по id.
-    try {
-      writeLetters(context.projectPath, context.workId, (letters, current) => {
-        const giver = lastTaskGiver(current, letters, sessionId);
-        if (giver === null) return;
-        const older = letters.unreadFor(giver).filter((message) => isReportLetterAbout(message, sessionId));
-        letters.markRead(giver, older.map((message) => message.id), new Date().toISOString());
-        letters.add({ from: SYSTEM, roomId: null, to: [giver], kind: 'note', text: reportLetterText(sessionId, status, summary) });
-      });
-    } catch { /* Уведомление не должно мешать сессии сдать результат. */ }
+    const sent = writeReportLetter(context, sessionId, status, summary, previous);
+    if (sent !== null) {
+      notified = sent.recipients.map((recipient) => recipient.id);
+      notice = reportNotice(map, sessionId, sent);
+    } else {
+      notified = [];
+      warning = reportLetterWarning(map, sessionId);
+    }
     // Итоговые метрики в карту фиксирует общий код жизненного цикла.
     map = await finishSession(context.projectPath, context.workId, sessionId, status);
   }
 
   const session = requireSession(map, sessionId);
-  const next = status === 'done' ? closeFinishedHint(map, sessionId) : null;
+  const hint = status === 'done' ? closeFinishedHint(map, sessionId) : null;
+  const next = [notice, hint].filter((part): part is string => part !== null).join(' ');
   // Карточки доски: только при done; при progress и failed номера молча не учитываются.
   let board: { review: string[]; skipped: { id: string; reason: BoardSkipReason }[] } | undefined;
   let backlogHint: string | undefined;
@@ -924,10 +931,84 @@ async function report(
     status: session.result ?? agentStatus(session),
     summary: session.summary,
     artifacts: session.artifacts,
-    ...(next !== null ? { next } : {}),
+    ...(notified !== undefined ? { notified } : {}),
+    ...(warning !== undefined ? { warning } : {}),
+    ...(next !== '' ? { next } : {}),
     ...(board !== undefined ? { backlog: board } : {}),
     ...(backlogHint !== undefined ? { backlogHint } : {}),
   };
+}
+
+/**
+ * Письмо о сдаче всем адресатам `reportRecipients` одной записью. Повтор того же итога в пределах окна письма не пишет;
+ * другой итог в окне — письмо с пометкой `(update)`. Две попытки; обе упали — `null` (итог сохранён, письма нет).
+ */
+function writeReportLetter(
+  context: McpContext,
+  sessionId: string,
+  status: SessionResult,
+  summary: string,
+  previous: { result?: SessionResult | null; summary?: string | null },
+): { recipients: ReportRecipient[]; repeat: boolean } | null {
+  let failure: unknown;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return writeLetters(context.projectPath, context.workId, (letters, current) => {
+        const recipients = reportRecipients(current, letters, sessionId);
+        if (recipients.length === 0) return { recipients, repeat: false };
+        const sinceAt = new Date(Date.now() - REPORT_UPDATE_WINDOW_MS).toISOString();
+        const recent = letters.query({ from: SYSTEM, roomId: null, sinceAt, newestFirst: true, limit: 50 })
+          .some((message) => isReportLetterAbout(message, sessionId));
+        if (recent && previous.result === status && previous.summary === summary) return { recipients, repeat: true };
+        const ids = recipients.map((recipient) => recipient.id);
+        const at = new Date().toISOString();
+        for (const id of ids) {
+          const older = letters.unreadFor(id).filter((message) => isReportLetterAbout(message, sessionId));
+          letters.markRead(id, older.map((message) => message.id), at);
+        }
+        const rooms = [...new Set(recipients.flatMap((recipient) => recipient.roomId === undefined ? [] : [recipient.roomId]))];
+        letters.add({ from: SYSTEM, roomId: null, to: ids, kind: 'note',
+          text: reportLetterText(sessionId, status, summary, { rooms, update: recent }) });
+        return { recipients, repeat: false };
+      });
+    } catch (error) {
+      failure = error;
+    }
+  }
+  process.stderr.write(`parley-mcp: report letter of ${sessionId} not written: ${(failure as Error).message}\n`);
+  return null;
+}
+
+/** Фраза в `next` о том, кого уведомил `report` (или почему никого). */
+function reportNotice(map: WorkMap, sessionId: string, sent: { recipients: ReportRecipient[]; repeat: boolean }): string {
+  if (sent.recipients.length > 0) {
+    const list = sent.recipients.map((recipient) => {
+      const role = recipient.as === 'giver' ? 'task giver' : `${recipient.as === 'lead' ? 'lead' : 'owner'} of ${recipient.roomId}`;
+      return `${recipient.id} (${role})`;
+    }).join(', ');
+    return sent.repeat ? `Already notified ${list} with this result; no new letter.` : `Notified ${list}.`;
+  }
+  const member = swarmOfSession(map, sessionId);
+  if (member !== null) {
+    return `Handed in to swarm ${member.swarm.id}: Parley passes swarm results on by itself; do not message anyone about it.`;
+  }
+  const createdBy = map.sessions.find((row) => row.id === sessionId)?.createdBy;
+  const humanOnly = (createdBy == null || createdBy === '' || createdBy === HUMAN) &&
+    map.rooms.every((room) => isRoomArchived(room) || !isMember(room, sessionId) || room.ownerId == null);
+  return humanOnly
+    ? 'Nobody was notified: the human sees the result in the window.'
+    : 'Nobody was notified: no live task giver, room lead or room owner. If a session waits for this result, write to it: send_message {to: "<id>", text: "<result>"}.';
+}
+
+/** Ответ, когда письмо о сдаче не записано дважды: итог сохранён, агент пишет адресатам сам. */
+function reportLetterWarning(map: WorkMap, sessionId: string): string {
+  const candidates = reportRecipients(map, mapLetterTx({ ...map, messages: [] }).letters, sessionId);
+  const base = 'The result is saved, but the notice letter was not written.';
+  if (candidates.length === 0) return base;
+  const calls = candidates.map((recipient) => recipient.roomId === undefined
+    ? `send_message {to: "${recipient.id}", text: "<result>"}`
+    : `send_message {room: "${recipient.roomId}", to: ["${recipient.id}"], text: "<result>"}`);
+  return `${base} Tell them yourself: ${calls.join('; ')}.`;
 }
 
 function backlogIdsArg(args: Record<string, unknown>): string[] {
@@ -975,12 +1056,12 @@ function closeFinishedHint(map: WorkMap, sessionId: string): string | null {
         led.some((room) => room.members.includes(row.id)))
       .map((row) => row.id);
     return finished.length > 0
-      ? `The human lets agents close finished sessions in this workspace (work.closeFinished): that is the human's explicit consent. Once you have accepted their parts, call close_session with target set to each of: ${finished.join(', ')}; the tool allows it.`
+      ? `The human lets agents close finished sessions in this workspace (work.closeFinished): that is the human's explicit consent. These members of your room have finished and are still open: call close_session with target set to each of: ${finished.join(', ')}, unless you still need one of them; the tool allows it.`
       : null;
   }
   const createdBy = map.sessions.find((row) => row.id === sessionId)?.createdBy;
   if (rooms.length > 0 || (typeof createdBy === 'string' && createdBy !== '')) {
-    return `The human lets agents close finished sessions in this workspace (work.closeFinished): that is the human's explicit consent. Once your part is accepted, call close_session with target "${sessionId}" as your last call.`;
+    return `The human lets agents close finished sessions in this workspace (work.closeFinished): that is the human's explicit consent. Nobody sends an acceptance, silence means accepted: unless the lead or the session that created you asked you to stay open, call close_session with target "${sessionId}" as your last call.`;
   }
   return null;
 }
