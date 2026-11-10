@@ -2558,4 +2558,34 @@ describe('WakeService: wake-blocked', () => {
     expect(parleyLetters(workId)).toHaveLength(2);
     expect(notices('resume-failed')).toHaveLength(2);
   }, 40_000);
+
+  it('перезапуск хоста: свежая попытка запускает процесс, он выходит без хуков — поле вернулось, писем и уведомлений не прибавилось', async () => {
+    const { workId, target, sender, ref, rig: first } = await blockedSetup();
+    await sendLetter(workId, target, 'первое', sender);
+    await waitFor(() => notices('resume-failed').length === 1, 8000);
+    await sendLetter(workId, target, 'второе', sender);
+    await waitFor(() => notices('resume-failed').length === 2, 8000);
+    await waitFor(() => first.works.entry(project, workId)?.map.sessions.find((s) => s.id === target)?.wakeBlocked != null, 5000);
+
+    // «Перезапуск»: новый будильник над той же картой, а подъём теперь настоящий — процесс стартует и выходит без хуков.
+    first.wake.stop();
+    setEnv('STUB_EXIT_AFTER_MS', '10');
+    const second = createWakeService(fakeHost(), first.works, first.activity, first.pty, first.sessions, { enterDelayMs: 30 });
+    stoppers.push(async () => second.stop());
+    second.start();
+    await settle(300);
+
+    const blockedLogs = (): number =>
+      logInfos.filter((entry) => entry.message === 'будильник: письма ждут' && entry.reason === 'wake-blocked').length;
+    const before = blockedLogs();
+    await sendLetter(workId, target, 'после перезапуска', sender);
+    // Сбой свежей попытки приходит ранним выходом; после него будильник снова публикует wake-blocked.
+    await waitFor(() => blockedLogs() > before, 10_000);
+    await settle(500);
+
+    expect(readStoredMap(project, workId).sessions.find((s) => s.id === target)?.wakeBlocked?.reason).toMatch(/^the process exited with code/);
+    expect(parleyLetters(workId)).toHaveLength(2);
+    expect(notices('resume-failed')).toHaveLength(2);
+    expect(first.activity.get(ref)?.metrics?.mailWaiting).toBe('wake-blocked');
+  }, 40_000);
 });

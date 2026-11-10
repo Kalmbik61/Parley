@@ -278,6 +278,12 @@ interface AttemptState {
    * сбой возвращает состояние без новых писем (поле в карте уже стоит).
    */
   fresh: boolean;
+  /**
+   * Идущий подъём — та самая свежая попытка. Запуск снимает `wakeBlocked` в карте (`transitionSession`), и сбой ранним
+   * выходом нашёл бы поле пустым и написал письма заново — раз на каждый перезапуск хоста. Поле тогда возвращается молча.
+   * Снимается первым хуком нового процесса, концом сбоя и заменой агента.
+   */
+  freshRunning: boolean;
   /** Запись `wakeBlocked` в карту не удалась: состояние держится в памяти, иначе каждое новое письмо снова билось бы о подъём. */
   blockedLocal: boolean;
 }
@@ -388,6 +394,7 @@ export function createWakeService(
         returnTurn: null,
         failures: 0,
         fresh: false,
+        freshRunning: false,
         blockedLocal: false,
       };
       attempts.set(key, state);
@@ -616,6 +623,9 @@ export function createWakeService(
   async function enterBlocked(ref: SessionRef, state: AttemptState, reason: string): Promise<void> {
     const oneLine = reason.replace(/\s+/g, ' ').trim();
     const shown = oneLine.length > WAKE_BLOCK_REASON_MAX ? `${oneLine.slice(0, WAKE_BLOCK_REASON_MAX)}...` : oneLine;
+    // Сбой свежей попытки после перезапуска хоста: поле возвращается в карту, а письма и уведомление не повторяются.
+    const quiet = state.freshRunning;
+    state.freshRunning = false;
     let entered = false;
     try {
       await updateMap(ref.projectPath, ref.workId, (map, letters) => {
@@ -624,6 +634,7 @@ export function createWakeService(
         if (session === undefined || session.wakeBlocked != null) return;
         const at = new Date().toISOString();
         session.wakeBlocked = { since: at, reason: shown };
+        if (quiet) return;
         entered = true;
         // Получатели, как у `notifyWaiting` в sessions-service: ведущий комнаты получает письмо в ней, отправитель — в общей
         // комнате или прямое; без самой сессии, закрытых и не-сессий (человек, система, `parley`).
@@ -654,7 +665,7 @@ export function createWakeService(
     } catch (error) {
       host.log.error('wake-blocked не записался в карту', { ref, error: String(error) });
       state.blockedLocal = true;
-      entered = true;
+      entered = !quiet;
     }
     if (entered) {
       notice(
@@ -687,6 +698,7 @@ export function createWakeService(
     // Свежая попытка после перезапуска хоста тратится на этот подъём; если подъёма не вышло (нечем, удержан, бюджет), она возвращается.
     const wasFresh = state.fresh;
     state.fresh = false;
+    state.freshRunning = wasFresh;
     try {
       const registry = await loadProviders();
       const template = registry[session.provider]?.runner.resumeArgs;
@@ -697,6 +709,7 @@ export function createWakeService(
       if (template === undefined || (session.providerSessionId === null && !awaiting)) {
         state.resumeUnavailable = true;
         state.fresh = wasFresh;
+        state.freshRunning = false;
         // Подъёма не будет — слот часа, взятый под него, не потрачен.
         releaseSlot(ref, state);
         // Окно уже видит «resuming»: пересчёт покажет, что письма ждут (`sleeping`). `resuming` снимается до него, иначе
@@ -734,6 +747,7 @@ export function createWakeService(
         releaseSlot(ref, state);
         for (const id of action.letterIds) state.pointed.delete(id);
         state.fresh = wasFresh;
+        state.freshRunning = false;
         if (outcome === 'held') state.trustHeld = true;
         else state.queued = action.launchClass;
         // `resuming` снимается до публикации: вложенный пересчёт, который она вызывает, иначе записал бы «resuming».
@@ -755,6 +769,7 @@ export function createWakeService(
         releaseSlot(ref, state);
         for (const id of action.letterIds) state.pointed.delete(id);
         state.fresh = wasFresh;
+        state.freshRunning = false;
         state.budgetDeniedAt = Date.now();
         limitNotice(ref, `the workspace budget is exhausted (${(error as Error).message})`);
         publishWaiting(ref, state, 'resume-limit');
@@ -1244,7 +1259,10 @@ export function createWakeService(
     state.blockedLocal = false;
     const live = activity.get(ref);
     // Новый процесс дал хоть один хук — подъём удался, счёт сбоев начинается заново.
-    if (hookedSince(live?.activity, handle.startedAt)) state.failures = 0;
+    if (hookedSince(live?.activity, handle.startedAt)) {
+      state.failures = 0;
+      state.freshRunning = false;
+    }
     if (state.pointerAfter !== null) {
       const endedAt = live?.activity.turnEndedAt ?? null;
       if (endedAt === null || Date.parse(endedAt) < state.pointerAfter) {
@@ -1436,6 +1454,7 @@ export function createWakeService(
       state.returnTurn = null;
       state.failures = 0;
       state.fresh = false;
+      state.freshRunning = false;
       state.blockedLocal = false;
       recompute(ref);
     },
