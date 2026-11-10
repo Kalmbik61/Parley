@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { TOOLS as PARLEY_TOOLS } from '../mcp/tools.js';
 import { MCP_SERVER_NAME } from '../names.js';
+import { BUILTIN_ROLES } from '../roles/builtin.js';
 import { LEAD_ROLE, memberRole } from './brief.js';
 import { GUIDE, guideTopic } from './guide.js';
 import { SKILL_MD } from './skill.js';
@@ -954,5 +955,33 @@ describe('профиль short, примеры для Codex и правило о
   it('stable guidance ends the report line with the stop rule', () => {
     expect(stableGuidance()).toMatch(/Call report before finishing, then end the turn; without it the result goes nowhere\.$/m);
     expect(stableGuidance({ toolProfile: 'short' })).toMatch(/Call report before finishing, then end the turn; without it the result goes nowhere\.$/m);
+  });
+
+  it('ни один текст агенту не держит прежнее правило сдачи', () => {
+    const texts = [
+      GUIDE,
+      stableGuidance(),
+      CODEX_TOOL_EXAMPLES,
+      LEAD_ROLE,
+      memberRole('@s03'),
+      SKILL_MD,
+      ...BUILTIN_ROLES.map((role) => role.prompt),
+      ...PARLEY_TOOLS.map((tool) => tool.description ?? ''),
+    ];
+    const old = [
+      'report to the lead in the room',
+      'once your part is accepted',
+      'A room member reports in the room',
+      'exactly once at the end',
+      'batch evidence',
+      'also mails the session that last tasked you',
+    ];
+    for (const text of texts) {
+      for (const phrase of old) expect(text.toLowerCase(), phrase).not.toContain(phrase.toLowerCase());
+    }
+    // Новое правило: кого будит report.
+    for (const text of [stableGuidance(), CODEX_TOOL_EXAMPLES, SKILL_MD]) {
+      expect(text).toContain('notifies your room lead, room owner or task giver');
+    }
   });
 });
