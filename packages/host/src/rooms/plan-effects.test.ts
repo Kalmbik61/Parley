@@ -94,7 +94,7 @@ function fixture(map = empty(), initialVersion?: number) {
   const failure = vi.fn();
   const service = createPlanEffectsService(works, {
     io,
-    messageRate: async () => 1,
+    planLetterBudget: 1,
     now: () => Date.now(),
     onFailure: failure,
   });

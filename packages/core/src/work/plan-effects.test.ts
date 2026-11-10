@@ -12,6 +12,7 @@ import { lookupIn, unreadFor } from "./letters.js";
 import {
   capturePlanNotice,
   cancelledPlanLetter,
+  PLAN_LETTERS_PER_HOUR,
   reservePlanEffects,
   resumablePlanLetter,
   validatePlanEffects,
@@ -107,7 +108,7 @@ describe("durable accepted-plan delivery", () => {
       restarted.messages.filter((row) => row.from === PARLEY),
     ).toHaveLength(1);
   });
-  it("queues beyond the same work-wide sender rate and releases after its sliding window", () => {
+  it("queues beyond the room's plan letter budget and releases after its sliding window", () => {
     const map = fixture("checklist", 3);
     expect(reservePlanEffects(map, lt(map), 1, AT).queued).toBe(2);
     expect(map.messages.filter((row) => row.from === PARLEY)).toHaveLength(1);
@@ -118,6 +119,63 @@ describe("durable accepted-plan delivery", () => {
       1,
     );
     expect(map.messages.filter((row) => row.from === PARLEY)).toHaveLength(2);
+  });
+  it("the plan letter budget is 120 per room per hour", () => {
+    expect(PLAN_LETTERS_PER_HOUR).toBe(120);
+  });
+  it("other Parley letters do not use up the plan letter budget", () => {
+    const map = fixture("checklist", 1);
+    for (let i = 0; i < 25; i++)
+      addMessage(map, { from: PARLEY, to: ["s-02"], text: `Other Parley letter ${i}` }, AT);
+    expect(reservePlanEffects(map, lt(map), 1, AT).queued).toBe(0);
+    expect(
+      map.messages.filter((row) => row.from === PARLEY && row.roomId === "r-01"),
+    ).toHaveLength(1);
+  });
+  it("the budget is per room", () => {
+    const map = fixture("checklist", 2);
+    for (const label of ["Lead 2", "Owner 2", "Reviewer 2"])
+      addSession(map, { provider: "codex", label, task: "Fixture" }, AT);
+    addRoom(
+      map,
+      {
+        title: "Plan 2",
+        creator: HUMAN,
+        members: ["s-04", "s-05", "s-06"],
+        lead: "s-04",
+        mode: "checklist",
+      },
+      AT,
+    );
+    const p = setProposal(map, "r-02", "s-04", "Decision", AT, {
+      plan: {
+        mode: "checklist",
+        goal: "Done",
+        items: [1, 2].map((id) => ({
+          id,
+          title: `Item ${id}`,
+          owner: "s-05",
+          scope: `src/b${id}.ts; use a native skill if available`,
+        })),
+      },
+    });
+    resolveProposal(
+      map,
+      lt(map),
+      "r-02",
+      p.proposalId,
+      "accept",
+      { rev: p.rev, planId: map.rooms[1]!.proposal!.plan!.id, planRev: 0 },
+      AT,
+    );
+    // Две комнаты по два пункта, бюджет один: по письму в каждой комнате, остальные два ждут.
+    expect(reservePlanEffects(map, lt(map), 1, AT).queued).toBe(2);
+    expect(
+      map.messages
+        .filter((row) => row.from === PARLEY)
+        .map((row) => row.roomId)
+        .sort(),
+    ).toEqual(["r-01", "r-02"]);
   });
   it("does not drop repeated return occurrences within one accepted revision", () => {
     const map = fixture();

@@ -1,6 +1,5 @@
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { createHash } from "node:crypto";
-import { DEFAULT_CONFIG, loadConfig } from "../config.js";
 import { PageError } from "../work/context-pages.js";
 import {
   capturePlanNotice,
@@ -514,7 +513,6 @@ export async function planTool(
         );
       }
     }
-    const config = (await loadConfig()).config;
     let proposed: { proposalId: string; rev: number } | undefined;
     let saved: { role: string; submission: number | null; at: string } | undefined;
     let next: ReturnType<typeof planTasksNext> | undefined;
@@ -706,7 +704,7 @@ export async function planTool(
           }
         }
       }
-      reservePlanEffects(map, letters, config.messageRate ?? DEFAULT_CONFIG.messageRate);
+      reservePlanEffects(map, letters);
       // Действия вызывающего считаются по карте после мутации: ответ говорит, что делать теперь.
       if (WITH_NEXT.has(name)) next = planTasksNext(map, actor);
     });

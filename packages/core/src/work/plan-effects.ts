@@ -4,6 +4,7 @@ import type { SharedWriteOptions, UpdateMapOptions } from "./store.js";
 import type { LetterTx } from "./letter-store.js";
 import { isMember, isRoomClosed, liveLead, RoomRuleError } from "./rooms.js";
 import {
+  PLAN_ITEM_MAX,
   planItemSatisfied,
   planVerifierUnavailable,
   reconcileRoomPlans,
@@ -25,6 +26,8 @@ const EFFECT_LIMIT = 30_000;
 const EFFECT_BYTES = 4 * 1024 * 1024;
 /** Сколько живут отменённые эффекты и записанные строки закончившихся планов (решение 6 части 08). */
 const PLAN_EFFECTS_KEEP_MS = 7 * 24 * 60 * 60 * 1000;
+/** Письма плана на комнату за скользящий час: каждый из пунктов может получить ready, verify, returned и blocked (решение 5 части 08). */
+export const PLAN_LETTERS_PER_HOUR = 4 * PLAN_ITEM_MAX;
 const KINDS = [
   "ready",
   "verify",
@@ -285,7 +288,7 @@ export interface PlanReservation {
 export function reservePlanEffects(
   map: WorkMap,
   letters: LetterTx,
-  messageRate: number,
+  planLetterBudget = PLAN_LETTERS_PER_HOUR,
   at = new Date().toISOString(),
 ): PlanReservation {
   // Письма не часть черновика: сорвавшийся расчёт забирает их обратно через `savepoint` (спека хранилища 6.2).
@@ -298,7 +301,7 @@ export function reservePlanEffects(
     planEffects: structuredClone(map.planEffects ?? []),
     planBacklogIntents: structuredClone(map.planBacklogIntents ?? []),
   };
-  const result = letters.savepoint(() => reserve(draft, letters, messageRate, at));
+  const result = letters.savepoint(() => reserve(draft, letters, planLetterBudget, at));
   if (result.changed)
     Object.assign(map, {
       work: draft.work,
@@ -340,10 +343,10 @@ function prune(map: WorkMap, now: number, all: boolean): void {
 function reserve(
   map: WorkMap,
   letters: LetterTx,
-  messageRate: number,
+  planLetterBudget: number,
   at: string,
 ): PlanReservation {
-  if (!date(at) || !Number.isSafeInteger(messageRate) || messageRate < 1)
+  if (!date(at) || !Number.isSafeInteger(planLetterBudget) || planLetterBudget < 1)
     throw new RoomRuleError("invalid plan delivery budget");
   const before = JSON.stringify([
     map.plans,
@@ -410,14 +413,26 @@ function reserve(
         "plan effect storage limit reached: too many open plan letters in this workspace; ask the human to complete or cancel plans that are no longer worked on",
       );
   }
-  // Письма `parley` за последний час: окно считается запросом `sinceAt`, а не обходом всей ленты (спека хранилища 6.2).
+  // Бюджет считается только по письмам самого плана (по `messageId` эффектов) и отдельно для каждой комнаты: письма
+  // «застрял», роя и прочие письма `parley` его не тратят. Окно — запрос `sinceAt` (спека хранилища 6.2).
+  const planLetterIds = new Set<string>();
+  for (const row of map.planEffects)
+    if (row.messageId !== null) planLetterIds.add(row.messageId);
   const recentQuery = {
     from: PARLEY,
     sinceAt: new Date(now - WINDOW_MS).toISOString(),
   };
   const recentCount = letters.count(recentQuery);
-  let available = Math.max(0, messageRate - recentCount);
-  let sent = 0;
+  const used = new Map<string, number>();
+  const earliest = new Map<string, number>();
+  const spend = (roomId: string, sentAt: number): void => {
+    used.set(roomId, (used.get(roomId) ?? 0) + 1);
+    earliest.set(roomId, Math.min(earliest.get(roomId) ?? sentAt, sentAt));
+  };
+  if (recentCount > 0)
+    for (const row of letters.query({ ...recentQuery, limit: recentCount }))
+      if (row.roomId !== null && planLetterIds.has(row.id))
+        spend(row.roomId, Date.parse(row.at));
   for (const value of map.planEffects) {
     if (value.status === "cancelled") continue;
     if (!currentPlanEffect(map, value, (id) => letters.byId(id))) {
@@ -428,7 +443,7 @@ function reserve(
       if (value.messageId !== null) letters.effectCancelled(value.messageId);
       continue;
     }
-    if (value.status !== "queued" || available === 0) continue;
+    if (value.status !== "queued" || (used.get(value.roomId) ?? 0) >= planLetterBudget) continue;
     // Эффект в очереди всегда с текстом: его проверяет `validatePlanEffects`.
     const text = value.text;
     if (text === undefined) throw new RoomRuleError("plan effect text is unavailable");
@@ -444,20 +459,23 @@ function reserve(
     value.messageId = message.id;
     // Письмо отправлено: текст остаётся в нём, а эффекту хватает хэша (спека хранилища 6.2).
     settleEffectText(value);
-    available--;
-    sent++;
+    spend(value.roomId, now);
   }
   const queued = map.planEffects.filter(
     (row) => row.status === "queued",
   ).length;
-  // Самое раннее из писем окна определяет, когда освободится место; запрос ограничен их числом (до и после отправки).
+  // Место освободится, когда уйдёт из окна самое раннее письмо плана в комнате, где эффекты ждут очереди.
+  const waiting = new Set(
+    map.planEffects.filter((row) => row.status === "queued").map((row) => row.roomId),
+  );
   const nextDueAt = queued
     ? Math.max(
         now + 1,
         Math.min(
-          ...letters
-            .query({ ...recentQuery, limit: recentCount + sent })
-            .map((row) => Date.parse(row.at) + WINDOW_MS),
+          ...[...waiting].flatMap((roomId) => {
+            const first = earliest.get(roomId);
+            return first === undefined ? [] : [first + WINDOW_MS];
+          }),
           now + WINDOW_MS,
         ),
       )

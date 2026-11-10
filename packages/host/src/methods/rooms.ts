@@ -20,7 +20,7 @@ import {
 } from '../rooms/rooms-service.js';
 import type { SessionsService } from '../sessions/sessions-service.js';
 
-import { ENGINE, HUMAN, DEFAULT_CONFIG, loadConfig, updateMap, workExists, setRoomMode, requireOpenRoom, lateDefect,
+import { ENGINE, HUMAN, updateMap, workExists, setRoomMode, requireOpenRoom, lateDefect,
   cancelRoomPlan, updatePlanItem, submitPlanItem, verifyPlanItem, capturePlanNotice,
   reservePlanEffects, reconcileRoomPlans, readMap, summarizePlanEffects, PlanConflictError, RoomRuleError } from '@parley/core';
 import type { PlanMethodName, PlanMethodParams, PlanActionResult } from '@parley/protocol';
@@ -111,7 +111,6 @@ export function createPlanHandlers(effects: PlanEffectsService, engine?: Pick<im
     if (!workExists(projectPath, workId)) throw new HostError('not_found', 'Workspace is unavailable.');
     let messageId: string | null = null;
     if (name !== 'plans.retryEffects') {
-      const rate = (await loadConfig()).config.messageRate ?? DEFAULT_CONFIG.messageRate;
       try {
         if (name === 'plans.cancel') {
           const input = params as PlanMethodParams<'plans.cancel'>;
@@ -175,7 +174,7 @@ export function createPlanHandlers(effects: PlanEffectsService, engine?: Pick<im
               cancelRoomPlan(map,letters,input.planId,input.rev,HUMAN); break;
             }
           }
-          reservePlanEffects(map, letters, rate);
+          reservePlanEffects(map, letters);
         });
       } catch (error) {
         if (!(error instanceof NoChange)) {
