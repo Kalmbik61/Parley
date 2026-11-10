@@ -50,6 +50,7 @@ export { extendCodexSessionIndex } from './codex/index-session.js';
 export type { CodexIndexState } from './codex/index-session.js';
 export { createSessionIndexer } from './session-indexer.js';
 export type { SessionIndexer, SessionIndexerOptions } from './session-indexer.js';
+export { cleanInline, cleanMultiline, startsShellLine, stripEscapes } from './text-clean.js';
 export { readJsonlTail } from './jsonl-tail.js';
 export type { TailCursor, TailHandler, TailResult } from './jsonl-tail.js';
 export { indexSubsession, readSubagentMeta } from './subsession.js';
