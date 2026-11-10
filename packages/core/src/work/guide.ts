@@ -406,7 +406,7 @@ The human set a task for everyone in the room. Such a message arrives from \`che
   \`wait_for("inbox", 1500)\`. A \`kind: decision\` message with the accepted decision is the
   outcome of the agreement, not an order to take on everything: do what the lead named.
 - Do not acknowledge the lead's assignment of parts ("got it", "starting"): silence means received.
-- When your part is done, call \`report\`: Parley mails the result to the room lead (and to the session that created you), and the answer names them in \`notified\`. Post in the room (\`send_message\` with \`room\` and \`to\` set to the lead, the room's \`lead\` in \`get_map\`) only what the lead must read in full: a long explanation, a question, a problem. With \`closeFinished\`, close yourself after \`report(done)\` unless the lead asked you to stay open (topic \`lifecycle\`).
+- When your part is done, call \`report\`: Parley mails the result to the room lead (and to the session that created you), and the answer names them in \`notified\`. Post in the room (\`send_message\` with \`room\` and \`to\` set to the lead: the room's \`lead\` field in \`get_map\`; \`null\` means the first of \`members\`, and a closed lead is replaced by the first live participant) only what the lead must read in full: a long explanation, a question, a problem. With \`closeFinished\`, close yourself after \`report(done)\` unless the lead asked you to stay open (topic \`lifecycle\`).
 - While a decision waits (the room's \`proposal\` in \`get_map\` is not \`null\`), a new human
   message to everyone is not a new task: do not write positions again.
 

@@ -189,7 +189,7 @@ export function createPtyManager(host: HostContext, windowCounters?: WindowCount
         } catch (error) {
           host.log.error('рассылка pty.exit упала', { ref, error: String(error) });
         }
-        notifyListeners(Array.from(exitListeners), 'слушатель выхода терминала упал', ref, exit);
+        notifyListeners(Array.from(exitListeners), 'PTY exit listener failed', ref, exit);
       } finally {
         // Даже сбой рассылки не должен повесить stop().
         for (const resolve of session.stopWaiters) resolve(exit);
@@ -198,7 +198,7 @@ export function createPtyManager(host: HostContext, windowCounters?: WindowCount
 
     // Последним: слушатель (methods/pty.ts) шлёт окнам pty.resync, и их pty.attach должен
     // уже застать ручку и обработчики процесса.
-    notifyListeners(Array.from(startListeners), 'слушатель старта терминала упал', ref);
+    notifyListeners(Array.from(startListeners), 'PTY start listener failed', ref);
 
     return toHandle(session);
   }

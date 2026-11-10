@@ -90,7 +90,8 @@ describe('reportRecipients', () => {
     const map = mapOf(3, { 2: 's-01' });
     addRoom(map, { title: 'Room', creator: 's-01', ownerId: 's-03', members: ['s-01', 's-02'], lead: 's-01' });
     map.swarms = [{ id: 'sw-01', tag: 'Work', creator: { kind: 'human' }, objective: '', queen: 's-01',
-      members: [{ sessionId: 's-02', role: 'drone', n: 1, addedAt: '', handedAt: null }],
+      members: [{ sessionId: 's-01', role: 'queen', n: 1, addedAt: '', handedAt: null },
+        { sessionId: 's-02', role: 'drone', n: 1, addedAt: '', handedAt: null }],
       status: 'running', createdAt: '', endedAt: null, result: null, failure: null, seenAt: null, expiredAt: null }];
     expect(recipients(map, 's-02')).toEqual([]);
     expect(recipients(map, 's-01')).toEqual([]);
