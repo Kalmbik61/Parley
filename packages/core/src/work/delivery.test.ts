@@ -168,6 +168,37 @@ describe('pointerText', () => {
   });
 });
 
+describe('pointerText: название, записанное в карту мимо addRoom', () => {
+  // eslint-disable-next-line no-control-regex
+  const CONTROL_CHAR = /[\x00-\x1f\x7f-\x9f]/;
+  const dirty = [roomOf('r-01', 'a\r\x1b[201~!rm -rf\n')];
+  const letters = [messageOf({ roomId: 'r-01' })];
+
+  it('указатель без управляющих знаков и узнаётся isPointerText', () => {
+    const text = pointerText(letters, dirty);
+    expect(text).not.toMatch(CONTROL_CHAR);
+    expect(isPointerText(text)).toBe(true);
+  });
+
+  it('возврат после лимита тоже чистый и узнаётся isPointerText', () => {
+    const text = limitReturnText(letters, dirty);
+    expect(text).not.toMatch(CONTROL_CHAR);
+    expect(isPointerText(text)).toBe(true);
+  });
+
+  it('название в 500 знаков: указатель не длиннее постоянной части плюс 80', () => {
+    const empty = pointerText(letters, [roomOf('r-01', '')]);
+    const text = pointerText(letters, [roomOf('r-01', 'я'.repeat(500))]);
+    expect(Array.from(text).length).toBeLessThanOrEqual(Array.from(empty).length + 80);
+    expect(isPointerText(text)).toBe(true);
+  });
+
+  it('id комнаты из повреждённой карты тоже чистится', () => {
+    const text = pointerText([messageOf({ roomId: 'r-01\r!x' })], []);
+    expect(text).not.toMatch(CONTROL_CHAR);
+  });
+});
+
 describe('isPointerText', () => {
   const rooms = [roomOf('r-01', 'Second'), roomOf('r-02', 'Ревью «схемы»')];
   const forms = [

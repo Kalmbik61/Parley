@@ -1,4 +1,5 @@
 import type { RecipeSnapshot } from '../recipes/types.js';
+import { cleanInline } from '../text-clean.js';
 import type { LetterTx } from './letter-store.js';
 import { maxNumber } from './map.js';
 import { cancelActiveRoomPlan } from './plans.js';
@@ -53,13 +54,18 @@ export interface NewRoom {
   recipe?: RecipeSnapshot | null;
 }
 
-/** Заводит комнату в карте. */
+/** Предел названия комнаты в знаках (кодовых точках); совпадает с пределом `rooms.rename` в протоколе. */
+export const ROOM_TITLE_MAX = 120;
+
+/** Заводит комнату в карте. Название чистится на входе (`cleanInline`): одна строка без управляющих знаков. */
 export function addRoom(map: WorkMap, init: NewRoom, at = new Date().toISOString()): Room {
   const lead = init.lead ?? null;
+  const title = cleanInline(init.title, ROOM_TITLE_MAX);
   if (init.mode !== undefined && !['free', 'checklist', 'verified', 'autonomous'].includes(init.mode)) throw new RoomRuleError('invalid room mode');
-  // Проверка до `nextRoomId`: отказ не должен тратить номер комнаты.
+  // Проверки до `nextRoomId`: отказ не должен тратить номер комнаты.
+  if (title === '') throw new RoomRuleError('room title is empty');
   if (lead !== null && (lead === HUMAN || !init.members.includes(lead))) {
-    throw new RoomRuleError(`lead ${lead} is not a participant of room "${init.title}"`);
+    throw new RoomRuleError(`lead ${lead} is not a participant of room "${title}"`);
   }
   const ownerId = init.ownerId ?? null;
   if (ownerId !== null && !map.sessions.some((session) => session.id === ownerId)) {
@@ -67,7 +73,7 @@ export function addRoom(map: WorkMap, init: NewRoom, at = new Date().toISOString
   }
   const room: Room = {
     id: nextRoomId(map),
-    title: init.title,
+    title,
     creator: init.creator,
     ownerId,
     members: [...init.members],
@@ -292,9 +298,9 @@ const TITLE_EDGES = /^[\s\u200B-\u200D\u2060\uFEFF]+|[\s\u200B-\u200D\u2060\uFEF
  */
 export function renameRoom(map: WorkMap, roomId: string, title: string): void {
   const room = findRoom(map, roomId);
-  const trimmed = title.replace(TITLE_EDGES, '');
-  if (trimmed === '') throw new RoomRuleError('room title is empty');
-  room.title = trimmed;
+  const cleaned = cleanInline(title, ROOM_TITLE_MAX);
+  if (cleaned === '') throw new RoomRuleError('room title is empty');
+  room.title = cleaned;
 }
 
 /**

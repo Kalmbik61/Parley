@@ -10,27 +10,12 @@
  * любой печатный ввод.
  */
 
-// ESC (0x1b) в регулярках ниже — не опечатка и не забытый ввод: это ровно тот
-// управляющий байт, который вырезают правила черновика.
-/* eslint-disable no-control-regex */
-// OSC (заголовок окна, OSC 52 — буфер обмена и т.п.): тело до BEL или ST (ESC \\), без
-// терминатора — до конца строки. Иначе OTHER_ESCAPE снял бы только ESC ']', а тело
-// осталось бы печатным мусором в тексте pty.send.
-const OSC = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\|$)/g;
-// ECMA-48 CSI: ESC '[' параметры (0x30–0x3F) intermediate (0x20–0x2F) финальный байт (0x40–0x7E).
-const CSI = /\x1b\[[0-?]*[ -/]*[@-~]/g;
-// SS3 (клавиши F1-F4 в некоторых терминалах): ESC 'O' + один байт.
-const SS3 = /\x1bO./g;
-// Всё прочее ESC + один байт (Alt+клавиша, сброс терминала и т.п.).
-const OTHER_ESCAPE = /\x1b./g;
+import { stripEscapes } from '@parley/core';
+
 const PASTE_START = '\x1b[200~';
 const PASTE_END = '\x1b[201~';
-/* eslint-enable no-control-regex */
 
-/** Правила вырезания ESC-последовательностей; ими же чистит текст pty.send (спека 8.6, шаг 2). */
-export function stripEscapes(data: string): string {
-  return data.replace(OSC, '').replace(CSI, '').replace(SS3, '').replace(OTHER_ESCAPE, '');
-}
+export { stripEscapes };
 
 export class DraftTracker {
   private count = 0;

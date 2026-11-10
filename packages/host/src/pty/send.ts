@@ -6,21 +6,14 @@
  */
 
 import { performance } from 'node:perf_hooks';
-import { hookedSince } from '@parley/core';
+import { cleanMultiline, hookedSince } from '@parley/core';
 import { refKey } from '@parley/protocol';
 import type { SendResult, SessionRef } from '@parley/protocol';
 import type { ActivityService } from '../activity/activity-service.js';
 import { HostError } from '../errors.js';
 import type { Log } from '../log.js';
 import type { WakeService } from '../wake/wake-service.js';
-import {
-  CODEX_SUBMIT_DELAY_MS,
-  PASTE_END,
-  PASTE_START,
-  codexPaste,
-  codexSubmitKey,
-} from './codex-input.js';
-import { stripEscapes } from './draft.js';
+import { CODEX_SUBMIT_DELAY_MS, codexSubmitKey } from './codex-input.js';
 import { choiceInProgress } from './effort-switch.js';
 import type { PtyManager } from './pty-manager.js';
 import { typeAndSubmit } from './type-and-submit.js';
@@ -29,13 +22,9 @@ import type { AttemptOutcome } from './type-and-submit.js';
 /** Предел текста `pty.send` — 64 КиБ в байтах UTF-8 (сквозные ограничения плана). */
 const MAX_SEND_BYTES = 64 * 1024;
 
-// C0 кроме \t и \n, и DEL: управляющие байты в поле ввода агента — это клавиши, а не текст.
-// eslint-disable-next-line no-control-regex
-const CONTROL = /[\x00-\x08\x0b-\x1f\x7f]/g;
-
 /** Очистка спеки 8.6, шаг 2; пусто или > 64 КиБ — HostError('bad_request'). */
 export function sanitizeForSend(text: string): string {
-  const clean = stripEscapes(text.replace(/\r\n?/g, '\n')).replace(CONTROL, '');
+  const clean = cleanMultiline(text);
   if (clean.length === 0) throw new HostError('bad_request', 'empty text');
   if (Buffer.byteLength(clean, 'utf8') > MAX_SEND_BYTES) {
     throw new HostError('bad_request', 'text is longer than 64 KiB');
@@ -128,18 +117,15 @@ export function createSender(deps: {
 
     // Черновик считается до вставки: человека или хоста от прошлой вставки без Enter.
     const hadDraft = handle.hasDraft();
-    const payload = codex
-      ? codexPaste(clean)
-      : paste
-        ? `${PASTE_START}${clean}${PASTE_END}`
-        : clean;
     const attempt = typeAndSubmit(
       { pty: deps.pty, enterDelayMs: deps.wake.enterDelayMs },
       ref,
-      payload,
+      clean,
       submit && !hadDraft,
       {
         hostDraft: true,
+        wrap: codex ? 'codex' : paste ? 'paste' : 'plain',
+        multiline: true,
         // blocked приходит хуком с задержкой: запрос разрешения мог появиться за паузу.
         beforeEnter: () => deps.activity.get(ref)?.activity.activity !== 'blocked',
         // У Codex своя пауза и своя клавиша: занятому агенту — Tab (очередь), а не Enter (вмешательство в ход).

@@ -401,4 +401,24 @@ describe('будильник и codex', () => {
     });
     await waitFor(() => stream().includes('enter: New messages (1) in r-01'), 5000);
   }, 30_000);
+
+  it('название комнаты с ESC[201~ и \\x03 — одна вставка, без лишних маркеров и управляющих', async () => {
+    const { ref, activity, stream, workId } = await rig();
+    await waitFor(() => known(activity, ref));
+    await updateMap(project, workId, (current, letters) => {
+      current.rooms.push({
+        id: 'r-01',
+        title: 'a\x1b[201~\x03b',
+        creator: 's-00',
+        members: [ref.sessionId],
+        createdAt: new Date().toISOString(),
+        lead: null,
+        proposal: null,
+      });
+      letters.add({ kind: 'note', from: 's-00', to: [ref.sessionId], text: 'x', roomId: 'r-01' });
+    });
+    await waitFor(() => stream().includes('enter: New messages (1) in r-01'), 5000);
+    expect(stream().match(/paste: /g)).toHaveLength(1);
+    expect(stream()).not.toContain('\x03');
+  }, 30_000);
 });

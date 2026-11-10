@@ -50,7 +50,7 @@ import type { HostContext } from '../context.js';
 import type { WindowCounters } from '../health/window-counters.js';
 import { HostError } from '../errors.js';
 import { mailSessions } from '../mail-sessions.js';
-import { CODEX_SUBMIT_DELAY_MS, codexPaste } from '../pty/codex-input.js';
+import { CODEX_SUBMIT_DELAY_MS } from '../pty/codex-input.js';
 import { choiceInProgress } from '../pty/effort-switch.js';
 import type { PtyHandle, PtyManager } from '../pty/pty-manager.js';
 import { typeAndSubmit } from '../pty/type-and-submit.js';
@@ -701,10 +701,11 @@ export function createWakeService(
     const typing = typeAndSubmit(
       { pty, enterDelayMs },
       ref,
-      // Одна логическая строка: свой указатель можно безопасно убрать Ctrl+U перед Enter.
-      codex ? codexPaste(action.text.replace(/[\r\n]/g, ' ')) : action.text,
+      // Одна логическая строка (очистка в typeAndSubmit): свой указатель можно безопасно убрать Ctrl+U перед Enter.
+      action.text,
       true,
       {
+        wrap: codex ? 'codex' : 'plain',
         // Смена модели или ползунок могли открыться за паузу: Enter в ползунке сохранил бы уровень умолчанием.
         beforeEnter: () => {
           const live = activity.get(ref)?.activity;

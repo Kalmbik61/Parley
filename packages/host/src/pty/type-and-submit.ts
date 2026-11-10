@@ -5,8 +5,10 @@
  * будильника, а не печати.
  */
 
+import { cleanInline, cleanMultiline } from '@parley/core';
 import { refKey } from '@parley/protocol';
 import type { SessionRef } from '@parley/protocol';
+import { PASTE_END, PASTE_START, codexPaste } from './codex-input.js';
 import type { PtyManager } from './pty-manager.js';
 
 export type AttemptOutcome = 'submitted' | 'input' | 'restarted' | 'cancelled' | 'typed' | 'blocked';
@@ -35,6 +37,9 @@ export interface TypeAndSubmitDeps {
  * submitKey — клавиша отправки, решается в момент отправки (по умолчанию Enter): Codex занятому агенту
  * принимает письмо клавишей Tab — в очередь, а не Enter — в ход. delayMs — своя пауза вместо
  * enterDelayMs: Codex достаточно десятков миллисекунд на приём вставки.
+ * Это единственная точка, где текст, напечатанный хостом, чистится и оборачивается: вызывающие передают чистый
+ * текст без маркеров. multiline — абзацы человека (остаются `\n`), иначе одна строка; wrap — вставка:
+ * 'paste' в маркеры bracketed paste, 'codex' через codexPaste (префикс `- ` для `/ ! $`), по умолчанию без обёртки.
  */
 export function typeAndSubmit(
   deps: TypeAndSubmitDeps,
@@ -46,6 +51,8 @@ export function typeAndSubmit(
     beforeEnter?: () => boolean;
     submitKey?: () => string;
     delayMs?: number;
+    wrap?: 'plain' | 'paste' | 'codex';
+    multiline?: boolean;
   } = {},
 ): Attempt {
   const setTimer = deps.setTimer ?? setTimeout;
@@ -53,7 +60,13 @@ export function typeAndSubmit(
   const hostDraft = options.hostDraft === true;
   const pid = deps.pty.get(ref)?.pid;
 
-  deps.pty.write(ref, text);
+  // Очистка — прямо перед записью: управляющие знаки и ESC[201~ не выходят из вставки и не жмут клавиш агента.
+  // Однострочная очистка срезает хвостовой пробел, а он нужен: закрывает меню автодополнения (`/compact @x `).
+  const multiline = options.multiline === true;
+  const cleaned = multiline ? cleanMultiline(text) : cleanInline(text, Number.POSITIVE_INFINITY);
+  const clean = !multiline && cleaned !== '' && text.endsWith(' ') ? `${cleaned} ` : cleaned;
+  const wrap = options.wrap ?? 'plain';
+  deps.pty.write(ref, wrap === 'codex' ? codexPaste(clean) : wrap === 'paste' ? `${PASTE_START}${clean}${PASTE_END}` : clean);
   if (hostDraft) deps.pty.setHostDraft(ref, true);
   if (!submit) return { cancel() {}, done: Promise.resolve('typed') };
 

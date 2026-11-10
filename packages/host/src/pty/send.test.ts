@@ -32,6 +32,10 @@ describe('sanitizeForSend', () => {
     expect(sanitizeForSend('a\x07b\x7fc\td\ne')).toBe('abc\td\ne');
   });
 
+  it('C1 (в том числе 0x9b — CSI восьмибитных терминалов) вырезан', () => {
+    expect(sanitizeForSend('a\x9b31mb')).not.toContain('\x9b');
+  });
+
   it('OSC 52 вырезается целиком, тело не остаётся мусором', () => {
     expect(sanitizeForSend('\x1b]52;c;aGVsbG8=\x07rest')).toBe('rest');
     expect(sanitizeForSend('a\x1b]0;title\x1b\\b')).toBe('ab');
