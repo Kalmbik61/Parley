@@ -57,7 +57,6 @@ export type SenderKind = 'human' | 'system' | 'agent';
 export interface ParticipantModel {
   id: string;
   role?: import('@parley/core').SessionRole | null;
-  roleRevision?: string;
   /** Рабочий каталог сессии (worktree или проект): ключ общего стора ролей. */
   cwd?: string;
   sessionRef?: import('@parley/protocol').SessionRef;
@@ -314,7 +313,6 @@ export function buildRoomModel(input: RoomModelInput): RoomModel | null {
     participants.push({
       id,
       role: session.role ?? null,
-      roleRevision: `${session.pid}:${session.startedAtProcess}:${session.lifecycle}:${session.worktree?.path}`,
       cwd: session.worktree?.path ?? entry.projectPath,
       sessionRef: { projectPath: entry.projectPath, workId: map.work.id, sessionId: id },
       label: sessionRowLabel(id, session.label),

@@ -1,9 +1,10 @@
 /**
- * Каталог ролей для плашек (`roles.list`): одна запись на рабочий каталог, а не на сессию. Плашка есть у каждой
- * сессии сайдбара, и все они монтируются разом — 12 сессий одного каталога давали 12 одинаковых вызовов, и хост
- * 12 раз сканировал файлы ролей. Ключ — каталог, который посчитает хост: `cwd` окно передаёт вместе с `ref`
- * только когда знает worktree сессии, иначе зовёт без `ref` и кладёт ответ под `projectPath`.
- * Дольше нескольких секунд ответ не держим: новая роль должна появляться сразу.
+ * Каталог ролей для плашек (`roles.list`): одна запись на проект, а не на сессию и не на worktree. Плашка есть у
+ * каждой сессии сайдбара, и все они монтируются разом — сорок сессий в worktree одного проекта давали сорок вызовов,
+ * и хост сорок раз читал файлы ролей. Ключ записи — `cwd`, который передал вызывающий: первый запрос плашки идёт без
+ * `ref` и кладёт ответ под `projectPath`; запрос с `ref` и ключом worktree делается, только если роли нет в каталоге
+ * проекта (она могла появиться лишь в ветке). Дольше нескольких секунд ответ не держим: новая роль должна появляться
+ * без перезапуска.
  */
 
 import { create } from 'zustand';
@@ -12,7 +13,7 @@ import type { ParleyBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import { useHostStore } from './host.js';
 
-export const ROLES_STORE_TTL_MS = 3_000;
+export const ROLES_STORE_TTL_MS = 10_000;
 
 export interface RolesEntry {
   status: 'loading' | 'reloading' | 'ready' | 'error';
@@ -22,8 +23,8 @@ export interface RolesEntry {
 }
 
 export interface RolesState {
-  byCwd: Record<string, RolesEntry>;
-  /** `ref` только когда вызывающий знает worktree сессии и `cwd` равен тому, что посчитает хост; иначе без `ref`, cwd = projectPath. */
+  byKey: Record<string, RolesEntry>;
+  /** Без `ref` — каталог проекта, ключ = projectPath; с `ref` — каталог worktree сессии, ключ = его путь. */
   load(bridge: ParleyBridge, input: { projectPath: string; ref?: SessionRef; cwd: string; force?: boolean }): void;
 }
 
@@ -37,10 +38,10 @@ function hostLacksRoles(): boolean {
 }
 
 export const useRolesStore = create<RolesState>((set, get) => ({
-  byCwd: {},
+  byKey: {},
   load: (bridge, { projectPath, ref, cwd, force }) => {
     if (hostLacksRoles()) return;
-    const was = get().byCwd[cwd];
+    const was = get().byKey[cwd];
     let pending = inflight.get(bridge);
     if (pending === undefined) inflight.set(bridge, pending = new Map());
     // Принудительная перезагрузка уже в полёте (пачка плашек сменила ревизию разом) — второй вызов не нужен.
@@ -51,12 +52,12 @@ export const useRolesStore = create<RolesState>((set, get) => ({
     const keep = was?.roles ?? [];
     // Force поверх любой записи (ready, loading по TTL, error) — reloading: чип скрывает замок старой ревизии до ответа.
     const status = force && was !== undefined ? 'reloading' : 'loading';
-    set((state) => ({ byCwd: { ...state.byCwd, [cwd]: { status, roles: keep, at: Date.now() } } }));
+    set((state) => ({ byKey: { ...state.byKey, [cwd]: { status, roles: keep, at: Date.now() } } }));
     const finish = (entry: RolesEntry): void => {
       // Ответ устаревшего запроса (после force) не затирает свежий.
       if (pending.get(cwd) !== token) return;
       pending.delete(cwd);
-      set((state) => ({ byCwd: { ...state.byCwd, [cwd]: entry } }));
+      set((state) => ({ byKey: { ...state.byKey, [cwd]: entry } }));
     };
     bridge
       .call('roles.list', { projectPath, ...(ref ? { ref } : {}) })
@@ -69,5 +70,5 @@ export const useRolesStore = create<RolesState>((set, get) => ({
 }));
 
 export function resetRolesStoreForTests(): void {
-  useRolesStore.setState({ byCwd: {} });
+  useRolesStore.setState({ byKey: {} });
 }

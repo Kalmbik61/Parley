@@ -356,7 +356,7 @@ export function createProvidersRefreshLimits(
           if (versions === undefined) return;
           await versions.ready;
           const registry = await loadProviders();
-          await Promise.all([...new Set(Object.values(registry).map(entry => entry.runner.command))].map(command => versions.fresh(command)));
+          await Promise.all([...new Set(Object.values(registry).map(entry => entry.runner.command))].map(command => versions.fresh(command, { force: true })));
         })(),
       ]);
     } catch (error) {

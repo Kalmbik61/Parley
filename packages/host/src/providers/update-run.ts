@@ -142,7 +142,7 @@ export function createCliUpdateRunner(options: CliUpdateRunnerOptions): CliUpdat
         const from = options.versions.get(command);
         const sessions = options.runningSessions(command).catch(() => 0);
         const result = await exec(binary, ['update'], env, timeoutMs, groups);
-        const to = await options.versions.fresh(command);
+        const to = await options.versions.fresh(command, { force: true });
         const latest = await options.updates.latest(command);
         const grew = to !== null && (from === null || isNewer(from, to) || to === latest);
         const ok = result.code === 0 && !result.timedOut && grew;

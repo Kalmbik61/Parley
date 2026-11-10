@@ -82,6 +82,18 @@ export const sameBinaryIdentity = (a: NativeBinaryIdentity | null | undefined, b
  */
 export const CLAUDE_ACTION_BUILD = { version: '2.1.287', platform: 'darwin', arch: 'arm64', size: 227827120,
   sha256: '6eab8333fe2121553100d8f40bfada384a3e989b94f947e18ba6677a6fcb41ea' } as const;
+/**
+ * Хэш бинаря держится по `canonicalPath` и кортежу `dev:ino:size:mtimeMs:ctimeMs` — тому же, что функция
+ * сверяет до и после чтения. Совпал кортеж — 227 МБ заново не читаются; иной кортеж (подмена на месте
+ * меняет mtime и ctime) — новое чтение. Параллельные вызовы делят один проход. Отказ (`null`) не хранится.
+ */
+const BINARY_IDENTITY_CACHE_LIMIT = 8;
+const identities = new Map<string, { tuple: string; value: Promise<{ sha256: string; size: number } | null> }>();
+let hashPasses = 0;
+/** Только для тестов: число настоящих проходов хэша. */
+export const binaryHashCount = (): number => hashPasses;
+export const resetBinaryIdentityCache = (): void => { identities.clear(); };
+
 export async function readBinaryIdentity(binary: string | null, context: SnapshotContext, maxBytes = 256 * 1024 * 1024): Promise<NativeBinaryIdentity | null> {
   if (!binary || !Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 256 * 1024 * 1024) return null;
   const candidates = binary.includes('/') || binary.includes('\\') ? [path.resolve(context.projectPath, binary)]
@@ -92,15 +104,31 @@ export async function readBinaryIdentity(binary: string | null, context: Snapsho
       const before = await handle.stat();
       if (!before.isFile() || (before.mode & 0o111) === 0) continue;
       if (before.size > maxBytes) return null;
-      const hash = createHash('sha256'); const chunk = Buffer.alloc(256 * 1024); let size = 0;
-      while (size <= maxBytes) {
-        const { bytesRead } = await handle.read(chunk, 0, Math.min(chunk.length, maxBytes + 1 - size), null);
-        if (!bytesRead) break; hash.update(chunk.subarray(0, bytesRead)); size += bytesRead;
+      const tuple = `${before.dev}:${before.ino}:${before.size}:${before.mtimeMs}:${before.ctimeMs}`;
+      let entry = identities.get(canonicalPath);
+      if (entry?.tuple !== tuple) {
+        const value = (async (): Promise<{ sha256: string; size: number } | null> => {
+          hashPasses++;
+          const hash = createHash('sha256'); const chunk = Buffer.alloc(256 * 1024); let size = 0;
+          while (size <= maxBytes) {
+            const { bytesRead } = await handle.read(chunk, 0, Math.min(chunk.length, maxBytes + 1 - size), null);
+            if (!bytesRead) break; hash.update(chunk.subarray(0, bytesRead)); size += bytesRead;
+          }
+          const after = await handle.stat();
+          if (size > maxBytes || size !== before.size || before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size ||
+            before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs) return null;
+          return { sha256: hash.digest('hex'), size };
+        })();
+        entry = { tuple, value };
+        identities.delete(canonicalPath); identities.set(canonicalPath, entry);
+        while (identities.size > BINARY_IDENTITY_CACHE_LIMIT) identities.delete(identities.keys().next().value as string);
+        const stored = entry;
+        void value.then(result => { if (result === null && identities.get(canonicalPath) === stored) identities.delete(canonicalPath); }, () => { if (identities.get(canonicalPath) === stored) identities.delete(canonicalPath); });
       }
-      const after = await handle.stat(); const current = await stat(canonicalPath);
-      if (size > maxBytes || size !== before.size || before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size ||
-        before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs || before.dev !== current.dev || before.ino !== current.ino || before.size !== current.size || before.mtimeMs !== current.mtimeMs || before.ctimeMs !== current.ctimeMs || await realpath(candidate) !== canonicalPath) return null;
-      return { canonicalPath, sha256: hash.digest('hex'), size };
+      // Хэш общий, но проверка «файл на месте и не менялся» идёт на каждый вызов, как и раньше.
+      const digest = await entry.value; const current = await stat(canonicalPath);
+      if (digest === null || before.dev !== current.dev || before.ino !== current.ino || before.size !== current.size || before.mtimeMs !== current.mtimeMs || before.ctimeMs !== current.ctimeMs || await realpath(candidate) !== canonicalPath) return null;
+      return { canonicalPath, sha256: digest.sha256, size: digest.size };
     } finally { await handle.close(); }
   } catch { /* No paths, errors or binary contents leave this private adapter. */ }
   return null;

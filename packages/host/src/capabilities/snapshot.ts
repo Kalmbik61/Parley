@@ -223,10 +223,20 @@ function mcpCheckProof(inventory: NativeMcpInventory | undefined, target: Native
     target: { id: target.id, provider: target.provider, name: target.name, scope: target.scope, fingerprint: target.fingerprint } });
 }
 
+export const CAPABILITY_PROJECT_CACHE_LIMIT = 64;
+
 export function createSafeCapabilitiesService(options: SafeCapabilitiesOptions = {}): SafeCapabilitiesService {
   interface Cached { generation: number; snapshot: CapabilitySnapshot; entries: Partial<Record<CapabilityProvider, SnapshotEntry[]>>; inventories: Partial<Record<CapabilityProvider, NativeMcpInventory>>; pluginInventories: Partial<Record<CapabilityProvider, NativePluginInventory>>; contexts: Partial<Record<CapabilityProvider, SnapshotContext>>; skillContexts: Partial<Record<CapabilityProvider, boolean>>; health: Map<string, { provider: CapabilityProvider; proof: string; status: CapabilityPresence['status'] }> }
   const cache = new Map<string, Cached>();
   let disposed = false;
+  // Не более CAPABILITY_PROJECT_CACHE_LIMIT проектов: вытесняется самый давно использованный, кроме идущих загрузкой.
+  const touch = (key: string, value: Cached): void => {
+    cache.delete(key); cache.set(key, value);
+    for (const [other, entry] of cache) {
+      if (cache.size <= CAPABILITY_PROJECT_CACHE_LIMIT) break;
+      if (other !== key && entry.snapshot.columns.claude.phase !== 'loading' && entry.snapshot.columns.codex.phase !== 'loading') cache.delete(other);
+    }
+  };
   const copy = (value: CapabilitySnapshot): CapabilitySnapshot => structuredClone(value);
   const active = (key: string, generation: number): Cached | undefined => {
     const value = cache.get(key); return !disposed && value?.generation === generation ? value : undefined;
@@ -238,7 +248,7 @@ export function createSafeCapabilitiesService(options: SafeCapabilitiesOptions =
     const generation = (previous?.generation ?? 0) + 1;
     const value: Cached = { generation, entries: {}, inventories: {}, pluginInventories: {}, contexts: {}, skillContexts: {}, health: new Map(previous?.health), snapshot: { projectPath: key, revision: (previous?.snapshot.revision ?? 0) + 1,
       columns: { claude: { phase: 'loading', diagnostics: [] }, codex: { phase: 'loading', diagnostics: [] } }, rows: [] } };
-    cache.set(key, value);
+    touch(key, value);
     const finish = async (provider: CapabilityProvider, result: ProviderSnapshotResult, context?: SnapshotContext): Promise<void> => {
       const current = active(key, generation); if (!current) return;
       if (context) current.contexts[provider] = context;
@@ -322,7 +332,7 @@ export function createSafeCapabilitiesService(options: SafeCapabilitiesOptions =
     });
     return copy(value.snapshot);
   };
-  return { get(projectPath) { const value = cache.get(path.resolve(projectPath)); return value ? copy(value.snapshot) : refresh(projectPath); },
+  return { get(projectPath) { const key = path.resolve(projectPath); const value = cache.get(key); if (value) touch(key, value); return value ? copy(value.snapshot) : refresh(projectPath); },
     refresh,
     async prepareSkillAction(params, kind = 'share') {
       if (disposed) return { ok: false, code: 'shutdown' };

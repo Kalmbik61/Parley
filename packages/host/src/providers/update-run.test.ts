@@ -56,14 +56,14 @@ interface Versions {
   after: string | null;
 }
 
-function runner(options: { versions: Versions; latest?: string | null; env?: NodeJS.ProcessEnv; timeoutMs?: number; sessions?: number; command?: 'codex' | 'claude' }) {
+function runner(options: { versions: Versions; latest?: string | null; env?: NodeJS.ProcessEnv; timeoutMs?: number; sessions?: number; command?: 'codex' | 'claude'; fresh?: (command: string, options?: { force?: boolean }) => Promise<string | null> }) {
   const command = options.command ?? 'codex';
   const key = command === 'codex' ? 'PARLEY_CODEX_BIN' : 'PARLEY_CLAUDE_BIN';
   return createCliUpdateRunner({
     log,
     versions: {
       get: () => options.versions.now,
-      fresh: async () => options.versions.after,
+      fresh: options.fresh ?? (async () => options.versions.after),
     },
     updates: { latest: async () => options.latest ?? null },
     runningSessions: async () => options.sessions ?? 0,
@@ -92,6 +92,13 @@ describe('обновление CLI из Parley', () => {
     // Путь с пробелом и «;» отработал: shell не участвует.
     expect(existsSync(path.join(root, 'SHOULD_NOT_EXIST'))).toBe(false);
     expect(existsSync(path.join(dir, 'SHOULD_NOT_EXIST'))).toBe(false);
+  });
+
+  it('после update версия пробуется принудительно, мимо кэша проб', async () => {
+    bin = await script('    exit 0');
+    const fresh = vi.fn(async () => '0.166.0');
+    await runner({ versions: { now: '0.162.0', after: '0.166.0' }, latest: '0.166.0', fresh }).run('codex', 'w');
+    expect(fresh).toHaveBeenCalledWith('codex', { force: true });
   });
 
   it('журнал хоста: кто, откуда и куда, итог', async () => {
