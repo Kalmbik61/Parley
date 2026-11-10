@@ -186,4 +186,49 @@ describe('typeAndSubmit', () => {
     await vi.advanceTimersByTimeAsync(500);
     await expect(attempt.done).resolves.toBe('submitted');
   });
+
+  describe('очистка и обёртка', () => {
+    const START = '\x1b[200~';
+    const END = '\x1b[201~';
+    // eslint-disable-next-line no-control-regex
+    const CONTROL = /[\x00-\x1f\x7f-\x9f]/;
+    const dirty = ['a\x1b[201~b', 'a\rb', 'a\x03b', 'a\x9bb', 'a\x1b[31mb\x07'];
+
+    it.each(dirty)('plain: %j — в PTY нет управляющих', (input) => {
+      typeAndSubmit(deps(), ref, input, false);
+      expect(pty.writes).toHaveLength(1);
+      expect(pty.writes[0]).not.toMatch(CONTROL);
+    });
+
+    it.each(dirty)('paste: %j — ровно одна вставка с чистым текстом внутри', (input) => {
+      typeAndSubmit(deps(), ref, input, false, { wrap: 'paste' });
+      const written = pty.writes[0] ?? '';
+      expect(written.startsWith(START)).toBe(true);
+      expect(written.endsWith(END)).toBe(true);
+      const inner = written.slice(START.length, written.length - END.length);
+      expect(inner).not.toMatch(CONTROL);
+      expect(inner).not.toContain(END);
+    });
+
+    it('paste: чистый текст — маркеры и текст как есть', () => {
+      typeAndSubmit(deps(), ref, 'привет', false, { wrap: 'paste' });
+      expect(pty.writes).toEqual([`${START}привет${END}`]);
+    });
+
+    it('codex: текст на `/` получает префикс `- `', () => {
+      typeAndSubmit(deps(), ref, '/x', false, { wrap: 'codex' });
+      expect(pty.writes).toEqual([`${START}- /x${END}`]);
+    });
+
+    it('multiline: true сохраняет \\n, по умолчанию переводов строк нет', () => {
+      typeAndSubmit(deps(), ref, 'a\nb', false, { multiline: true });
+      typeAndSubmit(deps(), ref, 'a\nb', false);
+      expect(pty.writes).toEqual(['a\nb', 'a b']);
+    });
+
+    it('хвостовой пробел (закрывает меню автодополнения) не срезается', () => {
+      typeAndSubmit(deps(), ref, '/compact @x ', false);
+      expect(pty.writes).toEqual(['/compact @x ']);
+    });
+  });
 });

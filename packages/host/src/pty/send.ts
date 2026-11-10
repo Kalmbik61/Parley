@@ -13,13 +13,7 @@ import type { ActivityService } from '../activity/activity-service.js';
 import { HostError } from '../errors.js';
 import type { Log } from '../log.js';
 import type { WakeService } from '../wake/wake-service.js';
-import {
-  CODEX_SUBMIT_DELAY_MS,
-  PASTE_END,
-  PASTE_START,
-  codexPaste,
-  codexSubmitKey,
-} from './codex-input.js';
+import { CODEX_SUBMIT_DELAY_MS, codexSubmitKey } from './codex-input.js';
 import { choiceInProgress } from './effort-switch.js';
 import type { PtyManager } from './pty-manager.js';
 import { typeAndSubmit } from './type-and-submit.js';
@@ -123,18 +117,15 @@ export function createSender(deps: {
 
     // Черновик считается до вставки: человека или хоста от прошлой вставки без Enter.
     const hadDraft = handle.hasDraft();
-    const payload = codex
-      ? codexPaste(clean)
-      : paste
-        ? `${PASTE_START}${clean}${PASTE_END}`
-        : clean;
     const attempt = typeAndSubmit(
       { pty: deps.pty, enterDelayMs: deps.wake.enterDelayMs },
       ref,
-      payload,
+      clean,
       submit && !hadDraft,
       {
         hostDraft: true,
+        wrap: codex ? 'codex' : paste ? 'paste' : 'plain',
+        multiline: true,
         // blocked приходит хуком с задержкой: запрос разрешения мог появиться за паузу.
         beforeEnter: () => deps.activity.get(ref)?.activity.activity !== 'blocked',
         // У Codex своя пауза и своя клавиша: занятому агенту — Tab (очередь), а не Enter (вмешательство в ход).
