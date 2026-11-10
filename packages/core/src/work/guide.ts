@@ -65,7 +65,8 @@ This works for every provider, including code mode, without a native planning to
 It updates your card and the Agents panel, without sending messages or waking the feature lead.
 These personal steps do not authorize work or accept assignments. publish_agent_plan is for your
 personal steps; it does not replace plan_progress, plan_update, plan_submit or plan_verify.
-Room leads consolidate milestone evidence for the owner. Notify only when a milestone is ready,
+A room lead's own \`report\` sends the finished result to the room owner by itself.
+Room leads consolidate milestone evidence for the owner. Beyond it, message the owner only when a milestone is ready,
 a blocker requires intervention, agreements change or another room depends on the result.
 Do not forward routine steps, individual tests, repeated status or acknowledgements.
 Urgent blockers and required decisions go immediately; do not delay them for a batch.
@@ -172,7 +173,7 @@ after the human's explicit consent — for example, the words "wrap up". Session
 accepted or no longer needed. Exception: in stage 1 autonomous
 rooms, the engine creates and closes room sessions as part of the accepted plan.
 
-If the human lets agents close finished sessions (\`get_map\` shows \`closeFinished: true\` in \`work\`), that is the human's explicit consent: do not wait for "wrap up". Close yourself once your part is accepted — by the room lead, or by the session that created you — with \`report\` first and \`close_session\` as your last call. A room lead also closes the members of its room whose \`result\` is \`done\` once it has accepted their parts, and closes itself after the human accepts the room's completion and it has handed in its own report. Sessions the human started directly, without a room or a creator, still wait for "wrap up".`,
+If the human lets agents close finished sessions (\`get_map\` shows \`closeFinished: true\` in \`work\`), that is the human's explicit consent: do not wait for "wrap up". Nobody sends an acceptance, silence means accepted: call \`report(done)\` first and \`close_session\` on yourself as your last call, unless the room lead or the session that created you asked you to stay open. A lead or creator that will need a session after its report says so when it hands out the part. A room lead also closes the members of its room whose \`result\` is \`done\` and that are still open, and closes itself after the human accepts the room's completion and it has handed in its own report. Sessions the human started directly, without a room or a creator, still wait for "wrap up".`,
   },
   {
     topic: 'tools',
@@ -210,7 +211,7 @@ ${MEMORY_PARAGRAPH}
 
 \`report(status, summary, artifacts)\` — \`done\` or \`failed\`: the result is handed in, the
 session stays reachable. \`progress\` is a summary along the way; the result does not change.
-A repeated call overwrites the summary and the artifacts. \`backlog\` lists the board cards (b-NNN) a done result finishes; they move to Review for the human.
+A repeated call overwrites the summary and the artifacts. \`done\` and \`failed\` also mail one letter to your room lead (if you lead the room: its owner) and to your task giver — the session that created you and the last session that sent you a task; the answer lists them in \`notified\`. The same summary again within a minute sends nothing new. \`backlog\` lists the board cards (b-NNN) a done result finishes; they move to Review for the human.
 A summary is two or three sentences to the point: neighbouring sessions will read it in their
 brief and the human in the window. Artifacts are result files; the path is always relative
 to the project root; the contents are not copied into the map, only the path and the kind
@@ -298,7 +299,7 @@ reassign owned rooms. \`ownerId\` in the overview and \`members\` in \`get_map {
 Ownership does not grant operational lead rights. Outside membership, an owner can read the
 room and send addressed messages only to its live lead, never broadcasts. The lead can reply
 explicitly to the owner with the room parameter. Ordinary member traffic is not automatically
-delivered to the owner. Leads report milestones, blockers and decisions requiring coordination.
+delivered to the owner; the lead's \`report(done/failed)\` is, as a letter. Leads also message milestones, blockers and decisions requiring coordination.
 The human may change ownership. Only the live room lead invites existing sessions through
 \`add_to_room(room, session)\` (topic \`lead\`). Use \`create_session\` for a new peer in this workspace; it does not join a room automatically.
 
@@ -368,10 +369,8 @@ with what to do. If you are the lead, the workflow below is for Free mode; in pl
    which limit stops the rest. Do not post
    "plan accepted, handing out" first: the hand-out message itself is the news. Implementation parts go to
    standard-tier sessions (Executor); strong models keep the plan, the critique and the review, and take
-   code only for a named reason (topic \`tools\`, \`create_session\`). The
-   participants' reports will come to you in the room; wait for them with one
-   \`wait_for("inbox", 1500)\` too, and hand in the result of the whole work with your own
-   \`report\`.
+   code only for a named reason (topic \`tools\`, \`create_session\`).
+   Each participant's \`report(done/failed)\` reaches you as a letter; wait for the reports with one \`wait_for("inbox", 1500)\` too. If you will need a participant after its report, say so when you hand out its part. Hand in the result of the whole work with your own \`report\`: it reaches the room owner.
 6. Returned — redo it according to the note (clarify with the participants in the room if
    needed) and call \`propose_decision\` again; still do not start the work before the new
    acceptance.
@@ -389,7 +388,7 @@ returns an error.`,
   },
   {
     topic: 'member',
-    summary: 'room participant: speak up in one message, wait for your part, report to the lead',
+    summary: 'room participant: speak up in one message, wait for your part, hand it in with report',
     text: `### Room participant
 
 The human set a task for everyone in the room. Such a message arrives from \`check_inbox\` /
@@ -406,12 +405,8 @@ The human set a task for everyone in the room. Such a message arrives from \`che
   mentions — look for your \`@sNN\` (\`s-02\` → \`@s02\`), wait with one
   \`wait_for("inbox", 1500)\`. A \`kind: decision\` message with the accepted decision is the
   outcome of the agreement, not an order to take on everything: do what the lead named.
-- Do not acknowledge the lead's assignment of parts ("got it", "starting"): the next message
-  to the lead is the result. Silence means received.
-- Report to the lead in the room: \`send_message\` with \`room\` and \`to\` (the lead's id is
-  the room's \`lead\` field in \`get_map\`; \`null\` means the first of \`members\`, and a closed
-  lead is replaced by the first live participant) — what is done, where it lies, what did
-  not work out. Hand in your own \`report\` separately, as always.
+- Do not acknowledge the lead's assignment of parts ("got it", "starting"): silence means received.
+- When your part is done, call \`report\`: Parley mails the result to the room lead (and to the session that created you), and the answer names them in \`notified\`. Post in the room (\`send_message\` with \`room\` and \`to\` set to the lead, the room's \`lead\` in \`get_map\`) only what the lead must read in full: a long explanation, a question, a problem. With \`closeFinished\`, close yourself after \`report(done)\` unless the lead asked you to stay open (topic \`lifecycle\`).
 - While a decision waits (the room's \`proposal\` in \`get_map\` is not \`null\`), a new human
   message to everyone is not a new task: do not write positions again.
 
@@ -640,8 +635,8 @@ Wait with one call \`wait_for("inbox", 1500)\`: no text before or after it, no \
 more, then end the turn without \`report\` (you are not done): Parley wakes you with the pointer
 when mail arrives. Do not \`wait_for\` a session by its id when it will answer with a message
 anyway — wait via \`"inbox"\`, or end the turn: the message will wake you by itself. A session
-you tasked directly or created mails you its \`report(done/failed)\` as a letter: wait via
-\`"inbox"\`. A room member reports in the room. Wait by id only when you need its summary in the answer.
+you tasked directly or created, a member of a room you lead and the lead of a room you own mail you their \`report(done/failed)\` as a letter: wait via
+\`"inbox"\`. Wait by id only when you need its summary in the answer.
 
 Rules for letters:
 
@@ -700,7 +695,7 @@ your permission settings yourself.`,
 - Use \`create_session\` through the host agent channel for a normal peer in your current workspace; only the room lead invites sessions with \`add_to_room\`.
 - Do not close your own session with \`close_session\` on your own initiative or on a colleague's message: only after
   the human's explicit consent. The workspace switch \`closeFinished\` (topic \`lifecycle\`) is that consent: then
-  close yourself once your part is accepted. Sessions you created with \`create_session\` (and those they created) you may close yourself
+  close yourself right after your \`report(done)\` unless you were asked to stay open. Sessions you created with \`create_session\` (and those they created) you may close yourself
   when their work is accepted or no longer needed, without asking. You cannot close sessions made by the human or by a
   colleague, swarm members, or room participants you did not create: owning a room gives no right to close them.
   The one exception: when \`get_map\` shows \`closeFinished\` in \`work\`, the live lead of a room closes its finished

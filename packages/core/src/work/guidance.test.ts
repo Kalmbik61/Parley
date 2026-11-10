@@ -157,7 +157,7 @@ describe('системная вставка', () => {
     const line = stableGuidance().split('\n').find((candidate) => candidate.startsWith('close_session'));
 
     expect(line).toBe(
-      'close_session — yours: after the human\'s "wrap up" or, if work.closeFinished, once accepted; sessions you created: once accepted; autonomous stage 1: the engine creates and closes sessions.',
+      'close_session — yours: after the human\'s "wrap up" or, if work.closeFinished, after report(done); sessions you created: once accepted; autonomous stage 1: the engine creates and closes sessions.',
     );
     expect(systemGuidance(mapOf('Authorization', 'login by e-mail'), 's-03').split('\n').length).toBeLessThanOrEqual(14);
   });
@@ -217,7 +217,7 @@ describe('системная вставка', () => {
     const text = systemGuidance(mapOf('Authorization', 'login by e-mail'), 's-03');
 
     expect(text).toMatch(
-      /a participant speaks up in one message, waits for their part and reports to the lead in the room/,
+      /a participant speaks up in one message, waits for their part and hands it in with report/,
     );
   });
 
@@ -436,7 +436,7 @@ describe('подробный гид', () => {
     expect(GUIDE).toContain('### Room participant');
     expect(GUIDE).toMatch(/Speak up in one message/);
     expect(GUIDE).toMatch(/Wait for your part: do not start the work/);
-    expect(GUIDE).toMatch(/Report to the lead in the room/);
+    expect(GUIDE).toMatch(/When your part is done, call `report`/);
   });
 
   it('комнаты, ведущему: пока решение ждёт, новое сообщение человека всем цикл не перезапускает', () => {
