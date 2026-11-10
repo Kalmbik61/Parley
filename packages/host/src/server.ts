@@ -1,6 +1,7 @@
 import { createServer as createNetServer } from 'node:net';
 import { performance } from 'node:perf_hooks';
 import type { Server, Socket } from 'node:net';
+import { startsShellLine } from '@parley/core';
 import {
   COMPACT_WORKS_FEATURE,
   FEED_CODEX_FEATURE,
@@ -493,6 +494,11 @@ function handleMessage(raw: unknown, client: Client, options: ServerOptions): vo
   }
   if (client.role === 'remote' && method === 'rooms.send' && remoteRoomAutonomous(parsed.params, options)) {
     client.send({ id, error: { code: 'bad_request', message: 'the phone cannot write into an autonomous room' } });
+    return;
+  }
+  // Строка оболочки (`!…`) с телефона исполнилась бы в терминале сессии; `checkRemoteParams` уже проверил, что `text` — строка.
+  if (client.role === 'remote' && method === 'pty.send' && startsShellLine((parsed.message.params as { text: string }).text)) {
+    client.send({ id, error: { code: 'bad_request', message: 'Shell commands cannot be sent from the phone' } });
     return;
   }
   const handler = options.methodHandlers[method];

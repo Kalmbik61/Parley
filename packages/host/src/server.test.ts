@@ -1453,6 +1453,25 @@ describe('роль remote: запуск с телефона (A2b, спека м�
       s.close();
     });
 
+    it('pty.send с телефона: строка оболочки (`!…`) — bad_request до обработчика; `/compact` и обычный текст проходят; окно не ограничено', async () => {
+      const s = await a28Server({ enabled: true });
+      const remote = await s.connect('remote');
+      let id = 640;
+      for (const text of ['!echo test', '  !echo', 'привет\n!echo', '\x1b[31m!echo']) {
+        const reply = await answer(remote.client, ++id, 'pty.send', { ...message, text });
+        expect(reply.error, JSON.stringify(text)).toMatchObject({ code: 'bad_request', message: 'Shell commands cannot be sent from the phone' });
+      }
+      expect(s.spies['pty.send']).not.toHaveBeenCalled();
+      for (const text of ['/compact', 'hello!', 'привет']) {
+        expect((await answer(remote.client, ++id, 'pty.send', { ...message, text })).error, text).toBeUndefined();
+      }
+      expect(s.spies['pty.send']).toHaveBeenCalledTimes(3);
+      const desktop = await s.connect('desktop');
+      expect((await answer(desktop.client, ++id, 'pty.send', { ...message, text: '!echo test' })).error).toBeUndefined();
+      expect(s.spies['pty.send']).toHaveBeenCalledTimes(4);
+      s.close();
+    });
+
     it('sessions.create с workId: null — новая работа только в известном проекте', async () => {
       const s = await a28Server({ enabled: true });
       const remote = await s.connect('remote');
