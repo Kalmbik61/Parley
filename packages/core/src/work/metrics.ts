@@ -220,6 +220,10 @@ export async function finishSession(
     projectPath,
     workId,
     (map) => {
+      // Выход процесса и сверка живости могут усыпить одну сессию внахлёст: вторая запись пустая, не ошибка.
+      if (to === 'sleeping' && map.sessions.find((candidate) => candidate.id === sessionId)?.lifecycle === 'sleeping') {
+        return;
+      }
       const target =
         to === 'sleeping'
           ? transitionSession(map, sessionId, to, options)

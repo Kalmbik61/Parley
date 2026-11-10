@@ -438,6 +438,23 @@ describe('finishSession', () => {
     expect(workVersion(project, map.work.id)).toBe(before);
   });
 
+  it('уход в sleeping уже спящей сессии — пустая запись, без ошибки', async () => {
+    const workId = await workWithActiveSession('session-1');
+    // Так сессию усыпила бы сверка живости, пока выход процесса читал логи.
+    await updateMap(project, workId, (current) => {
+      current.sessions[0]!.autoSleepPending = { reason: 'idle', at: '2026-08-26T13:00:00.000Z', waitTarget: null };
+      transitionSession(current, 's-01', 'sleeping', { at: '2026-08-26T13:00:01.000Z' });
+    });
+    const before = workVersion(project, workId);
+
+    await finishSession(project, workId, 's-01', 'sleeping', { exitCode: 0 });
+
+    expect(workVersion(project, workId)).toBe(before);
+    const [session] = (await readMap(project, workId)).sessions;
+    expect(session?.history.filter((step) => step.event === 'sleeping')).toHaveLength(1);
+    expect(session?.autoSleep).toBeDefined();
+  });
+
   it('сессии с таким id нет — ошибка', async () => {
     const workId = await workWithActiveSession('session-1');
 
