@@ -189,6 +189,65 @@ const UNTRACKED_CONCURRENCY = 8;
  */
 export const UNTRACKED_COUNTED = 500;
 
+/** Патч одного файла больше этого заменяется заглушкой (C1b-7). */
+export const PATCH_FILE_MAX_BYTES = 400 * 1024;
+/** Сумма кусков патча не больше этого; остальные куски — заглушки. */
+export const PATCH_TOTAL_MAX_BYTES = 2 * 1024 * 1024;
+/** Неотслеживаемый файл больше этого не читается ни для чисел, ни для патча. */
+export const UNTRACKED_READ_MAX_BYTES = 8 * 1024 * 1024;
+
+const PATCH_HEADER = 'diff --git ';
+
+function omittedNote(bytes: number): string {
+  return `# parley: patch omitted, too large to show (${Math.ceil(bytes / 1024)} KiB)\n`;
+}
+
+/**
+ * Режет патч по заголовкам `diff --git `: кусок файла больше `PATCH_FILE_MAX_BYTES` и каждый кусок,
+ * не влезающий в `PATCH_TOTAL_MAX_BYTES`, заменяется своим заголовком и строкой-заглушкой. Файл остаётся
+ * в патче, ничего не пропадает молча. Заголовок распознаётся только в начале строки: строки
+ * содержимого в унифицированном diff всегда начинаются с ` `, `+`, `-` или `\`, так что строка,
+ * похожая на заголовок внутри файла, границей не считается. Делим по `\n`, а не по `^` с флагом `m`
+ * (тот считает границей ещё и `\r`, `\u2028`).
+ */
+export function capPatch(patch: string): string {
+  const starts: number[] = [];
+  if (patch.startsWith(PATCH_HEADER)) starts.push(0);
+  for (let at = patch.indexOf(`\n${PATCH_HEADER}`); at !== -1; at = patch.indexOf(`\n${PATCH_HEADER}`, at + 1)) {
+    starts.push(at + 1);
+  }
+  if (starts.length === 0) return patch;
+  let out = patch.slice(0, starts[0]);
+  let total = 0;
+  for (let i = 0; i < starts.length; i += 1) {
+    const piece = patch.slice(starts[i], starts[i + 1] ?? patch.length);
+    const bytes = Buffer.byteLength(piece, 'utf8');
+    if (bytes > PATCH_FILE_MAX_BYTES || total + bytes > PATCH_TOTAL_MAX_BYTES) {
+      const newline = piece.indexOf('\n');
+      const header = newline === -1 ? piece : piece.slice(0, newline);
+      out += `${header}\n${omittedNote(bytes)}`;
+    } else {
+      out += piece;
+      total += bytes;
+    }
+  }
+  return out;
+}
+
+/** Размер неотслеживаемого файла по `lstat`; `null` — не узнать (git разберётся сам). */
+async function untrackedSize(at: GitAt, filePath: string): Promise<number | null> {
+  try {
+    return (await lstat(path.join(at.cwd, filePath))).size;
+  } catch {
+    return null;
+  }
+}
+
+/** Заголовок в кавычках, если в имени перевод строки: сырой `\n` в нём стал бы ложной границей. */
+function stubHeaderPath(filePath: string): string {
+  return /[\n\r]/.test(filePath) ? JSON.stringify(filePath) : filePath;
+}
+
 /** Предел вывода git: у `execFile` по умолчанию 1 МБ, а патч с lock-файлами больше. */
 const MAX_BUFFER = 256 * 1024 * 1024;
 
@@ -667,6 +726,10 @@ async function untrackedFiles(at: GitAt, pathspec: string[] = []): Promise<strin
  * `git add -N`: чтение индекс не трогает. Код 1 — «отличаются», не сбой.
  */
 async function untrackedCounts(at: GitAt, filePath: string): Promise<DiffFile> {
+  const size = await untrackedSize(at, filePath);
+  if (size !== null && size > UNTRACKED_READ_MAX_BYTES) {
+    return { path: filePath, status: 'A', oldPath: null, additions: null, deletions: null };
+  }
   const { code, stdout } = await gitWithCode(at, [
     'diff',
     ...DIFF_READ,
@@ -764,6 +827,11 @@ async function listWorktrees(projectPath: string): Promise<WorktreeListEntry[]> 
  * «файлы отличаются», не сбой; `execFile` иначе принял бы его за ошибку.
  */
 async function untrackedPatch(at: GitAt, filePath: string): Promise<string> {
+  const size = await untrackedSize(at, filePath);
+  if (size !== null && size > UNTRACKED_READ_MAX_BYTES) {
+    const name = stubHeaderPath(filePath);
+    return `${PATCH_HEADER}a/${name} b/${name}\n${omittedNote(size)}`;
+  }
   const { code, stdout } = await gitWithCode(at, ['diff', ...DIFF_READ, '--no-index', '--', '/dev/null', filePath]);
   if (code !== 0 && code !== 1) throw new Error(`git diff --no-index ${filePath}: exit code ${code}`);
   return stdout;
@@ -882,7 +950,7 @@ async function branchOnlyDiff(
     ]),
   );
   const patch =
-    options.patch === false ? '' : await readGit(project, ['diff', ...DIFF_READ, '--end-of-options', range]);
+    options.patch === false ? '' : capPatch(await readGit(project, ['diff', ...DIFF_READ, '--end-of-options', range]));
   return {
     patch,
     files,
@@ -966,7 +1034,7 @@ export async function worktreeDiff(
       const untrackedPatches = await mapLimited(untracked.slice(0, UNTRACKED_COUNTED), UNTRACKED_CONCURRENCY, (filePath) =>
         untrackedPatch(worktree, filePath),
       );
-      patch = `${committedPatch}${uncommittedPatch}${untrackedPatches.join('')}`;
+      patch = capPatch(`${committedPatch}${uncommittedPatch}${untrackedPatches.join('')}`);
     }
 
     return {
@@ -1051,7 +1119,7 @@ export async function projectChanges(
       const untrackedPatches = await mapLimited(untracked.slice(0, UNTRACKED_COUNTED), UNTRACKED_CONCURRENCY, (filePath) =>
         untrackedPatch(project, filePath),
       );
-      patch = `${trackedPatch}${untrackedPatches.join('')}`;
+      patch = capPatch(`${trackedPatch}${untrackedPatches.join('')}`);
     }
 
     return {
