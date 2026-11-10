@@ -24,6 +24,7 @@ All notable changes to Parley are documented in this file.
 - The Changes and Diff tabs no longer pile up overlapping requests or re-read every file when nothing changed, huge untracked files no longer stall the review, the island and the room usage chip poll far less, and Merge and Discard ignore double clicks and always refresh.
 - When an agent with a task stops, crashes or is stopped or closed by you without a result, or ends its turn without reporting, the session that gave the task and the room lead now get a letter. Stuck notices also reach the task giver, and a swarm no longer waits for a crashed drone until its time limit.
 - **The host stays responsive with many sessions.** A change in one workspace no longer makes the host recompute every session of every workspace, and archived or idle workspaces no longer hold file watchers. A session whose log is written without pause now gets its token numbers refreshed at least every few seconds.
+- After a restart, the background host no longer re-reads your whole Claude Code and Codex history: it keeps an index of the logs it has already read and reads only the ones that changed (the first start after an update still reads everything once). The 30-second limits check now looks only at recent and running Codex logs, putting a session to sleep no longer scans all your logs, and hook journals of stopped sessions are trimmed at start instead of growing forever.
 
 ### Changed
 
