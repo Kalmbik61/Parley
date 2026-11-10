@@ -30,14 +30,17 @@ const empty = (): WindowWorkMap => ({
   messages: [],
 });
 afterEach(() => vi.useRealTimers());
-function fixture(map = empty()) {
+function fixture(map = empty(), initialVersion?: number) {
+  let version = initialVersion;
   let listener: () => void = () => {};
   let present = true;
   let locked = false;
   let writes = 0;
   const works: Pick<WorksService, "snapshot" | "entry" | "onChange"> = {
     snapshot: () => ({
-      entries: present ? [{ projectPath: "/project", map }] : [],
+      entries: present
+        ? [{ projectPath: "/project", map, ...(version === undefined ? {} : { version }) }]
+        : [],
       branches: {},
     }),
     entry: () => (present ? { projectPath: "/project", map } : undefined),
@@ -103,6 +106,9 @@ function fixture(map = empty()) {
       return writes;
     },
     changed: () => listener(),
+    setVersion: (next: number) => {
+      version = next;
+    },
     remove: () => {
       present = false;
       listener();
@@ -198,6 +204,39 @@ describe("plan effects lifecycle scheduler", () => {
       count: 1,
     });
     expect(JSON.stringify(f.failure.mock.calls)).not.toContain("PRIVATE");
+    f.service.stop();
+  });
+});
+
+describe("plan effects version gate", () => {
+  it("a works pass skips a work whose version did not change", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(AT);
+    const f = fixture(planned(), 1);
+    f.service.start();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(f.io.readMap).toHaveBeenCalledTimes(1);
+    for (let i = 0; i < 5; i++) f.changed();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(f.io.readMap).toHaveBeenCalledTimes(1);
+    f.setVersion(2);
+    f.changed();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(f.io.readMap).toHaveBeenCalledTimes(2);
+    f.service.stop();
+  });
+  it("a work without a version is processed on every pass", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(AT);
+    const f = fixture(planned());
+    f.service.start();
+    await vi.advanceTimersByTimeAsync(1);
+    const before = f.io.readMap.mock.calls.length;
+    for (let i = 0; i < 3; i++) {
+      f.changed();
+      await vi.advanceTimersByTimeAsync(1);
+    }
+    expect(f.io.readMap).toHaveBeenCalledTimes(before + 3);
     f.service.stop();
   });
 });

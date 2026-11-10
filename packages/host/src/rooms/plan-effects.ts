@@ -45,6 +45,8 @@ interface State {
   projectPath: string;
   workId: string;
   dirty: boolean;
+  /** Версия работы из снимка при последнем запуске прохода; той же версией проход не повторяется. */
+  seenVersion?: number;
   source: string | null;
   retryAttempt: number;
   retryAt: number | null;
@@ -188,8 +190,9 @@ export function createPlanEffectsService(
       if (stopped || !works.entry(state.projectPath, state.workId))
         return result;
       const at = new Date(now()).toISOString();
-      const preview = structuredClone(map);
-      let reservation = reservePlanEffects(preview, (io.previewLetters ?? previewLetterTx)(state.projectPath, state.workId, preview), rate, at);
+      // Копия не нужна: `reservePlanEffects` считает на своём черновике и меняет `map` только при `changed`,
+      // а тогда `current` заменяет ответ `updateMap`.
+      let reservation = reservePlanEffects(map, (io.previewLetters ?? previewLetterTx)(state.projectPath, state.workId, map), rate, at);
       let current = map;
       if (reservation.changed) {
         try {
@@ -380,6 +383,8 @@ export function createPlanEffectsService(
     const active = state;
     active.running = process(active)
       .catch(() => {
+        // Сбойный проход снимает отметку версии: когда таймер повтора исчерпан, следующая смена снимка повторит проход.
+        delete active.seenVersion;
         notify(active, "plan-effect-failed", 1);
         {
           active.retryAttempt++;
@@ -415,9 +420,20 @@ export function createPlanEffectsService(
         clearTimer(state);
         states.delete(key);
       }
-    for (const entry of entries)
-      if (hasWork(entry.map))
-        void flush(entry.projectPath, entry.map.work.id).catch(() => {});
+    for (const entry of entries) {
+      if (!hasWork(entry.map)) continue;
+      const workId = entry.map.work.id;
+      const seen = states.get(`${entry.projectPath}\0${workId}`)?.seenVersion;
+      // Версию растит каждая запись работы любым процессом: та же версия — карта та же. Срок доставки и повтор
+      // после сбоя идут таймерами, ручной `flush` версией не ограничен; снимок без версии обрабатывается каждый раз.
+      if (entry.version !== undefined && seen === entry.version) continue;
+      void flush(entry.projectPath, workId).catch(() => {});
+      const state = states.get(`${entry.projectPath}\0${workId}`);
+      if (state) {
+        if (entry.version === undefined) delete state.seenVersion;
+        else state.seenVersion = entry.version;
+      }
+    }
   }
   return {
     start() {
