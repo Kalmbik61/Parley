@@ -472,6 +472,34 @@ describe('transitionSession: сон по решению хоста', () => {
   });
 });
 
+describe('transitionSession: wakeBlocked', () => {
+  const T2 = '2026-11-10T10:05:00.000Z';
+  const mapWith = (lifecycle: SessionLifecycle, withBlocked = true): WorkMap => {
+    const map = emptyMap();
+    const session = addSession(map, { provider: 'claude', label: 'план', task: 't' });
+    session.lifecycle = lifecycle;
+    if (withBlocked) session.wakeBlocked = { since: '2026-11-10T10:00:00.000Z', reason: 'launch failed' };
+    return map;
+  };
+
+  it('active и closed снимают wakeBlocked: ключ уходит, null не пишется', () => {
+    for (const [from, to] of [['sleeping', 'active'], ['pending', 'active'], ['sleeping', 'closed'], ['active', 'closed']] as const) {
+      const session = transitionSession(mapWith(from), 's-01', to, { at: T2 });
+      expect('wakeBlocked' in session, `${from} → ${to}`).toBe(false);
+    }
+  });
+
+  it('active → sleeping поле не трогает', () => {
+    const session = transitionSession(mapWith('active'), 's-01', 'sleeping', { at: T2, exitCode: 0 });
+    expect(session.wakeBlocked).toEqual({ since: '2026-11-10T10:00:00.000Z', reason: 'launch failed' });
+  });
+
+  it('обычные переходы сессии без поля ключа не заводят', () => {
+    const session = transitionSession(mapWith('sleeping', false), 's-01', 'active', { at: T2 });
+    expect('wakeBlocked' in session).toBe(false);
+  });
+});
+
 describe('transitionSession: запись очереди машины', () => {
   const T = '2026-10-31T10:00:00.000Z';
   const T2 = '2026-10-31T10:05:00.000Z';

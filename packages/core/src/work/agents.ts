@@ -206,6 +206,28 @@ export async function prepareSessionRole(cwd: string, entry: ProviderEntry, choi
   return resolved;
 }
 
+/**
+ * Роль, с которой сессию можно запустить на `entry`: прежняя, если она подходит; иначе одноимённая роль семейства
+ * цели; иначе `null` (умолчания провайдера). Ловит только `RoleChoiceError`, остальные ошибки идут наружу.
+ */
+export async function roleForProvider(cwd: string, entry: ProviderEntry, role: SessionRole | null, catalog?: RoleCatalog): Promise<SessionRole | null> {
+  if (role === null || role.source === 'builtin') return role;
+  const accepts = async (candidate: SessionRole, mode: 'existing' | 'create'): Promise<boolean> => {
+    try {
+      await prepareSessionRole(cwd, entry, { roleId: roleId(candidate), provider: entry.id, mode }, catalog);
+      return true;
+    } catch (error) {
+      if (error instanceof RoleChoiceError) return false;
+      throw error;
+    }
+  };
+  if (await accepts(role, 'existing')) return role;
+  const source = entry.id === 'codex' ? 'codex' : isClaudeCode(entry) ? 'claude' : null;
+  if (source === null || source === role.source) return null;
+  const sameName: SessionRole = { source, name: role.name };
+  return await accepts(sameName, 'create') ? sameName : null;
+}
+
 export interface RoleSummary {
   id: string; name: string; description: string; source: SessionRole['source'];
   provider: string; model: string | null; effort: string | null; readOnly: boolean;

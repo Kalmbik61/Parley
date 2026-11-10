@@ -4,7 +4,7 @@
  */
 
 import type { EffortLevel } from '../providers.js';
-import type { AgentBinding, WorkMap, WorkSession } from './types.js';
+import type { AgentBinding, SessionRole, WorkMap, WorkSession } from './types.js';
 import type { FrozenUsage } from './usage-ledger.js';
 
 /** Сколько отрезков хранится в сессии: при переполнении два самых старых сливаются в один (спека, 5.9). */
@@ -15,6 +15,8 @@ export interface AgentTarget {
   provider: string;
   model?: string | null;
   effort?: EffortLevel | null;
+  /** Роль после замены; `undefined` — роль та же, `null` — без роли (умолчание провайдера при запуске). */
+  role?: SessionRole | null;
 }
 
 const COUNTERS = ['input', 'output', 'cacheRead', 'cacheWrite', 'totalInput'] as const;
@@ -66,7 +68,8 @@ export function appendAgentBinding(previous: readonly AgentBinding[] | undefined
 export function applyAgentSwitch(map: WorkMap, sessionId: string, target: AgentTarget, binding: AgentBinding, agentRevision: string): WorkMap {
   const current = map.sessions.find((session) => session.id === sessionId);
   if (current === undefined) throw new Error(`session ${sessionId} not found`);
-  const previous = appendAgentBinding(current.previousAgents, binding);
+  // Смена роли: прежняя остаётся в привязке, чтобы человек видел, что заменено.
+  const previous = appendAgentBinding(current.previousAgents, target.role === undefined ? binding : { ...binding, role: current.role ?? null });
   const next: WorkSession = {
     ...current,
     provider: target.provider,
@@ -78,6 +81,11 @@ export function applyAgentSwitch(map: WorkMap, sessionId: string, target: AgentT
     agentRevision,
   };
   delete next.codexThreadBinding;
+  delete next.wakeBlocked;
+  if (target.role !== undefined) {
+    next.role = target.role;
+    delete next.agent;
+  }
   // Явный выбор прежнего провайдера цели не подходит; без выбора роль подставит умолчание при запуске.
   if (target.model === undefined) delete next.model;
   else next.model = target.model;

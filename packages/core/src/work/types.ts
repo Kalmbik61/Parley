@@ -163,6 +163,8 @@ export interface AgentBinding {
   usage?: FrozenUsage;
   /** Стоимость отрезка по данным лога провайдера; `null` или нет поля — лог её не сообщает. */
   costUsd?: number | null;
+  /** Роль прежнего агента; есть только если замена её сменила. Нет поля — роль не менялась. */
+  role?: SessionRole | null;
 }
 
 export interface WorkSession {
@@ -275,6 +277,12 @@ export interface WorkSession {
    * и закрытии. Нет поля — то же, что `null`: сессия не в очереди, миграции карты не нужно.
    */
   queued?: QueuedLaunch | null;
+  /**
+   * Будильник не может поднять сессию (подряд сбои подъёма): письма ей держатся, пока человек не поднимет её сам
+   * или не сменит агента. Пишет только будильник; `transitionSession` в `active` и `closed` и замена агента
+   * снимают поле. Нет поля — то же, что `null`: старые карты читаются как есть.
+   */
+  wakeBlocked?: { since: string; reason: string } | null;
 }
 
 /**
