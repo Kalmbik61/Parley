@@ -1811,7 +1811,9 @@ describe('перепроверка выбранного запроса T1a', () 
     expect(snapshots()).toBe(before);
     expect(screen.queryByTitle('Run: first')).not.toBeNull();
     await act(async () => { await vi.advanceTimersByTimeAsync(1); });
-    expect(snapshots()).toBe(before + 1);
+    // Два запроса: опрос раз в REQUEST_REVALIDATE_MS и сразу за ним проверка новой выбранной карточки — когда `first`
+    // ушла, выбор перешёл на `second`, и эффект опроса (зависит от `selectedKey`) запускается заново с немедленным `revalidate`.
+    expect(snapshots()).toBe(before + 2);
     expect(screen.queryByTitle('Run: first')).toBeNull();
     expect(screen.queryByTitle('Run: second')).not.toBeNull();
     expect(fake.calls.filter((call) => call.method === 'feed.decide')).toHaveLength(0);
