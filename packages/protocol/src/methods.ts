@@ -343,6 +343,8 @@ export const METHODS = {
   'worktrees.available': z.object({ projectPath: z.string() }),
   // `patch` только добавлен: старый хост его отбросит, старое окно не шлёт. false — `patch: ''`.
   'worktrees.diff': z.object({ ref: sessionRef, patch: z.boolean().optional() }),
+  // Версия набора изменений — дёшево, без патча: окно перечитывает дифф, только если она сменилась. Методы необязательные: старый хост их не знает.
+  'worktrees.version': z.object({ ref: sessionRef }),
   'worktrees.commit': z.object({ ref: sessionRef, message: z.string().min(1) }),
   'worktrees.merge': z.object({ ref: sessionRef }),
   'worktrees.discard': z.object({ ref: sessionRef, force: z.boolean() }),
@@ -353,6 +355,7 @@ export const METHODS = {
   'worktrees.leftovers': z.object({}),
   'worktrees.removeCopy': z.object({ ref: sessionRef }),
   'changes.project': z.object({ ref: sessionRef, patch: z.boolean().optional() }),
+  'changes.version': z.object({ ref: sessionRef }),
   'changes.commitProject': z.object({ ref: sessionRef, message: z.string().min(1).max(10000) }),
   // Пачка окна — до 500 id (500 мс тишины); пустую слать незачем.
   'mail.markRead': z.object({
@@ -594,6 +597,7 @@ export interface Results extends AssistantMethodResults, VoiceMethodResults, Car
   'rooms.send': { messageId: string };
   'worktrees.available': { available: boolean; gitRoot?: boolean };
   'worktrees.diff': WorktreeDiff;
+  'worktrees.version': { version: string };
   'worktrees.commit': { commit: string };
   'worktrees.merge': MergeResult;
   'worktrees.discard': { ok: true };
@@ -602,6 +606,7 @@ export interface Results extends AssistantMethodResults, VoiceMethodResults, Car
   'worktrees.leftovers': { items: WorktreeLeftover[] };
   'worktrees.removeCopy': RemoveCopyResult;
   'changes.project': ProjectChanges;
+  'changes.version': { version: string };
   'changes.commitProject': { commit: string };
   'mail.markRead': { marked: number };
   'pty.send': SendResult;

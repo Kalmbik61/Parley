@@ -19,11 +19,13 @@ import {
   mergeWorktree,
   NothingToCommitError,
   projectChanges,
+  projectVersion,
   readMap,
   sessionTag,
   transitionSession,
   updateMap,
   worktreeDiff,
+  worktreeVersion,
   type MergeCheck,
   type MergeResult,
   type ProjectChanges,
@@ -31,7 +33,7 @@ import {
   type WorktreeInfo,
   type WorkSession,
 } from '@parley/core';
-import { HOST_ERROR_REASONS } from '@parley/protocol';
+import { HOST_ERROR_REASONS, refKey } from '@parley/protocol';
 import type { HostErrorReason, SessionRef } from '@parley/protocol';
 import { HostError } from '../errors.js';
 import type { SessionsService } from '../sessions/sessions-service.js';
@@ -43,6 +45,8 @@ export interface WorktreesService {
   gitRoot(projectPath: string): Promise<boolean>;
   /** `patch: false` — без текста патча: окну этапа 8 он не нужен, а строка протокола ограничена 8 МБ. */
   diff(ref: SessionRef, patch?: boolean): Promise<WorktreeDiff>;
+  /** Дешёвая версия набора изменений worktree (см. `worktreeVersion` core): окно перечитывает дифф, только если она сменилась. */
+  version(ref: SessionRef): Promise<string>;
   commit(ref: SessionRef, message: string): Promise<string>;
   merge(ref: SessionRef): Promise<MergeResult>;
   /** `force` — грязный worktree отбрасывается вместе с незакоммиченным (второе подтверждение окна). */
@@ -51,6 +55,8 @@ export interface WorktreesService {
   mergeCheck(ref: SessionRef): Promise<MergeCheck>;
   /** Изменения папки проекта — только у сессии без своего worktree (спека 11.5). */
   projectChanges(ref: SessionRef, patch?: boolean): Promise<ProjectChanges>;
+  /** То же для папки проекта сессии без своего worktree. */
+  projectVersion(ref: SessionRef): Promise<string>;
   /** «Закоммитить всё в папке» — по кнопке человека, без каталога состояния (`.parley/`, `.harnas/`). */
   commitProject(ref: SessionRef, message: string): Promise<{ commit: string }>;
 }
@@ -148,13 +154,39 @@ async function requireNoWorktree(ref: SessionRef): Promise<void> {
 export function createWorktreesService(
   sessions: Pick<SessionsService, 'stop' | 'checkWorktreeGit' | 'afterSweep'>,
 ): WorktreesService {
+  // Один запуск git на ref и `patch`: параллельные вызовы (панель и вкладка диффа не делят `useChanges`) получают один Promise.
+  // Запись живёт, пока запрос в полёте; отказ не запоминается; вызов после конца запроса стартует новый.
+  const inFlight = new Map<string, Promise<unknown>>();
+  const shared = <T>(kind: string, ref: SessionRef, patch: boolean | undefined, start: () => Promise<T>): Promise<T> => {
+    const key = `${kind}\u0000${refKey(ref)}\u0000${patch === undefined ? '' : String(patch)}`;
+    const running = inFlight.get(key);
+    if (running !== undefined) return running as Promise<T>;
+    const promise = start().finally(() => {
+      if (inFlight.get(key) === promise) inFlight.delete(key);
+    });
+    inFlight.set(key, promise);
+    return promise;
+  };
+  // Запись, идущая во время коммита, слияния или сброса, не должна достаться вызову после них: он стартует свою.
+  const forget = (ref: SessionRef): void => {
+    const marker = `\u0000${refKey(ref)}\u0000`;
+    for (const key of [...inFlight.keys()]) if (key.includes(marker)) inFlight.delete(key);
+  };
+
   return {
     available: (projectPath) => isGitRepo(projectPath),
     gitRoot: (projectPath) => isGitRoot(projectPath),
 
-    async diff(ref, patch) {
+    diff(ref, patch) {
+      return shared('diff', ref, patch, async () => {
+        const { worktree } = await requirePresentWorktree(ref);
+        return viaGit(() => worktreeDiff(ref.projectPath, worktree, patch === undefined ? {} : { patch }));
+      });
+    },
+
+    async version(ref) {
       const { worktree } = await requirePresentWorktree(ref);
-      return viaGit(() => worktreeDiff(ref.projectPath, worktree, patch === undefined ? {} : { patch }));
+      return worktreeVersion(ref.projectPath, worktree);
     },
 
     async commit(ref, message) {
@@ -170,6 +202,8 @@ export function createWorktreesService(
       } catch (error) {
         if (error instanceof GitStateError) throw gitFailure(error);
         throw error;
+      } finally {
+        forget(ref);
       }
     },
 
@@ -183,6 +217,8 @@ export function createWorktreesService(
         // (internal с логом сервера).
         if (error instanceof InvalidRevisionError || error instanceof GitStateError) throw gitFailure(error);
         throw error;
+      } finally {
+        forget(ref);
       }
     },
 
@@ -201,6 +237,8 @@ export function createWorktreesService(
           if (error instanceof DirtyWorktreeError) throw new HostError('conflict', error.message);
           if (error instanceof InvalidRevisionError || error instanceof GitStateError) throw gitFailure(error);
           throw error;
+        } finally {
+          forget(ref);
         }
       }
       await updateMap(ref.projectPath, ref.workId, (map) => {
@@ -217,14 +255,25 @@ export function createWorktreesService(
       return viaGit(() => mergeCheck(ref.projectPath, worktree));
     },
 
-    async projectChanges(ref, patch) {
+    projectChanges(ref, patch) {
+      return shared('project', ref, patch, async () => {
+        await requireNoWorktree(ref);
+        return viaGit(() => projectChanges(ref.projectPath, patch === undefined ? {} : { patch }));
+      });
+    },
+
+    async projectVersion(ref) {
       await requireNoWorktree(ref);
-      return viaGit(() => projectChanges(ref.projectPath, patch === undefined ? {} : { patch }));
+      return projectVersion(ref.projectPath);
     },
 
     async commitProject(ref, message) {
       await requireNoWorktree(ref);
-      return viaGit(() => commitProject(ref.projectPath, message));
+      try {
+        return await viaGit(() => commitProject(ref.projectPath, message));
+      } finally {
+        forget(ref);
+      }
     },
   };
 }

@@ -21,6 +21,7 @@ export interface WorktreesMethodDeps {
 export interface WorktreesHandlers {
   worktreesAvailable: Handler<'worktrees.available'>;
   worktreesDiff: Handler<'worktrees.diff'>;
+  worktreesVersion: Handler<'worktrees.version'>;
   worktreesCommit: Handler<'worktrees.commit'>;
   worktreesMerge: Handler<'worktrees.merge'>;
   worktreesDiscard: Handler<'worktrees.discard'>;
@@ -41,6 +42,8 @@ export function createWorktreesHandlers(deps: WorktreesMethodDeps): WorktreesHan
     },
 
     worktreesDiff: async (params) => deps.worktrees.diff(params.ref, params.patch),
+
+    worktreesVersion: async (params) => ({ version: await deps.worktrees.version(params.ref) }),
 
     worktreesCommit: async (params) => ({
       commit: await deps.worktrees.commit(params.ref, params.message),

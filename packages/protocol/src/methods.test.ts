@@ -201,6 +201,14 @@ describe('ревью изменений (кусок 8.1)', () => {
     expect(METHODS['changes.project'].safeParse({ ref, patch: false }).success).toBe(true);
   });
 
+  it('worktrees.version и changes.version — только ref, ответ { version: string }', () => {
+    for (const name of ['worktrees.version', 'changes.version'] as const) {
+      expect(METHODS[name].safeParse({ ref }).success).toBe(true);
+      expect(METHODS[name].safeParse({}).success).toBe(false);
+      expectTypeOf<Result<typeof name>>().toEqualTypeOf<{ version: string }>();
+    }
+  });
+
   it('changes.commitProject: сообщение 1–10 000 символов', () => {
     const parse = (message: string) => METHODS['changes.commitProject'].safeParse({ ref, message });
     expect(parse('m').success).toBe(true);

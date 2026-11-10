@@ -1132,6 +1132,100 @@ export async function projectChanges(
   });
 }
 
+/** Больше путей в status — версия «летучая»: каждый вызов даёт новое значение, окно всегда делает полный запрос. */
+export const VERSION_MAX_PATHS = 5000;
+
+let volatileSeq = 0;
+/** Значение, которое никогда не совпадёт с прежним: неверно пропустить обновление хуже, чем сделать лишнее. */
+function volatileVersion(): string {
+  volatileSeq += 1;
+  return `volatile:${Date.now()}:${volatileSeq}`;
+}
+
+/**
+ * Отпечаток путей из status: сырая запись (XY и старое имя при переименовании) плюс `mtimeMs:ctimeMs:size` из `lstat`.
+ * Status не видит правку файла, который уже изменён (тот же `M`); mtime/ctime/size её ловят. Не ловится только правка,
+ * после которой совпали все три числа сразу (ctime ядро ставит само, подделать его без смены часов нельзя).
+ * `null` — путей слишком много.
+ */
+async function statusFingerprint(at: GitAt, args: string[]): Promise<string | null> {
+  const raw = await readGitBuffer(at, args);
+  const paths = parsePorcelainPaths(raw);
+  if (paths.length > VERSION_MAX_PATHS) return null;
+  const root = (await readGit(at, ['rev-parse', '--show-toplevel'])).trim();
+  const stamps = await mapLimited(paths, 32, async (filePath) => {
+    try {
+      const info = await lstat(path.join(root, filePath));
+      return `${info.mtimeMs}:${info.ctimeMs}:${info.size}`;
+    } catch {
+      return 'gone';
+    }
+  });
+  return createHash('sha1').update(raw).update('\u0000').update(stamps.join('\u0000')).digest('hex');
+}
+
+/**
+ * Версия набора изменений worktree — дёшево, без патча: меняется при коммите (rev-parse ветки, базы и головы worktree),
+ * при любой правке, индексе, новом или удалённом файле, переименовании (status и lstat путей), при смене грязности
+ * базы (`baseDirty`). Любой отказ git, исчезнувшая папка и больше `VERSION_MAX_PATHS` путей дают летучее значение.
+ */
+export async function worktreeVersion(projectPath: string, info: WorktreeInfo): Promise<string> {
+  try {
+    await assertRevisions(projectPath, [info.base, info.branch]);
+    const project = await readerAt(projectPath);
+    const parts = [
+      (await readGit(project, ['rev-parse', info.branch])).trim(),
+      (await readGit(project, ['rev-parse', info.base])).trim(),
+    ];
+    const baseCheckout = await findBaseCheckout(projectPath, info.base);
+    parts.push(
+      baseCheckout === null
+        ? 'no-base-checkout'
+        : String(await isDirty(await checkoutReader(projectPath, baseCheckout), await projectPrefix(project))),
+    );
+    if (info.removedAt) {
+      parts.push('removed');
+    } else {
+      const worktree = await checkoutReader(projectPath, info.path);
+      parts.push((await readGit(worktree, ['rev-parse', 'HEAD'])).trim());
+      const status = await statusFingerprint(worktree, [
+        'status',
+        '--porcelain=v1',
+        '-z',
+        '--untracked-files=all',
+        NO_SUBMODULE_WALK,
+        ...WORKTREE_PATHSPEC,
+      ]);
+      if (status === null) return volatileVersion();
+      parts.push(status);
+    }
+    return createHash('sha1').update(parts.join('\u0000')).digest('hex');
+  } catch {
+    return volatileVersion();
+  }
+}
+
+/** Версия изменений папки проекта (`projectChanges`): голова, ветка, status без каталога состояния и lstat путей. */
+export async function projectVersion(projectPath: string): Promise<string> {
+  try {
+    const project = await readerAt(projectPath);
+    const head = (await readGit(project, ['rev-parse', 'HEAD'])).trim();
+    const branch = (await readGit(project, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim();
+    const status = await statusFingerprint(project, [
+      'status',
+      '--porcelain=v1',
+      '-z',
+      '--untracked-files=all',
+      NO_SUBMODULE_WALK,
+      ...STATE_PATHSPEC,
+    ]);
+    if (status === null) return volatileVersion();
+    return createHash('sha1').update([head, branch, status].join('\u0000')).digest('hex');
+  } catch {
+    return volatileVersion();
+  }
+}
+
 /**
  * Pathspec-исключения записей подмодулей (gitlink, режим 160000 в индексе) для `add -A` коммита
  * из окна (раунд fix-final-c, п. 5). `add` заходит в изменённый подмодуль дочерним `git status`,

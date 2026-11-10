@@ -52,6 +52,12 @@ it('registers the window-only decisions list and room history actions', () => {
     expect(handlers.methods[name]).toBeTypeOf('function');
 });
 
+it('registers the optional worktrees.version and changes.version', () => {
+  const { deps } = fakeDeps(Promise.resolve());
+  const handlers = createHostHandlers(deps);
+  for (const name of ['worktrees.version', 'changes.version'] as const) expect(handlers.methods[name]).toBeTypeOf('function');
+});
+
 it('registers opt-in works.sync behind readiness and releases its client on disconnect', async () => {
   let ready!: () => void;
   const { deps } = fakeDeps(new Promise<void>(resolve => { ready = resolve; }));

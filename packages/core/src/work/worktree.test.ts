@@ -25,6 +25,7 @@ import {
   PATCH_FILE_MAX_BYTES,
   PATCH_TOTAL_MAX_BYTES,
   UNTRACKED_READ_MAX_BYTES,
+  VERSION_MAX_PATHS,
   parseCommits,
   parseMergeTree,
   parseNameStatusZ,
@@ -33,8 +34,10 @@ import {
   plannedWorktree,
   prepareWorktreeGitWrites,
   projectChanges,
+  projectVersion,
   removeWorktreeCopy,
   worktreeDiff,
+  worktreeVersion,
 } from './worktree.js';
 
 const run = promisify(execFile);
@@ -1696,4 +1699,86 @@ describe('огромный неотслеживаемый файл (C1b-7)', () 
     expect(diff.patch).toMatch(/# parley: patch omitted, too large to show \(\d+ KiB\)/);
     expect(Buffer.byteLength(diff.patch)).toBeLessThan(2000);
   }, 30_000);
+});
+
+describe('worktreeVersion и projectVersion', () => {
+  async function versioned() {
+    await initProject();
+    const info = plannedWorktree(project, 'w-0001', 's-02', 'main', worktreeRoot);
+    await createWorktree(project, info);
+    return info;
+  }
+
+  it('повторный вызов без изменений даёт то же значение', async () => {
+    const info = await versioned();
+    await writeFile(path.join(info.path, 'a.txt'), 'один\n', 'utf8');
+    expect(await worktreeVersion(project, info)).toBe(await worktreeVersion(project, info));
+    expect(await projectVersion(project)).toBe(await projectVersion(project));
+  });
+
+  it('правка уже изменённого файла с тем же размером и тем же статусом меняет версию', async () => {
+    const info = await versioned();
+    const file = path.join(info.path, 'README.md');
+    await writeFile(file, 'новое\n', 'utf8');
+    const before = await worktreeVersion(project, info);
+    await writeFile(file, 'иное!\n', 'utf8');
+    await utimes(file, new Date(), new Date(Date.now() + 10_000));
+    expect((await git(info.path, ['status', '--porcelain'])).stdout.trim()).toBe('M README.md');
+    expect(await worktreeVersion(project, info)).not.toBe(before);
+  });
+
+  it('новый и удалённый неотслеживаемый файл, коммит меняют версию', async () => {
+    const info = await versioned();
+    const v0 = await worktreeVersion(project, info);
+    await writeFile(path.join(info.path, 'new.txt'), 'x\n', 'utf8');
+    const v1 = await worktreeVersion(project, info);
+    expect(v1).not.toBe(v0);
+    await rm(path.join(info.path, 'new.txt'));
+    expect(await worktreeVersion(project, info)).toBe(v0);
+    await writeFile(path.join(info.path, 'new.txt'), 'x\n', 'utf8');
+    await git(info.path, ['add', 'new.txt']);
+    const v2 = await worktreeVersion(project, info);
+    expect(v2).not.toBe(v1);
+    await git(info.path, ['commit', '-m', 'новый']);
+    expect(await worktreeVersion(project, info)).not.toBe(v2);
+  });
+
+  it('изменение грязности базы меняет версию worktree', async () => {
+    const info = await versioned();
+    const clean = await worktreeVersion(project, info);
+    await writeFile(path.join(project, 'README.md'), 'правка базы\n', 'utf8');
+    expect(await worktreeVersion(project, info)).not.toBe(clean);
+  });
+
+  it('projectVersion: правка, новый файл и коммит меняют значение', async () => {
+    await initProject();
+    const v0 = await projectVersion(project);
+    await writeFile(path.join(project, 'u.txt'), '1\n', 'utf8');
+    const v1 = await projectVersion(project);
+    expect(v1).not.toBe(v0);
+    await git(project, ['add', 'u.txt']);
+    await git(project, ['commit', '-m', 'u']);
+    expect(await projectVersion(project)).not.toBe(v1);
+  });
+
+  it('больше VERSION_MAX_PATHS путей — летучая версия, два вызова различаются', async () => {
+    const info = await versioned();
+    const dir = path.join(info.path, 'many');
+    await mkdir(dir);
+    const names = Array.from({ length: VERSION_MAX_PATHS + 1 }, (_, index) => `f${index}.txt`);
+    for (let from = 0; from < names.length; from += 200) {
+      await Promise.all(names.slice(from, from + 200).map((name) => writeFile(path.join(dir, name), '', 'utf8')));
+    }
+    const first = await worktreeVersion(project, info);
+    const second = await worktreeVersion(project, info);
+    expect(first.startsWith('volatile:')).toBe(true);
+    expect(second.startsWith('volatile:')).toBe(true);
+    expect(first).not.toBe(second);
+  }, 60_000);
+
+  it('исчезнувшая папка worktree — летучая версия, а не стабильное значение', async () => {
+    const info = await versioned();
+    await rm(info.path, { recursive: true, force: true });
+    expect((await worktreeVersion(project, info)).startsWith('volatile:')).toBe(true);
+  });
 });
