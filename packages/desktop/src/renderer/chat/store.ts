@@ -11,8 +11,13 @@
  * Закрытие последней вкладки — `feed.unsubscribe` (и после ошибки тоже).
  *
  * Мост — из `init`, который `App` зовёт на каждый статус `connected`: одна подписка на
- * `feed.changed` на стор, а открытые ленты после переподключения подписываются и берут снимок
- * заново (хост забыл подписки ушедшего клиента). Хост без `feed.snapshot` — стор ничего не зовёт.
+ * `feed.changed` и `feed.resync` на стор, а открытые ленты после переподключения подписываются и берут
+ * снимок заново (хост забыл подписки ушедшего клиента). Так же — по `feed.resync` (хост снял подписки
+ * перегруженного окна): ленту, которой нет в сторе, событие не касается. Снимок берёт сразу только ВИДИМАЯ
+ * лента (`visibleSessionRefs` из `store/ui.ts`: сессия показана в виде «Chat»); остальные помечаются `stale`
+ * и грузятся, когда их покажут или откроет ещё один потребитель; до снимка на экране остаются прежние
+ * элементы, дельты ленты, ждущей показа, не применяются (подписки у неё уже нет). Хост без `feed.snapshot` —
+ * стор ничего не зовёт.
  * Решения человека (`decide`, кусок 4a, решение П): пока запрос в пути, повторный клик по той же
  * карточке игнорируется (`deciding`); `applied: true` — ждём дельту, карточка сменит состояние сама (снимок
  * забывает `deciding`, пометки и черновики только у карточек, что в нём не `pending` или пропали);
@@ -31,6 +36,7 @@ import type { ParleyBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import { hostMethods } from '../lib/capabilities.js';
 import { useHostStore } from '../store/host.js';
+import { useUiStore } from '../store/ui.js';
 import { cardKey, useChatUiStore } from './ui-store.js';
 
 export type FeedStatus = 'loading' | 'ready' | 'error';
@@ -77,6 +83,8 @@ interface Opened {
   loading: boolean;
   /** Дельты, пришедшие, пока снимок в пути; `load` и исход снимка очищают. */
   queued: EventData<'feed.changed'>[];
+  /** Хост забыл подписку, а лента не показана: снимок берётся, когда её покажут (`load` снимает признак). */
+  stale: boolean;
 }
 
 let bridge: ParleyBridge | null = null;
@@ -160,6 +168,7 @@ export const useFeedStore = create<FeedState>((set, get) => {
     if (feed === undefined || current === null || !hostHasFeed()) return;
     feed.generation += 1;
     feed.loading = true;
+    feed.stale = false;
     feed.queued = [];
     const generation = feed.generation;
     const stale = (): boolean => opened.get(key) !== feed || feed.generation !== generation || bridge !== current;
@@ -196,6 +205,25 @@ export const useFeedStore = create<FeedState>((set, get) => {
       });
   };
 
+  const isVisible = (key: string): boolean => key in useUiStore.getState().visibleSessionRefs;
+
+  /**
+   * Хост забыл подписку на ленту (переподключение, `feed.resync`): показанная лента берёт снимок сразу, скрытая
+   * ждёт показа. Загрузка, что была в пути, отбрасывается: её подписку хост уже снял.
+   */
+  const refresh = (key: string): void => {
+    const feed = opened.get(key);
+    if (feed === undefined) return;
+    if (isVisible(key)) {
+      load(key);
+      return;
+    }
+    feed.generation += 1;
+    feed.loading = false;
+    feed.queued = [];
+    feed.stale = true;
+  };
+
   /** Применяет дельту revision+1 к открытой ленте: элементы, revision, режим, решения и карточки. */
   const applyChanged = (key: string, entry: FeedEntry, delta: EventData<'feed.changed'>): void => {
     patch(key, {
@@ -214,7 +242,7 @@ export const useFeedStore = create<FeedState>((set, get) => {
     const key = refKey(delta.ref);
     const feed = opened.get(key);
     const entry = get().feeds[key];
-    if (feed === undefined || entry === undefined) return;
+    if (feed === undefined || entry === undefined || feed.stale) return;
     if (feed.loading) {
       feed.queued.push(delta);
       return;
@@ -235,9 +263,17 @@ export const useFeedStore = create<FeedState>((set, get) => {
     init: (next) => {
       bridge = next;
       const off = next.on('feed.changed', onChanged);
-      for (const key of opened.keys()) load(key);
+      const offResync = next.on('feed.resync', (event) => refresh(refKey(event.ref)));
+      for (const key of opened.keys()) refresh(key);
+      // Ленту, ждущую показа, грузим, как только сессию показали.
+      const offVisible = useUiStore.subscribe((state, prev) => {
+        if (state.visibleSessionRefs === prev.visibleSessionRefs) return;
+        for (const [key, feed] of opened) if (feed.stale && key in state.visibleSessionRefs) load(key);
+      });
       return () => {
         off();
+        offResync();
+        offVisible();
         if (bridge === next) bridge = null;
       };
     },
@@ -246,9 +282,10 @@ export const useFeedStore = create<FeedState>((set, get) => {
       const feed = opened.get(key);
       if (feed !== undefined) {
         feed.count += 1;
+        if (feed.stale) load(key);
         return;
       }
-      opened.set(key, { ref, count: 1, generation: 0, loading: false, queued: [] });
+      opened.set(key, { ref, count: 1, generation: 0, loading: false, queued: [], stale: false });
       load(key);
     },
     close: (ref) => {

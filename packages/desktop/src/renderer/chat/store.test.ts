@@ -8,6 +8,7 @@ import type { FeedItem } from '@parley/core';
 import { refKey, type SessionRef } from '@parley/protocol';
 import { REQUIRED_METHODS } from '../lib/capabilities.js';
 import { useHostStore } from '../store/host.js';
+import { useUiStore } from '../store/ui.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { resetFeedStoreForTests, useFeedStore } from './store.js';
 import { cardKey, resetChatUiStoreForTests, useChatUiStore } from './ui-store.js';
@@ -43,12 +44,14 @@ const flush = async (): Promise<void> => {
 };
 
 const feed = () => useFeedStore.getState().feeds[KEY];
+const show = (ref: SessionRef = REF): void => useUiStore.getState().setSessionVisible(refKey(ref), true);
 
 let bridge: FakeBridge;
 let dispose: (() => void) | null = null;
 
 beforeEach(() => {
   resetFeedStoreForTests();
+  useUiStore.setState({ visibleSessionRefs: {} });
   connect();
   bridge = createFakeBridge();
   bridge.setHandler('feed.subscribe', () => ({ ok: true }));
@@ -61,6 +64,7 @@ afterEach(() => {
   dispose?.();
   dispose = null;
   resetFeedStoreForTests();
+  useUiStore.setState({ visibleSessionRefs: {} });
   useHostStore.setState({ status: { state: 'connecting' } });
 });
 
@@ -213,6 +217,7 @@ describe('дельты, пришедшие во время снимка', () => 
 
   it('дельты, сохранённые до переподключения, на снимок нового моста не ложатся', async () => {
     await flush();
+    show();
     bridge.emit('feed.changed', { mode: null, ref: REF, revision: 2, upsert: [prompt('stale')], removed: [] });
     dispose?.();
     const next = createFakeBridge();
@@ -243,6 +248,7 @@ describe('дельты, пришедшие во время снимка', () => 
 
 describe('переподключение', () => {
   it('открытые ленты подписываются и берут снимок заново на новом мосте', async () => {
+    show();
     useFeedStore.getState().open(REF);
     await flush();
     dispose?.();
@@ -256,6 +262,86 @@ describe('переподключение', () => {
     // Старый мост ленту больше не двигает.
     bridge.emit('feed.changed', { mode: null, ref: REF, revision: 2, upsert: [prompt('old')], removed: [] });
     expect(feed()?.revision).toBe(1);
+  });
+
+  it('после переподключения снимок берёт только видимая лента, скрытая — когда её покажут', async () => {
+    const other: SessionRef = { ...REF, sessionId: 's-02' };
+    show();
+    useFeedStore.getState().open(REF);
+    useFeedStore.getState().open(other);
+    await flush();
+    dispose?.();
+    const next = createFakeBridge();
+    next.setHandler('feed.subscribe', () => ({ ok: true }));
+    setSnapshots(next, [{ items: [prompt('fresh')], revision: 1 }]);
+    dispose = useFeedStore.getState().init(next);
+    await flush();
+    expect(next.calls.filter((call) => call.method.startsWith('feed.')).map((call) => [call.method, (call.params as { ref: SessionRef }).ref.sessionId])).toEqual([
+      ['feed.subscribe', 's-01'],
+      ['feed.snapshot', 's-01'],
+    ]);
+    // Скрытая лента держит прежние элементы и дельт не применяет.
+    const hidden = (): FeedEntryLike | undefined => useFeedStore.getState().feeds[refKey(other)];
+    expect(hidden()?.items).toEqual([prompt('a'), prompt('b')]);
+    next.emit('feed.changed', { mode: null, ref: other, revision: 6, upsert: [prompt('late')], removed: [] });
+    expect(hidden()?.items).toEqual([prompt('a'), prompt('b')]);
+    show(other);
+    await flush();
+    expect(next.calls.filter((call) => call.method === 'feed.snapshot')).toHaveLength(2);
+    expect(hidden()).toEqual({ items: [prompt('fresh')], revision: 1, mode: null, decisions: null, status: 'ready' });
+  });
+});
+
+type FeedEntryLike = NonNullable<ReturnType<typeof feed>>;
+
+describe('feed.resync', () => {
+  it('видимая лента берёт снимок сразу, скрытая — при показе; чужая лента событие не двигает', async () => {
+    const other: SessionRef = { ...REF, sessionId: 's-02' };
+    show();
+    useFeedStore.getState().open(REF);
+    useFeedStore.getState().open(other);
+    await flush();
+    expect(feedCalls(bridge)).toHaveLength(4);
+    setSnapshots(bridge, [{ items: [prompt('fresh')], revision: 9 }]);
+    bridge.emit('feed.resync', { ref: REF });
+    bridge.emit('feed.resync', { ref: { ...REF, sessionId: 's-99' } });
+    await flush();
+    // Снимок видимой ленты: subscribe и snapshot; скрытая и неизвестная — ни одного вызова.
+    expect(feedCalls(bridge).slice(4)).toEqual(['feed.subscribe', 'feed.snapshot']);
+    expect(feed()).toEqual({ items: [prompt('fresh')], revision: 9, mode: null, decisions: null, status: 'ready' });
+    bridge.emit('feed.resync', { ref: other });
+    await flush();
+    expect(feedCalls(bridge)).toHaveLength(6);
+    expect(useFeedStore.getState().feeds[refKey(other)]?.items).toEqual([prompt('a'), prompt('b')]);
+    show(other);
+    await flush();
+    expect(feedCalls(bridge).slice(6)).toEqual(['feed.subscribe', 'feed.snapshot']);
+    expect(useFeedStore.getState().feeds[refKey(other)]?.revision).toBe(9);
+  });
+
+  it('дельты, пришедшие, пока снимок после resync в пути, ложатся на него по порядку, старый снимок отброшен', async () => {
+    show();
+    useFeedStore.getState().open(REF);
+    await flush();
+    let answer!: (value: Snap) => void;
+    setSnapshots(bridge, [new Promise<Snap>((resolve) => (answer = resolve))]);
+    bridge.emit('feed.resync', { ref: REF });
+    await flush();
+    bridge.emit('feed.changed', { mode: null, ref: REF, revision: 8, upsert: [prompt('late')], removed: [] });
+    answer({ items: [prompt('fresh')], revision: 7 });
+    await flush();
+    expect(feed()).toEqual({ items: [prompt('fresh'), prompt('late')], revision: 8, mode: null, decisions: null, status: 'ready' });
+  });
+
+  it('open второго потребителя у ленты, ждущей показа, грузит её', async () => {
+    useFeedStore.getState().open(REF);
+    await flush();
+    bridge.emit('feed.resync', { ref: REF });
+    await flush();
+    expect(feedCalls(bridge)).toEqual(['feed.subscribe', 'feed.snapshot']);
+    useFeedStore.getState().open(REF);
+    await flush();
+    expect(feedCalls(bridge)).toEqual(['feed.subscribe', 'feed.snapshot', 'feed.subscribe', 'feed.snapshot']);
   });
 });
 
