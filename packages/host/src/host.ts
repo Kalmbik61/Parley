@@ -1405,6 +1405,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       abandoned = true;
       log.error('shutdown deadline exceeded', { ms: shutdownTotalMs });
       for (const socket of sockets) socket.destroy();
+      // steps() брошен вместе с server.close(): без этого сервер слушает уже снятый сокет.
+      server.close();
       closeDb();
     }
     // Замок — последним: пока он держится, новый хост не стартует и не застанет сокет и токен

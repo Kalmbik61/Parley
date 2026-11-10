@@ -295,14 +295,24 @@ describe('сроки остановки хоста', () => {
     expect(await readFile(running.paths.log, 'utf8')).toContain('shutdown deadline exceeded');
     expect(existsSync(running.paths.pid)).toBe(false);
     expect(existsSync(running.paths.socket)).toBe(false);
+    const outcome = await new Promise<string>((resolve) => {
+      const probe = connect({ path: running.paths.socket });
+      probe.once('connect', () => {
+        probe.destroy();
+        resolve('connect');
+      });
+      probe.once('error', () => resolve('error'));
+    });
+    expect(outcome).toBe('error');
   });
 
   it('зависший хук, что бросает после остановки, не оставляет необработанных отказов', async () => {
     const running = await bootWith({ shutdownHookMs: 100, shutdownTotalMs: 250 });
-    for (let i = 0; i < 5; i += 1) running.context.onShutdown(() => new Promise<void>(() => {}));
+    // Отказывающий хук первым: хуки идут по очереди, и общий срок оборвёт остановку раньше, чем дойдёт до него, если он позади зависших.
     running.context.onShutdown(
       () => new Promise<void>((_resolve, reject) => setTimeout(() => reject(new Error('поздний отказ')), 400)),
     );
+    for (let i = 0; i < 5; i += 1) running.context.onShutdown(() => new Promise<void>(() => {}));
     const rejections: unknown[] = [];
     const spy = (reason: unknown): void => void rejections.push(reason);
     process.on('unhandledRejection', spy);
