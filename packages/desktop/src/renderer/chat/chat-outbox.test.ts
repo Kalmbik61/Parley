@@ -321,6 +321,19 @@ describe('chatOutbox — затвор на время хода', () => {
     expect(sentTexts()).toEqual(['later']);
   });
 
+  it('скрытая лента (loading, заморожен идущий ход), активность idle: отправка не пишет серый «Queued» и ждёт промпт', async () => {
+    live();
+    useFeedStore.setState({ feeds: { [KEY]: { items: [prompt('p1', 'go')], revision: 3, mode: null, decisions: null, status: 'loading' } } });
+    chatOutbox.enqueue(KEY, payload('one'));
+    await flush();
+    expect(sentTexts()).toEqual(['one']);
+    expect(useChatUiStore.getState().queued[KEY] ?? []).toEqual([]);
+    // awaitPrompt сработал: следующее сообщение ждёт промпт первого и не уходит.
+    chatOutbox.enqueue(KEY, payload('two'));
+    await flush();
+    expect(sentTexts()).toEqual(['one']);
+  });
+
   it('лента грузится (loading), активность idle: сообщение уходит', async () => {
     live();
     useFeedStore.setState({ feeds: { [KEY]: { items: [], revision: 0, mode: null, decisions: null, status: 'loading' } } });

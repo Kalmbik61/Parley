@@ -127,8 +127,10 @@ function sessionBusy(key: string, ref: SessionRef): boolean {
 
 export async function attemptChatSend(key: string, item: OutboxItem<ChatOutboxPayload>): Promise<AttemptResult> {
   const { ref, text, deps, requestedAt } = item.payload;
-  const before = useFeedStore.getState().feeds[key]?.items ?? NO_ITEMS;
-  const active = turnActive(before);
+  const feed = useFeedStore.getState().feeds[key];
+  const before = feed?.items ?? NO_ITEMS;
+  // Ход идёт — по тому же правилу, что в sessionBusy: замороженные элементы нечитаемой ленты не в счёт.
+  const active = feed?.status === 'ready' ? turnActive(before) : workingNow(ref);
   const seen = promptCount(before, text);
   const outcome = await sendToAgent(deps.bridge, ref, text, true, requestedAt);
   deps.onOutcome?.(outcome);
