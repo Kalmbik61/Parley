@@ -1,4 +1,4 @@
-import { appendFile, mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -18,6 +18,7 @@ import type { ActivityService } from './activity-service.js';
  * заводит свои наблюдатели. Чтения журналов считаются.
  */
 let reads = 0;
+const rescanCalls: string[][] = [];
 let releaseBuild: () => void = () => {};
 let buildGate: Promise<void> = Promise.resolve();
 
@@ -38,6 +39,22 @@ vi.mock('@parley/core', async (importOriginal) => {
     buildAllSessions: async (...args: Parameters<typeof core.buildAllSessions>) => {
       await buildGate;
       return core.buildAllSessions(...args);
+    },
+  };
+});
+
+vi.mock('./log-index.js', async (importOriginal) => {
+  const original = await importOriginal<typeof import('./log-index.js')>();
+  return {
+    ...original,
+    createLogIndex: (...args: Parameters<typeof original.createLogIndex>) => {
+      const created = original.createLogIndex(...args);
+      const rescan = created.rescan.bind(created);
+      created.rescan = (files) => {
+        rescanCalls.push([...files]);
+        rescan(files);
+      };
+      return created;
     },
   };
 });
@@ -75,6 +92,7 @@ beforeEach(async () => {
   codexRoot = await mkdtemp(path.join(tmpdir(), 'parley-codex-'));
   process.env['PARLEY_HOME'] = home;
   reads = 0;
+  rescanCalls.length = 0;
   buildGate = new Promise((resolve) => {
     releaseBuild = resolve;
   });
@@ -227,5 +245,46 @@ describe('страховка раз в SAFETY_RESCAN_MS', () => {
     });
     await appendFile(journal, SESSION_START);
     await waitFor(() => hookedSince(a.get(ref)?.activity, since));
+  }, 20_000);
+
+  it('страховка просит перечитать логи только активных сессий не Codex', async () => {
+    const claudeDir = path.join(claudeRoot, '-proj');
+    await mkdir(claudeDir, { recursive: true });
+    const claudeLog = (id: string): string => path.join(claudeDir, `${id}.jsonl`);
+    const claudeLine = (id: string): string =>
+      `${JSON.stringify({ type: 'custom-title', customTitle: 'заголовок', sessionId: id })}\n`;
+    const codexDir = path.join(codexRoot, '2026', '10', '04');
+    await mkdir(codexDir, { recursive: true });
+    const codexId = 'codex-live-1';
+    await writeFile(
+      path.join(codexDir, `rollout-2026-10-04T12-00-00-${codexId}.jsonl`),
+      `${JSON.stringify({ type: 'session_meta', timestamp: '2026-10-04T12:00:00.000Z', payload: { id: codexId, cwd: '/codex', source: 'cli' } })}\n`,
+    );
+    await writeFile(claudeLog('claude-live-1'), claudeLine('claude-live-1'));
+    await writeFile(claudeLog('claude-closed-1'), claudeLine('claude-closed-1'));
+
+    const { ref } = await freshSession();
+    await updateMap(project, ref.workId, (current) => {
+      current.sessions.find((item) => item.id === ref.sessionId)!.providerSessionId = 'claude-live-1';
+      const closed = addSession(current, { provider: 'claude', label: 'закрытая', task: 'сделать' });
+      closed.launchedBy = 'host';
+      transitionSession(current, closed.id, 'active');
+      transitionSession(current, closed.id, 'closed');
+      closed.providerSessionId = 'claude-closed-1';
+      const codex = addSession(current, { provider: 'codex', label: 'codex', task: 'сделать' });
+      codex.launchedBy = 'host';
+      transitionSession(current, codex.id, 'active');
+      codex.providerSessionId = codexId;
+    });
+    await startedWithFakeInterval();
+    releaseBuild();
+    // Индекс логов готов: на его первый список служба дочитывает журналы, а `rescan` уже вызван страховкой.
+    await waitFor(() => rescanCalls.length > 0, 10_000);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const before = rescanCalls.length;
+
+    vi.advanceTimersByTime(SAFETY_RESCAN_MS);
+    await waitFor(() => rescanCalls.length > before);
+    expect(rescanCalls.at(-1)).toEqual([claudeLog('claude-live-1')]);
   }, 20_000);
 });

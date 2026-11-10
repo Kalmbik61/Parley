@@ -1538,16 +1538,22 @@ export function createActivityService(
   /**
    * Дочитывание журналов активных сессий всех работ: после новых наблюдателей (`catchUp`) и по страховочному таймеру
    * (`SAFETY_RESCAN_MS`). Чтение без новых байт состояния не меняет. Спящие и закрытые сессии хуков не пишут.
+   * Заодно индексу логов отдаются логи этих сессий, кроме Codex (его дочитывает `codex-log-poll.ts`): потерянное
+   * событие наблюдателя логов иначе дождалось бы следующей записи в файл. Без изменений это один `stat` на файл.
    */
   function rescanLive(): void {
     if (stopped) return;
+    const logs: string[] = [];
     for (const entry of works.snapshot().entries) {
       const watch = workWatches.get(workKeyOf(entry.projectPath, entry.map.work.id));
-      if (watch === undefined) continue;
       for (const session of entry.map.sessions) {
-        if (isLive(session)) void readJournal(entry.projectPath, entry.map.work.id, watch.journal, session.id);
+        if (!isLive(session)) continue;
+        if (watch !== undefined) void readJournal(entry.projectPath, entry.map.work.id, watch.journal, session.id);
+        const file = session.provider === 'codex' ? undefined : logIndex.index(session)?.file;
+        if (file !== undefined) logs.push(file);
       }
     }
+    if (logs.length > 0) logIndex.rescan(logs);
   }
 
   async function readJournal(
