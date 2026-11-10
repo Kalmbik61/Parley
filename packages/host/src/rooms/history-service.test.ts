@@ -128,3 +128,54 @@ it('a letter without a map change rebuilds the room history; read marks and othe
   await vi.advanceTimersByTimeAsync(100); expect(f.io.rebuild).toHaveBeenCalledTimes(2);
   f.service.stop();
 });
+
+/** Две комнаты: письмо в одной пересобирает только её; общий отпечаток — все; упавшая комната не застревает. */
+const twoRooms = (): WorkEntry => {
+  const value = entry();
+  value.map.rooms.push({ ...value.map.rooms[0]!, id: 'r-02', title: 'Second room' });
+  return value;
+};
+const rebuilt = (f: ReturnType<typeof fixture>): string[] => vi.mocked(f.io.rebuild).mock.calls.map((call) => String(call[2]));
+it('a letter in one of two rooms rebuilds only that room', async () => {
+  vi.useFakeTimers(); const f = fixture(twoRooms()); f.service.start();
+  await vi.advanceTimersByTimeAsync(100); expect(rebuilt(f)).toEqual(['r-01', 'r-02']);
+  vi.mocked(f.io.tops).mockReturnValue({ 'r-02': 5 });
+  f.mailed(mailNotice({ added: [{ ...roomLetter, id: 'm-02', roomId: 'r-02' }] }));
+  await vi.advanceTimersByTimeAsync(100);
+  expect(rebuilt(f)).toEqual(['r-01', 'r-02', 'r-02']);
+  f.service.stop();
+});
+it('a work title change rebuilds every room', async () => {
+  vi.useFakeTimers(); const value = twoRooms(), f = fixture(value); f.service.start();
+  await vi.advanceTimersByTimeAsync(100);
+  value.map.work.title = 'Renamed work'; f.changed();
+  await vi.advanceTimersByTimeAsync(100);
+  expect(rebuilt(f)).toEqual(['r-01', 'r-02', 'r-01', 'r-02']);
+  f.service.stop();
+});
+it('a room whose rebuild failed is rebuilt again on the next pass, the other room is not', async () => {
+  vi.useFakeTimers(); const value = twoRooms(), f = fixture(value);
+  vi.mocked(f.io.rebuild).mockImplementation(async (_p, _w, roomId) => {
+    if (roomId === 'r-02') throw new Error('busy');
+    return { sharedAt: null, diagnostics: [] };
+  });
+  f.service.start(); await vi.advanceTimersByTimeAsync(100);
+  expect(rebuilt(f)).toEqual(['r-01', 'r-02']);
+  vi.mocked(f.io.rebuild).mockClear(); vi.mocked(f.io.rebuild).mockResolvedValue({ sharedAt: null, diagnostics: [] });
+  value.map.rooms[0]!.title = 'Renamed first'; f.changed();
+  await vi.advanceTimersByTimeAsync(100);
+  expect(rebuilt(f)).toEqual(['r-01', 'r-02']);
+  f.service.stop();
+});
+it('a snapshot with the same version does not recompute the fingerprint', async () => {
+  vi.useFakeTimers(); const value = twoRooms(); value.version = 3; value.incarnation = 1;
+  const f = fixture(value); f.service.start();
+  await vi.advanceTimersByTimeAsync(100);
+  const scans = vi.mocked(f.io.tops).mock.calls.length;
+  f.changed(); f.changed(); await vi.advanceTimersByTimeAsync(1000);
+  expect(vi.mocked(f.io.tops).mock.calls.length).toBe(scans);
+  value.version = 4; f.changed(); await vi.advanceTimersByTimeAsync(1000);
+  expect(vi.mocked(f.io.tops).mock.calls.length).toBe(scans + 1);
+  expect(rebuilt(f)).toEqual(['r-01', 'r-02']);
+  f.service.stop();
+});

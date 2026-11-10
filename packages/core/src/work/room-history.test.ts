@@ -101,6 +101,15 @@ describe('derived local history and explicitly owned shared snapshots', () => {
     await expect(readFile(local())).rejects.toMatchObject({ code: 'ENOENT' }); expect(await readFile(shared(), 'utf8')).toBe(content);
     expect((await removeLocalRoomHistories(project, workId, ['r-01'])).failed).toEqual([]);
   });
+  it('rebuild does not copy the map', async () => {
+    await readMap(project, workId);
+    const clone = vi.spyOn(globalThis, 'structuredClone');
+    try {
+      await rebuildRoomHistory(project, workId, 'r-01');
+      expect(clone).not.toHaveBeenCalled();
+    } finally { clone.mockRestore(); }
+    expect(await readFile(local(), 'utf8')).toContain('Human-readable feed');
+  });
 });
 
 it('legacy feed scalar/control units are explicitly represented while valid emoji, BOM and EOL are retained', async () => {
