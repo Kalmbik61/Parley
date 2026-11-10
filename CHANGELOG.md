@@ -9,6 +9,11 @@ All notable changes to Parley are documented in this file.
 ### Fixed
 
 - Room titles can no longer carry line breaks or terminal control codes into other agents' terminals; the phone can no longer send shell commands (`!…`) to a session.
+- When a room member hands in its result with `report`, the room lead now gets a letter, and a room lead's result reaches the room owner; the session that created the reporter is told too. The `report` answer names who was told, and the same result repeated within a minute does not wake them again.
+
+### Changed
+
+- An agent can create at most five rooms per hour and can no longer take a session out of a room you set up unless it leads that room.
 
 ## 0.32.0
 

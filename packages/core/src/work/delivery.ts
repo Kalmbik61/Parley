@@ -10,6 +10,7 @@ import { HUMAN, type Message, type Room, type WorkSession } from './types.js';
 import type { SessionActivity } from './activity.js';
 import { cleanInline } from '../text-clean.js';
 import { sessionMention } from './thread.js';
+import { isReportUpdateLetter } from './task-giver.js';
 
 /**
  * Окно тишины (план «меньше ходов», C1.2): заметка всем без упоминания не будит простаивающего агента сразу —
@@ -165,12 +166,14 @@ function mentionPattern(recipientId: string): RegExp {
 
 /**
  * Срочность письма для одного получателя: от человека, адресное (`to` не пусто), не заметка (`question`, `decision`)
- * или с упоминанием получателя `@sNN` (или `@s-NN`, `mentionPattern`). Выражение упоминания строится один раз —
+ * или с упоминанием получателя `@sNN` (или `@s-NN`, `mentionPattern`). Письмо-обновление итога (`isReportUpdateLetter`)
+ * не срочное, как бы ни было адресовано: оно ждёт окна тишины. Выражение упоминания строится один раз —
  * предикат годится на любое число писем.
  */
 function urgencyOf(recipientId: string): (message: Message) => boolean {
   const mention = mentionPattern(recipientId);
-  return (message) => message.from === HUMAN || message.to.length > 0 || message.kind !== 'note' || mention.test(message.text);
+  return (message) => !isReportUpdateLetter(message) &&
+    (message.from === HUMAN || message.to.length > 0 || message.kind !== 'note' || mention.test(message.text));
 }
 
 /** Письмо будит получателя сразу, без окна тишины (`urgencyOf`). */

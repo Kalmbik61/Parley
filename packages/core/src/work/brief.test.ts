@@ -323,7 +323,7 @@ describe('бриф: роль в комнате', () => {
     expect(brief).toContain('do not start the work until the lead names your part');
     // Свой токен упоминания — по нему участник узнаёт свою часть.
     expect(brief).toContain('yours is `@s03`');
-    expect(brief).toMatch(/report to the lead in the room/);
+    expect(brief).toMatch(/when done call `report`: it notifies the lead/);
     expect(brief).not.toContain('you are the lead');
   });
 
@@ -339,7 +339,7 @@ describe('бриф: роль в комнате', () => {
   it('участнику: раздачу частей не подтверждать — следующее письмо ведущему уже результат', () => {
     const role = memberRole('@s03');
 
-    expect(role).toContain('Do not acknowledge the assignment of parts: your next message to the lead is the result.');
+    expect(role).toContain('Do not acknowledge the assignment of parts.');
     expect(buildBrief(mapWithRoom(), 's-03')).toContain(role);
   });
 

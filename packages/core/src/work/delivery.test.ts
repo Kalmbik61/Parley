@@ -13,8 +13,9 @@ import {
   settleDelayMs,
   wakesAtOnce,
 } from './delivery.js';
+import { reportLetterText } from './task-giver.js';
 import type { SessionNeed } from './stuck.js';
-import { HUMAN, type Message, type Room, type WorkSession } from './types.js';
+import { HUMAN, SYSTEM, type Message, type Room, type WorkSession } from './types.js';
 
 const sessionOf = (patch: Partial<WorkSession> = {}): WorkSession => ({
   id: 's-01',
@@ -979,5 +980,40 @@ describe('deliveryAction — окно тишины (план «меньше хо
       kind: 'type-pointer',
       queue: true,
     });
+  });
+});
+
+describe('письмо-обновление итога — не срочное', () => {
+  const T0 = Date.parse('2026-10-27T10:00:00.000Z');
+  const report = (update: boolean): Message =>
+    messageOf({ id: 'm-01', from: SYSTEM, to: ['s-02'], roomId: null, kind: 'note', at: new Date(T0).toISOString(),
+      text: reportLetterText('s-03', 'done', 'Ready', update ? { rooms: ['r-01'], update: true } : { rooms: ['r-01'] }) });
+  const idle: Parameters<typeof deliveryAction>[0] = {
+    session: sessionOf({ id: 's-02' }),
+    activity: activityOf('idle'),
+    hasDraft: false,
+    paused: false,
+    unread: [report(true)],
+    rooms: [],
+    pointed: new Set<string>(),
+    inFlight: false,
+    resumeAllowed: true,
+    hooked: true,
+    now: T0,
+  };
+
+  it('wakesAtOnce: обновление — нет, обычное письмо о сдаче — да', () => {
+    expect(wakesAtOnce(report(true), 's-02')).toBe(false);
+    expect(wakesAtOnce(report(false), 's-02')).toBe(true);
+  });
+
+  it('settleDelayMs: обновление ждёт SETTLE_MS', () => {
+    expect(settleDelayMs([report(true)], 's-02', T0)).toBe(SETTLE_MS);
+  });
+
+  it('deliveryAction: одно обновление — settling, с обычным письмом о сдаче — указатель', () => {
+    expect(deliveryAction(idle)).toEqual({ kind: 'none', reason: 'settling', retryInMs: SETTLE_MS });
+    const regular = { ...report(false), id: 'm-02' };
+    expect(deliveryAction({ ...idle, unread: [report(true), regular] }).kind).toBe('type-pointer');
   });
 });

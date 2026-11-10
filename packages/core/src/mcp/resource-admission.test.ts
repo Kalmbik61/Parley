@@ -220,3 +220,100 @@ describe('send_message и приглашения: допуск', () => {
     expect((await readMap(project, workId)).sessions.find((session) => session.id === 's-01')?.lifecycle).toBe('closed');
   });
 });
+
+describe('комнаты: предел за час и комнаты, которые завёл человек', () => {
+  const HOUR = 60 * 60 * 1000;
+
+  beforeEach(async () => {
+    await updateMap(project, workId, (map) => {
+      for (const label of ['a', 'b', 'c']) {
+        const session = addSession(map, { provider: 'claude', label, task: 'x', parent: null });
+        session.parent = 's-01';
+        transitionSession(map, session.id, 'active');
+      }
+    });
+  });
+
+  const seedRooms = (count: number, ageMs: number) =>
+    updateMap(project, workId, (map) => {
+      for (let i = 0; i < count; i += 1) {
+        addRoom(map, { title: `старая ${i}`, creator: 's-01', members: ['s-01'] }, new Date(Date.now() - ageMs).toISOString());
+      }
+    });
+
+  it('create_room проходит ровно при k < 5 комнат вызывающего за последний час', async () => {
+    for (const k of [0, 1, 4, 5, 6]) {
+      await updateMap(project, workId, (map) => {
+        map.rooms.length = 0;
+      });
+      await seedRooms(k, 60_000);
+      const client = await connect('s-01', limits());
+      const result = await call(client, 'create_room', { title: 'новая', members: ['s-02'], lead: 's-02' });
+      expect(result.isError).toBe(k >= 5);
+      if (k >= 5) expect(result.text).toContain(`too many rooms: ${k} created by this session in the last hour (limit 5)`);
+    }
+  });
+
+  it('комнаты старше часа не считаются, а комната из одного себя считается', async () => {
+    await seedRooms(5, HOUR + 60_000);
+    const client = await connect('s-01', limits());
+    expect((await call(client, 'create_room', { title: 'новая', members: ['s-02'], lead: 's-02' })).isError).toBe(false);
+
+    await updateMap(project, workId, (map) => {
+      map.rooms.length = 0;
+    });
+    await seedRooms(5, 60_000); // у каждой members: [s-01]
+    expect((await call(client, 'create_room', { title: 'новая', members: ['s-02'], lead: 's-02' })).isError).toBe(true);
+  });
+
+  it('при отказе по пределу карта не меняется', async () => {
+    await seedRooms(5, 60_000);
+    const before = JSON.stringify(readStoredMap(project, workId));
+    const client = await connect('s-01', limits());
+    expect((await call(client, 'create_room', { title: 'новая', members: ['s-02'], lead: 's-02' })).isError).toBe(true);
+    expect(JSON.stringify(readStoredMap(project, workId))).toBe(before);
+  });
+
+  it('create_room: из комнаты человека уводит только её ведущий; из комнаты агента — любой', async () => {
+    await updateMap(project, workId, (map) => {
+      addRoom(map, { title: 'штаб', creator: HUMAN, members: ['s-02', 's-03'], lead: 's-02' });
+      addRoom(map, { title: 'агентская', creator: 's-01', members: ['s-04'], lead: 's-04' });
+    });
+
+    const stranger = await connect('s-01', limits());
+    const before = JSON.stringify(readStoredMap(project, workId));
+    const refused = await call(stranger, 'create_room', { title: 'увод', members: ['s-01', 's-03'], lead: 's-01' });
+    expect(refused.isError).toBe(true);
+    expect(refused.text).toContain("session s-03 works in room r-01, which the human set up: only the human or that room's lead can move it");
+    expect(JSON.stringify(readStoredMap(project, workId))).toBe(before);
+
+    // Участники комнаты агента уходят без отказа.
+    const fromAgent = await call(stranger, 'create_room', { title: 'из агентской', members: ['s-01', 's-04'], lead: 's-01' });
+    expect(fromAgent.isError).toBe(false);
+
+    // Ведущий комнаты человека уводит свою сессию, а сам (участник той же комнаты) отказа не получает.
+    const lead = await connect('s-02', limits());
+    const allowed = await call(lead, 'create_room', { title: 'увод', members: ['s-02', 's-03'], lead: 's-02' });
+    expect(allowed.isError).toBe(false);
+  });
+
+  it('add_to_room: тот же отказ для чужого, успех для ведущего комнаты человека', async () => {
+    await updateMap(project, workId, (map) => {
+      addRoom(map, { title: 'штаб', creator: HUMAN, members: ['s-02', 's-03'], lead: 's-02' });
+      addRoom(map, { title: 'своя', creator: 's-01', members: ['s-01'], lead: 's-01' });
+    });
+
+    const stranger = await connect('s-01', limits());
+    const before = JSON.stringify(readStoredMap(project, workId));
+    const refused = await call(stranger, 'add_to_room', { room: 'r-02', session: 's-03' });
+    expect(refused.isError).toBe(true);
+    expect(refused.text).toContain('which the human set up');
+    expect(JSON.stringify(readStoredMap(project, workId))).toBe(before);
+
+    await updateMap(project, workId, (map) => {
+      addRoom(map, { title: 'вторая', creator: 's-02', members: ['s-02'], lead: 's-02' });
+    });
+    const lead = await connect('s-02', limits());
+    expect((await call(lead, 'add_to_room', { room: 'r-03', session: 's-03' })).isError).toBe(false);
+  });
+});

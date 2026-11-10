@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { TOOLS as PARLEY_TOOLS } from '../mcp/tools.js';
 import { MCP_SERVER_NAME } from '../names.js';
+import { BUILTIN_ROLES } from '../roles/builtin.js';
 import { LEAD_ROLE, memberRole } from './brief.js';
 import { GUIDE, guideTopic } from './guide.js';
 import { SKILL_MD } from './skill.js';
@@ -157,7 +158,7 @@ describe('системная вставка', () => {
     const line = stableGuidance().split('\n').find((candidate) => candidate.startsWith('close_session'));
 
     expect(line).toBe(
-      'close_session — yours: after the human\'s "wrap up" or, if work.closeFinished, once accepted; sessions you created: once accepted; autonomous stage 1: the engine creates and closes sessions.',
+      'close_session — yours: after the human\'s "wrap up" or, if work.closeFinished, after report(done); sessions you created: once accepted; autonomous stage 1: the engine creates and closes sessions.',
     );
     expect(systemGuidance(mapOf('Authorization', 'login by e-mail'), 's-03').split('\n').length).toBeLessThanOrEqual(14);
   });
@@ -217,7 +218,7 @@ describe('системная вставка', () => {
     const text = systemGuidance(mapOf('Authorization', 'login by e-mail'), 's-03');
 
     expect(text).toMatch(
-      /a participant speaks up in one message, waits for their part and reports to the lead in the room/,
+      /a participant speaks up in one message, waits for their part and hands it in with report/,
     );
   });
 
@@ -436,7 +437,7 @@ describe('подробный гид', () => {
     expect(GUIDE).toContain('### Room participant');
     expect(GUIDE).toMatch(/Speak up in one message/);
     expect(GUIDE).toMatch(/Wait for your part: do not start the work/);
-    expect(GUIDE).toMatch(/Report to the lead in the room/);
+    expect(GUIDE).toMatch(/When your part is done, call `report`/);
   });
 
   it('комнаты, ведущему: пока решение ждёт, новое сообщение человека всем цикл не перезапускает', () => {
@@ -954,5 +955,33 @@ describe('профиль short, примеры для Codex и правило о
   it('stable guidance ends the report line with the stop rule', () => {
     expect(stableGuidance()).toMatch(/Call report before finishing, then end the turn; without it the result goes nowhere\.$/m);
     expect(stableGuidance({ toolProfile: 'short' })).toMatch(/Call report before finishing, then end the turn; without it the result goes nowhere\.$/m);
+  });
+
+  it('ни один текст агенту не держит прежнее правило сдачи', () => {
+    const texts = [
+      GUIDE,
+      stableGuidance(),
+      CODEX_TOOL_EXAMPLES,
+      LEAD_ROLE,
+      memberRole('@s03'),
+      SKILL_MD,
+      ...BUILTIN_ROLES.map((role) => role.prompt),
+      ...PARLEY_TOOLS.map((tool) => tool.description ?? ''),
+    ];
+    const old = [
+      'report to the lead in the room',
+      'once your part is accepted',
+      'A room member reports in the room',
+      'exactly once at the end',
+      'batch evidence',
+      'also mails the session that last tasked you',
+    ];
+    for (const text of texts) {
+      for (const phrase of old) expect(text.toLowerCase(), phrase).not.toContain(phrase.toLowerCase());
+    }
+    // Новое правило: кого будит report.
+    for (const text of [stableGuidance(), CODEX_TOOL_EXAMPLES, SKILL_MD]) {
+      expect(text).toContain('notifies your room lead, room owner or task giver');
+    }
   });
 });

@@ -29,6 +29,7 @@ const error = (text: string): CallToolResult => ({ content: [{ type: 'text', tex
 
 const FOLDER_TRUST_HELD = 'The session waits for the human to trust the folder; it starts by itself after that.';
 const PROJECT_MCP_HELD = 'The session waits for the human to decide which MCP servers of the project may run (.mcp.json); it starts by itself after that.';
+const REPORT_ARRIVES = 'Its report (done or failed) reaches you as a letter: wait for it with wait_for("inbox", 1500).';
 const SESSION_QUEUED = 'The session is queued: this machine is at its agent limit or low on memory. It starts by itself when a slot frees; wait_for on its id waits for it as for a running session.';
 
 /**
@@ -60,12 +61,12 @@ export async function createSession(agent: AgentChannel, args: Record<string, un
   if (isRecord(body) && body.ok === true && isRecord(body.result) && typeof body.result.sessionId === 'string' && body.result.sessionId && typeof body.result.provider === 'string' && body.result.provider) {
     // Запуск Codex удержан до согласия человека на папку (спека 2026-10-21, 4.2): ответ пришёл сразу, сессия стартует сама.
     if (body.result.held === 'folder-trust') {
-      return { content: [{ type: 'text', text: JSON.stringify(body.result) }, { type: 'text', text: FOLDER_TRUST_HELD }] };
+      return { content: [{ type: 'text', text: JSON.stringify(body.result) }, { type: 'text', text: FOLDER_TRUST_HELD }, { type: 'text', text: REPORT_ARRIVES }] };
     }
     if (body.result.held === 'project-mcp') {
-      return { content: [{ type: 'text', text: JSON.stringify(body.result) }, { type: 'text', text: PROJECT_MCP_HELD }] };
+      return { content: [{ type: 'text', text: JSON.stringify(body.result) }, { type: 'text', text: PROJECT_MCP_HELD }, { type: 'text', text: REPORT_ARRIVES }] };
     }
-    return { content: [{ type: 'text', text: JSON.stringify(body.result) }, ...queuedNotes(body.result)] };
+    return { content: [{ type: 'text', text: JSON.stringify(body.result) }, ...queuedNotes(body.result), { type: 'text', text: REPORT_ARRIVES }] };
   }
   if (isRecord(body) && body.ok === false && isRecord(body.error) && typeof body.error.code === 'string' && typeof body.error.message === 'string') {
     return error(`${body.error.code}: ${body.error.message}`);
