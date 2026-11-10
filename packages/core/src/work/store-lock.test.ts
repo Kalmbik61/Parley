@@ -5,12 +5,13 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { closeWorkDb, WORK_DB_FILE, workDb } from './db.js';
-import { readLetters, unreadLetters, writeLetters, type LetterTx, type NewLetter } from './letter-store.js';
+import { readLetters, unreadLetters, writeLetters, writeLettersAsync, type LetterTx, type NewLetter } from './letter-store.js';
 import { addSession, normalizeMap } from './map.js';
 import { isPlainJsonTree, mapToRows, rowsToMap } from './map-rows.js';
 import { addRoom } from './rooms.js';
 import {
   createWork,
+  MapLockTimeoutError,
   onMapWritten,
   pruneWorksIndex,
   readMap,
@@ -444,5 +445,128 @@ describe('pruneWorksIndex: копия снимаемой работы до за�
     expect(workExists(project, workId)).toBe(true);
     expect(report).toHaveBeenCalledTimes(1);
     expect(report).toHaveBeenCalledWith(`workspace ${workId} (${project}) kept: it changed while its copy was saved`);
+  });
+});
+
+describe('запись под чужим замком базы', () => {
+  /** Второе соединение держит блокировку записи, как чужой процесс (CLI, MCP агента). */
+  const holdWriteLock = (): { release: () => void } => {
+    const foreign = new Database(path.join(home, WORK_DB_FILE));
+    foreign.exec('PRAGMA busy_timeout = 0');
+    foreign.exec('BEGIN IMMEDIATE');
+    let held = true;
+    return {
+      release: () => {
+        if (!held) return;
+        held = false;
+        foreign.exec('ROLLBACK');
+        foreign.close();
+      },
+    };
+  };
+  const pause = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+  const texts = (workId: string): string[] => readLetters(project, workId, { limit: 100 }).map((message) => message.text);
+
+  it('writeLettersAsync ждёт освобождения, а цикл событий идёт: таймер, заведённый до записи, срабатывает раньше неё', async () => {
+    const workId = await seed(3);
+    const foreign = holdWriteLock();
+    const order: string[] = [];
+    try {
+      const timer = pause(30).then(() => order.push('timer'));
+      const write = writeLettersAsync(project, workId, (letters) => letters.add(note({ text: 'under lock' })), {
+        lockTimeoutMs: 20_000,
+      }).then(() => order.push('write'));
+      await pause(400);
+      // Замок ещё чужой: письма нет, запись не завершилась, а таймер уже сработал.
+      expect(order).toEqual(['timer']);
+      expect(texts(workId)).toEqual([]);
+      foreign.release();
+      await Promise.all([timer, write]);
+    } finally {
+      foreign.release();
+    }
+
+    expect(order).toEqual(['timer', 'write']);
+    expect(texts(workId)).toEqual(['under lock']);
+  });
+
+  it('замок дольше срока: MapLockTimeoutError с прежним текстом, мутатор не вызывался', async () => {
+    const workId = await seed(3);
+    const foreign = holdWriteLock();
+    let calls = 0;
+    try {
+      const started = Date.now();
+      const error = await writeLettersAsync(
+        project,
+        workId,
+        (letters) => {
+          calls += 1;
+          letters.add(note());
+        },
+        { lockTimeoutMs: 150 },
+      ).catch((cause: Error) => cause);
+
+      expect(error).toBeInstanceOf(MapLockTimeoutError);
+      expect((error as Error).message).toMatch(/lock .*parley\.db was not released within 150 ms/);
+      expect(Date.now() - started).toBeLessThan(3000);
+      expect(calls).toBe(0);
+    } finally {
+      foreign.release();
+    }
+    expect(texts(workId)).toEqual([]);
+  });
+
+  it('updateMap под чужим замком не держит цикл и пишет после освобождения; два писателя одного процесса оба применены', async () => {
+    const workId = await seed(3);
+    const foreign = holdWriteLock();
+    let fired = false;
+    const timer = pause(30).then(() => {
+      fired = true;
+    });
+    const first = updateMap(project, workId, (map) => (map.work.title = 'First'), { lockTimeoutMs: 20_000 });
+    const second = updateMap(project, workId, (map) => (map.work.goal = 'Second'), { lockTimeoutMs: 20_000 });
+    try {
+      await pause(300);
+      expect(fired).toBe(true);
+    } finally {
+      foreign.release();
+    }
+    await Promise.all([first, second, timer]);
+
+    const map = await readMap(project, workId);
+    expect(map.work.title).toBe('First');
+    expect(map.work.goal).toBe('Second');
+  });
+
+  it('ошибка тела не повторяется: мутатор вызван один раз', async () => {
+    const workId = await seed(3);
+    let calls = 0;
+    await expect(
+      updateMap(project, workId, () => {
+        calls += 1;
+        throw new Error('mutator failed');
+      }),
+    ).rejects.toThrow('mutator failed');
+    expect(calls).toBe(1);
+  });
+
+  it('синхронный writeLetters по-прежнему блокирует цикл и падает по сроку', async () => {
+    const workId = await seed(3);
+    const foreign = holdWriteLock();
+    let fired = false;
+    setTimeout(() => {
+      fired = true;
+    }, 0);
+    try {
+      const started = Date.now();
+      expect(() => writeLetters(project, workId, (letters) => letters.add(note()), { lockTimeoutMs: 150 })).toThrow(
+        MapLockTimeoutError,
+      );
+      // Цикл событий не освобождался: таймер на 0 мс не успел сработать, а ожидание длилось почти весь срок.
+      expect(fired).toBe(false);
+      expect(Date.now() - started).toBeGreaterThanOrEqual(100);
+    } finally {
+      foreign.release();
+    }
   });
 });

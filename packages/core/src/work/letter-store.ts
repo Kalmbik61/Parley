@@ -33,7 +33,7 @@ import {
 import { recipientsOf, unreadFor, unreadForHuman } from './letters.js';
 import { addMessage, maxNumber } from './map.js';
 import { deepFreeze, freezeMaps } from './works.js';
-import { applyMapUpdate, letterDb, readMapView, readTransaction, storeDb, type UpdateMapOptions } from './store.js';
+import { applyLettersAsync, applyMapUpdate, letterDb, readMapView, readTransaction, storeDb, type UpdateMapOptions } from './store.js';
 import { HUMAN, type Message, type MessageKind, type MessageVia, type WindowWorkMap, type WorkMap } from './types.js';
 
 /** Новое письмо. Номер `m-NN` выдаёт хранилище; `readBy` и `at` задают тесты и переезд, у обычного письма их нет. */
@@ -356,6 +356,23 @@ export function writeLetters<T>(
   return result as T;
 }
 
+/**
+ * `writeLetters` для хоста: чужой замок базы ждётся срезами по 10 мс с паузой цикла событий до прежнего срока, а не сном
+ * внутри SQLite (хост — один поток). Остальное — как у `writeLetters`; синхронная версия остаётся для процессов инструментов.
+ */
+export async function writeLettersAsync<T>(
+  projectPath: string,
+  workId: string,
+  fn: (letters: LetterTx, map: Readonly<WorkMap>) => T,
+  options?: Pick<UpdateMapOptions, 'touch' | 'lockTimeoutMs'>,
+): Promise<T> {
+  let result: T | undefined;
+  await applyLettersAsync(projectPath, workId, (map, letters) => {
+    result = fn(letters, freezeMaps ? deepFreeze(structuredClone(map)) : map);
+  }, options);
+  return result as T;
+}
+
 /** Выборка писем вне транзакции. Работы нет — `WorkNotFoundError`. */
 export function readLetters(projectPath: string, workId: string, q: LetterQuery): Message[] {
   return selectRows(letterDb(projectPath, workId), projectPath, workId, q);
@@ -532,7 +549,7 @@ export async function markHumanRead(projectPath: string, workId: string, message
 
   // Под блокировкой отбираем заново: другой клиент мог отметить часть писем между чтениями.
   let marked = 0;
-  writeLetters(
+  await writeLettersAsync(
     projectPath,
     workId,
     (letters) => {

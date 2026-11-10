@@ -39,7 +39,7 @@ import {
   setRoomOwner,
   updateMap,
   workExists,
-  writeLetters,
+  writeLettersAsync,
   type MessageVia,
   type Room,
   type WorkMap,
@@ -170,8 +170,8 @@ export async function deliverRecipeToNewLeads(projectPath: string, map: WorkMap)
 export async function sendHumanLetter(input: Params<'rooms.send'>, options: { via?: MessageVia } = {}): Promise<string> {
   const { projectPath, workId, roomId, to, text, kind, replyTo } = input;
   assertWork(projectPath, workId);
-  // Письмо человека — только письма, без разбора карты (спека хранилища 6.2): `writeLetters` кладёт одну строку.
-  return writeLetters(projectPath, workId, (letters, map) => {
+  // Письмо человека — только письма, без разбора карты (спека хранилища 6.2): `writeLettersAsync` кладёт одну строку.
+  return await writeLettersAsync(projectPath, workId, (letters, map) => {
     if (roomId !== null) {
       // Нет комнаты или она в архиве — `bad_request`: писать в архивную нельзя, пока человек не вернёт её (`rooms.reopen`).
       const room = openRoom(map, roomId);
