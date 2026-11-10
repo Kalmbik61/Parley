@@ -17,6 +17,7 @@
 export const PLAN_LETTER_TAILS = {
   ready: 'Perform this accepted assignment; use plan_update and plan_submit with this exact planId/rev/item. A skill named in scope is guidance, not automatic loading.',
   verify: 'Independently inspect the result and call plan_verify with this exact planId/rev/item.',
+  verifyByLead: 'The named verifier is unavailable. Inspect the result and call plan_verify with this exact planId/rev/item; if you own this item, propose an amended plan with another verifier.',
   returned: 'Address this note, then call plan_submit with this exact planId/rev/item.',
   blocked: 'Bring an amended decision if this assignment must change.',
   mode: 'Bring a plan matching the current mode before proceeding.',
@@ -79,14 +80,16 @@ function itemLetter(header: RegExpExecArray, text: string): string | null {
     return sections === null ? null : [head, ...sections, next(PLAN_LETTER_TAILS.ready)].join('\n\n');
   }
 
-  const verify = splitTail(body, PLAN_LETTER_TAILS.verify);
+  const verifyTail =
+    splitTail(body, PLAN_LETTER_TAILS.verify) !== null ? PLAN_LETTER_TAILS.verify : PLAN_LETTER_TAILS.verifyByLead;
+  const verify = splitTail(body, verifyTail);
   if (verify !== null) {
     const at = verify.indexOf('\nEvidence:\n');
     if (at < 0) return null;
     const sections = scopeSections(verify.slice(0, at));
     const evidence = verify.slice(at + '\nEvidence:\n'.length);
     if (sections === null) return null;
-    return [head, ...sections, ...(evidence.trim() === '' ? [] : [section('Evidence', evidence)]), next(PLAN_LETTER_TAILS.verify)].join('\n\n');
+    return [head, ...sections, ...(evidence.trim() === '' ? [] : [section('Evidence', evidence)]), next(verifyTail)].join('\n\n');
   }
 
   const returned = splitTail(body, PLAN_LETTER_TAILS.returned);

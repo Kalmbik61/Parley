@@ -72,6 +72,14 @@ function participant(
       ))
   );
 }
+/** Названный проверяющий недоступен: сессия закрыта или не в комнате (HUMAN доступен всегда). */
+export function planVerifierUnavailable(
+  map: WorkMap,
+  room: Room,
+  item: PlanItem,
+): boolean {
+  return item.verifier !== null && !participant(map, room, item.verifier);
+}
 export function requirePlanLead(map: WorkMap, room: Room, actor: string): void {
   if (
     isRoomClosed(map, room) ||
@@ -755,8 +763,20 @@ export function verifyPlanItem(
       (!humanReturn && (plan.status !== "active" || item.status !== "done"))
     )
       throw new PlanConflictError();
-    if (actor !== HUMAN && (actor !== item.verifier || actor === item.owner))
-      throw new RoomRuleError("only the independent verifier can verify");
+    const itemRoom = planRoom(draft, plan.roomId);
+    // Исполнитель никогда не проверяет свой пункт, даже будучи ведущим: эта проверка первая.
+    if (
+      actor !== HUMAN &&
+      (actor === item.owner ||
+        (actor !== item.verifier &&
+          !(
+            liveLead(draft, itemRoom) === actor &&
+            planVerifierUnavailable(draft, itemRoom, item)
+          )))
+    )
+      throw new RoomRuleError(
+        "only the independent verifier, or the live lead when that verifier is unavailable, can verify",
+      );
     if (!["verified", "returned"].includes(verdict) || !text(note))
       throw new RoomRuleError("verification needs a note");
     log(item, actor, verdict, note, at);

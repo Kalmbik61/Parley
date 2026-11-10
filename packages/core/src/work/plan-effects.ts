@@ -3,7 +3,11 @@ import type { BacklogDocument, BacklogWriteResult } from "./backlog.js";
 import type { SharedWriteOptions, UpdateMapOptions } from "./store.js";
 import type { LetterTx } from "./letter-store.js";
 import { isMember, isRoomClosed, liveLead, RoomRuleError } from "./rooms.js";
-import { planItemSatisfied, reconcileRoomPlans } from "./plans.js";
+import {
+  planItemSatisfied,
+  planVerifierUnavailable,
+  reconcileRoomPlans,
+} from "./plans.js";
 import { effectTextIs, isSha256, settleEffectText } from "./stored-texts.js";
 import { PARLEY, HUMAN, SYSTEM } from "./types.js";
 import type {
@@ -113,8 +117,13 @@ function itemEffect(
     !planItemSatisfied(plan, item)
   ) {
     kind = "verify";
-    target = item.verifier ?? liveLead(map, room) ?? "";
-    text = `${assignment}\nEvidence:\n${item.evidence?.text ?? ""}\n${item.evidence?.artifacts.join("\n") ?? ""}\nIndependently inspect the result and call plan_verify with this exact planId/rev/item.`;
+    const stand = planVerifierUnavailable(map, room, item);
+    target = (stand ? null : item.verifier) ?? liveLead(map, room) ?? "";
+    text = `${assignment}\nEvidence:\n${item.evidence?.text ?? ""}\n${item.evidence?.artifacts.join("\n") ?? ""}\n${
+      stand
+        ? "The named verifier is unavailable. Inspect the result and call plan_verify with this exact planId/rev/item; if you own this item, propose an amended plan with another verifier."
+        : "Independently inspect the result and call plan_verify with this exact planId/rev/item."
+    }`;
   } else if (item.status === "returned") {
     kind = "returned";
     target = item.owner;

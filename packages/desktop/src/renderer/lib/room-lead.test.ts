@@ -7,7 +7,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Room } from '@parley/core';
 import { makeRoom, makeSession, makeWork } from '../test-utils/work-fixtures.js';
-import { roomLiveLead } from './room-lead.js';
+import { roomLiveLead, roomVerifierUnavailable } from './room-lead.js';
 
 function room(patch: Partial<Room>): Room {
   return { ...makeRoom('r-01', 'Refunds'), ...patch };
@@ -47,5 +47,24 @@ describe('roomLiveLead', () => {
     expect(
       roomLiveLead(map, room({ creator: 'human', members: ['s-01', 's-02'], lead: null })),
     ).toBeNull();
+  });
+});
+
+describe('roomVerifierUnavailable', () => {
+  const { map } = makeWork('w', { sessions: [alive('s-01'), closed('s-02'), alive('s-03')] });
+  const members = room({ members: ['s-01', 's-02'] });
+
+  it('живой участник комнаты доступен', () => {
+    expect(roomVerifierUnavailable(map, members, 's-01')).toBe(false);
+  });
+
+  it('закрытая сессия и сессия вне комнаты недоступны', () => {
+    expect(roomVerifierUnavailable(map, members, 's-02')).toBe(true);
+    expect(roomVerifierUnavailable(map, members, 's-03')).toBe(true);
+  });
+
+  it('человек доступен всегда, пункт без проверяющего не считается недоступным', () => {
+    expect(roomVerifierUnavailable(map, members, 'human')).toBe(false);
+    expect(roomVerifierUnavailable(map, members, null)).toBe(false);
   });
 });

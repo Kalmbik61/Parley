@@ -194,6 +194,22 @@ describe("planTasksView: action table", () => {
     });
   });
 
+  it("a submitted item with a closed verifier: the live lead gets the verify task with the evidence", () => {
+    const map = fixture();
+    const plan = accept(map);
+    submitPlanItem(map, lt(map), plan.id, 0, 1, "s-02", evidence, AT);
+    transitionSession(map, "s-03", "closed");
+    const lead = planTasksView(map, "s-01", {});
+    expect(rows(lead)).toEqual(["1:verifier:verify", "2:owner:wait"]);
+    expect(lead.assignments[0]).toMatchObject({
+      role: "verifier",
+      action: "verify",
+      status: "done",
+      evidence,
+    });
+    expect(rows(planTasksView(map, "s-02", {}))).toEqual(["3:owner:start", "1:owner:wait"]);
+  });
+
   it("a returned item: the owner reworks it and sees the verdict and the earlier evidence", () => {
     const map = fixture();
     const plan = accept(map);

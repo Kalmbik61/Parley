@@ -249,6 +249,62 @@ describe("durable accepted-plan delivery", () => {
     expect(reservePlanEffects(map, lt(map), 20, AT).changed).toBe(true);
     expect(map.messages.filter((row) => row.from === PARLEY)).toHaveLength(2);
   });
+  const VERIFY_HEAD =
+    "Accepted plan pl-01, revision 0, item 1: Item 1\nScope:\nsrc/0.ts; use a native skill if available\nCriteria:\nPassing meaningful checks\nEvidence:\nMeasured\nsrc/test.ts\n";
+  const submitFirst = (map: WorkMap, by = "s-02") =>
+    submitPlanItem(map, lt(map), "pl-01", 0, 1, by, { text: "Measured", artifacts: ["src/test.ts"] }, AT);
+  it("verify letter to an available verifier keeps its exact text", () => {
+    const map = fixture();
+    submitFirst(map);
+    reservePlanEffects(map, lt(map), 20, AT);
+    const sent = map.planEffects!.filter((row) => row.kind === "verify");
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.target).toBe("s-03");
+    const letter = map.messages.find((row) => row.id === sent[0]!.messageId)!;
+    expect(letter.text).toBe(
+      `${VERIFY_HEAD}Independently inspect the result and call plan_verify with this exact planId/rev/item.`,
+    );
+  });
+  it("closed verifier: verify letter goes to the live lead with the stand-in tail", () => {
+    const map = fixture();
+    submitFirst(map);
+    reservePlanEffects(map, lt(map), 20, AT);
+    transitionSession(map, "s-03", "closed", { at: AT });
+    reservePlanEffects(map, lt(map), 20, AT);
+    const length = map.plans![0]!.items[0]!.log.length;
+    const [old, next] = map.planEffects!.filter((row) => row.kind === "verify");
+    expect(old!.target).toBe("s-03");
+    expect(old!.status).toBe("cancelled");
+    expect(next!.key).toBe(`r-01/pl-01/0/1/verify/${length}/s-01`);
+    expect(next!.target).toBe("s-01");
+    expect(next!.status).toBe("sent");
+    const letter = map.messages.find((row) => row.id === next!.messageId)!;
+    expect(letter.to).toEqual(["s-01"]);
+    expect(letter.text).toBe(
+      `${VERIFY_HEAD}The named verifier is unavailable. Inspect the result and call plan_verify with this exact planId/rev/item; if you own this item, propose an amended plan with another verifier.`,
+    );
+  });
+  it("a verifier removed from the room is unavailable too; the letter is not repeated on the next pass", () => {
+    const map = fixture();
+    submitFirst(map);
+    map.rooms[0]!.members = map.rooms[0]!.members.filter((id) => id !== "s-03");
+    reservePlanEffects(map, lt(map), 20, AT);
+    const verify = map.planEffects!.filter((row) => row.kind === "verify");
+    expect(verify.map((row) => row.target)).toEqual(["s-01"]);
+    reservePlanEffects(map, lt(map), 20, AT);
+    expect(map.planEffects!.filter((row) => row.kind === "verify")).toHaveLength(1);
+  });
+  it("a lead that owns the item gets the same stand-in letter", () => {
+    const map = fixture();
+    map.plans![0]!.items[0]!.owner = "s-01";
+    submitFirst(map, "s-01");
+    transitionSession(map, "s-03", "closed", { at: AT });
+    reservePlanEffects(map, lt(map), 20, AT);
+    const verify = map.planEffects!.filter((row) => row.kind === "verify");
+    expect(verify.map((row) => row.target)).toEqual(["s-01"]);
+    const letter = map.messages.find((row) => row.id === verify[0]!.messageId)!;
+    expect(letter.text.endsWith("propose an amended plan with another verifier.")).toBe(true);
+  });
   it("a submitted item stays verifiable when its owner closes", () => {
     const map = fixture();
     submitPlanItem(

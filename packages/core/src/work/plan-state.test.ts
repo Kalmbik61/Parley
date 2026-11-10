@@ -202,6 +202,42 @@ describe("planItemDuties", () => {
       duty("verifier", VERIFIER, "verify"),
     ]);
   });
+  it("done with an unavailable verifier: the live lead verifies in its place", () => {
+    const row = item({
+      status: "done",
+      evidence: { text: "ok", artifacts: [] },
+    });
+    expect(planItemDuties(plan([row]), row, LEAD, true)).toEqual([
+      duty("owner", OWNER, "wait", { kind: "verification", by: VERIFIER }),
+      duty("verifier", LEAD, "verify"),
+    ]);
+  });
+  it("done with an unavailable verifier and a lead that owns the item: the lead resolves, nobody verifies", () => {
+    const row = item({
+      owner: LEAD,
+      status: "done",
+      evidence: { text: "ok", artifacts: [] },
+    });
+    expect(planItemDuties(plan([row]), row, LEAD, true)).toEqual([
+      duty("owner", LEAD, "wait", { kind: "verification", by: VERIFIER }),
+      duty("lead", LEAD, "resolve-block"),
+    ]);
+  });
+  it("done with an unavailable verifier and no live lead: only the owner waits", () => {
+    const row = item({
+      status: "done",
+      evidence: { text: "ok", artifacts: [] },
+    });
+    expect(planItemDuties(plan([row]), row, null, true)).toEqual([
+      duty("owner", OWNER, "wait", { kind: "verification", by: VERIFIER }),
+    ]);
+  });
+  it("an unavailable verifier changes nothing before the submission", () => {
+    const row = item({ status: "ready" });
+    expect(planItemDuties(plan([row]), row, LEAD, true)).toEqual(
+      planItemDuties(plan([row]), row, LEAD),
+    );
+  });
   it("a satisfied item has no duties, whoever the live lead is", () => {
     const verified = item({ status: "verified" });
     expect(planItemDuties(plan([verified]), verified, LEAD)).toEqual([]);

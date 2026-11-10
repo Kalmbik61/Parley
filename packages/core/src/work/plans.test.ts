@@ -24,6 +24,7 @@ import {
   proposedRoomPlan,
   acceptRoomPlan,
   PlanConflictError,
+  planVerifierUnavailable,
   PLAN_OLD_ARTIFACTS_MAX,
   PLAN_OLD_EVIDENCE_MAX,
 } from "./plans.js";
@@ -687,6 +688,70 @@ describe("room plan state and permissions", () => {
     const repaired = JSON.stringify(map);
     reconcileRoomPlans(map, AT);
     expect(JSON.stringify(map)).toBe(repaired);
+  });
+  it("the verifier is unavailable when closed or out of the room; the human and a missing verifier never are", () => {
+    const map = fixture("verified");
+    const plan = accept(map);
+    const room = map.rooms[0]!;
+    const item = plan.items[0]!;
+    expect(planVerifierUnavailable(map, room, item)).toBe(false);
+    transitionSession(map, "s-03", "closed", { at: AT });
+    expect(planVerifierUnavailable(map, room, item)).toBe(true);
+    const fresh = fixture("verified");
+    const freshPlan = accept(fresh);
+    fresh.rooms[0]!.members = fresh.rooms[0]!.members.filter((id) => id !== "s-03");
+    expect(planVerifierUnavailable(fresh, fresh.rooms[0]!, freshPlan.items[0]!)).toBe(true);
+    expect(planVerifierUnavailable(map, room, { ...item, verifier: HUMAN })).toBe(false);
+    expect(planVerifierUnavailable(map, room, { ...item, verifier: null })).toBe(false);
+  });
+  it("the live lead verifies when the named verifier is unavailable", () => {
+    const map = fixture("verified");
+    const plan = accept(map);
+    submitPlanItem(map, lt(map), plan.id, 0, 1, "s-02", evidence, AT);
+    transitionSession(map, "s-03", "closed", { at: AT });
+    verifyPlanItem(map, lt(map), plan.id, 0, 1, "s-01", "verified", "Checked by the lead", AT);
+    const item = map.plans![0]!.items[0]!;
+    expect(item.status).toBe("verified");
+    expect(item.log.at(-1)).toEqual({ by: "s-01", status: "verified", note: "Checked by the lead", at: AT });
+  });
+  it("the lead cannot verify while the named verifier is live", () => {
+    const map = fixture("verified");
+    const plan = accept(map);
+    submitPlanItem(map, lt(map), plan.id, 0, 1, "s-02", evidence, AT);
+    const attempt = () =>
+      verifyPlanItem(map, lt(map), plan.id, 0, 1, "s-01", "verified", "Lead pass", AT);
+    expect(attempt).toThrow(RoomRuleError);
+    expect(attempt).toThrow(
+      "only the independent verifier, or the live lead when that verifier is unavailable, can verify",
+    );
+    expect(map.plans![0]!.items[0]!.status).toBe("done");
+  });
+  it("a lead that owns the item can never verify it, even when the verifier is unavailable", () => {
+    const map = fixture("verified");
+    const plan = accept(map);
+    submitPlanItem(map, lt(map), plan.id, 0, 1, "s-02", evidence, AT);
+    verifyPlanItem(map, lt(map), plan.id, 0, 1, "s-03", "verified", "Checked", AT);
+    submitPlanItem(map, lt(map), plan.id, 0, 2, "s-01", evidence, AT);
+    transitionSession(map, "s-03", "closed", { at: AT });
+    const attempt = () =>
+      verifyPlanItem(map, lt(map), plan.id, 0, 2, "s-01", "verified", "Self proof", AT);
+    expect(attempt).toThrow(RoomRuleError);
+    expect(attempt).toThrow("can verify");
+    expect(map.plans![0]!.items[1]!.status).toBe("done");
+  });
+  it("a non-lead member cannot verify in place of an unavailable verifier", () => {
+    const map = fixture("verified");
+    const plan = accept(map);
+    submitPlanItem(map, lt(map), plan.id, 0, 1, "s-02", evidence, AT);
+    transitionSession(map, "s-03", "closed", { at: AT });
+    expect(() =>
+      verifyPlanItem(map, lt(map), plan.id, 0, 1, "s-02", "verified", "Self proof", AT),
+    ).toThrow("can verify");
+    map.rooms[0]!.members.push("s-04");
+    addSession(map, { provider: "codex", label: "Extra", task: "Fixture" }, AT);
+    expect(() =>
+      verifyPlanItem(map, lt(map), plan.id, 0, 1, "s-04", "verified", "Outsider", AT),
+    ).toThrow("can verify");
   });
   it("Human Free transition requires cancellation confirmation and captures cancellation once", () => {
     const map = fixture();
