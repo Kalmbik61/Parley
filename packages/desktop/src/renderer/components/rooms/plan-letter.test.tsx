@@ -74,6 +74,18 @@ describe('planLetterMarkdown', () => {
     expect(returned).not.toContain('**Criteria**');
   });
 
+  it('проверка вместо недоступного проверяющего: тот же разбор, другой хвост «Next»', () => {
+    const text = VERIFY.replace(PLAN_LETTER_TAILS.verify, PLAN_LETTER_TAILS.verifyByLead);
+    const usual = planLetterMarkdown(VERIFY) ?? '';
+    expect(planLetterMarkdown(text)).toBe(
+      usual.replace(
+        /\*\*Next:\*\*.*$/s,
+        '**Next:** The named verifier is unavailable. Inspect the result and call `plan_verify` with this exact planId/rev/item; if you own this item, propose an amended plan with another verifier.',
+      ),
+    );
+    expect(planLetterMarkdown(text)).toContain('**Evidence**\nКонтракт написан.');
+  });
+
   it('блокировка, готовность к завершению, смена режима и возврат завершения', () => {
     expect(planLetterMarkdown(`Accepted plan pl-02, revision 1, item 3: API\nBlocked: Owner is unavailable.\n${PLAN_LETTER_TAILS.blocked}`))
       .toBe(`**API**\nAccepted plan pl-02, revision 1, item 3\n\n**Blocked**\nOwner is unavailable.\n\n**Next:** ${PLAN_LETTER_TAILS.blocked}`);

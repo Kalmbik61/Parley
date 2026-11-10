@@ -19,3 +19,11 @@ export function roomLiveLead(map: WindowWorkMap, room: Room): string | null {
   if (declared !== null && room.members.includes(declared) && isAlive(map, declared)) return declared;
   return room.members.find((id) => isAlive(map, id)) ?? null;
 }
+
+/**
+ * Названный проверяющий пункта недоступен — копия `planVerifierUnavailable` из core (`work/plans.ts`): сессия закрыта
+ * или не в комнате; человек доступен всегда. Меняется правило — меняются оба места вместе.
+ */
+export function roomVerifierUnavailable(map: WindowWorkMap, room: Room, verifier: string | null): boolean {
+  return verifier !== null && verifier !== 'human' && !(room.members.includes(verifier) && isAlive(map, verifier));
+}

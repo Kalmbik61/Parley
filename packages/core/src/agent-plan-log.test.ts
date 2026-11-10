@@ -106,4 +106,54 @@ describe('plan log collectors', () => {
     });
     expect(c.finish()?.items[0]?.subject).toBe('A');
   });
+  it('1000 завершённых TodoWrite: в хвосте не больше одного вызова, finish() — последний список', () => {
+    const c = createClaudePlanCollector();
+    for (let n = 0; n < 1000; n++) {
+      c.onRecord(call(`t${n}`, 'TodoWrite', todo(`S${n}`)));
+      c.onRecord(result(`t${n}`));
+      const pending = (c as unknown as { pending: Map<string, unknown> }).pending;
+      expect(pending.size).toBeLessThanOrEqual(1);
+    }
+    expect(c.finish()?.items.map((i) => i.subject)).toEqual(['S999']);
+  });
+  it('параллельные вызовы с ответами в обратном порядке дают прежний план (второй TodoWrite)', () => {
+    const c = createClaudePlanCollector();
+    c.onRecord(call('a', 'TodoWrite', todo('A')));
+    c.onRecord(call('b', 'TodoWrite', todo('B')));
+    c.onRecord(result('b'));
+    expect(c.finish()?.items.map((i) => i.subject)).toEqual(['B']);
+    c.onRecord(result('a'));
+    expect(c.finish()?.items.map((i) => i.subject)).toEqual(['B']);
+  });
+  it('повтор tool_use свёрнутого вызова игнорируется', () => {
+    const c = createClaudePlanCollector();
+    const a = call('a', 'TodoWrite', todo('A'));
+    c.onRecord(a);
+    c.onRecord(result('a'));
+    c.onRecord(call('b', 'TodoWrite', todo('B')));
+    c.onRecord(result('b'));
+    c.onRecord(a);
+    c.onRecord(result('a'));
+    expect(c.finish()?.items.map((i) => i.subject)).toEqual(['B']);
+  });
+  it('брошенный вызов старше PENDING_MAX сбрасывается, его поздний ответ игнорируется', () => {
+    const c = createClaudePlanCollector();
+    c.onRecord(call('lost', 'TodoWrite', todo('LOST')));
+    for (let n = 0; n < 70; n++) {
+      c.onRecord(call(`t${n}`, 'TodoWrite', todo(`S${n}`)));
+      c.onRecord(result(`t${n}`));
+    }
+    c.onRecord(result('lost'));
+    expect(c.finish()?.items.map((i) => i.subject)).toEqual(['S69']);
+  });
+  it('clone независим от оригинала', () => {
+    const c = createClaudePlanCollector();
+    c.onRecord(call('a', 'TodoWrite', todo('A')));
+    c.onRecord(result('a'));
+    const clone = c.clone();
+    clone.onRecord(call('b', 'TodoWrite', todo('B')));
+    clone.onRecord(result('b'));
+    expect(c.finish()?.items.map((i) => i.subject)).toEqual(['A']);
+    expect(clone.finish()?.items.map((i) => i.subject)).toEqual(['B']);
+  });
 });

@@ -5,7 +5,6 @@ import { _electron as electron, expect, test, type ElectronApplication, type Loc
 import {
   addRoom,
   addSession,
-  DEFAULT_CONFIG,
   HUMAN,
   reservePlanEffects,
   setProposal,
@@ -196,7 +195,7 @@ test.describe('задания комнаты в окне: кто действу�
         },
       ];
       // Поручения резервирует настоящий `reservePlanEffects`, как после принятия плана.
-      reservePlanEffects(map, letters, DEFAULT_CONFIG.messageRate);
+      reservePlanEffects(map, letters);
     });
     await expect(window.locator('[data-room-row]')).toHaveCount(1, { timeout: 20_000 });
 

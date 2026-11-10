@@ -22,7 +22,7 @@ import { isRoomArchived } from "../../lib/room-archive.js";
 import { RoleChip } from "../../lib/role-summary.js";
 import { sessionRowLabel } from "../../lib/participant.js";
 import { relativeTime } from "../../lib/relative-time.js";
-import { roomLiveLead } from "../../lib/room-lead.js";
+import { roomLiveLead, roomVerifierUnavailable } from "../../lib/room-lead.js";
 import { useNow } from "../../lib/use-now.js";
 import { useHostStore } from "../../store/host.js";
 import { badgeVariants } from "../../ui/badge.js";
@@ -475,7 +475,7 @@ export function PlanSummary({
           const summary = check?.summary.replace(/\s+/g, " ") ?? "";
           const verdict = check ? `${check.specId} → ${check.verdict} · ${summary.slice(0, 160)}${summary.length > 160 ? "…" : ""}` : "";
           const satisfied = planItemSatisfied(plan, item);
-          const duties = working ? planItemDuties(plan, item, liveLeadId) : [];
+          const duties = working ? planItemDuties(plan, item, liveLeadId, entry && room ? roomVerifierUnavailable(entry.map, room, item.verifier) : false) : [];
           const submission = planSubmission(item);
           return (
             <li

@@ -2033,7 +2033,7 @@ describe('check_inbox и wait_for("inbox"): задания плана комна
         planId: map.rooms[0]!.proposal!.plan!.id,
         planRev: 0,
       });
-      reservePlanEffects(map, letters, DEFAULT_CONFIG.messageRate);
+      reservePlanEffects(map, letters);
       // Решение и ответ человека на него тестам не нужны: читаем их за всех, остаются только поручения.
       const at = new Date().toISOString();
       const seen = letters.query({ roomId: 'r-01', kind: 'decision', limit: 100 }).map((message) => message.id);
@@ -2190,7 +2190,7 @@ describe('check_inbox и wait_for("inbox"): задания плана комна
       plan.mode = 'autonomous';
       plan.autonomous = autonomousStore();
       plan.status = 'completing';
-      reservePlanEffects(map, letters, DEFAULT_CONFIG.messageRate);
+      reservePlanEffects(map, letters);
     });
     const effects = (await readMap(project, workId)).planEffects ?? [];
     expect(effects.some((effect) => effect.kind === 'completing' && effect.target === 's-01')).toBe(true);

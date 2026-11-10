@@ -4,7 +4,6 @@ import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { DEFAULT_CONFIG } from "../config.js";
 import { createParleyServer } from "../mcp/tools.js";
 import { ASSIGNMENTS_BLOCK_MAX_BYTES } from "./context-budget.js";
 import { readLetters } from "./letter-store.js";
@@ -197,7 +196,7 @@ async function accept(): Promise<void> {
       .filter((message) => message.from !== "parley")
       .map((message) => message.id);
     for (const id of MEMBERS) letters.markRead(id, ids, at);
-    reservePlanEffects(map, letters, DEFAULT_CONFIG.messageRate);
+    reservePlanEffects(map, letters);
   });
 }
 /** Пункт от начала до подтверждения: владелец начинает и сдаёт, проверяющий подтверждает. */

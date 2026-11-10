@@ -22,8 +22,6 @@ import {
   ENGINE,
   resume,
   settleOp,
-  DEFAULT_CONFIG,
-  loadConfig,
   capturePlanNotice,
   reservePlanEffects,
   PlanConflictError,
@@ -242,7 +240,6 @@ export async function addRoomMember(input: Params<'rooms.addMember'>): Promise<s
  */
 export async function resolveRoomProposal(input: Params<'rooms.resolveProposal'>): Promise<string> {
   const { projectPath, workId, roomId, proposalId, action, note, rev, planId, planRev } = input;
-  const rate = (await loadConfig()).config.messageRate ?? DEFAULT_CONFIG.messageRate;
   assertWork(projectPath, workId);
   let messageId = '';
   await updateMap(projectPath, workId, (map, letters) => {
@@ -251,7 +248,7 @@ export async function resolveRoomProposal(input: Params<'rooms.resolveProposal'>
       messageId = resolveAutonomousProposal(map, letters, roomId, proposalId, action, { note, rev, ...(planId === undefined ? {} : { planId }), ...(planRev === undefined ? {} : { planRev }) });
       if (action === 'return' && completion?.kind === 'completion')
         capturePlanNotice(map, letters, roomId, 'completion-returned', messageId, completion.planId);
-      reservePlanEffects(map, letters, rate);
+      reservePlanEffects(map, letters);
     } catch (error) {
       throw asHostError(error);
     }

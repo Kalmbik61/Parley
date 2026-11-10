@@ -1,6 +1,4 @@
 import {
-  DEFAULT_CONFIG,
-  loadConfig,
   previewLetterTx,
   readMap,
   reservePlanEffects,
@@ -22,7 +20,8 @@ export interface PlanEffectsServiceIO {
 }
 export interface PlanEffectsServiceOptions {
   io?: PlanEffectsServiceIO;
-  messageRate?: () => Promise<number>;
+  /** Бюджет писем плана на комнату в час; тесты ставят малый. */
+  planLetterBudget?: number;
   now?: () => number;
   onFailure?(failure: {
     projectPath: string;
@@ -45,6 +44,8 @@ interface State {
   projectPath: string;
   workId: string;
   dirty: boolean;
+  /** Версия работы из снимка при последнем запуске прохода; той же версией проход не повторяется. */
+  seenVersion?: number;
   source: string | null;
   retryAttempt: number;
   retryAt: number | null;
@@ -115,10 +116,6 @@ export function createPlanEffectsService(
   const io = options.io ?? { readMap, updateMap, flush: flushPlanEffects };
   const flushJournal = io.flushJournal ?? flushDecisionJournal;
   const now = options.now ?? Date.now;
-  const messageRate =
-    options.messageRate ??
-    (async () =>
-      (await loadConfig()).config.messageRate ?? DEFAULT_CONFIG.messageRate);
   const states = new Map<string, State>();
   const noticed = new Set<string>();
   let stopped = false;
@@ -184,12 +181,12 @@ export function createPlanEffectsService(
         state.retryAttempt = 0;
         state.retryAt = null;
       }
-      const rate = await messageRate();
       if (stopped || !works.entry(state.projectPath, state.workId))
         return result;
       const at = new Date(now()).toISOString();
-      const preview = structuredClone(map);
-      let reservation = reservePlanEffects(preview, (io.previewLetters ?? previewLetterTx)(state.projectPath, state.workId, preview), rate, at);
+      // Копия не нужна: `reservePlanEffects` считает на своём черновике и меняет `map` только при `changed`,
+      // а тогда `current` заменяет ответ `updateMap`.
+      let reservation = reservePlanEffects(map, (io.previewLetters ?? previewLetterTx)(state.projectPath, state.workId, map), options.planLetterBudget, at);
       let current = map;
       if (reservation.changed) {
         try {
@@ -197,7 +194,7 @@ export function createPlanEffectsService(
             state.projectPath,
             state.workId,
             (draft, letters) => {
-              reservation = reservePlanEffects(draft, letters, rate, at);
+              reservation = reservePlanEffects(draft, letters, options.planLetterBudget, at);
               if (!reservation.changed) throw new NoPlanChange();
             },
             { touch: false },
@@ -380,6 +377,8 @@ export function createPlanEffectsService(
     const active = state;
     active.running = process(active)
       .catch(() => {
+        // Сбойный проход снимает отметку версии: когда таймер повтора исчерпан, следующая смена снимка повторит проход.
+        delete active.seenVersion;
         notify(active, "plan-effect-failed", 1);
         {
           active.retryAttempt++;
@@ -415,9 +414,20 @@ export function createPlanEffectsService(
         clearTimer(state);
         states.delete(key);
       }
-    for (const entry of entries)
-      if (hasWork(entry.map))
-        void flush(entry.projectPath, entry.map.work.id).catch(() => {});
+    for (const entry of entries) {
+      if (!hasWork(entry.map)) continue;
+      const workId = entry.map.work.id;
+      const seen = states.get(`${entry.projectPath}\0${workId}`)?.seenVersion;
+      // Версию растит каждая запись работы любым процессом: та же версия — карта та же. Срок доставки и повтор
+      // после сбоя идут таймерами, ручной `flush` версией не ограничен; снимок без версии обрабатывается каждый раз.
+      if (entry.version !== undefined && seen === entry.version) continue;
+      void flush(entry.projectPath, workId).catch(() => {});
+      const state = states.get(`${entry.projectPath}\0${workId}`);
+      if (state) {
+        if (entry.version === undefined) delete state.seenVersion;
+        else state.seenVersion = entry.version;
+      }
+    }
   }
   return {
     start() {

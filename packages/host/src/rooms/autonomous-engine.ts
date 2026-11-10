@@ -7,7 +7,7 @@ import { promisify } from 'node:util';
 import {
   ENGINE, HUMAN, addMember, cancelRoomPlan, coverageVerdict, enqueue, failureSignature, halt, intendOp,
   liveLead, parleyNote, planItemsComplete, proposeCompletion, PROPOSAL_TEXT_MAX, PlanConflictError, ProposalConflictError, RoomRuleError, readMap, receipt, reconcileAfterRestart, recordCheck, resolveProposal,
-  integrate, isGitRoot, normalizeAttemptSubmission, returnAttempt, settleOp, startAttempt, submitAttempt, supersedeByAmendment, updateMap, workPaths,
+  integrate, isGitRoot, normalizeAttemptSubmission, returnAttempt, settleOp, startAttempt, submitAttempt, supersedeByAmendment, updateMap, workPaths, workVersion,
   type AutonomousOp, type CheckResult, type HandoffManifest, type LetterTx, type PlanAttempt,
   type RoomPlan, type WorkMap,
 } from '@parley/core';
@@ -20,6 +20,8 @@ import { run } from './check-runner.js';
 
 export interface EngineIO {
   readMap: typeof readMap;
+  /** Версия работы в базе (растёт на каждую запись любого процесса); без неё карта читается заново при каждом чтении. */
+  version?(projectPath: string, workId: string): number | undefined;
   updateMap: typeof updateMap;
   sessions: Pick<SessionsService, 'create' | 'launch' | 'stop' | 'close'>;
   runner: typeof run;
@@ -42,9 +44,11 @@ export interface AutonomousEngine extends AttemptsEngine {
   cancel(input: { projectPath: string; workId: string; planId: string; rev: number }): Promise<void>;
 }
 const exec = promisify(execFile);
+/** Страховочный тик движка: цикл идёт по смене версии работы, а тик ловит то, что версии не меняет (срок попытки). */
+export const ENGINE_SAFETY_TICK_MS = 30_000;
 export function autonomousEngineIO(sessions: EngineIO['sessions']): EngineIO {
   return {
-    readMap, updateMap, sessions, runner: run, fs: filesystem, now: () => new Date(), sleep,
+    readMap, version: workVersion, updateMap, sessions, runner: run, fs: filesystem, now: () => new Date(), sleep,
     git: async (args, options) => (await exec('git', args, { ...options, encoding: 'buffer', maxBuffer: 16 * 1024 * 1024 })).stdout,
   };
 }
@@ -67,10 +71,23 @@ const attemptOf = (plan: RoomPlan, id: string) => {
 };
 // Shared by every engine instance in this host process: sandbox log windows cannot overlap.
 let checkQueue: Promise<unknown> = Promise.resolve();
-function serialCheck<T>(effect: () => Promise<T>): Promise<T> {
-  const result = checkQueue.then(effect, effect);
+// Отмена снимает проверку с ожидания в очереди сразу; уже запущенную дожидается (её прерывает сам runner), чтобы работа
+// не пошла дальше, пока проверка ещё убирает за собой. Отменённый эффект, дошедший до очереди, не стартует никогда.
+const CHECK_CANCELLED = 'check-cancelled';
+function serialCheck<T>(effect: () => Promise<T>, signal: AbortSignal): Promise<T> {
+  let started = false;
+  const run = () => {
+    if (signal.aborted) throw new Error(CHECK_CANCELLED);
+    started = true;
+    return effect();
+  };
+  const result = checkQueue.then(run, run);
   checkQueue = result.catch(() => {});
-  return result;
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => { if (!started) reject(new Error(CHECK_CANCELLED)); };
+    signal.addEventListener('abort', onAbort, { once: true });
+    result.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
+  });
 }
 interface WorkState {
   tail: Promise<unknown>;
@@ -78,6 +95,12 @@ interface WorkState {
   recovering: Set<string>;
   recoveryFailures: number;
   retryAt: number;
+  /** Версия работы, по которой цикл уже поставлен; той же версией снимок цикл не запускает. */
+  seenVersion?: number;
+  /** Карта, прочитанная при этой версии; читать её можно, менять нельзя (правки идут через `change`). */
+  cached?: { version: number; map: WorkMap };
+  /** Прерыватель проверки, которую сейчас ведёт работа (ждёт в очереди или идёт); одна за раз. */
+  checkAbort?: AbortController;
 }
 interface Location { projectPath: string; workId: string; planId: string }
 class NoEngineChange extends Error {}
@@ -164,12 +187,30 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
     void result.catch(() => {});
     return result;
   }
+  /** Проверка работы в общей очереди с прерывателем в состоянии работы: `cancel` и `stop` дотягиваются до него. */
+  async function cancellable(loc: Location, effect: (signal: AbortSignal) => () => Promise<void>): Promise<void> {
+    const current = state(loc.projectPath, loc.workId);
+    const controller = new AbortController();
+    current.checkAbort = controller;
+    try { await serialCheck(effect(controller.signal), controller.signal); }
+    finally { if (current.checkAbort === controller) delete current.checkAbort; }
+  }
   const recovering = (projectPath: string, workId: string) => !started || state(projectPath, workId).recovering.size > 0;
   function requireRecovered(projectPath: string, workId: string) {
     if (recovering(projectPath, workId)) throw new Error('engine-recovering');
   }
+  // Пока `io.version` не изменилась, карта та же: копию не берём. Версия читается до карты: запись между ними даст
+  // запоздавший ключ и лишнее чтение, а не устаревшую карту под свежим ключом.
+  async function read(projectPath: string, workId: string): Promise<WorkMap> {
+    const version = io.version?.(projectPath, workId);
+    const current = state(projectPath, workId);
+    if (version !== undefined && current.cached?.version === version) return current.cached.map;
+    const map = await io.readMap(projectPath, workId);
+    if (version === undefined) delete current.cached; else current.cached = { version, map };
+    return map;
+  }
   async function load(loc: Location): Promise<RoomPlan> {
-    const map = await io.readMap(loc.projectPath, loc.workId);
+    const map = await read(loc.projectPath, loc.workId);
     const plan = map.plans?.find(row => row.id === loc.planId);
     if (!plan || !active(plan)) throw new Error('plan-unavailable');
     return plan;
@@ -257,7 +298,7 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
   }
   async function sessionOperation(loc: Location, op: AutonomousOp): Promise<void> {
     const sessionId = String(op.payload.sessionId);
-    const map = await io.readMap(loc.projectPath, loc.workId);
+    const map = await read(loc.projectPath, loc.workId);
     const session = map.sessions.find(row => row.id === sessionId);
     await effect(loc, op, async () => {
       if (session && (op.kind === 'close-session' ? session.lifecycle !== 'closed' : ['active', 'pending', 'closing'].includes(session.lifecycle))) {
@@ -386,7 +427,7 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
       const selected = role === 'worker' ? { provider: options.provider, model: options.model } : options.verifier;
       const create = op;
       await effect(loc, create, async () => {
-        const map = await io.readMap(loc.projectPath, loc.workId);
+        const map = await read(loc.projectPath, loc.workId);
         const existing = map.sessions.find(row => row.label === sessionLabel(loc, attemptId, create));
         if (existing) return { sessionId: existing.id };
         const input: CreateSessionInput = { projectPath: loc.projectPath, workId: loc.workId, requestedBy: ENGINE, deferLaunch: true, parent: null, ...(role === 'worker' ? { workspace: { kind: 'clone' as const, path: cloneDirectory(loc, attemptId), branch: attempt.branch, sha: attempt.baseSha } } : { workspace: { kind: 'artifacts' as const, path: review! } }), provider: selected.provider, label: sessionLabel(loc, attemptId, create), task, role: { source: 'builtin', name: role === 'worker' ? 'executor' : 'verifier' }, ...(selected.model === undefined ? {} : { model: selected.model }) };
@@ -551,18 +592,21 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
       plan = await load(loc); attempt = attemptOf(plan, attemptId);
       if (plan.autonomous!.halted || fenced.has(attempt.status)) return;
       if (thisResults(plan, attempt).some(row => row.specId === spec.id)) continue;
-      await serialCheck(async () => {
+      await cancellable(loc, signal => async () => {
         const current = await load(loc);
         if (stopped || current.autonomous!.halted) return;
         const resultId = nextCheckId(current);
         const op = await intend(loc, 'check', attemptId, { phase: 'attempt', sha: attempt.sha, specId: spec.id, resultId });
         let result: CheckResult;
-        try { result = await io.runner({ projectPath: loc.projectPath, workId: loc.workId, planId: loc.planId, resultId, now: io.now }, spec, attempt.sha!, attemptId); }
+        try { result = await io.runner({ projectPath: loc.projectPath, workId: loc.workId, planId: loc.planId, resultId, now: io.now, signal }, spec, attempt.sha!, attemptId); }
         catch (error) {
+          // Прерванная проверка не вина работы: ни settled, ни halt, пункт попыткой не считается.
+          if (signal.aborted) throw new Error(CHECK_CANCELLED);
           await settled(loc, op, 'failed', { reason: errorText(error) });
           await change(loc, row => halt(row, { ...context(row, at()), reason: 'human', detail: `check: ${errorText(error)}` }));
           throw error;
         }
+        if (signal.aborted) throw new Error(CHECK_CANCELLED);
         await record(loc, attemptId, op, result);
       });
     }
@@ -722,7 +766,7 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
     await cleanupPlan(loc);
     plan = await load(loc);
     if (!planItemsComplete(plan)) return;
-    const room = (await io.readMap(loc.projectPath, loc.workId)).rooms.find(row => row.id === plan.roomId)!;
+    const room = (await read(loc.projectPath, loc.workId)).rooms.find(row => row.id === plan.roomId)!;
     if (room.proposal) return;
     const a = plan.autonomous!, b = a.budget;
     const integrated = a.attempts.filter(attempt => attempt.status === 'integrated' && plan.items.some(item => item.id === attempt.item && item.status === 'verified'))
@@ -802,7 +846,7 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
         `Diff: ${diff}`, `Checks: ${JSON.stringify(results)}`, `Output tails: ${JSON.stringify(await outputTails(loc, results))}`].join('\n');
       const creation = op;
       op = await effect(loc, creation, async () => {
-        const map = await io.readMap(loc.projectPath, loc.workId);
+        const map = await read(loc.projectPath, loc.workId);
         const existing = map.sessions.find(row => row.label === sessionLabel(loc, operation.attemptId!, creation));
         if (existing) return { sessionId: existing.id };
         const ref = await io.sessions.create({ projectPath: loc.projectPath, workId: loc.workId, requestedBy: ENGINE, deferLaunch: true, parent: null,
@@ -871,19 +915,21 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
           plan = await load(loc);
           if (plan.autonomous!.halted) return;
           if (integrationResults(plan, operation).some(result => result.attemptId === owner.id && result.specId === spec.id)) continue;
-          await serialCheck(async () => {
+          await cancellable(loc, signal => async () => {
             const current = await load(loc);
             if (stopped || current.autonomous!.halted) return;
             const resultId = nextCheckId(current);
             const sha = current.autonomous!.integration.candidateHead!;
             const op = await intend(loc, 'check', owner.id, { phase: 'integration', integrationOp: operation!.key, sha, specId: spec.id, resultId });
             let result: CheckResult;
-            try { result = await io.runner({ projectPath: loc.projectPath, workId: loc.workId, planId: loc.planId, resultId, now: io.now }, spec, sha, owner.id); }
+            try { result = await io.runner({ projectPath: loc.projectPath, workId: loc.workId, planId: loc.planId, resultId, now: io.now, signal }, spec, sha, owner.id); }
             catch (error) {
+              if (signal.aborted) throw new Error(CHECK_CANCELLED);
               await settled(loc, op, 'failed', { reason: errorText(error) });
               await change(loc, current => halt(current, { ...context(current, at()), reason: 'human', detail: `integration check: ${errorText(error)}` }));
               throw error;
             }
+            if (signal.aborted) throw new Error(CHECK_CANCELLED);
             await record(loc, owner.id, op, result);
           });
           plan = await load(loc);
@@ -937,7 +983,7 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
     return { ok: true, result: { check: result.id } };
   }
   async function recover(loc: Location): Promise<void> {
-    const plan = await load(loc), map = await io.readMap(loc.projectPath, loc.workId);
+    const plan = await load(loc), map = await read(loc.projectPath, loc.workId);
     const observations: Parameters<typeof reconcileAfterRestart>[1]['observations'] = [];
     for (const op of plan.autonomous!.ops.filter(row => row.state === 'intended')) {
       let result: Record<string, unknown> | null = null;
@@ -1003,7 +1049,7 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
   }
   async function cycle(projectPath: string, workId: string): Promise<void> {
     requireRecovered(projectPath, workId);
-    const map = await io.readMap(projectPath, workId);
+    const map = await read(projectPath, workId);
     if (map.work.status !== 'active') return;
     for (const original of map.plans?.filter(active) ?? []) {
       const loc = { projectPath, workId, planId: original.id };
@@ -1112,14 +1158,17 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
     }
     await cycle(projectPath, workId);
   }
-  function schedule(projectPath: string, workId: string) {
+  function schedule(projectPath: string, workId: string, version?: number, force = false) {
     const current = state(projectPath, workId);
+    // Та же версия — та же карта: цикл не нужен. Восстановление и тик (`force`) версией не ограничены.
+    if (!force && version !== undefined && current.seenVersion === version && current.recovering.size === 0) return;
+    if (version !== undefined) current.seenVersion = version; else delete current.seenVersion;
     if (current.scheduled || stopped) return;
     current.scheduled = true;
     void exclusive(projectPath, workId, async () => {
       current.scheduled = false;
       await processWork(projectPath, workId);
-    }).catch(error => options.onFailure?.(error));
+    }).catch(error => { delete current.seenVersion; if (errorText(error) !== CHECK_CANCELLED) options.onFailure?.(error); });
   }
   return {
     start() {
@@ -1131,17 +1180,27 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
         }
       }
       started = true;
-      const scan = () => { for (const entry of options.works!.snapshot().entries) if (entry.map.plans?.some(active)) schedule(entry.projectPath, entry.map.work.id); };
-      off = options.works.onChange(scan);
-      const poll = () => { if (stopped) return; scan(); timer = setTimeout(poll, 1000); timer.unref?.(); };
+      const scan = (force: boolean) => { for (const entry of options.works!.snapshot().entries) if (entry.map.plans?.some(active)) schedule(entry.projectPath, entry.map.work.id, entry.version, force); };
+      off = options.works.onChange(() => scan(false));
+      const poll = () => { if (stopped) return; scan(true); timer = setTimeout(poll, ENGINE_SAFETY_TICK_MS); timer.unref?.(); };
       poll();
     },
-    async stop() { stopped = true; off?.(); if (timer) clearTimeout(timer); await Promise.allSettled([...states.values()].map(value => value.tail)); },
+    async stop() {
+      stopped = true; off?.(); if (timer) clearTimeout(timer);
+      // Сначала прервать проверки: хвост работы иначе ждал бы их до срока (хуки остановки хоста ограничены 5 с).
+      for (const value of states.values()) value.checkAbort?.abort();
+      await Promise.allSettled([...states.values()].map(value => value.tail));
+    },
     flush: (projectPath, workId) => exclusive(projectPath, workId, () => processWork(projectPath, workId, true)),
-    cancel: input => exclusive(input.projectPath, input.workId, async () => {
+    cancel: async input => {
+      // Проверку нужно прервать до очереди работы: сама очередь занята этой проверкой.
+      const mapNow = await read(input.projectPath, input.workId);
+      const live = mapNow.plans?.find(row => row.id === input.planId);
+      if (live && live.rev === input.rev && active(live)) state(input.projectPath, input.workId).checkAbort?.abort();
+      return exclusive(input.projectPath, input.workId, async () => {
       const { projectPath, workId, planId, rev } = input;
       requireRecovered(projectPath, workId);
-      const map = await io.readMap(projectPath, workId);
+      const map = await read(projectPath, workId);
       const plan = map.plans?.find(row => row.id === planId);
       if (!plan || plan.rev !== rev) throw new PlanConflictError();
       if (plan.status === 'cancelled') return;
@@ -1163,7 +1222,8 @@ export function createAutonomousEngine(io: EngineIO, options: AutonomousEngineOp
           current.autonomous.ops.some(op => op.state === 'intended')) throw new PlanConflictError();
         cancelRoomPlan(draft, letters, planId, rev, HUMAN, at());
       });
-    }),
+      });
+    },
     async submit(ref, planId, rev, request) {
       if (recovering(ref.projectPath, ref.workId)) return denied(new Error('engine-recovering'));
       return exclusive(ref.projectPath, ref.workId, async () => {
