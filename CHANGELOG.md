@@ -4,7 +4,9 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
-## Unreleased
+## 0.33.0
+
+The first three waves of a full review of 0.32.0: agents reliably hear each other, silent endings and stuck plans are reported, and the host stays responsive with many sessions. Agents also spend fewer model responses on mail, and new session worktrees get their dependencies.
 
 ### Added
 
@@ -12,34 +14,45 @@ All notable changes to Parley are documented in this file.
 
 ### Fixed
 
-- Parley no longer stalls when many sessions resume or the assistant is asked for an overview: chat feeds load from the end of the log, two at a time with the visible tab first, idle feeds leave memory, and a window that stops reading is reconnected instead of growing the host's memory.
-- Large workspaces stay responsive while agents exchange messages: a message is saved without rebuilding the workspace map, Parley no longer freezes while an agent's write holds the database, only the room that received a message has its history file rebuilt, and get_map list pages keep working while the workspace changes.
-- Plans no longer get stuck: a submitted item can still be verified after its owner closes, a closed verifier's review goes to the room lead, assignments are sent again when a workspace is reopened, Resume retries blocked items of an autonomous plan, plan letters no longer wait behind other Parley messages, and old delivery records are pruned. Cancelling an autonomous plan or quitting no longer waits for a running check, and the host recalculates plans only for workspaces that changed.
-- Continuing a session on another provider no longer leaves it unable to start when its role belongs to the old provider: Parley picks the matching role (or none) and tells you which one it took.
-- A session that failed to start twice in a row is no longer resumed on every new letter: you get one notice, and the room lead and the senders of its unread mail get one letter saying the session cannot be woken.
-- `send_message` now warns when the recipient cannot be woken, so the sender knows the message will be read only after you resume the session.
-- A message pointer that gets no answer is typed again after 30 seconds and after 2 minutes, and a session that is resumed gets a pointer for the mail that was waiting for it.
-- Unsent text left in a terminal that holds back mail now produces a notice after 5 minutes instead of waiting silently.
-- Parley's background host no longer dies when a connected program sends a malformed message, when an internal error slips through, or when a log write fails, so running agents keep working; stopping the host now always finishes within 15 seconds and releases its lock.
-- Room titles can no longer carry line breaks or terminal control codes into other agents' terminals; the phone can no longer send shell commands (`!…`) to a session.
-- When a room member hands in its result with `report`, the room lead now gets a letter, and a room lead's result reaches the room owner; the session that created the reporter is told too. The `report` answer names who was told, and the same result repeated within a minute does not wake them again.
-- **An agent is no longer put to sleep in the middle of its turn.** A Claude turn that stayed silent during a long command or tool call counted as finished after 30 seconds, and when memory was tight Parley could stop the agent 5 minutes later, killing the command. Sleep now follows the window: a silent open turn counts as working for up to 15 minutes of silence.
-- The host log no longer reports "invalid transition sleeping → sleeping" when an agent falls asleep.
-- A session added to a room now gets a short note instead of the room's whole history, and a large inbox arrives in pages instead of one answer the agent could not read. Closed sessions no longer collect unread messages.
-- The Changes and Diff tabs no longer pile up overlapping requests or re-read every file when nothing changed, huge untracked files no longer stall the review, the island and the room usage chip poll far less, and Merge and Discard ignore double clicks and always refresh.
-- When an agent with a task stops, crashes or is stopped or closed by you without a result, or ends its turn without reporting, the session that gave the task and the room lead now get a letter. Stuck notices also reach the task giver, and a swarm no longer waits for a crashed drone until its time limit.
-- **The host stays responsive with many sessions.** A change in one workspace no longer makes the host recompute every session of every workspace, and archived or idle workspaces no longer hold file watchers. A session whose log is written without pause now gets its token numbers refreshed at least every few seconds.
-- After a restart, the background host no longer re-reads your whole Claude Code and Codex history: it keeps an index of the logs it has already read and reads only the ones that changed (the first start after an update still reads everything once). The 30-second limits check now looks only at recent and running Codex logs, putting a session to sleep no longer scans all your logs, and hook journals of stopped sessions are trimmed at start instead of growing forever.
+- Parley no longer stalls when many sessions resume or the assistant is asked for an overview: chat feeds load from the end of the log, two at a time with the visible tab first, idle feeds leave memory, and a window that stops reading is reconnected instead of growing the host's memory. ([#217](https://github.com/Kalmbik61/Parley/pull/217))
+- Large workspaces stay responsive while agents exchange messages: a message is saved without rebuilding the workspace map, Parley no longer freezes while an agent's write holds the database, only the room that received a message has its history file rebuilt, and get_map list pages keep working while the workspace changes. ([#213](https://github.com/Kalmbik61/Parley/pull/213))
+- Plans no longer get stuck: a submitted item can still be verified after its owner closes, a closed verifier's review goes to the room lead, assignments are sent again when a workspace is reopened, Resume retries blocked items of an autonomous plan, plan letters no longer wait behind other Parley messages, and old delivery records are pruned. Cancelling an autonomous plan or quitting no longer waits for a running check, and the host recalculates plans only for workspaces that changed. ([#210](https://github.com/Kalmbik61/Parley/pull/210))
+- Continuing a session on another provider no longer leaves it unable to start when its role belongs to the old provider: Parley picks the matching role (or none) and tells you which one it took. ([#207](https://github.com/Kalmbik61/Parley/pull/207))
+- A session that failed to start twice in a row is no longer resumed on every new letter: you get one notice, and the room lead and the senders of its unread mail get one letter saying the session cannot be woken. ([#207](https://github.com/Kalmbik61/Parley/pull/207))
+- `send_message` now warns when the recipient cannot be woken, so the sender knows the message will be read only after you resume the session. ([#207](https://github.com/Kalmbik61/Parley/pull/207))
+- A message pointer that gets no answer is typed again after 30 seconds and after 2 minutes, and a session that is resumed gets a pointer for the mail that was waiting for it. ([#207](https://github.com/Kalmbik61/Parley/pull/207))
+- Unsent text left in a terminal that holds back mail now produces a notice after 5 minutes instead of waiting silently. ([#207](https://github.com/Kalmbik61/Parley/pull/207))
+- Parley's background host no longer dies when a connected program sends a malformed message, when an internal error slips through, or when a log write fails, so running agents keep working; stopping the host now always finishes within 15 seconds and releases its lock. ([#204](https://github.com/Kalmbik61/Parley/pull/204))
+- Room titles can no longer carry line breaks or terminal control codes into other agents' terminals; the phone can no longer send shell commands (`!…`) to a session. ([#200](https://github.com/Kalmbik61/Parley/pull/200))
+- When a room member hands in its result with `report`, the room lead now gets a letter, and a room lead's result reaches the room owner; the session that created the reporter is told too. The `report` answer names who was told, and the same result repeated within a minute does not wake them again. ([#202](https://github.com/Kalmbik61/Parley/pull/202))
+- **An agent is no longer put to sleep in the middle of its turn.** ([#203](https://github.com/Kalmbik61/Parley/pull/203)) A Claude turn that stayed silent during a long command or tool call counted as finished after 30 seconds, and when memory was tight Parley could stop the agent 5 minutes later, killing the command. Sleep now follows the window: a silent open turn counts as working for up to 15 minutes of silence.
+- The host log no longer reports "invalid transition sleeping → sleeping" when an agent falls asleep. ([#203](https://github.com/Kalmbik61/Parley/pull/203))
+- A session added to a room now gets a short note instead of the room's whole history, and a large inbox arrives in pages instead of one answer the agent could not read. Closed sessions no longer collect unread messages. ([#206](https://github.com/Kalmbik61/Parley/pull/206))
+- The Changes and Diff tabs no longer pile up overlapping requests or re-read every file when nothing changed, huge untracked files no longer stall the review, the island and the room usage chip poll far less, and Merge and Discard ignore double clicks and always refresh. ([#215](https://github.com/Kalmbik61/Parley/pull/215))
+- When an agent with a task stops, crashes or is stopped or closed by you without a result, or ends its turn without reporting, the session that gave the task and the room lead now get a letter. Stuck notices also reach the task giver, and a swarm no longer waits for a crashed drone until its time limit. ([#209](https://github.com/Kalmbik61/Parley/pull/209))
+- **The host stays responsive with many sessions.** ([#212](https://github.com/Kalmbik61/Parley/pull/212)) A change in one workspace no longer makes the host recompute every session of every workspace, and archived or idle workspaces no longer hold file watchers. A session whose log is written without pause now gets its token numbers refreshed at least every few seconds.
+- After a restart, the background host no longer re-reads your whole Claude Code and Codex history: it keeps an index of the logs it has already read and reads only the ones that changed (the first start after an update still reads everything once). The 30-second limits check now looks only at recent and running Codex logs, putting a session to sleep no longer scans all your logs, and hook journals of stopped sessions are trimmed at start instead of growing forever. ([#218](https://github.com/Kalmbik61/Parley/pull/218))
 
 ### Changed
 
-- An agent can create at most five rooms per hour and can no longer take a session out of a room you set up unless it leads that room.
-- **Idle agents are put to sleep for memory less eagerly.** "Sleep idle agents sooner when the machine is busy" now defaults to 15 minutes (was 5) and applies when memory is critical or a queued launch needs a slot; on a memory warning agents fall asleep after at least 30 minutes. An agent woken by a letter or Resume stays awake at least 15 minutes after its last turn before memory can put it to sleep. A value you set yourself still applies.
-- Parley starts fewer duplicate helper processes when many agents share a project: Codex role lookups, CLI version checks, binary verification, the Codex skill catalog read at launch and git queries are cached or shared, the window asks for role summaries once per project, and the backlog panel ignores unrelated file changes. The window should stay more responsive with dozens of sessions.
-- **Wakes after a Parley sleep count toward "Session wake-ups per hour".** Two agents writing to each other can no longer wake each other without limit: a session put to sleep by Parley is woken by mail at most that many times per hour (6 by default); further mail waits and the window says so.
+- An agent can create at most five rooms per hour and can no longer take a session out of a room you set up unless it leads that room. ([#202](https://github.com/Kalmbik61/Parley/pull/202))
+- **Idle agents are put to sleep for memory less eagerly.** ([#203](https://github.com/Kalmbik61/Parley/pull/203)) "Sleep idle agents sooner when the machine is busy" now defaults to 15 minutes (was 5) and applies when memory is critical or a queued launch needs a slot; on a memory warning agents fall asleep after at least 30 minutes. An agent woken by a letter or Resume stays awake at least 15 minutes after its last turn before memory can put it to sleep. A value you set yourself still applies.
+- Parley starts fewer duplicate helper processes when many agents share a project: Codex role lookups, CLI version checks, binary verification, the Codex skill catalog read at launch and git queries are cached or shared, the window asks for role summaries once per project, and the backlog panel ignores unrelated file changes. The window should stay more responsive with dozens of sessions. ([#214](https://github.com/Kalmbik61/Parley/pull/214))
+- **Wakes after a Parley sleep count toward "Session wake-ups per hour".** ([#203](https://github.com/Kalmbik61/Parley/pull/203)) Two agents writing to each other can no longer wake each other without limit: a session put to sleep by Parley is woken by mail at most that many times per hour (6 by default); further mail waits and the window says so.
 - Claude Code no longer moves Parley's `wait_for` to the background after two minutes: Parley raises the client's threshold above the longest wait, so a waiting agent gets its mail at once instead of spending a turn on "still running" and answering late.
 - When Parley wakes a Claude-family agent for new mail, the letters now arrive together with the wake line, so the agent no longer spends a separate turn on `check_inbox`. If the letters do not fit, the rest stays unread and the agent is told to call `check_inbox`.
 - Agents are told to put `wait_for` in the same message as the call it follows, and Codex agents to wait in one script. In our measurement a waiting Claude agent went from 10 model responses to 7 and a Codex agent from 22 to 7 (one Codex run each); the numbers come from two designed scenarios, not from everyday use, see [docs/research/2026-11-11-mail-turns/README.md](docs/research/2026-11-11-mail-turns/README.md).
+
+### Updating
+
+- The first start after the update reads the whole Claude Code and Codex history once and then keeps an index, so later starts are faster.
+- At start Parley trims hook journals larger than 1 MiB of sleeping and closed sessions. The cut part is not kept and cannot be restored.
+- "Sleep idle agents sooner when the machine is busy" now defaults to 15 minutes instead of 5; a value you set yourself still applies.
+- A window from an older version keeps working with the new host.
+
+### What is not proven yet
+
+- None of these changes was checked in the packaged app on a real workload: chat feed loading with a long log and feed eviction, a reconnect with several chats open, host start time with a real history, the hook journal trimming on real data, and the letters about silent endings with real CLIs.
 
 ## 0.32.0
 
