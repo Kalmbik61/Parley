@@ -87,7 +87,8 @@ describe('бюджет агентской карты', () => {
       session.contextFrom = Array(100).fill('s-01');
       session.summary = '\ud800\n'.repeat(5000);
       session.worktree = { path: 'x'.repeat(10000), branch: 'b', base: 'master' };
-      addRoom(map, { creator: HUMAN, title: 'р'.repeat(1000), members: [session.id] });
+      // Название длиннее предела addRoom — как в старой карте: бюджет должен держаться и на таких данных.
+      addRoom(map, { creator: HUMAN, title: 'р', members: [session.id] }).title = 'р'.repeat(1000);
     }
     map.work.deletedSessions = Array.from({ length: 1000 }, (_, i) => `s-${i + 2000}`);
     const result = mapOverview(map, 's-01', mapLetterReader(map));
