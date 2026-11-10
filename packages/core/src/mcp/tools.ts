@@ -592,7 +592,7 @@ export const TOOLS: Tool[] = [
     name: 'add_to_room',
     annotations: WRITES,
     description:
-      "Bring another session of this workspace into the room. Lead only. One room per session: it leaves its other rooms and the feed shows \"@s04 joined the room\". The new participant gets no message: tell it in the room what you expect.",
+      "Bring another session of this workspace into the room. Lead only. One room per session: it leaves its other rooms and the feed shows \"@s04 joined the room\". The new participant gets a note, not the history: tell it in the room what you expect.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -1524,9 +1524,10 @@ async function addToRoom(
     // Правила — ведущий, живая комната, закрытая или чужая сессия, уже участник, одна комната на сессию —
     // держит `addMemberByLead`. Его `RoomRuleError` уходит агенту текстом ошибки, как у `propose_decision`,
     // а исключение из мутатора не даёт `updateMap` записать карту: после отказа она не меняется.
-    // Допуска бюджета здесь нет намеренно (P37): `addMemberByLead` пишет только системную строку «joined the room»
-    // (`from: system`, адресат — человек), она никого не будит, не рассылается и в бюджет писем не входит. Письма
-    // приглашённому здесь нет, в отличие от `create_room`; разговорная квота управление комнатой не блокирует.
+    // Допуска бюджета здесь нет намеренно (P37): `addMemberByLead` пишет системную строку «joined the room»
+    // (`from: system`, адресат — человек) и одно прямое письмо новичку от `system` (кто ввёл, ведущий, число прежних
+    // писем): они не рассылаются и в бюджет писем `parley` не входят; письмо будит новичка сразу. Разговорная квота
+    // управление комнатой не блокирует.
     assertNotSwarmMember(current, target);
     assertNotInHumanRoom(current, sessionId, target, roomId);
     messageId = addMemberByLead(current, letters, roomId, sessionId, target).id;

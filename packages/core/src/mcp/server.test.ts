@@ -296,11 +296,11 @@ describe('список инструментов', () => {
 
     expect(add?.inputSchema.required).toEqual(['room', 'session']);
     expect(Object.keys(add?.inputSchema.properties ?? {}).sort()).toEqual(['room', 'session']);
-    // Тон соседних описаний: только ведущий, одна комната на сессию, системная строка, письма нет.
+    // Тон соседних описаний: только ведущий, одна комната на сессию, системная строка, новичку — короткая записка, а не история.
     expect(add?.description).toMatch(/Lead only/);
     expect(add?.description).toMatch(/One room per session/);
     expect(add?.description).toContain('@s04 joined the room');
-    expect(add?.description).toMatch(/gets no message/);
+    expect(add?.description).toMatch(/gets a note, not the history/);
   });
 
 
@@ -1464,7 +1464,7 @@ describe('add_to_room', () => {
   /** Версия строки работы: после отказа она не сдвинулась — карту не записывали. */
   const rawMap = (): number | undefined => workVersion(project, workId);
 
-  it('ведущий вводит живую сессию: она в members, в ленте — системная строка, письма ей нет', async () => {
+  it('ведущий вводит живую сессию: она в members, в ленте — системная строка, а ящик новичка — одно письмо о вводе', async () => {
     const { lead } = await setup();
     const result = await callOk(lead, 'add_to_room', { room: 'r-01', session: 's-04' });
 
@@ -1478,9 +1478,19 @@ describe('add_to_room', () => {
       to: [HUMAN],
       text: '@s04 joined the room',
     });
-    // Письма о добавлении новому участнику не пишется: его ящик пуст.
+    // Новичок получает одно прямое письмо от system вместо истории комнаты; в комнате одно прежнее письмо — приглашение s-02.
     const added = await connect('s-04');
-    expect(await callOk(added, 'check_inbox')).toEqual({ messages: [] });
+    const inbox = (await callOk(added, 'check_inbox')) as { messages: Array<Record<string, unknown>> };
+    expect(Object.keys(inbox)).toEqual(['messages']);
+    expect(inbox.messages).toHaveLength(1);
+    expect(inbox.messages[0]).toMatchObject({
+      from: 'system',
+      kind: 'note',
+      room: null,
+      text:
+        '@s01 added you to room r-01 "комната"; its lead is @s01. Earlier messages of the room (1) are not in your inbox: ' +
+        'read_room with room "r-01" shows the newest, page.next the older ones. Messages sent from now on reach you as usual.',
+    });
   });
 
   it('одна комната на сессию: введённая уходит из другой комнаты той же работы', async () => {

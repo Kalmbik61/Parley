@@ -1,4 +1,5 @@
 import { cancelledPlanLetter } from './plan-effects.js';
+import { maxNumber } from './map.js';
 import { isRoomArchived } from './rooms.js';
 import { HUMAN, type Message, type WindowWorkMap, type WorkMap } from './types.js';
 
@@ -9,7 +10,8 @@ export type LetterLookup = (id: string) => Message | undefined;
  * Адресаты письма: `to`, а у рассылки комнаты (пустой `to`) — все участники,
  * кроме отправителя (спецификация 6.1). Создатель комнаты тоже участник, даже
  * если в `members` его не записали. Человек в адресаты не попадает: он не
- * сессия и читает всё, отметка прочтения ему не нужна. Письма архивной комнаты
+ * сессия и читает всё, отметка прочтения ему не нужна. Рассылка не адресована участнику, вошедшему не раньше неё
+ * (`room.joinedSeq`: номер новейшего письма комнаты при входе); письма с явным `to` порог не трогает. Письма архивной комнаты
  * адресатов не имеют, и с явным `to` тоже: старая лента непрочитанной не считается
  * и сессий не будит (архив комнат, 3.4).
  */
@@ -22,7 +24,10 @@ export function recipientsOf(message: Message, map: WorkMap): string[] {
   const members = new Set(room.members);
   members.delete(HUMAN);
   members.delete(message.from);
-  return [...members];
+  const joinedSeq = room.joinedSeq;
+  if (joinedSeq === undefined) return [...members];
+  const seq = maxNumber([message.id], 'm-');
+  return [...members].filter((id) => (joinedSeq[id] ?? 0) < seq);
 }
 
 /**

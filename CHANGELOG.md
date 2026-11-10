@@ -13,6 +13,7 @@ All notable changes to Parley are documented in this file.
 - When a room member hands in its result with `report`, the room lead now gets a letter, and a room lead's result reaches the room owner; the session that created the reporter is told too. The `report` answer names who was told, and the same result repeated within a minute does not wake them again.
 - **An agent is no longer put to sleep in the middle of its turn.** A Claude turn that stayed silent during a long command or tool call counted as finished after 30 seconds, and when memory was tight Parley could stop the agent 5 minutes later, killing the command. Sleep now follows the window: a silent open turn counts as working for up to 15 minutes of silence.
 - The host log no longer reports "invalid transition sleeping → sleeping" when an agent falls asleep.
+- A session added to a room now gets a short note instead of the room's whole history, and a large inbox arrives in pages instead of one answer the agent could not read. Closed sessions no longer collect unread messages.
 
 ### Changed
 

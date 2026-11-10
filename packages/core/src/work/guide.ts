@@ -378,8 +378,8 @@ with what to do. If you are the lead, the workflow below is for Free mode; in pl
 The lead can also bring one more session of this workspace into the room —
 \`add_to_room(room, session)\`: for example, an existing executor whose part needs to be discussed together with everyone. The session
 leaves the workspace's other rooms (one room per session), and a line
-\`@s04 joined the room\` appears in the feed. The new participant does not get a message about
-being added: write to it in the room yourself, saying what you expect. A non-lead, a closed
+\`@s04 joined the room\` appears in the feed. The new participant gets a short note from Parley — who added it, the lead, how many earlier
+messages there are and that \`read_room\` reads them — not the room's history: write to it in the room yourself, saying what you expect. A non-lead, a closed
 room, a foreign or closed session, and an existing participant are an error; the map does
 not change.
 

@@ -25,7 +25,7 @@ import { assertStorableLetterIds, sessionUnreadTotals } from './letter-tables.js
 import { messagePage, type LetterReader } from './context-pages.js';
 import { agentLetterAudience, agentLetterVisible } from './thread.js';
 import { addSession, transitionSession } from './map.js';
-import { addRoom } from './rooms.js';
+import { addRoom, recordJoin } from './rooms.js';
 import {
   createWork,
   mapCacheStats,
@@ -235,16 +235,22 @@ describe('LetterTx.markRead', () => {
 });
 
 describe('LetterTx.unreadFor', () => {
-  it('новичок комнаты получает непрочитанными все прежние рассылки', async () => {
+  it('новичок комнаты не получает прежних рассылок; явное письмо и рассылка после входа ему непрочитанные', async () => {
     await seed((_map, letters) => {
       letters.add(letter({ from: 's-01', to: [], roomId: 'r-01' })); // m-01
       letters.add(letter({ from: 's-02', to: [], roomId: 'r-01' })); // m-02
     });
     await updateMap(project, WORK, (map, letters) => {
       room(map).members.push('s-04');
-      letters.joined('r-01', 's-04');
+      recordJoin(room(map), letters, 's-04');
       expectParity(map, letters);
-      expect(ids(letters.unreadFor('s-04'))).toEqual(['m-01', 'm-02']);
+      expect(room(map).joinedSeq).toEqual({ 's-04': 2 });
+      expect(letters.unreadFor('s-04')).toEqual([]);
+
+      letters.add(letter({ from: 's-01', to: ['s-04'], roomId: 'r-01' })); // m-03
+      letters.add(letter({ from: 's-02', to: [], roomId: 'r-01' })); // m-04
+      expectParity(map, letters);
+      expect(ids(letters.unreadFor('s-04'))).toEqual(['m-03', 'm-04']);
     });
   });
 
@@ -834,7 +840,7 @@ function expectDbParity(readers: readonly string[] = ['s-01', 's-02', 's-03', 's
 }
 
 describe('кандидаты в непрочитанное против прежних правил (Review Focus 1–3)', () => {
-  it('новичок длинной комнаты, выход и возвращение: история непрочитанной, у вышедшего пропадает, у вернувшегося снова', async () => {
+  it('новичок длинной комнаты, выход и возвращение: истории нет, у вышедшего остаётся явное письмо, у вернувшегося рассылки вне комнаты не появляются', async () => {
     await seed((_map, letters) => {
       for (let n = 0; n < 60; n += 1) letters.add(letter({ from: n % 2 === 0 ? 's-01' : 's-02', to: [], roomId: 'r-01', text: `рассылка ${n}` }));
     });
@@ -843,9 +849,9 @@ describe('кандидаты в непрочитанное против преж
 
     await updateMap(project, WORK, (map, letters) => {
       room(map).members.push('s-04');
-      letters.joined('r-01', 's-04');
+      recordJoin(room(map), letters, 's-04');
     });
-    expect(unreadLetters(project, WORK, 's-04')).toHaveLength(60);
+    expect(unreadLetters(project, WORK, 's-04')).toEqual([]);
     expectDbParity();
 
     // Явное письмо новичку и рассылка, пока он в комнате.
@@ -869,10 +875,30 @@ describe('кандидаты в непрочитанное против преж
 
     await updateMap(project, WORK, (map, letters) => {
       room(map).members.push('s-04');
-      letters.joined('r-01', 's-04');
+      recordJoin(room(map), letters, 's-04');
     });
-    // Вернувшийся видит все рассылки заново, не от него и без его отметки, и явное письмо один раз.
-    expect(unreadLetters(project, WORK, 's-04')).toHaveLength(60 + 1 + 1 + 1);
+    // Порог встал заново на новейшее письмо комнаты (m-63): пропущенные вне комнаты рассылки не возвращаются, явное письмо остаётся.
+    expect(unreadLetters(project, WORK, 's-04').map((message) => message.text)).toEqual(['тебе лично']);
+    expectDbParity();
+  });
+
+  it('комната с участником из 0.32.0 (без joinedSeq, кандидаты есть): непрочитанное прежнее, позднего новичка порог не касается их', async () => {
+    await seed((_map, letters) => {
+      letters.add(letter({ from: 's-01', to: [], roomId: 'r-01', text: 'раз' })); // m-01
+      letters.add(letter({ from: 's-02', to: [], roomId: 'r-01', text: 'два' })); // m-02
+    });
+    expect(room(readStoredMap(project, WORK)).joinedSeq).toBeUndefined();
+    // s-01 — создатель вне members, рассылок не получает; s-02 не читает своё; s-03 читает оба.
+    expect(ids(unreadLetters(project, WORK, 's-03'))).toEqual(['m-01', 'm-02']);
+    expect(ids(unreadLetters(project, WORK, 's-02'))).toEqual(['m-01']);
+    expectDbParity();
+
+    await updateMap(project, WORK, (map, letters) => {
+      room(map).members.push('s-04');
+      recordJoin(room(map), letters, 's-04');
+    });
+    expect(ids(unreadLetters(project, WORK, 's-03'))).toEqual(['m-01', 'm-02']);
+    expect(unreadLetters(project, WORK, 's-04')).toEqual([]);
     expectDbParity();
   });
 
@@ -979,7 +1005,7 @@ describe('кандидаты в непрочитанное против преж
           letters.markRead(reader, unread, stamp());
         } else if (kind === 5 && !archived && !r.members.includes(reader)) {
           r.members.push(reader);
-          letters.joined('r-01', reader);
+          recordJoin(r, letters, reader);
         } else if (kind === 6 && !archived && r.members.includes(reader)) {
           r.members = r.members.filter((id) => id !== reader);
           letters.left('r-01', reader);
@@ -1580,7 +1606,7 @@ describe('журнал писем транзакции в событии onMapWr
     expect(event.journal).toEqual({ ...EMPTY, droppedRooms: ['r-01'] });
   });
 
-  it('методы кандидатов (joined, left, archived, effectCancelled) журнал не пополняют', async () => {
+  it('методы кандидатов (left, archived, effectCancelled) журнал не пополняют', async () => {
     await seed((_map, letters) => {
       letters.add(letter({ from: 's-02', to: [], roomId: 'r-01' })); // m-01
     });
@@ -1588,7 +1614,6 @@ describe('журнал писем транзакции в событии onMapWr
 
     writeLetters(project, WORK, (letters) => {
       letters.left('r-01', 's-03');
-      letters.joined('r-01', 's-03');
       letters.archived('r-01');
     });
 

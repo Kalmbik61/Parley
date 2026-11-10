@@ -25,6 +25,7 @@ import { S } from '../../shared/strings.js';
 import { participantTag } from './participant-tag.js';
 import { isRoomArchived } from './room-archive.js';
 import { treeOrder } from './tree-order.js';
+import { messageSeq } from './window-merge.js';
 
 // Тот же литерал, что и `HUMAN` в `core/work/types.ts` (см. комментарий выше
 // про `import type`).
@@ -37,7 +38,8 @@ export const DECISIONS_SHOWN = 5;
 /**
  * Адресаты письма: `to`, а у рассылки комнаты (пустой `to`) — все участники,
  * кроме отправителя (спецификация 6.1, перенос из `core/work/letters.ts`). Письма архивной комнаты адресатов не имеют,
- * и с явным `to` тоже: старая лента непрочитанной не считается (архив комнат, 3.4).
+ * и с явным `to` тоже: старая лента непрочитанной не считается (архив комнат, 3.4). Рассылка не адресована участнику с
+ * порогом входа (`room.joinedSeq`) не ниже её номера; письма с явным `to` порог не трогает.
  */
 export function recipientsOf(message: Message, map: WindowWorkMap): string[] {
   if (message.roomId === null) return message.to;
@@ -48,7 +50,11 @@ export function recipientsOf(message: Message, map: WindowWorkMap): string[] {
   const members = new Set(room.members);
   members.delete(HUMAN);
   members.delete(message.from);
-  return [...members];
+  // Порог входа: рассылка не адресована участнику, вошедшему не раньше неё (копия правила `core/work/letters.ts`).
+  const joinedSeq = room.joinedSeq;
+  if (joinedSeq === undefined) return [...members];
+  const seq = messageSeq(message);
+  return [...members].filter((id) => (joinedSeq[id] ?? 0) < seq);
 }
 
 /** Письмо адресовано сессии, и она его ещё не прочла (перенос из `core/work/letters.ts`). */

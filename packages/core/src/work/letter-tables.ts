@@ -517,7 +517,7 @@ function truncateJournal(journal: LetterJournal, lengths: readonly number[]): vo
  *
  * `journal` — что транзакция записала в письма (спека rooms.mail 6.2), для события `onMapWritten`. Методы, которые меняют
  * письма и отметки, дописывают свой список: `add` — `added`, `markRead` — `reads`, `flagDeleted` — `deleted`, `deleteRoom` —
- * `droppedRooms`, `reopened` — `rereadRooms`. Методы одних кандидатов непрочитанного (`joined`, `left`, `archived`,
+ * `droppedRooms`, `reopened` — `rereadRooms`. Методы одних кандидатов непрочитанного (`left`, `archived`,
  * `effectCancelled`) ставят `wrote`, но окну не нужны и в журнал не идут. `savepoint` при отказе обрезает журнал до длин,
  * какими он был до `fn`.
  */
@@ -596,19 +596,6 @@ export function createTableLetterTx(
     count: (q) => countLetters(db, projectPath, workId, q),
     unreadFor: (reader) =>
       reader === HUMAN ? unreadOfHuman(db, projectPath, workId) : unreadOfSession(db, projectPath, workId, reader, map, byId),
-
-    joined(roomId, reader) {
-      // Все рассылки комнаты без отметки читателя и не от него: новичок получает историю непрочитанной.
-      const added = sql(
-        db,
-        `INSERT OR IGNORE INTO message_unread (project_path, work_id, reader, seq, room_id)
-           SELECT m.project_path, m.work_id, ?, m.seq, m.room_id FROM messages m
-            WHERE m.project_path = ? AND m.work_id = ? AND m.room_id = ? AND m.recipients = '[]' AND m.sender != ?
-              AND NOT EXISTS (SELECT 1 FROM message_reads r
-                WHERE r.project_path = m.project_path AND r.work_id = m.work_id AND r.seq = m.seq AND r.reader = ?)`,
-      ).run(reader, projectPath, workId, roomId, reader, reader);
-      if (changed(added) > 0) wrote = true;
-    },
 
     left(roomId, reader) {
       // Только рассылки комнаты: письма с явным `to` остаются адресату и после выхода (`recipientsOf`).
