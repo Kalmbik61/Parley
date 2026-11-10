@@ -143,16 +143,20 @@ export async function readJsonlTail(
     for await (const chunk of stream) {
       const piece = typeof chunk === 'string' ? Buffer.from(chunk) : (chunk as Buffer);
       bytesRead += piece.length;
-      let data = carry.length === 0 ? piece : Buffer.concat([carry, piece]);
+      const carried = carry.length;
+      let data = carried === 0 ? piece : Buffer.concat([carry, piece]);
+      let skipped = 0;
       // Перевод строки (`\n` или `\r\n`) после уже принятой строки без `\n` — её конец, не пустая строка.
       if (skipLf && data.length > 0 && !(data[0] === CR && data.length === 1)) {
         skipLf = false;
         const skip = data[0] === LF ? 1 : data[0] === CR && data[1] === LF ? 2 : 0;
         data = data.subarray(skip);
         consumed += skip;
+        skipped = skip;
       }
       let pos = 0;
-      for (let end = data.indexOf(LF, pos); end !== -1; end = data.indexOf(LF, pos)) {
+      // В перенесённом остатке `\n` нет (его уже просмотрели): ищем только в новых байтах.
+      for (let end = data.indexOf(LF, Math.max(0, carried - skipped)); end !== -1; end = data.indexOf(LF, pos)) {
         take(data.subarray(pos, end));
         consumed += end + 1 - pos;
         pos = end + 1;

@@ -57,6 +57,24 @@ function memoryReader(): { reader: TimelineReader; set(text: string, ino?: numbe
   };
 }
 
+/** Файл целиком; читатель отдаёт его кусками заданных размеров (остаток — одним куском). */
+function fixed(content: Buffer, sizes: number[]): TimelineReader {
+  return {
+    stat: async () => ({ size: content.length, ino: 1 }),
+    open: (_file, start) => {
+      const pieces: Buffer[] = [];
+      let at = start;
+      for (const size of sizes) {
+        if (at >= content.length) break;
+        pieces.push(content.subarray(at, Math.min(content.length, at + size)));
+        at += size;
+      }
+      if (at < content.length) pieces.push(content.subarray(at));
+      return Readable.from(pieces);
+    },
+  };
+}
+
 const A = assistant({}, 'm1', '2026-10-01T10:00:01.000Z', u(10, 1));
 const B = assistant({}, 'm2', '2026-10-01T10:00:02.000Z', u(20, 2));
 const C = assistant({}, 'm3', '2026-10-01T10:00:03.000Z', u(30, 3));
@@ -115,16 +133,70 @@ describe('extendUsageTimeline', () => {
     expect(mem.opens[2]).toBe(0);
   });
 
-  it('extend не мутирует прежнюю шкалу', async () => {
+  it('extend дописывает в тот же массив', async () => {
     const mem = memoryReader();
     mem.set(jsonl([A]));
     const first = await extendUsageTimeline(null, '/f.jsonl', 'claude', mem.reader);
     mem.set(jsonl([A, B]));
     const second = await extendUsageTimeline(first, '/f.jsonl', 'claude', mem.reader);
+    expect(second.observations).toBe(first.observations);
+    expect(second.observations).toHaveLength(2);
+    expect(second.sidechain).toBe(first.sidechain);
+  });
+
+  it('чтение, упавшее посреди хвоста, шкалу не меняет', async () => {
+    const mem = memoryReader();
+    mem.set(jsonl([A]));
+    const first = await extendUsageTimeline(null, '/f.jsonl', 'claude', mem.reader);
+    const both = Buffer.from(jsonl([A, B, C]));
+    const from = Buffer.byteLength(jsonl([A]));
+    const firstNew = Buffer.byteLength(jsonl([B]));
+    const failing: TimelineReader = {
+      stat: async () => ({ size: both.length, ino: 1 }),
+      open: () =>
+        Readable.from(
+          (async function* () {
+            yield both.subarray(from, from + firstNew);
+            throw new Error('boom');
+          })(),
+        ),
+    };
+    await expect(extendUsageTimeline(first, '/f.jsonl', 'claude', failing)).rejects.toThrow('boom');
     expect(first.observations).toHaveLength(1);
-    expect(second).not.toBe(first);
-    expect(second.observations).not.toBe(first.observations);
-    expect(second.sidechain).not.toBe(first.sidechain);
+    mem.set(jsonl([A, B]));
+    const second = await extendUsageTimeline(first, '/f.jsonl', 'claude', mem.reader);
+    expect(second.observations.map((o) => (o.kind === 'delta' ? o.id : ''))).toEqual(['msg:m1', 'msg:m2']);
+  });
+
+  it('любая нарезка файла даёт те же наблюдения и тот же итог, что чтение целиком', async () => {
+    const text = jsonl([A, B, assistant({}, 'm4', '2026-10-01T10:00:04.000Z', u(5, 5)), { type: 'user', message: { role: 'user', content: 'привет, мир' } }, C]);
+    const bytes = Buffer.from(text);
+    const whole = await extendUsageTimeline(null, '/f.jsonl', 'claude', fixed(bytes, [bytes.length]));
+    const byLine = bytes.toString('utf8').split('\n').filter((l) => l !== '').map((l) => Buffer.byteLength(`${l}\n`));
+    const insideLine = [Math.floor(bytes.length / 2), bytes.length - Math.floor(bytes.length / 2)];
+    const insideChar = bytes.indexOf(Buffer.from('привет')) + 1; // середина двухбайтного символа
+    for (const sizes of [byLine, insideLine, [insideChar, bytes.length - insideChar], Array(bytes.length).fill(1)]) {
+      const piecewise = await extendUsageTimeline(null, '/f.jsonl', 'claude', fixed(bytes, sizes));
+      expect(piecewise.observations).toEqual(whole.observations);
+      expect(piecewise.offset).toBe(whole.offset);
+      expect(piecewise.lineNo).toBe(whole.lineNo);
+    }
+    // Дочитывание по строкам: итог равен чтению целиком.
+    const mem = memoryReader();
+    let timeline: Awaited<ReturnType<typeof extendUsageTimeline>> | null = null;
+    let acc = '';
+    for (const line of text.split('\n').filter((l) => l !== '')) {
+      acc += `${line}\n`;
+      mem.set(acc);
+      timeline = await extendUsageTimeline(timeline, '/f.jsonl', 'claude', mem.reader);
+    }
+    expect(timeline?.observations).toEqual(whole.observations);
+    const totals = (observations: readonly Parameters<ReturnType<typeof createUsageLedger>['observe']>[0][]) => {
+      const ledger = createUsageLedger();
+      for (const o of observations) ledger.observe(o);
+      return ledger.summary();
+    };
+    expect(totals(timeline!.observations)).toEqual(totals(whole.observations));
   });
 
   it('файла нет — пустая шкала; срез пустой шкалы равен summary() пустого ledger с окнами', async () => {

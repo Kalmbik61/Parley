@@ -109,6 +109,32 @@ describe('createUsageLedger', () => {
     expect(ledger.summary()).toMatchObject({ input: 1000, output: 200, completeness: 'complete' });
   });
 
+  it('повтор id с растущими полями: прежний вклад вычитается, поле из null становится числом', () => {
+    const ledger = createUsageLedger();
+    ledger.observe(delta('a', { output: 5, cacheRead: null }));
+    ledger.observe(delta('b', { input: 1, output: 1, cacheRead: 7, cacheWrite: 0, totalInput: 8 }));
+    // cacheRead известен у одного вклада из двух: поле неизвестно, итог неполный.
+    expect(ledger.summary()).toMatchObject({ input: 11, output: 6, cacheRead: null, cacheWrite: 20, totalInput: 138, completeness: 'partial' });
+
+    ledger.observe(delta('a', { output: 9, cacheRead: 100 }));
+    expect(ledger.summary()).toMatchObject({ input: 11, output: 10, cacheRead: 107, cacheWrite: 20, totalInput: 138, completeness: 'complete' });
+  });
+
+  it('ответ без полей кэша: поля null, итог неполный', () => {
+    const ledger = createUsageLedger();
+    ledger.observe(delta('a', { cacheRead: null, cacheWrite: null }));
+    ledger.observe(delta('b'));
+    expect(ledger.summary()).toMatchObject({ input: 20, output: 10, cacheRead: null, cacheWrite: null, totalInput: 260, completeness: 'partial' });
+  });
+
+  it('сумма вне безопасного целого: поле null и после следующих записей', () => {
+    const ledger = createUsageLedger();
+    ledger.observe(delta('a', { input: Number.MAX_SAFE_INTEGER }));
+    ledger.observe(delta('b', { input: 1 }));
+    ledger.observe(delta('c', { input: 1 }));
+    expect(ledger.summary()).toMatchObject({ input: null, output: 15 });
+  });
+
   it('спад накопителя без доказанного сброса не суммируется: остаётся наибольшее, итог неполный', () => {
     const ledger = createUsageLedger();
     ledger.observe(cumulative({ input: 1000, output: 200 }));
