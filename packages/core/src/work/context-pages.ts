@@ -1118,11 +1118,11 @@ export const TOPOLOGY_FIELDS = ['sessions', 'rooms', 'plans', 'deletedSessions',
 export type TopologyField = typeof TOPOLOGY_FIELDS[number];
 type SummaryRow = Record<string, unknown>;
 
-/** Счётчики и поколение вычисляются один раз на запрос, в том числе для всех пяти частей обзора. */
-function topologySnapshot(map: WorkMap, caller: string | null, letters: LetterReader) {
+/** Счётчики вычисляются один раз на запрос, в том числе для всех пяти частей обзора. Карта целиком не хешируется. */
+function topologySnapshot(caller: string | null, letters: LetterReader) {
   const stats = letters.channelStats();
   const unread = caller === null ? { total: 0, byRoom: {} as Record<string, number> } : letters.unreadCount(caller);
-  return { stats, unread, generation: textHash(JSON.stringify([map, stats, unread])) };
+  return { stats, unread };
 }
 type TopologySnapshot = ReturnType<typeof topologySnapshot>;
 
@@ -1178,9 +1178,8 @@ interface TopologyQuery { field: TopologyField; cursor?: string; maxBytes?: numb
 function topologySelection(map: WorkMap, caller: string | null, query: TopologyQuery, snapshot: TopologySnapshot) {
   const maxBytes = Math.min(TOPOLOGY_MAX_BYTES, clampPageBytes(query.maxBytes));
   const binding = textHash(JSON.stringify([map.work.id, caller, query.field, maxBytes]));
-  // updatedAt недостаточен: два изменения могут иметь одинаковую метку времени. Хеш охватывает и удаление.
   const rows = topologyRows(map, caller, query.field, snapshot);
-  const { generation } = snapshot;
+  // Курсор держит id последней отданной строки (якорь): вставка или удаление до неё сдвигает позицию, а не рвёт курсор.
   let offset = 0;
   if (query.cursor !== undefined) {
     try {
@@ -1188,21 +1187,26 @@ function topologySelection(map: WorkMap, caller: string | null, query: TopologyQ
       const decoded = Buffer.from(query.cursor.slice(9), 'base64url').toString('utf8');
       if (Buffer.from(decoded).toString('base64url') !== query.cursor.slice(9)) throw new Error();
       const raw = JSON.parse(decoded) as unknown;
-      if (!Array.isArray(raw) || raw.length !== 3 || raw[0] !== binding || typeof raw[1] !== 'string' || !/^[0-9a-f]{12}$/.test(raw[1]) || !Number.isSafeInteger(raw[2]) || raw[2] <= 0) throw new Error();
-      if (raw[1] !== generation) throw new PageError('stale-cursor', 'stale-cursor: The map changed; restart this collection without a cursor.');
-      offset = raw[2] as number;
-      if (offset >= rows.length) throw new Error();
+      if (!Array.isArray(raw) || raw.length !== 3 || raw[0] !== binding || typeof raw[1] !== 'string' || raw[1].length < 1 || raw[1].length > 128 || !Number.isSafeInteger(raw[2]) || raw[2] <= 0) throw new Error();
+      const lastId = raw[1];
+      if (rows[(raw[2] as number) - 1]?.['id'] === lastId) offset = raw[2] as number;
+      else {
+        // Курсор прежней сборки несёт хеш карты вместо id: такого якоря в списке нет, и он честно устаревает.
+        const at = rows.findIndex((row) => row['id'] === lastId);
+        if (at < 0) throw new PageError('stale-cursor', 'stale-cursor: The row this page ended on is gone; restart this collection without a cursor.');
+        offset = at + 1;
+      }
     } catch (error) {
       if (error instanceof PageError) throw error;
       throw new PageError('invalid-cursor', 'invalid-cursor: Use page.next with the same workspace, caller, field and maxBytes.');
     }
   }
-  const next = (at: number) => `topology:${Buffer.from(JSON.stringify([binding, generation, at])).toString('base64url')}`;
+  const next = (at: number) => `topology:${Buffer.from(JSON.stringify([binding, String(rows[at - 1]?.['id']), at])).toString('base64url')}`;
   return { rows, offset, maxBytes, next };
 }
 
 /** Страница новых списков ограничена всем MCP-ответом, а не суммой размеров строк. */
-export function topologyListPage(map: WorkMap, caller: string | null, letters: LetterReader, query: TopologyQuery, budget?: number, snapshot = topologySnapshot(map, caller, letters)) {
+export function topologyListPage(map: WorkMap, caller: string | null, letters: LetterReader, query: TopologyQuery, budget?: number, snapshot = topologySnapshot(caller, letters)) {
   const { rows, offset, maxBytes, next } = topologySelection(map, caller, query, snapshot);
   const items: SummaryRow[] = [];
   const result = { field: query.field, items, page: { total: rows.length, returned: 0, complete: false, next: null as string | null, bytes: 0, cut: 0 } };
@@ -1229,7 +1233,7 @@ export function topologyListPage(map: WorkMap, caller: string | null, letters: L
 /** Обзор — пять ограниченных коллекций с точными итогами; полные данные остаются в адресных страницах. */
 export function mapOverview(map: WorkMap, caller: string | null, letters: LetterReader) {
   const cut: Cut = {};
-  const snapshot = topologySnapshot(map, caller, letters);
+  const snapshot = topologySnapshot(caller, letters);
   const { stats, unread } = snapshot;
   const pages = Object.fromEntries(TOPOLOGY_FIELDS.map((field) => [field, topologyListPage(map, caller, letters, { field }, 6000, snapshot)])) as Record<TopologyField, ReturnType<typeof topologyListPage>>;
   const result = {

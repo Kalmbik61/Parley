@@ -141,8 +141,17 @@ describe('бюджет агентской карты', () => {
     }
     expect(() => topologyListPage(map, 's-01', letters, { field: 'sessions', maxBytes: 2048, cursor: next })).toThrow('invalid-cursor');
     expect(() => topologyListPage({ ...map, work: { ...map.work, id: 'w-9999' } }, 's-80', letters, { field: 'sessions', maxBytes: 2048, cursor: next })).toThrow('invalid-cursor');
+    // Правка строки не рвёт курсор: страницы продолжаются от якоря, 119 id без повторов и пропусков.
     map.sessions[0]!.label = 'другое содержимое с прежним updatedAt';
-    expect(() => topologyListPage(map, 's-80', letters, { field: 'sessions', maxBytes: 2048, cursor: next })).toThrow('stale-cursor');
+    const resumed = [...first.items.map((item) => (item as { id: string }).id)];
+    let resumeCursor: string | null = next;
+    while (resumeCursor !== null) {
+      const page = topologyListPage(map, 's-80', letters, { field: 'sessions', maxBytes: 2048, cursor: resumeCursor });
+      resumed.push(...page.items.map((item) => (item as { id: string }).id));
+      resumeCursor = page.page.next;
+    }
+    expect(resumed).toHaveLength(119);
+    expect(new Set(resumed).size).toBe(119);
     expect(() => topologyListPage(map, 's-80', letters, { field: 'sessions', cursor: 'broken' })).toThrow('invalid-cursor');
   });
 
@@ -180,8 +189,68 @@ describe('бюджет агентской карты', () => {
       expect(new Set(seen).size).toBe(result.map.collections[field].total);
     }
     const first = topologyListPage(map, 's-01', letters, { field: 'plans', maxBytes: 2048 });
+    const anchor = first.items[first.items.length - 1]!.id;
     map.plans.pop();
+    const resumed = topologyListPage(map, 's-01', letters, { field: 'plans', maxBytes: 2048, cursor: first.page.next! });
+    expect(resumed.items[0]!.id).not.toBe(anchor);
+    expect(resumed.page.total).toBe(118);
+    // Якорь удалён — продолжать не от чего.
+    map.plans = map.plans.filter((plan) => plan.id !== anchor);
     expect(() => topologyListPage(map, 's-01', letters, { field: 'plans', maxBytes: 2048, cursor: first.page.next! })).toThrow('stale-cursor');
+    try {
+      topologyListPage(map, 's-01', letters, { field: 'plans', maxBytes: 2048, cursor: first.page.next! });
+    } catch (error) {
+      expect(error).toBeInstanceOf(PageError);
+      expect((error as Error).message).toContain('restart this collection without a cursor');
+    }
+  });
+
+  it('письмо в другой комнате не рвёт курсор sessions', () => {
+    const map = emptyMap();
+    for (let i = 0; i < 40; i += 1) addSession(map, { provider: 'codex', label: 'сессия', task: 'з'.repeat(500) });
+    const letters = mapLetterReader(map);
+    const first = topologyListPage(map, 's-01', letters, { field: 'sessions', maxBytes: 2048 });
+    expect(first.page.next).not.toBeNull();
+    const busy = { ...letters, channelStats: () => ({ 'r-99': { total: 5, latestId: 'm-05' } }) };
+    const second = topologyListPage(map, 's-01', busy, { field: 'sessions', maxBytes: 2048, cursor: first.page.next! });
+    expect(second.items[0]!.id).toBe(`s-${String(first.items.length + 1).padStart(2, '0')}`);
+  });
+
+  it('курсор у конца списка, когда строки после якоря исчезли, даёт пустую завершённую страницу', () => {
+    const map = emptyMap();
+    for (let i = 0; i < 40; i += 1) addSession(map, { provider: 'codex', label: 'сессия', task: 'з'.repeat(500) });
+    const letters = mapLetterReader(map);
+    const first = topologyListPage(map, 's-01', letters, { field: 'sessions', maxBytes: 2048 });
+    map.sessions.length = first.items.length;
+    const last = topologyListPage(map, 's-01', letters, { field: 'sessions', maxBytes: 2048, cursor: first.page.next! });
+    expect(last.items).toEqual([]);
+    expect(last.page).toMatchObject({ returned: 0, complete: true, next: null, total: first.items.length });
+  });
+
+  it('курсор прежней сборки с хешем карты устаревает, а не продолжается с чужого места', () => {
+    const map = emptyMap();
+    for (let i = 0; i < 40; i += 1) addSession(map, { provider: 'codex', label: 'сессия', task: 'з'.repeat(500) });
+    const letters = mapLetterReader(map);
+    const first = topologyListPage(map, 's-01', letters, { field: 'sessions', maxBytes: 2048 });
+    const raw = JSON.parse(Buffer.from(first.page.next!.slice(9), 'base64url').toString('utf8')) as [string, string, number];
+    const old = `topology:${Buffer.from(JSON.stringify([raw[0], '0123456789ab', raw[2]])).toString('base64url')}`;
+    expect(() => topologyListPage(map, 's-01', letters, { field: 'sessions', maxBytes: 2048, cursor: old })).toThrow(/stale-cursor|invalid-cursor/);
+  });
+
+  it('обзор не сериализует карту целиком', () => {
+    const map = emptyMap();
+    for (let i = 0; i < 30; i += 1) addSession(map, { provider: 'codex', label: 'сессия', task: 'з'.repeat(500) });
+    const letters = mapLetterReader(map);
+    const stringify = vi.spyOn(JSON, 'stringify');
+    try {
+      mapOverview(map, 's-01', letters);
+      for (const [value] of stringify.mock.calls) {
+        expect(value).not.toBe(map);
+        expect(Array.isArray(value) && value.includes(map)).toBe(false);
+      }
+    } finally {
+      stringify.mockRestore();
+    }
   });
 });
 
