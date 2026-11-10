@@ -504,7 +504,6 @@ export function PlanSummary({
                       sessionId: session.id,
                     }}
                     cwd={session.worktree?.path ?? entry.projectPath}
-                    revision={`${session.pid}:${session.startedAtProcess}:${session.lifecycle}:${session.worktree?.path}`}
                   />
                 ) : null}
               </div>

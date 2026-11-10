@@ -62,7 +62,6 @@ export function PlanRemainingView({
                     {...(bridge ? { bridge } : {})}
                     sessionRef={{ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id }}
                     cwd={session.worktree?.path ?? entry.projectPath}
-                    revision={`${session.pid}:${session.startedAtProcess}:${session.lifecycle}:${session.worktree?.path}`}
                   />
                 ) : null}
               </div>
