@@ -161,9 +161,9 @@ describe('close_session: право живого лида закрыть зав�
 
 describe('report: подсказка закрыть завершённые сессии в ответе', () => {
   const LEAD_HINT = (ids: string): string =>
-    `The human lets agents close finished sessions in this workspace (work.closeFinished): that is the human's explicit consent. Once you have accepted their parts, call close_session with target set to each of: ${ids}; the tool allows it.`;
+    `The human lets agents close finished sessions in this workspace (work.closeFinished): that is the human's explicit consent. These members of your room have finished and are still open: call close_session with target set to each of: ${ids}, unless you still need one of them; the tool allows it.`;
   const OWN_HINT = (id: string): string =>
-    `The human lets agents close finished sessions in this workspace (work.closeFinished): that is the human's explicit consent. Once your part is accepted, call close_session with target "${id}" as your last call.`;
+    `The human lets agents close finished sessions in this workspace (work.closeFinished): that is the human's explicit consent. Nobody sends an acceptance, silence means accepted: unless the lead or the session that created you asked you to stay open, call close_session with target "${id}" as your last call.`;
 
   async function reportAs(sessionId: string, status: 'done' | 'progress' = 'done'): Promise<Record<string, unknown>> {
     const result = await call(await connect(sessionId), 'report', { status, summary: 'итог' });
@@ -185,17 +185,17 @@ describe('report: подсказка закрыть завершённые се�
 
   it('ведущий: подсказка называет завершивших участников по порядку карты', async () => {
     await seed({ flag: true, finished: ['s-03', 's-02'] });
-    expect((await reportAs('s-01'))['next']).toBe(LEAD_HINT('s-02, s-03'));
+    expect((await reportAs('s-01'))['next']).toContain(LEAD_HINT('s-02, s-03'));
   });
 
   it('ведущий без завершивших участников: поля нет', async () => {
     await seed({ flag: true });
-    expect(await reportAs('s-01')).not.toHaveProperty('next');
+    expect(String((await reportAs('s-01'))['next'])).not.toContain('close_session');
   });
 
-  it('участник комнаты, не ведущий: подсказка закрыть себя', async () => {
+  it('участник комнаты, не ведущий: подсказка закрыть себя после фразы об уведомлении', async () => {
     await seed({ flag: true });
-    expect((await reportAs('s-02'))['next']).toBe(OWN_HINT('s-02'));
+    expect((await reportAs('s-02'))['next']).toBe(`Notified s-01 (lead of r-01). ${OWN_HINT('s-02')}`);
   });
 
   it('созданная сессия: подсказка закрыть себя', async () => {
@@ -203,28 +203,31 @@ describe('report: подсказка закрыть завершённые се�
     await updateMap(project, workId, (map) => {
       addSession(map, { provider: 'claude', label: 'дитя', task: 'x', createdBy: 's-04' });
     });
-    expect((await reportAs('s-05'))['next']).toBe(OWN_HINT('s-05'));
+    expect((await reportAs('s-05'))['next']).toBe(`Notified s-04 (task giver). ${OWN_HINT('s-05')}`);
   });
 
   it('сессия человека без комнаты и создателя: поля нет', async () => {
     await seed({ flag: true });
-    expect(await reportAs('s-04')).not.toHaveProperty('next');
+    expect(String((await reportAs('s-04'))['next'])).not.toContain('close_session');
   });
 
   it('флаг выключен: поля нет ни у ведущего, ни у участника', async () => {
     await seed({ flag: false, finished: ['s-02'] });
-    expect(await reportAs('s-01')).not.toHaveProperty('next');
-    expect(await reportAs('s-03')).not.toHaveProperty('next');
+    expect(String((await reportAs('s-01'))['next'])).not.toContain('close_session');
+    expect(String((await reportAs('s-03'))['next'])).not.toContain('close_session');
   });
 
   it('статус progress: поля нет', async () => {
     await seed({ flag: true, finished: ['s-02'] });
-    expect(await reportAs('s-01', 'progress')).not.toHaveProperty('next');
-    expect(await reportAs('s-03', 'progress')).not.toHaveProperty('next');
+    for (const id of ['s-01', 's-03']) {
+      const answer = await reportAs(id, 'progress');
+      expect(answer).not.toHaveProperty('next');
+      expect(answer).not.toHaveProperty('notified');
+    }
   });
 
   it('ведущий архивной комнаты: подсказки ведущего нет', async () => {
     await seed({ flag: true, archived: true, finished: ['s-02'] });
-    expect(await reportAs('s-01')).not.toHaveProperty('next');
+    expect(String((await reportAs('s-01'))['next'])).not.toContain('close_session');
   });
 });
