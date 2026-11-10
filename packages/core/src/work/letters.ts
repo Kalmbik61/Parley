@@ -44,8 +44,16 @@ export function lookupIn(map: Pick<WindowWorkMap, 'messages'>): LetterLookup {
   };
 }
 
+/**
+ * Читатель — закрытая сессия карты. Возврата из `closed` нет (`TRANSITIONS`), поэтому у закрытого читателя нет непрочитанного
+ * и кандидатов; `recipientsOf` его по-прежнему считает адресатом: на него опираются вид треда и бюджеты.
+ */
+export const isClosedReader = (map: WorkMap, id: string): boolean =>
+  map.sessions.some((session) => session.id === id && session.lifecycle === 'closed');
+
 /** Непрочитанные письма сессии в порядке карты — правила над картой с письмами (окно, сверка переезда, тесты). */
 export function unreadFor(map: WindowWorkMap, sessionId: string): Message[] {
+  if (isClosedReader(map, sessionId)) return [];
   const byId = lookupIn(map);
   return map.messages.filter((message) => isUnreadFor(message, sessionId, map, byId));
 }

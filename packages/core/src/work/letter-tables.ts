@@ -9,12 +9,17 @@
  * сессий, `isHumanUnread` у человека. Инвариант: у читателя нет кандидата на письмо, которое он уже отметил
  * (`message_reads`), а человек — кандидат на каждое письмо, которое он видит и не прочёл, и ни на какое другое: поэтому его
  * счётчики считаются запросом по кандидатам без разбора писем.
+ *
+ * Инвариант сессии-читателя: каждый её кандидат на письмо не от `parley` непрочитан и по живым правилам. Отметку снимает
+ * `markRead`/`reopened`, выход из комнаты — `left`, архив — `archived`, удаление — `flagDeleted`, закрытие — удаление строк
+ * в той же записи (`dropReaderCandidates`). Поэтому `sessionUnreadTotals` считает такие письма запросом, а по одному правилами
+ * судит только письма `parley`: эффект плана может отмениться без `effectCancelled`.
  */
 
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
 import { isHumanUnread } from './attention.js';
 import type { LetterJournal, LetterQuery, LetterTx, NewLetter } from './letter-store.js';
-import { isUnreadFor, recipientsOf, type LetterLookup } from './letters.js';
+import { isClosedReader, isUnreadFor, recipientsOf, type LetterLookup } from './letters.js';
 import { maxNumber } from './map.js';
 import { planEffectOwnsLetter } from './plan-effects.js';
 import { isRoomArchived } from './rooms.js';
@@ -260,11 +265,11 @@ export function roomLetterTops(db: DatabaseSync, projectPath: string, workId: st
   return tops;
 }
 
-/** Кандидаты читателя — письма по возрастанию номера; `counting` — лёгкие строки для подсчёта (см. `COUNTING_COLUMNS`). */
-function candidates(db: DatabaseSync, projectPath: string, workId: string, reader: string, counting: boolean): Message[] {
+/** Кандидаты читателя — письма по возрастанию номера. */
+function candidates(db: DatabaseSync, projectPath: string, workId: string, reader: string): Message[] {
   return rowsOf(
     db,
-    `SELECT ${counting ? COUNTING_COLUMNS : LETTER_COLUMNS} FROM message_unread u
+    `SELECT ${LETTER_COLUMNS} FROM message_unread u
        JOIN messages m ON m.project_path = u.project_path AND m.work_id = u.work_id AND m.seq = u.seq
       WHERE u.project_path = ? AND u.work_id = ? AND u.reader = ? ORDER BY u.seq`,
     [projectPath, workId, reader],
@@ -282,14 +287,15 @@ export function unreadOfSession(
   reader: string,
   map: WorkMap,
   byId: LetterLookup,
-  counting = false,
 ): Message[] {
-  return candidates(db, projectPath, workId, reader, counting).filter((message) => isUnreadFor(message, reader, map, byId));
+  // Закрытый читатель ничего не читает: возврата из `closed` нет, строки кандидатов остались бы мёртвым грузом.
+  if (isClosedReader(map, reader)) return [];
+  return candidates(db, projectPath, workId, reader).filter((message) => isUnreadFor(message, reader, map, byId));
 }
 
 /** Непрочитанное человеком: кандидаты, затем `isHumanUnread` (то же правило, что у окна и `mail.markRead`). */
 export function unreadOfHuman(db: DatabaseSync, projectPath: string, workId: string): Message[] {
-  return candidates(db, projectPath, workId, HUMAN, false).filter(isHumanUnread);
+  return candidates(db, projectPath, workId, HUMAN).filter(isHumanUnread);
 }
 
 /** Последние `limit` непрочитанных человеком писем по возрастанию номера. */
@@ -337,18 +343,53 @@ export function sessionUnreadTotals(
   byId: LetterLookup,
 ): UnreadTotals {
   const byRoom: Record<string, number> = {};
-  const unread = unreadOfSession(db, projectPath, workId, reader, map, byId, true);
-  for (const message of unread) byRoom[channelKey(message.roomId)] = (byRoom[channelKey(message.roomId)] ?? 0) + 1;
-  return { total: unread.length, byRoom };
+  let total = 0;
+  if (isClosedReader(map, reader)) return { total, byRoom };
+  // Кандидат на письмо не от `parley` непрочитан и по живым правилам (инвариант в шапке модуля): считается запросом.
+  const groups = sql(
+    db,
+    `SELECT u.room_id, COUNT(*) AS n FROM message_unread u
+       JOIN messages m ON m.project_path = u.project_path AND m.work_id = u.work_id AND m.seq = u.seq
+      WHERE u.project_path = ? AND u.work_id = ? AND u.reader = ? AND m.sender != ? GROUP BY u.room_id`,
+  ).all(projectPath, workId, reader, PARLEY);
+  for (const group of groups) {
+    const count = Number(group['n']);
+    const key = channelKey((group['room_id'] as string | null) ?? null);
+    byRoom[key] = (byRoom[key] ?? 0) + count;
+    total += count;
+  }
+  // Письмо `parley` может перестать быть непрочитанным без отметки (эффект плана отменился): его судят правила.
+  const noted = rowsOf(
+    db,
+    `SELECT ${COUNTING_COLUMNS} FROM message_unread u
+       JOIN messages m ON m.project_path = u.project_path AND m.work_id = u.work_id AND m.seq = u.seq
+      WHERE u.project_path = ? AND u.work_id = ? AND u.reader = ? AND m.sender = ? ORDER BY u.seq`,
+    [projectPath, workId, reader, PARLEY],
+  ).filter((message) => isUnreadFor(message, reader, map, byId));
+  for (const message of noted) {
+    byRoom[channelKey(message.roomId)] = (byRoom[channelKey(message.roomId)] ?? 0) + 1;
+    total += 1;
+  }
+  return { total, byRoom };
 }
 
 /** Читатели, которым письмо ещё предстоит прочесть: адресаты на этот момент и человек, если письмо ему видно. Отмеченные не входят. */
 export function candidateReaders(message: Message, map: WorkMap): string[] {
-  const readers = new Set(recipientsOf(message, map));
+  const readers = new Set(recipientsOf(message, map).filter((reader) => !isClosedReader(map, reader)));
   // Человек — не адресат по `recipientsOf`: его кандидатство решает `isHumanUnread`, одно и то же для всех писем.
   readers.delete(HUMAN);
   if (isHumanUnread({ ...message, readBy: {} })) readers.add(HUMAN);
   return [...readers].filter((reader) => message.readBy[reader] === undefined);
+}
+
+/** Удаляет кандидатов названных читателей — при закрытии сессии, в той же записи; число удалённых строк. */
+export function dropReaderCandidates(db: DatabaseSync, projectPath: string, workId: string, readers: readonly string[]): number {
+  if (readers.length === 0) return 0;
+  const dropped = sql(
+    db,
+    'DELETE FROM message_unread WHERE project_path = ? AND work_id = ? AND reader IN (SELECT value FROM json_each(?))',
+  ).run(projectPath, workId, JSON.stringify(readers));
+  return changed(dropped);
 }
 
 const INSERT_LETTER = `INSERT INTO messages (project_path, work_id, seq, id, room_id, sender, recipients, at, kind, deleted, body)
