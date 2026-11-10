@@ -22,6 +22,7 @@ import {
   recentCreations,
   reserveAttempt,
   resourceStatus,
+  resumesInWindow,
   roomOfSession,
   countRecipients,
   settleAttempt,
@@ -216,6 +217,21 @@ describe('reserveAttempt: подъём сессии, которую усыпил
     for (let i = 3; i < 6; i += 1) wake(map, target, {}, NOW + i);
     const refusal = denied(() => wake(map, target, {}, NOW + 10));
     expect([refusal.code, refusal.scope, refusal.used, refusal.limit]).toEqual(['resume-rate', 'session', 6, 6]);
+  });
+
+  it('resumesInWindow считает подъёмы одной сессии за час, в том числе windowFree, и сходится с отказом resume-rate', () => {
+    const map = emptyMap();
+    const target = addHostSlept(map);
+    const other = addHostSlept(map);
+    for (let i = 0; i < 3; i += 1) wake(map, target, {}, NOW + i);
+    wake(map, other, {}, NOW + 5);
+    expect(resumesInWindow(map, target, NOW + 10)).toBe(3);
+    expect(resumesInWindow(map, other, NOW + 10)).toBe(1);
+    // Окно скользит: через час с лишним подъёмы уже не считаются.
+    expect(resumesInWindow(map, target, NOW + RESOURCE_WINDOW_MS + 10)).toBe(0);
+    // Тот же счёт стоит за отказом: при пороге, равном счёту, подъём отклонён и называет это число.
+    const refusal = denied(() => wake(map, target, {}, NOW + 10, 3));
+    expect([refusal.code, refusal.used, refusal.limit]).toEqual(['resume-rate', resumesInWindow(map, target, NOW + 10), 3]);
   });
 
   it('подъёмы после сна не тратят workLaunches и roomLaunches', () => {

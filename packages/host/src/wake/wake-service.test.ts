@@ -14,9 +14,11 @@ import {
   DEFAULT_RESOURCE_LIMITS,
   HUMAN,
   LIMIT_RETURN_TEXT,
+  PARLEY,
   readStoredMap,
   reserveAttempt,
   saveConfig,
+  sessionTag,
   setWorkStatus,
   settleAttempt,
   SYSTEM,
@@ -303,7 +305,7 @@ describe('WakeService', () => {
     expect(stream().split(expected)).toHaveLength(2);
   });
 
-  it('5: без хуков и с малым pointerTimeoutMs — pointer-timeout, повторного набора нет', async () => {
+  it('5: без хуков и с малым pointerTimeoutMs — pointer-timeout, повторный набор не раньше паузы', async () => {
     const { workId, sessionId } = await activeSession();
     const { stream } = await rig(sessionId, workId, {}, { pointerTimeoutMs: 300 });
 
@@ -2422,4 +2424,379 @@ describe('возврат после сброса лимита', () => {
     await rig.advance(CODEX_SUBMIT_DELAY_MS);
     expect(rig.written.at(-1)).toBe('\r');
   });
+});
+
+describe('WakeService: wake-blocked', () => {
+  const REASON = 'role-provider-mismatch';
+
+  /** Спящая `s-01`, отправитель `s-02` и ведущий `s-03` общей комнаты с адресатом; подъём всегда падает с `REASON`. */
+  async function blockedSetup(): Promise<{
+    workId: string;
+    target: string;
+    sender: string;
+    lead: string;
+    roomId: string;
+    ref: SessionRef;
+    launches: () => number;
+    rig: ResumeRig;
+  }> {
+    const { workId, target, sender } = await sleepingPair();
+    let lead = '';
+    let roomId = '';
+    await updateMap(project, workId, (map) => {
+      lead = addSession(map, { provider: 'claude', label: 'ведущий', task: 'вести' }).id;
+      roomId = addRoom(map, { title: 'Комната', creator: HUMAN, members: [target, lead], lead }).id;
+    });
+    let launched = 0;
+    const rig = await resumeRig({}, (real) => ({
+      ...real,
+      launch: async () => {
+        launched += 1;
+        throw new Error(REASON);
+      },
+    }));
+    return { workId, target, sender, lead, roomId, ref: { projectPath: project, workId, sessionId: target }, launches: () => launched, rig };
+  }
+
+  const parleyLetters = (workId: string) =>
+    readStoredMap(project, workId)
+      .messages.filter((m) => m.from === PARLEY)
+      .map((m) => ({ to: m.to, roomId: m.roomId, text: m.text }))
+      .sort((a, b) => String(a.to[0]).localeCompare(String(b.to[0])));
+
+  it('два сбоя подряд — поле, одно уведомление, по письму ведущему и отправителю; третье письмо не поднимает', async () => {
+    const { workId, target, sender, lead, roomId, ref, launches, rig } = await blockedSetup();
+
+    await sendLetter(workId, target, 'первое', sender);
+    await waitFor(() => notices('resume-failed').length === 1, 8000);
+    // Первый сбой — как раньше: письмо `system` отправителю и обычное уведомление, поля ещё нет.
+    expect(noticeTexts('resume-failed')).toEqual([`S01 did not resume: ${REASON}`]);
+    expect(readStoredMap(project, workId).sessions.find((s) => s.id === target)?.wakeBlocked ?? null).toBeNull();
+    expect(parleyLetters(workId)).toEqual([]);
+
+    await sendLetter(workId, target, 'второе', sender);
+    await waitFor(() => notices('resume-failed').length === 2, 8000);
+    await settle(300);
+
+    expect(launches()).toBe(2);
+    expect(readStoredMap(project, workId).sessions.find((s) => s.id === target)?.wakeBlocked?.reason).toBe(REASON);
+    expect(noticeTexts('resume-failed')[1]).toBe(
+      `S01 cannot be woken (${REASON}); messages to it are held. Resume it by hand or continue it on another provider.`,
+    );
+    expect(parleyLetters(workId)).toEqual([
+      { to: [sender], roomId: null, text: `@s01 cannot be woken (${REASON}); your message is held.` },
+      { to: [lead], roomId, text: `@s01 cannot be woken (${REASON}); messages to it are held.` },
+    ]);
+    expect(rig.activity.get(ref)?.metrics?.mailWaiting).toBe('wake-blocked');
+
+    // Третье письмо: ни подъёма, ни писем `parley`, ни уведомлений.
+    await sendLetter(workId, target, 'третье', sender);
+    await settle(500);
+    expect(launches()).toBe(2);
+    expect(parleyLetters(workId)).toHaveLength(2);
+    expect(notices('resume-failed')).toHaveLength(2);
+    expect(rig.activity.get(ref)?.metrics?.mailWaiting).toBe('wake-blocked');
+  }, 30_000);
+
+  it('старт процесса снимает: после active и сна новое письмо поднимает снова', async () => {
+    const { workId, target, sender, launches } = await blockedSetup();
+    await sendLetter(workId, target, 'первое', sender);
+    await waitFor(() => notices('resume-failed').length === 1, 8000);
+    await sendLetter(workId, target, 'второе', sender);
+    await waitFor(() => notices('resume-failed').length === 2, 8000);
+    expect(launches()).toBe(2);
+
+    await updateMap(project, workId, (map) => {
+      transitionSession(map, target, 'active');
+      transitionSession(map, target, 'sleeping');
+    });
+    expect(readStoredMap(project, workId).sessions.find((s) => s.id === target)?.wakeBlocked ?? null).toBeNull();
+
+    await sendLetter(workId, target, 'третье', sender);
+    await waitFor(() => launches() === 3, 8000);
+  }, 30_000);
+
+  it('перезапуск хоста — одна свежая попытка; её сбой не пишет писем и уведомлений, дальше подъёма нет', async () => {
+    const { workId, target, sender, ref, rig: first } = await blockedSetup();
+    await sendLetter(workId, target, 'первое', sender);
+    await waitFor(() => notices('resume-failed').length === 1, 8000);
+    await sendLetter(workId, target, 'второе', sender);
+    await waitFor(() => notices('resume-failed').length === 2, 8000);
+    await waitFor(() => first.works.entry(project, workId)?.map.sessions.find((s) => s.id === target)?.wakeBlocked != null, 5000);
+
+    // «Перезапуск»: прежнего будильника нет, новый стартует над той же картой с полем `wakeBlocked`.
+    first.wake.stop();
+    let launched = 0;
+    const second = createWakeService(
+      fakeHost(),
+      first.works,
+      first.activity,
+      first.pty,
+      {
+        launch: async () => {
+          launched += 1;
+          throw new Error(REASON);
+        },
+      },
+      { enterDelayMs: 30 },
+    );
+    stoppers.push(async () => second.stop());
+    second.start();
+    await settle(300);
+    expect(launched).toBe(0);
+
+    await sendLetter(workId, target, 'после перезапуска', sender);
+    await waitFor(() => launched === 1, 8000);
+    await settle(500);
+    expect(parleyLetters(workId)).toHaveLength(2);
+    expect(notices('resume-failed')).toHaveLength(2);
+    expect(readStoredMap(project, workId).sessions.find((s) => s.id === target)?.wakeBlocked?.reason).toBe(REASON);
+    expect(first.activity.get(ref)?.metrics?.mailWaiting).toBe('wake-blocked');
+
+    await sendLetter(workId, target, 'ещё одно', sender);
+    await settle(500);
+    expect(launched).toBe(1);
+    expect(parleyLetters(workId)).toHaveLength(2);
+    expect(notices('resume-failed')).toHaveLength(2);
+  }, 40_000);
+
+  it('перезапуск хоста: свежая попытка запускает процесс, он выходит без хуков — поле вернулось, писем и уведомлений не прибавилось', async () => {
+    const { workId, target, sender, ref, rig: first } = await blockedSetup();
+    await sendLetter(workId, target, 'первое', sender);
+    await waitFor(() => notices('resume-failed').length === 1, 8000);
+    await sendLetter(workId, target, 'второе', sender);
+    await waitFor(() => notices('resume-failed').length === 2, 8000);
+    await waitFor(() => first.works.entry(project, workId)?.map.sessions.find((s) => s.id === target)?.wakeBlocked != null, 5000);
+
+    // «Перезапуск»: новый будильник над той же картой, а подъём теперь настоящий — процесс стартует и выходит без хуков.
+    first.wake.stop();
+    setEnv('STUB_EXIT_AFTER_MS', '10');
+    const second = createWakeService(fakeHost(), first.works, first.activity, first.pty, first.sessions, { enterDelayMs: 30 });
+    stoppers.push(async () => second.stop());
+    second.start();
+    await settle(300);
+
+    const blockedLogs = (): number =>
+      logInfos.filter((entry) => entry.message === 'будильник: письма ждут' && entry.reason === 'wake-blocked').length;
+    const before = blockedLogs();
+    await sendLetter(workId, target, 'после перезапуска', sender);
+    // Сбой свежей попытки приходит ранним выходом; после него будильник снова публикует wake-blocked.
+    await waitFor(() => blockedLogs() > before, 10_000);
+    await settle(500);
+
+    expect(readStoredMap(project, workId).sessions.find((s) => s.id === target)?.wakeBlocked?.reason).toMatch(/^the process exited with code/);
+    expect(parleyLetters(workId)).toHaveLength(2);
+    expect(notices('resume-failed')).toHaveLength(2);
+    expect(first.activity.get(ref)?.metrics?.mailWaiting).toBe('wake-blocked');
+  }, 40_000);
+});
+
+describe('WakeService: повтор указателя', () => {
+  const journalOf = (workId: string, sessionId: string): string =>
+    path.join(workPaths(project, workId).events, `${sessionId}.jsonl`);
+  const hookLine = (name: string): string => `${JSON.stringify({ hook_event_name: name })}\n`;
+  const append = (file: string, text: string): Promise<void> => writeFile(file, text, { flag: 'a' });
+  /**
+   * Сколько раз стаб ответил эхом на указатель с `count` письмами: строка эха кончается указателем, а начаться может с
+   * оставшегося в поле текста — поэтому ищем указатель внутри строки `echo:`, а не сразу за ней.
+   */
+  const echoes = (stream: string, count: number): number =>
+    (stream.match(new RegExp(`echo: [^\\r\\n]*New messages \\(${count}\\)\\. Call check_inbox\\.`, 'g')) ?? []).length;
+  const storedBlock = (workId: string, sessionId: string) =>
+    readStoredMap(project, workId).sessions.find((candidate) => candidate.id === sessionId)?.wakeBlocked ?? null;
+
+  it('таймаут: повтор через паузу, после третьего — wake-blocked живой сессии, письма не печатаются', async () => {
+    const { workId, sessionId } = await activeSession();
+    const { stream, ref, activity } = await rig(sessionId, workId, {}, { pointerTimeoutMs: 300, pointerRearmMs: [200, 400] });
+
+    await sendLetter(workId, sessionId);
+    await waitFor(() => storedBlock(workId, sessionId) !== null, 10_000);
+    // Дольше самой длинной паузы повтора: четвёртого указателя быть не должно.
+    await settle(800);
+
+    expect(storedBlock(workId, sessionId)?.reason).toBe('no turn after 3 message pointers');
+    expect(echoes(stream(), 1)).toBe(3);
+    // Три обычных уведомления о таймауте и одно — о блокировке тем же видом `pointer-timeout`.
+    expect(noticeTexts('pointer-timeout')).toEqual([
+      `session ${sessionId} did not start a turn after the pointer`,
+      `session ${sessionId} did not start a turn after the pointer`,
+      `session ${sessionId} did not start a turn after the pointer`,
+      `${sessionTag(sessionId)} cannot be woken (no turn after 3 message pointers); messages to it are held. Resume it by hand or continue it on another provider.`,
+    ]);
+    await waitFor(() => activity.get(ref)?.metrics?.mailWaiting === 'wake-blocked', 3000);
+
+    // Новое письмо живую заблокированную сессию не тревожит.
+    await sendLetter(workId, sessionId, 'второе');
+    await settle(500);
+    expect(echoes(stream(), 2)).toBe(0);
+  }, 30_000);
+
+  it('живая wake-blocked снимается начавшимся ходом: поле убрано, ждавшие письма получают указатель после хода', async () => {
+    const { workId, sessionId } = await activeSession();
+    const { stream, ref, activity } = await rig(sessionId, workId, {}, { pointerTimeoutMs: 150, pointerRearmMs: [100, 100] });
+
+    await sendLetter(workId, sessionId);
+    await waitFor(() => storedBlock(workId, sessionId) !== null, 10_000);
+    await waitFor(() => activity.get(ref)?.metrics?.mailWaiting === 'wake-blocked', 3000);
+    expect(echoes(stream(), 1)).toBe(3);
+
+    // Сессия ответила: ход начался.
+    await append(journalOf(workId, sessionId), hookLine('UserPromptSubmit'));
+    await waitFor(() => storedBlock(workId, sessionId) === null, 5000);
+    // Ход кончился, письмо так и не прочитано — один новый указатель на него.
+    await append(journalOf(workId, sessionId), hookLine('Stop'));
+    // Не меньше четырёх: без хода по новому указателю его таймаут снова повторит набор (так и задумано), точное число зависит от пауз.
+    await waitFor(() => echoes(stream(), 1) >= 4, 5000);
+  }, 30_000);
+
+  it('остановка будильника снимает таймер повтора: после паузы второго указателя нет', async () => {
+    const { workId, sessionId } = await activeSession();
+    const { stream, wake } = await rig(sessionId, workId, {}, { pointerTimeoutMs: 150, pointerRearmMs: [400] });
+
+    await sendLetter(workId, sessionId);
+    await waitFor(() => noticeTexts('pointer-timeout').length === 1, 5000);
+    wake.stop();
+    await settle(700);
+
+    expect(echoes(stream(), 1)).toBe(1);
+  }, 30_000);
+
+  it('ввод человека: второго указателя нет, пока поле не отправлено; после хода указатель уходит один раз', async () => {
+    const { workId, sessionId } = await activeSession();
+    const { stream, pty, ref, activity } = await rig(sessionId, workId, {}, { enterDelayMs: 300 });
+
+    await sendLetter(workId, sessionId);
+    await waitFor(() => stream().includes(pointer(1)), 3000);
+    pty.input(ref, 'X');
+    await waitFor(() => noticeTexts('pointer-cancelled').length === 1, 3000);
+
+    await sendLetter(workId, sessionId, 'второе');
+    await waitFor(() => activity.get(ref)?.metrics?.mailWaiting === 'draft', 3000);
+    // Человек отправил поле (черновика в трекере больше нет), но хода хост ещё не видел: наш текст всё ещё «в поле».
+    pty.input(ref, '\r');
+    await settle(700);
+    expect(activity.get(ref)?.metrics?.mailWaiting).toBe('draft');
+    expect(echoes(stream(), 2)).toBe(0);
+
+    await append(journalOf(workId, sessionId), hookLine('UserPromptSubmit'));
+    await waitFor(() => activity.get(ref)?.activity.activity === 'working', 3000);
+    await append(journalOf(workId, sessionId), hookLine('Stop'));
+    await waitFor(() => echoes(stream(), 2) === 1, 5000);
+    await settle(500);
+    expect(echoes(stream(), 2)).toBe(1);
+  }, 30_000);
+
+  it('диалог за паузу Enter: конец идущего хода поле не освобождает, ход после простоя — освобождает', async () => {
+    const { workId, sessionId } = await activeSession();
+    const { stream, ref, activity } = await rig(sessionId, workId, {}, { enterDelayMs: 600 });
+    const journal = journalOf(workId, sessionId);
+
+    await sendLetter(workId, sessionId);
+    await waitFor(() => stream().includes(pointer(1)), 3000);
+    await append(journal, hookLine('PermissionRequest'));
+    await waitFor(() => noticeTexts('pointer-cancelled').length === 1, 3000);
+
+    await sendLetter(workId, sessionId, 'второе');
+    await settle(300);
+    expect(echoes(stream(), 2)).toBe(0);
+
+    // Идущий ход кончился: простой, но поле нашим текстом занято — не печатаем.
+    await append(journal, hookLine('Stop'));
+    await waitFor(() => ['idle', 'unseen'].includes(activity.get(ref)?.activity.activity ?? ''), 3000);
+    await settle(500);
+    expect(echoes(stream(), 2)).toBe(0);
+    expect(activity.get(ref)?.metrics?.mailWaiting).toBe('draft');
+
+    // Человек отправил поле — ход начался и кончился: письма снова свободны.
+    await append(journal, hookLine('UserPromptSubmit'));
+    await waitFor(() => activity.get(ref)?.activity.activity === 'working', 3000);
+    await append(journal, hookLine('Stop'));
+    await waitFor(() => echoes(stream(), 2) === 1, 5000);
+  }, 30_000);
+
+  it('Resume человека после старта хоста получает указатель на лежавшее письмо', async () => {
+    const { workId, target, sender } = await sleepingPair();
+    const ref = { projectPath: project, workId, sessionId: target };
+    await sendLetter(workId, target, 'лежало до старта', sender);
+    setEnv('STUB_READY_HOOK', '1');
+    const { sessions, stream } = await resumeRig();
+    // Будильник считает лежавшее письмо указанным (Stop человека сессию не поднимает) и не поднимает её.
+    await settle(300);
+    await sessions.launch(ref, 'resume', { by: 'human' });
+    await waitFor(() => stream().includes(`echo: ${pointer(1)}`), 15_000);
+  }, 30_000);
+
+  it('брошенное чтение страниц: один повторный указатель на остаток; прочтённого за ход нет — повтора нет', async () => {
+    const { workId, sessionId } = await activeSession();
+    const { stream, ref, activity } = await rig(sessionId, workId, { STUB_HOOKS: '1', STUB_TURN_MS: '600' });
+
+    await updateMap(project, workId, (map, letters) => {
+      for (const text of ['один', 'два', 'три']) letters.add({ roomId: null, kind: 'note', from: 's-00', to: [sessionId], text });
+    });
+    await waitFor(() => stream().includes(pointer(3)), 5000);
+    await waitFor(() => activity.get(ref)?.activity.activity === 'working', 5000);
+    // Агент за ход прочитал первую страницу — одно письмо; два остались непрочитанными.
+    writeLetters(project, workId, (letters) => {
+      const first = letters.unreadFor(sessionId)[0];
+      if (first !== undefined) letters.markRead(sessionId, [first.id], new Date().toISOString());
+    });
+
+    // Ход кончился (эхо и Stop): остаток выходит из `pointed` один раз — один указатель на два письма.
+    await waitFor(() => echoes(stream(), 2) === 1, 8000);
+    // Ход по новому указателю кончился, ничего не прочитано: третьего указателя нет.
+    await waitFor(() => (stream().match(/echo: /g) ?? []).length === 2, 5000);
+    await settle(800);
+    expect(echoes(stream(), 3)).toBe(1);
+    expect(echoes(stream(), 2)).toBe(1);
+    expect((stream().match(/echo: /g) ?? []).length).toBe(2);
+  }, 30_000);
+
+  it('проигнорированный указатель не повторяется: за ход ничего не прочитано — второго указателя нет', async () => {
+    const { workId, sessionId } = await activeSession();
+    const { stream } = await rig(sessionId, workId, { STUB_HOOKS: '1', STUB_TURN_MS: '300' });
+
+    await updateMap(project, workId, (map, letters) => {
+      for (const text of ['один', 'два', 'три']) letters.add({ roomId: null, kind: 'note', from: 's-00', to: [sessionId], text });
+    });
+    // Ход по указателю кончился эхом и Stop; писем никто не читал.
+    await waitFor(() => echoes(stream(), 3) === 1, 5000);
+    await settle(1200);
+
+    expect((stream().match(/echo: /g) ?? []).length).toBe(1);
+  }, 30_000);
+});
+
+describe('WakeService: черновик держит почту', () => {
+  const draftNotice = (sessionId: string): string =>
+    `Mail for ${sessionTag(sessionId)} is waiting: unsent text in its terminal blocks delivery.`;
+
+  it('черновик дольше срока — одно уведомление, отправителю ничего', async () => {
+    const { workId, sessionId } = await activeSession();
+    const { ref, pty } = await rig(sessionId, workId, {}, { draftNoticeMs: 200 });
+
+    pty.input(ref, 'пр');
+    await sendLetter(workId, sessionId);
+    await waitFor(() => noticeTexts('pointer-cancelled').length === 1, 3000);
+    expect(noticeTexts('pointer-cancelled')).toEqual([draftNotice(sessionId)]);
+
+    // Повтор не чаще часа: дольше срока второго уведомления нет.
+    await settle(600);
+    expect(noticeTexts('pointer-cancelled')).toEqual([draftNotice(sessionId)]);
+    const map = readStoredMap(project, workId);
+    expect(map.messages.some((m) => m.from === SYSTEM || m.from === PARLEY)).toBe(false);
+  }, 30_000);
+
+  it('черновик отправлен до срока — уведомления нет', async () => {
+    const { workId, sessionId } = await activeSession();
+    const { ref, pty, stream } = await rig(sessionId, workId, {}, { draftNoticeMs: 600 });
+
+    pty.input(ref, 'пр');
+    await sendLetter(workId, sessionId);
+    await settle(100);
+    pty.input(ref, '\r');
+    await waitFor(() => stream().includes(pointer(1)), 3000);
+
+    await settle(800);
+    expect(noticeTexts('pointer-cancelled')).toEqual([]);
+  }, 30_000);
 });

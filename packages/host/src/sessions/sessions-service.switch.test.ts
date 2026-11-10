@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   addRoom,
   addSession,
+  buildRoleCatalog,
   createWork,
   customProviderDir,
   customProvidersFile,
@@ -904,5 +905,67 @@ describe('ревью №10: форк вышел, не записав разго�
     expect(launch.args.join('\n')).toContain('HANDOVER-PACKAGE');
     expect(r.handover.mock.calls[0]?.[5]).toBe(old);
     expect((await sessionOf(ref)).previousAgents?.at(-1)?.carried).toBe('handover');
+  });
+});
+
+describe('switchAgent: роль сессии при замене (случай 2.2)', () => {
+  const claudeArchitect = { id: 'claude:architect', source: 'claude', provider: 'claude', name: 'architect', nativeAgent: 'architect', description: '', path: '/fixture.md', readOnly: false } as const;
+  const codexArchitect = { id: 'codex:architect', source: 'codex', provider: 'codex', name: 'architect', description: '', path: '/fixture.toml', prompt: 'Architect.', model: null, effort: null, sandboxMode: null, readOnly: false } as const;
+  const both = buildRoleCatalog({ roles: [codexArchitect, claudeArchitect], diagnostics: [], partial: false });
+  const onlyClaude = buildRoleCatalog({ roles: [claudeArchitect], diagnostics: [], partial: false });
+  const architect = { source: 'claude', name: 'architect' } as const;
+
+  it('роль другого семейства: одноимённая роль цели, ответ и привязка это называют', async () => {
+    const r = rig({ roleCatalog: async () => both });
+    const ref = await r.sessions.create({ projectPath: project, workId, provider: 'claude', label: 'backend', task: 'do it', parent: null, role: architect });
+    launches.length = 0;
+
+    const answer = await r.sessions.switchAgent(ref, request('codex'));
+
+    expect(answer).toEqual({ outcome: 'started', carried: 'handover', role: { from: 'claude:architect', to: 'codex:architect' } });
+    const after = await sessionOf(ref);
+    expect(after.role).toEqual({ source: 'codex', name: 'architect' });
+    expect(after.previousAgents?.[0]?.role).toEqual(architect);
+    expect(launches).toHaveLength(1);
+  });
+
+  it('одноимённой роли нет — без роли, запуск идёт', async () => {
+    const r = rig({ roleCatalog: async () => onlyClaude });
+    const ref = await r.sessions.create({ projectPath: project, workId, provider: 'claude', label: 'backend', task: 'do it', parent: null, role: architect });
+    launches.length = 0;
+
+    const answer = await r.sessions.switchAgent(ref, request('codex'));
+
+    expect(answer).toMatchObject({ outcome: 'started', role: { from: 'claude:architect', to: null } });
+    expect((await sessionOf(ref)).role).toBeNull();
+    expect(launches).toHaveLength(1);
+  });
+
+  it('карта 0.32.0: Resume снимает чужую роль на первом запуске', async () => {
+    const r = rig({ roleCatalog: async () => both });
+    const ref = await r.sessions.create({ projectPath: project, workId, provider: 'claude', label: 'backend', task: 'do it', parent: null });
+    await r.sessions.stop(ref);
+    // Как `s-289` в карте 0.32.0: провайдер Claude, роль Codex, замена уже записана, разговора у нового агента нет.
+    await updateMap(project, workId, (map) => {
+      const session = map.sessions.find((candidate) => candidate.id === ref.sessionId)!;
+      session.role = { source: 'codex', name: 'architect' };
+      session.providerSessionId = null;
+      session.lifecycle = 'sleeping';
+      session.previousAgents = [
+        {
+          provider: 'codex', model: null, effort: null, providerSessionId: 'old-thread',
+          startedAt: session.startedAt, endedAt: '2026-11-01T10:00:00.000Z', reason: 'manual', requestedBy: 'human',
+          carried: 'handover', costUsd: null,
+        },
+      ];
+    });
+    launches.length = 0;
+    notices.length = 0;
+
+    await r.sessions.launch(ref, 'resume');
+
+    expect((await sessionOf(ref)).role).toEqual({ source: 'claude', name: 'architect' });
+    expect(launches).toHaveLength(1);
+    expect(notices.filter((notice) => notice.kind === 'role-missing')).toHaveLength(1);
   });
 });

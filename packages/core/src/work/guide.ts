@@ -159,8 +159,8 @@ which session called \`create_session\` (the window nests it there) and inherits
 A session has two independent axes. \`lifecycle\` says whether the process is alive:
 \`pending\` (the record exists, the process will start by itself — nobody needs to be
 called), \`active\` (the process is running), \`sleeping\` (no process, but the session is
-reachable, and a message will wake it), \`closed\` (closed explicitly, receives no more
-messages and is not started again). \`result\` is what your \`report\` handed in: \`done\` or
+reachable, and a message will wake it unless the \`send_message\` answer warns that it cannot), \`closed\`
+(closed explicitly, receives no more messages and is not started again). \`result\` is what your \`report\` handed in: \`done\` or
 \`failed\`; empty until the first \`report\`. A session Parley put to sleep is \`sleeping\` too: \`wait_for\` on it
 answers \`asleep\`, and mail wakes it. A session that waits for a free agent slot on this machine is \`queued\`: it
 starts by itself, and \`wait_for\` waits for it as for a running session.

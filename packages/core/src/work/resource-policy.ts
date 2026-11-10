@@ -290,6 +290,13 @@ const launchAttempts = (map: WorkMap, now: number): ResourceAttempt[] =>
     (attempt) => attempt.kind !== 'spawn' && attempt.windowFree !== true && attempt.state !== 'released' && within(attempt.at, now),
   );
 
+/** Подъёмы `resume` сессии за окно часа, включая `windowFree`, кроме снятых: то, что `reserveAttempt` сверяет с `resumeRate`. */
+export function resumesInWindow(map: WorkMap, sessionId: string, now: number): number {
+  return (map.resources?.attempts ?? []).filter(
+    (attempt) => attempt.kind === 'resume' && attempt.session === sessionId && attempt.state !== 'released' && within(attempt.at, now),
+  ).length;
+}
+
 const inRoom = (map: WorkMap, ids: Iterable<string>, roomId: string): number => {
   let count = 0;
   for (const id of ids) if (roomOfSession(map, id) === roomId) count += 1;
@@ -352,9 +359,7 @@ export function reserveAttempt(map: WorkMap, request: ReserveRequest): ResourceA
 
   // Частота возобновлений одной сессии: считаются все её подъёмы за окно, и после сна по решению хоста, и обычные.
   if (request.kind === 'resume' && request.sessionResumeRate !== undefined) {
-    const taken = (map.resources?.attempts ?? []).filter(
-      (attempt) => attempt.kind === 'resume' && attempt.session === session && attempt.state !== 'released' && within(attempt.at, now),
-    ).length;
+    const taken = resumesInWindow(map, session, now);
     if (taken >= request.sessionResumeRate) throw new ResourceDeniedError('resume-rate', 'session', taken, request.sessionResumeRate);
   }
 

@@ -43,6 +43,8 @@ import {
   limitsFromConfig,
   prepareSessionRole,
   roleId,
+  roleForProvider,
+  sessionRole,
   type SessionRole,
   type WorkSession,
   type RoleCatalog,
@@ -887,6 +889,34 @@ export function createSessionsService(
       // Before planned worktree creation, settings, skills and hook registration; repeated every launch.
       // Первым: отказ готовности провайдера не оставляет следа в карте, в том числе резерва бюджета.
       const entry = await timer.step('provider', () => readyProvider(session.provider, true));
+
+      // Первый запуск после замены: роль могла остаться чужой для провайдера (карта 0.32.0) или каталог ролей сменился
+      // между заменой и запуском. Та же проверка, что в `runSwitch`; роль чинится в карте до плана запуска.
+      if (awaitingAgent(session)) {
+        const roleCwd = session.workspace?.path ?? session.worktree?.path ?? ref.projectPath;
+        const before = sessionRole(session);
+        const after = await timer.step('roleFit', async () =>
+          roleForProvider(roleCwd, entry, before, feed.roleCatalog ? await feed.roleCatalog(roleCwd) : undefined),
+        );
+        if (roleId(after) !== roleId(before)) {
+          await updateMap(ref.projectPath, ref.workId, (current) => {
+            const record = current.sessions.find((candidate) => candidate.id === ref.sessionId);
+            if (record === undefined) return;
+            record.role = after;
+            delete record.agent;
+            const last = record.previousAgents?.at(-1);
+            if (last !== undefined && last.role === undefined) last.role = before;
+          });
+          session.role = after;
+          delete session.agent;
+          host.broadcast('host.notice', {
+            kind: 'role-missing',
+            ref,
+            text: `${sessionTag(ref.sessionId)} role ${roleId(before)} does not run on ${providerLabel(entry)}: it starts ${after === null ? 'without a role' : `as ${roleId(after)}`}`,
+            at: new Date().toISOString(),
+          });
+        }
+      }
 
       // Согласие человека на папку (спека 2026-10-21, 4.2) — до бюджета, worktree, скилла и PARLEY.md: удержанный запуск
       // ничего не оставляет. Только Codex: у Claude, GLM и своих провайдеров экрана доверия Parley не заменяет.
@@ -1947,6 +1977,17 @@ export function createSessionsService(
     if (carry === 'transcript' && !(isClaudeAccount(session.provider, Object.hasOwn(registry, session.provider) ? registry[session.provider] : undefined) && isClaudeAccount(entry.id, entry))) {
       throw new HostError('bad_request', 'The conversation can be continued only between Claude accounts: use the handover summary');
     }
+    // Роль решается до любых изменений: роль прежнего семейства на цели не запускается (`--agent` или `-c agents` у
+    // чужого CLI), и сессия осталась бы без старта. Отказ роли поглощается (`roleForProvider` ловит только его),
+    // любая другая ошибка обрывает замену, пока карта не тронута.
+    const previousRole = sessionRole(session);
+    const switchRole = await roleForProvider(
+      session.workspace?.path ?? session.worktree?.path ?? ref.projectPath,
+      entry,
+      previousRole,
+      feed.roleCatalog ? await feed.roleCatalog(session.workspace?.path ?? session.worktree?.path ?? ref.projectPath) : undefined,
+    );
+    const roleChanged = roleId(switchRole) !== roleId(previousRole);
     // Свежая запись перед проверками занятости: за пробу версии CLI лимит мог сброситься, и будильник вернул агента
     // к работе — по старому снимку его погасили бы посреди хода без `force`.
     const current = (await readMap(ref.projectPath, ref.workId)).sessions.find((candidate) => candidate.id === ref.sessionId);
@@ -2042,7 +2083,7 @@ export function createSessionsService(
       await updateMap(ref.projectPath, ref.workId, (current, letters) => {
         const fresh = current.sessions.find((candidate) => candidate.id === ref.sessionId);
         if (fresh?.switching?.id !== request.requestId) throw new HostError('conflict', 'the switch was cancelled');
-        current.sessions = applyAgentSwitch(current, ref.sessionId, target, binding, randomUUID()).sessions;
+        current.sessions = applyAgentSwitch(current, ref.sessionId, roleChanged ? { ...target, role: switchRole } : target, binding, randomUUID()).sessions;
         const line = switchLine(ref.sessionId, targetLabel, target.model ?? null, previousLabel, reason);
         for (const room of roomsOfSession(current, ref.sessionId)) addSystemMessage(current, letters, room.id, line, endedAt);
       });
@@ -2084,6 +2125,8 @@ export function createSessionsService(
         }
       } catch (error) {
         // Шаг 9: карта уже с новым провайдером, сессия спит; Resume повторит запуск, обратная замена — тот же метод.
+        // Роль решена до записи `switching` и сверяется ещё раз на первом запуске (`launchHeld`, `awaitingAgent`), так что
+        // Resume не упрётся в ту же роль; неустранимый отказ будильник доведёт до wake-blocked.
         await dropSwitch(ref, request.requestId);
         host.broadcast('host.notice', {
           kind: 'launch-failed',
@@ -2096,7 +2139,11 @@ export function createSessionsService(
       // `held`: запуск Codex ждёт согласия на папку; `queued`: машине тесно, запуск ждёт слота в очереди. И там и там
       // `switching` остаётся до старта нового агента, снимет его сам запуск (`finishSwitch`).
       heldKinds.delete(refKey(ref));
-      return { outcome, carried: transcript === null ? 'handover' : 'transcript' };
+      return {
+        outcome,
+        carried: transcript === null ? 'handover' : 'transcript',
+        ...(roleChanged ? { role: { from: roleId(previousRole) ?? '', to: roleId(switchRole) } } : {}),
+      };
     } catch (error) {
       if (!applied) {
         pendingHandovers.delete(key);

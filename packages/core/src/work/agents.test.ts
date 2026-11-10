@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { agentDirs, assertAgent, listAgents, prepareSessionRole, sessionRoleCatalog, assertRoleDelivery, projectSkillRunnerContext, roleProvider, roleModel } from './agents.js';
+import { agentDirs, assertAgent, listAgents, prepareSessionRole, roleForProvider, sessionRoleCatalog, assertRoleDelivery, projectSkillRunnerContext, roleProvider, roleModel } from './agents.js';
 import { PROVIDERS } from '../providers.js';
 import { buildRoleCatalog, resolveRoleChoice } from '../roles/catalog.js';
 let project = '', claudeHome = '';
@@ -102,6 +102,38 @@ describe('роли Claude у GLM: конфигурация GLM — ~/.claude, а
     const bare = { ...PROVIDERS.glm, runner: { ...PROVIDERS.glm.runner, args: template, resumeArgs: template } };
     await expect(prepareSessionRole(project, bare, { roleId: 'claude:exact', provider: 'glm' }, catalog)).rejects.toThrow('role-permissions-unavailable');
     await expect(prepareSessionRole(project, PROVIDERS.codex, { roleId: 'claude:exact', provider: 'codex' }, catalog)).rejects.toThrow('role-provider-mismatch');
+  });
+});
+
+describe('roleForProvider', () => {
+  const claudeArchitect = { id: 'claude:architect', source: 'claude', provider: 'claude', name: 'architect', nativeAgent: 'architect', description: '', path: '/fixture.md', readOnly: false } as const;
+  const codexArchitect = { id: 'codex:architect', source: 'codex', provider: 'codex', name: 'architect', description: '', path: '/fixture.toml', prompt: 'Architect.', model: null, effort: null, sandboxMode: null, readOnly: false } as const;
+  const both = buildRoleCatalog({ roles: [codexArchitect, claudeArchitect], diagnostics: [], partial: false });
+  const onlyCodex = buildRoleCatalog({ roles: [codexArchitect], diagnostics: [], partial: false });
+
+  it('одноимённая роль цели, иначе без роли', async () => {
+    expect(await roleForProvider(project, PROVIDERS.claude, { source: 'codex', name: 'architect' }, both)).toEqual({ source: 'claude', name: 'architect' });
+    expect(await roleForProvider(project, PROVIDERS.claude, { source: 'codex', name: 'architect' }, onlyCodex)).toBeNull();
+    expect(await roleForProvider(project, PROVIDERS.codex, { source: 'builtin', name: 'architect' }, both)).toEqual({ source: 'builtin', name: 'architect' });
+    expect(await roleForProvider(project, PROVIDERS.codex, null, both)).toBeNull();
+    // Роль Claude на Codex: одноимённой роли Codex нет в каталоге, значит без роли.
+    expect(await roleForProvider(project, PROVIDERS.codex, { source: 'claude', name: 'architect' }, onlyCodex)).toEqual({ source: 'codex', name: 'architect' });
+    expect(await roleForProvider(project, PROVIDERS.codex, { source: 'claude', name: 'architect' }, buildRoleCatalog({ roles: [claudeArchitect], diagnostics: [], partial: false }))).toBeNull();
+  });
+
+  it('роль Claude остаётся на записи семейства Claude Code (GLM)', async () => {
+    expect(await roleForProvider(project, PROVIDERS.glm, { source: 'claude', name: 'architect' }, both)).toEqual({ source: 'claude', name: 'architect' });
+  });
+
+  it('результат всегда запускаем: null или роль, которую prepareSessionRole принимает', async () => {
+    for (const entry of [PROVIDERS.claude, PROVIDERS.codex]) {
+      for (const definition of both.roles) {
+        const role = { source: definition.source, name: definition.name };
+        const result = await roleForProvider(project, entry, role, both);
+        if (result === null) continue;
+        await expect(prepareSessionRole(project, entry, { roleId: `${result.source}:${result.name}`, provider: entry.id, mode: 'existing' }, both), `${entry.id} ${definition.id}`).resolves.toBeDefined();
+      }
+    }
   });
 });
 

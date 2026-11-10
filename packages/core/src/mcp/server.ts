@@ -24,6 +24,7 @@ async function main(): Promise<number> {
       const context = {
         ...contextFromEnv(),
         messageRate: config.messageRate,
+        resumeRate: config.resumeRate,
         worktreeRoot: config.worktreeRoot,
       };
       // Сессия запущена хостом (есть канал агента и id): инструменты исполняет он, и этот процесс карту не открывает

@@ -8,6 +8,11 @@ All notable changes to Parley are documented in this file.
 
 ### Fixed
 
+- Continuing a session on another provider no longer leaves it unable to start when its role belongs to the old provider: Parley picks the matching role (or none) and tells you which one it took.
+- A session that failed to start twice in a row is no longer resumed on every new letter: you get one notice, and the room lead and the senders of its unread mail get one letter saying the session cannot be woken.
+- `send_message` now warns when the recipient cannot be woken, so the sender knows the message will be read only after you resume the session.
+- A message pointer that gets no answer is typed again after 30 seconds and after 2 minutes, and a session that is resumed gets a pointer for the mail that was waiting for it.
+- Unsent text left in a terminal that holds back mail now produces a notice after 5 minutes instead of waiting silently.
 - Parley's background host no longer dies when a connected program sends a malformed message, when an internal error slips through, or when a log write fails, so running agents keep working; stopping the host now always finishes within 15 seconds and releases its lock.
 - Room titles can no longer carry line breaks or terminal control codes into other agents' terminals; the phone can no longer send shell commands (`!…`) to a session.
 - When a room member hands in its result with `report`, the room lead now gets a letter, and a room lead's result reaches the room owner; the session that created the reporter is told too. The `report` answer names who was told, and the same result repeated within a minute does not wake them again.

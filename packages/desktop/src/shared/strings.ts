@@ -1118,6 +1118,9 @@ export const S = {
       continue: 'Continue',
       stopAndContinue: 'Stop and continue',
       held: 'Waiting for folder trust',
+      /** Роль прежнего агента не запускается у нового: `to` — одноимённая роль цели или `null` (без роли). */
+      roleChanged: (from: string, to: string | null): string =>
+        to === null ? `Role ${from} doesn't run on this provider — continuing without a role` : `Role ${from} doesn't run on this provider — continuing as ${to}`,
       failed: 'Could not continue the session',
       limitsFive: (percent: number): string => `5h ${Math.round(percent)}%`,
       limitsWeek: (percent: number): string => `week ${Math.round(percent)}%`,
@@ -1270,6 +1273,7 @@ export const S = {
       settling: 'batched, waits for a quiet room',
       'provider-missing': 'Provider removed — continue the session on another provider',
       queued: 'queued for a free agent slot',
+      'wake-blocked': "can't be woken — resume it by hand",
     } satisfies Record<MailWait, string>,
     /** Причина, которой окно не знает (хост новее окна): вместо пустой скобки (`mailWaitText`). */
     mailWaitUnknown: 'waiting',

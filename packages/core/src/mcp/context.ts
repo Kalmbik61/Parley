@@ -65,6 +65,8 @@ export interface McpContext {
    * окружении его нет: `server.ts` берёт значение из настроек при старте.
    */
   messageRate?: number;
+  /** Потолок подъёмов спящей сессии за час (`resumeRate`): для предупреждения `send_message`; нет — `DEFAULT_CONFIG.resumeRate`. */
+  resumeRate?: number;
   /**
    * Корень worktree для `spawn_session { worktree: true }` (спецификация 8.1).
    * В окружении его тоже нет — `server.ts` берёт из настроек, как и `messageRate`.

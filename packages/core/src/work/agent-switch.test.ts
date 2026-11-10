@@ -81,6 +81,31 @@ describe('applyAgentSwitch', () => {
     expect(list.at(-1)!.providerSessionId).toBe(`uuid-${PREVIOUS_AGENTS_MAX}`);
   });
 
+  it('роль: undefined оставляет её, null и значение меняют и кладут прежнюю в привязку', () => {
+    const executor = { source: 'builtin', name: 'executor' };
+    const same = applyAgentSwitch(fixture(), 's-01', { provider: 'codex' }, binding(), 'rev-1').sessions[0]!;
+    expect(same.role).toEqual(executor);
+    expect(same.previousAgents![0]).not.toHaveProperty('role');
+
+    const none = applyAgentSwitch(fixture(), 's-01', { provider: 'codex', role: null }, binding(), 'rev-1').sessions[0]!;
+    expect(none.role).toBeNull();
+    expect(none.previousAgents![0]!.role).toEqual(executor);
+
+    const architect = { source: 'codex', name: 'architect' } as const;
+    const changed = applyAgentSwitch(fixture(), 's-01', { provider: 'codex', role: architect }, binding(), 'rev-1').sessions[0]!;
+    expect(changed.role).toEqual(architect);
+    expect(changed.previousAgents![0]!.role).toEqual(executor);
+  });
+
+  it('снимает wakeBlocked и не меняет исходную карту', () => {
+    const map = fixture();
+    map.sessions[0]!.wakeBlocked = { since: '2026-10-30T10:40:00.000Z', reason: 'launch failed' };
+    const before = structuredClone(map);
+    const next = applyAgentSwitch(map, 's-01', { provider: 'codex' }, binding(), 'rev-1');
+    expect(next.sessions[0]).not.toHaveProperty('wakeBlocked');
+    expect(map).toEqual(before);
+  });
+
   it('throws for an unknown session', () => {
     expect(() => applyAgentSwitch(fixture(), 's-99', { provider: 'codex' }, binding(), 'rev-1')).toThrow('not found');
   });
@@ -148,6 +173,34 @@ describe('agent fields in parseMap', () => {
     expect(session).not.toHaveProperty('switching');
     expect(session).not.toHaveProperty('agentRevision');
     expect(read({ previousAgents: 'x' })).not.toHaveProperty('previousAgents');
+  });
+
+  it('wakeBlocked: верное значение и null остаются, кривое убирается', () => {
+    const blocked = { since: '2026-10-30T10:40:00.000Z', reason: 'launch failed' };
+    expect(read({}).wakeBlocked).toBeUndefined();
+    expect(read({ wakeBlocked: blocked }).wakeBlocked).toEqual(blocked);
+    expect(read({ wakeBlocked: null }).wakeBlocked).toBeNull();
+    for (const bad of [{ since: 1, reason: 'x' }, { since: 'x' }, 'x', 5]) {
+      expect(read({ wakeBlocked: bad }), JSON.stringify(bad)).not.toHaveProperty('wakeBlocked');
+    }
+  });
+
+  it('роль привязки: верная и null остаются, кривая убирается, запись читаема', () => {
+    const role = { source: 'codex', name: 'architect' };
+    const session = read({
+      previousAgents: [
+        { ...binding(1), role },
+        { ...binding(2), role: null },
+        { ...binding(3), role: { source: 'other', name: 'x' } },
+        { ...binding(4), role: 'x' },
+        { ...binding(5), role: { source: 'claude', name: '' } },
+        binding(6),
+      ],
+    });
+    expect(session.previousAgents).toHaveLength(6);
+    expect(session.previousAgents![0]!.role).toEqual(role);
+    expect(session.previousAgents![1]!.role).toBeNull();
+    for (const index of [2, 3, 4, 5]) expect(session.previousAgents![index]).not.toHaveProperty('role');
   });
 
   it('trims an over-long history to the newest 20', () => {

@@ -302,6 +302,7 @@ export function transitionSession(
     delete session.autoSleep;
     delete session.autoSleepPending;
     delete session.queued;
+    delete session.wakeBlocked;
   }
   session.history.push(entry);
   if (to === 'active' && session.startedAt === null) session.startedAt = at;
@@ -808,6 +809,9 @@ function normalizeBinding(entry: unknown): Record<string, unknown> | null {
     !AGENT_REASONS.includes(String(entry['reason'])) || !['handover', 'transcript'].includes(String(entry['carried']))) return null;
   for (const key of ['model', 'effort', 'providerSessionId', 'startedAt']) if (!nullableString(entry[key])) entry[key] = null;
   if (entry['usage'] !== undefined && !isRecord(entry['usage'])) delete entry['usage'];
+  const role = entry['role'];
+  if (role !== undefined && role !== null && !(isRecord(role) && ['builtin', 'claude', 'codex'].includes(String(role['source'])) &&
+    typeof role['name'] === 'string' && role['name'] !== '')) delete entry['role'];
   if (entry['costUsd'] !== undefined && entry['costUsd'] !== null && !(typeof entry['costUsd'] === 'number' && Number.isFinite(entry['costUsd']) && entry['costUsd'] >= 0)) delete entry['costUsd'];
   return entry;
 }
@@ -827,4 +831,9 @@ function normalizeAgentFields(session: Record<string, unknown>): void {
     delete session['switching'];
   }
   if (session['agentRevision'] !== undefined && !nullableString(session['agentRevision'])) delete session['agentRevision'];
+  const wakeBlocked = session['wakeBlocked'];
+  if (wakeBlocked !== undefined && wakeBlocked !== null &&
+    !(isRecord(wakeBlocked) && typeof wakeBlocked['since'] === 'string' && typeof wakeBlocked['reason'] === 'string')) {
+    delete session['wakeBlocked'];
+  }
 }

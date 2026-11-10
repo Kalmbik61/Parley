@@ -84,6 +84,7 @@ export async function hostToolContext(
     sessionId: ref.sessionId,
     channel: false,
     messageRate: config.messageRate,
+    resumeRate: config.resumeRate,
     worktreeRoot: config.worktreeRoot,
     // Исключение — «строки неизвестны»: `get_map {field: "providers"}` отдаст локальный реестр с пометкой, а не откажет целиком.
     providerRows: async () => {
