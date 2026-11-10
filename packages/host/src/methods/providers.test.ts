@@ -9,6 +9,7 @@ import type { RequestInfo } from '../context.js';
 import { startHost } from '../host.js';
 import type { HostOptions, RunningHost } from '../host.js';
 import { hostPaths } from '../paths.js';
+import { VERSION_NULL_TTL_MS } from '../providers/versions.js';
 import type { ProviderVersions } from '../providers/versions.js';
 import { createProvidersList } from './providers.js';
 
@@ -93,11 +94,20 @@ const byId = (providers: ProviderItem[], id: string): ProviderItem => {
 };
 
 describe('providers.list: модели, усилие и версия CLI (дизайн комнат, 3.2)', () => {
-  it('retries an unknown Codex version on list without restarting the host', async () => {
-    let codexCalls = 0;
-    const client = await boot({ probeVersion: async command => command === 'codex' ? (++codexCalls === 1 ? null : '0.162.0') : '2.1.300' });
-    expect(byId(await list(client), 'codex').version).toBe('0.162.0');
-    expect(codexCalls).toBe(2);
+  it('retries an unknown Codex version on list after the negative cache expires', async () => {
+    // Часы кэша версий — `Date.now`, снятый при старте хоста: фальшивая `Date` ставится до `boot`.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      let codexCalls = 0;
+      const client = await boot({ probeVersion: async command => command === 'codex' ? (++codexCalls === 1 ? null : '0.162.0') : '2.1.300' });
+      expect(byId(await list(client), 'codex').version).toBeNull();
+      expect(codexCalls).toBe(1);
+      vi.setSystemTime(Date.now() + VERSION_NULL_TTL_MS + 1);
+      expect(byId(await list(client), 'codex').version).toBe('0.162.0');
+      expect(codexCalls).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('claude, codex и glm принимают effort; GLM использует версию Claude Code', async () => {
@@ -131,7 +141,7 @@ describe('providers.list: модели, усилие и версия CLI (диз
     expect(providers.every((provider) => provider.version === null)).toBe(true);
   });
 
-  it('обычные версии кэшируются; GLM заново проверяет версию Claude Code при каждом list', async () => {
+  it('версии кэшируются по отпечатку бинаря: GLM берёт версию Claude Code из кэша, пока бинарь тот же', async () => {
     process.env['PARLEY_CLAUDE_BIN'] = process.execPath;
     extraEnv.push('PARLEY_CLAUDE_BIN');
     const calls: string[] = [];
@@ -145,7 +155,7 @@ describe('providers.list: модели, усилие и версия CLI (диз
     await list(client);
     await list(client);
     await list(client);
-    expect(calls.sort()).toEqual(['claude', 'claude', 'claude', 'claude', 'codex']);
+    expect(calls.sort()).toEqual(['claude', 'codex']);
   });
 
   it('первый providers.list дожидается пробы, а не отвечает пустой версией', async () => {
