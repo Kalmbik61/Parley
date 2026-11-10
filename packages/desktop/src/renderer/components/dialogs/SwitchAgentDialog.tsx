@@ -132,6 +132,8 @@ export function SwitchAgentDialog({ bridge, sessionRef, onClose }: SwitchAgentDi
         // Согласие на папку ждёт человека в отдельной карточке: диалог закрывается с пояснением.
         toast(text.held);
       }
+      // Поле есть только у нового хоста: старый его не шлёт.
+      if (result.role !== undefined) toast(text.roleChanged(result.role.from, result.role.to));
       onClose();
     } catch (err) {
       console.warn('[parley] sessions.switchAgent', err);

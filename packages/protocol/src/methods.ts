@@ -552,7 +552,12 @@ export interface Results extends AssistantMethodResults, VoiceMethodResults, Car
    * `held` — запуск ждёт согласия (папка Codex); `queued` — запуск ждёт свободного слота машины (очередь, спека ёмкости
    * 4.2); `carried` — как передан контекст.
    */
-  'sessions.switchAgent': { outcome: 'started' | 'held' | 'queued'; carried: 'handover' | 'transcript' };
+  'sessions.switchAgent': {
+    outcome: 'started' | 'held' | 'queued';
+    carried: 'handover' | 'transcript';
+    /** Роль сменилась (id ролей): прежняя не запускается у цели, `to: null` — без роли. Старый хост поля не шлёт. */
+    role?: { from: string; to: string | null };
+  };
   /** Списки отсортированы по имени; у провайдера без поддержки (Codex) — пустые. */
   'capabilities.list': Capabilities;
   'capabilities.get': CapabilitySnapshot;
