@@ -1054,9 +1054,12 @@ describe('heldWarning — send_message предупреждает об адре�
     expect(heldWarning(asleep(), 5, 6)).toBeNull();
   });
 
-  it('усыплённая хостом при исчерпанном часе: предупреждения нет', () => {
+  it('усыплённая хостом: при исчерпанном часе то же предупреждение, ниже лимита — нет', () => {
     const slept = asleep({ autoSleep: { reason: 'idle', at: '2026-11-10T10:00:00.000Z', waitTarget: null } });
-    expect(heldWarning(slept, 6, 6)).toBeNull();
+    expect(heldWarning(slept, 6, 6)).toBe(
+      '@s02 reached its hourly resume limit: it reads this when the limit frees or the human resumes it',
+    );
+    expect(heldWarning(slept, 5, 6)).toBeNull();
   });
 
   it('живая и ожидающая сессия: предупреждения нет', () => {

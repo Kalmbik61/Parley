@@ -300,8 +300,8 @@ export function deliveryAction(input: DeliveryInput): DeliveryAction {
 
 /**
  * Предупреждение `send_message` об адресате, которого письмо не поднимет: поле `wakeBlocked`; сессия спит и поднимать
- * нечем (нет id провайдера и прежних агентов, как в `resumeSession` будильника); спит не по решению хоста и час
- * подъёмов исчерпан. `null` — письмо дойдёт обычным путём.
+ * нечем (нет id провайдера и прежних агентов, как в `resumeSession` будильника); спит и час подъёмов исчерпан
+ * (лимит `reserveAttempt` считает и подъём после сна по решению хоста). `null` — письмо дойдёт обычным путём.
  */
 export function heldWarning(session: WorkSession, resumesInHour: number, resumeRate: number): string | null {
   const mention = sessionMention(session.id);
@@ -312,7 +312,7 @@ export function heldWarning(session: WorkSession, resumesInHour: number, resumeR
   if (session.providerSessionId === null && (session.previousAgents?.length ?? 0) === 0) {
     return `${mention} is asleep with no conversation to resume: it reads this when the human starts it`;
   }
-  if (session.autoSleep == null && resumesInHour >= resumeRate) {
+  if (resumesInHour >= resumeRate) {
     return `${mention} reached its hourly resume limit: it reads this when the limit frees or the human resumes it`;
   }
   return null;
