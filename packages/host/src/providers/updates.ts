@@ -76,6 +76,8 @@ interface Record_ {
   skipped: string | null;
   /** Почему последняя проверка не удалась (`offline`, `http 503`, `parse`); `null` — удалась. */
   lastError: string | null;
+  /** Когда проверка в последний раз удалась; `checkedAt` — время последней попытки, в том числе неудачной. */
+  lastSuccessAt: string | null;
 }
 type Cache = Partial<Record<UpdateCommand, Record_>>;
 
@@ -91,7 +93,10 @@ function readRecord(value: unknown): Record_ | null {
   if (typeof checkedAt !== 'string' || Number.isNaN(Date.parse(checkedAt)) || typeof method !== 'string') return null;
   if (latest !== null && typeof latest !== 'string') return null;
   if (skipped !== null && typeof skipped !== 'string') return null;
-  return { latest, checkedAt, method, skipped, lastError };
+  // Файлы до этого поля: запись без ошибки — это успешная проверка в `checkedAt`.
+  const stored = value['lastSuccessAt'];
+  const lastSuccessAt = typeof stored === 'string' && !Number.isNaN(Date.parse(stored)) ? stored : lastError === null ? checkedAt : null;
+  return { latest, checkedAt, method, skipped, lastError, lastSuccessAt };
 }
 
 /** Битый файл или запись не той формы — пустой кэш. */
@@ -200,6 +205,7 @@ export function createCliUpdates(options: CliUpdatesOptions): CliUpdates {
         method: latest === null ? (previous?.method ?? method ?? 'unknown') : (method ?? 'unknown'),
         skipped: previous?.skipped ?? null,
         lastError,
+        lastSuccessAt: latest !== null ? new Date(now()).toISOString() : (previous?.lastSuccessAt ?? null),
       };
       changed = latest !== null && latest !== previous?.latest;
       return true;
@@ -247,6 +253,7 @@ export function createCliUpdates(options: CliUpdatesOptions): CliUpdates {
         checkedAt: record?.checkedAt ?? null,
         state,
         lastError: record?.lastError ?? null,
+        lastSuccessAt: record?.lastSuccessAt ?? null,
       };
     },
     async current(command, installed) {

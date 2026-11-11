@@ -91,6 +91,7 @@ describe('проверка версий CLI', () => {
       method: 'standalone',
       skipped: null,
       lastError: null,
+      lastSuccessAt: '2026-11-02T00:00:00.000Z',
     });
     expect(file.providers['claude']).toMatchObject({ latest: '2.1.320', method: 'native' });
   });
@@ -179,7 +180,7 @@ describe('проверка версий CLI', () => {
     at += 25 * HOUR;
     await updates.checkAll();
     const codex = JSON.parse(await readFile(cacheFile(), 'utf8')).providers.codex;
-    expect(codex).toEqual({ latest: '0.166.0', checkedAt: new Date(at).toISOString(), method: 'standalone', skipped: null, lastError: 'offline' });
+    expect(codex).toEqual({ latest: '0.166.0', checkedAt: new Date(at).toISOString(), method: 'standalone', skipped: null, lastError: 'offline', lastSuccessAt: '2026-11-02T00:00:00.000Z' });
     expect(await updates.current('codex', '0.162.0')).toMatchObject({ latest: '0.166.0' });
   });
 
@@ -241,6 +242,7 @@ describe('проверка версий CLI', () => {
       checkedAt: '2026-11-02T00:00:00.000Z',
       state: 'missing',
       lastError: null,
+      lastSuccessAt: '2026-11-02T00:00:00.000Z',
     });
     expect(await updates.status('qwen', null)).toMatchObject({ state: 'missing', latest: '0.28.0' });
   });
@@ -319,7 +321,7 @@ describe('status и checkOne (спека Qwen, §4.4)', () => {
     // Не проверяли вовсе: unknown без времени.
     const fresh = createCliUpdates({ fetchImpl: n.fetchImpl, log, home: path.join(root, 'empty'), userHome, env: { PATH: '' } });
     expect(await fresh.status('claude', '2.1.316')).toEqual({
-      installed: '2.1.316', latest: null, method: null, checkedAt: null, state: 'unknown', lastError: null,
+      installed: '2.1.316', latest: null, method: null, checkedAt: null, state: 'unknown', lastError: null, lastSuccessAt: null,
     });
     expect(await updates.status('other', '1.0.0')).toBeNull();
   });
@@ -360,6 +362,19 @@ describe('status и checkOne (спека Qwen, §4.4)', () => {
     at += 25 * HOUR;
     await updates.checkAll();
     expect(await updates.status('codex', '0.162.0')).toMatchObject({ state: 'available', latest: '0.166.0', lastError: 'offline' });
+  });
+
+  it('успех, затем офлайн-проверка: lastError записан, а время последнего успеха осталось прежним', async () => {
+    const n = net();
+    let at = Date.UTC(2026, 10, 2);
+    const updates = service(n, () => at);
+    await updates.checkAll();
+    n.replies.set(GITHUB, new TypeError('fetch failed'));
+    at += 60_000;
+    await updates.checkOne('codex', { force: true });
+    expect(await updates.status('codex', '0.166.0')).toMatchObject({
+      state: 'up-to-date', lastError: 'offline', checkedAt: new Date(at).toISOString(), lastSuccessAt: '2026-11-02T00:00:00.000Z',
+    });
   });
 
   it('force обходит порог 20 часов, без force проверка пропускается', async () => {
