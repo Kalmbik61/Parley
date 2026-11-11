@@ -461,7 +461,7 @@ describe('план запуска', () => {
 
     expect(plan.command).toBe('claude');
     expect(plan.cwd).toBe(project);
-    expect(plan.env).toEqual(sessionEnv(paths.dir, sessionId));
+    expect(plan.env).toEqual({ ...sessionEnv(paths.dir, sessionId), CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS: '1860000' });
     expect(plan.providerSessionId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-/);
     expect(plan.args.slice(0, 2)).toEqual(['--session-id', plan.providerSessionId]);
 
@@ -3502,5 +3502,33 @@ describe('доверие к папке у Claude Code (спека мобильн
     } finally {
       await chmod(dir, 0o700);
     }
+  });
+});
+
+describe('порог фонового режима MCP у Claude Code', () => {
+  const KEY = 'CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS';
+  const saved = process.env[KEY];
+  afterEach(() => {
+    if (saved === undefined) delete process.env[KEY]; else process.env[KEY] = saved;
+  });
+  const envOf = async (provider: string) => {
+    const { workId, sessionId } = await pending(provider);
+    return (await planLaunch(project, workId, await sessionOf(workId, sessionId))).env;
+  };
+
+  it('Claude, GLM и свой провайдер получают порог, Codex — нет', async () => {
+    delete process.env[KEY];
+    await writeCustomProviders(
+      [{ id: 'custom-local', label: 'Local', preset: 'other', baseUrl: 'http://127.0.0.1:9/anthropic', auth: 'bearer',
+        models: { opus: 'm-big', sonnet: 'm-mid', haiku: 'm-small', subagent: 'm-mid' }, contextWindow: null, linkClaude: false }],
+      customProvidersFile(),
+    );
+    for (const provider of ['claude', 'glm', 'custom-local']) expect((await envOf(provider))[KEY]).toBe('1860000');
+    expect(await envOf('codex')).not.toHaveProperty(KEY);
+  });
+
+  it('значение из окружения хоста остаётся', async () => {
+    process.env[KEY] = '5000';
+    expect(await envOf('claude')).not.toHaveProperty(KEY);
   });
 });

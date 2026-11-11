@@ -169,6 +169,13 @@ export const tomlString = (value: string): string =>
 export const CODEX_MCP_STARTUP_TIMEOUT_SEC = 30;
 export const CODEX_MCP_TOOL_TIMEOUT_SEC = 30 * 60 + 60;
 
+/**
+ * Через сколько миллисекунд Claude Code переводит долгий вызов MCP в фон (по умолчанию 120 с): `wait_for`
+ * тогда возвращается с «still running», и агент тратит ход на повторный вызов. Порог — дольше самого долгого
+ * `wait_for` (`MAX_TIMEOUT_SEC`) и ещё минута сверху, как и `CODEX_MCP_TOOL_TIMEOUT_SEC` у Codex. Тест сверяет число с `MAX_TIMEOUT_SEC`.
+ */
+export const CLAUDE_MCP_AUTO_BACKGROUND_MS = (30 * 60 + 60) * 1000;
+
 /** Переменные, которые сервер получает из окружения запускающего: только наше пространство имён, оба префикса. */
 const OWN_VARIABLE = new RegExp(`^(?:${ENV_PREFIX}|${LEGACY_ENV_PREFIX})[A-Z0-9_]+$`);
 /**

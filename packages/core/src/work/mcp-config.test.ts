@@ -7,6 +7,7 @@ import { MAX_TIMEOUT_SEC } from '../mcp/tools.js';
 import { MCP_SERVER_NAME } from '../names.js';
 import {
   CODEX_MCP_STARTUP_TIMEOUT_SEC,
+  CLAUDE_MCP_AUTO_BACKGROUND_MS,
   CODEX_MCP_TOOL_TIMEOUT_SEC,
   MCP_SERVER_ENTRY,
   codexMcpOverride,
@@ -104,6 +105,11 @@ describe('конфиг MCP-сервера на сессию', () => {
     // до `MAX_TIMEOUT_SEC` и без запаса был бы оборван клиентом посреди ожидания.
     expect(CODEX_MCP_STARTUP_TIMEOUT_SEC).toBeGreaterThan(10);
     expect(CODEX_MCP_TOOL_TIMEOUT_SEC).toBeGreaterThan(MAX_TIMEOUT_SEC);
+  });
+
+  it('порог фонового режима Claude Code — дольше самого долгого wait_for', () => {
+    expect(CLAUDE_MCP_AUTO_BACKGROUND_MS).toBe((MAX_TIMEOUT_SEC + 60) * 1000);
+    expect(CLAUDE_MCP_AUTO_BACKGROUND_MS).toBe(1_860_000);
   });
 
   it('серверу, которому Codex режет окружение, уходят переменные PARLEY_* и HARNAS_* хоста', () => {
