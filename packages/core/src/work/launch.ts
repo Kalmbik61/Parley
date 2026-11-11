@@ -22,6 +22,7 @@ import { findRunnerBinary } from './find-binary.js';
 import { CLAUDE_LEAN_ENV, CLAUDE_LEAN_FLAGS, codexLeanFlags, readCodexMcpServerIds, readUserPluginIds } from './lean.js';
 import { writeNativeContext, writeNativeSkillCatalog, stampNativeContext, type NativeContextDescriptor } from './native-context.js';
 import { CLAUDE_PROJECTS_DIR_KEY, claudeProjectRoots } from '../discover.js';
+import { defaultQwenRoot, discoverQwenSessions } from '../qwen/discover.js';
 import { isServiceText, type SessionIndex } from '../session-index.js';
 import { bothEnv, envValue } from '../names.js';
 import { userClaudeConfigDir, wantLinks } from '../custom-provider-dir.js';
@@ -234,6 +235,29 @@ async function claudeConversationExists(id: string, roots: string[] = claudeProj
 }
 
 /**
+ * Is there a Qwen Code transcript for this id: the bound path (from `SessionStart`) or `<id>.jsonl` under
+ * `<qwenHome>/projects/*\/chats`. Qwen creates it with the first prompt, and `qwen --resume` of a session that slept before
+ * that fails, so such a session starts again with the same id (`--session-id`), as Claude's does. Like Claude's check, only
+ * an exact "no" counts: a history root that cannot be read leaves the plain `--resume`.
+ */
+async function qwenConversationExists(id: string, bound?: string): Promise<boolean> {
+  if (bound !== undefined) {
+    try {
+      if ((await stat(bound)).isFile()) return true;
+    } catch {
+      // The bound file is gone: look by id.
+    }
+  }
+  const root = defaultQwenRoot();
+  try {
+    await readdir(root);
+  } catch {
+    return true;
+  }
+  return (await discoverQwenSessions(root)).some((found) => found.id === id.toLowerCase());
+}
+
+/**
  * Корни, где искать разговор записи провайдера: известна своя папка конфигурации (аккаунт Claude, свой провайдер) —
  * только её `projects`, чтобы транскрипт чужого аккаунта не сошёл за свой. Подмена тестов и записи без своей
  * папки — все корни, как раньше.
@@ -305,7 +329,11 @@ async function plan(
     forkFrom !== undefined ||
     (mode === 'resume' &&
       session.providerSessionId !== null &&
-      (!isClaudeCode(entry) || (await claudeConversationExists(session.providerSessionId, conversationRoots(entry)))));
+      (isClaudeCode(entry)
+        ? await claudeConversationExists(session.providerSessionId, conversationRoots(entry))
+        : entry.runner.mcpConfig === 'qwen-system-settings'
+          ? await qwenConversationExists(session.providerSessionId, session.qwenTranscript?.path)
+          : true));
   let providerSessionId: string | null = null;
 
   // Navigator launches isolate the generated settings file per session; off keeps the work path.

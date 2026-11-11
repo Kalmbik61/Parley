@@ -78,6 +78,30 @@ describe('feed of a Qwen Code session', () => {
     expect((await service.snapshot(REF)).items.length).toBe(first);
   });
 
+  it('after sleep and resume the feed continues the same transcript with no duplicates', async () => {
+    const client = fakeClient();
+    service.subscribe(REF, client);
+    const before = await service.snapshot(REF);
+    const ids = new Set(before.items.map((item) => item.id));
+    // The process exits (sleep), then `qwen --resume <id>` starts: the same file is appended to.
+    fakes.emitExit(REF);
+    fakes.emitStart(REF);
+    const line = (n: number, type: string, parts: unknown[]): string =>
+      `${JSON.stringify({ uuid: `r${n}`, sessionId: ID, timestamp: `2026-11-11T15:00:0${n}.000Z`, type, provenance: type === 'user' ? 'real_user' : 'assistant_output', model: 'm', message: { parts } })}\n`;
+    await appendFile(file, line(1, 'user', [{ text: 'after resume' }]) + line(2, 'assistant', [{ text: 'resumed answer' }]));
+    service.onHook(hookRequest({ hook_event_name: 'SessionStart', session_id: ID, source: 'resume' }));
+    await vi.waitFor(async () => {
+      const snapshot = await service.snapshot(REF);
+      expect(snapshot.items.some((i) => i.kind === 'text' && i.text === 'resumed answer')).toBe(true);
+    });
+    const after = await service.snapshot(REF);
+    // Everything from before is still there once, and only the two new records were added (plus the closed turn).
+    for (const id of ids) expect(after.items.filter((item) => item.id === id)).toHaveLength(1);
+    expect(after.items.filter((i) => i.kind === 'prompt')).toHaveLength(3);
+    expect(new Set(after.items.map((item) => item.id)).size).toBe(after.items.length);
+    expect(after.items.filter((i) => i.kind === 'text' && i.text === 'resumed answer')).toHaveLength(1);
+  });
+
   it('has no subagent transcripts and never reads the Claude layout', async () => {
     await expect(service.snapshot(REF, 'agent-1')).rejects.toMatchObject({ code: 'not_found' });
   });

@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -32,6 +32,7 @@ beforeEach(async () => {
   setEnv('HARNAS_SKILL_NAVIGATOR', undefined);
   // The effective system file of these tests; absent unless a test writes it.
   setEnv('QWEN_CODE_SYSTEM_SETTINGS_PATH', adminBase);
+  setEnv('QWEN_HOME', path.join(home, 'qwen-home'));
 });
 
 afterEach(async () => {
@@ -148,5 +149,48 @@ describe('qwen launch', () => {
     await expect(planLaunch(project, workId, session)).rejects.toThrow('Qwen system settings key mcp.excluded includes parley');
     await writeFile(adminBase, '{not json');
     await expect(planLaunch(project, workId, session)).rejects.toThrow(`Qwen system settings file ${adminBase} is not valid JSON`);
+  });
+});
+
+describe('qwen wake: resume into the same transcript', () => {
+  const ID = '11111111-1111-4111-8111-111111111111';
+  const writeTranscript = async (id: string): Promise<string> => {
+    const dir = path.join(home, 'qwen-home', 'projects', '-p', 'chats');
+    await mkdir(dir, { recursive: true });
+    const file = path.join(dir, `${id}.jsonl`);
+    await writeFile(file, `${JSON.stringify({ uuid: 'u', sessionId: id, timestamp: '2026-11-11T10:00:00.000Z', type: 'user' })}\n`);
+    return file;
+  };
+
+  it('a session with a transcript wakes with --resume <id>, the same settings file and env as its first launch', async () => {
+    const { workId, session } = await qwenSession();
+    const first = await planNew(project, workId, { ...session, providerSessionId: ID });
+    expect(valueOf(first.args, '--session-id')).toBe(ID);
+    await writeTranscript(ID);
+    const woken = await planResume(project, workId, { ...session, providerSessionId: ID }, { prompt: 'You have new mail' });
+    expect(woken.args.slice(0, 2)).toEqual(['--resume', ID]);
+    expect(woken.args).not.toContain('--session-id');
+    expect(woken.env['QWEN_CODE_SYSTEM_SETTINGS_PATH']).toBe(first.env['QWEN_CODE_SYSTEM_SETTINGS_PATH']);
+  });
+
+  it('the bound transcript path counts as the conversation', async () => {
+    const { workId, session } = await qwenSession();
+    const file = await writeTranscript('22222222-2222-4222-8222-222222222222');
+    const woken = await planResume(project, workId, { ...session, providerSessionId: ID, qwenTranscript: { path: file, cwd: project } }, {});
+    expect(woken.args.slice(0, 2)).toEqual(['--resume', ID]);
+  });
+
+  it('a session that slept before its first prompt has no transcript: it starts again with the same id, not a failing --resume', async () => {
+    const { workId, session } = await qwenSession();
+    await writeTranscript('33333333-3333-4333-8333-333333333333');
+    const woken = await planResume(project, workId, { ...session, providerSessionId: ID }, { prompt: 'You have new mail' });
+    expect(woken.args).not.toContain('--resume');
+    expect(valueOf(woken.args, '--session-id')).toBe(ID);
+  });
+
+  it('an unreadable history root keeps the plain --resume', async () => {
+    const { workId, session } = await qwenSession();
+    const woken = await planResume(project, workId, { ...session, providerSessionId: ID }, {});
+    expect(woken.args.slice(0, 2)).toEqual(['--resume', ID]);
   });
 });
