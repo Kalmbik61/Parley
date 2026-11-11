@@ -472,3 +472,15 @@ describe('другие пути сервера (спека браузера 3.7;
     expect((await post(`${origin}/agent/browser`, {}, { token })).status).toBe(404);
   });
 });
+
+describe('ревизия агента запуска', () => {
+  it('register запоминает ревизию, и она доходит до запроса хука; без неё поля нет', async () => {
+    const { server, url, seen } = await boot();
+    const withRevision = server.register(REF, PROVIDER_SESSION, 'claude', 'rev-1');
+    await post(url, event('UserPromptSubmit', { prompt: 'x' }), { token: withRevision });
+    expect(seen.at(-1)?.agentRevision).toBe('rev-1');
+    const plain = server.register(REF, PROVIDER_SESSION);
+    await post(url, event('UserPromptSubmit', { prompt: 'y' }), { token: plain });
+    expect(seen.at(-1)).not.toHaveProperty('agentRevision');
+  });
+});

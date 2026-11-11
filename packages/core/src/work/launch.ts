@@ -54,7 +54,7 @@ import { leadRecipeBlock } from './recipe-lead.js';
 import { buildSessionLayer, developerInstructions, validateLayerArguments, type SessionLayerInput, type SessionLayerWarning } from './session-layer.js';
 import { addSession, isCodexThreadBinding, removeSession, transitionSession, type NewSession } from './map.js';
 import { NEW_LABEL } from './names.js';
-import { mcpConfigValue, writeMcpConfig, type AgentChannel } from './mcp-config.js';
+import { CLAUDE_MCP_AUTO_BACKGROUND_MS, mcpConfigValue, writeMcpConfig, type AgentChannel } from './mcp-config.js';
 import { finishSession, linkProviderSession, type FinishOptions, type MetricsRoots } from './metrics.js';
 import { writeWorkSettings } from './settings-file.js';
 import { CLAUDE_SKILL_BUDGET_ENV, CODEX_SKILL_CATALOG_OVERRIDE, claudeSkillReduction, codexSkillRoute } from './skill-reduction.js';
@@ -652,6 +652,9 @@ async function plan(
         ...(skillList === undefined ? {} : { SKILL_LIST_REDUCED: '1' }) }),
       ...(isClaudeCode(entry) && skillList === 'names' ? CLAUDE_SKILL_BUDGET_ENV : {}),
       ...(lean && isClaudeCode(entry) ? CLAUDE_LEAN_ENV : {}),
+      // Значение, уже заданное человеком в окружении хоста, остаётся: процесс его унаследует.
+      ...(isClaudeCode(entry) && process.env['CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS'] === undefined
+        ? { CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS: String(CLAUDE_MCP_AUTO_BACKGROUND_MS) } : {}),
       ...(workspace ? { TMPDIR: path.join(workspace.path, '.parley-tmp') } : {}),
     },
     providerSessionId,

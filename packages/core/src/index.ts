@@ -533,6 +533,7 @@ export type {
 export {
   PARLEY_STARTUP_NOTIFICATION,
   PERMISSION_ANSWERED_EVENT,
+  INLINE_MAIL_EVENT,
   TERMINAL_WORKING_EVENT,
   bareEvent,
   eventRecordOf,
@@ -687,6 +688,8 @@ export {
   createParleyServer,
   createToolRunner,
   finishedState,
+  takeInlineMail,
+  INLINE_MAIL_MAX_CHARS,
 } from './mcp/tools.js';
 export type { ToolRunner } from './mcp/tools.js';
 export type { MapChanges } from './mcp/watch-map.js';

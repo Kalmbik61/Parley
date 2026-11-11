@@ -331,6 +331,7 @@ describe('бриф: роль в комнате', () => {
     const brief = buildBrief(mapWithRoom(), 's-02');
 
     expect(LEAD_ROLE).toContain('with one `wait_for("inbox", 1500)`, not by each participant\'s id');
+    expect(LEAD_ROLE).toContain('put it in the same message as the call it follows;');
     expect(brief).toContain('Wait for positions and reports with one `wait_for("inbox", 1500)`, not by each participant\'s id;');
     // Развилка с «закончить ход» (M2): ответ running при уже собранных позициях — предложить решение, не молчать до пробуждения.
     expect(LEAD_ROLE).toContain('if it answers `running` while you already hold some positions, propose a decision on them instead of ending the turn.');

@@ -27,6 +27,22 @@ function pageExtras(
   };
 }
 
+/** Бюджет страницы в символах (`JSON.stringify` ответа `{ messages, ...extras }`) вместо байтов результата MCP. */
+export interface InboxCharLimit {
+  chars: number;
+}
+
+/** Письмо, не влезшее первым, урезается до бюджета; экранирование JSON может раздуть текст, поэтому бюджет сужается, пока страница не влезет. */
+function cutToChars<V extends { text: string }>(view: V, limit: InboxCharLimit, build: (cut: V) => string): V {
+  let bytes = limit.chars;
+  let cut = shrinkText(view, bytes);
+  while (build(cut).length > limit.chars && bytes > 512) {
+    bytes = Math.floor(bytes / 2);
+    cut = shrinkText(view, bytes);
+  }
+  return cut;
+}
+
 /**
  * Одна страница почты: старейшие письма, пока ответ `{ state: 'message', ... }` (форма `wait_for`, `check_inbox` меньше) не
  * превысит `INBOX_MAX_BYTES` и письмо не окажется пятьдесят первым. Хотя бы одно письмо отдаётся всегда: если оно одно
@@ -36,7 +52,11 @@ export function inboxPage<V extends { text: string }>(
   letters: readonly Message[],
   view: (message: Message) => V,
   notice: { openAssignments?: number; hint?: string },
+  limit?: InboxCharLimit,
 ): { messages: V[]; ids: string[]; extras: InboxExtras } {
+  const fits = (list: V[], more: InboxExtras): boolean => limit === undefined
+    ? mcpResultBytes({ state: 'message', messages: list, ...more }) <= INBOX_MAX_BYTES
+    : JSON.stringify({ messages: list, ...more }).length <= limit.chars;
   const messages: V[] = [];
   const ids: string[] = [];
   let cutId: string | null = null;
@@ -46,15 +66,17 @@ export function inboxPage<V extends { text: string }>(
     const left = letters.length - ids.length - 1;
     const whole = view(letter);
     const wholeExtras = pageExtras(left, cutId, notice);
-    if (mcpResultBytes({ state: 'message', messages: [...messages, whole], ...wholeExtras }) <= INBOX_MAX_BYTES) {
+    if (fits([...messages, whole], wholeExtras)) {
       messages.push(whole);
       extras = wholeExtras;
     } else if (ids.length > 0) {
       break;
     } else {
       cutId = letter.id;
-      messages.push(shrinkText(whole, INBOX_CUT_BYTES));
       extras = pageExtras(left, cutId, notice);
+      messages.push(limit === undefined
+        ? shrinkText(whole, INBOX_CUT_BYTES)
+        : cutToChars(whole, limit, (cut) => JSON.stringify({ messages: [cut], ...extras })));
     }
     ids.push(letter.id);
   }

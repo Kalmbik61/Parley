@@ -40,8 +40,12 @@ export interface HookRequest {
   ref: SessionRef;
   /** stdin-JSON Claude Code как есть; `hook_event_name` — из `FEED_HOOK_EVENTS`. */
   body: Record<string, unknown>;
+  /** Ревизия агента запуска (`PARLEY_AGENT_REVISION`), под которым выдан токен; `undefined` — запуск без неё. */
+  agentRevision?: string;
   /** Ответ хуку (200, JSON). Второй и следующие вызовы ничего не делают. */
   respond(json: HookResponse): void;
+  /** Запрос уже отвечен кем-то (в том числе `{}` при закрытии сервера) или закрыт другой стороной: новый ответ ничего не отправит. */
+  answered(): boolean;
   /**
    * Запрос закрыт другой стороной раньше ответа (CLI оборвал хук, процесс вышел). Слушатель
    * вызывается один раз и только если ответа ещё не было.
@@ -73,7 +77,7 @@ export interface HookServer {
    * отзывается. `providerSessionId` — id сессии у Claude Code; `null` — сверять `session_id` не с чем,
    * первый принятый хук его запомнит. `provider` задаёт набор принимаемых событий (у Codex свой).
    */
-  register(ref: SessionRef, providerSessionId: string | null, provider?: string): string;
+  register(ref: SessionRef, providerSessionId: string | null, provider?: string, agentRevision?: string): string;
   /** Отзывает токен сессии: её хуки дальше — 401. */
   unregister(ref: SessionRef): void;
   /** `{}` всем висящим запросам, затем закрывает сервер и все соединения. */
@@ -88,6 +92,7 @@ interface Registration {
   providerSessionId: string | null;
   /** События, которые принимает этот запуск: у Claude Code и Codex наборы разные. */
   events: ReadonlySet<string>;
+  agentRevision?: string;
 }
 
 /** Строка заголовка: у повторённого заголовка Node отдаёт массив — такой не принимаем. */
@@ -275,7 +280,9 @@ export function createHookServer(options: HookServerOptions): HookServer {
     const request: HookRequest = {
       ref: registration.ref,
       body,
+      ...(registration.agentRevision === undefined ? {} : { agentRevision: registration.agentRevision }),
       respond,
+      answered: () => answered,
       onAbandon(listener) {
         abandon = listener;
       },
@@ -309,7 +316,7 @@ export function createHookServer(options: HookServerOptions): HookServer {
     },
     url: () => address,
     origin: () => base,
-    register(ref, providerSessionId, provider = 'claude') {
+    register(ref, providerSessionId, provider = 'claude', agentRevision) {
       const key = refKey(ref);
       const previous = tokenOfSession.get(key);
       if (previous !== undefined) byToken.delete(previous);
@@ -319,6 +326,7 @@ export function createHookServer(options: HookServerOptions): HookServer {
         token,
         providerSessionId,
         events: provider === 'codex' ? CODEX_EVENTS : FEED_EVENTS,
+        ...(agentRevision === undefined ? {} : { agentRevision }),
       });
       tokenOfSession.set(key, token);
       return token;

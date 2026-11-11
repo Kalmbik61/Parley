@@ -119,6 +119,8 @@ describe('темы гида', () => {
     expect(text).toContain('`wait_for("inbox")` returns the mail itself, already marked read: do not call `check_inbox` after it');
     expect(text).toContain('`check_inbox` is for when you are not waiting');
     expect(text).toContain('Wait with one call `wait_for("inbox", 1500)`, with no text before or after it');
+    expect(text).toContain('Put it in the same message as the call it follows (for example `send_message`), not in a message of its own');
+    expect(text).toContain('one `exec` script that starts with `// @exec: {"yield_time_ms": 1560000}` holds the call and the wait; if `exec` still yields, call `wait` once with the same `yield_time_ms`');
     expect(text).toContain('for `"inbox"` call it once more, then end the turn (without `report`: you are not done)');
     // По id ждут, пока running (как и в вставке): повтор-и-конец — только для «inbox».
     expect(text).toContain('for a session id keep calling while it is `running`');
@@ -135,6 +137,7 @@ describe('темы гида', () => {
     // Участник обязан высказаться по задаче человека, а застрявший — назвать блокер: молчание их не запрещено.
     expect(text).toContain('Write only a result, a position, a question, a decision or a blocker.');
     expect(text).toContain('Wait with one call `wait_for("inbox", 1500)`: no text before or after it, no `Monitor`, `sleep` or polling loops');
+    expect(text).toContain('Send it in the same message as the call it follows (for example `send_message`), not in a message of its own.');
     expect(text).toContain('On `{"state":"running"}` call it once more, then end the turn without `report` (you are not done)');
     expect(text).toContain('A session you tasked directly or created, a member of a room you lead and the lead of a room you own mail you their `report(done/failed)` as a letter: wait via `"inbox"`.');
     expect(text).not.toContain('A room member reports in the room.');

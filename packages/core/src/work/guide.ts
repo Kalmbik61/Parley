@@ -269,7 +269,8 @@ same model and effort.
 \`wait_for(target, timeoutSec)\` — wait for a session by its id or for an incoming message
 (\`target: "inbox"\`). \`wait_for("inbox")\` returns the mail itself, already marked read: do not
 call \`check_inbox\` after it (\`check_inbox\` is for when you are not waiting). Wait with one call
-\`wait_for("inbox", 1500)\`, with no text before or after it. On timeout you get
+\`wait_for("inbox", 1500)\`, with no text before or after it. Put it in the same message as the call it follows
+(for example \`send_message\`), not in a message of its own: a separate message costs a whole model response. On timeout you get
 \`{"state":"running"}\`: for \`"inbox"\` call it once more, then end the turn (without \`report\`: you are
 not done) — Parley wakes you with the pointer when mail arrives; for a session id keep calling
 while it is \`running\`.
@@ -281,6 +282,7 @@ session to sleep: mail wakes it, so write to it or wait for mail via \`"inbox"\`
 away — it is a typo. Giving a new job to a session that has already handed in its
 \`report\`? Do not wait for it with \`wait_for(target)\` — it returns the old result at once.
 Wait with \`wait_for("inbox", 1500)\`: it will wake on the session's reply message or report letter.
+In Codex code mode, one \`exec\` script that starts with \`// @exec: {"yield_time_ms": 1560000}\` holds the call and the wait; if \`exec\` still yields, call \`wait\` once with the same \`yield_time_ms\`, not short polls.
 
 \`send_message(to, text, kind, room, replyTo)\` and \`check_inbox()\` — correspondence inside the
 workspace. Without \`room\`, \`to\` is exactly one session; with \`room\` it is one id or a list, an empty or
@@ -635,7 +637,7 @@ such message wakes each addressee for a whole turn. Write only a result, a posit
 question, a decision or a blocker.
 
 Wait with one call \`wait_for("inbox", 1500)\`: no text before or after it, no \`Monitor\`,
-\`sleep\` or polling loops, no narration of the wait. On \`{"state":"running"}\` call it once
+\`sleep\` or polling loops, no narration of the wait. Send it in the same message as the call it follows (for example \`send_message\`), not in a message of its own. On \`{"state":"running"}\` call it once
 more, then end the turn without \`report\` (you are not done): Parley wakes you with the pointer
 when mail arrives. Do not \`wait_for\` a session by its id when it will answer with a message
 anyway — wait via \`"inbox"\`, or end the turn: the message will wake you by itself. A session

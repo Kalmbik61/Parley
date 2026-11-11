@@ -129,6 +129,13 @@ export const TERMINAL_WORKING_EVENT = 'TerminalWorking';
 export const PERMISSION_ANSWERED_EVENT = 'ParleyPermissionAnswered';
 
 /**
+ * Отметка хоста «письма доставлены вместе с указателем» (ответ хуку `UserPromptSubmit` с `additionalContext`): одна строка
+ * журнала на доставку, число писем — в поле `letters`. Пишет хост, не Claude Code; в свёртке хода не начинает и не кончает,
+ * метрики использования считают по ней доставки.
+ */
+export const INLINE_MAIL_EVENT = 'ParleyInlineMail';
+
+/**
  * `notification_type` внутреннего уведомления хоста: процесс агента запущен, а за срок ни одного события — он на
  * экране старта (вход, доверие к папке). Хук Claude Code такого не шлёт: хост записывает его в свёртку сам, как кадр
  * спиннера Codex, а `activityOf` читает как ожидание человека — `blocked`, `need` вида `startup` (спека «Застрявшие
