@@ -5,6 +5,7 @@ import { startsShellLine } from '@parley/core';
 import {
   COMPACT_WORKS_FEATURE,
   FEED_CODEX_FEATURE,
+  FEED_QWEN_FEATURE,
   LineDecoder,
   LineTooLongError,
   PROTOCOL_VERSION,
@@ -112,7 +113,7 @@ interface HelloParams {
  * Что хост умеет сверх протокола 1: окно по этому списку знает, что снимок работ компактный, что лента Chat есть у Codex и
  * что письма приходят событием `rooms.mail`, а не вместе со снимком.
  */
-const HOST_FEATURES = [COMPACT_WORKS_FEATURE, FEED_CODEX_FEATURE, ROOMS_MAIL_FEATURE, REMOTE_POLICY_FEATURE];
+const HOST_FEATURES = [COMPACT_WORKS_FEATURE, FEED_CODEX_FEATURE, FEED_QWEN_FEATURE, ROOMS_MAIL_FEATURE, REMOTE_POLICY_FEATURE];
 
 const REMOTE_METHOD_SET: ReadonlySet<string> = new Set(REMOTE_METHODS);
 const REMOTE_NOTIFICATION_SET: ReadonlySet<string> = new Set(REMOTE_NOTIFICATIONS);

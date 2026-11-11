@@ -43,6 +43,10 @@ export const FEED_MIN_VERSION = '2.1.286';
 export const CODEX_FEED_MIN_VERSION = '0.160.0';
 /** Признак `hello.features` хоста, который строит ленту Codex из журнала. */
 export const FEED_CODEX_FEATURE = 'feed-codex';
+/** = `runner.minVersion` of the `qwen` registry entry: the lowest Qwen Code whose transcript the Chat feed parses (spec 2026-11-11, 3.5). */
+export const QWEN_FEED_MIN_VERSION = '0.27.2';
+/** `hello.features` of a host that builds the Qwen Code feed from its transcript. */
+export const FEED_QWEN_FEATURE = 'feed-qwen';
 /**
  * Признак `hello.features` клиента: он понимает событие `feed.resync` (хост снял его подписки на ленты из-за
  * затора и просит взять снимок заново). Клиенту без признака подписки не снимаются.

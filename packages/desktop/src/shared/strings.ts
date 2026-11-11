@@ -2137,6 +2137,8 @@ export const S = {
     /** Баннер над полем ввода: агент ждёт в терминале (диалог без хука). */
     waitingBanner: {
       text: 'Claude Code is waiting in the terminal',
+      /** Qwen Code approvals are answered in the terminal in v1: the Chat view has no approval cards for it. */
+      qwenApproval: 'Waiting for approval in the terminal',
       open: 'Open terminal',
     },
     /** Баннер замены агента над полем ввода (спека 2026-10-30, 5.7). */
