@@ -52,9 +52,11 @@ import {
   versionAtLeast,
   workPaths,
   writeSecret,
+  type McpContext,
   type ProjectMigration,
   type ProviderEntry,
   type Room,
+  type ToolLaunch,
   type WorkMap,
 } from '@parley/core';
 import { createTelegramService } from './telegram/service.js';
@@ -132,6 +134,7 @@ import { createVoiceTelemetry, LIVE_USD_PER_MINUTE } from './voice/telemetry.js'
 import { dailyBudget } from './voice/budget.js';
 import { AGENT_BROWSER_PATH, createBrowserEndpoint } from './agent/browser-endpoint.js';
 import { createHookServer } from './hooks/hook-server.js';
+import { createInlineMail } from './hooks/inline-mail.js';
 import { createSilentEndings } from './endings/silent-endings.js';
 import { createSessionsService } from './sessions/sessions-service.js';
 import { providerLaunchEnv } from './sessions/provider-env.js';
@@ -536,31 +539,37 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   // Строки провайдеров для `get_map {field: "providers"}` — те же, что у `/agent/providers`: ходить к себе по HTTP
   // незачем; `wait_for` будит изменение работ службы, а не `fs.watch`; `list_roles` берёт общий кэш каталога. Токен
   // тот же, что у остальных маршрутов агента.
+  const toolContextFor = (ref: SessionRef, launch: ToolLaunch): Promise<McpContext> =>
+    hostToolContext(ref, launch, {
+      providerRows: listProviderRows,
+      onWorksChange: mapChangeSignal(worksService),
+      roleCatalog: (cwd) => roleCatalog(cwd, { codex: true }),
+      attempts: (ref, request) => attemptsEndpoint.perform(ref, request, () => browserEndpoint.isRegistered(ref)),
+      turnBoundary: turnBoundarySource(worksService, activityService),
+      // Лента ёмкости заведена ниже по файлу; вызов поздний, как у `sessionsService`. Сбой снимка не должен ронять
+      // инструмент: `null` — в ответе `machine: null`.
+      capacity: async (ref) => {
+        try {
+          const live = activityService.get(ref)?.activity;
+          return {
+            machine: (await capacityFeed.snapshot()).machine,
+            activity: live === undefined ? null : { subagents: live.subagents, background: live.runningBackground },
+          };
+        } catch (error) {
+          log.warn('ёмкость: числа для get_capacity не собрались', { error: String(error) });
+          return null;
+        }
+      },
+    });
   const toolsEndpoint = createToolsEndpoint({
     authenticate: (req) => browserEndpoint.authenticate(req),
-    contextFor: (ref, launch) =>
-      hostToolContext(ref, launch, {
-        providerRows: listProviderRows,
-        onWorksChange: mapChangeSignal(worksService),
-        roleCatalog: (cwd) => roleCatalog(cwd, { codex: true }),
-        attempts: (ref, request) => attemptsEndpoint.perform(ref, request, () => browserEndpoint.isRegistered(ref)),
-        turnBoundary: turnBoundarySource(worksService, activityService),
-        // Лента ёмкости заведена ниже по файлу; вызов поздний, как у `sessionsService`. Сбой снимка не должен ронять
-        // инструмент: `null` — в ответе `machine: null`.
-        capacity: async (ref) => {
-          try {
-            const live = activityService.get(ref)?.activity;
-            return {
-              machine: (await capacityFeed.snapshot()).machine,
-              activity: live === undefined ? null : { subagents: live.subagents, background: live.runningBackground },
-            };
-          } catch (error) {
-            log.warn('ёмкость: числа для get_capacity не собрались', { error: String(error) });
-            return null;
-          }
-        },
-      }),
+    contextFor: toolContextFor,
     log,
+  });
+  const inlineMail = createInlineMail({
+    log,
+    provider: (ref) => worksService.entry(ref.projectPath, ref.workId)?.map.sessions.find((session) => session.id === ref.sessionId)?.provider,
+    context: toolContextFor,
   });
   const hookServer = createHookServer({
     log,
@@ -571,7 +580,9 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       } catch (error) {
         log.warn(`compaction hook failed: ${error instanceof Error ? error.message : String(error)}`);
       }
-      feedService.onHook(request);
+      // Указатель на письма с хуком `UserPromptSubmit`: хост отвечает сам (письма в `additionalContext`), а лента получает
+      // событие с глухим `respond`: её `{}` второй ответ не перебьёт.
+      feedService.onHook(inlineMail.handle(request) ? { ...request, respond: () => {} } : request);
     },
     routes: { [AGENT_ATTEMPTS_PATH]: (req, res) => attemptsEndpoint.handle(req, res), [AGENT_SESSIONS_PATH]: (req, res) => sessionEndpoint.handle(req, res), [AGENT_SWITCH_PATH]: (req, res) => switchEndpoint.handle(req, res), [AGENT_SWARMS_PATH]: (req, res) => swarmEndpoint.handle(req, res), [AGENT_PROVIDERS_PATH]: (req, res) => providersEndpoint.handle(req, res), [AGENT_TOOLS_PATH]: (req, res) => toolsEndpoint.handle(req, res), [AGENT_BROWSER_PATH]: (req, res) => browserEndpoint.handle(req, res), ...assistantEndpoint.routes() },
   });

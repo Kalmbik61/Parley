@@ -104,7 +104,7 @@ import {
 } from '../work/types.js';
 import { BROWSER_UNAVAILABLE, createBrowserTools } from './browser-tools.js';
 import type { McpContext } from './context.js';
-import { inboxPage, type InboxExtras } from './inbox-page.js';
+import { inboxPage, type InboxCharLimit, type InboxExtras } from './inbox-page.js';
 import { watchInbox, type Ring } from './inbox-watch.js';
 import { waitForMap } from './watch-map.js';
 
@@ -1416,6 +1416,8 @@ async function sendMessage(
 function takeInbox(
   context: McpContext,
   sessionId: string,
+  limit?: InboxCharLimit,
+  lockTimeoutMs?: number,
 ): { messages: ReturnType<typeof inboxView>[]; extras: InboxExtras } {
   const at = new Date().toISOString();
   return writeLetters(context.projectPath, context.workId, (letters, current) => {
@@ -1432,10 +1434,31 @@ function takeInbox(
       letters.unreadFor(sessionId),
       (message) => inboxView(message, current, sessionId, (id) => letters.byId(id)),
       openAssignmentsNotice(current, sessionId),
+      limit,
     );
     letters.markRead(sessionId, page.ids, at);
     return { messages: page.messages, extras: page.extras };
-  });
+  }, lockTimeoutMs === undefined ? undefined : { lockTimeoutMs });
+}
+
+/** Первая строка текста, которым хост доставляет письма вместе с указателем (`takeInlineMail`). */
+export const INLINE_MAIL_LINE = 'Parley delivered the messages announced above; they are marked read. Do not call check_inbox for them.';
+/** Предел всего текста доставки: строка и страница в компактном JSON. */
+export const INLINE_MAIL_MAX_CHARS = 9000;
+
+/**
+ * Письма сессии для хука `UserPromptSubmit` (хост отвечает им на указатель): та же страница и та же пометка прочитанными, что у
+ * `check_inbox` (`takeInbox`), но в пределе `INLINE_MAIL_MAX_CHARS` символов. Письма, не влезшие в предел, остаются непрочитанными и
+ * считаются в `remaining`. `null` — выдавать нечего (пусто, ограда сна); устаревший агент и сбой записи — исключение, ничего не помечено.
+ */
+export function takeInlineMail(
+  context: McpContext,
+  sessionId: string,
+  lockTimeoutMs?: number,
+): { text: string; letters: number } | null {
+  const { messages, extras } = takeInbox(context, sessionId, { chars: INLINE_MAIL_MAX_CHARS - INLINE_MAIL_LINE.length - 1 }, lockTimeoutMs);
+  if (messages.length === 0) return null;
+  return { text: `${INLINE_MAIL_LINE}\n${JSON.stringify({ messages, ...extras })}`, letters: messages.length };
 }
 
 async function checkInbox(context: McpContext, sessionId: string): Promise<unknown> {

@@ -1283,6 +1283,7 @@ export function createSessionsService(
           ref,
           plan.providerSessionId ?? session.providerSessionId,
           session.provider,
+          plan.env['PARLEY_AGENT_REVISION'],
         );
       }
       // `provider` — процессу не нужен, а хосту нужен: у codex состояние берётся из потока его терминала,
