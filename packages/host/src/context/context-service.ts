@@ -7,7 +7,7 @@
  * для Codex застывает (приёмка 2026-10-16).
  */
 
-import { byFamily, codexContextFill, readContextFill, workPaths, type ContextFill, type RolloutRecord } from '@parley/core';
+import { byFamily, codexContextFill, openEvents, qwenContextFill, readContextFill, workPaths, type ContextFill, type EventRecord, type EventsLog, type RolloutRecord } from '@parley/core';
 import { refKey, type SessionRef } from '@parley/protocol';
 import { createRolloutTail } from '../feed/codex-source.js';
 import type { ActivityService } from '../activity/activity-service.js';
@@ -29,11 +29,32 @@ export function createContextService(deps: {
   activity: Pick<ActivityService, 'setContext' | 'logFile'>;
   read?: (workDir: string, sessionId: string) => Promise<ContextFill | null>;
   codexTail?: (file: string, seedMaxBytes: number) => { read(): Promise<RolloutRecord[]> };
+  /** Qwen hook journal of a session (its `Stop` carries `context_usage`); tests substitute it. */
+  qwenEvents?: (ref: SessionRef) => Promise<readonly EventRecord[] | null>;
   intervalMs?: number;
 }): ContextService {
   const read = deps.read ?? readContextFill;
   const codexTail = deps.codexTail ?? ((file: string, seedMaxBytes: number) => createRolloutTail(file, { seedMaxBytes }));
   const tails = new Map<string, { file: string; tail: { read(): Promise<RolloutRecord[]> } }>();
+  // One journal reader per work, parsed as Qwen: it keeps its offsets and reads only new lines.
+  const qwenJournals = new Map<string, EventsLog>();
+  const qwenEvents = deps.qwenEvents ?? ((ref: SessionRef) => {
+    const dir = workPaths(ref.projectPath, ref.workId).events;
+    let journal = qwenJournals.get(dir);
+    if (journal === undefined) {
+      journal = openEvents(dir, 'qwen');
+      qwenJournals.set(dir, journal);
+    }
+    return journal.read(ref.sessionId);
+  });
+
+  /** Qwen: the context fill of the latest `Stop` with `context_usage` (spec 2026-11-11, 3.4); none yet — keep the old value. */
+  async function tickQwen(ref: SessionRef): Promise<void> {
+    const events = await qwenEvents(ref).catch(() => null);
+    const stop = events?.findLast((event) => event.name === 'Stop' && event.contextUsage !== undefined);
+    const fill = stop === undefined ? null : qwenContextFill(stop.contextUsage, stop.contextLimit, stop.at);
+    if (fill !== null) deps.activity.setContext(ref, fill);
+  }
   let timer: ReturnType<typeof setInterval> | null = null;
   let inFlight = false;
 
@@ -64,7 +85,7 @@ export function createContextService(deps: {
         await byFamily(provider ?? 'claude', {
           claude: async () => deps.activity.setContext(ref, await read(workPaths(ref.projectPath, ref.workId).dir, ref.sessionId)),
           codex: () => tickCodex(ref),
-          qwen: async () => undefined,
+          qwen: () => tickQwen(ref),
           neutral: async () => undefined,
         })();
       }),

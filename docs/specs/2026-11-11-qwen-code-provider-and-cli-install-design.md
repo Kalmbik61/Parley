@@ -228,6 +228,25 @@ of that is observed for Qwen (Q1, Q7, Q12, Q15–Q17, Q19).
 - Later evidence of readiness clears the state.
 - Nothing is typed into the pty before `ready`.
 
+**Amendment 2026-11-11 (A6, accepted by the r-27 lead): OSC 7501 readiness, no `-i`.**
+
+Measured through the real host on the mock lab with qwen 0.27.2:
+- the `-i` first turn reached the model with 33 tools and **0 Parley tools**: Qwen sends it before its background MCP discovery ends;
+- without `-i`, the only hook at startup is SessionStart, whether Qwen is ready or under the "Connect a Provider" picker; no `auth_success` and no `idle_prompt` until a turn;
+- the MCP `tools/list` also happens under the picker, so the MCP connection alone does not prove readiness either.
+
+Qwen does report its state in the terminal, as OSC 7501 (`ESC]7501;state=<state>[:kind=<kind>]:app=qwen-code[:msg=<base64>]ESC\`). It sends `state=idle` at a ready prompt and `state=blocked:kind=auth` under the picker. It also has `working`, `blocked` with `kind=permission|question`, `error` and `clear`.
+
+The machine above is replaced as follows:
+- **Launch.** New and resumed sessions start without `-i {prompt}`. The brief of a new conversation is `LaunchPlan.deferredPrompt`, which the host types once the session is `ready` (plan A8).
+- **Status source.** OSC 7501 is read by the host only from the session's pty, and only from the current process generation. A report from a replaced process does not count.
+- **Ready.** The current process reported `state=idle` **and** the host served this session's Parley MCP tool list (`/agent/tools` `list`). Journal evidence of input also counts: a real UserPromptSubmit, `idle_prompt` or `auth_success`. Measured: ready about 1.0 s after spawn, and the first typed turn reached the model with 82 tools, 49 of them Parley.
+- **Startup attention.**
+  - `state=blocked:kind=auth` gives startup attention at once.
+  - Not ready past the startup grace gives startup attention: "Qwen needs attention at startup (sign-in or a dialog): see the terminal".
+  - If no OSC 7501 arrived at all (another qwen version), the text is "Qwen needs attention at startup: see the terminal", and nothing is ever typed.
+- **Hooks.** Until `ready`, the new process's journal lines stay out of the state fold, so its SessionStart does not count as "hooked" for mail. The hooks stay the source of turn state, Chat and the journal; OSC 7501 gates only readiness and the startup screens.
+
 **Mail and typing.** This is a Qwen-specific typing strategy, not the Codex one.
 - It keeps every guarantee of `send.ts` and `type-and-submit.ts`: the human's draft, the human typing at the same time, process-generation and PID checks, blocked-dialog recheck, sanitization, retry and dedup.
 - The submit is `text` and then `\r`, written as observed (Q19). Bracketed paste is used only if A6 proves it.

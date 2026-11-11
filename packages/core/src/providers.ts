@@ -470,8 +470,10 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
   },
   // Qwen Code (spec 2026-11-11, 3.3): the official CLI in a pty. The Parley MCP server and hooks come from the
   // per-session system settings file (`QWEN_CODE_SYSTEM_SETTINGS_PATH`, `work/qwen-settings-file.ts`); there is no
-  // `--settings` flag. `--yolo` is never used: the approval mode is `{approvalMode}` (D6). `-i` runs the first
-  // prompt and stays interactive; a positional prompt would be one-shot. No model catalog and no effort in v1.
+  // `--settings` flag. `--yolo` is never used: the approval mode is `{approvalMode}` (D6). No `-i {prompt}` (spec 3.4
+  // amendment): Qwen sends that turn before its MCP discovery ends, so the first turn has no Parley tools; the brief
+  // goes out as `LaunchPlan.deferredPrompt`, typed once the session is ready. A positional prompt would be one-shot.
+  // No model catalog and no effort in v1.
   qwen: {
     id: 'qwen',
     family: 'qwen',
@@ -492,8 +494,6 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
         '{systemPrompt}',
         '-m',
         '{model}',
-        '-i',
-        '{prompt}',
       ],
       // `--resume` appends to the same transcript and keeps the id; the system prompt is not stored there.
       resumeArgs: [
@@ -505,8 +505,6 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
         '{systemPrompt}',
         '-m',
         '{model}',
-        '-i',
-        '{prompt}',
       ],
       mcpConfig: 'qwen-system-settings',
     },
@@ -944,11 +942,13 @@ export async function providerReadiness(entry: ProviderEntry, options: ProviderR
 export function providerReadinessError(entry: ProviderEntry, readiness: ProviderReadiness): string | null {
   if (readiness.error !== null) return readiness.error;
   // Провайдер окна называется своим именем (`entry.label`: у аккаунта с пустой меткой стандартное уже посчитано).
-  const name = isManagedEntry(entry) ? entry.label : 'GLM';
+  const name = isManagedEntry(entry) || entry.family === 'qwen' ? entry.label : 'GLM';
+  // The CLI the version belongs to: Qwen Code has its own; every other versioned entry runs Claude Code.
+  const cli = entry.family === 'qwen' ? entry.runner.command : 'Claude Code';
   if (readiness.needs === 'sign-in') return `${name} is not signed in: open Settings → Providers and press Sign in`;
   if (readiness.needs === 'cli') return entry.runner.minVersion === undefined
     ? `command ${entry.runner.command} is not in PATH — provider ${entry.id} is unavailable`
-    : `${name} requires Claude Code ${entry.runner.minVersion} or newer; install or update the CLI and check again`;
+    : `${name} requires ${cli} ${entry.runner.minVersion} or newer; install or update the CLI and check again`;
   if (readiness.needs !== 'key') return null;
   return entry.custom === undefined
     ? 'GLM requires a saved Z.ai key in Providers'

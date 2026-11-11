@@ -318,9 +318,32 @@ describe('приём событий', () => {
     expect((await post(url, event('MessageDisplay', { message_id: 'm', index: 0, delta: 'x' }), { token })).status).toBe(400);
   });
 
-  it('neutral family (qwen, unknown): no hook event is accepted; Claude-family ids keep theirs', async () => {
+  it('qwen: the events of its system settings file are accepted, others are not', async () => {
+    const { server, url } = await boot({ onHook: (hook) => hook.respond({}) });
+    const token = server.register(REF, null, 'qwen');
+    for (const name of ['SessionStart', 'SessionEnd', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure',
+      'Stop', 'StopFailure', 'Notification', 'PermissionRequest']) {
+      expect((await post(url, event(name, { tool_name: 'run_shell_command', tool_input: {} }), { token })).status).toBe(200);
+    }
+    for (const name of ['MessageDisplay', 'SubagentStart', 'PreCompact']) {
+      expect((await post(url, event(name, {}), { token })).status).toBe(400);
+    }
+  });
+
+  it('qwen: the feed answers every hook at once with {} (no window hold before its Chat branch)', async () => {
+    const { server, url, fakes } = await boot();
+    fakes.setSessions([{ ref: REF, provider: 'qwen' }]);
+    const token = server.register(REF, null, 'qwen');
+    for (const name of ['PermissionRequest', 'PreToolUse', 'UserPromptSubmit']) {
+      const reply = await post(url, event(name, { tool_name: 'run_shell_command', tool_input: { command: 'ls' } }), { token });
+      expect(reply).toMatchObject({ status: 200 });
+      expect(JSON.parse(reply.body)).toEqual({});
+    }
+  });
+
+  it('neutral family (unknown): no hook event is accepted; Claude-family ids keep theirs', async () => {
     const { server, url } = await boot();
-    for (const provider of ['qwen', 'mystery']) {
+    for (const provider of ['mystery']) {
       const token = server.register(REF, null, provider);
       expect((await post(url, event('PreToolUse', { tool_name: 'Bash', tool_input: {} }), { token })).status).toBe(400);
     }

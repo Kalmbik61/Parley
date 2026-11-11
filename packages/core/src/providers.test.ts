@@ -104,15 +104,19 @@ describe('реестр провайдеров', () => {
     ).toEqual(['claude', 'codex', 'glm', 'qwen']);
   });
 
-  it('qwen: the spec 3.3 entry, the system-settings MCP route and no --yolo', () => {
+  it('qwen: the spec 3.3 entry, the system-settings MCP route, no first prompt and no --yolo', () => {
     const qwen = PROVIDERS.qwen;
     expect(qwen).toMatchObject({ id: 'qwen', family: 'qwen', label: 'Qwen Code', linkBy: 'session-id', hasHistory: true });
     expect(qwen.runner).toMatchObject({ command: 'qwen', minVersion: '0.27.2', mcpConfig: 'qwen-system-settings' });
     expect(qwen.runner.args).toEqual(['--session-id', '{sessionUuid}', '--approval-mode', '{approvalMode}',
-      '--append-system-prompt', '{systemPrompt}', '-m', '{model}', '-i', '{prompt}']);
+      '--append-system-prompt', '{systemPrompt}', '-m', '{model}']);
     expect(qwen.runner.resumeArgs).toEqual(['--resume', '{providerSessionId}', '--approval-mode', '{approvalMode}',
-      '--append-system-prompt', '{systemPrompt}', '-m', '{model}', '-i', '{prompt}']);
-    for (const template of [qwen.runner.args, qwen.runner.resumeArgs]) expect(template).not.toContain('--yolo');
+      '--append-system-prompt', '{systemPrompt}', '-m', '{model}']);
+    // No first-prompt flag (spec 3.4 amendment): the brief is typed once the session is ready.
+    for (const template of [qwen.runner.args, qwen.runner.resumeArgs]) {
+      expect(template).not.toContain('--yolo');
+      expect(template).not.toContain('{prompt}');
+    }
     expect(startCommand(qwen, { sessionUuid: 'u', approvalMode: 'default' })).toEqual({
       command: 'qwen', args: ['--session-id', 'u', '--approval-mode', 'default'],
     });

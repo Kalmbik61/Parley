@@ -567,6 +567,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     authenticate: (req) => browserEndpoint.authenticate(req),
     contextFor: toolContextFor,
     log,
+    // Qwen readiness needs the agent's Parley MCP client connected (spec 2026-11-11, 3.4 amendment).
+    onList: (ref) => activityService.mcpListed(ref),
   });
   const inlineMail = createInlineMail({
     log,

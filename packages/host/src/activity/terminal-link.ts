@@ -12,7 +12,7 @@ export function linkTerminalActivity(
   pty: Pick<PtyManager, 'on' | 'get'>,
   activity: Pick<
     ActivityService,
-    'terminalStarted' | 'terminalSignal' | 'terminalStopped' | 'processStarted'
+    'terminalStarted' | 'terminalSignal' | 'terminalStopped' | 'processStarted' | 'qwenStatus'
   >,
 ): () => void {
   const off = [
@@ -24,6 +24,8 @@ export function linkTerminalActivity(
       else activity.processStarted(ref);
     }),
     pty.on('signal', (ref, signal) => activity.terminalSignal(ref, signal)),
+    // Qwen Code readiness and startup screens (OSC 7501); the pty manager reports only the current process.
+    pty.on('program-status', (ref, status) => activity.qwenStatus(ref, status)),
     // Без состояния (не codex) `terminalStopped` ничего не делает.
     pty.on('exit', (ref) => activity.terminalStopped(ref)),
   ];

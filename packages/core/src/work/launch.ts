@@ -154,6 +154,12 @@ export interface LaunchPlan {
   warnings: string[];
   /** Safe warning codes for host logging and deduplicated notices. */
   diagnostics?: Array<SessionLayerWarning | { code: 'role-missing'; message: string }>;
+  /**
+   * The first message of a new conversation that the runner cannot take as an argument: the host types it once the
+   * session is ready. Qwen Code only (spec 2026-11-11, 3.4 amendment): its `-i` turn would go out before its MCP
+   * discovery ends. Absent — nothing to type.
+   */
+  deferredPrompt?: string;
 }
 
 async function entryOf(provider: string): Promise<ProviderEntry> {
@@ -641,6 +647,8 @@ async function plan(
   }
 
   const { command, args } = resuming ? resumeCommand(entry, subs) : startCommand(entry, subs);
+  const deferredPrompt = entry.runner.mcpConfig === 'qwen-system-settings' && !resuming && subs.prompt !== undefined && !template.includes('{prompt}')
+    ? subs.prompt : undefined;
   if (forkFrom !== undefined) {
     // Форк, а не продолжение копии (5.4.1, п. 1): у нового агента свой id, и один разговор не живёт в двух корнях.
     const at = args.findIndex((arg, index) => arg === '--resume' && args[index + 1] === forkFrom);
@@ -679,6 +687,7 @@ async function plan(
     providerSessionId,
     warnings,
     diagnostics,
+    ...(deferredPrompt === undefined ? {} : { deferredPrompt }),
   };
 }
 

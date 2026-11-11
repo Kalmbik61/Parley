@@ -139,6 +139,8 @@ export function createToolsEndpoint(options: {
   /** Журнал хоста: сюда идут отказы маршрута с причиной. */
   log: Log;
   now?: () => number;
+  /** The session's MCP server got its tool list: its agent's MCP client is connected (Qwen readiness, spec 3.4). */
+  onList?(ref: SessionRef): void;
 }): { handle(req: IncomingMessage, res: ServerResponse): void; forget(ref: SessionRef): void } {
   const { log } = options;
   const now = options.now ?? Date.now;
@@ -270,7 +272,15 @@ export function createToolsEndpoint(options: {
             const runner = await tools.runner;
             // Клиент ушёл, пока собирался исполнитель: начинать вызов, ответ на который некому прочесть, незачем.
             if (controller.signal.aborted) return;
-            if (request.op === 'list') return reply({ ok: true, result: { tools: await runner.list() } });
+            if (request.op === 'list') {
+              reply({ ok: true, result: { tools: await runner.list() } });
+              try {
+                options.onList?.(ref);
+              } catch (error) {
+                log.warn('tools list listener failed', { error: String(error) });
+              }
+              return;
+            }
             return reply({ ok: true, result: await callOf(tools, runner, request, controller).result });
           } catch (error) {
             const code = error instanceof BadRequest ? 'bad_request' : 'internal';

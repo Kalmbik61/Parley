@@ -735,7 +735,7 @@ export function createSessionsService(
    * (короткая, ждём её); нет версии, старый CLI и прочие провайдеры — без хуков, окно покажет терминал.
    */
   async function feedHookUrl(provider: string): Promise<string | undefined> {
-    const hooked = byFamily(provider, { claude: 'claude' as const, codex: 'codex' as const, qwen: null, neutral: null });
+    const hooked = byFamily(provider, { claude: 'claude' as const, codex: 'codex' as const, qwen: 'qwen' as const, neutral: null });
     if (hooked === null || hooks === undefined || providerVersions === undefined) return undefined;
     const codex = hooked === 'codex';
     const url = hooks.url();
@@ -746,6 +746,8 @@ export function createSessionsService(
     if (entry === undefined) return undefined;
     const version = providerVersions.get(entry.runner.command);
     if (version === null) return undefined;
+    // Qwen Code: the HTTP hook route is required (spec 2026-11-11, 3.3) and verified from the entry's `minVersion`.
+    if (hooked === 'qwen') return entry.runner.minVersion !== undefined && feedSupported(version, entry.runner.minVersion) ? url : undefined;
     return (codex ? codexFeedSupported(version) : feedSupported(version)) ? url : undefined;
   }
 
@@ -968,7 +970,8 @@ export function createSessionsService(
       // ничего не оставляет. Только Codex: у Claude, GLM и своих провайдеров экрана доверия Parley не заменяет.
       // Нет согласия — карточка и `held`; есть — ключи доверия считаются ниже, уже после создания worktree.
       let trusted = false;
-      if (session.provider === 'codex') {
+      // Qwen Code has folder trust off by default (Q10): no consent screen to replace.
+      if (byFamily(session.provider, { claude: false, codex: true, qwen: false, neutral: false })) {
         trusted = await timer.step('trust', () => isTrusted(ref.projectPath));
         if (!trusted && feed.consents !== undefined) {
           const by = options.by ?? 'human';
@@ -1191,7 +1194,8 @@ export function createSessionsService(
 
       const { hookUrl, codexHookCommand } = await timer.step('hooks', async () => {
         const url = await feedHookUrl(session.provider);
-        const codexCommand = url !== undefined && session.provider === 'codex' ? await feed.codexHookCommand?.() : undefined;
+        const codexCommand = url !== undefined && byFamily(session.provider, { claude: false, codex: true, qwen: false, neutral: false })
+          ? await feed.codexHookCommand?.() : undefined;
         return { hookUrl: url, codexHookCommand: codexCommand };
       });
       const roleCatalog = feed.roleCatalog
@@ -1205,7 +1209,9 @@ export function createSessionsService(
       // всё остальное, чего человек не решал (файл в worktree отличается от проекта), — в `disabled`: ни один сервер без
       // решения не включается, а вопрос Claude из-за этого не возникает. Только Claude-семейство.
       let projectMcp: { enabled: string[]; disabled: string[] } | undefined;
-      if (entry.runner.command === 'claude' && feed.projectMcp !== undefined) {
+      // `.mcp.json` decisions go into Claude's `--settings` file; Qwen Code reads project MCP servers itself (its own
+      // one-time approval, Q4), and Codex has no such file.
+      if (byFamily(entry, { claude: entry.runner.command === 'claude', codex: false, qwen: false, neutral: false }) && feed.projectMcp !== undefined) {
         const found = await timer.step('projectMcpFinal', () => feed.projectMcp!.inspect(session.workspace?.path ?? session.worktree?.path ?? ref.projectPath, { configDir: claudeConfigDirFor(entry, process.env) }));
         if (found.undecided.length > 0) {
           host.log.warn('project MCP: servers without a decision are disabled for this launch', { ref, servers: found.undecided.map((server) => server.name) });
@@ -1224,7 +1230,7 @@ export function createSessionsService(
             cwd: await trustKey(session.workspace?.path ?? session.worktree?.path ?? ref.projectPath),
           }
         : undefined;
-      const codexApprovals = session.provider === 'codex'
+      const codexApprovals = byFamily(session.provider, { claude: false, codex: true, qwen: false, neutral: false })
         ? await timer.step('approvals', () => codexApprovalsFor(ref, session.provider))
         : undefined;
       const plan = await timer.step('plan', () => planFn(ref.projectPath, ref.workId, session, {
@@ -1319,7 +1325,8 @@ export function createSessionsService(
         // Тот же признак, что у `launch.ts` в файле настроек: имя переменной в файле и в окружении не разойдутся (К13).
         const name = ownsHookToken(entry) ? 'PARLEY_HOOK_CAPABILITY' : 'PARLEY_HOOK_TOKEN';
         // Мост хука Codex (`codex-hook-bin`) читает адрес и токен из окружения процесса — у Claude они в файле настроек.
-        if (session.provider === 'codex') env['PARLEY_HOOK_URL'] = hookUrl;
+        // Qwen reads both from its system settings file, like Claude.
+        if (byFamily(session.provider, { claude: false, codex: true, qwen: false, neutral: false })) env['PARLEY_HOOK_URL'] = hookUrl;
         env[name] = hooks.register(
           ref,
           plan.providerSessionId ?? session.providerSessionId,
@@ -2511,7 +2518,10 @@ export function createSessionsService(
     },
     async collectInterrupted() {
       interruptedRefs = await findInterrupted(works.snapshot().entries, (ref) =>
-        openEvents(workPaths(ref.projectPath, ref.workId).events)
+        openEvents(workPaths(ref.projectPath, ref.workId).events, (sessionId) => {
+          const provider = works.entry(ref.projectPath, ref.workId)?.map.sessions.find((session) => session.id === sessionId)?.provider;
+          return provider === undefined ? null : providerFamily(provider);
+        })
           .read(ref.sessionId)
           .catch(() => null),
       );

@@ -298,11 +298,16 @@ const isDirectory = async (dir: string): Promise<boolean> => {
   }
 };
 
+/** Family of the journal's writer: one for every session, or per session (one reader serves a whole work). */
+export type EventsFamily = ProviderFamily | null | ((sessionId: string) => ProviderFamily | null);
+
 /**
  * Читатель журналов одной работы. Состояние живёт в замыкании по сессиям,
  * поэтому один читатель обслуживает всю работу и не перечитывает старые байты.
+ * `family` включает разбор фактов семейства (у Qwen — `promptEmpty`, `contextUsage`); у работы с разными провайдерами
+ * это функция от id сессии.
  */
-export function openEvents(eventsDir: string, family?: ProviderFamily | null): EventsLog {
+export function openEvents(eventsDir: string, family?: EventsFamily): EventsLog {
   const journals = new Map<string, Journal>();
   /**
    * Чтения одной сессии идут по очереди (fix-tests2): состояние журнала общее, и чтение,
@@ -314,6 +319,7 @@ export function openEvents(eventsDir: string, family?: ProviderFamily | null): E
 
   const readOnce = async (sessionId: string): Promise<readonly EventRecord[] | null> => {
     const file = path.join(eventsDir, `${sessionId}.jsonl`);
+    const sessionFamily = typeof family === 'function' ? family(sessionId) : family;
     let handle;
     try {
       handle = await open(file, 'r');
@@ -347,7 +353,7 @@ export function openEvents(eventsDir: string, family?: ProviderFamily | null): E
       const fresh: EventRecord[] = [];
       for (const line of data.subarray(0, cut).toString('utf8').split('\n')) {
         if (line.trim() === '') continue;
-        const event = parseEvent(line, at, family);
+        const event = parseEvent(line, at, sessionFamily);
         if (event !== null) fresh.push(event);
       }
       // Новый массив только при новых событиях: выданный раньше не меняется, а без новых строк уходит прежний.

@@ -28,6 +28,7 @@ import {
   loadConfig,
   loadProviders,
   openEvents,
+  providerFamily,
   parleyNote,
   sessionMention,
   sessionTag,
@@ -47,6 +48,7 @@ import {
   type SessionActivity,
   type WorkEntry,
   type WorkSession,
+  type ProviderFamily,
 } from '@parley/core';
 import { refKey } from '@parley/protocol';
 import type { MailWait, NoticeKind, SessionRef } from '@parley/protocol';
@@ -352,9 +354,9 @@ function sinceSentMs(newestAt: string | null): number | null {
   return Number.isNaN(sentAt) ? null : Math.max(0, Date.now() - sentAt);
 }
 
-/** Число хуков в журнале сессии; журнала нет — ноль. */
-async function journalLength(ref: SessionRef): Promise<number> {
-  const events = await openEvents(workPaths(ref.projectPath, ref.workId).events)
+/** Число хуков в журнале сессии; журнала нет — ноль. `family` — семейство провайдера сессии (разбор фактов Qwen). */
+async function journalLength(ref: SessionRef, family: ProviderFamily | null): Promise<number> {
+  const events = await openEvents(workPaths(ref.projectPath, ref.workId).events, family)
     .read(ref.sessionId)
     .catch(() => null);
   return events?.length ?? 0;
@@ -374,6 +376,11 @@ export function createWakeService(
   const pointerRearmMs = options.pointerRearmMs ?? POINTER_REARM_MS;
   const draftNoticeMs = options.draftNoticeMs ?? DRAFT_NOTICE_MS;
   const resumeFailWindowMs = options.resumeFailWindowMs ?? DEFAULT_RESUME_FAIL_WINDOW_MS;
+  /** Семейство провайдера сессии по снимку работ; сессии нет — `null`. */
+  const familyOfRef = (ref: SessionRef): ProviderFamily | null => {
+    const provider = works.entry(ref.projectPath, ref.workId)?.map.sessions.find((session) => session.id === ref.sessionId)?.provider;
+    return provider === undefined ? null : providerFamily(provider);
+  };
   const limitGraceMs = options.limitReturn?.graceMs ?? LIMIT_RETURN_GRACE_MS;
   const limitRetryMs = options.limitReturn?.retryMs ?? LIMIT_RETRY_MS;
   const settle = {
@@ -775,7 +782,7 @@ export function createWakeService(
       }
       const withPrompt = template.includes('{prompt}') && !awaiting;
 
-      state.journalBase = await journalLength(ref);
+      state.journalBase = await journalLength(ref, familyOfRef(ref));
       state.resumeLetters = [...action.letterIds];
       state.resumedAt = Date.now();
       if (withPrompt) {
@@ -853,7 +860,7 @@ export function createWakeService(
     base: number,
     letterIds: readonly string[],
   ): Promise<void> {
-    if ((await journalLength(ref)) > base) return;
+    if ((await journalLength(ref, familyOfRef(ref))) > base) return;
     await resumeFailed(ref, state, letterIds, `the process exited with code ${exitCode} before starting work`);
     // Как в конце неудачного `resumeSession`: `resuming` уже снят, а карта могла не измениться.
     recompute(ref);

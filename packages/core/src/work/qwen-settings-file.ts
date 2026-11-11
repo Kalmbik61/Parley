@@ -72,6 +72,21 @@ export class QwenSettingsError extends Error {
 }
 
 type Json = Record<string, unknown>;
+
+/**
+ * Qwen's `security.allowedHttpHookUrls` match (UrlValidator, qwen 0.27.2): the whole URL, case-insensitive, `*` matching
+ * any run of characters; a pattern that already contains `\\.` is taken as a regular expression with only `*` expanded.
+ */
+function urlMatches(pattern: string, url: string): boolean {
+  const source = pattern.includes('\\.')
+    ? pattern.replace(/\*/g, '.*')
+    : pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*');
+  try {
+    return new RegExp(`^${source}$`, 'i').test(url);
+  } catch {
+    return false;
+  }
+}
 const isObject = (value: unknown): value is Json => typeof value === 'object' && value !== null && !Array.isArray(value);
 
 /** The file Qwen would read without Parley: an inherited `QWEN_CODE_SYSTEM_SETTINGS_PATH`, else the platform default. */
@@ -165,6 +180,16 @@ export function qwenSettings(base: Json | null, options: QwenSettingsOptions): Q
   for (const event of QWEN_HOOK_EVENTS) {
     const groups = isObject(hooks) ? hooks[event] : undefined;
     if (groups !== undefined && !Array.isArray(groups)) throw refuse(`hooks.${event}`, 'is not a list');
+  }
+  // The HTTP hook is the required route for state and Chat (spec 3.3): an administrator allow list that leaves out the
+  // host's hook URL would make Qwen drop every HTTP hook silently.
+  if (options.hookUrl !== undefined) {
+    const security = settings['security'];
+    const allowed = isObject(security) ? security['allowedHttpHookUrls'] : undefined;
+    if (allowed !== undefined && !Array.isArray(allowed)) throw refuse('security.allowedHttpHookUrls', 'is not a list');
+    if (Array.isArray(allowed) && allowed.length > 0 && !allowed.some((pattern) => typeof pattern === 'string' && urlMatches(pattern, options.hookUrl!))) {
+      throw refuse('security.allowedHttpHookUrls', `does not allow the Parley hook URL ${options.hookUrl}`);
+    }
   }
   const permissions = settings['permissions'];
   if (permissions !== undefined && !isObject(permissions)) throw refuse('permissions', 'is not an object');

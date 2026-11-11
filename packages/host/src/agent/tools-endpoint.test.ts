@@ -86,7 +86,7 @@ interface RawOptions {
   signal?: AbortSignal;
 }
 
-async function boot(options: { now?: () => number; pollMs?: number } = {}) {
+async function boot(options: { now?: () => number; pollMs?: number; onList?: (ref: SessionRef) => void } = {}) {
   const registry = createBrowserEndpoint({ log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() }, clients: () => [], roomsOf: () => [] });
   const ref: SessionRef = { projectPath: project, workId, sessionId: 's-01' };
   const ownToken = registry.register(ref);
@@ -122,6 +122,7 @@ async function boot(options: { now?: () => number; pollMs?: number } = {}) {
     contextFor,
     log,
     ...(options.now === undefined ? {} : { now: options.now }),
+    ...(options.onList === undefined ? {} : { onList: options.onList }),
   });
   // Закрытия соединений считает сам тест: его слушатель `close` ставится раньше хостового, и когда счётчик вырос,
   // обработчик хоста этого же закрытия уже отработал.
@@ -392,6 +393,19 @@ describe('маршрут /agent/tools: инструменты агента в п
     notifyMail();
     expect(JSON.parse(textOf(await pending))).toMatchObject({ state: 'message' });
     await expect.poll(() => waiters() + mailWaiters(), POLL).toBe(0);
+  });
+
+  it('a served tool list tells the host the session\'s MCP client is connected; a refused one does not', async () => {
+    const listed: SessionRef[] = [];
+    const { post, raw, ref, contextFor } = await boot({ onList: (from) => listed.push(from) });
+    expect((await raw({ op: 'list', launch: {} }, { token: null })).status).toBe(401);
+    contextFor.mockImplementationOnce(async () => {
+      throw new Error('settings are unreadable');
+    });
+    await post({ op: 'list', launch: {} });
+    expect(listed).toEqual([]);
+    expect(toolNames(await post({ op: 'list', launch: {} }))).toContain('get_map');
+    expect(listed).toEqual([ref]);
   });
 
   it('answers a failure to build the executor with ok: false internal, and the next request builds it again', async () => {

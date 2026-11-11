@@ -57,7 +57,7 @@ const valueOf = (args: string[], flag: string): string | undefined => {
 };
 
 describe('qwen launch', () => {
-  it('new session: session id, default approval mode, system layer, -i brief; settings file in the env', async () => {
+  it('new session: session id, default approval mode, system layer; the brief is deferred, not -i; settings file in the env', async () => {
     const { workId, session } = await qwenSession();
     const plan = await planLaunch(project, workId, session);
     expect(plan.command).toBe('qwen');
@@ -66,8 +66,9 @@ describe('qwen launch', () => {
     expect(plan.providerSessionId).toBe(plan.args[1]);
     expect(valueOf(plan.args, '--approval-mode')).toBe('default');
     expect(valueOf(plan.args, '--append-system-prompt')).toContain('You are inside Parley');
-    expect(valueOf(plan.args, '-i')).toContain('run the e2e suite');
-    expect(plan.args.at(-2)).toBe('-i');
+    expect(plan.args).not.toContain('-i');
+    expect(plan.deferredPrompt).toContain('run the e2e suite');
+    expect(plan.args.join('\n')).not.toContain('run the e2e suite');
     expect(plan.args).not.toContain('-m');
     const file = plan.env['QWEN_CODE_SYSTEM_SETTINGS_PATH']!;
     expect(file).toBe(path.join(project, '.parley', 'works', workId, 'settings', `${session.id}-qwen.json`));
@@ -92,7 +93,7 @@ describe('qwen launch', () => {
     }
   });
 
-  it('resume: --resume <id> with the same flags and no --session-id; the pointer goes through -i', async () => {
+  it('resume: --resume <id> with the same flags and no --session-id; no -i and nothing deferred (the host types the pointer)', async () => {
     const { workId, session } = await qwenSession();
     const id = '11111111-1111-4111-8111-111111111111';
     const plan = await planResume(project, workId, { ...session, providerSessionId: id }, { prompt: 'You have new mail', model: 'qwen3-coder-plus' });
@@ -100,14 +101,17 @@ describe('qwen launch', () => {
     expect(plan.args).not.toContain('--session-id');
     expect(valueOf(plan.args, '--append-system-prompt')).toContain('You are inside Parley');
     expect(valueOf(plan.args, '-m')).toBe('qwen3-coder-plus');
-    expect(valueOf(plan.args, '-i')).toBe('You have new mail');
+    expect(plan.args).not.toContain('-i');
+    expect(plan.args).not.toContain('You have new mail');
+    expect(plan).not.toHaveProperty('deferredPrompt');
     expect(plan.env['QWEN_CODE_SYSTEM_SETTINGS_PATH']).toBeDefined();
   });
 
-  it('new (quick) session: no first prompt, the -i pair drops', async () => {
+  it('new (quick) session: no first prompt, nothing deferred', async () => {
     const { workId, session } = await qwenSession();
     const plan = await planNew(project, workId, session);
     expect(plan.args).not.toContain('-i');
+    expect(plan).not.toHaveProperty('deferredPrompt');
     expect(valueOf(plan.args, '--approval-mode')).toBe('default');
   });
 

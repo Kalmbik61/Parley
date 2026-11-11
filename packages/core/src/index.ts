@@ -68,6 +68,7 @@ export type { AllSessionsOptions } from './all-sessions.js';
 export { codexLogId, defaultCodexRoot, discoverCodexSessions } from './codex/discover.js';
 export type { DiscoveredCodexSession } from './codex/discover.js';
 export { qwenHome } from './qwen/home.js';
+export { QWEN_HOOK_EVENTS, QwenSettingsError } from './work/qwen-settings-file.js';
 export { qwenAuthHints } from './qwen/auth-state.js';
 export type { QwenAuthDeps, QwenAuthHint, QwenAuthHints } from './qwen/auth-state.js';
 export { buildCodexIndex, indexCodexSession } from './codex/index-session.js';
@@ -78,6 +79,7 @@ export type { LimitWindow, ProviderLimits } from './limits.js';
 export {
   claudeContextFill,
   codexContextFill,
+  qwenContextFill,
   CODEX_BASELINE_TOKENS,
   CONTEXT_DIR,
   contextFile,
@@ -550,6 +552,7 @@ export {
   textOf,
   watchEvents,
 } from './work/events.js';
+export type { EventsFamily } from './work/events.js';
 export {
   JOURNAL_CUT_SEARCH,
   JOURNAL_ROTATE_BUDGET_MS,

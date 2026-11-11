@@ -797,8 +797,12 @@ export function createFeedService(
       onCodexHook(request);
       return;
     }
-    // Neutral family (qwen until its own branch, null or unknown): no Claude hook handling.
-    if (hookFamily === null) return;
+    // Qwen until its Chat branch (plan A7b), null or unknown family: no Claude hook handling, and the hook is answered
+    // at once — Qwen waits for the HTTP answer (PermissionRequest and PreToolUse up to an hour) before it goes on.
+    if (hookFamily === null) {
+      request.respond(EMPTY_HOOK_RESPONSE);
+      return;
+    }
     const feed = feedOf(ref);
     feed.live = true;
     const proof = captureProgress(feed);

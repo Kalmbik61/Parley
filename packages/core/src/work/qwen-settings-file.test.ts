@@ -146,6 +146,20 @@ describe('qwenSettings', () => {
     expect(() => build(base)).toThrow(new QwenSettingsError(`Qwen system settings key ${key} ${reason}; Parley cannot connect its MCP server or hooks.`));
   });
 
+  it('security.allowedHttpHookUrls that leaves out the host hook URL refuses the launch; a match or an empty list passes', () => {
+    const hookUrl = 'http://127.0.0.1:4100/hooks';
+    const allowed = (list: unknown) => ({ security: { allowedHttpHookUrls: list } });
+    expect(() => build(allowed(['https://hooks.example.com/*']), { hookUrl })).toThrow(new QwenSettingsError(
+      `Qwen system settings key security.allowedHttpHookUrls does not allow the Parley hook URL ${hookUrl}; Parley cannot connect its MCP server or hooks.`,
+    ));
+    expect(() => build(allowed('http://*'), { hookUrl })).toThrow('security.allowedHttpHookUrls is not a list');
+    for (const list of [[], ['http://127.0.0.1:*'], ['HTTP://127.0.0.1:4100/HOOKS'], ['http://127\\.0\\.0\\.1:\\d+/hooks'], ['https://x/*', 'http://127.0.0.1:4100/*']]) {
+      expect(build(allowed(list), { hookUrl }).settings['security']).toEqual({ allowedHttpHookUrls: list });
+    }
+    // Without the HTTP route nothing is sent to it, so the list does not matter.
+    expect(() => build(allowed(['https://hooks.example.com/*']))).not.toThrow();
+  });
+
   it('mcp.allowed that lists parley is accepted and kept', () => {
     expect(build({ mcp: { allowed: ['github', 'parley'] } }).settings['mcp']).toEqual({ allowed: ['github', 'parley'] });
   });
