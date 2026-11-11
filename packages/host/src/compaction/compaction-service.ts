@@ -6,7 +6,7 @@
  * в хвосте rollout после печати (опрос раз в 2 с, Codex), выход процесса или таймаут.
  */
 
-import { byFamily, hookedSince, type RolloutRecord } from '@parley/core';
+import { byFamily, hookedSince, providerFamily, type RolloutRecord } from '@parley/core';
 import { COMPACT_MAX_INSTRUCTIONS, refKey } from '@parley/protocol';
 import type { CompactResult, NoticeKind, SessionRef } from '@parley/protocol';
 import type { ActivityService } from '../activity/activity-service.js';
@@ -35,8 +35,12 @@ const CONTROL = /[\x00-\x1f\x7f]+/g;
 /** Последний токен инструкции начинается с `@` или `/` (как `TRAILING_MENU_TOKEN` в pty/codex-input.ts). */
 const TRAILING_MENU_TOKEN = /(?:^|\s)[@/]\S*$/;
 
-/** Строка команды: Codex — голый `/compact` (спека 2.7); фокус — одна строка до 350 знаков, пусто — без фокуса. */
+/**
+ * Строка команды: Codex — голый `/compact` (спека 2.7); фокус — одна строка до 350 знаков, пусто — без фокуса. Qwen Code
+ * compacts with its own `/compress`, without a focus (spec 2026-11-11, 3.4).
+ */
 export function compactCommand(provider: string | null, instructions: string | null): string {
+  if (provider !== null && providerFamily(provider) === 'qwen') return '/compress';
   if (instructions === null || (provider !== null && !byFamily(provider, { claude: true, codex: false, qwen: false, neutral: false }))) return '/compact';
   const line = stripEscapes(instructions).replace(CONTROL, ' ').replace(/\s+/g, ' ').trim();
   // Предел (спека 5.3): `/compact ` + 350 знаков кириллицы ≤ 709 байт — ниже порога «вставки» Claude Code.
@@ -63,7 +67,7 @@ export interface CompactionService {
 export interface CompactionDeps {
   host: Pick<HostContext, 'log' | 'broadcast'>;
   pty: PtyManager;
-  activity: Pick<ActivityService, 'get' | 'onChange' | 'setCompaction' | 'logFile'>;
+  activity: Pick<ActivityService, 'get' | 'onChange' | 'setCompaction' | 'logFile' | 'qwenBlocked'>;
   exclusive: SwitchLock;
   wake: Pick<WakeService, 'inFlight' | 'enterDelayMs'>;
   timeoutMs?: number;
@@ -76,6 +80,10 @@ export interface CompactionDeps {
 interface Running {
   ref: SessionRef;
   codex: boolean;
+  /** Qwen Code: `/compress` ends with the first `idle_prompt` after its Enter (no PostCompact was observed). */
+  qwen: boolean;
+  /** When the command's Enter went out (ms); `null` — not yet. */
+  submittedAt: number | null;
   done(): void;
 }
 
@@ -102,6 +110,7 @@ export function createCompactionService(deps: CompactionDeps): CompactionService
   function ready(ref: SessionRef, handle: PtyHandle): boolean {
     const state = deps.activity.get(ref)?.activity.activity;
     if (state !== 'idle' && state !== 'unseen') return false;
+    if (deps.activity.qwenBlocked(ref)) return false;
     if (choiceInProgress(ref, { pty: deps.pty, switching: (target) => deps.exclusive.held(target) })) return false;
     if (handle.hasDraft()) return false;
     return !deps.wake.inFlight(ref);
@@ -160,14 +169,24 @@ export function createCompactionService(deps: CompactionDeps): CompactionService
     const settled = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const entry: Running = { ref, codex: handle.provider === 'codex', done: () => release() };
+    const entry: Running = {
+      ref,
+      codex: handle.provider === 'codex',
+      qwen: handle.provider !== null && providerFamily(handle.provider) === 'qwen',
+      submittedAt: null,
+      done: () => release(),
+    };
     running.set(key, entry);
     publish(ref, 'running');
 
     const run = async (): Promise<void> => {
       const attempt = typeAndSubmit({ pty: deps.pty, enterDelayMs: deps.wake.enterDelayMs }, ref, text, true, {
         hostDraft: true,
-        beforeEnter: () => deps.activity.get(ref)?.activity.activity !== 'blocked',
+        beforeEnter: () => {
+          if (deps.activity.get(ref)?.activity.activity === 'blocked' || deps.activity.qwenBlocked(ref)) return false;
+          entry.submittedAt = Date.now();
+          return true;
+        },
         ...(entry.codex ? { delayMs: CODEX_SUBMIT_DELAY_MS, submitKey: () => KEY_ENTER } : {}),
       });
       const outcome = await attempt.done;
@@ -241,7 +260,18 @@ export function createCompactionService(deps: CompactionDeps): CompactionService
     },
     holds: (ref) => pending.has(refKey(ref)) || running.has(refKey(ref)),
     onHook(ref, body) {
-      if (body['hook_event_name'] === 'PostCompact') finish(ref, new Date().toISOString());
+      if (body['hook_event_name'] === 'PostCompact') {
+        finish(ref, new Date().toISOString());
+        return;
+      }
+      // Qwen: `/compress` fires PreCompact and then `idle_prompt` (qwen 0.27.2, mock lab). Only an `idle_prompt` stamped
+      // after the command's Enter ends it: one from the turn before may still be on its way.
+      const entry = running.get(refKey(ref));
+      if (entry?.qwen !== true || entry.submittedAt === null) return;
+      if (body['hook_event_name'] !== 'Notification' || body['notification_type'] !== 'idle_prompt') return;
+      const stamped = typeof body['timestamp'] === 'string' ? Date.parse(body['timestamp']) : Number.NaN;
+      if (Number.isNaN(stamped) || stamped < entry.submittedAt) return;
+      finish(ref, new Date().toISOString());
     },
     start() {
       unsubscribe.push(

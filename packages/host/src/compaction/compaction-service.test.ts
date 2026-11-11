@@ -10,9 +10,11 @@ import type { CompactionTrack } from './context-view.js';
 const ref: SessionRef = { projectPath: '/tmp/project', workId: 'w-01', sessionId: 's-01' };
 
 describe('compactCommand by family', () => {
-  it('only the Claude Code family carries the focus; codex, qwen, null-family and unknown stay bare', () => {
+  it('only the Claude Code family carries the focus; codex, null-family and unknown stay bare; qwen compresses', () => {
     for (const provider of ['claude', 'glm', 'custom-kimi']) expect(compactCommand(provider, 'focus')).toBe('/compact focus');
-    for (const provider of ['codex', 'qwen', 'mystery']) expect(compactCommand(provider, 'focus')).toBe('/compact');
+    for (const provider of ['codex', 'mystery']) expect(compactCommand(provider, 'focus')).toBe('/compact');
+    expect(compactCommand('qwen', 'focus')).toBe('/compress');
+    expect(compactCommand('qwen', null)).toBe('/compress');
   });
 });
 
@@ -50,8 +52,10 @@ describe('createCompactionService (спека 5.2–5.5)', () => {
   let activityListeners: Array<(target: SessionRef) => void>;
   let tracks: CompactionTrack[];
   let notices: string[];
+  let qwenBlocked = false;
 
   beforeEach(() => {
+    qwenBlocked = false;
     vi.useFakeTimers();
     pty = fakePty();
     state = 'idle';
@@ -89,6 +93,7 @@ describe('createCompactionService (спека 5.2–5.5)', () => {
       pty: pty.manager,
       activity: {
         get: () => ({ activity: { activity: state, lastEventAt }, metrics: null }),
+        qwenBlocked: () => qwenBlocked,
         onChange: (listener: (target: SessionRef) => void) => {
           activityListeners.push(listener);
           return () => undefined;
@@ -125,6 +130,26 @@ describe('createCompactionService (спека 5.2–5.5)', () => {
     expect(pty.writes).toEqual(['/compact Focus on room "Auth"', '\r']);
     expect(s.holds(ref)).toBe(true);
     expect(held).toBe(true);
+  });
+
+  it('qwen: /compress and Enter; only an idle_prompt stamped after the Enter ends it; a dialog in the terminal holds it', async () => {
+    pty.provider = 'qwen';
+    qwenBlocked = true;
+    const s = service();
+    expect(s.compact(ref, 'ignored focus')).toEqual({ state: 'pending' });
+    expect(pty.writes).toEqual([]);
+    qwenBlocked = false;
+    poke();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(pty.writes).toEqual(['/compress', '\r']);
+    expect(s.holds(ref)).toBe(true);
+    s.onHook(ref, { hook_event_name: 'Notification', notification_type: 'idle_prompt', timestamp: new Date(Date.now() - 60_000).toISOString() });
+    s.onHook(ref, { hook_event_name: 'PreCompact', trigger: 'manual', timestamp: new Date().toISOString() });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(s.holds(ref)).toBe(true);
+    s.onHook(ref, { hook_event_name: 'Notification', notification_type: 'idle_prompt', timestamp: new Date().toISOString() });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(s.holds(ref)).toBe(false);
   });
 
   it('PostCompact — замок снят, конец сжатия записан', async () => {

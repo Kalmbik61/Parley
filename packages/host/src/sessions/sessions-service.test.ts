@@ -890,6 +890,29 @@ describe('launch(): лента вида «Chat» — адрес приёмник
     await vi.waitFor(() => expect(unregistered).toContainEqual(ref));
   });
 
+  it('qwen: the brief is not an argument; it goes to deferFirst with the pid of the started process', async () => {
+    const qwenArgs = await tempArgsFile();
+    setEnv('PARLEY_QWEN_BIN', QWEN_STUB);
+    setEnv('STUB_QWEN_ARGS_FILE', qwenArgs);
+    setEnv('QWEN_CODE_SYSTEM_SETTINGS_PATH', path.join(project, 'no-admin-settings.json'));
+    const deferred: Array<{ ref: SessionRef; pid: number; text: string }> = [];
+    const work = await createWork(project, { title: 'Work', goal: '' });
+    const pty = createPtyManager(fakeHost());
+    const service = createSessionsService(fakeHost(), fakeWorks(), pty, fakeActivity(), {
+      providerVersions: fakeVersions({ qwen: '0.27.2' }),
+      deferFirst: (ref, pid, text) => deferred.push({ ref, pid, text }),
+    });
+    const ref = await service.create({ projectPath: project, workId: work.work.id, provider: 'qwen', label: 'qwen', task: 'run the e2e suite', parent: null });
+    await vi.waitFor(async () => expect((await readFile(qwenArgs, 'utf8')).length).toBeGreaterThan(0));
+    const started = JSON.parse(await readFile(qwenArgs, 'utf8')) as { argv: string[] };
+    expect(started.argv).not.toContain('-i');
+    expect(started.argv.join('\n')).not.toContain('run the e2e suite');
+    expect(deferred).toHaveLength(1);
+    expect(deferred[0]).toMatchObject({ ref, pid: pty.get(ref)?.pid });
+    expect(deferred[0]?.text).toContain('run the e2e suite');
+    await service.stop(ref);
+  });
+
   it('claude 2.1.280 (ниже порога): ни токена, ни HTTP-хуков, прежние хуки на месте', async () => {
     const { hooks, registered } = fakeHooks();
     const launched = await launchWith('claude', { hooks, providerVersions: fakeVersions({ claude: '2.1.280' }) });

@@ -371,6 +371,11 @@ export interface SessionsTakeoverOptions {
  */
 export interface SessionsFeedOptions {
   hooks?: Pick<HookServer, 'url' | 'register' | 'unregister'>;
+  /**
+   * The launch's first message the runner could not take as an argument (`LaunchPlan.deferredPrompt`, Qwen Code): the
+   * host types it into this process once it is ready (`WakeService.deferFirst`).
+   */
+  deferFirst?: (ref: SessionRef, pid: number, text: string) => void;
   providerVersions?: ProviderVersions;
   /**
    * Вошёл ли аккаунт подписки с этим id (служба входа, спека подписок 5.4): `true` — вошёл, `false` и `null` (не знаем) —
@@ -1397,6 +1402,13 @@ export function createSessionsService(
       })();
       // Выходу нужен только момент, а не результат: ошибку старта получит вызывающий.
       starting.set(key, started.catch(() => {}));
+      if (plan.deferredPrompt !== undefined) {
+        try {
+          feed.deferFirst?.(ref, handle.pid, plan.deferredPrompt);
+        } catch (error) {
+          host.log.error('the deferred first message was not handed to the wake service', { ref, error: String(error) });
+        }
+      }
       try {
         await timer.step('startWrite', () => started);
         failed = false;

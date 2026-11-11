@@ -184,6 +184,11 @@ export interface ActivityService {
   /** The session's Parley MCP server asked the host for its tool list: the agent's MCP client is connected. */
   mcpListed(ref: SessionRef): void;
   /**
+   * The session's current Qwen process last reported OSC 7501 `state=blocked` (sign-in, a permission or a question in
+   * its terminal): nothing may be typed or submitted. Other providers and sessions without a report — `false`.
+   */
+  qwenBlocked(ref: SessionRef): boolean;
+  /**
    * План 2026-10-01, кусок 4a, решение О: окно держит вопрос агента (хук `PreToolUse`) — сессия
    * 'blocked', пока хук не отпущен: журнал событий удержанного вопроса не видит и по тишине считал бы её
    * idle. Таймер тишины и метрики при этом считаются по настоящему значению. Публикуемое `blocked` несёт `need`
@@ -463,6 +468,8 @@ interface QwenProcess {
   authAt: number | null;
   /** The session's Parley MCP server listed its tools through the host. */
   mcpListed: boolean;
+  /** The last report was `state=blocked`. */
+  blocked: boolean;
 }
 
 /** A journal line that proves the Qwen process accepts input (spec 2026-11-11, 3.4). */
@@ -1974,10 +1981,14 @@ export function createActivityService(
       if (current === undefined) return;
       current.statusSeen = true;
       if (status.state === 'idle') current.idleSeen = true;
+      current.blocked = status.state === 'blocked';
       const auth = status.state === 'blocked' && status.kind === 'auth';
       // The picker is left once Qwen reports any other state.
       current.authAt = auth ? (current.authAt ?? nowFn()) : null;
       recompute(ref);
+    },
+    qwenBlocked(ref) {
+      return qwenProcesses.get(refKey(ref))?.blocked === true;
     },
     mcpListed(ref) {
       if (stopped) return;
@@ -1990,7 +2001,7 @@ export function createActivityService(
       if (stopped) return;
       const key = refKey(ref);
       // A new process generation: nothing it has not shown yet counts (stale OSC or MCP of the previous process).
-      qwenProcesses.set(key, { statusSeen: false, idleSeen: false, authAt: null, mcpListed: false });
+      qwenProcesses.set(key, { statusSeen: false, idleSeen: false, authAt: null, mcpListed: false, blocked: false });
       launches.set(key, { at: nowFn(), journalLength: journals.get(key)?.length ?? 0 });
       // Срок и счёт новых строк начинаются заново: таймер прежнего запуска (Resume) к этому процессу не относится.
       clearStartupTimer(key);

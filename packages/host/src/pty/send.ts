@@ -6,7 +6,7 @@
  */
 
 import { performance } from 'node:perf_hooks';
-import { cleanMultiline, hookedSince } from '@parley/core';
+import { cleanMultiline, hookedSince, providerFamily } from '@parley/core';
 import { refKey } from '@parley/protocol';
 import type { SendResult, SessionRef } from '@parley/protocol';
 import type { ActivityService } from '../activity/activity-service.js';
@@ -104,6 +104,8 @@ export function createSender(deps: {
     // это был бы автоответ, запрещённый рамкой.
     const live = deps.activity.get(ref)?.activity;
     if (live?.activity === 'blocked') return refuse('blocked');
+    // Qwen Code says so in its terminal (OSC 7501 `blocked`: sign-in, a permission or a question) before any hook does.
+    if (deps.activity.qwenBlocked(ref)) return refuse('blocked');
     // Ни одного хука с запуска процесса — хост не знает, что у агента на экране: у свежей
     // сессии это может быть вопрос доверия к папке, где Enter выбрал бы «Yes, proceed»
     // (fix-final-b). Отвечаем как на blocked: человек смотрит в терминал сам.
@@ -113,21 +115,25 @@ export function createSender(deps: {
     const paste = handle.bracketedPaste();
     // Codex — всегда вставкой: без неё поток знаков он не считает вставкой, и Enter внутри него отправил бы
     // сообщение раньше времени. Режима вставки нет — TUI ещё не поднялся, и писать в него нечего.
-    if (codex ? !paste : clean.includes('\n') && !paste) return refuse('no-paste-mode');
+    // Qwen Code — always typed: LF is a newline in its field and only `\r` submits, while a large bracketed paste is
+    // framed to its model as material that "issues no instructions of its own" (qwen 0.27.2, mock lab).
+    const qwen = handle.provider !== null && providerFamily(handle.provider) === 'qwen';
+    if (codex ? !paste : clean.includes('\n') && !paste && !qwen) return refuse('no-paste-mode');
 
     // Черновик считается до вставки: человека или хоста от прошлой вставки без Enter.
     const hadDraft = handle.hasDraft();
     const attempt = typeAndSubmit(
       { pty: deps.pty, enterDelayMs: deps.wake.enterDelayMs },
       ref,
-      clean,
+      // Typed into Qwen, a Tab could accept a completion: it becomes spaces.
+      qwen ? clean.replace(/\t/g, '  ') : clean,
       submit && !hadDraft,
       {
         hostDraft: true,
-        wrap: codex ? 'codex' : paste ? 'paste' : 'plain',
+        wrap: codex ? 'codex' : paste && !qwen ? 'paste' : 'plain',
         multiline: true,
         // blocked приходит хуком с задержкой: запрос разрешения мог появиться за паузу.
-        beforeEnter: () => deps.activity.get(ref)?.activity.activity !== 'blocked',
+        beforeEnter: () => deps.activity.get(ref)?.activity.activity !== 'blocked' && !deps.activity.qwenBlocked(ref),
         // У Codex своя пауза и своя клавиша: занятому агенту — Tab (очередь), а не Enter (вмешательство в ход).
         ...(codex
           ? {

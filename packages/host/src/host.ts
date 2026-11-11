@@ -720,6 +720,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       consents: consentsService,
       projectMcp,
       hooks: hookServer,
+      // Qwen's brief is typed by the wake service once the process is ready (spec 2026-11-11, 3.4 amendment).
+      deferFirst: (ref, pid, text) => wakeService.deferFirst(ref, pid, text),
       providerVersions,
       signedIn: accountSignedIn,
       codexHookCommand: codexHookCommandOnce,

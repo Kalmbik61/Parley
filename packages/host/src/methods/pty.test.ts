@@ -127,7 +127,8 @@ function fakeActivity(): ActivityService & { markSeen: ReturnType<typeof vi.fn> 
     markSeen: vi.fn(),
     onChange: () => () => {},
     stop: async () => {},
-  };
+    qwenBlocked: () => false,
+  } as unknown as ActivityService & { markSeen: ReturnType<typeof vi.fn> };
 }
 
 /**
