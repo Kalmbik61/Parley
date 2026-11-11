@@ -106,6 +106,7 @@ describe('qwenSettings', () => {
     expect(settings['general']).toEqual({ enableAutoUpdate: false });
     expect(settings['tools']).toEqual({ toolSearch: { enabled: false } });
     expect(settings['memory']).toEqual({ enableManagedAutoMemory: false, enableManagedAutoDream: false });
+    expect(settings['ui']).toEqual({ enableFollowupSuggestions: false });
     expect(settings).not.toHaveProperty('permissions');
   });
 
@@ -169,8 +170,10 @@ describe('qwenSettings', () => {
       general: { enableAutoUpdate: true },
       tools: { toolSearch: { enabled: true } },
       memory: { enableManagedAutoMemory: false },
+      ui: { enableFollowupSuggestions: true, theme: 'x' },
     });
-    expect(kept).toEqual(['general.enableAutoUpdate', 'tools.toolSearch.enabled', 'memory.enableManagedAutoMemory']);
+    expect(kept).toEqual(['general.enableAutoUpdate', 'tools.toolSearch.enabled', 'memory.enableManagedAutoMemory', 'ui.enableFollowupSuggestions']);
+    expect(settings['ui']).toEqual({ enableFollowupSuggestions: true, theme: 'x' });
     expect(settings['general']).toEqual({ enableAutoUpdate: true });
     expect(settings['tools']).toEqual({ toolSearch: { enabled: true } });
     expect(settings['memory']).toEqual({ enableManagedAutoMemory: false, enableManagedAutoDream: false });
@@ -225,7 +228,7 @@ describe('writeQwenSettings', () => {
     expect((await stat(file)).mode & 0o777).toBe(0o600);
     expect(kept).toEqual(['tools.toolSearch.enabled']);
     const written = JSON.parse(await readFile(file, 'utf8'));
-    expect(written.ui).toEqual({ theme: 'x' });
+    expect(written.ui).toEqual({ theme: 'x', enableFollowupSuggestions: false });
     expect(written.mcpServers.parley.env.PARLEY_SESSION_ID).toBe('s-3');
     expect((await stat(workPaths(project, work.work.id).events)).isDirectory()).toBe(true);
   });

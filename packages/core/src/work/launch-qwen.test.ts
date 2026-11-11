@@ -4,6 +4,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createPendingSession, planLaunch, planNew, planResume } from './launch.js';
+import { assertRoleDelivery, prepareSessionRole, roleForProvider } from './agents.js';
+import { roleModel } from './role-choice.js';
+import { modelForTier } from '../roles/builtin.js';
+import { buildRoleCatalog, resolveRoleChoice } from '../roles/catalog.js';
+import type { RoleCatalog } from '../roles/types.js';
+import { PROVIDERS } from '../providers.js';
 import { BROWSER_PRIORITY_RULE } from './guidance.js';
 import { BROWSER_PERMISSIONS, CLOSE_SESSION_PERMISSION } from './settings-file.js';
 import { createWork, readMap } from './store.js';
@@ -44,10 +50,10 @@ afterEach(async () => {
   await Promise.all([home, project].map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
-async function qwenSession(task = 'run the e2e suite') {
+async function qwenSession(task = 'run the e2e suite', role?: { source: 'builtin'; name: string }) {
   const created = await createWork(project, { title: 'Auth', goal: 'email login' });
   const workId = created.work.id;
-  const sessionId = await createPendingSession(project, workId, { provider: 'qwen', label: 'tests', task });
+  const sessionId = await createPendingSession(project, workId, { provider: 'qwen', label: 'tests', task, ...(role === undefined ? {} : { role }) });
   const session = (await readMap(project, workId)).sessions.find((item) => item.id === sessionId)!;
   return { workId, session };
 }
@@ -192,5 +198,61 @@ describe('qwen wake: resume into the same transcript', () => {
     const { workId, session } = await qwenSession();
     const woken = await planResume(project, workId, { ...session, providerSessionId: ID }, {});
     expect(woken.args.slice(0, 2)).toEqual(['--resume', ID]);
+  });
+});
+
+describe('roles on qwen (spec 2026-11-11, 3.6, D10)', () => {
+  const RESUME_ID = '11111111-1111-4111-8111-111111111111';
+
+  it.each(['executor', 'debugger', 'verifier'])('%s launches and resumes with the role prompt and no role model', async (name) => {
+    const { workId, session } = await qwenSession('do it', { source: 'builtin', name });
+    for (const plan of [
+      await planLaunch(project, workId, session),
+      await planResume(project, workId, { ...session, providerSessionId: RESUME_ID }),
+    ]) {
+      expect(valueOf(plan.args, '--append-system-prompt')).toContain(`(builtin:${name})`);
+      expect(plan.args).not.toContain('-m');
+    }
+  });
+
+  it.each(['planner', 'critic', 'reviewer', 'architect', 'feature-lead', 'researcher'])('read-only %s is refused on launch and resume', async (name) => {
+    const { workId, session } = await qwenSession('do it', { source: 'builtin', name });
+    await expect(planLaunch(project, workId, session)).rejects.toThrow('role-permissions-unavailable');
+    await expect(planResume(project, workId, { ...session, providerSessionId: RESUME_ID })).rejects.toThrow('role-permissions-unavailable');
+  });
+
+  it('native Claude and Codex roles are a provider mismatch on qwen, and do not carry over to it', async () => {
+    const claude = { id: 'claude:reviewer-x', source: 'claude' as const, name: 'reviewer-x', description: '', provider: 'claude' as const,
+      readOnly: false, path: '/x.md', nativeAgent: 'reviewer-x' };
+    const codex = { id: 'codex:fixer', source: 'codex' as const, name: 'fixer', description: '', provider: 'codex' as const, readOnly: false,
+      path: '/x.toml', prompt: 'fix things', model: null, effort: null, sandboxMode: null };
+    const catalog: RoleCatalog = buildRoleCatalog({ roles: [claude, codex], diagnostics: [], partial: false });
+    for (const roleId of ['claude:reviewer-x', 'codex:fixer']) {
+      for (const mode of ['create', 'existing'] as const) {
+        await expect(prepareSessionRole(project, PROVIDERS.qwen, { roleId, provider: 'qwen', mode }, catalog)).rejects.toThrow('role-provider-mismatch');
+      }
+    }
+    expect(await roleForProvider(project, PROVIDERS.qwen, { source: 'claude', name: 'reviewer-x' }, catalog)).toBeNull();
+    expect(await roleForProvider(project, PROVIDERS.qwen, { source: 'codex', name: 'fixer' }, catalog)).toBeNull();
+    expect(await roleForProvider(project, PROVIDERS.qwen, { source: 'builtin', name: 'executor' }, catalog)).toEqual({ source: 'builtin', name: 'executor' });
+  });
+
+  it('a template with an unknown flag (or -i) is refused for a role; the built-in templates pass', () => {
+    const executor = resolveRoleChoice(buildRoleCatalog(), { roleId: 'builtin:executor', provider: 'qwen' });
+    expect(() => assertRoleDelivery(PROVIDERS.qwen, executor)).not.toThrow();
+    const runner = PROVIDERS.qwen.runner;
+    for (const extra of [['-i', '{prompt}'], ['--yolo'], ['--allowed-tools', 'x'], ['{leanFlags}'], ['--', '{prompt}']]) {
+      const entry = { ...PROVIDERS.qwen, runner: { ...runner, args: [...(runner.args ?? []), ...extra] } };
+      expect(() => assertRoleDelivery(entry, executor)).toThrow('role-permissions-unavailable');
+    }
+    // Without a role the template is the human's own business: no role delivery to prove.
+    const plain = resolveRoleChoice(buildRoleCatalog(), { provider: 'qwen' });
+    expect(() => assertRoleDelivery({ ...PROVIDERS.qwen, runner: { ...runner, args: ['--yolo'] } }, plain)).not.toThrow();
+  });
+
+  it('models: no tier model and no role model for qwen', () => {
+    for (const tier of ['strong', 'standard', 'light'] as const) expect(modelForTier('qwen', tier)).toBeNull();
+    expect(roleModel({ source: 'builtin', model: null, models: { claude: 'opus', codex: 'gpt-6-astra' } }, 'qwen')).toBeNull();
+    expect(roleModel({ source: 'builtin', model: null, models: { claude: 'opus', codex: 'gpt-6-astra' } }, 'claude')).toBe('opus');
   });
 });

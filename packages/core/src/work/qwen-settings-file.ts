@@ -54,13 +54,17 @@ const COMMAND_TIMEOUT_SEC: Readonly<Record<string, number>> = { SessionEnd: 5 };
 
 /**
  * Parley's defaults, set only when the base does not set them (spec 3.3, step 4): no startup update check
- * (Q23), MCP tools declared directly instead of `tool_search` → `tool_call` (D8), no background memory extractor (D9).
+ * (Q23), MCP tools declared directly instead of `tool_search` → `tool_call` (D8), no background memory extractor (D9),
+ * no follow-up suggestion request (consistent with D9).
  */
 export const QWEN_DEFAULTS: ReadonlyArray<{ key: readonly string[]; value: unknown }> = [
   { key: ['general', 'enableAutoUpdate'], value: false },
   { key: ['tools', 'toolSearch', 'enabled'], value: false },
   { key: ['memory', 'enableManagedAutoMemory'], value: false },
   { key: ['memory', 'enableManagedAutoDream'], value: false },
+  // The follow-up suggestion after each turn is one more model request ("[SUGGESTION MODE]"), and Enter accepts a
+  // visible suggestion into the input field (qwen 0.27.2).
+  { key: ['ui', 'enableFollowupSuggestions'], value: false },
 ];
 
 /** A launch refused because of the effective system settings file; the message names the file or the key. */
