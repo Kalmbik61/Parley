@@ -162,6 +162,8 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
   const [locked, setLocked] = useState<Record<string, string>>({});
   const [errors, setErrors] = useState<FieldErrors>({});
   const [loadError, setLoadError] = useState<string | null>(null);
+  /** Состояние Code Mode: с диска при открытии (`settings.get`), затем исход последней записи (план T12a, слайс D; лид m-7289, R2). */
+  const [codeModeResult, setCodeModeResult] = useState<'on' | 'off' | 'off-not-durable' | 'off-next-launch' | null>(null);
   const [islandShortcutStatus, setIslandShortcutStatus] = useState<AssistantShortcutStatus>({ accelerator: null, ok: true });
 
   const ui = useUiStore((state) => state.ui);
@@ -195,6 +197,7 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
       .then((result) => {
         setConfig(result.config);
         setLocked(result.locked);
+        setCodeModeResult(result.codeMode ?? null);
         setErrors({});
         setLoadError(null);
       })
@@ -208,6 +211,7 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
     try {
       const result = await bridge.call('settings.set', { key, value });
       setConfig(result.config);
+      if (result.codeMode !== undefined) setCodeModeResult(result.codeMode);
       onConfigChange?.(result.config);
       // Не `{ [key]: undefined }` — под `exactOptionalPropertyTypes` это другое
       // значение, чем отсутствие ключа; убираем ключ явно.
@@ -496,6 +500,31 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
                     <span className="text-xs text-muted-foreground">{S.settings.skillNavigatorHint}</span>
                     {errors.skillNavigator !== undefined ? (
                       <span className="text-xs text-destructive">{errors.skillNavigator}</span>
+                    ) : null}
+                  </>
+                ) : null}
+
+                {config.codeMode !== undefined ? (
+                  <>
+                    <label className="flex items-center justify-between gap-2 text-sm">
+                      <span>{S.settings.codeMode}</span>
+                      <Switch
+                        aria-label={S.settings.codeMode}
+                        checked={config.codeMode}
+                        onCheckedChange={(checked) => void save('codeMode', checked ? 'true' : 'false')}
+                      />
+                    </label>
+                    {/* Строка состояния: только чтение, только у выключенного (у включённого строки нет: m-7348). Частичный off —
+                        из состояния на диске при открытии или из исхода записи. */}
+                    {config.codeMode ? null : (
+                      <span className="text-xs text-muted-foreground" data-testid="code-mode-state">
+                        {codeModeResult === 'off-next-launch' || codeModeResult === 'off-not-durable'
+                          ? S.settings.codeModeState[codeModeResult]
+                          : S.settings.codeModeState.off}
+                      </span>
+                    )}
+                    {errors.codeMode !== undefined ? (
+                      <span className="text-xs text-destructive">{errors.codeMode}</span>
                     ) : null}
                   </>
                 ) : null}

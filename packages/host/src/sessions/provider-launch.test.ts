@@ -231,6 +231,22 @@ const hostEnv = {
   CLAUDE_CONFIG_DIR: '/u/.claude', CLAUDE_SECURESTORAGE_CONFIG_DIR: '/u/.claude', PATH: '/bin',
 };
 
+describe('providerLaunchEnv: нонс запуска Code Mode не наследуется от хоста (план T8h)', () => {
+  // Claude Code передаёт серверу окружение целиком: без этого сессия, поднявшая хост, отдала бы свой нонс всем его сессиям.
+  const withExposure = { ...hostEnv, PARLEY_CODE_MODE_LAUNCH: 'a'.repeat(32), HARNAS_CODE_MODE_LAUNCH: 'a'.repeat(32), PARLEY_HOME: '/h' };
+  const entries: [string, Parameters<typeof providerLaunchEnv>[0], string | null][] = [
+    ['без ключа (Claude)', PROVIDERS.claude, null],
+    ['Codex', PROVIDERS.codex, null],
+    ['с ключом (свой провайдер)', customProviderEntry(kimi, '/p'), 'sk-1'],
+  ];
+  it.each(entries)('%s: в окружении PTY нет ни одного из двух имён, остальное на месте', (_name, entry, key) => {
+    const env = providerLaunchEnv(entry, withExposure, {}, key);
+    expect(env.PARLEY_CODE_MODE_LAUNCH).toBeUndefined();
+    expect(env.HARNAS_CODE_MODE_LAUNCH).toBeUndefined();
+    expect(env.PARLEY_HOME).toBe('/h');
+  });
+});
+
 describe('providerLaunchEnv: свой провайдер', () => {
   const entry = customProviderEntry(kimi, '/p');
   it('чистит ANTHROPIC_*, CLAUDE_SECURESTORAGE_CONFIG_DIR и CLAUDE_CONFIG_DIR хоста, ставит свою папку', () => {

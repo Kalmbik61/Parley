@@ -8,6 +8,7 @@ import { EMPTY_HISTORY } from '../layout/history.js';
 import { useLayoutStore } from '../layout/store.js';
 import { emptyLayout, openTab } from '../layout/tree.js';
 import { useWorksStore } from '../store/works.js';
+import { createFakeBridge } from '../test-utils/fake-bridge.js';
 import { makeSession, makeSwarm, makeSwarmMember, makeWork } from '../test-utils/work-fixtures.js';
 import { ChatToolbar } from './ChatToolbar.js';
 
@@ -183,5 +184,39 @@ describe('ChatToolbar — чип роя (спека роя, 7.2)', () => {
     setUp('s-x');
     render(<ChatToolbar workKey={KEY} tabId="terminal:s-x" view="chat" available provider="claude" />);
     expect(screen.queryByTestId('chat-swarm-chip')).toBeNull();
+  });
+});
+
+describe('ChatToolbar — метка режима Code Mode (план T12a-indicator)', () => {
+  const KEY = '/tmp/proj w-01';
+  const bridge = createFakeBridge();
+
+  function setUp(): void {
+    useWorksStore.setState({ entries: [makeWork('w-01', { projectPath: '/tmp/proj', sessions: [makeSession('s-01', 'lead')] })], branches: {}, loading: false, error: null });
+    const layout = openTab(emptyLayout(), { kind: 'terminal', id: 'terminal:s-01', sessionId: 's-01' }, 'active');
+    useLayoutStore.setState({ activeWorkKey: KEY, layouts: { [KEY]: layout }, hydrated: { [KEY]: true }, pending: {}, history: EMPTY_HISTORY, mru: {}, navigating: false });
+  }
+  const original = (window as unknown as { parley?: unknown }).parley;
+  afterEach(() => { (window as unknown as { parley?: unknown }).parley = original; });
+
+  it('есть и в виде Chat, и в виде Terminal; читает запись по ref этой сессии', async () => {
+    (window as unknown as { parley?: unknown }).parley = bridge;
+    bridge.setHandler('sessions.codeMode', (async () => ({ mode: 'classic', reason: 'not-requested' })) as never);
+    setUp();
+    const { rerender } = render(<ChatToolbar workKey={KEY} tabId="terminal:s-01" view="chat" available provider="claude" />);
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.getByTestId('chat-code-mode').textContent).toBe('Classic · not requested');
+    rerender(<ChatToolbar workKey={KEY} tabId="terminal:s-01" view="terminal" available provider="claude" micTargetId="terminal:s-01" />);
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.getByTestId('chat-code-mode').textContent).toBe('Classic · not requested');
+    expect(bridge.calls.some((c) => c.method === 'sessions.codeMode' && JSON.stringify(c.params) === JSON.stringify({ ref: { projectPath: '/tmp/proj', workId: 'w-01', sessionId: 's-01' } }))).toBe(true);
+  });
+
+  it('вкладки сессии нет в раскладке — метки нет, и хосту ничего не уходит', () => {
+    const quiet = createFakeBridge();
+    (window as unknown as { parley?: unknown }).parley = quiet;
+    render(<ChatToolbar workKey="k" tabId="t" view="chat" available provider="claude" />);
+    expect(screen.queryByTestId('chat-code-mode')).toBeNull();
+    expect(quiet.calls).toEqual([]);
   });
 });

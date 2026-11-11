@@ -72,6 +72,12 @@ mac:
   # Hardened runtime без сертификата Apple не нужен, а с ad-hoc он требует лишних entitlements.
   identity: '-'
   hardenedRuntime: false
+  # Нативная проверка Code Mode уже подписана ad-hoc скриптом build-procinfo-probe.mjs, и её sha256 записан в manifest.json
+  # рядом. Переподпись здесь изменила бы байты, и проверка хеша в рантайме сделала бы Code Mode недоступным: её не трогаем.
+  # Бинарь едет внутри @parley/core (pnpm deploy хоста), поэтому он есть и в x64-приложении; там рантайм отказывает по
+  # архитектуре процесса.
+  signIgnore:
+    - '/@parley/core/native/darwin-arm64/procinfo-probe$'
   # Текст системного запроса доступа к микрофону (голосовой ввод): без него macOS показала бы заглушку Electron.
   extendInfo:
     NSMicrophoneUsageDescription: Parley uses the microphone for voice dictation. Audio is transcribed on this Mac and never leaves it.

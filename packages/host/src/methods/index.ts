@@ -345,6 +345,7 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
         }),
     'sessions.setModel': sessions.sessionsSetModel as AnyHandler,
     'sessions.switchOptions': sessions.sessionsSwitchOptions as AnyHandler,
+    'sessions.codeMode': sessions.sessionsCodeMode as AnyHandler,
     'sessions.switchAgent': sessions.sessionsSwitchAgent as AnyHandler,
     'sessions.resumeInterrupted': sessions.sessionsResumeInterrupted as AnyHandler,
     'wake.pause': wake.wakePause as AnyHandler,

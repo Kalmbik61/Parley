@@ -5,6 +5,7 @@
  */
 
 import {
+  codeModeStateOf,
   effortsFor,
   hookedSince,
   isClaudeCode,
@@ -15,6 +16,7 @@ import {
   RoomRuleError,
   updateMap,
   workExists,
+  workPaths,
 } from '@parley/core';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { Handler } from '../context.js';
@@ -59,6 +61,7 @@ export interface SessionHandlers {
   sessionsSetEffort: Handler<'sessions.setEffort'>;
   sessionsSetModel: Handler<'sessions.setModel'>;
   sessionsSwitchOptions: Handler<'sessions.switchOptions'>;
+  sessionsCodeMode: Handler<'sessions.codeMode'>;
   sessionsSwitchAgent: Handler<'sessions.switchAgent'>;
   sessionsResumeInterrupted: Handler<'sessions.resumeInterrupted'>;
 }
@@ -211,6 +214,17 @@ export function createSessionHandlers(deps: SessionMethodDeps): SessionHandlers 
 
     // Замена агента на месте (спека 2026-10-30, 5.2–5.3): правила, порядок и восстановление — в сервисе.
     sessionsSwitchOptions: async ({ ref }) => deps.sessions.switchOptions(ref),
+    // Метка режима для окна (план T12a-indicator): чтение записи запуска и ничего больше. Рабочий каталог — из работы `ref`, найденной в
+    // базе, а сессия — из её карты: путь из запроса не принимается, чужая работа и неизвестная сессия — `not_found`. Сбой чтения файла
+    // — `unknown` (это делает `codeModeStateOf`), а не ошибка: метка не должна мешать ни сессии, ни запуску.
+    sessionsCodeMode: async ({ ref }) => {
+      const map = await readMap(ref.projectPath, ref.workId).catch(notFoundOnGone);
+      if (!map.sessions.some((candidate) => candidate.id === ref.sessionId)) {
+        throw new HostError('not_found', `session ${ref.sessionId} is not in the map of workspace ${ref.workId}`);
+      }
+      const { mode, reason } = codeModeStateOf(workPaths(ref.projectPath, ref.workId).dir, ref.sessionId);
+      return { mode, reason };
+    },
     sessionsSwitchAgent: async ({ ref, requestId, provider, model, effort, carry, force }) =>
       deps.sessions.switchAgent(ref, {
         requestId,

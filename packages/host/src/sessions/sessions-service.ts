@@ -62,6 +62,8 @@ import {
   effortsFor,
   finishExited,
   findRunnerBinary,
+  probeClaudeClient,
+  wantsClientProbe,
   GitStateError,
   InvalidRevisionError,
   CODEX_AUTO_MIN_VERSION,
@@ -113,6 +115,7 @@ import {
   transitionSession,
   trustKey,
   updateMap,
+  inspectRunRecord,
   workPaths,
   writeBrief,
   writeLettersAsync,
@@ -120,6 +123,7 @@ import {
   type EffortLevel,
   type ParleyConfig,
   type LaunchPlan,
+  type CodeModeGateSeams,
   type SpawnLimits,
   type ProviderEntry,
   type UsageSummary,
@@ -272,6 +276,12 @@ export interface LaunchChoice {
   effort?: EffortLevel | null;
 }
 
+/** Кто останавливает сессию, для журнала Code Mode: сон со своей причиной; без `cause` — Stop. */
+export interface StopCause {
+  readonly by: 'sleep';
+  readonly reason: string;
+}
+
 export interface SessionsService {
   /** Проверка после удаления worktree, включая сессии без живого процесса. */
   checkWorktreeGit(ref: SessionRef): Promise<void>;
@@ -283,8 +293,11 @@ export interface SessionsService {
    * выходе (запуск уже идёт, процесс жив).
    */
   launch(ref: SessionRef, mode: LaunchMode, options?: LaunchChoice): Promise<LaunchOutcome>;
-  /** `cause: 'human'` — остановка по действию человека: сторож тихих концовок пишет об этом письмо; без причины — молча. */
-  stop(ref: SessionRef, cause?: 'human'): Promise<void>;
+  /**
+   * `cause: 'human'` — остановка по действию человека: сторож тихих концовок пишет об этом письмо; без причины — молча. `StopCause` — сон со
+   * своей причиной, для строки журнала Code Mode (T12a, §9); для сторожа это тихая остановка.
+   */
+  stop(ref: SessionRef, cause?: 'human' | StopCause): Promise<void>;
   /** Насовсем: `closed` в карте и остановка PTY, если он жив. `by: 'human'` — закрыл человек (письмо сторожа). */
   close(ref: SessionRef, by?: 'human'): Promise<void>;
   /** `force` — грязный worktree отбрасывается вместе с сессией; без него — `conflict` (спека 8.3). */
@@ -393,6 +406,11 @@ export interface SessionsFeedOptions {
    * `project-mcp`, решение человека уходит в файл `--settings` сессии. Без сервиса (изолированные тесты) ключей нет.
    */
   projectMcp?: Pick<ProjectMcp, 'inspect'>;
+  /**
+   * Isolated tests only: the Code Mode proven set and the setting, as the launch would read them. Not given: `PROVEN_PROVIDERS` and the
+   * human's setting, so with no proven provider a Claude launch runs no client probe and spawns as it always did (s-292 B1 m-7532).
+   */
+  codeModeGates?: Pick<CodeModeGateSeams, 'proven' | 'requested'>;
   /**
    * Канал агента к браузеру окна (спека браузера 2026-10-07, 3.7): адрес эндпоинта (`null` — не слушает) и токены на
    * запуск. Всем провайдерам, в отличие от хуков ленты; без него сессии запускаются без инструмента `browser_open`.
@@ -1172,6 +1190,13 @@ export function createSessionsService(
         const disabled = [...found.disabled, ...found.undecided.map((server) => server.name), ...found.unmanaged];
         if (found.enabled.length > 0 || disabled.length > 0) projectMcp = { enabled: found.enabled, disabled };
       }
+      // T12a-Claude C1 (s-296 R1): claude is resolved once, by realpath, before the plan. The Code Mode client-version gate reads the version of
+      // exactly that file, the decision records it, and the PTY below spawns exactly that file: no PATH lookup between the check and the spawn.
+      // Only for the claude provider itself (GLM runs `claude` too and has its own row; s-296 G1), proven, with Code Mode requested (s-292 B1
+      // m-7532); any other launch runs no probe and spawns as before.
+      const clientProbe = entry.id === 'claude' && await wantsClientProbe(entry.id, feed.codeModeGates)
+        ? await timer.step('client', async () => { try { return await probeClaudeClient(await findRunnerBinary(entry.runner.command, process.env), process.env); } catch { return undefined; } })
+        : undefined;
       const planFn = mode === 'resume' ? planResume : mode === 'new' ? planNew : planLaunch;
       // Политика одобрений и ключи доверия — только Codex. Ключи — realpath: cwd сессии (worktree) к этому месту уже
       // создан на диске, а до создания `/tmp` и `/private/tmp` дали бы разные ключи, и Codex показал бы экран доверия.
@@ -1200,12 +1225,15 @@ export function createSessionsService(
         ...(options.forkFrom === undefined ? {} : { forkFrom: options.forkFrom }),
         ...(options.model === undefined ? {} : { model: options.model }),
         ...(options.effort === undefined ? {} : { effort: options.effort }),
+        ...(clientProbe === undefined && feed.codeModeGates === undefined ? {} : { codeModeGates: { ...feed.codeModeGates, ...(clientProbe === undefined ? {} : { client: clientProbe }) } }),
       }));
       deliverWarnings(ref, plan);
 
       let command: string;
       try {
-        command = await timer.step('binary', () => findRunnerBinary(plan.command, process.env));
+        command = clientProbe?.ok === true && plan.command === entry.runner.command
+          ? clientProbe.client.path
+          : await timer.step('binary', () => findRunnerBinary(plan.command, process.env));
       } catch (error) {
         host.broadcast('host.notice', {
           kind: 'launch-failed',
@@ -1660,9 +1688,24 @@ export function createSessionsService(
     }
   }
 
-  async function stop(ref: SessionRef, cause?: 'human'): Promise<void> {
+  /**
+   * Code Mode (план T12a, §9): Stop и сон убивают живой прогон, и на Claude сессия после этого навсегда классическая. Частоту в поле до включения не
+   * измерить, поэтому остановка живой сессии с удержанной, неучтённой или нечитаемой записью прогона пишет строку журнала; её читает T12b. Только
+   * чтение (`inspectRunRecord` ничего не забирает и не удаляет) и никогда не мешает остановке.
+   */
+  function logHeldRun(ref: SessionRef, cause: StopCause | undefined): void {
+    try {
+      const view = inspectRunRecord(workPaths(ref.projectPath, ref.workId).dir, ref.sessionId);
+      if (view.kind === 'free') return;
+      host.log.info('code mode: stop with a held run record', { ref, by: cause?.by ?? 'stop', reason: cause?.reason ?? null, record: view.kind, methods: view.kind === 'unreadable' ? [] : view.methods });
+    } catch { /* только журнал */ }
+  }
+
+  async function stop(ref: SessionRef, cause?: 'human' | StopCause): Promise<void> {
     if (pty.get(ref) !== undefined) {
-      exitCauses.set(refKey(ref), cause ?? 'quiet');
+      // Сторож тихих концовок (master): только `'human'` — человек; сон и всё остальное — тихо. Журнал Code Mode (T12a) — сон со своей причиной.
+      exitCauses.set(refKey(ref), cause === 'human' ? 'human' : 'quiet');
+      logHeldRun(ref, typeof cause === 'object' ? cause : undefined);
       await pty.stop(ref);
     }
     // Само событие `exit` уже прошло (см. выше) — если запись карты ещё

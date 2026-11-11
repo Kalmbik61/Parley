@@ -10,6 +10,7 @@
  * `--version` и `-e`. Так проверяется логика скрипта (что он требует и что отвергает), а не сборка.
  */
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   chmodSync,
   mkdirSync,
@@ -53,6 +54,80 @@ interface AppOptions {
   nodeVersion?: string;
   /** `require('node-pty')` под встроенным node отказывает. */
   loadFails?: boolean;
+  /**
+   * Что встроенный node печатает на проверку запуска Code Mode (`--input-type=module -e …`). По умолчанию arm64 — `ok`,
+   * x64 — отказ по архитектуре. Это ответ ПОДСТАВНОГО node: тест проверяет логику скрипта, а не нативную проверку.
+   */
+  launchVerdict?: string;
+  /** Проверка запуска падает (node выходит с кодом 1). */
+  launchFails?: boolean;
+}
+
+/** Каталог @parley/core внутри хоста — так его раскладывает pnpm deploy. */
+const coreDir = (resources: string): string =>
+  path.join(resources, 'host', 'node_modules', '.pnpm', '@parley+core@file+packages+core', 'node_modules', '@parley', 'core');
+const probeFile = (resources: string): string => path.join(coreDir(resources), 'native', 'darwin-arm64', 'procinfo-probe');
+const manifestFile = (resources: string): string => path.join(coreDir(resources), 'native', 'darwin-arm64', 'manifest.json');
+/** Нативная проверка Code Mode: arm64 в обоих приложениях (deploy хоста один), манифест с её sha256. */
+function putProbe(resources: string, arch = 'arm64'): void {
+  const body = `# ARCH:${arch}\nprocinfo probe\n`;
+  put(probeFile(resources), body, 0o755);
+  put(manifestFile(resources), JSON.stringify({ v: 1, arch: 'arm64', binarySha256: createHash('sha256').update(body).digest('hex') }));
+}
+
+/** Копия @parley/core в мосте Remote access — так её раскладывает pnpm deploy моста (план T9b-packaging). */
+const remoteCoreDir = (resources: string): string =>
+  path.join(resources, 'remote', 'node_modules', '.pnpm', '@parley+core@file+packages+core', 'node_modules', '@parley', 'core');
+const CORE_PACKAGE = JSON.stringify({ name: '@parley/core', version: '0.0.0' });
+
+/**
+ * Минимальный app.asar: заголовок — pickle Chromium (u32 4, u32 размер pickle заголовка, u32 размер его данных, u32 длина
+ * строки, JSON с выравниванием до 4), затем данные файлов. `files` — путь внутри архива → содержимое; `unpacked` — те, что
+ * лежат в app.asar.unpacked.
+ */
+function putAsar(resources: string, files: Record<string, string>, unpacked: Record<string, string> = {}): void {
+  const header: { files: Record<string, unknown> } = { files: {} };
+  const node = (rel: string): Record<string, unknown> => {
+    let at = header as { files: Record<string, unknown> };
+    const parts = rel.split('/');
+    for (const part of parts.slice(0, -1)) at = (at.files[part] ??= { files: {} }) as { files: Record<string, unknown> };
+    return at.files as Record<string, unknown>;
+  };
+  const data: Buffer[] = [];
+  let offset = 0;
+  for (const [rel, body] of Object.entries(files)) {
+    const buf = Buffer.from(body);
+    node(rel)[rel.split('/').pop()!] = { size: buf.length, offset: String(offset) };
+    data.push(buf);
+    offset += buf.length;
+  }
+  for (const [rel, body] of Object.entries(unpacked)) {
+    node(rel)[rel.split('/').pop()!] = { size: Buffer.byteLength(body), unpacked: true };
+    put(path.join(resources, 'app.asar.unpacked', rel), body, rel.endsWith('procinfo-probe') ? 0o755 : 0o644);
+  }
+  const json = Buffer.from(JSON.stringify(header));
+  const padded = Math.ceil(json.length / 4) * 4;
+  const head = Buffer.alloc(16 + padded);
+  head.writeUInt32LE(4, 0);
+  head.writeUInt32LE(8 + padded, 4);
+  head.writeUInt32LE(4 + padded, 8);
+  head.writeUInt32LE(json.length, 12);
+  json.copy(head, 16);
+  put(path.join(resources, 'app.asar'), '');
+  writeFileSync(path.join(resources, 'app.asar'), Buffer.concat([head, ...data]));
+}
+
+/** Три копии @parley/core, как в собранном приложении: хост, мост и app.asar окна с распакованной проверкой. */
+function putCoreCopies(resources: string): void {
+  put(path.join(coreDir(resources), 'package.json'), CORE_PACKAGE);
+  const remote = remoteCoreDir(resources);
+  put(path.join(remote, 'package.json'), CORE_PACKAGE);
+  put(path.join(remote, 'native', 'darwin-arm64', 'procinfo-probe'), '# ARCH:arm64\nprocinfo probe\n', 0o755);
+  putAsar(
+    resources,
+    { 'package.json': JSON.stringify({ name: '@parley/desktop' }), 'node_modules/@parley/core/package.json': CORE_PACKAGE },
+    { 'node_modules/@parley/core/native/darwin-arm64/procinfo-probe': '# ARCH:arm64\nprocinfo probe\n' },
+  );
 }
 
 let work = '';
@@ -70,12 +145,16 @@ function makeApp(arch: Arch, options: AppOptions = {}): string {
     path.join(app, 'Contents', 'Info.plist'),
     `CFBundleIdentifier=dev.parley.desktop\nCFBundleShortVersionString=${desktopVersion}\n`,
   );
-  // Встроенный node: shell-скрипт с отметкой архитектуры; `-e` — загрузка node-pty.
+  // Встроенный node: shell-скрипт с отметкой архитектуры; `-e` — загрузка node-pty, `--input-type=module` — проверка
+  // запуска Code Mode (печатает заданный вердикт).
+  const verdict = options.launchVerdict ?? (arch === 'arm64' ? 'ok' : 'refused: unsupported platform darwin/x64');
   put(
     path.join(resources, 'node', 'bin', 'node'),
-    `#!/bin/sh\n${marker}case "$1" in\n  --version) echo "v${options.nodeVersion ?? NODE_VERSION}" ;;\n  -e) exit ${options.loadFails === true ? 1 : 0} ;;\nesac\n`,
+    `#!/bin/sh\n${marker}case "$1" in\n  --version) echo "v${options.nodeVersion ?? NODE_VERSION}" ;;\n  -e) exit ${options.loadFails === true ? 1 : 0} ;;\n  --input-type=module) printf '%s\\n' '${verdict}'; exit ${options.launchFails === true ? 1 : 0} ;;\nesac\n`,
     0o755,
   );
+  putProbe(resources);
+  putCoreCopies(resources);
   put(path.join(resources, 'node', 'LICENSE'), 'Node.js is licensed for use as follows: MIT\n');
   // Движок голосового ввода: `--help` отвечает кодом 0 (запускается только у родной архитектуры).
   put(
@@ -105,7 +184,8 @@ function makeApp(arch: Arch, options: AppOptions = {}): string {
 function makeFakeTools(): void {
   const tool = (name: string, body: string): void =>
     put(path.join(fakeBin, name), `#!/bin/sh\n${body}\n`, 0o755);
-  tool('codesign', 'exit 0');
+  // codesign -v ФАЙЛ (подпись нативной проверки) отказывает при FAKE_PROBE_SIG_BAD=1; --verify --deep --strict — всегда успех.
+  tool('codesign', '[ "$1" = "-v" ] && [ "${FAKE_PROBE_SIG_BAD:-0}" = "1" ] && { echo "invalid signature" >&2; exit 1; }\nexit 0');
   // plutil -extract KEY raw -o - FILE: ключи лежат в поддельном Info.plist строками KEY=значение.
   tool('plutil', 'grep "^$2=" "$6" | cut -d= -f2-');
   // lipo -archs FILE: архитектура — в строке `# ARCH:…` файла.
@@ -382,5 +462,162 @@ describe.skipIf(process.platform === 'win32')('verify-packaged-apps.sh', () => {
 
     expect(status).toBe(1);
     expect(out).toMatch(/^::error::.*mac\/Parley\.app was not built/m);
+  });
+
+  it('Code Mode: обе архитектуры несут проверку; arm64 получает EPERM, x64 под Rosetta отказывается по архитектуре', () => {
+    makeApp('arm64');
+    makeApp('x64');
+
+    const { status, out } = run();
+
+    expect(status, out).toBe(0);
+    expect(out).toContain('mac-arm64: Code Mode launch probe denied foreign process info (EPERM)');
+    expect(out).toContain('mac: Code Mode refuses this architecture (refused: unsupported platform darwin/x64)');
+    // x64 проверялся через `arch -x86_64`, как и его node.
+    expect(logged()).toContain('arch -x86_64');
+  });
+
+  it('машина x86_64: своё x64-приложение отказывает по архитектуре без Rosetta', () => {
+    makeApp('arm64');
+    makeApp('x64');
+
+    const { status, out } = run({ FAKE_UNAME: 'x86_64' });
+
+    expect(status, out).toBe(0);
+    expect(out).toContain('mac: Code Mode refuses this architecture');
+    expect(out).not.toContain('mac-arm64: Code Mode launch probe');
+  });
+
+  const fileCases: [string, (resources: string) => void, string][] = [
+    ['нет бинаря проверки', (r) => rmSync(probeFile(r)), 'the Code Mode probe is missing'],
+    ['нет манифеста', (r) => rmSync(manifestFile(r)), 'the Code Mode probe manifest is missing'],
+    ['байты бинаря не совпадают с манифестом (переподписан?)', (r) => writeFileSync(probeFile(r), '# ARCH:arm64\nresigned\n'), 'bytes differ from its manifest'],
+    ['бинарь не arm64', (r) => putProbe(r, 'x86_64'), 'the Code Mode probe is not an arm64 binary'],
+    ['нет @parley/core в хосте', (r) => rmSync(path.join(r, 'host', 'node_modules', '.pnpm'), { recursive: true }), '@parley/core is missing from the host'],
+  ];
+  it.each(fileCases)('Code Mode: %s — отказ', (_label, breakIt, message) => {
+    for (const arch of ['arm64', 'x64'] as const) {
+      rmSync(dist, { recursive: true, force: true });
+      const resources = makeApp(arch);
+      makeApp(arch === 'arm64' ? 'x64' : 'arm64');
+      breakIt(resources);
+
+      const { status, out } = run();
+
+      expect(status, `${arch}: ${out}`).toBe(1);
+      expect(out).toContain(message);
+    }
+  });
+
+  it('Code Mode: подпись проверки не проходит codesign -v — отказ', () => {
+    makeApp('arm64');
+    makeApp('x64');
+
+    const { status, out } = run({ FAKE_PROBE_SIG_BAD: '1' });
+
+    expect(status).toBe(1);
+    expect(out).toContain('the Code Mode probe signature is not valid');
+  });
+
+  // Вердикты подставного node: отказ, частичный EPERM (только одна из двух проверок), мусор, пустота, сбой запуска.
+  const arm64Verdicts: [string, AppOptions][] = [
+    ['чужой kinfo_proc читается', { launchVerdict: 'refused: launch probe: foreign kinfo_proc not denied (errno 0)' }],
+    ['EPERM только у одной из двух проверок', { launchVerdict: 'refused: launch probe: foreign KERN_PROCARGS2 not denied (errno 0)' }],
+    ['другой errno', { launchVerdict: 'refused: launch probe: foreign kinfo_proc not denied (errno 22)' }],
+    ['проверка не собрана', { launchVerdict: 'refused: native probe not built' }],
+    ['мусор вместо вердикта', { launchVerdict: 'PARLEY_PROCINFO_PROBE_STARTED 1' }],
+    ['пустой вывод', { launchVerdict: '' }],
+    ['ok с хвостом', { launchVerdict: 'ok but partial' }],
+    ['проверка упала', { launchFails: true }],
+  ];
+  it.each(arm64Verdicts)('Code Mode arm64: %s — отказ (fail-closed)', (_label, options) => {
+    makeApp('arm64', options);
+    makeApp('x64');
+
+    const { status, out } = run();
+
+    expect(status, out).toBe(1);
+    expect(out).toMatch(/^::error::mac-arm64: (the Code Mode launch proof did not run|Code Mode launch proof: expected ok)/m);
+  });
+
+  // Копии @parley/core (план T9b-packaging, предложение §3, пункты 1 и 4): ровно хост, мост и app.asar; signIgnore покрывает
+  // настоящий путь каждой проверки на диске.
+  const copyCases: [string, (resources: string) => void, string][] = [
+    ['четвёртая копия', (r) => put(path.join(r, 'extra', 'node_modules', '@parley', 'core', 'package.json'), CORE_PACKAGE), 'found: asar, host, remote, unknown:extra/node_modules/@parley/core'],
+    ['нет копии моста', (r) => rmSync(path.join(r, 'remote'), { recursive: true }), 'found: asar, host'],
+    ['вторая копия в хосте', (r) => put(path.join(r, 'host', 'node_modules', '@parley', 'core', 'package.json'), CORE_PACKAGE), 'found: asar, host, host, remote'],
+    ['нет копии в app.asar', (r) => putAsar(r, { 'package.json': '{}' }), 'found: host, remote'],
+    [
+      'проверка по пути, который signIgnore не покрывает',
+      (r) => put(path.join(remoteCoreDir(r), 'native', 'darwin-arm64-old', 'procinfo-probe'), '# ARCH:arm64\n', 0o755),
+      'mac.signIgnore does not match these probe paths',
+    ],
+  ];
+  it.each(copyCases)('Code Mode: %s — отказ', (_label, breakIt, message) => {
+    for (const arch of ['arm64', 'x64'] as const) {
+      rmSync(dist, { recursive: true, force: true });
+      const resources = makeApp(arch);
+      makeApp(arch === 'arm64' ? 'x64' : 'arm64');
+      breakIt(resources);
+
+      const { status, out } = run();
+
+      expect(status, `${arch}: ${out}`).toBe(1);
+      expect(out).toContain(message);
+    }
+  });
+
+  it('Code Mode: исправные копии называются в выводе, signIgnore покрывает все три проверки на диске', () => {
+    makeApp('arm64');
+    makeApp('x64');
+
+    const { status, out } = run();
+
+    expect(status, out).toBe(0);
+    expect(out).toContain('mac-arm64: @parley/core copies: asar, host, remote');
+    expect(out).toContain('mac-arm64: mac.signIgnore covers 3 probe paths');
+  });
+
+  it.each([
+    ['x64-процесс согласился', 'ok'],
+    ['x64 отказал по другой причине', 'refused: native probe hash mismatch'],
+    ['пустой вывод', ''],
+  ])('Code Mode x64: %s — отказ', (_label, launchVerdict) => {
+    makeApp('arm64');
+    makeApp('x64', { launchVerdict });
+
+    const { status, out } = run();
+
+    expect(status, out).toBe(1);
+    expect(out).toMatch(/^::error::mac: Code Mode launch proof: expected refuse/m);
+  });
+});
+
+// verify-code-mode-package.mjs — инструмент проверки, а не код продукта (s-292, m-7351): его не импортирует и не называет ни
+// один файл, который едет в приложение или его собирает, — только два скрипта проверки, этот тест и документы.
+describe('verify-code-mode-package.mjs не входит в продукт', () => {
+  it('его называют только скрипты проверки релиза, этот тест и документы', () => {
+    const tracked = spawnSync('git', ['ls-files', '-z'], { cwd: repoRoot, encoding: 'utf8' });
+    expect(tracked.status, tracked.stderr).toBe(0);
+    const files = tracked.stdout.split('\0').filter(Boolean);
+    files.push('scripts/release/verify-code-mode-package.mjs', 'scripts/release/verify-code-mode-package.sh');
+    const allowed = new Set([
+      'scripts/release/verify-code-mode-package.mjs',
+      'scripts/release/verify-code-mode-package.sh',
+      'scripts/release/verify-packaged-apps.sh',
+      'packages/desktop/src/verify-packaged-apps.test.ts',
+    ]);
+    const naming = [...new Set(files)].filter((f) => {
+      if (allowed.has(f) || f.startsWith('docs/') || f.startsWith('.parley/')) return false;
+      let text: string;
+      try {
+        text = readFileSync(path.join(repoRoot, f), 'utf8');
+      } catch {
+        return false;
+      }
+      return text.includes('verify-code-mode-package');
+    });
+    expect(naming).toEqual([]);
+    expect(files).toContain('packages/desktop/electron-builder.yml');
   });
 });

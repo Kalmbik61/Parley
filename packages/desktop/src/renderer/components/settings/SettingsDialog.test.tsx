@@ -270,6 +270,71 @@ describe('SettingsDialog — скилл агентов (кусок 10 плана
   });
 });
 
+describe('SettingsDialog — Code Mode: переключатель и строка состояния (план T12a, слайс D)', () => {
+  const WITH = { ...CONFIG, codeMode: true };
+  const open = (bridge: ReturnType<typeof createFakeBridge>, config: Record<string, unknown> = WITH, codeMode?: string): void => {
+    bridge.setHandler('settings.get', () => ({ config: config as typeof CONFIG, locked: {}, ...(codeMode === undefined ? {} : { codeMode }) }) as never);
+    render(<SettingsDialog open bridge={bridge} onOpenChange={() => {}} />);
+    switchTo('Agents');
+  };
+  const state = async (): Promise<string> => (await screen.findByTestId('code-mode-state')).textContent ?? '';
+
+  it('метка «Code Mode (Beta)»; включён: строки состояния нет вовсе (решение человека m-7348)', async () => {
+    const bridge = createFakeBridge();
+    open(bridge);
+    expect(S.settings.codeMode).toBe('Code Mode (Beta)');
+    expect((await screen.findByRole('switch', { name: 'Code Mode (Beta)' })).getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByText('Code Mode (Beta)')).toBeTruthy();
+    expect(screen.queryByTestId('code-mode-state')).toBeNull();
+    expect(document.body.textContent).not.toMatch(/Requested|not yet proven|proven for/i);
+  });
+
+  it.each([
+    ['off', S.settings.codeModeState.off],
+    ['off-next-launch', S.settings.codeModeState['off-next-launch']],
+    ['off-not-durable', S.settings.codeModeState['off-not-durable']],
+  ] as const)('выключение с исходом %s: settings.set codeMode false, строка — этот исход', async (result, text) => {
+    const bridge = createFakeBridge();
+    bridge.setHandler('settings.set', () => ({ config: { ...WITH, codeMode: false }, codeMode: result }));
+    open(bridge);
+    fireEvent.click(await screen.findByRole('switch', { name: 'Code Mode (Beta)' }));
+    await waitFor(() => expect(bridge.calls).toContainEqual({ method: 'settings.set', params: { key: 'codeMode', value: 'false' } }));
+    await waitFor(async () => expect(await state()).toBe(text));
+    expect(screen.getByRole('switch', { name: 'Code Mode (Beta)' }).getAttribute('aria-checked')).toBe('false');
+  });
+
+  it.each(['off-next-launch', 'off-not-durable'] as const)('свежее открытие окна, на диске %s: строка этого состояния сразу, без переключения (лид m-7289, R2)', async (disk) => {
+    open(createFakeBridge(), { ...WITH, codeMode: false }, disk);
+    await waitFor(async () => expect(await state()).toBe(S.settings.codeModeState[disk]));
+    expect(screen.getByRole('switch', { name: 'Code Mode (Beta)' }).getAttribute('aria-checked')).toBe('false');
+  });
+
+  it('выключен при открытии: строка off, исхода записи ещё нет', async () => {
+    open(createFakeBridge(), { ...WITH, codeMode: false });
+    expect(await state()).toBe(S.settings.codeModeState.off);
+  });
+
+  it('не сохранено: ошибка под переключателем, переключатель остаётся включённым и строка — прежняя', async () => {
+    const bridge = createFakeBridge();
+    bridge.setHandler('settings.set', () => { throw { code: 'internal', message: 'Code Mode was not saved; it is still on' }; });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    open(bridge);
+    fireEvent.click(await screen.findByRole('switch', { name: 'Code Mode (Beta)' }));
+    await waitFor(() => expect(bridge.calls).toContainEqual({ method: 'settings.set', params: { key: 'codeMode', value: 'false' } }));
+    await waitFor(() => expect(screen.getByRole('switch', { name: 'Code Mode (Beta)' }).parentElement?.parentElement?.querySelector('.text-destructive')).not.toBeNull());
+    expect(screen.getByRole('switch', { name: 'Code Mode (Beta)' }).getAttribute('aria-checked')).toBe('true');
+    expect(screen.queryByTestId('code-mode-state')).toBeNull();
+    warn.mockRestore();
+  });
+
+  it('хост без ключа codeMode — ни переключателя, ни строки', async () => {
+    open(createFakeBridge(), CONFIG);
+    await screen.findByText('Worktree root');
+    expect(screen.queryByRole('switch', { name: 'Code Mode (Beta)' })).toBeNull();
+    expect(screen.queryByTestId('code-mode-state')).toBeNull();
+  });
+});
+
 describe('SettingsDialog — тест 2: поле, заданное окружением', () => {
   it('неактивно и подписано именем переменной; незаблокированное поле рядом активно', async () => {
     const bridge = createFakeBridge();

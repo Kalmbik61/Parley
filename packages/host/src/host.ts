@@ -133,6 +133,7 @@ import { dailyBudget } from './voice/budget.js';
 import { AGENT_BROWSER_PATH, createBrowserEndpoint } from './agent/browser-endpoint.js';
 import { createHookServer } from './hooks/hook-server.js';
 import { createSilentEndings } from './endings/silent-endings.js';
+import { startCodeModeNotices } from './sessions/code-mode-notice.js';
 import { createSessionsService } from './sessions/sessions-service.js';
 import { providerLaunchEnv } from './sessions/provider-env.js';
 import { createReadyJournal } from './sessions/ready-journal.js';
@@ -769,6 +770,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     // Сон по давлению памяти и ради слота очереди (спека, 4.2) читает тот же датчик, что и сервис ёмкости.
     pressure: pressureSensor,
   });
+  handle.context.onShutdown(startCodeModeNotices({ pty: ptyManager, notify: (notice) => handle.context.broadcast('host.notice', notice) }));
 
   compactionService = createCompactionService({
     host: handle.context,
