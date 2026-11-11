@@ -1,4 +1,5 @@
 import {
+  CLI_TOOLS,
   clearSecret,
   syncApiKeyApproval,
   loadProviders,
@@ -10,7 +11,7 @@ import {
   supportsEffort,
   writeSecret,
 } from '@parley/core';
-import type { ProviderEntry, SecretId } from '@parley/core';
+import type { CliTool, ProviderEntry, SecretId } from '@parley/core';
 import type { CustomProviderInfo } from '@parley/protocol';
 import type { Handler } from '../context.js';
 import { HostError } from '../errors.js';
@@ -25,6 +26,7 @@ import type { ProviderVersions } from '../providers/versions.js';
 import type { CliUpdates } from '../providers/updates.js';
 import { UPDATE_COMMANDS, type UpdateCommand } from '../providers/updates.js';
 import type { CliUpdateRunner } from '../providers/update-run.js';
+import type { CliInstaller } from '../providers/install-run.js';
 
 /**
  * Состояние входа аккаунтов подписки для `providers.list` (спека подписок 5.5): его даёт служба входа, пока её нет —
@@ -213,6 +215,30 @@ export function createProvidersUpdate(runner?: CliUpdateRunner): Handler<'provid
       result = await runner.run(command, `${request.client.name} (${request.client.id})`);
     } catch {
       throw new HostError('internal', 'Unable to start the provider update');
+    }
+    if (result.state === 'done') request.host.broadcast('providers.changed', { provider });
+    return result;
+  };
+}
+
+/**
+ * Установить CLI провайдера (спека Qwen, §4.2). Провайдер выбирает команду реестра (GLM и свои провайдеры делят
+ * `claude`); CLI таблицы, которого ещё нет в реестре, выбирается по своему имени. Из запроса в установку не идёт ничего,
+ * кроме этой команды. После установки окно узнаёт о новом CLI событием `providers.changed`.
+ */
+export function createProvidersInstall(installer?: CliInstaller): Handler<'providers.install'> {
+  return async ({ provider }, request) => {
+    const registry = await loadProviders();
+    const entry = Object.hasOwn(registry, provider) ? registry[provider] : undefined;
+    const command = entry?.runner.command ?? provider;
+    if (installer === undefined || !Object.hasOwn(CLI_TOOLS, command)) {
+      throw new HostError('bad_request', 'Provider CLI cannot be installed from Parley');
+    }
+    let result;
+    try {
+      result = await installer.install(command as CliTool, `${request.client.name} (${request.client.id})`);
+    } catch {
+      throw new HostError('internal', 'Unable to start the provider install');
     }
     if (result.state === 'done') request.host.broadcast('providers.changed', { provider });
     return result;

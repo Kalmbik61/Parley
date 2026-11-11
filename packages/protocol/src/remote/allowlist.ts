@@ -152,6 +152,8 @@ export const REMOTE_FORBIDDEN: readonly string[] = [
   // Обновление и проверка версий CLI запускают процессы и ходят в сеть от имени хоста: только на Маке.
   'providers.update',
   'providers.checkUpdates',
+  // Установка запускает скачанный код вендора от имени человека (спека Qwen, §4.2 п. 9): только на Маке.
+  'providers.install',
   'telegram.*',
   'voiceProvider.*',
   'trust.grant',

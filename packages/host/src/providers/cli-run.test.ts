@@ -1,3 +1,6 @@
+import { existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { cliEnv, createCliRun, installerEnv } from './cli-run.js';
 
@@ -26,6 +29,15 @@ describe('общий раннер CLI', () => {
     const cli = createCliRun();
     await expect(cli.exclusive('claude', async () => Promise.reject(new Error('boom')))).rejects.toThrow('boom');
     expect(await cli.exclusive('claude', async () => 'ok')).toBe('ok');
+  });
+
+  it('после stop() новые процессы не запускаются', async () => {
+    const cli = createCliRun();
+    cli.stop();
+    const marker = path.join(tmpdir(), `parley-cli-run-stopped-${process.pid}-${Date.now()}`);
+    const result = await cli.exec('/bin/sh', ['-c', `touch "${marker}"`], { PATH: '/usr/bin:/bin' }, 5000);
+    expect(result).toMatchObject({ code: null, timedOut: false });
+    expect(existsSync(marker)).toBe(false);
   });
 
   it('окружение установщика: без переменных внедрения и меток родителя; прокси и CA остаются', () => {

@@ -383,6 +383,26 @@ describe('providers.skipUpdate и providers.list.update (спека 2026-11-02)'
     expect([busy.state, finished.state]).toEqual(['busy', 'done']);
   });
 
+  it('providers.install: {provider}, ответ busy или done с итогом установки', () => {
+    expect(METHODS['providers.install'].safeParse({ provider: 'qwen' }).success).toBe(true);
+    expect(METHODS['providers.install'].safeParse({}).success).toBe(false);
+    expect(METHODS['providers.install'].safeParse({ provider: 7 }).success).toBe(false);
+    // Лишние поля не проходят в обработчик: ни URL, ни аргументы из запроса.
+    expect(METHODS['providers.install'].parse({ provider: 'qwen', args: ['--evil'], url: 'https://x' })).toEqual({ provider: 'qwen' });
+    const busy: Result<'providers.install'> = { state: 'busy' };
+    const done: Result<'providers.install'> = {
+      state: 'done',
+      ok: false,
+      version: null,
+      output: 'tail',
+      error: 'The installer exited with code 1',
+      manualCommand: 'curl -fsSL https://claude.ai/install.sh | bash',
+      pathNote: '/Users/x/.local/bin is not on your shell PATH; Parley finds qwen there',
+      smoke: { ok: false, output: '' },
+    };
+    expect([busy, done]).toHaveLength(2);
+  });
+
   it('providers.checkUpdates: {provider}, ответ — cli; cli в providers.list необязателен и круговой обход схемы цел', () => {
     expect(METHODS['providers.checkUpdates'].safeParse({ provider: 'qwen' }).success).toBe(true);
     expect(METHODS['providers.checkUpdates'].safeParse({}).success).toBe(false);

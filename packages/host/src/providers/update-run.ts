@@ -86,6 +86,23 @@ async function isFile(file: string): Promise<boolean> {
   }
 }
 
+/** Задаёт ли npmrc реестр для области (`@scope:registry=…`); файла нет — нет. */
+async function setsScopedRegistry(npmrc: string, scope: string): Promise<boolean> {
+  let text: string;
+  try {
+    text = await readFile(npmrc, 'utf8');
+  } catch {
+    return false;
+  }
+  const key = `${scope.toLowerCase()}:registry`;
+  return text.split(/\r?\n/).some((line) => {
+    const trimmed = line.trim();
+    if (trimmed.startsWith('#') || trimmed.startsWith(';')) return false;
+    const at = trimmed.indexOf('=');
+    return at > 0 && trimmed.slice(0, at).trim().toLowerCase() === key;
+  });
+}
+
 /** `[major, minor, patch]` из `v22.1.0` или `22.1.0`; чужая форма — `null`. */
 function parseVersion(raw: string): [number, number, number] | null {
   const match = /^v?(\d+)\.(\d+)\.(\d+)/.exec(raw.trim());
@@ -138,6 +155,13 @@ export function createCliUpdateRunner(options: CliUpdateRunnerOptions): CliUpdat
     const npmCli = path.join(prefix, 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js');
     if (!(await isExecutableFile(node))) return manual(`No node next to this install: ${node} is missing.`);
     if (!(await isFile(npmCli))) return manual(`No npm next to this install: ${npmCli} is missing.`);
+    // Глобальный и встроенный npmrc этой установки: свой реестр для области пакета перекрыл бы `--registry` (§4.2 п. 3).
+    const scope = name.startsWith('@') ? name.split('/')[0] : undefined;
+    if (scope !== undefined) {
+      for (const npmrc of [path.join(prefix, 'etc', 'npmrc'), path.join(prefix, 'lib', 'node_modules', 'npm', 'npmrc')]) {
+        if (await setsScopedRegistry(npmrc, scope)) return manual(`${npmrc} sets a registry for ${scope}; Parley does not update through it.`);
+      }
+    }
     const env = installerEnv(source());
     const need = await requiredNode(path.join(prefix, 'lib', 'node_modules', name, 'package.json'));
     const probe = await cli.exec(node, ['--version'], env, smokeTimeoutMs);

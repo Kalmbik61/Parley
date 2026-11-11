@@ -41,7 +41,7 @@ describe('белый список против запретного списка
     const mustBeForbidden = [
       'settings.set', 'settings.get', 'host.shutdown', 'wake.now', 'pty.input', 'pty.resize', 'works.create', 'works.delete',
       'sessions.delete', 'sessions.rename', 'rooms.reopen', 'rooms.setMode', 'worktrees.merge', 'changes.commitProject',
-      'providers.setKey', 'providers.update', 'providers.checkUpdates', 'trust.grant', 'memory.write', 'backlog.add', 'plans.resumeAutonomous', 'assistant.send', 'browser.agentResult',
+      'providers.setKey', 'providers.update', 'providers.checkUpdates', 'providers.install', 'trust.grant', 'memory.write', 'backlog.add', 'plans.resumeAutonomous', 'assistant.send', 'browser.agentResult',
     ];
     for (const name of mustBeForbidden) {
       expect(isRemoteForbidden(name), name).toBe(true);

@@ -4,7 +4,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RequestInfo } from '../context.js';
 import type { CliUpdates } from '../providers/updates.js';
-import { createProvidersCheckUpdates, createProvidersList, createProvidersSkipUpdate, createProvidersUpdate } from './providers.js';
+import { createProvidersCheckUpdates, createProvidersInstall, createProvidersList, createProvidersSkipUpdate, createProvidersUpdate } from './providers.js';
 
 let home = '';
 beforeEach(async () => {
@@ -169,5 +169,42 @@ describe('providers.list: cli и providers.checkUpdates', () => {
     const stub = { checkOne: vi.fn(), status: vi.fn() };
     await expect(createProvidersCheckUpdates(undefined, stub)({ provider: 'нет-такого' }, req)).rejects.toMatchObject({ code: 'bad_request' });
     expect(stub.checkOne).not.toHaveBeenCalled();
+  });
+});
+
+describe('providers.install', () => {
+  const request = () => {
+    const broadcast = vi.fn();
+    return { broadcast, req: { client: { id: 'c-1', name: 'window' }, host: { broadcast } } as unknown as RequestInfo };
+  };
+  const done = { state: 'done', ok: true, version: '0.28.0', output: '' } as const;
+
+  it('провайдер → команда таблицы (GLM — claude, qwen без записи в реестре — qwen); кто звал — в установку; providers.changed', async () => {
+    const install = vi.fn(async () => done);
+    const handler = createProvidersInstall({ install });
+    const { broadcast, req } = request();
+    expect(await handler({ provider: 'glm' }, req)).toEqual(done);
+    expect(install).toHaveBeenLastCalledWith('claude', 'window (c-1)');
+    expect(await handler({ provider: 'qwen' }, req)).toEqual(done);
+    expect(install).toHaveBeenLastCalledWith('qwen', 'window (c-1)');
+    expect(broadcast).toHaveBeenCalledWith('providers.changed', { provider: 'qwen' });
+  });
+
+  it('в установку уходит только команда: лишние поля запроса не доходят', async () => {
+    const install = vi.fn(async () => done);
+    await createProvidersInstall({ install })({ provider: 'codex', args: ['--evil'], url: 'https://evil.example/' } as unknown as { provider: string }, request().req);
+    expect(install.mock.calls).toEqual([['codex', 'window (c-1)']]);
+  });
+
+  it('busy — как есть и без события; нет службы или команда не из таблицы — bad_request; сбой — internal без деталей', async () => {
+    const { broadcast, req } = request();
+    expect(await createProvidersInstall({ install: async () => ({ state: 'busy' }) })({ provider: 'codex' }, req)).toEqual({ state: 'busy' });
+    expect(broadcast).not.toHaveBeenCalled();
+    await expect(createProvidersInstall()({ provider: 'codex' }, req)).rejects.toMatchObject({ code: 'bad_request' });
+    await expect(createProvidersInstall({ install: vi.fn() })({ provider: 'нет-такого' }, req)).rejects.toMatchObject({ code: 'bad_request' });
+    const failing = createProvidersInstall({ install: async () => { throw new Error('/private/path leaked'); } });
+    const error = await failing({ provider: 'codex' }, req).catch((e: unknown) => e);
+    expect(error).toMatchObject({ code: 'internal' });
+    expect(JSON.stringify(error)).not.toContain('/private/path');
   });
 });

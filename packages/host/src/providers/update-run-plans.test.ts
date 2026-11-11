@@ -183,6 +183,26 @@ describe('qwen: привязанное npm-обновление', () => {
     expect(existsSync(path.join(root, 'path-node'))).toBe(false);
   });
 
+  it.each([
+    ['глобальный npmrc', 'etc/npmrc'],
+    ['встроенный npmrc npm', 'lib/node_modules/npm/npmrc'],
+  ])('%s задаёт реестр для @qwen-code — отказ с причиной, npm не запускается', async (_label, relative) => {
+    const a = await npmPrefix('prefix-a');
+    await mkdir(path.dirname(path.join(a.prefix, relative)), { recursive: true });
+    await writeFile(path.join(a.prefix, relative), 'fund=false\n @Qwen-Code:registry = https://mirror.example/\n');
+    const result = await runner({ bin: a.qwen }).update.run('qwen', 'w');
+    expect(result).toMatchObject({ ok: false, manualCommand: 'npm install -g @qwen-code/qwen-code@latest' });
+    expect((result as { output: string }).output).toContain('sets a registry for @qwen-code');
+    expect(existsSync(a.argv)).toBe(false);
+  });
+
+  it('npmrc без реестра области (или с закомментированным) не мешает', async () => {
+    const a = await npmPrefix('prefix-a');
+    await mkdir(path.join(a.prefix, 'etc'), { recursive: true });
+    await writeFile(path.join(a.prefix, 'etc/npmrc'), '# @qwen-code:registry=https://mirror.example/\n@other:registry=https://x.example/\n');
+    expect(await runner({ bin: a.qwen }).update.run('qwen', 'w')).toMatchObject({ ok: true });
+  });
+
   it('Node ниже 22 — ручная команда с причиной, npm не запускается', async () => {
     const a = await npmPrefix('prefix-a', { nodeVersion: 'v20.11.1' });
     const { update } = runner({ bin: a.qwen });

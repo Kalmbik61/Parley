@@ -7,7 +7,7 @@ import { accountProviderEntry, customProviderEntry, customProvidersFile, isAccou
 import { readSecret, type SecretId } from './secrets.js';
 import { parseVersion } from './work/channel.js';
 import type { Provider } from './session-index.js';
-import { overrideValue } from './work/find-binary.js';
+import { expectedRunnerBinary, overrideValue, resolveRunnerBinary } from './work/find-binary.js';
 import { parleyHome } from './work/store.js';
 import type { WorkProvider } from './work/types.js';
 
@@ -772,13 +772,17 @@ export async function commandInPath(
     if (dir === '') continue;
     if (await isExecutableFile(path.join(dir, binary))) return true;
   }
-  return false;
+  // Точный ожидаемый бинарь CLI из таблицы — тот же запасной путь, что у `resolveRunnerBinary`; не при подмене.
+  const expected = binary === command ? expectedRunnerBinary(command, env) : null;
+  return expected !== null && isExecutableFile(expected);
 }
 
 /** Local, bounded version-only probe; no session/config/authentication operation. */
-export function probeCliVersion(command: string, timeoutMs = 3000, env: NodeJS.ProcessEnv = process.env): Promise<string | null> {
+export async function probeCliVersion(command: string, timeoutMs = 3000, env: NodeJS.ProcessEnv = process.env): Promise<string | null> {
+  // Тот же бинарь, что запускается (подмена, PATH, точный ожидаемый путь); не нашли — как раньше, по имени.
+  const binary = await resolveRunnerBinary(command, env).then((found) => found.path, () => commandBinary(command, env));
   return new Promise((resolve) => {
-    const child = execFile(commandBinary(command, env), ['--version'], {
+    const child = execFile(binary, ['--version'], {
       env, timeout: timeoutMs, killSignal: 'SIGKILL', windowsHide: true,
     }, (error, stdout) => {
       const version = error === null ? parseVersion(stdout) : null;

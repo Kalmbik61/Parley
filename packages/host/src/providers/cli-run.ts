@@ -24,7 +24,7 @@ export interface CliRun {
    * `busy`. Флаг ставится синхронно в момент вызова и снимается по завершении работы, в том числе по исключению.
    */
   exclusive<T>(tool: CliTool, work: () => Promise<T>): Promise<T | { state: 'busy' }>;
-  /** Остановка хоста: идущие процессы убиваются целыми группами. */
+  /** Остановка хоста: идущие процессы убиваются целыми группами, новые после этого не запускаются. */
   stop(): void;
 }
 
@@ -114,8 +114,11 @@ export function createCliRun(): CliRun {
   const running = new Set<CliTool>();
   /** Группы живых процессов (`pid` лидера): их добивает `stop()`. */
   const groups = new Set<number>();
+  let stopped = false;
   return {
-    exec: (binary, args, env, timeoutMs) => exec(binary, args, env, timeoutMs, groups),
+    // Установщик, скачанный уже после остановки хоста, не стартует: процесс пережил бы хост.
+    exec: (binary, args, env, timeoutMs) =>
+      stopped ? Promise.resolve({ code: null, output: 'The host is stopping; nothing was started.', timedOut: false }) : exec(binary, args, env, timeoutMs, groups),
     async exclusive(tool, work) {
       if (running.has(tool)) return { state: 'busy' };
       running.add(tool);
@@ -126,6 +129,7 @@ export function createCliRun(): CliRun {
       }
     },
     stop() {
+      stopped = true;
       for (const pid of [...groups]) killGroup(pid);
     },
   };

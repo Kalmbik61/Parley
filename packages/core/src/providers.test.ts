@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -11,6 +11,7 @@ import {
   assistantCommand,
   codexModelsFile,
   commandInPath,
+  probeCliVersion,
   commandBinary,
   effortsFor,
   loadProviders,
@@ -787,6 +788,20 @@ describe('commandInPath', () => {
     await chmod(file, 0o755);
 
     expect(await commandInPath('стаб-агент', env())).toBe(true);
+  });
+
+  it('CLI из таблицы по точному ожидаемому пути ~/.local/bin находится и без PATH; подмена важнее; чужая команда туда не смотрит', async () => {
+    const bin = path.join(dir, 'home/.local/bin');
+    await mkdir(bin, { recursive: true });
+    for (const name of ['qwen', 'opencode']) {
+      await writeFile(path.join(bin, name), '#!/bin/sh\necho 0.28.0\n', 'utf8');
+      await chmod(path.join(bin, name), 0o755);
+    }
+    const home = { HOME: path.join(dir, 'home'), PATH: '' };
+    expect(await commandInPath('qwen', home)).toBe(true);
+    expect(await probeCliVersion('qwen', 5000, home)).toBe('0.28.0');
+    expect(await commandInPath('opencode', home)).toBe(false);
+    expect(await commandInPath('qwen', { ...home, PARLEY_QWEN_BIN: path.join(dir, 'нет') })).toBe(false);
   });
 
   it('неисполняемый файл и отсутствующая команда — нет в PATH', async () => {

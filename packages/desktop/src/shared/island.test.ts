@@ -13,6 +13,8 @@ describe('остров: белый список методов хоста', () =
 
   it('пропускает providers.list: без строк провайдеров значки своих провайдеров на острове — значок Parley', () => {
     expect(ISLAND_METHODS.has('providers.list')).toBe(true);
+    // Установка, обновление и проверка версий CLI запускают процессы и ходят в сеть: острову не открыты (спека Qwen, §4.2 п. 9).
+    for (const method of ['providers.install', 'providers.update', 'providers.checkUpdates']) expect(ISLAND_METHODS.has(method)).toBe(false);
     expect(ISLAND_EVENTS.has('providers.changed')).toBe(true);
   });
 

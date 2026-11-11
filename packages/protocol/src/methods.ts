@@ -135,6 +135,8 @@ export const METHODS = {
   'providers.update': z.object({ provider: z.string() }),
   // Проверить версии сейчас (спека Qwen, §4.4): свежая проба CLI и свежий запрос последней версии; не чаще раза в 10 с на CLI.
   'providers.checkUpdates': z.object({ provider: z.string() }),
+  // Установить CLI провайдера установщиком вендора (спека Qwen, §4.2): argv константный, из запроса — только провайдер.
+  'providers.install': z.object({ provider: z.string() }),
   'providers.check': z.object({ provider: z.string() }),
   // Key normalization belongs to core: trim edges before checking the length or whitespace.
   'providers.setKey': z.object({ provider: z.string(), key: z.string() }),
@@ -424,6 +426,23 @@ export interface Results extends AssistantMethodResults, VoiceMethodResults, Car
    * `output` — последние 4 КБ stdout и stderr; `manualCommand` — при `ok: false`; `smoke` — пробный запуск Codex с
    * флагами Parley; `runningSessions` — активные сессии этого CLI, они остаются на старой версии до перезапуска.
    */
+  /**
+   * `busy` — установка или обновление этого CLI уже идёт. `done`: `ok` — выход 0, без таймаута, версия у найденного
+   * бинаря и успешная проба; `version` — версия найденного бинаря; `output` — последние 4 КБ вывода установщика;
+   * `error` и `manualCommand` — при `ok: false`; `pathNote` — бинарь найден только по точному ожидаемому пути.
+   */
+  'providers.install':
+    | { state: 'busy' }
+    | {
+        state: 'done';
+        ok: boolean;
+        version: string | null;
+        output: string;
+        error?: string;
+        manualCommand?: string;
+        pathNote?: string;
+        smoke?: { ok: boolean; output: string };
+      };
   'providers.update':
     | { state: 'busy' }
     | {
