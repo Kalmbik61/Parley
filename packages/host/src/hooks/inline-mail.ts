@@ -10,7 +10,7 @@
 
 import { appendFile } from 'node:fs/promises';
 import path from 'node:path';
-import { INLINE_MAIL_EVENT, isPointerText, takeInlineMail, workPaths } from '@parley/core';
+import { INLINE_MAIL_EVENT, isPointerText, takeInlineMail as coreTakeInlineMail, workPaths } from '@parley/core';
 import type { McpContext } from '@parley/core';
 import type { SessionRef } from '@parley/protocol';
 import type { Log } from '../log.js';
@@ -19,8 +19,8 @@ import type { HookRequest } from './hook-server.js';
 
 /** Сколько хост отвечает хуку: позже — без писем. */
 export const INLINE_MAIL_BUDGET_MS = 2000;
-/** Ожидание записи почты внутри бюджета: запись, не успевшая взять блокировку, ничего не помечает. */
-const LOCK_TIMEOUT_MS = 1500;
+/** Меньше такого остатка бюджета письма не забираем: запись не успеет, а позже 2 с хук уже отвечен пустым. */
+export const INLINE_MAIL_MIN_LEFT_MS = 100;
 
 export interface InlineMailDeps {
   log: Log;
@@ -30,6 +30,9 @@ export interface InlineMailDeps {
   context(ref: SessionRef, launch: { agentRevision?: string }): Promise<McpContext>;
   /** Журнал доставок; по умолчанию — строка в `events/<сессия>.jsonl` работы. */
   journal?(ref: SessionRef, letters: number): void;
+  /** Часы и забор писем подменяются тестами. */
+  now?(): number;
+  take?: typeof coreTakeInlineMail;
 }
 
 const defaultJournal = (ref: SessionRef, letters: number): void => {
@@ -45,6 +48,8 @@ export interface InlineMail {
 
 export function createInlineMail(deps: InlineMailDeps): InlineMail {
   const journal = deps.journal ?? defaultJournal;
+  const now = deps.now ?? Date.now;
+  const take = deps.take ?? coreTakeInlineMail;
   return {
     handle(request) {
       const { body, ref } = request;
@@ -54,6 +59,7 @@ export function createInlineMail(deps: InlineMailDeps): InlineMail {
       const provider = deps.provider(ref);
       if (provider === undefined || provider === 'codex') return false;
 
+      const startedAt = now();
       let late = false;
       const answer = (text: string | null): void => {
         clearTimeout(timer);
@@ -72,9 +78,12 @@ export function createInlineMail(deps: InlineMailDeps): InlineMail {
 
       void (async () => {
         const context = await deps.context(ref, request.agentRevision === undefined ? {} : { agentRevision: request.agentRevision });
-        // Ответили пустым по таймеру или хук оборван: письма не забираем.
-        if (late) return;
-        const taken = takeInlineMail(context, ref.sessionId, LOCK_TIMEOUT_MS);
+        // Хуку уже ответили (таймер, закрытие сервера, сбой ленты) или он оборван: новый ответ не дойдёт, письма не забираем.
+        if (late || request.answered()) return;
+        // Бюджет покрывает и сам забор: остаток уходит ожиданием записи, а мало осталось — отвечаем без писем.
+        const left = INLINE_MAIL_BUDGET_MS - (now() - startedAt);
+        if (left < INLINE_MAIL_MIN_LEFT_MS) return answer(null);
+        const taken = take(context, ref.sessionId, left);
         if (taken === null) return answer(null);
         try {
           journal(ref, taken.letters);
@@ -90,4 +99,12 @@ export function createInlineMail(deps: InlineMailDeps): InlineMail {
       return true;
     },
   };
+}
+
+/**
+ * Проводка приёмника хуков: указатель с письмами обрабатывает `inline`, а лента получает то же событие с глухим `respond`.
+ * Без подмены лента отвечала бы `{}` синхронно, раньше письма, и каждое письмо указателя было бы помечено прочитанным и потеряно.
+ */
+export function hookWithInlineMail(inline: InlineMail, forward: (request: HookRequest) => void): (request: HookRequest) => void {
+  return (request) => forward(inline.handle(request) ? { ...request, respond: () => {} } : request);
 }

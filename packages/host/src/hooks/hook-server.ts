@@ -44,6 +44,8 @@ export interface HookRequest {
   agentRevision?: string;
   /** Ответ хуку (200, JSON). Второй и следующие вызовы ничего не делают. */
   respond(json: HookResponse): void;
+  /** Запрос уже отвечен кем-то (в том числе `{}` при закрытии сервера) или закрыт другой стороной: новый ответ ничего не отправит. */
+  answered(): boolean;
   /**
    * Запрос закрыт другой стороной раньше ответа (CLI оборвал хук, процесс вышел). Слушатель
    * вызывается один раз и только если ответа ещё не было.
@@ -280,6 +282,7 @@ export function createHookServer(options: HookServerOptions): HookServer {
       body,
       ...(registration.agentRevision === undefined ? {} : { agentRevision: registration.agentRevision }),
       respond,
+      answered: () => answered,
       onAbandon(listener) {
         abandon = listener;
       },

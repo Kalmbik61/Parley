@@ -2203,6 +2203,24 @@ describe('session layer warnings and final spawn budget', () => {
     await service.stopAll();
   });
 
+  it('the hook token is registered with the session agent revision from the launch environment', async () => {
+    setEnv('PARLEY_HOME', path.join(project, 'home'));
+    const host = fakeHost();
+    const pty = createPtyManager(host);
+    const registered = vi.fn(() => 'token');
+    const service = createSessionsService(host, fakeWorks(), pty, fakeActivity(), {
+      hooks: { url: () => 'http://127.0.0.1:4321/hooks', register: registered, unregister: vi.fn() },
+      providerVersions: { ready: Promise.resolve(), get: () => '999.0.0' },
+      spawnLimits: async () => ({ argMax: 50000, pointerSize: 8 }),
+    });
+    const ref = await makeRef();
+    await updateMap(project, ref.workId, map => { map.sessions.find(item => item.id === ref.sessionId)!.agentRevision = 'rev-test'; });
+    await service.launch(ref, 'launch').catch(() => {});
+    expect(registered).toHaveBeenCalledTimes(1);
+    expect((registered.mock.calls[0] as unknown[])[3]).toBe('rev-test');
+    await service.stopAll();
+  });
+
   it('an unknown native limit fails before PTY, without claiming a guessed budget', async () => {
     setEnv('PARLEY_HOME', path.join(project, 'home'));
     const host = fakeHost();

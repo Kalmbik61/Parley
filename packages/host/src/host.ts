@@ -134,7 +134,7 @@ import { createVoiceTelemetry, LIVE_USD_PER_MINUTE } from './voice/telemetry.js'
 import { dailyBudget } from './voice/budget.js';
 import { AGENT_BROWSER_PATH, createBrowserEndpoint } from './agent/browser-endpoint.js';
 import { createHookServer } from './hooks/hook-server.js';
-import { createInlineMail } from './hooks/inline-mail.js';
+import { createInlineMail, hookWithInlineMail } from './hooks/inline-mail.js';
 import { createSilentEndings } from './endings/silent-endings.js';
 import { createSessionsService } from './sessions/sessions-service.js';
 import { providerLaunchEnv } from './sessions/provider-env.js';
@@ -582,7 +582,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       }
       // Указатель на письма с хуком `UserPromptSubmit`: хост отвечает сам (письма в `additionalContext`), а лента получает
       // событие с глухим `respond`: её `{}` второй ответ не перебьёт.
-      feedService.onHook(inlineMail.handle(request) ? { ...request, respond: () => {} } : request);
+      hookWithInlineMail(inlineMail, (hook) => feedService.onHook(hook))(request);
     },
     routes: { [AGENT_ATTEMPTS_PATH]: (req, res) => attemptsEndpoint.handle(req, res), [AGENT_SESSIONS_PATH]: (req, res) => sessionEndpoint.handle(req, res), [AGENT_SWITCH_PATH]: (req, res) => switchEndpoint.handle(req, res), [AGENT_SWARMS_PATH]: (req, res) => swarmEndpoint.handle(req, res), [AGENT_PROVIDERS_PATH]: (req, res) => providersEndpoint.handle(req, res), [AGENT_TOOLS_PATH]: (req, res) => toolsEndpoint.handle(req, res), [AGENT_BROWSER_PATH]: (req, res) => browserEndpoint.handle(req, res), ...assistantEndpoint.routes() },
   });

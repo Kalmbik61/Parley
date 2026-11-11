@@ -14,7 +14,9 @@ import type { SessionRef } from '@parley/protocol';
 import { silentLog } from '../../test/feed-fakes.js';
 import { EMPTY_HOOK_RESPONSE, type HookResponse } from './decisions.js';
 import type { HookRequest } from './hook-server.js';
-import { createInlineMail, INLINE_MAIL_BUDGET_MS } from './inline-mail.js';
+import { request as httpRequest } from 'node:http';
+import { createHookServer } from './hook-server.js';
+import { createInlineMail, hookWithInlineMail, INLINE_MAIL_BUDGET_MS } from './inline-mail.js';
 
 let home = '';
 let project = '';
@@ -42,6 +44,7 @@ const POINTER = (count: number): string => pointerText(
 );
 
 interface Probe { request: HookRequest; replies: HookResponse[]; abandoned(): void }
+
 const hook = (prompt: string, event = 'UserPromptSubmit', agentRevision?: string): Probe => {
   const replies: HookResponse[] = [];
   let abandon: (() => void) | null = null;
@@ -50,6 +53,7 @@ const hook = (prompt: string, event = 'UserPromptSubmit', agentRevision?: string
     body: { hook_event_name: event, prompt },
     ...(agentRevision === undefined ? {} : { agentRevision }),
     respond: (json) => { if (replies.length === 0) replies.push(json); },
+    answered: () => replies.length > 0,
     onAbandon: (listener) => { abandon = listener; },
   };
   return { request, replies, abandoned: () => abandon?.() };
@@ -198,5 +202,104 @@ describe('письма вместе с указателем', () => {
     await settle();
     await settle();
     expect(unread()).toBe(1);
+  });
+});
+
+describe('бюджет и чужой ответ', () => {
+  it('хуку уже ответил кто-то другой (сбой ленты, закрытие сервера): письма не забираются', async () => {
+    await say('письмо');
+    let release: (() => void) | undefined;
+    const { inline, journal } = make({
+      context: (_ref, launch) => new Promise<McpContext>((resolve) => { release = () => resolve(contextOf(launch.agentRevision)); }),
+    });
+    const probe = hook(POINTER(1));
+    inline.handle(probe.request);
+    probe.request.respond(EMPTY_HOOK_RESPONSE);
+    release!();
+    await settle();
+    await settle();
+    expect(unread()).toBe(1);
+    expect(journal).not.toHaveBeenCalled();
+    expect(probe.replies).toEqual([EMPTY_HOOK_RESPONSE]);
+  });
+
+  it('остаток бюджета уходит ожиданием записи: забор получает lockTimeoutMs = остаток', async () => {
+    vi.useFakeTimers();
+    await say('письмо');
+    let release: (() => void) | undefined;
+    const take = vi.fn(() => null);
+    const { inline } = make({
+      take,
+      context: (_ref, launch) => new Promise<McpContext>((resolve) => { release = () => resolve(contextOf(launch.agentRevision)); }),
+    });
+    inline.handle(hook(POINTER(1)).request);
+    await vi.advanceTimersByTimeAsync(500);
+    release!();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(take).toHaveBeenCalledTimes(1);
+    expect(take.mock.calls[0]?.[2]).toBe(INLINE_MAIL_BUDGET_MS - 500);
+  });
+
+  it('почти весь бюджет ушёл на контекст: ответ без писем, ничего не помечено, забор не вызван', async () => {
+    vi.useFakeTimers();
+    await say('письмо');
+    let release: (() => void) | undefined;
+    const take = vi.fn(() => null);
+    const { inline } = make({
+      take,
+      context: (_ref, launch) => new Promise<McpContext>((resolve) => { release = () => resolve(contextOf(launch.agentRevision)); }),
+    });
+    const probe = hook(POINTER(1));
+    inline.handle(probe.request);
+    await vi.advanceTimersByTimeAsync(INLINE_MAIL_BUDGET_MS - 50);
+    release!();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(take).not.toHaveBeenCalled();
+    expect(probe.replies).toEqual([EMPTY_HOOK_RESPONSE]);
+    expect(unread()).toBe(1);
+  });
+});
+
+describe('проводка приёмника хуков', () => {
+  const post = (url: string, token: string, body: unknown): Promise<string> => new Promise((resolve, reject) => {
+    const target = new URL(url);
+    const payload = JSON.stringify(body);
+    const req = httpRequest({
+      host: target.hostname, port: target.port, path: target.pathname, method: 'POST', agent: false,
+      headers: { 'Content-Type': 'application/json', 'Content-Length': String(Buffer.byteLength(payload)),
+        Authorization: `Bearer ${token}`, 'X-Parley-Session': ref.sessionId },
+    }, (res) => {
+      const chunks: Buffer[] = [];
+      res.on('data', (chunk: Buffer) => chunks.push(chunk));
+      res.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    });
+    req.on('error', reject);
+    req.end(payload);
+  });
+
+  it('лента отвечает {} синхронно, а письма всё равно доходят и помечены только отданные; ревизия агента доходит до контекста', async () => {
+    await say('письмо');
+    const launches: { agentRevision?: string }[] = [];
+    const { inline } = make({ context: async (_ref, launch) => { launches.push(launch); return contextOf(launch.agentRevision); } });
+    // Как настоящая лента: отвечает `{}` сразу, в том же вызове.
+    const server = createHookServer({
+      log: silentLog(),
+      onHook: hookWithInlineMail(inline, (request) => request.respond(EMPTY_HOOK_RESPONSE)),
+    });
+    try {
+      const url = await server.listen();
+      const token = server.register(ref, null, 'claude', 'rev-7');
+      const answer = JSON.parse(await post(url, token, { hook_event_name: 'UserPromptSubmit', prompt: POINTER(1) })) as HookResponse;
+      expect(contextOfOutput(answer)).toContain('письмо');
+      expect(unread()).toBe(0);
+      expect(launches).toEqual([{ agentRevision: 'rev-7' }]);
+      // Не указатель: письма не трогаются, ответ — лента.
+      await say('второе');
+      const plain = JSON.parse(await post(url, token, { hook_event_name: 'UserPromptSubmit', prompt: 'сделай' })) as HookResponse;
+      expect(plain).toEqual({});
+      expect(unread()).toBe(1);
+    } finally {
+      await server.close();
+    }
   });
 });
