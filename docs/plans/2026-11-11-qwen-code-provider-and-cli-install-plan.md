@@ -36,7 +36,7 @@ Status: draft. **No task starts before the human accepts the spec and decisions 
 ## Order and shared files
 
 ```
-Part B: B1 → B2 → B3 → B4(senior) → B5 → B6
+Part B: B1 → B2(senior) → B3 → B4(senior) → B5 → B6
 Part A: A0 → A1a → A1b → A1c → A2 → A3 → A4 → A5(senior) → A6(senior) → A7a → A7b → A7c → A8 → A9(senior) → A10 → A11
 Final:  V1
 ```
@@ -58,7 +58,7 @@ Final:  V1
   - latest source;
   - `installMethod(realpath, home, exists)`;
   - update plan per method (`run`, `npm-bound`, `manual`);
-  - install plan per platform;
+  - install plan per platform, with the allowed HTTPS redirect hosts per CLI (determined once with `curl -sI` on the three installer URLs, recorded in the report);
   - exact expected binary;
   - smoke argv.
 - `cli-updates.ts` reads its sources and method rules from the table. `CliUpdateProvider` gains `'qwen'`.
@@ -74,7 +74,7 @@ Final:  V1
    - the update plan per method;
    - the install plans and expected binaries as a constant snapshot.
 
-### B2. Shared runner; update through the table (host)
+### B2. Shared runner; update through the table (host). **Senior-only**
 
 **Scope.** Extract the runner from `update-run.ts` into `cli-run.ts`, moving the existing semantics without changing them:
 - group spawn, timeout and kill, tail, scrub;
@@ -88,7 +88,7 @@ Final:  V1
 
 `UPDATE_COMMANDS` gains qwen.
 
-Junior, with mandatory senior review of the busy/kill boundary. Reason it is not senior-only: the existing tested code moves with unchanged semantics, and the only new concurrency fact is that one guard is shared.
+**Reason for senior-only:** the process lifetime and the busy guard shared by install and update are a concurrency boundary (PARLEY.md).
 
 **Files.** `packages/host/src/providers/cli-run.ts` (new), `update-run.ts`, `updates.ts`, `packages/host/src/methods/providers.ts`, tests.
 
@@ -153,7 +153,7 @@ Junior, with mandatory senior review of the busy/kill boundary. Reason it is not
 
 **Criteria.** Tests with a local HTTPS stub (a test-only CA) and stub interpreters:
 1. success;
-2. an HTTP redirect is refused;
+2. an HTTP redirect and an HTTPS redirect to a host outside the CLI's list are refused, and a redirect within the list is followed;
 3. a body over 1 MB is refused;
 4. a timeout kills the group;
 5. a non-zero exit returns the tail and the manual command;

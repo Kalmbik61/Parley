@@ -344,7 +344,7 @@ On Windows, Install and the bound npm route show copy-only commands.
 
 1. **Constant argv.** Only built-in commands from the table. Nothing from the request or from settings reaches the argv.
 2. **Download, then run.**
-   - The host downloads the script over HTTPS from the constant URL. Redirects are allowed only to HTTPS, the body is capped at 1 MB and the timeout is 15 s.
+   - The host downloads the script over HTTPS from the constant URL. A redirect is followed only to an HTTPS host on the CLI's allowed list in the descriptor table (the installer's own host plus the hosts it was observed to redirect to, fixed in B1); any other redirect refuses the install. The body is capped at 1 MB and the timeout is 15 s.
    - The script goes into a fresh `0700` temp dir and runs as `[/bin/bash --noprofile --norc | /bin/sh, <file>, …constant args]` with `shell: false`.
    - Nothing is piped from the network into a shell. The SHA-256 and size are logged, and the temp dir is removed.
 3. **Installer env.** It starts from `agentEnv` with the update scrub, then:
@@ -551,3 +551,4 @@ Every record also has `uuid, parentUuid, sessionId, timestamp, cwd, version`.
 | 13 | Tool search is global | D8 and its A5 check |
 | 14 | Evidence labels | §2 evidence column cites addendum A1–A10; lab versioned by A0 |
 | 15 | Decision framing | D1 dropped (already authorized); D2/D3 split; D6/D9 wording; V1 install authorized with acceptance |
+| 16 | Delta check of revision 2: redirects to any HTTPS host; B2 concurrency boundary still junior | §4.2.2 per-CLI redirect host list; plan B2 made senior-only |
