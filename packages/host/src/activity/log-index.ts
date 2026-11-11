@@ -42,6 +42,7 @@ import {
   type WorkSession,
   usageKey,
   withDescendants,
+  byFamily,
 } from '@parley/core';
 import { hostPaths } from '../paths.js';
 import { readHostVersion } from '../version.js';
@@ -115,7 +116,8 @@ export interface LogIndex {
  * Чьи логи читает сессия: Codex — свои, всё прочее (Claude и его надстройки вроде GLM) — Claude Code.
  * Один и тот же нативный id у двух семейств друг друга не вытесняет.
  */
-const logFamily = (provider: string): 'codex' | 'claude' => (provider === 'codex' ? 'codex' : 'claude');
+const logFamily = (provider: string): 'codex' | 'claude' | 'other' =>
+  byFamily(provider, { claude: 'claude' as const, codex: 'codex' as const, qwen: 'other' as const, neutral: 'other' as const });
 const logKey = (provider: string, id: string): string => `${logFamily(provider)}\u0000${id}`;
 
 /**

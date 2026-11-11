@@ -14,7 +14,7 @@ import {
   backLetter,
   backLine,
   envValue,
-  isClaudeCode,
+  byFamily,
   isManagedProviderId,
   isRoomArchived,
   liveLead,
@@ -155,9 +155,12 @@ export function createStuckService(
    * Claude Code (`claude`, `glm`, свои аккаунты `custom-*`) или Codex; у незнакомого семейства — имя самого провайдера.
    */
   function familyName(id: string, provider: string): string {
-    if (isClaudeCode(id)) return providerLabel(PROVIDERS.claude);
-    if (id.toLowerCase() === PROVIDERS.codex.id) return providerLabel(PROVIDERS.codex);
-    return provider;
+    return byFamily(id.toLowerCase(), {
+      claude: providerLabel(PROVIDERS.claude),
+      codex: providerLabel(PROVIDERS.codex),
+      qwen: provider,
+      neutral: provider,
+    });
   }
 
   async function alternativesFor(provider: string): Promise<readonly LimitAlternative[]> {

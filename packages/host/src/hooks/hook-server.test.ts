@@ -318,6 +318,18 @@ describe('приём событий', () => {
     expect((await post(url, event('MessageDisplay', { message_id: 'm', index: 0, delta: 'x' }), { token })).status).toBe(400);
   });
 
+  it('neutral family (qwen, unknown): no hook event is accepted; Claude-family ids keep theirs', async () => {
+    const { server, url } = await boot();
+    for (const provider of ['qwen', 'mystery']) {
+      const token = server.register(REF, null, provider);
+      expect((await post(url, event('PreToolUse', { tool_name: 'Bash', tool_input: {} }), { token })).status).toBe(400);
+    }
+    for (const provider of ['claude', 'glm', 'custom-kimi']) {
+      const token = server.register(REF, null, provider);
+      expect((await post(url, event('PreToolUse', { tool_name: 'Bash', tool_input: {} }), { token })).status).toBe(200);
+    }
+  });
+
   it('провайдер codex: первый хук с session_id привязывает id, чужой session_id не SessionStart — 404', async () => {
     const { server, url } = await boot();
     const token = server.register(REF, null, 'codex');

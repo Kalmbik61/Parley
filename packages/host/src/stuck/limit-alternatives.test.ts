@@ -127,6 +127,7 @@ describe('limitAlternatives — другие вошедшие аккаунты �
     const deps = { limits: noLimits, signedIn: () => true, readiness: ready };
     expect(await limitAlternatives('codex', deps)).toEqual([]);
     expect(await limitAlternatives('нет-такого', deps)).toEqual([]);
+    expect(await limitAlternatives('qwen', deps)).toEqual([]);
   });
 });
 

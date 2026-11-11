@@ -26,7 +26,7 @@ import {
   type CustomAccountRecord,
   type CustomEndpointRecord,
 } from './custom-providers.js';
-import { PROVIDERS, claudeConfigDirFor, isClaudeCode, isManagedEntry, loadProviders, managedRecord, ownsHookToken, providerFamily } from './providers.js';
+import { PROVIDERS, claudeConfigDirFor, isClaudeCode, isManagedEntry, loadProviders, managedRecord, ownsHookToken, providerFamily, byFamily } from './providers.js';
 import { QWEN_FAMILY_ENTRY, UNKNOWN_FAMILY_ENTRY } from '../test/family-fixtures.js';
 
 const kimi: CustomEndpointRecord = {
@@ -436,5 +436,20 @@ describe('providerFamily', () => {
   it('codex having a family does not make it Claude Code', () => {
     expect(isClaudeCode(PROVIDERS.codex)).toBe(false);
     expect(isClaudeCode('codex')).toBe(false);
+  });
+});
+
+describe('byFamily', () => {
+  const branches = { claude: 'c', codex: 'x', qwen: 'q', neutral: 'n' } as const;
+  it('picks the family branch; a null or unrecognised family takes neutral', () => {
+    expect(byFamily(PROVIDERS.claude, branches)).toBe('c');
+    expect(byFamily(PROVIDERS.glm, branches)).toBe('c');
+    expect(byFamily('custom-kimi', branches)).toBe('c');
+    expect(byFamily(PROVIDERS.codex, branches)).toBe('x');
+    expect(byFamily('codex', branches)).toBe('x');
+    expect(byFamily(QWEN_FAMILY_ENTRY, branches)).toBe('q');
+    expect(byFamily(UNKNOWN_FAMILY_ENTRY, branches)).toBe('n');
+    expect(byFamily('qwen', branches)).toBe('n');
+    expect(byFamily('mystery', branches)).toBe('n');
   });
 });

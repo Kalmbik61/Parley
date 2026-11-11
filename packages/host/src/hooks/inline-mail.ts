@@ -10,7 +10,7 @@
 
 import { appendFile } from 'node:fs/promises';
 import path from 'node:path';
-import { INLINE_MAIL_EVENT, isPointerText, takeInlineMail as coreTakeInlineMail, workPaths } from '@parley/core';
+import { byFamily, INLINE_MAIL_EVENT, isPointerText, takeInlineMail as coreTakeInlineMail, workPaths } from '@parley/core';
 import type { McpContext } from '@parley/core';
 import type { SessionRef } from '@parley/protocol';
 import type { Log } from '../log.js';
@@ -57,7 +57,7 @@ export function createInlineMail(deps: InlineMailDeps): InlineMail {
       const prompt = body['prompt'];
       if (typeof prompt !== 'string' || !isPointerText(prompt)) return false;
       const provider = deps.provider(ref);
-      if (provider === undefined || provider === 'codex') return false;
+      if (provider === undefined || byFamily(provider, { claude: false, codex: true, qwen: true, neutral: true })) return false;
 
       const startedAt = now();
       let late = false;

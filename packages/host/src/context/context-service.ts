@@ -7,7 +7,7 @@
  * для Codex застывает (приёмка 2026-10-16).
  */
 
-import { codexContextFill, readContextFill, workPaths, type ContextFill, type RolloutRecord } from '@parley/core';
+import { byFamily, codexContextFill, readContextFill, workPaths, type ContextFill, type RolloutRecord } from '@parley/core';
 import { refKey, type SessionRef } from '@parley/protocol';
 import { createRolloutTail } from '../feed/codex-source.js';
 import type { ActivityService } from '../activity/activity-service.js';
@@ -61,8 +61,12 @@ export function createContextService(deps: {
     for (const key of Array.from(tails.keys())) if (!live.has(key)) tails.delete(key);
     await Promise.all(
       handles.map(async ({ ref, provider }) => {
-        if (provider === 'codex') await tickCodex(ref);
-        else deps.activity.setContext(ref, await read(workPaths(ref.projectPath, ref.workId).dir, ref.sessionId));
+        await byFamily(provider ?? 'claude', {
+          claude: async () => deps.activity.setContext(ref, await read(workPaths(ref.projectPath, ref.workId).dir, ref.sessionId)),
+          codex: () => tickCodex(ref),
+          qwen: async () => undefined,
+          neutral: async () => undefined,
+        })();
       }),
     );
   };

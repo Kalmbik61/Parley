@@ -491,6 +491,33 @@ export function providerFamily(entry: ProviderEntry | WorkProvider): ProviderFam
 }
 
 /**
+ * Exhaustive dispatch on the provider family. Every family has its own branch, so a new `ProviderFamily` member
+ * breaks the compile at every caller; a null or unrecognised family takes `neutral` (no Claude hooks, transcript,
+ * statusline or inline mail).
+ */
+export function byFamily<T>(
+  entry: ProviderEntry | WorkProvider,
+  branches: { claude: T; codex: T; qwen: T; neutral: T },
+): T {
+  const family = providerFamily(entry);
+  switch (family) {
+    case 'claude':
+      return branches.claude;
+    case 'codex':
+      return branches.codex;
+    case 'qwen':
+      return branches.qwen;
+    case null:
+      return branches.neutral;
+    default: {
+      const unreachable: never = family;
+      void unreachable;
+      return branches.neutral;
+    }
+  }
+}
+
+/**
  * `CLAUDE_CONFIG_DIR`, под которым живёт процесс провайдера семейства Claude Code. У GLM хост срезает
  * переменную (`provider-env.ts`): его конфигурация — `~/.claude`, и значение из окружения хоста или ведущего
  * агента ему не принадлежит. Одно правило для запуска, каталога ролей и поиска скиллов.

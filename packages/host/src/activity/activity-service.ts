@@ -57,6 +57,7 @@ import {
   type Activity,
   type ContextFill,
   type ActivityLog,
+  byFamily,
   type EventRecord,
   type EventsLog,
   type EventsWatcher,
@@ -642,6 +643,11 @@ export function createActivityService(
     terminals.delete(key);
   }
 
+  /** Only the Claude Code family speaks the Claude hooks; codex, qwen and a null or unknown family do not. */
+  function hooksExpected(session: WorkSession): boolean {
+    return byFamily(session.provider, { claude: true, codex: false, qwen: false, neutral: false });
+  }
+
   /**
    * События сессии для свёртки. У Claude Code — журнал хуков. У codex хуков нет: журнал `events/` пишет
    * только скрипт `notify` (конец хода), поэтому его отсутствие не поломка хуков, а к журналу добавляется
@@ -653,7 +659,7 @@ export function createActivityService(
   function eventsFor(session: WorkSession, key: string): readonly EventRecord[] | null {
     const journal = journals.get(key) ?? null;
     const terminal = terminals.get(key);
-    if (terminal === undefined && session.provider !== 'codex') {
+    if (terminal === undefined && hooksExpected(session)) {
       return withLaunchBoundary(journal, launchBoundaryOf(session, key));
     }
     // Строки до запуска процесса Codex — прошлых процессов (прежний агент до замены, прошлый запуск): за ними граница
@@ -711,7 +717,7 @@ export function createActivityService(
     return (
       session.launchedBy === 'host' &&
       session.lifecycle === 'active' &&
-      session.provider !== 'codex' &&
+      hooksExpected(session) &&
       !terminals.has(key)
     );
   }
@@ -1127,7 +1133,7 @@ export function createActivityService(
   ): void {
     if (session.launchedBy !== 'host' || session.lifecycle !== 'active') return;
     // Хуков Codex харнесс не включает: их отсутствие у него — норма, состояние ведёт терминал.
-    if (terminals.has(key) || session.provider === 'codex') return;
+    if (terminals.has(key) || !hooksExpected(session)) return;
     if (events !== null || hooksMissingNotified.has(key)) return;
     hooksMissingNotified.add(key);
     host.broadcast('host.notice', {
@@ -1150,7 +1156,7 @@ export function createActivityService(
       return;
     }
     // Экраны старта Codex ловит свой срок (`terminalStarted`): хуков у него не будет ни в одной папке.
-    if (terminals.has(key) || session.provider === 'codex') {
+    if (terminals.has(key) || !hooksExpected(session)) {
       clearTrustWaitTimer(key);
       return;
     }

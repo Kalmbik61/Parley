@@ -40,6 +40,17 @@ describe('createContextService (спека 4.3)', () => {
     expect(setContext).toHaveBeenCalledWith(claude, FILL);
   });
 
+  it('neutral family (qwen, unknown) is neither read as Claude nor as Codex', async () => {
+    await writeFile(contextFile(workPaths(project, 'w-01').dir, 's-03'), JSON.stringify(FILL));
+    const setContext = vi.fn();
+    const neutral = [
+      { ref: { ...claude, sessionId: 's-03' }, provider: 'qwen' },
+      { ref: { ...claude, sessionId: 's-04' }, provider: 'mystery' },
+    ] as unknown as PtyHandle[];
+    await createContextService({ pty: { list: () => neutral }, activity: { setContext, logFile: () => null } }).tick();
+    expect(setContext).not.toHaveBeenCalled();
+  });
+
   it('файла нет — setContext(ref, null)', async () => {
     const setContext = vi.fn();
     await createContextService({ pty: { list: handles }, activity: { setContext, logFile: () => null } }).tick();

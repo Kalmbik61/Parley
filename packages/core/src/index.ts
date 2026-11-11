@@ -100,6 +100,7 @@ export {
   loadProviders,
   isClaudeCode,
   providerFamily,
+  byFamily,
   isManagedEntry,
   managedRecord,
   ownsHookToken,

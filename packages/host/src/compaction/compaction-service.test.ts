@@ -9,6 +9,13 @@ import type { CompactionTrack } from './context-view.js';
 
 const ref: SessionRef = { projectPath: '/tmp/project', workId: 'w-01', sessionId: 's-01' };
 
+describe('compactCommand by family', () => {
+  it('only the Claude Code family carries the focus; codex, qwen, null-family and unknown stay bare', () => {
+    for (const provider of ['claude', 'glm', 'custom-kimi']) expect(compactCommand(provider, 'focus')).toBe('/compact focus');
+    for (const provider of ['codex', 'qwen', 'mystery']) expect(compactCommand(provider, 'focus')).toBe('/compact');
+  });
+});
+
 describe('compactCommand (спека 5.3)', () => {
   it('фокус — одна строка без управляющих символов', () => {
     expect(compactCommand('claude', 'a\n\tb\x1b[31m c ')).toBe('/compact a b c');

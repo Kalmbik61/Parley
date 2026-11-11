@@ -498,6 +498,16 @@ describe('служба «застрял» — доклад (спека заст�
     expect(letters(map)[0]?.text).toContain('Other Codex accounts in Parley right now: Codex 2 — no limits known.');
   });
 
+  it('qwen (neutral family): the limit letter names the provider itself, not Claude Code or Codex', async () => {
+    const [, worker] = await makeWork((map, [a, b]) => inRoom(a, b)(map), 'qwen');
+    boot({ alternatives: async () => [{ id: 'qwen-2', label: 'Qwen 2', limits: null }] });
+    await emit(worker, needOf('limit'));
+    await until(async () => (await stuckOf(worker)) != null);
+    const text = letters(readStoredMap(project, workId))[0]?.text ?? '';
+    expect(text).toContain('Other qwen accounts in Parley right now: Qwen 2');
+    expect(text).not.toContain('Other Claude Code accounts');
+  });
+
   it('застрял ведущий: письма только отправителям непрочитанных, не человеку и не системе; строка с хвостом про «Make lead»', async () => {
     const [lead, worker, third] = await makeWork((map, [a, b, c], tx) => {
       inRoom(a, b, c)(map);

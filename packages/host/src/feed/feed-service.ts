@@ -44,6 +44,7 @@ import {
   forEachJsonlRecord,
   interruptedAt,
   isCodexThreadBinding,
+  byFamily,
   isClaudeCode,
   loadConfig,
   parleyHome,
@@ -791,10 +792,13 @@ export function createFeedService(
     } catch {
       provider = undefined;
     }
-    if (provider === 'codex') {
+    const hookFamily = provider === undefined ? 'claude' : byFamily(provider, { claude: 'claude' as const, codex: 'codex' as const, qwen: null, neutral: null });
+    if (hookFamily === 'codex') {
       onCodexHook(request);
       return;
     }
+    // Neutral family (qwen until its own branch, null or unknown): no Claude hook handling.
+    if (hookFamily === null) return;
     const feed = feedOf(ref);
     feed.live = true;
     const proof = captureProgress(feed);
@@ -848,7 +852,12 @@ export function createFeedService(
     if (foreground) promoteSeed(key);
     const existing = coldReads.get(key);
     if (existing !== undefined) return existing;
-    const run = provider === 'codex' ? seedCodex(feed, foreground) : seedClaude(feed, provider, foreground);
+    const run = byFamily(provider, {
+      claude: () => seedClaude(feed, provider, foreground),
+      codex: () => seedCodex(feed, foreground),
+      qwen: () => Promise.resolve(),
+      neutral: () => Promise.resolve(),
+    })();
     if (feed.seeding === undefined) return run;
     const held = run.finally(() => {
       if (coldReads.get(key) === held) coldReads.delete(key);

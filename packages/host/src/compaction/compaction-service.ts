@@ -6,7 +6,7 @@
  * в хвосте rollout после печати (опрос раз в 2 с, Codex), выход процесса или таймаут.
  */
 
-import { hookedSince, type RolloutRecord } from '@parley/core';
+import { byFamily, hookedSince, type RolloutRecord } from '@parley/core';
 import { COMPACT_MAX_INSTRUCTIONS, refKey } from '@parley/protocol';
 import type { CompactResult, NoticeKind, SessionRef } from '@parley/protocol';
 import type { ActivityService } from '../activity/activity-service.js';
@@ -37,7 +37,7 @@ const TRAILING_MENU_TOKEN = /(?:^|\s)[@/]\S*$/;
 
 /** Строка команды: Codex — голый `/compact` (спека 2.7); фокус — одна строка до 350 знаков, пусто — без фокуса. */
 export function compactCommand(provider: string | null, instructions: string | null): string {
-  if (provider === 'codex' || instructions === null) return '/compact';
+  if (instructions === null || (provider !== null && !byFamily(provider, { claude: true, codex: false, qwen: false, neutral: false }))) return '/compact';
   const line = stripEscapes(instructions).replace(CONTROL, ' ').replace(/\s+/g, ' ').trim();
   // Предел (спека 5.3): `/compact ` + 350 знаков кириллицы ≤ 709 байт — ниже порога «вставки» Claude Code.
   if (line.length > COMPACT_MAX_INSTRUCTIONS) {

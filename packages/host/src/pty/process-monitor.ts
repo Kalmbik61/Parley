@@ -9,6 +9,7 @@
  */
 
 import { spawn } from 'node:child_process';
+import { byFamily } from '@parley/core';
 import { refKey } from '@parley/protocol';
 import type { SessionRef } from '@parley/protocol';
 import type { Log } from '../log.js';
@@ -41,8 +42,14 @@ const SHELLS: ReadonlySet<string> = new Set(['sh', 'bash', 'zsh', 'dash', 'fish'
  */
 function isCommandProcess(name: string, provider: string | null): boolean {
   const lower = name.toLowerCase().replace(/^-/, '');
-  if (provider === 'codex') return lower !== 'node' && lower !== 'node_repl' && !lower.startsWith('codex');
-  return SHELLS.has(lower);
+  const shell = SHELLS.has(lower);
+  if (provider === null) return shell;
+  return byFamily(provider, {
+    claude: shell,
+    codex: lower !== 'node' && lower !== 'node_repl' && !lower.startsWith('codex'),
+    qwen: shell,
+    neutral: shell,
+  });
 }
 
 /** Строка процесса: только безопасные поля, без argv. */

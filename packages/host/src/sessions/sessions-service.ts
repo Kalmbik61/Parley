@@ -72,6 +72,9 @@ import {
   isTrusted,
   loadConfig,
   loadProviders,
+  byFamily,
+  providerFamily,
+  type ProviderFamily,
   isClaudeCode,
   isAccountRecord,
   isManagedEntry,
@@ -732,8 +735,9 @@ export function createSessionsService(
    * (короткая, ждём её); нет версии, старый CLI и прочие провайдеры — без хуков, окно покажет терминал.
    */
   async function feedHookUrl(provider: string): Promise<string | undefined> {
-    const codex = provider === 'codex';
-    if ((!isClaudeCode(provider) && !codex) || hooks === undefined || providerVersions === undefined) return undefined;
+    const hooked = byFamily(provider, { claude: 'claude' as const, codex: 'codex' as const, qwen: null, neutral: null });
+    if (hooked === null || hooks === undefined || providerVersions === undefined) return undefined;
+    const codex = hooked === 'codex';
     const url = hooks.url();
     if (url === null) return undefined;
     if (codex && !codexHooksWanted((await loadConfig()).config)) return undefined;
@@ -2291,7 +2295,8 @@ export function createSessionsService(
       targets.push({
         id: entry.id,
         label: providerLabel(entry),
-        family: entry.family ?? null,
+        // The wire still carries only 'claude' | null; A1c widens it.
+        family: entry.family === 'claude' ? ('claude' as const) : null,
         available: needs === null,
         needs,
         limits: limitsOf(entry.id),
@@ -2311,8 +2316,9 @@ export function createSessionsService(
     const ready = new Set(targets.filter((target) => target.available).map((target) => target.id));
     const same = alternatives.filter((alternative) => ready.has(alternative.id));
     const best = [...same].sort((a, b) => headroom(b.limits) - headroom(a.limits))[0];
-    const family = currentEntry?.family;
-    const other = targets.find((target) => target.available && (family === undefined || target.family !== family));
+    const family = currentEntry === undefined ? null : providerFamily(currentEntry);
+    const familyOfTarget = (id: string): ProviderFamily | null => providerFamily(registry[id] ?? id);
+    const other = targets.find((target) => target.available && (family === null || familyOfTarget(target.id) !== family));
     const suggested = best?.id ?? other?.id ?? null;
 
     const rooms = map.rooms.filter((room) => room.members.includes(session.id));
