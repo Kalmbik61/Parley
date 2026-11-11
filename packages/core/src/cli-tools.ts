@@ -80,8 +80,7 @@ const claude: CliDescriptor = {
     if (path.startsWith(`${homeRoot(home)}/.local/share/claude/versions/`)) return 'native';
     return 'unknown';
   },
-  updatePlan(method) {
-    if (method === 'unknown') return { kind: 'manual', manualCommand: 'claude update' };
+  updatePlan() {
     return { kind: 'run', args: ['update'] };
   },
 };
@@ -105,8 +104,7 @@ const codex: CliDescriptor = {
     if (path.includes('/Caskroom/') || path.startsWith('/opt/homebrew/')) return 'brew';
     return 'unknown';
   },
-  updatePlan(method) {
-    if (method === 'unknown') return { kind: 'manual', manualCommand: 'codex update' };
+  updatePlan() {
     return { kind: 'run', args: ['update'] };
   },
 };

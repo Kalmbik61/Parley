@@ -55,10 +55,11 @@ describe('план обновления', () => {
     expect(qwen.updatePlan('unknown')).toEqual({ kind: 'manual', manualCommand: 'npm install -g @qwen-code/qwen-code@latest' });
   });
 
-  it('claude и codex как раньше: run update, неизвестный способ — вручную', () => {
+  it('claude и codex как раньше: run update при любом способе', () => {
     for (const tool of ['claude', 'codex'] as const) {
-      expect(CLI_TOOLS[tool].updatePlan('npm')).toEqual({ kind: 'run', args: ['update'] });
-      expect(CLI_TOOLS[tool].updatePlan('unknown')).toEqual({ kind: 'manual', manualCommand: `${tool} update` });
+      for (const method of ['npm', 'native', 'standalone', 'brew', 'unknown'] as const) {
+        expect(CLI_TOOLS[tool].updatePlan(method)).toEqual({ kind: 'run', args: ['update'] });
+      }
     }
   });
 });
