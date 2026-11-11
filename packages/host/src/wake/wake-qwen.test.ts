@@ -5,7 +5,7 @@
  * into another process, or twice. The real qwen never runs here: `test/stub-qwen-tty.mjs` reports what reached it.
  */
 
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -28,6 +28,9 @@ const POINTER = 'New messages (1). Call check_inbox.';
 const BRIEF = '# Workspace w-0001\n\nTask: run the e2e suite\n\nCall `get_map` first.';
 const SHOWN_BRIEF = BRIEF.replace(/\n/g, '\\n');
 const IDLE: QwenStatus = { state: 'idle', kind: null, msg: null };
+/** A hook line as qwen journals it, with its own `timestamp`. */
+const journalLine = (name: string, extra: Record<string, unknown> = {}): string =>
+  `${JSON.stringify({ hook_event_name: name, timestamp: new Date().toISOString(), ...extra })}\n`;
 
 let home = '';
 let project = '';
@@ -89,7 +92,7 @@ interface Rig {
   ready: () => void;
 }
 
-async function rig(env: NodeJS.ProcessEnv = {}): Promise<Rig> {
+async function rig(env: NodeJS.ProcessEnv = {}, enterDelayMs = 300): Promise<Rig> {
   const map = await createWork(project, { title: 'Work' });
   let sessionId = '';
   await updateMap(project, map.work.id, (current) => {
@@ -106,7 +109,7 @@ async function rig(env: NodeJS.ProcessEnv = {}): Promise<Rig> {
   const activity = createActivityService(host, works, { silenceThresholdMs: 30_000, trustWaitMs: 60_000, claudeRoot, codexRoot });
   const pty = createPtyManager(host);
   const unlink = linkTerminalActivity(pty, activity);
-  const wake = createWakeService(host, works, activity, pty, { launch: async () => {} }, { enterDelayMs: 300, pointerTimeoutMs: 3000 });
+  const wake = createWakeService(host, works, activity, pty, { launch: async () => {} }, { enterDelayMs, pointerTimeoutMs: 3000 });
   await works.start();
   await activity.start();
   wake.start();
@@ -144,7 +147,7 @@ async function rig(env: NodeJS.ProcessEnv = {}): Promise<Rig> {
       }).then(() => undefined),
     ready: () => {
       activity.qwenStatus(ref, IDLE);
-      activity.mcpListed(ref);
+      activity.mcpListed(ref, activity.processGeneration(ref));
     },
   };
 }
@@ -172,7 +175,7 @@ describe('wake and qwen: the deferred brief', () => {
     const r = await rig();
     r.wake.deferFirst(r.ref, r.handle.pid, BRIEF);
     r.activity.qwenStatus(r.ref, { state: 'blocked', kind: 'auth', msg: 'Authentication required' });
-    r.activity.mcpListed(r.ref);
+    r.activity.mcpListed(r.ref, r.activity.processGeneration(r.ref));
     await settle(800);
     expect(r.stream()).not.toContain('field:');
     r.activity.qwenStatus(r.ref, IDLE);
@@ -226,6 +229,28 @@ describe('wake and qwen: the mail pointer', () => {
     await waitFor(() => r.stream().includes(`turn: ${POINTER}`), 10_000);
     expect(count(r.stream(), `turn: ${POINTER}`)).toBe(1);
   }, 20_000);
+
+  it('a new turn during the pause before Enter defers Enter; after that turn the same pointer is submitted once', async () => {
+    const r = await rig({}, 1500);
+    r.ready();
+    await waitFor(() => r.activity.get(r.ref)?.activity.lastEventAt != null);
+    // A turn ended (Stop): the session is idle, and the letter's pointer is typed.
+    await r.letter();
+    await waitFor(() => r.stream().includes(`field: ${POINTER}`));
+    // A delayed hook of input submitted just before the pointer: a new turn runs during the pause before Enter.
+    const events = path.join(workPaths(r.ref.projectPath, r.ref.workId).events, `${r.ref.sessionId}.jsonl`);
+    await appendFile(events, journalLine('UserPromptSubmit', { prompt: 'human input' }));
+    await waitFor(() => r.activity.get(r.ref)?.activity.activity === 'working');
+    await settle(1800);
+    expect(r.stream()).not.toContain(`turn: ${POINTER}`);
+    // That turn ends: Enter goes on the pointer already in the field — no second pointer.
+    await appendFile(events, journalLine('Stop') + journalLine('Notification', { notification_type: 'idle_prompt' }));
+    await waitFor(() => r.stream().includes(`turn: ${POINTER}`), 10_000);
+    await settle(800);
+    expect(count(r.stream(), `turn: ${POINTER}`)).toBe(1);
+    expect(count(r.stream(), `field: ${POINTER}`)).toBe(1);
+    expect(r.stream()).not.toContain(`${POINTER}${POINTER}`);
+  }, 30_000);
 
   it('the human typing during the pause before Enter: no Enter, the pointer stays in the field', async () => {
     const r = await rig();

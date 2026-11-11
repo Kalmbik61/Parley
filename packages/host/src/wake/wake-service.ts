@@ -329,8 +329,10 @@ interface AttemptState {
   /**
    * «Наш текст лежит в поле ввода процесса `pid`»: после исходов `input` и `blocked` указатель не печатается вовсе.
    * Письма `ids` снова свободны, когда после простоя (`idleSeen`) начался ход — поле отправлено — или процесс сменился.
+   * `enter` — Qwen: Enter отложен, потому что за паузу перед ним начался новый ход; после этого хода хост сам жмёт Enter
+   * у того же текста (`submitLeftover`), второго указателя не печатая.
    */
-  leftover: { pid: number; ids: string[]; idleSeen: boolean } | null;
+  leftover: { pid: number; ids: string[]; idleSeen: boolean; enter?: true } | null;
   /** Сколько писем было непрочитано в момент печати последнего указателя; `null` — проверка брошенного чтения не нужна. */
   unreadAtPointer: number | null;
   /** С какого момента почта и текст в поле держатся подряд; `null` — не держатся. */
@@ -922,6 +924,40 @@ export function createWakeService(
   }
 
   /**
+   * Qwen pointer whose Enter was deferred because a new turn started during the pause before it (`leftover.enter`): the
+   * text is still in the field. Once that turn is over and nothing else holds the session, the host presses Enter on it —
+   * the letters stay pointed, no second pointer is typed. Input of the human on top of it makes it theirs: an ordinary
+   * leftover, no Enter of ours.
+   */
+  function submitLeftover(
+    ref: SessionRef,
+    state: AttemptState,
+    handle: PtyHandle,
+    live: SessionActivity | undefined,
+    entry: WorkEntry,
+  ): void {
+    const leftover = state.leftover!;
+    const wait = (reason: MailWait): void => publishWaiting(ref, state, reason);
+    if (handle.hasDraft()) {
+      delete leftover.enter;
+      return wait('draft');
+    }
+    if (isPaused) return wait('paused');
+    if (state.inFlight || state.typing !== undefined) return wait('in-flight');
+    if (live === undefined || live.need != null || live.activity === 'blocked' || activity.qwenBlocked(ref)) return wait('stuck');
+    if (live.activity !== 'idle' && live.activity !== 'unseen') return wait('busy');
+    if (choiceNow(ref)) {
+      retryLater(ref, state, 'choice');
+      return wait('busy');
+    }
+    const ids = leftover.ids.filter((id) => unreadOf(entry, ref.sessionId).some((letter) => letter.id === id));
+    state.leftover = null;
+    beginAttempt(ref, state, { text: '', letterIds: ids, ...traceOf(unreadOf(entry, ref.sessionId), ids) }, 'qwen');
+    host.log.info('будильник: отложенный Enter указателя Qwen', { ref, letters: ids.length });
+    wait('in-flight');
+  }
+
+  /**
    * Печатает текст указателя и заводит оба таймера попытки: Enter и предохранитель. Codex — своим
    * порядком: вставка в маркерах bracketed paste, пауза десятки миллисекунд и Enter у приглашения.
    * Если за паузу начался ход или письма прочитаны, указатель отзывается, а не уходит в очередь Tab.
@@ -939,6 +975,8 @@ export function createWakeService(
     // Перед Enter — снова `blocked`: запрос разрешения мог появиться за паузу (fix-final-b).
     const startedAt = performance.now();
     let withdrawn = false;
+    // Qwen: a new turn started during the pause before Enter (a hook of input submitted just before the pointer).
+    let turnStarted = false;
     const typing = typeAndSubmit(
       { pty, enterDelayMs },
       ref,
@@ -956,6 +994,11 @@ export function createWakeService(
           if (live?.activity === 'blocked' || choiceNow(ref)) return false;
           // Qwen's terminal reports a dialog (OSC 7501 `blocked`) before any hook: Enter would answer it.
           if (mode === 'qwen' && activity.qwenBlocked(ref)) return false;
+          // Qwen in a new turn: Enter now would submit the pointer into it. It waits for the turn to end instead.
+          if (mode === 'qwen' && live?.activity === 'working' && !live.heldByBackground) {
+            turnStarted = true;
+            return false;
+          }
           if (codex) {
             const entry = works.entry(ref.projectPath, ref.workId);
             const busy = live?.activity === 'working' && !live.heldByBackground;
@@ -1028,6 +1071,16 @@ export function createWakeService(
         leaveText(ref, state, action.letterIds, true);
         notice('pointer-cancelled', ref, `the pointer for session ${ref.sessionId} was cancelled by human input`);
       } else if (outcome === 'blocked') {
+        if (turnStarted) {
+          // The pointer stays in the field and its letters pointed; after that turn the host presses Enter once.
+          clearTimers(state);
+          state.inFlight = false;
+          abandonReturn(state);
+          leaveText(ref, state, action.letterIds, false);
+          if (state.leftover !== null) state.leftover.enter = true;
+          host.log.info('будильник: Enter указателя Qwen отложен — начался ход', { ref });
+          return;
+        }
         if (withdrawn) {
           // typeAndSubmit уже проверил pid и отсутствие ввода человека. Убираем только собственную вставку.
           try {
@@ -1506,6 +1559,10 @@ export function createWakeService(
     trackDraft(ref, state, hasUnread(entry, session.id) && (handle.hasDraft() || state.leftover !== null));
     // Наш текст лежит в поле ввода, либо живую сессию заблокировали три указателя без хода: ничего не печатаем.
     if (state.leftover !== null && hasUnread(entry, session.id)) {
+      if (state.leftover.enter === true) {
+        submitLeftover(ref, state, handle, live?.activity, entry);
+        return;
+      }
       publishWaiting(ref, state, 'draft');
       return;
     }
