@@ -723,6 +723,7 @@ export type {
   WorkStatus,
   WorksIndex,
   WorktreeInfo,
+  WorktreeSeed,
   CloneWorkspace,
   ArtifactsWorkspace,
 } from './work/types.js';
@@ -930,3 +931,19 @@ export { fetchLatestVersion, installMethod, isNewer } from './cli-updates.js';
 export type { CliUpdateProvider, InstallMethod, LatestVersionSource } from './cli-updates.js';
 export { sessionWorktreeFinished } from './work/worktree-owner.js';
 export type { WorktreeLeftover } from './work/worktree-owner.js';
+export {
+  INCLUDE_MAX_ENTRIES,
+  INCLUDE_MAX_FILE_BYTES,
+  listIncludePaths,
+  resolveIncludePaths,
+  WORKTREE_INCLUDE_FILE,
+} from './work/worktree-include.js';
+export {
+  LOCK_FILE_NAMES,
+  SEED_MAX_ENTRIES,
+  SEED_TIMEOUT_MS,
+  describeSeed,
+  seedWorktree,
+  toWorktreeSeed,
+} from './work/worktree-seed.js';
+export type { SeedDeps, SeedReport, SeedSkip, SeedSkipReason } from './work/worktree-seed.js';

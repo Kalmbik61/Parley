@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { BRIEF_MAX_BYTES, CONTEXT_LIMITS, ContextBudgetError, assertWithinBudget, inlineOrRef, textHash } from './context-budget.js';
+import { describeSeed } from './worktree-seed.js';
 import { storeLetterReads, type LetterReads } from './letter-store.js';
 import { isMember, isRoomArchived, liveLead } from './rooms.js';
 import { ensureStateDir } from './state-dir.js';
@@ -96,12 +97,13 @@ export function buildBrief(map: WorkMap, sessionId: string, letters: LetterReads
   } else if (session.workspace?.kind === 'clone') {
     lines.push(`Clone: isolated clone of the integration branch at ${session.workspace.sha}; the engine captures your tree on attempt_submit; do not commit, do not touch git, do not write outside this folder. Use .parley-tmp inside this clone as your only temporary directory; the engine excludes it, and the root folders .omc, .omx, .claude, .codex and .agents, from captured trees. Folder: \`${session.workspace.path}\`.`, '');
   } else if (session.worktree !== null) {
-    const { branch, base, path: folder } = session.worktree;
+    const { branch, base, path: folder, seed } = session.worktree;
     lines.push(
       `Worktree: branch \`${branch}\` off base \`${base}\`, folder \`${folder}\`.`,
       'The rules for working in a worktree are in `read_guide`, topic `worktrees`.',
-      '',
     );
+    if (seed !== null && seed !== undefined) lines.push(describeSeed(seed));
+    lines.push('');
   }
 
   if (session.contextFrom.length > 0) {

@@ -279,7 +279,11 @@ export type NoticeKind =
   | 'swarm-done'
   | 'swarm-failed'
   // Запуск человека пошёл сверх потолка машины (спека ёмкости, 4.2, «Классы запусков»): `ref` — запущенная сессия.
-  | 'machine-over-limit';
+  | 'machine-over-limit'
+  // Зависимости не склонированы в новую копию: корень копий на другом томе или не на APFS (раз на проект за запуск хоста).
+  | 'deps-clone-unavailable'
+  // Склонированные зависимости не совпали с lock-файлом копии: агент ставит их сам (раз на проект за запуск хоста).
+  | 'deps-clone-mismatch';
 
 export interface HostNotice {
   kind: NoticeKind;

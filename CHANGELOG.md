@@ -6,6 +6,10 @@ All notable changes to Parley are documented in this file.
 
 ## Unreleased
 
+### Added
+
+- New session worktrees get their dependencies without an install: Parley clones the ignored folders listed in the project's `.worktreeinclude` (for example `node_modules`) from the main checkout — copy-on-write on APFS, so it takes seconds and almost no disk — and the brief tells the agent whether the lock files match.
+
 ### Fixed
 
 - Parley no longer stalls when many sessions resume or the assistant is asked for an overview: chat feeds load from the end of the log, two at a time with the visible tab first, idle feeds leave memory, and a window that stops reading is reconnected instead of growing the host's memory.

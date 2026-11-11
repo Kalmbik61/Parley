@@ -1525,6 +1525,90 @@ describe('worktree (план, кусок 4.2)', () => {
     await service.stop(ref);
   });
 
+  it('после создания копии зовётся клон, итог в карте', async () => {
+    await initGitProject(project);
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    setEnv('STUB_ARGS_FILE', await tempArgsFile());
+    setEnv('PARLEY_WORKTREE_ROOT', await tempWorktreeRoot());
+    const record = { at: '2026-11-11T10:00:00.000Z', cloned: 1, first: 'node_modules' };
+    const seen: { copyExisted: boolean; path: string }[] = [];
+    const depsSeeder = {
+      run: vi.fn(async (_ref: SessionRef, info: WorktreeInfo) => {
+        seen.push({ copyExisted: existsSync(info.path), path: info.path });
+        return record;
+      }),
+    };
+
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity(), { depsSeeder });
+    const ref = await service.create({
+      projectPath: project,
+      workId: work.work.id,
+      provider: 'claude',
+      label: 'бэкенд',
+      task: 'сделай штуку',
+      parent: null,
+      worktree: true,
+    });
+
+    expect(depsSeeder.run).toHaveBeenCalledTimes(1);
+    // Клон зовётся после создания копии: каталог к этому моменту уже есть.
+    expect(seen[0]?.copyExisted).toBe(true);
+    const stored = (await readMap(project, work.work.id)).sessions.find((candidate) => candidate.id === ref.sessionId);
+    expect(stored?.worktree?.seed).toEqual(record);
+    expect(stored?.worktree?.path).toBe(seen[0]?.path);
+    await service.stop(ref);
+  });
+
+  it('клон вернул null — ключа seed в карте нет', async () => {
+    await initGitProject(project);
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    setEnv('STUB_ARGS_FILE', await tempArgsFile());
+    setEnv('PARLEY_WORKTREE_ROOT', await tempWorktreeRoot());
+    const depsSeeder = { run: vi.fn(async () => null) };
+
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity(), { depsSeeder });
+    const ref = await service.create({
+      projectPath: project,
+      workId: work.work.id,
+      provider: 'claude',
+      label: 'бэкенд',
+      task: 'сделай штуку',
+      parent: null,
+      worktree: true,
+    });
+
+    expect(depsSeeder.run).toHaveBeenCalledTimes(1);
+    const stored = (await readMap(project, work.work.id)).sessions.find((candidate) => candidate.id === ref.sessionId);
+    expect(stored?.worktree).not.toBeNull();
+    expect(stored?.worktree !== null && stored?.worktree !== undefined && 'seed' in stored.worktree).toBe(false);
+    await service.stop(ref);
+  });
+
+  it('первое создание — заметки нет', async () => {
+    await initGitProject(project);
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    setEnv('STUB_ARGS_FILE', await tempArgsFile());
+    setEnv('PARLEY_WORKTREE_ROOT', await tempWorktreeRoot());
+    const depsSeeder = {
+      run: vi.fn(async () => ({ at: '2026-11-11T10:00:00.000Z', cloned: 1, first: 'node_modules' })),
+    };
+
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity(), { depsSeeder });
+    const ref = await service.create({
+      projectPath: project,
+      workId: work.work.id,
+      provider: 'claude',
+      label: 'бэкенд',
+      task: 'сделай штуку',
+      parent: null,
+      worktree: true,
+    });
+
+    const map = readStoredMap(project, work.work.id);
+    expect(map.messages.filter((m) => m.from === SYSTEM && m.to.includes(ref.sessionId) && m.text.startsWith('Your worktree folder'))).toEqual([]);
+    await service.stop(ref);
+  });
+
   it('1б: sessions.create({ worktree: true }) — бриф на диске называет ветку и базу worktree (fix-guide, п. 3)', async () => {
     // Бриф пишется при создании записи, а план worktree — следом: без
     // перезаписи агент получил бы бриф без строки о своей ветке.
@@ -1781,6 +1865,30 @@ describe('убранная копия', () => {
     expect(head.stdout.trim()).toBe(info.branch);
     const stored = (await readMap(ref.projectPath, ref.workId)).sessions.find((s) => s.id === ref.sessionId);
     expect(stored?.worktree?.removedAt).toBeUndefined();
+    await service.stop(ref);
+  });
+
+  it('подъём из ветки — заметка сессии', async () => {
+    const { ref, info } = await sessionWithCopy();
+    setEnv('STUB_ARGS_FILE', await tempArgsFile());
+    await runGit('git', ['-C', project, 'worktree', 'remove', '--force', info.path]);
+    await updateMap(ref.projectPath, ref.workId, (map) => {
+      const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
+      if (session?.worktree) session.worktree.removedAt = new Date().toISOString();
+    });
+    const depsSeeder = {
+      run: vi.fn(async () => ({ at: '2026-11-11T10:00:00.000Z', cloned: 1, first: 'node_modules' })),
+    };
+
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity(), { depsSeeder });
+    await service.launch(ref, 'launch');
+
+    const map = readStoredMap(ref.projectPath, ref.workId);
+    const notes = map.messages.filter((m) => m.from === SYSTEM && m.to.includes(ref.sessionId) && m.kind === 'note');
+    expect(notes).toHaveLength(1);
+    expect(notes[0]?.text).toBe(
+      `Your worktree folder was removed while this session was not running and is restored from branch \`${info.branch}\`. Its commits are intact. Dependencies: \`node_modules\` was cloned from the main checkout; lock files match, no install is needed.`,
+    );
     await service.stop(ref);
   });
 
