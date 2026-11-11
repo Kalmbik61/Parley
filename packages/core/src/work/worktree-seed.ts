@@ -264,6 +264,12 @@ export async function seedWorktree(
           continue;
         }
         const isDirectory = (await lstat(source)).isDirectory();
+        // Обход мог занять время: срок проверяется ещё раз до таймера и клона.
+        if (expired || deadline - Date.now() <= 0) {
+          expired = true;
+          report.skipped.push({ path: entry, reason: 'timeout' });
+          continue;
+        }
         timer = setTimeout(() => {
           expired = true;
           controller.abort();
@@ -319,22 +325,28 @@ const SKIP_WHY: Record<SeedSkipReason, string> = {
   failed: 'failed',
 };
 
+/** Имя из файлов репозитория попадает в строку брифа: управляющие символы и обратная кавычка заменяются. */
+function safeName(name: string): string {
+  // eslint-disable-next-line no-control-regex -- управляющие символы здесь и нужны
+  return name.replace(/[\u0000-\u001f\u007f`]/g, '?');
+}
+
 /** Строка для брифа и заметки о подъёме. */
 export function describeSeed(seed: WorktreeSeed): string {
   const tail =
     seed.skipped && seed.skipped.length > 0
-      ? ` Not cloned: ${seed.skipped.map((item) => `\`${item.path}\` (${SKIP_WHY[item.reason]})`).join(', ')}.`
+      ? ` Not cloned: ${seed.skipped.map((item) => `\`${safeName(item.path)}\` (${SKIP_WHY[item.reason]})`).join(', ')}.`
       : '';
   if (seed.cloned === 0 || seed.first === null) {
     return `Dependencies: nothing was cloned from the main checkout.${tail}`;
   }
   const head =
     seed.cloned === 1
-      ? `\`${seed.first}\` was cloned from the main checkout`
-      : `\`${seed.first}\` and ${seed.cloned - 1} more ignored paths were cloned from the main checkout`;
+      ? `\`${safeName(seed.first)}\` was cloned from the main checkout`
+      : `\`${safeName(seed.first)}\` and ${seed.cloned - 1} more ignored paths were cloned from the main checkout`;
   const mismatch = seed.lockMismatch ?? [];
   if (mismatch.length > 0) {
-    const names = mismatch.map((name) => `\`${name}\``).join(', ');
+    const names = mismatch.map((name) => `\`${safeName(name)}\``).join(', ');
     const verb = mismatch.length === 1 ? 'differs' : 'differ';
     return `Dependencies: ${head}, but ${names} ${verb} from the main checkout — run the project's install before you build or test.${tail}`;
   }

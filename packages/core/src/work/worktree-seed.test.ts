@@ -237,7 +237,7 @@ describe('seedWorktree', () => {
     await put(project, '.env', 'KEY=1\n');
     let calls = 0;
     const deps = fakeDeps({
-      timeoutMs: 50,
+      timeoutMs: 500,
       clonePath: (_source, _stage, _isDirectory, signal) => {
         calls += 1;
         return new Promise<void>((_resolve, reject) => {
@@ -252,7 +252,7 @@ describe('seedWorktree', () => {
       { path: 'node_modules', reason: 'timeout' },
     ]);
     expect(report?.cloned).toEqual([]);
-    expect(calls).toBe(1);
+    expect(calls).toBeLessThanOrEqual(1);
   });
 
   it('lock-файл отличается', async () => {
@@ -371,5 +371,15 @@ describe('describeSeed', () => {
     ).toBe(
       'Dependencies: `node_modules` was cloned from the main checkout; lock files match, no install is needed. Not cloned: `a` (too many files), `b` (timed out), `c` (failed).',
     );
+  });
+
+  it('имя с переводом строки и обратной кавычкой не ломает строку', () => {
+    const text = describeSeed({
+      ...base,
+      first: 'a\nb`c',
+      skipped: [{ path: 'x\ny`z', reason: 'failed' }],
+    });
+    expect(text).not.toContain('\n');
+    expect((text.match(/`/g) ?? []).length % 2).toBe(0);
   });
 });
