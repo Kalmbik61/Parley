@@ -5,7 +5,8 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { WORKTREE_INCLUDE_FILE } from './worktree-include.js';
-import { seedWorktree, type SeedDeps } from './worktree-seed.js';
+import { describeSeed, seedWorktree, toWorktreeSeed, type SeedDeps, type SeedReport } from './worktree-seed.js';
+import type { WorktreeSeed } from './types.js';
 
 const run = promisify(execFile);
 const git = (dir: string, args: string[]) => run('git', ['-C', dir, ...args]);
@@ -283,5 +284,92 @@ describe('seedWorktree', () => {
     const fresh = await seedWorktree(project, copy, fakeDeps());
     expect(fresh?.cloned).toEqual(['node_modules']);
     expect(fresh?.stale).toBe(false);
+  });
+});
+
+function reportOf(extra: Partial<SeedReport> = {}): SeedReport {
+  return { sourceRoot: '/main', cloned: [], skipped: [], lockMismatch: [], stale: false, unavailable: false, ...extra };
+}
+
+describe('toWorktreeSeed', () => {
+  const at = '2026-11-11T10:00:00.000Z';
+
+  it('ничего и без отказов — null', () => {
+    expect(toWorktreeSeed(reportOf(), at)).toBeNull();
+  });
+
+  it('unavailable — null', () => {
+    expect(toWorktreeSeed(reportOf({ unavailable: true }), at)).toBeNull();
+  });
+
+  it('обрезка', () => {
+    const skipped = Array.from({ length: 7 }, (_, i) => ({ path: `p${i}`, reason: 'failed' as const }));
+    const lockMismatch = ['a', 'b', 'c', 'd', 'e'];
+    const seed = toWorktreeSeed(reportOf({ cloned: ['node_modules'], skipped, lockMismatch }), at);
+    expect(seed?.skipped).toHaveLength(5);
+    expect(seed?.lockMismatch).toHaveLength(3);
+  });
+
+  it('ключей нет, когда пусто', () => {
+    expect(toWorktreeSeed(reportOf({ cloned: ['node_modules'] }), at)).toEqual({
+      at,
+      cloned: 1,
+      first: 'node_modules',
+    });
+  });
+});
+
+describe('describeSeed', () => {
+  const base: WorktreeSeed = { at: '2026-11-11T10:00:00.000Z', cloned: 1, first: 'node_modules' };
+
+  it('один путь, lock-файлы совпали', () => {
+    expect(describeSeed(base)).toBe(
+      'Dependencies: `node_modules` was cloned from the main checkout; lock files match, no install is needed.',
+    );
+  });
+
+  it('несколько путей', () => {
+    expect(describeSeed({ ...base, cloned: 3 })).toBe(
+      'Dependencies: `node_modules` and 2 more ignored paths were cloned from the main checkout; lock files match, no install is needed.',
+    );
+  });
+
+  it('расхождение двух lock-файлов главнее stale', () => {
+    expect(describeSeed({ ...base, lockMismatch: ['pnpm-lock.yaml', 'yarn.lock'], stale: true })).toBe(
+      "Dependencies: `node_modules` was cloned from the main checkout, but `pnpm-lock.yaml`, `yarn.lock` differ from the main checkout — run the project's install before you build or test.",
+    );
+  });
+
+  it('расхождение одного lock-файла', () => {
+    expect(describeSeed({ ...base, lockMismatch: ['pnpm-lock.yaml'] })).toBe(
+      "Dependencies: `node_modules` was cloned from the main checkout, but `pnpm-lock.yaml` differs from the main checkout — run the project's install before you build or test.",
+    );
+  });
+
+  it('только stale', () => {
+    expect(describeSeed({ ...base, stale: true })).toBe(
+      "Dependencies: `node_modules` was cloned from the main checkout, but they are older than this worktree's lock file — run the project's install before you build or test.",
+    );
+  });
+
+  it('ничего не склонировано, отказ entries', () => {
+    expect(
+      describeSeed({ ...base, cloned: 0, first: null, skipped: [{ path: 'node_modules', reason: 'entries' }] }),
+    ).toBe('Dependencies: nothing was cloned from the main checkout. Not cloned: `node_modules` (too many files).');
+  });
+
+  it('хвост с тремя причинами', () => {
+    expect(
+      describeSeed({
+        ...base,
+        skipped: [
+          { path: 'a', reason: 'entries' },
+          { path: 'b', reason: 'timeout' },
+          { path: 'c', reason: 'failed' },
+        ],
+      }),
+    ).toBe(
+      'Dependencies: `node_modules` was cloned from the main checkout; lock files match, no install is needed. Not cloned: `a` (too many files), `b` (timed out), `c` (failed).',
+    );
   });
 });

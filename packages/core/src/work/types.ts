@@ -122,6 +122,22 @@ export interface CloneWorkspace {
  * появляются только при запуске — до этого `createdAt` держит план живым, не
  * подтверждая, что каталог и ветка уже существуют.
  */
+/** Итог шага клона зависимостей в новую копию; хранится в карте, поэтому короткий: число и исключения, не все пути. */
+export interface WorktreeSeed {
+  /** ISO-время шага. */
+  at: string;
+  /** Сколько путей склонировано. */
+  cloned: number;
+  /** Первый склонированный путь; `null` — ничего не склонировано. */
+  first: string | null;
+  /** Не склонированные пути с причиной; не больше 5; нет ключа — отказов не было. */
+  skipped?: { path: string; reason: 'entries' | 'timeout' | 'failed' }[];
+  /** Lock-файлы копии, не совпавшие с основной копией; не больше 3; нет ключа — совпали. */
+  lockMismatch?: string[];
+  /** Склонированные зависимости pnpm старше lock-файла копии. */
+  stale?: true;
+}
+
 export interface WorktreeInfo {
   path: string;
   branch: string;
@@ -134,6 +150,8 @@ export interface WorktreeInfo {
    * `createdAt` при уборке не трогается: `null` в нём по-прежнему значит «ещё не создан».
    */
   removedAt?: string | null;
+  /** Итог клона зависимостей; нет поля или `null` — клона не было (старые карты читаются так же). */
+  seed?: WorktreeSeed | null;
 }
 
 /** Приватное evidence запуска Codex: не входит в agent/public works/island projections. */

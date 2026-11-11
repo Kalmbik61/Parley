@@ -576,6 +576,8 @@ folder and the branch are deleted.
 
 After the session is closed, or its room or workspace is archived, Parley removes a clean worktree folder by itself. A branch merged into the base is deleted too; an unmerged one stays, and a sleeping session that wakes up continues on it.
 
+Parley may clone ignored folders listed in the project's \`.worktreeinclude\` (usually dependencies) from the main checkout into a new worktree. The brief says what was cloned and whether the lock files match. When the brief says nothing about dependencies, install them yourself as before.
+
 Therefore:
 
 - do not switch the branch;

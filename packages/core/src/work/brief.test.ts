@@ -558,6 +558,38 @@ describe('бриф сессии: worktree', () => {
     expect(brief.indexOf('Worktree:')).toBeLessThan(brief.indexOf('## Context'));
   });
 
+  it('строка зависимостей после правил копии', () => {
+    const map = mapWithSessions();
+    const session = map.sessions.find((candidate) => candidate.id === 's-02');
+    if (session === undefined) throw new Error('нет s-02');
+    session.worktree = {
+      path: '/tmp/worktrees/proj-a1b2c3/w-0042-s-02',
+      branch: 'harnas/w-0042/s-02',
+      base: 'master',
+      createdAt: null,
+      seed: { at: '2026-11-11T10:00:00.000Z', cloned: 1, first: 'node_modules' },
+    };
+
+    const brief = buildBrief(map, 's-02');
+    const rules = 'The rules for working in a worktree are in `read_guide`, topic `worktrees`.';
+    const line =
+      'Dependencies: `node_modules` was cloned from the main checkout; lock files match, no install is needed.';
+    expect(brief).toContain(`${rules}\n${line}\n`);
+  });
+
+  it('без seed бриф прежний', () => {
+    const map = mapWithSessions();
+    const session = map.sessions.find((candidate) => candidate.id === 's-02');
+    if (session === undefined) throw new Error('нет s-02');
+    session.worktree = {
+      path: '/tmp/worktrees/proj-a1b2c3/w-0042-s-02',
+      branch: 'harnas/w-0042/s-02',
+      base: 'master',
+      createdAt: null,
+    };
+    expect(buildBrief(map, 's-02')).not.toContain('Dependencies:');
+  });
+
   it('сессия без worktree: бриф о worktree молчит', () => {
     const brief = buildBrief(mapWithSessions(), 's-02');
     expect(brief).not.toContain('Worktree');

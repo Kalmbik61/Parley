@@ -723,6 +723,7 @@ export type {
   WorkStatus,
   WorksIndex,
   WorktreeInfo,
+  WorktreeSeed,
   CloneWorkspace,
   ArtifactsWorkspace,
 } from './work/types.js';
@@ -941,6 +942,8 @@ export {
   LOCK_FILE_NAMES,
   SEED_MAX_ENTRIES,
   SEED_TIMEOUT_MS,
+  describeSeed,
   seedWorktree,
+  toWorktreeSeed,
 } from './work/worktree-seed.js';
 export type { SeedDeps, SeedReport, SeedSkip, SeedSkipReason } from './work/worktree-seed.js';

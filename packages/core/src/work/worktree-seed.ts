@@ -11,6 +11,7 @@ import { execFile } from 'node:child_process';
 import { link, lstat, mkdir, readdir, readFile, realpath, rename, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { resolveIncludePaths } from './worktree-include.js';
+import type { WorktreeSeed } from './types.js';
 import { NO_FSMONITOR } from './worktree.js';
 
 export const SEED_MAX_ENTRIES = 300_000;
@@ -297,4 +298,48 @@ export async function seedWorktree(
     report.stale = false;
   }
   return report;
+}
+
+const SEED_SKIPPED_LIMIT = 5;
+const SEED_LOCK_LIMIT = 3;
+
+/** null — записывать нечего: ничего не склонировано и отказов нет (в том числе unavailable). */
+export function toWorktreeSeed(report: SeedReport, at: string): WorktreeSeed | null {
+  if (report.cloned.length === 0 && report.skipped.length === 0) return null;
+  const seed: WorktreeSeed = { at, cloned: report.cloned.length, first: report.cloned[0] ?? null };
+  if (report.skipped.length > 0) seed.skipped = report.skipped.slice(0, SEED_SKIPPED_LIMIT);
+  if (report.lockMismatch.length > 0) seed.lockMismatch = report.lockMismatch.slice(0, SEED_LOCK_LIMIT);
+  if (report.stale) seed.stale = true;
+  return seed;
+}
+
+const SKIP_WHY: Record<SeedSkipReason, string> = {
+  entries: 'too many files',
+  timeout: 'timed out',
+  failed: 'failed',
+};
+
+/** Строка для брифа и заметки о подъёме. */
+export function describeSeed(seed: WorktreeSeed): string {
+  const tail =
+    seed.skipped && seed.skipped.length > 0
+      ? ` Not cloned: ${seed.skipped.map((item) => `\`${item.path}\` (${SKIP_WHY[item.reason]})`).join(', ')}.`
+      : '';
+  if (seed.cloned === 0 || seed.first === null) {
+    return `Dependencies: nothing was cloned from the main checkout.${tail}`;
+  }
+  const head =
+    seed.cloned === 1
+      ? `\`${seed.first}\` was cloned from the main checkout`
+      : `\`${seed.first}\` and ${seed.cloned - 1} more ignored paths were cloned from the main checkout`;
+  const mismatch = seed.lockMismatch ?? [];
+  if (mismatch.length > 0) {
+    const names = mismatch.map((name) => `\`${name}\``).join(', ');
+    const verb = mismatch.length === 1 ? 'differs' : 'differ';
+    return `Dependencies: ${head}, but ${names} ${verb} from the main checkout — run the project's install before you build or test.${tail}`;
+  }
+  if (seed.stale) {
+    return `Dependencies: ${head}, but they are older than this worktree's lock file — run the project's install before you build or test.${tail}`;
+  }
+  return `Dependencies: ${head}; lock files match, no install is needed.${tail}`;
 }
