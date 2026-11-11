@@ -1,4 +1,4 @@
-import { mkdir, readFile, rm, stat } from 'node:fs/promises';
+import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron, expect, test, type ElectronApplication, type Locator, type Page } from '@playwright/test';
@@ -137,6 +137,12 @@ test.describe('подключение провайдеров на изолиро
       // Проверка ключа после Save — тестовое сообщение Z.ai; E2E в сеть не ходит: хост отдаёт исход сам.
       PARLEY_GLM_CHECK_STUB: 'ok',
     });
+    // Кэш проверки версий (спека 2026-11-11, §4.4), заполненный до старта хоста: последняя версия новее стаба, порог в 20 часов
+    // оставляет её, и строка Claude сразу `available` — без сети и без гонки с фоновой проверкой.
+    await writeFile(path.join(home, 'cli-updates.json'), `${JSON.stringify({
+      version: 1,
+      providers: { claude: { latest: '9.9.9', checkedAt: new Date().toISOString(), method: 'native', skipped: null, lastError: null } },
+    })}\n`);
     const app = await electron.launch({ args: [mainEntry], env, ...(visual ? { slowMo: 350 } : {}) });
     running = app;
     const window = await app.firstWindow();
@@ -512,23 +518,21 @@ test.describe('подключение провайдеров на изолиро
     await settings.getByRole('tab', { name: 'Providers' }).click();
     await settings.locator('[data-provider-pill="claude"]').click();
 
-    // Строка Claude видна всегда: версия стаба 2.1.287 и одно из состояний `cli`. Сеть до реестра в E2E не гарантирована,
-    // поэтому проверяется переход Check now → снова Check now и допустимое состояние, а не конкретная последняя версия.
+    // Кэш засеян: строка Claude `available`, 2.1.287 → 9.9.9. Update идёт в стаб (`PARLEY_CLAUDE_BIN`), не в настоящий CLI.
     const row = settings.locator('[data-provider-update="claude"]');
-    await expect(row).toContainText('2.1.287');
-    const checkNow = row.getByRole('button', { name: /Check now|Checking…/ });
-    await expect(row.getByRole('button', { name: 'Check now', exact: true })).toBeVisible();
-    await checkNow.click();
-    await expect(row.getByRole('button', { name: 'Check now', exact: true })).toBeVisible({ timeout: 30_000 });
-    await expect(row).toHaveAttribute('data-cli-state', /^(up-to-date|available|skipped|unknown)$/);
+    await expect(row).toHaveAttribute('data-cli-state', 'available');
+    await expect(row).toContainText('2.1.287 → 9.9.9');
+    await row.getByRole('button', { name: 'Update', exact: true }).click();
+    await expect(row.locator('[data-update-result="ok"]')).toHaveText('Updated to 9.9.9', { timeout: 30_000 });
 
-    // Update: только если проверка нашла новую версию. `PARLEY_CLAUDE_BIN` — стаб, поэтому `update` идёт в него, не в настоящий CLI.
-    const cliState = await row.getAttribute('data-cli-state');
-    test.info().annotations.push({ type: 'cli-state', description: String(cliState) });
-    if (cliState === 'available') {
-      await row.getByRole('button', { name: 'Update', exact: true }).click();
-      await expect(row.locator('[data-update-result]')).toBeVisible({ timeout: 30_000 });
-    }
+    // Заново открытая строка (пилюля туда и обратно): стаб уже 9.9.9, состояние `up-to-date`; Check now возвращается к кнопке.
+    await settings.locator('[data-provider-pill="codex"]').click();
+    await settings.locator('[data-provider-pill="claude"]').click();
+    const fresh = settings.locator('[data-provider-update="claude"]');
+    await expect(fresh).toHaveAttribute('data-cli-state', 'up-to-date');
+    await expect(fresh).toContainText('Up to date');
+    await fresh.getByRole('button', { name: 'Check now', exact: true }).click();
+    await expect(fresh.getByRole('button', { name: 'Check now', exact: true })).toBeVisible({ timeout: 30_000 });
 
     // Codex отсутствует (`absent-codex`): Install… открывает подтверждение с точной командой; Cancel — установщик не запущен.
     await settings.locator('[data-provider-pill="codex"]').click();
