@@ -13,7 +13,8 @@ import { Input } from '../../ui/input.js';
 import { AgentIcon } from '../AgentIcon.js';
 import { CheckLine, knownReason, maskedHint, newerCheck } from './check-line.js';
 import { accountOf } from './custom-provider-draft.js';
-import { GLM_KEY_URL, PROVIDER_INSTALL } from './provider-install.js';
+import { ProviderInstall } from './ProviderInstall.js';
+import { GLM_KEY_URL, installableId, PROVIDER_INSTALL } from './provider-install.js';
 
 export interface ProviderCardProps {
   /** Структурный тип позволяет передать снимок стора или список этого открытия диалога. */
@@ -64,6 +65,11 @@ export function ProviderCard({
   const showInstall =
     install !== null &&
     (isGlm ? provider.needs === 'cli' || provider.version == null : !provider.available);
+  // Установка из окна (спека 2026-11-11): у GLM своей установки нет — он делит CLI Claude; нужен хост с `providers.install`.
+  const installId = isGlm ? null : installableId(provider.id);
+  const canInstall = installId !== null && methods.has('providers.install');
+  const missingCli = showInstall && !isGlm;
+  const latest = provider.cli?.latest ?? null;
 
   useEffect(() => {
     ++generation.current;
@@ -304,8 +310,18 @@ export function ProviderCard({
           ) : null}
         </>
       ) : null}
+      {canInstall && installId !== null ? (
+        // Вне блока с командой: ход и итог остаются на месте, когда CLI найден и блок исчезает.
+        <ProviderInstall id={installId} name={name} missing={missingCli} disabled={busy} onReload={onReload} />
+      ) : null}
       {showInstall && install !== null ? (
         <div className="space-y-2">
+          {canInstall ? (
+            <p data-not-installed className="text-xs text-muted-foreground">
+              {S.providerCard.notInstalled}
+              {latest === null ? '' : ` · ${S.providerCard.latestVersion(latest)}`}
+            </p>
+          ) : null}
           <code className="block break-all rounded-lg bg-muted p-2 text-xs">{install.command}</code>
           <div className="flex flex-wrap gap-2">
             <Button
@@ -321,7 +337,7 @@ export function ProviderCard({
                 });
               }}
             >
-              {copied ? S.providerCard.copied : S.providerCard.copy}
+              {copied ? S.providerCard.copied : canInstall ? S.providerCard.copyCommand : S.providerCard.copy}
             </Button>
             <Button
               type="button"

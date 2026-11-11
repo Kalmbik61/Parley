@@ -740,6 +740,17 @@ export const S = {
     sessions: (count: number, name: string, from: string | null): string =>
       `${count} ${name} ${count === 1 ? 'session' : 'sessions'} will stay on ${from ?? 'the old version'} until restarted`,
     smokeFailed: "The new version rejected Parley's launch flags. New sessions may fail to start.",
+    /** Строка состояния CLI (спека 2026-11-11, §4.4). */
+    upToDate: 'Up to date',
+    checked: (time: string): string => `checked ${time}`,
+    checkNow: 'Check now',
+    checking: 'Checking…',
+    updateAnyway: 'Update anyway',
+    skipped: 'skipped',
+    couldNotCheck: (reason: string | null): string => (reason === null ? 'Could not check' : `Could not check (${reason})`),
+    manualUpdate: 'update with:',
+    copy: 'Copy',
+    copied: 'Copied',
   },
 
   /** Строка статуса — `shell/StatusBar.tsx`. */
@@ -812,8 +823,28 @@ export const S = {
     connected: 'Connected',
     notConnected: 'Not connected',
     copy: 'Copy',
+    copyCommand: 'Copy command',
     copied: 'Copied',
     installationGuide: 'Installation guide',
+    /** Установка из Parley (спека 2026-11-11, §4.2, §4.4). */
+    notInstalled: 'Not installed',
+    latestVersion: (latest: string): string => `latest ${latest}`,
+    installAction: 'Install…',
+    installConfirm: {
+      title: (name: string): string => `Install ${name}?`,
+      command: 'Command',
+      source: 'Source',
+      trust:
+        "This downloads the vendor's installer and runs it as you. Parley logs its fingerprint but cannot verify the vendor's code or what the installer downloads.",
+      profile: 'The installer may add ~/.local/bin to your shell profile so qwen works in your own terminal.',
+      accept: 'Install',
+    },
+    installing: (name: string): string => `Installing ${name}…`,
+    installBusy: 'An install or update of this CLI is already running.',
+    installed: (name: string, version: string | null): string => `${name} installed${version === null ? '' : ` · ${version}`}`,
+    installFailed: 'Install failed',
+    installSmokeFailed: "The installed version rejected Parley's launch flags. New sessions may fail to start.",
+    installManual: 'Run it yourself:',
     signInGuide: 'Sign-in guide',
     checkAgain: 'Check again',
     /**
@@ -2788,6 +2819,8 @@ export const S = {
       loadProviders: 'load providers',
       refreshProviderLimits: 'refresh provider limits',
       updateProvider: 'update the provider CLI',
+      checkProviderUpdates: 'check for updates',
+      installProvider: 'install the provider CLI',
       decideProjectMcp: 'save the MCP server choice',
       skipProviderUpdate: 'skip this version',
       saveDiagnostics: 'save diagnostics',

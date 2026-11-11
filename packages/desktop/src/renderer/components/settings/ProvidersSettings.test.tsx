@@ -79,6 +79,23 @@ describe('ProvidersSettings: строка обновления CLI (спека 2
     expect(document.querySelector('[data-provider-update]')).toBeNull();
   });
 
+  it('снимок `cli`: строка видна и без update — Up to date и Check now', () => {
+    useProvidersStore.setState({
+      providers: [
+        base('claude', 'Claude Code', true),
+        {
+          ...base('codex', 'Codex', true), version: '0.162.0',
+          cli: { installed: '0.162.0', latest: '0.162.0', method: 'standalone', checkedAt: '2026-11-11T14:05:00.000Z', state: 'up-to-date', lastError: null },
+        },
+      ],
+    } as never);
+    useUiStore.setState({ settingsProvider: 'codex' });
+    render(<ProvidersSettings />);
+    const row = document.querySelector('[data-provider-update="codex"]')!;
+    expect(row.textContent).toContain('Up to date');
+    expect(row.querySelector('[data-check-now]')).not.toBeNull();
+  });
+
   it('без update строки нет', () => {
     useUiStore.setState({ settingsProvider: 'codex' });
     render(<ProvidersSettings />);

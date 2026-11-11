@@ -502,4 +502,45 @@ test.describe('подключение провайдеров на изолиро
     await present('glm-approved');
     expect(errors).toEqual([]);
   });
+
+  test('Settings → Providers: Check now, Update на стабе и Install… с подтверждением (установщик не запускается)', async () => {
+    test.setTimeout(90_000);
+    const { window } = await open();
+    await window.keyboard.press('Meta+,');
+    const settings = window.getByRole('dialog', { name: 'Settings', exact: true });
+    await expect(settings).toBeVisible();
+    await settings.getByRole('tab', { name: 'Providers' }).click();
+    await settings.locator('[data-provider-pill="claude"]').click();
+
+    // Строка Claude видна всегда: версия стаба 2.1.287 и одно из состояний `cli`. Сеть до реестра в E2E не гарантирована,
+    // поэтому проверяется переход Check now → снова Check now и допустимое состояние, а не конкретная последняя версия.
+    const row = settings.locator('[data-provider-update="claude"]');
+    await expect(row).toContainText('2.1.287');
+    const checkNow = row.getByRole('button', { name: /Check now|Checking…/ });
+    await expect(row.getByRole('button', { name: 'Check now', exact: true })).toBeVisible();
+    await checkNow.click();
+    await expect(row.getByRole('button', { name: 'Check now', exact: true })).toBeVisible({ timeout: 30_000 });
+    await expect(row).toHaveAttribute('data-cli-state', /^(up-to-date|available|skipped|unknown)$/);
+
+    // Update: только если проверка нашла новую версию. `PARLEY_CLAUDE_BIN` — стаб, поэтому `update` идёт в него, не в настоящий CLI.
+    const cliState = await row.getAttribute('data-cli-state');
+    test.info().annotations.push({ type: 'cli-state', description: String(cliState) });
+    if (cliState === 'available') {
+      await row.getByRole('button', { name: 'Update', exact: true }).click();
+      await expect(row.locator('[data-update-result]')).toBeVisible({ timeout: 30_000 });
+    }
+
+    // Codex отсутствует (`absent-codex`): Install… открывает подтверждение с точной командой; Cancel — установщик не запущен.
+    await settings.locator('[data-provider-pill="codex"]').click();
+    const card = settings.locator('[data-provider-card="codex"]');
+    await card.getByRole('button', { name: 'Install…', exact: true }).click();
+    const confirm = window.getByRole('dialog', { name: 'Install Codex?', exact: true });
+    await expect(confirm).toBeVisible();
+    await expect(confirm.locator('[data-install-command]')).toHaveText('curl -fsSL https://chatgpt.com/codex/install.sh | sh');
+    await expect(confirm).toContainText("runs it as you");
+    await confirm.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await expect(confirm).toBeHidden();
+    await expect(card.locator('[data-install-running]')).toHaveCount(0);
+    expect(errors).toEqual([]);
+  });
 });

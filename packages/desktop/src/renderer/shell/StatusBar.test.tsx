@@ -234,6 +234,13 @@ describe('StatusBar — метка «↑» новой версии CLI (спек
     expect(segment.textContent).toContain('0.162.0');
   });
 
+  it('у Qwen Code с update метка «↑» тоже есть', () => {
+    useProvidersStore.setState({ providers: [provider({ id: 'qwen', label: 'Qwen Code', version: '0.27.2', update: { ...update, latest: '0.28.0' } })] });
+    const el = mark(renderPlain().container, 'qwen')!;
+    expect(el.textContent).toBe('↑');
+    expect(el.getAttribute('title')).toBe('0.28.0 available');
+  });
+
   it('без update, с update: null, у GLM и у недоступного провайдера метки нет', () => {
     useProvidersStore.setState({
       providers: [

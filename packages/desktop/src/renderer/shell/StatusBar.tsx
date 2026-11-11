@@ -189,8 +189,8 @@ function ProviderSegment({ provider, resets, onRestartHost, hidden = false }: { 
   // Блок лимитов рисуется, только когда есть хоть одно окно (`ProviderLimitsMeter`); у старого хоста поля нет вовсе.
   const meter = limits && (provider.limits?.fiveHour != null || provider.limits?.week != null);
   const yields = version || meter;
-  // Новая версия CLI (T2/T4): тихая «↑» рядом с версией. Только у самих Claude Code и Codex — GLM делит с Claude его CLI.
-  const mark = provider.available && provider.update != null && (provider.id === 'claude' || provider.id === 'codex');
+  // Новая версия CLI (T2/T4): тихая «↑» рядом с версией. Только у самих Claude Code, Codex и Qwen Code — GLM делит с Claude его CLI.
+  const mark = provider.available && provider.update != null && (provider.id === 'claude' || provider.id === 'codex' || provider.id === 'qwen');
   const segmentClass = cn('flex min-w-0 items-center gap-[7px] rounded-full text-left transition-colors hover:bg-foreground/8', yields && YIELDING_SEGMENT, !provider.available && 'opacity-50');
   const segmentContent = (
     <>
