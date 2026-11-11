@@ -343,6 +343,7 @@ export const S = {
     numbers: (used: string, window: string, percent: string): string => `${used} of ${window} tokens · ${percent}`,
     instructionsLabel: 'Focus instructions',
     codexNoFocus: 'Codex compacts without focus',
+    qwenNoFocus: 'Qwen Code compresses without focus',
     compact: 'Compact',
     compactAll: 'Compact all',
     cancel: 'Cancel',
@@ -745,6 +746,7 @@ export const S = {
     /** Строка состояния CLI (спека 2026-11-11, §4.4). */
     upToDate: 'Up to date',
     checked: (time: string): string => `checked ${time}`,
+    lastSuccess: (time: string): string => `last successful check ${time}`,
     checkNow: 'Check now',
     checking: 'Checking…',
     updateAnyway: 'Update anyway',
