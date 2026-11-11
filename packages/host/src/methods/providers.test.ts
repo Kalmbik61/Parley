@@ -122,6 +122,9 @@ describe('providers.list: модели, усилие и версия CLI (диз
     expect(byId(providers, 'codex')).toMatchObject({ label: 'Codex', effort: true, version: '0.44.0' });
     expect(byId(providers, 'glm')).toMatchObject({ label: 'GLM', effort: true, version: '2.1.276', available: false });
     expect(byId(providers, 'glm').models?.length).toBeGreaterThan(0);
+    expect(byId(providers, 'claude').family).toBe('claude');
+    expect(byId(providers, 'codex').family).toBe('codex');
+    expect(byId(providers, 'glm').family).toBe('claude');
     expect(typeof byId(providers, 'claude').available).toBe('boolean');
   });
 

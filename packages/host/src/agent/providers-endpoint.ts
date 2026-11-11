@@ -12,8 +12,7 @@ export function providerRowsOf(result: Result<'providers.list'>): ProviderRow[] 
   return result.providers.map((row) => ({
     id: row.id,
     label: row.label,
-    // Протокол пока держит `family` как `'claude' | null`; `'codex'` появится на этапе 3, когда его расширят.
-    family: (row.family ?? null) as ProviderRow['family'],
+    family: row.family ?? null,
     available: row.available,
     needs: row.needs ?? null,
     models: row.models ?? null,

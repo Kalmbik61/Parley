@@ -471,11 +471,10 @@ export interface Results extends AssistantMethodResults, VoiceMethodResults, Car
       /** Only a masked hint is returned for providers that use a saved key. */
       keyHint?: string | null;
       /**
-       * Trusted built-in CLI family; older hosts omit this field. Temporarily `'claude' | null` only: the window's feed
-       * availability checks type `family` that narrowly, so `'codex'` (Codex accounts, subscriptions spec 5.2, stage 3)
-       * is added in the task that updates those consumers.
+       * Trusted built-in CLI family; older hosts omit this field, and an entry without a family (providers.json) is
+       * `null`. A reader that meets a value it does not know treats it as neutral.
        */
-      family?: 'claude' | null;
+      family?: 'claude' | 'codex' | 'qwen' | null;
       // Три поля ниже необязательны, как `hello.methods`: хост переживает окно, а `PROTOCOL_VERSION`
       // остаётся 1, поэтому новое окно с хостом, оставшимся с живыми сессиями, получит элементы без
       // них. Нынешний хост отдаёт их всегда; нет поля — окно читает «контрола нет» и «версии нет».

@@ -9,7 +9,7 @@ import type { AgentChannel } from '../work/mcp-config.js';
 export interface ProviderRow {
   id: string;
   label: string;
-  family: 'claude' | 'codex' | null;
+  family: 'claude' | 'codex' | 'qwen' | null;
   available: boolean;
   needs: 'cli' | 'key' | 'sign-in' | null;
   models: ModelOption[] | null;
@@ -30,7 +30,7 @@ function rowOf(value: unknown): ProviderRow | null {
   return {
     id,
     label,
-    family: family === 'claude' || family === 'codex' ? family : null,
+    family: family === 'claude' || family === 'codex' || family === 'qwen' ? family : null,
     available,
     needs: needs === 'cli' || needs === 'key' || needs === 'sign-in' ? needs : null,
     models: Array.isArray(models) ? (models as ModelOption[]) : null,

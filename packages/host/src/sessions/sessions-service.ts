@@ -2295,8 +2295,7 @@ export function createSessionsService(
       targets.push({
         id: entry.id,
         label: providerLabel(entry),
-        // The wire still carries only 'claude' | null; A1c widens it.
-        family: entry.family === 'claude' ? ('claude' as const) : null,
+        family: entry.family ?? null,
         available: needs === null,
         needs,
         limits: limitsOf(entry.id),

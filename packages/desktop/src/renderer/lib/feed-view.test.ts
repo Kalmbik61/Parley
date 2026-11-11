@@ -18,6 +18,14 @@ const REF: SessionRef = { projectPath: '/tmp/p', workId: 'w-01', sessionId: 's-0
 const FEED = new Set(['hello', 'feed.snapshot', 'feed.subscribe', 'feed.unsubscribe']);
 const NO_FEED = new Set(['hello', 'pty.attach']);
 
+describe('feedAvailable by family', () => {
+  it('qwen and an unknown family are provider-unsupported; codex keeps its own rule', () => {
+    expect(feedUnavailableReason({ hostMethods: FEED, provider: 'qwen', family: 'qwen', version: '1.0.0' })).toBe('provider-unsupported');
+    expect(feedUnavailableReason({ hostMethods: FEED, provider: 'x', family: 'mystery' as never, version: '1.0.0' })).toBe('provider-unsupported');
+    expect(feedUnavailableReason({ hostMethods: FEED, provider: 'codex', family: 'codex', version: null, features: new Set() })).toBe('host-unsupported');
+  });
+});
+
 describe('feedAvailable', () => {
   it('Chat доступен доверенному семейству Claude, а версия берётся у выбранной записи', () => {
     expect(feedAvailable({ hostMethods: FEED, provider: 'glm', family: 'claude', version: '2.1.287' })).toBe(true);
