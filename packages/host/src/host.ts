@@ -570,7 +570,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     contextFor: toolContextFor,
     log,
     // Qwen readiness needs the agent's Parley MCP client connected (spec 2026-11-11, 3.4 amendment).
-    onList: (ref) => activityService.mcpListed(ref),
+    generationOf: (ref) => activityService.processGeneration(ref),
+    onList: (ref, generation) => activityService.mcpListed(ref, generation),
   });
   const inlineMail = createInlineMail({
     log,

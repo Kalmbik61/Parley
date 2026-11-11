@@ -98,6 +98,11 @@ export interface EventRecord {
   contextUsage?: number;
   /** Qwen family only: `context_limit` of `Stop`, tokens. */
   contextLimit?: number;
+  /**
+   * Qwen family only: `at` is the hook payload's own `timestamp`, not the journal mtime. A record read late (after a
+   * relaunch) keeps the time it was written, so it cannot pass for a line of a newer process (spec 2026-11-11, 3.4).
+   */
+  atFromPayload?: true;
 }
 
 /** Состояние чтения одного журнала: докуда дочитали и что уже разобрали. */
@@ -235,7 +240,18 @@ function parseEvent(line: string, at: string, family?: ProviderFamily | null): E
   } catch {
     return null;
   }
-  return eventRecordOf(data, at, family);
+  // Qwen sends its own `timestamp`: the journal mtime is the time of the last append and would make every older line of
+  // the batch look as fresh as the newest one.
+  const stamped = family === 'qwen' ? payloadTime(data) : null;
+  const record = eventRecordOf(data, stamped ?? at, family);
+  return record !== null && stamped !== null ? { ...record, atFromPayload: true } : record;
+}
+
+/** The hook payload's `timestamp` as an ISO time; absent or not a date — `null`. */
+function payloadTime(data: unknown): string | null {
+  if (!isRecord(data) || typeof data.timestamp !== 'string') return null;
+  const ms = Date.parse(data.timestamp);
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
 }
 
 /**

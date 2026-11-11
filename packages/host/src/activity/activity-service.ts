@@ -178,11 +178,20 @@ export interface ActivityService {
    * и «новые» строки журнала (спека «Застрявшие сессии», 3.2). У возобновлённой сессии журнал прошлого запуска не пуст, и
    * экран старта ловится по тому, что с запуска нынешнего процесса ничего не прибавилось.
    */
-  processStarted(ref: SessionRef): void;
+  processStarted(ref: SessionRef, spawnedAt?: number): void;
   /** Qwen Code program status (OSC 7501) of the session's current process (spec 2026-11-11, 3.4 amendment). */
   qwenStatus(ref: SessionRef, status: QwenStatus): void;
-  /** The session's Parley MCP server asked the host for its tool list: the agent's MCP client is connected. */
-  mcpListed(ref: SessionRef): void;
+  /**
+   * The process generation of the session (`processStarted` counts them); `null` — no process started under this host.
+   * The tools endpoint takes it when a `tools/list` request arrives and hands it back to `mcpListed`.
+   */
+  processGeneration(ref: SessionRef): number | null;
+  /**
+   * The session's Parley MCP server got its tool list answered: the agent's MCP client is connected. Counts only for the
+   * generation that sent the request and only while it is still the current one: a list of a replaced process does not
+   * certify its successor (spec 2026-11-11, 3.4 amendment).
+   */
+  mcpListed(ref: SessionRef, generation: number | null): void;
   /**
    * The session's current Qwen process last reported OSC 7501 `state=blocked` (sign-in, a permission or a question in
    * its terminal): nothing may be typed or submitted. Other providers and sessions without a report — `false`.
@@ -460,6 +469,10 @@ export const QWEN_STARTUP_NO_STATUS = 'Qwen needs attention at startup: see the 
 
 /** Readiness facts of one Qwen process (spec 2026-11-11, 3.4 amendment). */
 interface QwenProcess {
+  /** The process generation (`processStarted`): facts of another generation are not this process's. */
+  generation: number;
+  /** Spawn time of the process, taken before the spawn: journal lines written earlier belong to a past process. */
+  spawnedAt: number;
   /** Any OSC 7501 report arrived. */
   statusSeen: boolean;
   /** `state=idle` arrived: the prompt accepts input. */
@@ -590,6 +603,8 @@ export function createActivityService(
   const startupTimers = new Map<string, NodeJS.Timeout>();
   /** What the current Qwen process has shown since its start: OSC 7501 reports and the Parley MCP tool list. */
   const qwenProcesses = new Map<string, QwenProcess>();
+  /** Process generations by session key (`processStarted`); they only grow, so a stale one never matches again. */
+  const generations = new Map<string, number>();
   /** Запуски процессов, которые видел хост (`processStarted`), по ключу сессии: отсчёт срока и «новых» строк журнала. */
   const launches = new Map<string, Launch>();
   /**
@@ -696,7 +711,9 @@ export function createActivityService(
    * Qwen readiness (spec 2026-11-11, 3.4 and its amendment): `SessionStart` is not ready, because Qwen fires it under its
    * sign-in picker. The current process is ready once its terminal reported OSC 7501 `state=idle` and its Parley MCP
    * client listed the tools, or once its journal shows input: `auth_success`, `idle_prompt` or a real prompt
-   * (`UserPromptSubmit` that is not Qwen's empty follow-up). Lines before the current launch are a past process.
+   * (`UserPromptSubmit` that is not Qwen's empty follow-up). A journal line counts only by its own payload time at or
+   * after the spawn of the current process: its position past the cached journal length proves nothing, because the
+   * journal is read asynchronously and a read finishing after a fast resume brings old lines past that length.
    */
   function qwenReady(key: string): boolean {
     const current = qwenProcesses.get(key);
@@ -704,8 +721,10 @@ export function createActivityService(
     if (current?.idleSeen === true && current.mcpListed) return true;
     // The journal shows the process took input (a real prompt, idle after a turn, a finished sign-in).
     const journal = journals.get(key) ?? [];
-    const from = launches.get(key)?.journalLength ?? 0;
-    return journal.slice(from).some(isQwenReadiness);
+    if (current === undefined) return journal.slice(launches.get(key)?.journalLength ?? 0).some(isQwenReadiness);
+    return journal.some(
+      (event) => isQwenReadiness(event) && event.atFromPayload === true && Date.parse(event.at) >= current.spawnedAt,
+    );
   }
 
   /**
@@ -1990,18 +2009,32 @@ export function createActivityService(
     qwenBlocked(ref) {
       return qwenProcesses.get(refKey(ref))?.blocked === true;
     },
-    mcpListed(ref) {
+    processGeneration(ref) {
+      return generations.get(refKey(ref)) ?? null;
+    },
+    mcpListed(ref, generation) {
       if (stopped) return;
       const current = qwenProcesses.get(refKey(ref));
-      if (current === undefined || current.mcpListed) return;
+      // The list was asked by another (replaced) process, or before any process of this host: not this process's tools.
+      if (current === undefined || generation === null || current.generation !== generation || current.mcpListed) return;
       current.mcpListed = true;
       recompute(ref);
     },
-    processStarted(ref) {
+    processStarted(ref, spawnedAt) {
       if (stopped) return;
       const key = refKey(ref);
+      const generation = (generations.get(key) ?? 0) + 1;
+      generations.set(key, generation);
       // A new process generation: nothing it has not shown yet counts (stale OSC or MCP of the previous process).
-      qwenProcesses.set(key, { statusSeen: false, idleSeen: false, authAt: null, mcpListed: false, blocked: false });
+      qwenProcesses.set(key, {
+        generation,
+        spawnedAt: spawnedAt ?? nowFn(),
+        statusSeen: false,
+        idleSeen: false,
+        authAt: null,
+        mcpListed: false,
+        blocked: false,
+      });
       launches.set(key, { at: nowFn(), journalLength: journals.get(key)?.length ?? 0 });
       // Срок и счёт новых строк начинаются заново: таймер прежнего запуска (Resume) к этому процессу не относится.
       clearStartupTimer(key);

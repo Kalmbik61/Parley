@@ -77,7 +77,9 @@ const waitFor = async (check: () => boolean, timeoutMs = 5000): Promise<void> =>
   }
 };
 
-const hook = (name: string, extra: Record<string, unknown> = {}): string => `${JSON.stringify({ hook_event_name: name, ...extra })}\n`;
+/** A hook line as qwen journals it: with its own `timestamp` (now, unless `extra` gives another). */
+const hook = (name: string, extra: Record<string, unknown> = {}): string =>
+  `${JSON.stringify({ hook_event_name: name, timestamp: new Date().toISOString(), ...extra })}\n`;
 const IDLE: QwenStatus = { state: 'idle', kind: null, msg: null };
 const WORKING: QwenStatus = { state: 'working', kind: null, msg: null };
 const AUTH: QwenStatus = { state: 'blocked', kind: 'auth', msg: 'Authentication required' };
@@ -125,7 +127,7 @@ describe('qwen readiness', () => {
     const { ref, a, launched } = await started();
     a.qwenStatus(ref, IDLE);
     expect(a.get(ref)?.activity.lastEventAt).toBeNull();
-    a.mcpListed(ref);
+    a.mcpListed(ref, a.processGeneration(ref));
     await waitFor(() => a.get(ref)?.activity.lastEventAt != null);
     expect(hookedSince(a.get(ref)?.activity, launched)).toBe(true);
     expect(a.get(ref)?.activity.need).toBeNull();
@@ -133,7 +135,7 @@ describe('qwen readiness', () => {
 
   it('MCP listed before idle: ready on idle', async () => {
     const { ref, a } = await started();
-    a.mcpListed(ref);
+    a.mcpListed(ref, a.processGeneration(ref));
     expect(a.get(ref)?.activity.lastEventAt).toBeNull();
     a.qwenStatus(ref, IDLE);
     await waitFor(() => a.get(ref)?.activity.lastEventAt != null);
@@ -145,7 +147,7 @@ describe('qwen readiness', () => {
     expect(a.get(ref)?.activity).toMatchObject({ activity: 'blocked', need: { kind: 'startup', detail: QWEN_STARTUP_ATTENTION } });
     expect(hookedSince(a.get(ref)?.activity, Date.now() + 60_000)).toBe(false);
     a.qwenStatus(ref, IDLE);
-    a.mcpListed(ref);
+    a.mcpListed(ref, a.processGeneration(ref));
     await waitFor(() => a.get(ref)?.activity.need === null);
     expect(a.get(ref)?.activity.activity).not.toBe('blocked');
   });
@@ -163,7 +165,7 @@ describe('qwen readiness', () => {
 
   it('past the grace without any OSC 7501 (another qwen version): attention, never ready', async () => {
     const { ref, a, clock, launched } = await started();
-    a.mcpListed(ref);
+    a.mcpListed(ref, a.processGeneration(ref));
     clock.now = launched + 20_000;
     a.markSeen(ref);
     expect(a.get(ref)?.activity).toMatchObject({ activity: 'blocked', need: { kind: 'startup', detail: QWEN_STARTUP_NO_STATUS } });
@@ -187,7 +189,7 @@ describe('qwen readiness', () => {
   it('a new process generation forgets the previous one: its idle and MCP list do not count', async () => {
     const { ref, a } = await started();
     a.qwenStatus(ref, IDLE);
-    a.mcpListed(ref);
+    a.mcpListed(ref, a.processGeneration(ref));
     await waitFor(() => a.get(ref)?.activity.lastEventAt != null);
     const before = a.get(ref)?.activity.lastEventAt;
     a.processStarted(ref);
@@ -196,7 +198,47 @@ describe('qwen readiness', () => {
     expect(a.get(ref)?.activity.lastEventAt).toBe(before);
     a.qwenStatus(ref, IDLE);
     expect(a.get(ref)?.activity.lastEventAt).toBe(before);
-    a.mcpListed(ref);
+    a.mcpListed(ref, a.processGeneration(ref));
+    await waitFor(() => a.get(ref)?.activity.lastEventAt !== before);
+  });
+
+  it('a delayed read of the old journal after a fast resume does not make the replacement ready', async () => {
+    const { ref, a, clock } = await started();
+    // The old process wrote input and idle, but the host had not read them yet when the replacement was spawned.
+    const old = new Date(clock.now - 5_000).toISOString();
+    a.processStarted(ref);
+    const before = a.get(ref)?.activity.lastEventAt;
+    await appendFile(
+      journal(ref),
+      hook('UserPromptSubmit', { prompt: 'old', timestamp: old }) +
+        hook('Notification', { notification_type: 'idle_prompt', timestamp: old }) +
+        hook('SessionStart', { source: 'resume' }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    // Read past the cached length and stamped by the file's fresh mtime, the old lines would have passed for new ones.
+    expect(a.get(ref)?.activity.lastEventAt).toBe(before);
+    expect(a.get(ref)?.activity.activity).not.toBe('working');
+    expect(a.get(ref)?.activity.need).toBeNull();
+    // The replacement's own input is readiness.
+    await appendFile(journal(ref), hook('UserPromptSubmit', { prompt: 'hello' }));
+    await waitFor(() => a.get(ref)?.activity.activity === 'working');
+  });
+
+  it('an MCP list of a replaced process generation does not certify its successor', async () => {
+    const { ref, a } = await started();
+    const previous = a.processGeneration(ref);
+    a.processStarted(ref);
+    expect(a.processGeneration(ref)).not.toBe(previous);
+    await appendFile(journal(ref), hook('SessionStart', { source: 'resume' }));
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const before = a.get(ref)?.activity.lastEventAt;
+    a.qwenStatus(ref, IDLE);
+    // The old process's list request finishes after the restart.
+    a.mcpListed(ref, previous);
+    a.mcpListed(ref, null);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(a.get(ref)?.activity.lastEventAt).toBe(before);
+    a.mcpListed(ref, a.processGeneration(ref));
     await waitFor(() => a.get(ref)?.activity.lastEventAt !== before);
   });
 
@@ -211,7 +253,7 @@ describe('qwen readiness', () => {
   it('ready: the hook mapping drives the turn (busy → idle)', async () => {
     const { ref, a } = await started();
     a.qwenStatus(ref, IDLE);
-    a.mcpListed(ref);
+    a.mcpListed(ref, a.processGeneration(ref));
     await appendFile(journal(ref), hook('UserPromptSubmit', { prompt: 'brief' }));
     await waitFor(() => a.get(ref)?.activity.activity === 'working');
     await appendFile(journal(ref), hook('Stop', { context_usage: 0.1, context_limit: 1000 }) + hook('Notification', { notification_type: 'idle_prompt' }));
