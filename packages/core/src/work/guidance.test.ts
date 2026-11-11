@@ -119,6 +119,8 @@ describe('системная вставка', () => {
     expect(line).toContain('wait_for("inbox", 1500)');
     expect(line).not.toContain('1800');
     expect(line).toContain('no text before or after');
+    // Ожидание — в том же сообщении, что и вызов перед ним: отдельное сообщение ради wait_for — лишний ответ модели.
+    expect(line).toContain('wait_for("inbox", 1500) in one message with the call it follows; no text before or after');
     expect(line).toMatch(/no Monitor, sleep or loops/);
     // Буквальное {"state":"running"}: Codex иначе путает его со своим «Script running with cell ID».
     expect(line).toContain('on {"state":"running"} repeat once, then end the turn without report (not done)');
@@ -941,7 +943,7 @@ describe('профиль short, примеры для Codex и правило о
 
   it('CODEX_TOOL_EXAMPLES names real tools and real argument keys', () => {
     const calls = [...CODEX_TOOL_EXAMPLES.matchAll(/tools\.mcp__parley__(\w+)\((\{[^)]*\})?/g)];
-    expect(calls.map((m) => m[1])).toEqual(['get_map', 'send_message', 'check_inbox', 'wait_for', 'report']);
+    expect(calls.map((m) => m[1])).toEqual(['get_map', 'send_message', 'check_inbox', 'wait_for', 'wait_for', 'report']);
     for (const [, name, args] of calls) {
       const tool = PARLEY_TOOLS.find((t) => t.name === name)!;
       expect(tool, name).toBeDefined();
@@ -949,6 +951,11 @@ describe('профиль short, примеры для Codex и правило о
     }
     // Пример ожидания — одно длинное и помечающее прочитанным (как вставка): 1500 с, не 600 и не 1800.
     expect(CODEX_TOOL_EXAMPLES).toContain('wait_for({ target: "inbox", timeoutSec: 1500 }); // returns and marks messages read; on running repeat once');
+    // Скрипт, который ждёт, начинается с прагмы `@exec` и держит вызов перед ожиданием вместе с ним; при повторном yield — один `wait` с тем же сроком.
+    expect(CODEX_TOOL_EXAMPLES).toContain('A waiting exec script starts with `// @exec: {"yield_time_ms": 1560000}` and holds the call it follows and the wait: send_message, then text(await tools.mcp__parley__wait_for({ target: "inbox", timeoutSec: 1500 })).');
+    expect(CODEX_TOOL_EXAMPLES).toContain('If exec still yields, call wait once with that yield_time_ms.');
+    // 1560000 мс = 1500 с ожидания и минута запаса.
+    expect(1560000).toBe((1500 + 60) * 1000);
     expect(CODEX_TOOL_EXAMPLES.split('\n').length).toBeLessThanOrEqual(8);
     expect(Buffer.byteLength(CODEX_TOOL_EXAMPLES)).toBeLessThanOrEqual(1024);
     expect(CODEX_TOOL_EXAMPLES).not.toMatch(/[А-Яа-яЁё]/);

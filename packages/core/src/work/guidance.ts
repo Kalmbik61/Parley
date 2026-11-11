@@ -33,13 +33,14 @@ export const CODEX_APPROVAL_GUIDANCE =
  * Текст — дословно из спеки; форма `tools.mcp__parley__<имя>(…)` проверена пробой на 0.160.
  */
 export const CODEX_TOOL_EXAMPLES = [
-  'Parley tools in Codex code mode are called as tools.mcp__parley__<name>(args). Examples:',
-  '  const map = await tools.mcp__parley__get_map({});',
-  '  await tools.mcp__parley__send_message({ to: "s-02", kind: "question", text: "Which branch do I build on?" });',
-  '  const inbox = await tools.mcp__parley__check_inbox({});                 // per pointer; again while remaining',
+  'Parley tools in Codex are called as tools.mcp__parley__<name>(args):',
+  '  await tools.mcp__parley__get_map({});',
+  '  await tools.mcp__parley__send_message({ to: "s-02", text: "Which branch?" });',
+  '  const inbox = await tools.mcp__parley__check_inbox({}); // per pointer',
   '  await tools.mcp__parley__wait_for({ target: "inbox", timeoutSec: 1500 }); // returns and marks messages read; on running repeat once',
-  '  await tools.mcp__parley__report({ status: "done", summary: "What was done, what was found, what is left." });',
-  'Call report at the end (status failed if the task is not done): it notifies your room lead, room owner or task giver, so no separate "done" message is needed. Then stop: end the turn, do not poll get_map or check_inbox, do not start unrelated work. New messages reach you as the pointer after your turn.',
+  'A waiting exec script starts with `// @exec: {"yield_time_ms": 1560000}` and holds the call it follows and the wait: send_message, then text(await tools.mcp__parley__wait_for({ target: "inbox", timeoutSec: 1500 })). If exec still yields, call wait once with that yield_time_ms.',
+  '  await tools.mcp__parley__report({ status: "done", summary: "Done, found, left." });',
+  'Call report at the end (failed if not done): it notifies your room lead, room owner or task giver, so send no "done" message. Then end the turn; do not poll get_map or check_inbox or start unrelated work. New messages reach you as the pointer after your turn.',
 ].join('\n');
 
 /**
@@ -109,7 +110,7 @@ export function stableGuidance({ skillNavigator = false, skillList, toolProfile 
     'create_session — launch a new peer in the current workspace. No inherited room membership or ownership; leads invite existing sessions. Native provider subagents remain separate. Implementation: standard-tier models (Executor); strong ones plan, lead, review.',
     // Одно длинное ожидание вместо цепочки коротких: каждый вызов и каждая реплика «жду» — полный ход модели.
     // 1500, а не 1800: у вызова MCP в Claude Code потолок простоя 30 минут (CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT).
-    'wait_for — session by id or mail ("inbox"; marks it read). Mail: one wait_for("inbox", 1500), no text before or after, no Monitor, sleep or loops; on {"state":"running"} repeat once, then end the turn without report (not done). By id: repeat while running. New job: wait via "inbox", not by id (its report arrives as a letter).',
+    'wait_for — session by id or mail ("inbox"; marks it read). Mail: one wait_for("inbox", 1500) in one message with the call it follows; no text before or after, no Monitor, sleep or loops; on {"state":"running"} repeat once, then end the turn without report (not done). By id: repeat while running. New job: wait via "inbox", not by id (its report arrives as a letter).',
     'send_message — to a session or to a room (room): question — waiting for an answer, decision — we have agreed, note — the default; replyTo — in a room, the id of the message you answer, above all the human\'s question: the window quotes it.',
     // В окне письма объявляет указатель: хост печатает его после хода агента (`delivery.ts`), а сессии окна
     // запускает без канала. Тег `<channel source="parley">` — только у сессий CLI `parley-core`; его оговорка
