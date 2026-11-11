@@ -325,6 +325,11 @@ interface SessionFeed {
   codex?: CodexFeed;
   /** Qwen Code: state of the feed read from the bound transcript. */
   qwen?: QwenFeed;
+  /**
+   * Qwen Code: when its last turn ended (Stop hook or the journal going idle). The transcript has no end-of-turn record, so
+   * this closes the turn it leaves open; it survives reseeding and a reconnect.
+   */
+  qwenStoppedAt?: string | undefined;
   /** Опрос журналов Codex и Qwen, пока есть подписчики. */
   codexPoll?: NodeJS.Timeout | undefined;
   /** Кто отвечает на одобрения Codex: `null` — пока неизвестно (у Claude всегда). */
@@ -816,7 +821,13 @@ export function createFeedService(
     // and no permission cards (spec 2026-11-11, 3.5, Feed ownership); it only prompts the transcript to be read now.
     if (hookFamily === null) {
       request.respond(EMPTY_HOOK_RESPONSE);
-      if (provider !== undefined && byFamily(provider, { claude: false, codex: false, qwen: true, neutral: false })) void seedAside(ref);
+      if (provider !== undefined && byFamily(provider, { claude: false, codex: false, qwen: true, neutral: false })) {
+        if (body['hook_event_name'] === 'Stop' || body['hook_event_name'] === 'StopFailure') {
+          const stamp = textOf(body['timestamp']);
+          feedOf(ref).qwenStoppedAt = stamp !== null && !Number.isNaN(Date.parse(stamp)) ? new Date(stamp).toISOString() : at();
+        }
+        void seedAside(ref);
+      }
       return;
     }
     const feed = feedOf(ref);
@@ -1037,7 +1048,7 @@ export function createFeedService(
         if (!feedCurrent(feed)) return;
         const seeded = feedFromQwenTranscript(records, { limit: maxItems });
         // A turn left open by the transcript is closed only without a live process (a host restart killed it with the host).
-        const state = deps.pty.get(feed.ref) === undefined ? closeBrokenTurn(seeded.state) : seeded.state;
+        const state = deps.pty.get(feed.ref) === undefined ? closeBrokenTurn(seeded.state) : closedByQwenStop(feed, seeded.state);
         feed.state = state;
         feed.qwen = { tail, cursor: seeded.cursor, queue: Promise.resolve() };
         feed.sizes = new Map();
@@ -1079,6 +1090,20 @@ export function createFeedService(
     await seedQwen(feed);
   }
 
+  /** The turn the transcript leaves open is closed by the recorded end of the turn, unless a newer prompt followed it. */
+  function closedByQwenStop(feed: SessionFeed, state: FeedState): FeedState {
+    const stoppedAt = feed.qwenStoppedAt;
+    if (stoppedAt === undefined || !turnActive(state.items)) return state;
+    const prompt = state.items.findLast((item) => item.kind === 'prompt');
+    if (prompt !== undefined && prompt.at > stoppedAt) return state;
+    return closeFeedTurn(state, stoppedAt).state;
+  }
+
+  function closeQwenTurn(feed: SessionFeed): void {
+    const closed = closedByQwenStop(feed, feed.state);
+    if (closed !== feed.state) commit(feed, closeFeedTurn(feed.state, feed.qwenStoppedAt ?? at()));
+  }
+
   /** New transcript records of a Qwen session go into the feed. */
   function pollQwen(feed: SessionFeed): Promise<void> {
     const qwen = feed.qwen;
@@ -1087,10 +1112,15 @@ export function createFeedService(
       if (!feedCurrent(feed) || feed.qwen !== qwen) return;
       const records = await qwen.tail.read();
       // The feed was seeded again from another transcript while the tail read: these records are foreign.
-      if (!feedCurrent(feed) || feed.qwen !== qwen || records.length === 0) return;
+      if (!feedCurrent(feed) || feed.qwen !== qwen) return;
+      if (records.length === 0) {
+        closeQwenTurn(feed);
+        return;
+      }
       const { update, cursor } = applyQwenRecords(feed.state, records, qwen.cursor);
       qwen.cursor = cursor;
       commit(feed, update);
+      closeQwenTurn(feed);
     });
     qwen.queue = run.catch(() => {});
     return run;
@@ -1585,8 +1615,14 @@ export function createFeedService(
     // отдала бы хуку `{}`, Codex ушёл бы в окно TUI, и `exec` ждал бы там без срока (разбор 2026-10-16).
     try {
       if (sessionOf(feed.ref).provider === 'codex') return;
-      // Qwen Code has no feed cards to settle (approvals are answered in the terminal).
-      if (byFamily(sessionOf(feed.ref).provider, { claude: false, codex: false, qwen: true, neutral: false })) return;
+      // Qwen Code has no feed cards to settle (approvals are answered in the terminal). Its journal going idle ends the turn.
+      if (byFamily(sessionOf(feed.ref).provider, { claude: false, codex: false, qwen: true, neutral: false })) {
+        if (turnActive(feed.state.items)) {
+          feed.qwenStoppedAt = at();
+          void seedAside(feed.ref);
+        }
+        return;
+      }
     } catch {
       // Сессии уже нет в работах — поведение прежнее.
     }

@@ -145,6 +145,18 @@ describe('ProviderUpdateRow', () => {
   describe('состояния строки `cli` (спека 2026-11-11, §4.4)', () => {
     const AT = '2026-11-11T14:05:00.000Z';
     const clock = new Date(AT).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+    it('the last check failed: the row shows the failure, not "Up to date · checked"', () => {
+      const failed = codex({
+        cli: { installed: '0.162.0', latest: '0.162.0', method: 'standalone', checkedAt: '2026-11-11T12:00:00.000Z', state: 'up-to-date', lastError: 'offline', lastSuccessAt: '2026-11-11T09:30:00.000Z' },
+      });
+      const { container } = render(<ProviderUpdateRow provider={failed} onReload={reload} />);
+      const text = container.textContent ?? '';
+      expect(text).toContain('Could not check (offline)');
+      expect(text).toContain('last successful check');
+      expect(text).not.toContain('Up to date');
+      expect(text).not.toContain('checked 1');
+    });
+
     const withCli = (cli: Partial<NonNullable<ProviderInfo['cli']>>, patch: Partial<ProviderInfo> = {}): ProviderInfo =>
       codex({
         update: null,

@@ -57,6 +57,8 @@ export interface CliStatus {
   checkedAt: string | null;
   state: 'missing' | 'up-to-date' | 'available' | 'skipped' | 'unknown';
   lastError: string | null;
+  /** Когда проверка в последний раз удалась; `checkedAt` — последняя попытка, в том числе неудачная. Старый хост поля не шлёт. */
+  lastSuccessAt?: string | null;
 }
 
 export type ProviderCheckReason = (typeof PROVIDER_CHECK_REASONS)[number];

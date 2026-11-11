@@ -4,7 +4,7 @@ import { appendFile, copyFile, mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { FeedItem } from '@parley/core';
+import { turnActive, type FeedItem } from '@parley/core';
 import { fakeFeedDeps, fakeClient, hookRequest, REF } from '../../test/feed-fakes.js';
 import type { FakeFeedDeps } from '../../test/feed-fakes.js';
 import { createLogIndex } from '../activity/log-index.js';
@@ -72,10 +72,11 @@ describe('feed of a Qwen Code session', () => {
   });
 
   it('a transcript replayed after the same records were applied gives no duplicates', async () => {
-    const first = (await service.snapshot(REF)).items.length;
+    const first = (await service.snapshot(REF)).items.filter((i) => i.kind !== 'turn').length;
     service.onHook(hookRequest({ hook_event_name: 'Stop', session_id: ID }));
     await new Promise((resolve) => setTimeout(resolve, 100));
-    expect((await service.snapshot(REF)).items.length).toBe(first);
+    // The transcript items are not duplicated; only the closing turn item is added by the Stop.
+    expect((await service.snapshot(REF)).items.filter((i) => i.kind !== 'turn').length).toBe(first);
   });
 
   it('after sleep and resume the feed continues the same transcript with no duplicates', async () => {
@@ -100,6 +101,30 @@ describe('feed of a Qwen Code session', () => {
     expect(after.items.filter((i) => i.kind === 'prompt')).toHaveLength(3);
     expect(new Set(after.items.map((item) => item.id)).size).toBe(after.items.length);
     expect(after.items.filter((i) => i.kind === 'text' && i.text === 'resumed answer')).toHaveLength(1);
+  });
+
+  it('the Stop hook closes the open turn, and it stays closed on a reseed and a later poll', async () => {
+    expect(turnActive((await service.snapshot(REF)).items)).toBe(true);
+    service.onHook(hookRequest({ hook_event_name: 'Stop', session_id: ID, timestamp: '2026-11-11T13:30:00.000Z' }));
+    await vi.waitFor(async () => {
+      expect(turnActive((await service.snapshot(REF)).items)).toBe(false);
+    });
+    const turns = kinds((await service.snapshot(REF)).items, 'turn');
+    expect(turns.at(-1)).toMatchObject({ durationMs: expect.any(Number) });
+    // A poll with no new records (reconnect) keeps it closed.
+    service.onHook(hookRequest({ hook_event_name: 'Notification', session_id: ID }));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(turnActive((await service.snapshot(REF)).items)).toBe(false);
+  });
+
+  it('a new prompt after the Stop opens a new turn', async () => {
+    await service.snapshot(REF);
+    service.onHook(hookRequest({ hook_event_name: 'Stop', session_id: ID, timestamp: '2026-11-11T13:30:00.000Z' }));
+    await vi.waitFor(async () => expect(turnActive((await service.snapshot(REF)).items)).toBe(false));
+    const user = `${JSON.stringify({ uuid: 'np1', sessionId: ID, timestamp: '2026-11-11T14:00:00.000Z', type: 'user', provenance: 'real_user', message: { parts: [{ text: 'again' }] } })}\n`;
+    await appendFile(file, user);
+    service.onHook(hookRequest({ hook_event_name: 'UserPromptSubmit', session_id: ID }));
+    await vi.waitFor(async () => expect(turnActive((await service.snapshot(REF)).items)).toBe(true));
   });
 
   it('has no subagent transcripts and never reads the Claude layout', async () => {

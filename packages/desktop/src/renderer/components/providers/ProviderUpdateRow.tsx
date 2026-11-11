@@ -91,6 +91,9 @@ export function ProviderUpdateRow({ provider, onReload }: { provider: ProviderIn
   const L = S.providerUpdate;
   const result = phase.kind === 'done' ? phase.result : null;
   const at = clock(cli?.checkedAt ?? update?.checkedAt);
+  // The last check failed: the cached version is not verified now, so the failure shows whatever the state is.
+  const failed = cli !== null && cli.lastError != null;
+  const lastSuccess = clock(cli?.lastSuccessAt);
   const versionText = <span className="font-mono text-[12px]">{installed ?? '?'}</span>;
   return (
     <div data-provider-update={provider.id} data-cli-state={state ?? undefined} className="flex flex-col gap-1.5 rounded-lg border border-border px-3 py-2 text-[13px]">
@@ -105,8 +108,9 @@ export function ProviderUpdateRow({ provider, onReload }: { provider: ProviderIn
               {name} {versionText}
             </span>
           )}
-          {state === 'up-to-date' ? <span className="text-neutral-600">· {L.upToDate}</span> : null}
-          {state === 'unknown' ? <span className="text-neutral-600">· {L.couldNotCheck(cli?.lastError ?? null)}</span> : null}
+          {state === 'up-to-date' && !failed ? <span className="text-neutral-600">· {L.upToDate}</span> : null}
+          {state === 'unknown' || failed ? <span data-check-failed className="text-neutral-600">· {L.couldNotCheck(cli?.lastError ?? null)}</span> : null}
+          {failed && lastSuccess !== null ? <span className="text-neutral-600">· {L.lastSuccess(lastSuccess)}</span> : null}
           {state === 'skipped' ? <span className="text-neutral-600">· {L.skipped}</span> : null}
           {state === 'available' && method !== null && method !== 'unknown' ? <span className="text-neutral-600">· {method}</span> : null}
           {(state === 'available' || state === 'skipped') && manual !== null ? (
@@ -129,7 +133,7 @@ export function ProviderUpdateRow({ provider, onReload }: { provider: ProviderIn
               {L.skip}
             </button>
           ) : null}
-          {at !== null && (state === 'up-to-date' || state === 'unknown') ? <span className="text-neutral-600">· {L.checked(at)}</span> : null}
+          {at !== null && ((state === 'up-to-date' && !failed) || state === 'unknown') ? <span className="text-neutral-600">· {L.checked(at)}</span> : null}
           {cli !== null ? (
             <button type="button" data-check-now aria-busy={checking} disabled={running || checking} onClick={() => void checkNow()} className={BUTTON}>
               {checking ? <Loader2 aria-hidden size={13} className="animate-spin" /> : null}
