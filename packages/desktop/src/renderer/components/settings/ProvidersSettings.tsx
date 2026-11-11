@@ -22,7 +22,7 @@ import { accountOf } from '../providers/custom-provider-draft.js';
 import { ProviderCard } from '../providers/ProviderCard.js';
 import { ProviderUpdateRow } from '../providers/ProviderUpdateRow.js';
 
-const CORE_IDS = ['claude', 'codex', 'glm'] as const;
+const CORE_IDS = ['claude', 'codex', 'glm', 'qwen'] as const;
 
 export function ProvidersSettings(): JSX.Element {
   const providers = useProvidersStore((state) => state.providers);

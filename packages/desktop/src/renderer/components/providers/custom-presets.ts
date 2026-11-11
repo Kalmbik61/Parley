@@ -98,7 +98,8 @@ export const CUSTOM_PRESETS: readonly CustomPreset[] = [
   },
   {
     id: 'qwen',
-    label: 'Qwen',
+    // The id stays: existing `custom-*` providers keep it (spec 2026-11-11, §5). The Qwen Code CLI is a separate provider.
+    label: 'Qwen models in Claude Code (Alibaba key)',
     billing: 'Coding Plan, Token Plan or pay as you go',
     keyUrl: 'https://www.alibabacloud.com/help/en/model-studio/claude-code',
     endpoints: [

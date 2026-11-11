@@ -86,7 +86,7 @@ export async function startAgents(options: StartAgentsOptions): Promise<StartOut
         // Модель и effort — только явно выбранные (тронутые) и ещё существующие в снимке провайдеров: `null` — явный
         // `Default` (снимает умолчание роли, флага нет), провайдер без списка или уровней их не получает, исчезнувший
         // после `providers.changed` выбор уходит как `Default`.
-        ...(row.modelTouched && (info?.models?.length ?? 0) > 0 ? { model: chosenModel(row, info) } : {}),
+        ...(row.modelTouched && ((info?.models?.length ?? 0) > 0 || info?.family === 'qwen') ? { model: chosenModel(row, info) } : {}),
         ...(row.effortTouched && effortChoices(info, chosenModel(row, info)) !== null ? { effort: chosenEffort(row, info) } : {}),
         ...(options.lean === null ? {} : { lean: options.lean }),
       });

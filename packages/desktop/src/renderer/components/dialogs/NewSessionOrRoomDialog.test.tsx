@@ -2534,3 +2534,46 @@ describe('NewSessionOrRoomDialog — «Put them in a room»', () => {
     expect(callsOf('rooms.create')).toHaveLength(1);
   });
 });
+
+
+describe('Qwen Code in the dialog', () => {
+  const QWEN = { id: 'qwen', label: 'Qwen Code', available: true, family: 'qwen' as const, version: '0.27.2' };
+  const roles = [
+    { id: 'builtin:planner', name: 'Planner', source: 'builtin' as const, provider: 'claude', description: 'Plan', model: null, effort: null, readOnly: true, models: { claude: null, codex: null } },
+    { id: 'builtin:executor', name: 'Executor', source: 'builtin' as const, provider: 'claude', description: 'Do', model: null, effort: null, readOnly: false, models: { claude: null, codex: null } },
+  ];
+  const roleControl = () => within(rows()[0]!).getByRole('combobox', { name: 'Role' });
+  beforeEach(() => {
+    bridge.setHandler('providers.list', async () => ({ providers: [...PROVIDERS, QWEN] }));
+    bridge.setHandler('roles.list', async () => ({ roles, diagnostics: [], partial: false }));
+  });
+
+  it('lists Qwen Code; on it the read-only roles are disabled with the reason, the others stay', async () => {
+    await renderDialog();
+    fireEvent.click(providerRadio(0, 'Qwen Code'));
+    fireEvent.keyDown(roleControl(), { key: 'ArrowDown' });
+    const planner = await screen.findByRole('option', { name: /Planner/ });
+    expect(planner.getAttribute('aria-disabled')).toBe('true');
+    expect(planner.getAttribute('title')).toBe(S.roles.readOnlyUnavailableOnQwen);
+    expect(screen.getByRole('option', { name: /Executor/ }).getAttribute('aria-disabled')).not.toBe('true');
+  });
+
+  it('a read-only role chosen first turns the Qwen Code pill off with the reason', async () => {
+    await renderDialog();
+    await chooseOption(roleControl(), /Planner/);
+    const pill = providerRadio(0, 'Qwen Code') as HTMLButtonElement;
+    expect(pill.disabled).toBe(true);
+    expect(pill.title).toBe(S.roles.readOnlyUnavailableOnQwen);
+  });
+
+  it('there is no model catalog: a typed model id goes to sessions.create, empty is Default', async () => {
+    await renderDialog();
+    fireEvent.click(providerRadio(0, 'Qwen Code'));
+    const field = within(rows()[0]!).getByLabelText('Model') as HTMLInputElement;
+    expect(field.placeholder).toBe(S.dialogs.newSession.modelTyped);
+    fireEvent.change(field, { target: { value: ' qwen3-coder-plus ' } });
+    fireEvent.click(button('Start session'));
+    await waitFor(() => expect(callsOf('sessions.create')).toHaveLength(1));
+    expect(callsOf('sessions.create')[0]).toMatchObject({ provider: 'qwen', model: 'qwen3-coder-plus' });
+  });
+});

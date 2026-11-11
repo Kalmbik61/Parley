@@ -739,3 +739,50 @@ describe('ProviderCard: установка CLI из окна (спека 2026-11
   });
 });
 
+
+
+describe('ProviderCard: Qwen Code (spec 2026-11-11, 3.6)', () => {
+  const qwen = (patch: Partial<Provider> = {}): Provider => ({
+    id: 'qwen', label: 'Qwen Code', available: true, family: 'qwen', needs: null, version: '0.27.2', ...patch,
+  });
+  const auth = (patch: Partial<NonNullable<Provider['qwenAuth']>>): Provider['qwenAuth'] => ({
+    selectedType: null, model: null, oauthFilePresent: false, envKeyPresent: false, hint: 'not-detected', ...patch,
+  });
+  const show = (provider: Provider) => render(<ProviderCard provider={provider} onReload={async () => {}} onRestartHost={() => {}} />);
+  const text = (): string => document.querySelector('[data-qwen-auth]')!.textContent ?? '';
+
+  it.each([
+    ['configured', auth({ hint: 'configured', selectedType: 'openai' }), 'Configured: openai'],
+    ['qwen-account', auth({ hint: 'qwen-account', oauthFilePresent: true }), 'Qwen account sign-in found'],
+    ['env-key', auth({ hint: 'env-key', envKeyPresent: true }), 'Key found in environment'],
+    ['not-detected', auth({}), 'Sign-in not detected: start a Qwen session and use /auth in the terminal'],
+  ])('hint %s is shown with the note that it is not a verdict', (_name, qwenAuth, expected) => {
+    show(qwen({ qwenAuth }));
+    expect(text()).toContain(expected);
+    expect(text()).toContain(S.providerCard.qwen.hintNote);
+    expect(document.querySelector('[data-qwen-auth]')!.getAttribute('data-qwen-auth')).toBe(qwenAuth!.hint);
+  });
+
+  it('a host without the hints field shows the not-detected text, never a claim', () => {
+    show(qwen());
+    expect(text()).toContain('Sign-in not detected');
+  });
+
+  it('model: Default, plus model.name when known', () => {
+    show(qwen({ qwenAuth: auth({ model: 'qwen3-coder-plus' }) }));
+    expect(document.querySelector('[data-qwen-model]')!.textContent).toBe('Model: Default (qwen3-coder-plus in Qwen settings)');
+    cleanup();
+    show(qwen({ qwenAuth: auth({}) }));
+    expect(document.querySelector('[data-qwen-model]')!.textContent).toBe('Model: Default');
+  });
+
+  it('a missing qwen offers Install… and Check again; the other providers show no Qwen hints', () => {
+    useHostStore.setState({ status: { state: 'connected', hostVersion: '0.4.0', methods: [...REQUIRED_METHODS, 'providers.install'] } });
+    show(qwen({ available: false, needs: 'cli', version: null }));
+    expect(screen.getByRole('button', { name: 'Install…' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: S.providerCard.checkAgain })).toBeTruthy();
+    cleanup();
+    show(glm());
+    expect(document.querySelector('[data-qwen-auth]')).toBeNull();
+  });
+});

@@ -68,7 +68,10 @@ export function ProviderCard({
   // Установка из окна (спека 2026-11-11): у GLM своей установки нет — он делит CLI Claude; нужен хост с `providers.install`.
   const installId = isGlm ? null : installableId(provider.id);
   const canInstall = installId !== null && methods.has('providers.install');
-  const missingCli = showInstall && !isGlm;
+  // Qwen Code has no copy-paste command block here: its install is the host's `Install…` (spec 2026-11-11, §4.2).
+  const qwenMissing = provider.id === 'qwen' && !provider.available;
+  const missingCli = (showInstall && !isGlm) || qwenMissing;
+  const qwenAuth = provider.id === 'qwen' ? (provider.qwenAuth ?? null) : null;
   const latest = provider.cli?.latest ?? null;
 
   useEffect(() => {
@@ -310,6 +313,12 @@ export function ProviderCard({
           ) : null}
         </>
       ) : null}
+      {qwenMissing ? (
+        <p data-not-installed className="text-xs text-muted-foreground">
+          {S.providerCard.notInstalled}
+          {latest === null ? '' : ` · ${S.providerCard.latestVersion(latest)}`}
+        </p>
+      ) : null}
       {canInstall && installId !== null ? (
         // Вне блока с командой: ход и итог остаются на месте, когда CLI найден и блок исчезает.
         <ProviderInstall id={installId} name={name} missing={missingCli} disabled={busy} onReload={onReload} />
@@ -350,6 +359,21 @@ export function ProviderCard({
             </Button>
           </div>
           <p className="text-xs text-muted-foreground">{S.providerCard.path}</p>
+        </div>
+      ) : null}
+      {provider.id === 'qwen' ? (
+        // Qwen Code signs in inside its terminal (`/auth`): the card shows hints from local files, never a verdict.
+        <div data-qwen-auth={qwenAuth?.hint ?? 'unknown'} className="space-y-1">
+          <p className="text-xs text-muted-foreground">
+            {qwenAuth === null
+              ? S.providerCard.qwen.hint['not-detected']
+              : qwenAuth.hint === 'configured'
+                ? S.providerCard.qwen.hint.configured(qwenAuth.selectedType ?? '')
+                : S.providerCard.qwen.hint[qwenAuth.hint]}
+          </p>
+          <p className="text-xs text-muted-foreground">{S.providerCard.qwen.hintNote}</p>
+          <p data-qwen-model="" className="text-xs text-muted-foreground">{S.providerCard.qwen.model(qwenAuth?.model ?? null)}</p>
+          <p className="text-xs text-muted-foreground">{S.providerCard.qwen.modelHelp}</p>
         </div>
       ) : null}
       {!isGlm && install !== null ? (

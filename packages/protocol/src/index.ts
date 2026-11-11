@@ -254,5 +254,6 @@ export type { VoiceProviderCheck, VoiceProviderCheckCode, VoiceProviderMethodRes
 export { consentMethodSchemas } from './consents.js';
 export type { AgentSwitchCard, ConsentCard, ConsentMethodResults, FolderTrustCard, ProjectMcpCard, ProjectMcpServer, TrustRecord } from './consents.js';
 export { CODEX_ACCOUNT_PREFIX, CUSTOM_PROVIDER_PREFIX, customProviderMethodSchemas, isCodexAccountId, isCustomProviderId, isManagedProviderId } from './custom-providers.js';
+export type { QwenAuthHints } from './qwen-auth.js';
 export type { CustomAccountInfo, CustomEndpointInfo, CustomProviderAuth, CustomProviderInfo, CustomProviderKind, CustomProviderMethodResults, CustomProviderSaveParams, CustomProviderModels } from './custom-providers.js';
 export type * from './human-overview.js';

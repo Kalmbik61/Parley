@@ -365,6 +365,8 @@ export const S = {
   },
   roles: {
     readOnly: 'Read only', unavailable: 'Role unavailable', providerLocked: 'Native roles use their own provider',
+    /** New-session dialog: read-only roles on Qwen Code (spec 2026-11-11, 3.6). */
+    readOnlyUnavailableOnQwen: 'Read-only roles are not available on Qwen Code yet',
     option: (name: string, source: 'builtin' | 'claude' | 'codex'): string => `${name} · ${{ builtin: 'Builtin', claude: 'Claude', codex: 'Codex' }[source]}`,
     defaultEffort: (effort: string): string => `Default effort: ${effort}`,
   },
@@ -820,6 +822,18 @@ export const S = {
 
   /** Общая карточка подключения: строка статуса и диалог новой сессии. */
   providerCard: {
+    /** Qwen Code card (spec 2026-11-11, 3.6): sign-in hints, never a verdict. */
+    qwen: {
+      hint: {
+        configured: (type: string): string => `Configured: ${type}`,
+        'qwen-account': 'Qwen account sign-in found',
+        'env-key': 'Key found in environment',
+        'not-detected': 'Sign-in not detected: start a Qwen session and use /auth in the terminal',
+      },
+      hintNote: 'This is a hint from local files, not a check that the sign-in works.',
+      model: (name: string | null): string => (name === null ? 'Model: Default' : `Model: Default (${name} in Qwen settings)`),
+      modelHelp: 'Pick Default, or type a model id when you start a session.',
+    },
     connected: 'Connected',
     notConnected: 'Not connected',
     copy: 'Copy',
@@ -1066,6 +1080,8 @@ export const S = {
       modelField: 'Model',
       /** Первый пункт списка моделей: без флага `--model`, модель CLI по умолчанию (решение 5). */
       modelDefault: 'Default',
+      /** Qwen Code has no model catalog: a typed model id (empty is Default). */
+      modelTyped: 'Model id (empty: Default)',
       effortField: 'Effort',
       /** Первый пункт списка уровней: без флага `--effort` — CLI берёт уровень, сохранённый у себя (нормалайзер 2026-10-06). */
       effortDefault: 'Default',

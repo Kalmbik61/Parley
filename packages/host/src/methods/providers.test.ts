@@ -564,3 +564,30 @@ describe('providers.list: аккаунт подписки и состояние 
     });
   });
 });
+
+
+describe('providers.list: Qwen Code sign-in hints (spec 2026-11-11, 3.6)', () => {
+  it('qwen carries hints only (presence and two non-secret strings); no secret leaves the host; other rows have none', async () => {
+    const qwenHome = await mkdtemp(path.join(tmpdir(), 'parley-qwen-home-'));
+    homes.push(qwenHome);
+    await writeFile(
+      path.join(qwenHome, 'settings.json'),
+      JSON.stringify({
+        security: { auth: { selectedType: 'openai', apiKey: 'SECRET-SETTINGS-KEY' } },
+        env: { OPENAI_API_KEY: 'SECRET-SETTINGS-ENV' },
+        modelProviders: [{ apiKey: 'SECRET-PROVIDER-KEY' }],
+        model: { name: 'qwen3-coder-plus' },
+      }),
+    );
+    await writeFile(path.join(qwenHome, 'oauth_creds.json'), '{"access_token":"SECRET-OAUTH"}');
+    process.env['QWEN_HOME'] = qwenHome;
+    process.env['OPENAI_API_KEY'] = 'SECRET-ENV-KEY';
+    extraEnv.push('QWEN_HOME', 'OPENAI_API_KEY');
+    await boot({});
+    const { providers } = await createProvidersList()({}, {} as RequestInfo);
+    const qwen = providers.find((provider) => provider.id === 'qwen');
+    expect(qwen?.qwenAuth).toEqual({ selectedType: 'openai', model: 'qwen3-coder-plus', oauthFilePresent: true, envKeyPresent: true, hint: 'configured' });
+    expect(JSON.stringify(providers)).not.toContain('SECRET');
+    expect(providers.filter((provider) => provider.id !== 'qwen').every((provider) => !('qwenAuth' in provider))).toBe(true);
+  });
+});

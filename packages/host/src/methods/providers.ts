@@ -4,6 +4,7 @@ import {
   syncApiKeyApproval,
   loadProviders,
   providerReadiness,
+  qwenAuthHints,
   readSecret,
   SecretFormatError,
   secretHint,
@@ -152,6 +153,8 @@ export function createProvidersList(
           argsOverridden: entry.argsOverridden === true,
           ...(check === undefined ? {} : { check }),
           ...(custom === undefined ? {} : { custom }),
+          // Hints only, from `qwenAuthHints`: presence and two non-secret strings (spec 2026-11-11, 3.6).
+          ...(entry.family === 'qwen' && entry.custom === undefined ? { qwenAuth: await qwenAuthHints() } : {}),
         };
       }),
     );

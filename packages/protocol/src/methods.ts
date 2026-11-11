@@ -29,6 +29,7 @@ import { voiceMethodSchemas } from './remote/voice.js';
 import type { VoiceMethodResults } from './remote/voice.js';
 import { customProviderMethodSchemas } from './custom-providers.js';
 import type { CustomProviderInfo, CustomProviderMethodResults } from './custom-providers.js';
+import type { QwenAuthHints } from './qwen-auth.js';
 import type { AssistantMethodResults } from './assistant.js';
 import { telegramMethodSchemas } from './telegram.js';
 import { voiceProviderMethodSchemas } from './voice-provider.js';
@@ -516,6 +517,12 @@ export interface Results extends AssistantMethodResults, VoiceMethodResults, Car
       update?: CliUpdate | null;
       /** Состояние CLI (claude, codex, qwen; GLM и свои провайдеры делят строку `claude`); хост до этой версии поля не знает. */
       cli?: CliStatus;
+      /**
+       * Qwen Code only: sign-in hints (spec 2026-11-11, 3.6). Presence and two non-secret strings, never a verdict and never
+       * a secret: `selectedType` and `model` come from `security.auth.selectedType` and `model.name` of the Qwen home's
+       * settings file; the credential file and the env key are reported as presence only. A host before this field omits it.
+       */
+      qwenAuth?: QwenAuthHints | null;
     }>;
   };
   'providers.setKey': { keyHint: string };

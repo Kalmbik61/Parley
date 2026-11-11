@@ -162,7 +162,7 @@ function ProviderLimitsMeter({ limits, resets }: { limits: ProviderLimits | null
 }
 
 /** Порядок основных подключённых провайдеров; остальные — в порядке ответа хоста. */
-const CORE_PROVIDERS = ['claude', 'codex', 'glm'] as const;
+const CORE_PROVIDERS = ['claude', 'codex', 'glm', 'qwen'] as const;
 
 /**
  * В поповере длинные сегменты могут сжиматься до ширины окна: сначала уступают лимиты, затем версия и имя.
