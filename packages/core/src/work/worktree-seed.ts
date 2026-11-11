@@ -8,7 +8,7 @@
  * одним `rename` (каталог) или `link` (файл). Сбой пути или шага наружу не бросается.
  */
 import { execFile } from 'node:child_process';
-import { link, lstat, mkdir, readdir, readFile, realpath, rename, rm } from 'node:fs/promises';
+import { link, lstat, mkdir, readdir, readFile, realpath, rename, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { resolveIncludePaths } from './worktree-include.js';
 import { NO_FSMONITOR } from './worktree.js';
@@ -163,9 +163,13 @@ async function isStalePnpm(worktreePath: string, cloned: string[]): Promise<bool
   return installed !== null && wanted !== null && !installed.equals(wanted);
 }
 
-/** Перенос из временного каталога на место; существующая непустая цель остаётся нетронутой (rename и link не затирают). */
+/**
+ * Перенос из временного каталога на место. Цель, появившаяся за время клона, не заменяется:
+ * rename молча заменил бы пустой каталог, поэтому наличие цели проверяется явно и даёт сбой пути.
+ */
 async function moveIntoPlace(stage: string, target: string, isDirectory: boolean): Promise<void> {
   await mkdir(path.dirname(target), { recursive: true });
+  if (await lstat(target).then(() => true, () => false)) throw new Error('target appeared');
   if (isDirectory) {
     await rename(stage, target);
     return;
@@ -201,7 +205,8 @@ export async function seedWorktree(
     if (platform !== 'darwin') {
       unavailable = true;
     } else {
-      unavailable = !(await sameCloneVolume(sourceRoot, worktreePath).catch(() => false));
+      // Обёртка: синхронное исключение подмены или реализации тоже означает «клон невозможен».
+      unavailable = !(await (async () => sameCloneVolume(sourceRoot, worktreePath))().catch(() => false));
     }
     if (!unavailable) {
       const gitDir = (await gitOut(['-C', worktreePath, 'rev-parse', '--absolute-git-dir'])).trim();
@@ -210,6 +215,13 @@ export async function seedWorktree(
       // Остаток оборванного запуска не мешает и не выдаётся за готовое.
       await rm(stageRoot, { recursive: true, force: true });
       await mkdir(stageRoot, { recursive: true });
+      // Временный каталог на другом устройстве, чем источник, превратил бы `cp -c` в обычную
+      // копию (клон возможен только в пределах одного тома), поэтому в этом случае шаг не идёт.
+      const [stageInfo, sourceInfo] = await Promise.all([stat(stageRoot), stat(sourceRoot)]);
+      if (stageInfo.dev !== sourceInfo.dev) {
+        await rm(stageRoot, { recursive: true, force: true });
+        unavailable = true;
+      }
     }
   } catch {
     return null;
@@ -227,6 +239,8 @@ export async function seedWorktree(
 
   const deadline = Date.now() + timeoutMs;
   let used = 0;
+  // Один признак на шаг: срок вышел (таймер или остаток не положителен); дальше клоны не стартуют.
+  let expired = false;
   try {
     for (const [index, entry] of entries.entries()) {
       const source = path.join(sourceRoot, entry);
@@ -238,7 +252,8 @@ export async function seedWorktree(
         // Цель уже есть (свой каталог агента, прежний запуск): не трогаем, в отчёт не пишем.
         if (await lstat(target).then(() => true, () => false)) continue;
         const remaining = deadline - Date.now();
-        if (remaining <= 0) {
+        if (expired || remaining <= 0) {
+          expired = true;
           report.skipped.push({ path: entry, reason: 'timeout' });
           continue;
         }
@@ -248,7 +263,10 @@ export async function seedWorktree(
           continue;
         }
         const isDirectory = (await lstat(source)).isDirectory();
-        timer = setTimeout(() => controller.abort(), Math.max(1, deadline - Date.now()));
+        timer = setTimeout(() => {
+          expired = true;
+          controller.abort();
+        }, Math.max(1, deadline - Date.now()));
         timer.unref();
         await clonePath(source, stage, isDirectory, controller.signal);
         if (controller.signal.aborted) throw new Error('timeout');
@@ -256,7 +274,7 @@ export async function seedWorktree(
         used += count;
         report.cloned.push(entry);
       } catch {
-        report.skipped.push({ path: entry, reason: controller.signal.aborted ? 'timeout' : 'failed' });
+        report.skipped.push({ path: entry, reason: expired || controller.signal.aborted ? 'timeout' : 'failed' });
       } finally {
         if (timer) clearTimeout(timer);
         await rm(stage, { recursive: true, force: true }).catch(() => {});

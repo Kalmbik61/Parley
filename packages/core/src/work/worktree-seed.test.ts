@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { cp, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -119,6 +119,13 @@ describe('seedWorktree', () => {
     });
     expect((await seedWorktree(project, copy, throwing))?.unavailable).toBe(true);
     expect(throwing.calls.count).toBe(0);
+    const throwingSync = fakeDeps({
+      sameCloneVolume: () => {
+        throw new Error('df упал сразу');
+      },
+    });
+    expect((await seedWorktree(project, copy, throwingSync))?.unavailable).toBe(true);
+    expect(throwingSync.calls.count).toBe(0);
   });
 
   it('цель существует', async () => {
@@ -204,6 +211,47 @@ describe('seedWorktree', () => {
     expect(await readFile(path.join(copy, 'node_modules/own.txt'), 'utf8')).toBe('свой\n');
     expect(await exists(path.join(copy, 'node_modules/x.js'))).toBe(false);
     expect(await exists(path.join(await gitDirOf(copy), 'parley-seed'))).toBe(false);
+  });
+
+  it('пустая цель появилась во время клона — не заменена', async () => {
+    await setup('node_modules\n');
+    await put(project, 'node_modules/x.js');
+    const deps = fakeDeps({
+      clonePath: async (source, stage) => {
+        await cp(source, stage, { recursive: true });
+        await mkdir(path.join(copy, 'node_modules'));
+      },
+    });
+    const report = await seedWorktree(project, copy, deps);
+    expect(report?.skipped).toEqual([{ path: 'node_modules', reason: 'failed' }]);
+    expect(report?.cloned).toEqual([]);
+    expect(await exists(path.join(copy, 'node_modules'))).toBe(true);
+    expect(await readdir(path.join(copy, 'node_modules'))).toEqual([]);
+    expect(await exists(path.join(await gitDirOf(copy), 'parley-seed'))).toBe(false);
+  });
+
+  it('после срока остальные пути не клонируются', async () => {
+    await setup('node_modules\n.env\n');
+    await put(project, 'node_modules/x.js');
+    await put(project, '.env', 'KEY=1\n');
+    let calls = 0;
+    const deps = fakeDeps({
+      timeoutMs: 50,
+      clonePath: (_source, _stage, _isDirectory, signal) => {
+        calls += 1;
+        return new Promise<void>((_resolve, reject) => {
+          if (signal.aborted) return reject(new Error('прервано'));
+          signal.addEventListener('abort', () => reject(new Error('прервано')));
+        });
+      },
+    });
+    const report = await seedWorktree(project, copy, deps);
+    expect(report?.skipped).toEqual([
+      { path: '.env', reason: 'timeout' },
+      { path: 'node_modules', reason: 'timeout' },
+    ]);
+    expect(report?.cloned).toEqual([]);
+    expect(calls).toBe(1);
   });
 
   it('lock-файл отличается', async () => {
