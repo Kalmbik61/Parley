@@ -1,0 +1,2100 @@
+{
+  "schemaVersion": 1,
+  "generator": {
+    "@cloudflare/codemode": "0.5.6",
+    "@tanstack/ai": "1.2.0",
+    "zod": "4.5.4"
+  },
+  "implementation": {
+    "baseCommit": "3b53d78164f1f4c935b22a1bdfb2a2b487ad20e1"
+  },
+  "allowlist": [
+    "get_map",
+    "read_room",
+    "read_guide",
+    "list_roles",
+    "backlog_list"
+  ],
+  "lists": {
+    "fullNoAgent": {
+      "count": 30,
+      "names": [
+        "publish_agent_plan",
+        "set_room_mode",
+        "plan_update",
+        "plan_submit",
+        "plan_verify",
+        "plan_progress",
+        "propose_completion",
+        "attempt_submit",
+        "attempt_verify",
+        "attempt_status",
+        "plan_tasks",
+        "backlog_list",
+        "backlog_suggest",
+        "backlog_take",
+        "remember",
+        "memory_read",
+        "search_history",
+        "get_map",
+        "get_capacity",
+        "report",
+        "list_roles",
+        "wait_for",
+        "send_message",
+        "check_inbox",
+        "create_room",
+        "add_to_room",
+        "read_room",
+        "propose_decision",
+        "close_session",
+        "read_guide"
+      ],
+      "serializedSha256": "586d8b2976f01bae09d866529ef12051c0a9e5028ec5b6a89e7808450b803071"
+    },
+    "shortNoAgent": {
+      "count": 27,
+      "names": [
+        "publish_agent_plan",
+        "set_room_mode",
+        "plan_update",
+        "plan_submit",
+        "plan_verify",
+        "plan_progress",
+        "propose_completion",
+        "attempt_submit",
+        "attempt_verify",
+        "attempt_status",
+        "plan_tasks",
+        "backlog_list",
+        "backlog_suggest",
+        "backlog_take",
+        "get_map",
+        "get_capacity",
+        "report",
+        "list_roles",
+        "wait_for",
+        "send_message",
+        "check_inbox",
+        "create_room",
+        "add_to_room",
+        "read_room",
+        "propose_decision",
+        "close_session",
+        "read_guide"
+      ],
+      "serializedSha256": "d07603a4fa79c8a0a750aa82684b2ea6afdaf2370a38ad7d361a77d717575315"
+    },
+    "fullNoAgentNavigator": {
+      "count": 31,
+      "names": [
+        "publish_agent_plan",
+        "set_room_mode",
+        "plan_update",
+        "plan_submit",
+        "plan_verify",
+        "plan_progress",
+        "propose_completion",
+        "attempt_submit",
+        "attempt_verify",
+        "attempt_status",
+        "plan_tasks",
+        "backlog_list",
+        "backlog_suggest",
+        "backlog_take",
+        "remember",
+        "memory_read",
+        "search_history",
+        "get_map",
+        "get_capacity",
+        "report",
+        "list_roles",
+        "wait_for",
+        "send_message",
+        "check_inbox",
+        "create_room",
+        "add_to_room",
+        "read_room",
+        "propose_decision",
+        "close_session",
+        "read_guide",
+        "find_skill"
+      ],
+      "serializedSha256": "cb6118429361d1ce1cf5147362f5d2583a935ae3db1103ccafa55e1a010a055f"
+    },
+    "shortNoAgentNavigator": {
+      "count": 28,
+      "names": [
+        "publish_agent_plan",
+        "set_room_mode",
+        "plan_update",
+        "plan_submit",
+        "plan_verify",
+        "plan_progress",
+        "propose_completion",
+        "attempt_submit",
+        "attempt_verify",
+        "attempt_status",
+        "plan_tasks",
+        "backlog_list",
+        "backlog_suggest",
+        "backlog_take",
+        "get_map",
+        "get_capacity",
+        "report",
+        "list_roles",
+        "wait_for",
+        "send_message",
+        "check_inbox",
+        "create_room",
+        "add_to_room",
+        "read_room",
+        "propose_decision",
+        "close_session",
+        "read_guide",
+        "find_skill"
+      ],
+      "serializedSha256": "0086449d21cf05d7f0fa2f4e075a8d90d02a95ec6d2fbe0d8668dbc7ce1d5691"
+    },
+    "fullAgent": {
+      "count": 49,
+      "names": [
+        "publish_agent_plan",
+        "set_room_mode",
+        "plan_update",
+        "plan_submit",
+        "plan_verify",
+        "plan_progress",
+        "propose_completion",
+        "attempt_submit",
+        "attempt_verify",
+        "attempt_status",
+        "plan_tasks",
+        "backlog_list",
+        "backlog_suggest",
+        "backlog_take",
+        "remember",
+        "memory_read",
+        "search_history",
+        "get_map",
+        "get_capacity",
+        "report",
+        "list_roles",
+        "wait_for",
+        "send_message",
+        "check_inbox",
+        "create_room",
+        "add_to_room",
+        "read_room",
+        "propose_decision",
+        "close_session",
+        "read_guide",
+        "browser_tabs",
+        "browser_console",
+        "browser_network",
+        "browser_screenshot",
+        "browser_open",
+        "browser_navigate",
+        "browser_snapshot",
+        "browser_action",
+        "browser_wait_for",
+        "browser_resize",
+        "browser_evaluate",
+        "browser_cookies",
+        "browser_storage",
+        "browser_downloads",
+        "browser_close",
+        "create_session",
+        "request_agent_switch",
+        "create_swarm",
+        "swarm_add"
+      ],
+      "serializedSha256": "591e301d8c0a8645ab5081f03c6eb89e70bfed506d0ebf1ea266bf3d4e102ac3"
+    },
+    "shortAgent": {
+      "count": 46,
+      "names": [
+        "publish_agent_plan",
+        "set_room_mode",
+        "plan_update",
+        "plan_submit",
+        "plan_verify",
+        "plan_progress",
+        "propose_completion",
+        "attempt_submit",
+        "attempt_verify",
+        "attempt_status",
+        "plan_tasks",
+        "backlog_list",
+        "backlog_suggest",
+        "backlog_take",
+        "get_map",
+        "get_capacity",
+        "report",
+        "list_roles",
+        "wait_for",
+        "send_message",
+        "check_inbox",
+        "create_room",
+        "add_to_room",
+        "read_room",
+        "propose_decision",
+        "close_session",
+        "read_guide",
+        "browser_tabs",
+        "browser_console",
+        "browser_network",
+        "browser_screenshot",
+        "browser_open",
+        "browser_navigate",
+        "browser_snapshot",
+        "browser_action",
+        "browser_wait_for",
+        "browser_resize",
+        "browser_evaluate",
+        "browser_cookies",
+        "browser_storage",
+        "browser_downloads",
+        "browser_close",
+        "create_session",
+        "request_agent_switch",
+        "create_swarm",
+        "swarm_add"
+      ],
+      "serializedSha256": "83bc7b20c006a2431a50cdd88de3a99eb1fad0595112a0c2fbed8316629f7d39"
+    },
+    "fullAgentNavigator": {
+      "count": 50,
+      "names": [
+        "publish_agent_plan",
+        "set_room_mode",
+        "plan_update",
+        "plan_submit",
+        "plan_verify",
+        "plan_progress",
+        "propose_completion",
+        "attempt_submit",
+        "attempt_verify",
+        "attempt_status",
+        "plan_tasks",
+        "backlog_list",
+        "backlog_suggest",
+        "backlog_take",
+        "remember",
+        "memory_read",
+        "search_history",
+        "get_map",
+        "get_capacity",
+        "report",
+        "list_roles",
+        "wait_for",
+        "send_message",
+        "check_inbox",
+        "create_room",
+        "add_to_room",
+        "read_room",
+        "propose_decision",
+        "close_session",
+        "read_guide",
+        "find_skill",
+        "browser_tabs",
+        "browser_console",
+        "browser_network",
+        "browser_screenshot",
+        "browser_open",
+        "browser_navigate",
+        "browser_snapshot",
+        "browser_action",
+        "browser_wait_for",
+        "browser_resize",
+        "browser_evaluate",
+        "browser_cookies",
+        "browser_storage",
+        "browser_downloads",
+        "browser_close",
+        "create_session",
+        "request_agent_switch",
+        "create_swarm",
+        "swarm_add"
+      ],
+      "serializedSha256": "27805c9aa74b2aaa4b8767e2b38821bc910e1adb913e3b27e39002dd16a1bf5d"
+    },
+    "shortAgentNavigator": {
+      "count": 47,
+      "names": [
+        "publish_agent_plan",
+        "set_room_mode",
+        "plan_update",
+        "plan_submit",
+        "plan_verify",
+        "plan_progress",
+        "propose_completion",
+        "attempt_submit",
+        "attempt_verify",
+        "attempt_status",
+        "plan_tasks",
+        "backlog_list",
+        "backlog_suggest",
+        "backlog_take",
+        "get_map",
+        "get_capacity",
+        "report",
+        "list_roles",
+        "wait_for",
+        "send_message",
+        "check_inbox",
+        "create_room",
+        "add_to_room",
+        "read_room",
+        "propose_decision",
+        "close_session",
+        "read_guide",
+        "find_skill",
+        "browser_tabs",
+        "browser_console",
+        "browser_network",
+        "browser_screenshot",
+        "browser_open",
+        "browser_navigate",
+        "browser_snapshot",
+        "browser_action",
+        "browser_wait_for",
+        "browser_resize",
+        "browser_evaluate",
+        "browser_cookies",
+        "browser_storage",
+        "browser_downloads",
+        "browser_close",
+        "create_session",
+        "request_agent_switch",
+        "create_swarm",
+        "swarm_add"
+      ],
+      "serializedSha256": "be6ff532739c4241fa4bd25d9ba25bebab7a5ee6ce1b8dc8387accf41a3267bc"
+    }
+  },
+  "tools": [
+    {
+      "name": "publish_agent_plan",
+      "source": "core",
+      "schemaSha256": "4cdc2559a2689f5094c4ea64492a757388a70f7dfb39a7c6b431d68e038ef685",
+      "descriptorSha256": "a49c171b39e81baeb491cfeac477ba25e48451f4fc00eb9da2425b7e5f6c2e31",
+      "effect": "write",
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "inFull": true,
+      "inShort": true,
+      "requiresAgentChannel": false,
+      "requiresNavigator": false,
+      "cohort": "residual",
+      "signature": {
+        "status": "available"
+      },
+      "disposition": "direct",
+      "migration": "disabled",
+      "nativePolicy": "unknown"
+    },
+    {
+      "name": "set_room_mode",
+      "source": "core",
+      "schemaSha256": "adff736dc10959d5c23cac37690c3ca9458a60dc9831ffa5cdb7658ac97fe6e5",
+      "descriptorSha256": "20be0b1e34f90383ef46eb91f417f6f9363145ff6b49e37f967ef85bca45cebd",
+      "effect": "write",
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "inFull": true,
+      "inShort": true,
+      "requiresAgentChannel": false,
+      "requiresNavigator": false,
+      "cohort": "residual",
+      "signature": {
+        "status": "available"
+      },
+      "disposition": "direct",
+      "migration": "disabled",
+      "nativePolicy": "unknown"
+    },
+    {
+      "name": "plan_update",
+      "source": "core",
+      "schemaSha256": "499d56916ab2faddea0dbb1d1e3d09318f27d965a928b3e19aee899c1ab96388",
+      "descriptorSha256": "7a76de174f72fce13e6ffd7f6b49602ae31640dca01fffc94276145173a3668e",
+      "effect": "write",
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "inFull": true,
+      "inShort": true,
+      "requiresAgentChannel": false,
+      "requiresNavigator": false,
+      "cohort": "residual",
+      "signature": {
+        "status": "available"
+      },
+      "disposition": "direct",
+      "migration": "disabled",
+      "nativePolicy": "unknown"
+    },
+    {
+      "name": "plan_submit",
+      "source": "core",
+      "schemaSha256": "f4ff815ec2c5b5b6b521b61223d1c63525670650bc606ff8ef7913b2dac3a049",
+      "descriptorSha256": "45da402e850c0673092f8a39f6f6abcbfbacafef636c6bdaa79b152ba98cbd78",
+      "effect": "write",
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "inFull": true,
+      "inShort": true,
+      "requiresAgentChannel": false,
+      "requiresNavigator": false,
+      "cohort": "residual",
+      "signature": {
+        "status": "available"
+      },
+      "disposition": "direct",
+      "migration": "disabled",
+      "nativePolicy": "unknown"
+    },
+    {
+      "name": "plan_verify",
+      "source": "core",
+      "schemaSha256": "db292e99f9ffdb97386419a39074df57b50c23c749aa2a61674a78c0b5228960",
+      "descriptorSha256": "0becaf687fa83ff5a3e7f4bbfb2dd4080563e83ef60e468dbf4fe8deeffbd8f2",
+      "effect": "write",
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "inFull": true,
+      "inShort": true,
+      "requiresAgentChannel": false,
+      "requiresNavigator": false,
+      "cohort": "residual",
+      "signature": {
+        "status": "available"
+      },
+      "disposition": "direct",
+      "migration": "disabled",
+      "nativePolicy": "unknown"
+    },
+    {
+      "name": "plan_progress",
+      "source": "core",
+      "schemaSha256": "80620118261cc5592ed2506e61e61a8bd1618891d64c3b0677f716ef27dd95ea",
+      "descriptorSha256": "84d4da2d38e5236c38a340c144be9ebe07fa035167669515badc01759663d2a4",
+      "effect": "write",
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "inFull": true,
+      "inShort": true,
+      "requiresAgentChannel": false,
+      "requiresNavigator": false,
+      "cohort": "residual",
+      "signature": {
+        "status": "available"
+      },
+      "disposition": "direct",
+      "migration": "disabled",
+      "nativePolicy": "unknown"
+    },
+    {
+      "name": "propose_completion",
+      "source": "core",
+      "schemaSha256": "d7fb4533a84ea9b371f804d65d6a7a54416afb69e63b3c78ba9915c0a009fda7",
+      "descriptorSha256": "b19a6c45f387d152a4ca333423ac0e16d2a35554e059adf42548f519a0569336",
+      "effect": "write",
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "inFull": true,
+      "inShort": true,
+      "requiresAgentChannel": false,
+      "requiresNavigator": false,
+      "cohort": "residual",
+      "signature": {
+        "status": "available"
+      },
+      "disposition": "direct",
+      "migration": "disabled",
+      "nativePolicy": "unknown"
+    },
+    {
+      "name": "attempt_submit",
+      "source": "core",
+      "schemaSha256": "9590a9e4b4d83634fb42e0adfd2bf605104218a9170236d38cb1249ea5a7971e",
+      "descriptorSha256": "164094d4518cacc826bafefac0ed888b5c44310b12a2a8faa14c6d091b7e517b",
+      "effect": "write",
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "inFull": true,
+      "inShort": true,
+      "requiresAgentChannel": false,
+      "requiresNavigator": false,
+      "cohort": "residual",
+      "signature": {
+        "status": "available"
+      },
+      "disposition": "direct",
+      "migration": "disabled",
+      "nativePolicy": "unknown"
+    },
+    {
+      "name": "attempt_verify",
+      "source": "core",
+      "schemaSha256": "0ef4da1d1047738ace767d07ce7d9b0ee620f11c545b8e3f60827bb8deeb9d19",
+      "descriptorSha256": "2c206e221e6960afb1c392006ec6ab84506671dce9dfdd765bc1db80e07d5d4b",
+      "effect": "write",
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "inFull": true,
+      "inShort": true,
+      "requiresAgentChannel": false,
+      "requiresNavigator": false,
+      "cohort": "residual",
+      "signature": {
+        "status": "available"
+      },
+      "disposition": "direct",
+      "migration": "disabled",
+      "nativePolicy": "unknown"
+    },
+    {
+      "name": "attempt_status",
+      "source": "core",
+      "schemaSha256": "22dd3e04afb28c9e04dbd06d6d8a68fac7a70994767ebd52333e534c546eb2db",
+      "descriptorSha256": "dc2333f2eb8b4ffffd7ebaac5f6586cd90c2d68a1f8f650d0852956b00d08adb",
+      "effect": "read",
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "inFull": true,
+      "inShort": true,
+      "requiresAgentChannel": false,
+      "requiresNavigator": false,
+      "cohort": "residual",
+      "signature": {
+        "status": "available"
+      },
+      "disposition": "direct",
+      "migration": "disabled",
+      "nativePolicy": "unknown"
+    },
+    {
+      "name": "plan_tasks",
+      "source": "core",
+      "schemaSha256": "e59dec1406b1e62756221b95d60f302239c38cd6fa3dfadef1f6806a798bf039",
+      "descriptorSha256": "451fe8fda01f7a3af37b7702a5ca103183552cf31954b72b293fd54175264da1",
+      "effect": "read",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inFull": true,
+      "inShort": true,
+      "requiresAgentChannel": false,
+      "requiresNavigator": false,
+      "cohort": "residual",
+      "signature": {
+        "status": "available"
+      },
+      "disposition": "direct",
+      "migration": "disabled",
+      "nativePolicy": "unknown"
+    },
+    {
+      "name": "backlog_list",
+      "source": "core",
+      "schemaSha256": "aa0f5f5f96508069d404870cc979c5da45e1eb26f6d565d29d8c8d09d021b538",
+      "descriptorSha256": "faec4d6991acd1206ab365ddd3d48249161155e9988f5f2e27c2c35334150ec1",
+      "effect": "read",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inFull": true,
+      "inShort": true,
+      "requiresAgentChannel": false,
+      "requiresNavigator": false,
+      "cohort": "initial",
+      "signature": {
+        "status": "available"
+      },
+      "disposition": "direct",
+      "migration": "disabled",
+      "nativePolicy": "unknown"
+    },
+    {
+      "name": "backlog_suggest",
+      "source": "core",
+      "schemaSha256": "16d1cffac8fbe75b0599eedd54abfaf9adb428b5a32afa1de8ea9142e2ff087a",
+      "descriptorSha256": "2e7c626ff5fb6a5662d37c3cfae1a82dd3301c96d5aaece5bd0006a1a7c12172",
+      "effect": "write",
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "inFull": true,
+      "inShort": true,
+      "requiresAgentChannel": false,
+      "requiresNavigator": false,
+      "cohort": "residual",
+      "signature": {
+        "status": "available"
+      },
+      "disposition": "direct",
+      "migration": "disabled",
+      "nativePolicy": "unknown"
+    },
+    {
+      "name": "backlog_take",
+      "source": "core",
+      "schemaSha256": "ed1425b6deac16c6553efb2f7f83238001aea8e35bc584ffd030325145523d9f",
+      "descriptorSha256": "f32185cf660d61a2784e97d662a1d8bb74a8883d90ce3bad8b4cb54aac07233b",
+      "effect": "write",
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "inFull": true,
+      "inShort": true,
+      "requiresAgentChannel": false,
+      "requiresNavigator": false,
+      "cohort": "residual",
+      "signature": {
+        "status": "available"
+      },
+      "disposition": "direct",
+      "migration": "disabled",
+      "nativePolicy": "unknown"
+    },
+    {
+      "name": "remember",
+      "source": "core",
+      "schemaSha256": "8a1f60c48f2a2cc35c37485c6bc2858d2b451858244a88d0433d92083842d0f8",
+      "descriptorSha256": "a7b9db8272b21498b27ded554de416ad762bddd9be70ba0df56e93bcce9a6f1b",
+      "effect": "write",
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "inFull": true,
+      "inShort": false,
+      "requiresAgentChannel": false,
+      "requiresNavigator": false,
+      "cohort": "residual",
+      "signature": {
+        "status": "available"
+      },
+      "disposition": "direct",
+      "migration": "disabled",
+      "nativePolicy": "unknown"
+    },
+    {
+      "name": "memory_read",
+      "source": "core",
+      "schemaSha256": "d880edfa55950a3ae0bb77e42030e802df3c3e26bb72c1184d40736b0ac47a81",
+      "descriptorSha256": "ffb58d95d253a25809b612c81a2a027e087fbd2a8b91796c668d6842a48f6bc1",
+      "effect": "read",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inFull": true,
+      "inShort": false,
+      "requiresAgentChannel": false,
+      "requiresNavigator": false,
+      "cohort": "residual",
+      "signature": {
+        "status": "available"
+      },
+      "disposition": "direct",
+      "migration": "disabled",
+      "nativePolicy": "unknown"
+    },
+    {
+      "name": "search_history",
+      "source": "core",
+      "schemaSha256": "447572ae2d6c7895aac4f0bce12a0b53b5bff33d4d7e7afff1c04a15306d4405",
+      "descriptorSha256": "49b6a6fa991c6c900a9098369f73600851da9b12703c745a008c2ea44bddf66e",
+      "effect": "read",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inFull": true,
+      "inShort": false,
+      "requiresAgentChannel": false,
+      "requiresNavigator": false,
+      "cohort": "residual",
+      "signature": {
+        "status": "available"
+      },
+      "disposition": "direct",
+      "migration": "disabled",
+      "nativePolicy": "unknown"
+    },
+    {
+      "name": "get_map",
+      "source": "core",
+      "schemaSha256": "0dd5b5abaf4670a7df6fce67b1fd9072f102e812d4fff7be86d7b92b97fd1bc4",
+      "descriptorSha256": "23fb87f05833acdac88804057e98c90c1c07e0ce499eff9b1b3a2915ff941f2a",
+      "effect": "read",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inFull": true,
+      "inShort": true,
+      "requiresAgentChannel": false,
+      "requiresNavigator": false,
+      "cohort": "initial",
+      "signature": {
+        "status": "available"
+      },
+      "disposition": "direct",
+      "migration": "disabled",
+      "nativePolicy": "unknown"
+    },
+    {
+      "name": "get_capacity",
+      "source": "core",
+      "schemaSha256": "99334726611ccf58a148b0814696bfa6fe08c1b2d027e946beccf5a74331c9aa",
+      "descriptorSha256": "f3caf07e020b95f24d198a91243b4c7d18986e7a81863e7009e2e0d2a6f778ea",
+      "effect": "read",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inFull": true,
+      "inShort": true,
+      "requiresAgentChannel": false,
+      "requiresNavigator": false,
+      "cohort": "residual",
+      "signature": {
+        "status": "available"
+      },
+      "disposition": "direct",
+      "migration": "disabled",
+      "nativePolicy": "unknown"
+    },
+    {
+      "name": "report",
+      "source": "core",
+      "schemaSha256": "fc2c79d5a0e4b775696386aff5bd843f5e2453fa71ca1f8e6c86200dd9dc47c6",
+      "descriptorSha256": "a89a4e3276d6d03c1c4c48f1f18a9537ddefedb41107c4b4b53e8afaa608140f",
+      "effect": "write",
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "inFull": true,
+      "inShort": true,
+      "requiresAgentChannel": false,
+      "requiresNavigator": false,
+      "cohort": "residual",
+      "signature": {
+        "status": "unavailable",
+        "reasons": [
+          "report.inputSchema.properties.backlog: unsupported keyword \"uniqueItems\""
+        ]
+      },
+      "disposition": "direct",
+      "migration": "disabled",
+      "nativePolicy": "unknown"
+    },
+    {
+      "name": "list_roles",
+      "source": "core",
+      "schemaSha256": "efddc7bd8bbcef73a14eb1ace1ffdaec81e518ef1e13c1e9271d0b8acb694a49",
+      "descriptorSha256": "fb1c189cf7af12478320c1a3048b320125f938f567e551a03d3ad3c9f53d4ba2",
+      "effect": "read",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inFull": true,
+      "inShort": true,
+      "requiresAgentChannel": false,
+      "requiresNavigator": false,
+      "cohort": "initial",
+      "signature": {
+        "status": "available"
+      },
+      "disposition": "direct",
+      "migration": "disabled",
+      "nativePolicy": "unknown"
+    },
+    {
+      "name": "wait_for",
+      "source": "core",
+      "schemaSha256": "92faa6bdfc637ca4b59bb6daee9eaf2f62fa8126114b1c2b3228a9acde874117",
+      "descriptorSha256": "fc3167a85f19892bb449866bc0c97494f7393c914649074de64b76acbf0bc973",
+      "effect": "write",
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "inFull": true,
+      "inShort": true,
+      "requiresAgentChannel": false,
+      "requiresNavigator": false,
+      "cohort": "residual",
+      "signature": {
+        "status": "available"
+      },
+      "disposition": "direct",
+      "migration": "disabled",
+      "nativePolicy": "unknown"
+    },
+    {
+      "name": "send_message",
+      "source": "core",
+      "schemaSha256": "119b919fb9b922809f12b51661010684f4b605fed0511dc734b893ae5573f450",
+      "descriptorSha256": "583759c1e90aafd6406f18c2f9837a07ace858c3617cfa5b52845a45f100b15d",
+      "effect": "write",
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "inFull": true,
+      "inShort": true,
+      "requiresAgentChannel": false,
+      "requiresNavigator": false,
+      "cohort": "residual",
+      "signature": {
+        "status": "available"
+      },
+      "disposition": "direct",
+      "migration": "disabled",
+      "nativePolicy": "unknown"
+    },
+    {
+      "name": "check_inbox",
+      "source": "core",
+      "schemaSha256": "99334726611ccf58a148b0814696bfa6fe08c1b2d027e946beccf5a74331c9aa",
+      "descriptorSha256": "d59fd2ed07db9523c304b9e572cd7091990412dad4cdef4a3c39672477a68acf",
+      "effect": "write",
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "inFull": true,
+      "inShort": true,
+      "requiresAgentChannel": false,
+      "requiresNavigator": false,
+      "cohort": "residual",
+      "signature": {
+        "status": "available"
+      },
+      "disposition": "direct",
+      "migration": "disabled",
+      "nativePolicy": "unknown"
+    },
+    {
+      "name": "create_room",
+      "source": "core",
+      "schemaSha256": "3b676176a87106685a85c07eb99193aa79da0d84fb4cd554f6502e7e93d2df29",
+      "descriptorSha256": "fa0522edc7333df62b5dbec5e40dd3dbdf74de94101203dc38a1c9b3db79bf17",
+      "effect": "write",
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "inFull": true,
+      "inShort": true,
+      "requiresAgentChannel": false,
+      "requiresNavigator": false,
+      "cohort": "residual",
+      "signature": {
+        "status": "available"
+      },
+      "disposition": "direct",
+      "migration": "disabled",
+      "nativePolicy": "unknown"
+    },
+    {
+      "name": "add_to_room",
+      "source": "core",
+      "schemaSha256": "1939ca19b17909fad62caadd593f085924082d601c183e2145fe245d2f620cd2",
+      "descriptorSha256": "88df613235c03c3618586c9d53080f63427d9545ea048eb3dfcd7a0e2271a116",
+      "effect": "write",
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "inFull": true,
+      "inShort": true,
+      "requiresAgentChannel": false,
+      "requiresNavigator": false,
+      "cohort": "residual",
+      "signature": {
+        "status": "available"
+      },
+      "disposition": "direct",
+      "migration": "disabled",
+      "nativePolicy": "unknown"
+    },
+    {
+      "name": "read_room",
+      "source": "core",
+      "schemaSha256": "3c153c0928a7e9ee77e212730d79804defe1b87ccb68cf3b672c78a48678343c",
+      "descriptorSha256": "c8ac23eb9c8fa00b743d0011d60044f43bbf51591406d1d5807e0066402b00aa",
+      "effect": "read",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inFull": true,
+      "inShort": true,
+      "requiresAgentChannel": false,
+      "requiresNavigator": false,
+      "cohort": "initial",
+      "signature": {
+        "status": "available"
+      },
+      "disposition": "direct",
+      "migration": "disabled",
+      "nativePolicy": "unknown"
+    },
+    {
+      "name": "propose_decision",
+      "source": "core",
+      "schemaSha256": "2678227757e94770a99ea4b8b8099094d24d4200df881a71e009777827f2f2f9",
+      "descriptorSha256": "ddb5c7e58e5a0bfc9588064160ecf010fcd16cab00f168bc9d897faec2f2e16f",
+      "effect": "write",
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "inFull": true,
+      "inShort": true,
+      "requiresAgentChannel": false,
+      "requiresNavigator": false,
+      "cohort": "residual",
+      "signature": {
+        "status": "available"
+      },
+      "disposition": "direct",
+      "migration": "disabled",
+      "nativePolicy": "unknown"
+    },
+    {
+      "name": "close_session",
+      "source": "core",
+      "schemaSha256": "73e090aa7481ff706e2bc50194c301434099559212e60b94cb669894dd7666ae",
+      "descriptorSha256": "71c3991d1bc9df921c649bd72c0cfd798d306c7e02f8d20f98e0536a5e59277c",
+      "effect": "destructive",
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "openWorldHint": false
+      },
+      "inFull": true,
+      "inShort": true,
+      "requiresAgentChannel": false,
+      "requiresNavigator": false,
+      "cohort": "residual",
+      "signature": {
+        "status": "available"
+      },
+      "disposition": "direct",
+      "migration": "disabled",
+      "nativePolicy": "unknown"
+    },
+    {
+      "name": "read_guide",
+      "source": "core",
+      "schemaSha256": "ea685b636b1110119723d17f0db2ee95995a44b30bd84fce50ccf0ae8466239c",
+      "descriptorSha256": "2e8410eae81bb661ba2a367abc542964937367e0af01f603fe48e4c744969fd1",
+      "effect": "read",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inFull": true,
+      "inShort": true,
+      "requiresAgentChannel": false,
+      "requiresNavigator": false,
+      "cohort": "initial",
+      "signature": {
+        "status": "available"
+      },
+      "disposition": "direct",
+      "migration": "disabled",
+      "nativePolicy": "unknown"
+    },
+    {
+      "name": "find_skill",
+      "source": "navigator",
+      "schemaSha256": "056bec2b5d5b1655a936d4fdc5729c6bfb853d4e54b53a9970c08476ded8c45a",
+      "descriptorSha256": "fca416465623791abacf06de9280d61746ff57fd708328e38f9f3004c33cf199",
+      "effect": "read",
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "inFull": true,
+      "inShort": true,
+      "requiresAgentChannel": false,
+      "requiresNavigator": true,
+      "cohort": "residual",
+      "signature": {
+        "status": "available"
+      },
+      "disposition": "direct",
+      "migration": "disabled",
+      "nativePolicy": "unknown"
+    },
+    {
+      "name": "browser_tabs",
+      "source": "browser",
+      "schemaSha256": "99334726611ccf58a148b0814696bfa6fe08c1b2d027e946beccf5a74331c9aa",
+      "descriptorSha256": "ba1ef21b9b817fbda20d184685423342d991d667fed29d48a464b657847dd02c",
+      "effect": "read",
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false
+      },
+      "inFull": true,
+      "inShort": true,
+      "requiresAgentChannel": true,
+      "requiresNavigator": false,
+      "cohort": "residual",
+      "signature": {
+        "status": "available"
+      },
+      "disposition": "direct",
+      "migration": "disabled",
+      "nativePolicy": "unknown"
+    },
+    {
+      "name": "browser_console",
+      "source": "browser",
+      "schemaSha256": "16a8cb590b861cbd56e68a5d0f5e67c3f2b78645e0c11b083087aee7a999cf22",
+      "descriptorSha256": "c179d482d724f24a3de62623be1ddd101b8c0823d929d23fc6d3fb1bca51baba",
+      "effect": "read",
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false
+      },
+      "inFull": true,
+      "inShort": true,
+      "requiresAgentChannel": true,
+      "requiresNavigator": false,
+      "cohort": "residual",
+      "signature": {
+        "status": "available"
+      },
+      "disposition": "direct",
+      "migration": "disabled",
+      "nativePolicy": "unknown"
+    },
+    {
+      "name": "browser_network",
+      "source": "browser",
+      "schemaSha256": "42742f78d0a148c9a1845ba63a7897abe0e7bd456eace0cf8204cc3fef3956c4",
+      "descriptorSha256": "8f3d391d92eb95ff6e7e39e0a19f00048d438269eed52cd85a05da83bd02a409",
+      "effect": "read",
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false
+      },
+      "inFull": true,
+      "inShort": true,
+      "requiresAgentChannel": true,
+      "requiresNavigator": false,
+      "cohort": "residual",
+      "signature": {
+        "status": "available"
+      },
+      "disposition": "direct",
+      "migration": "disabled",
+      "nativePolicy": "unknown"
+    },
+    {
+      "name": "browser_screenshot",
+      "source": "browser",
+      "schemaSha256": "043833f34ae927b4baec256b9419d06f654cd5b12bd28c6e50f70cb05f191826",
+      "descriptorSha256": "d156fcaea31f49fa3da2019657a46a5a65814530deb23e7ae25279315b937472",
+      "effect": "read",
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false
+      },
+      "inFull": true,
+      "inShort": true,
+      "requiresAgentChannel": true,
+      "requiresNavigator": false,
+      "cohort": "residual",
+      "signature": {
+        "status": "available"
+      },
+      "disposition": "direct",
+      "migration": "disabled",
+      "nativePolicy": "unknown"
+    },
+    {
+      "name": "browser_open",
+      "source": "browser",
+      "schemaSha256": "f193383612f1dac184f2eca4282d2c098dc922e1185ea7b53e39ddf0586e06e0",
+      "descriptorSha256": "ea8d77c25d0d0235d2c7fa665080bfa7dc75c0a195cb84bbd1aca22f836ff0e2",
+      "effect": "write",
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "inFull": true,
+      "inShort": true,
+      "requiresAgentChannel": true,
+      "requiresNavigator": false,
+      "cohort": "residual",
+      "signature": {
+        "status": "available"
+      },
+      "disposition": "direct",
+      "migration": "disabled",
+      "nativePolicy": "unknown"
+    },
+    {
+      "name": "browser_navigate",
+      "source": "browser",
+      "schemaSha256": "98a8484febb1a167e16335158e55356636605f210cde552300789bb45bd4ce1d",
+      "descriptorSha256": "ad044c042e59e5298ea4c54b10ae6ce20fc5c1836b3da87f81f00c722f59b067",
+      "effect": "write",
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "inFull": true,
+      "inShort": true,
+      "requiresAgentChannel": true,
+      "requiresNavigator": false,
+      "cohort": "residual",
+      "signature": {
+        "status": "available"
+      },
+      "disposition": "direct",
+      "migration": "disabled",
+      "nativePolicy": "unknown"
+    },
+    {
+      "name": "browser_snapshot",
+      "source": "browser",
+      "schemaSha256": "9f82ac5ace45292b65931f06bd3ba8fef72d9f1ee538ad82a8413d6f589ddcb8",
+      "descriptorSha256": "4f95bef71dc709f5ffc962470b05b5850347275b4a9f648beb4b9e8aada65781",
+      "effect": "read",
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false
+      },
+      "inFull": true,
+      "inShort": true,
+      "requiresAgentChannel": true,
+      "requiresNavigator": false,
+      "cohort": "residual",
+      "signature": {
+        "status": "available"
+      },
+      "disposition": "direct",
+      "migration": "disabled",
+      "nativePolicy": "unknown"
+    },
+    {
+      "name": "browser_action",
+      "source": "browser",
+      "schemaSha256": "7f38789c2769e219bda38bcd14a37e67ec7a27a5e5bb1c643b02b2ccabcb4531",
+      "descriptorSha256": "7111e1cca6a7725b0cf7384afe9fd359bf91a1f06bbf00bd8b70a04c89c044ae",
+      "effect": "write",
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "inFull": true,
+      "inShort": true,
+      "requiresAgentChannel": true,
+      "requiresNavigator": false,
+      "cohort": "residual",
+      "signature": {
+        "status": "unavailable",
+        "reasons": [
+          "browser_action.inputSchema.properties.modifiers.items: union-valued array items (enum with several values, oneOf or a type array) are generated with wrong precedence"
+        ]
+      },
+      "disposition": "direct",
+      "migration": "disabled",
+      "nativePolicy": "unknown"
+    },
+    {
+      "name": "browser_wait_for",
+      "source": "browser",
+      "schemaSha256": "ec250e5280136209f9bf12287548773e125bf8a63677954511f2b6dc98e41d06",
+      "descriptorSha256": "c4ffc38220b140f3d0dc05fa79431b4eee4548471b8acb26c7f094de7a52867b",
+      "effect": "read",
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false
+      },
+      "inFull": true,
+      "inShort": true,
+      "requiresAgentChannel": true,
+      "requiresNavigator": false,
+      "cohort": "residual",
+      "signature": {
+        "status": "available"
+      },
+      "disposition": "direct",
+      "migration": "disabled",
+      "nativePolicy": "unknown"
+    },
+    {
+      "name": "browser_resize",
+      "source": "browser",
+      "schemaSha256": "726cd92e88e93eec04dc4710c56ed6e5a47ac77420a4543217572a7949a65dbc",
+      "descriptorSha256": "17826aa0003dbfe16b03e4e0979261b58e0cbd1d1dbb4d16df7b15a7159090fc",
+      "effect": "write",
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "inFull": true,
+      "inShort": true,
+      "requiresAgentChannel": true,
+      "requiresNavigator": false,
+      "cohort": "residual",
+      "signature": {
+        "status": "available"
+      },
+      "disposition": "direct",
+      "migration": "disabled",
+      "nativePolicy": "unknown"
+    },
+    {
+      "name": "browser_evaluate",
+      "source": "browser",
+      "schemaSha256": "3a4834a603a8a00f6e15a206725af1eacba2cd0fb10fe3454a6264b035f7bff5",
+      "descriptorSha256": "85c0ffbf94b5ba84543f3a237e1c1485b186305b658a9377a08844cc0c13181e",
+      "effect": "destructive",
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "openWorldHint": true
+      },
+      "inFull": true,
+      "inShort": true,
+      "requiresAgentChannel": true,
+      "requiresNavigator": false,
+      "cohort": "residual",
+      "signature": {
+        "status": "available"
+      },
+      "disposition": "direct",
+      "migration": "disabled",
+      "nativePolicy": "unknown"
+    },
+    {
+      "name": "browser_cookies",
+      "source": "browser",
+      "schemaSha256": "3860e6ba3e48dcc8ffc35b3a676eb6e97d9cd1120d3b0cf5aaf802a983c87499",
+      "descriptorSha256": "ce68c58c6841309eb0864b7531bf70c4c3b3b0449473c8ad004ad79bd8711beb",
+      "effect": "destructive",
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "openWorldHint": false
+      },
+      "inFull": true,
+      "inShort": true,
+      "requiresAgentChannel": true,
+      "requiresNavigator": false,
+      "cohort": "residual",
+      "signature": {
+        "status": "available"
+      },
+      "disposition": "direct",
+      "migration": "disabled",
+      "nativePolicy": "unknown"
+    },
+    {
+      "name": "browser_storage",
+      "source": "browser",
+      "schemaSha256": "cc7e52f777a48151f11a3ccfbcbac62ccc3fee5913997c6ed1dbb53cd12ec669",
+      "descriptorSha256": "85b664a0fe56113c31d435f3ee9fb1edaa0e4863982238c3ad7016e1d9e87464",
+      "effect": "destructive",
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "openWorldHint": false
+      },
+      "inFull": true,
+      "inShort": true,
+      "requiresAgentChannel": true,
+      "requiresNavigator": false,
+      "cohort": "residual",
+      "signature": {
+        "status": "available"
+      },
+      "disposition": "direct",
+      "migration": "disabled",
+      "nativePolicy": "unknown"
+    },
+    {
+      "name": "browser_downloads",
+      "source": "browser",
+      "schemaSha256": "99334726611ccf58a148b0814696bfa6fe08c1b2d027e946beccf5a74331c9aa",
+      "descriptorSha256": "8d28a01eb00334350c087f89c5bf8d63228120621b4d5dae2ffa469539f55aa4",
+      "effect": "read",
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false
+      },
+      "inFull": true,
+      "inShort": true,
+      "requiresAgentChannel": true,
+      "requiresNavigator": false,
+      "cohort": "residual",
+      "signature": {
+        "status": "available"
+      },
+      "disposition": "direct",
+      "migration": "disabled",
+      "nativePolicy": "unknown"
+    },
+    {
+      "name": "browser_close",
+      "source": "browser",
+      "schemaSha256": "abc9c98745846250e538ca963c9f9b17879cdd51f775d71ec87f78fbfe31c673",
+      "descriptorSha256": "05fbeb0fb9cd0b4a8576fd94272309064ae43d84d773f9de6848855e5df2ddb0",
+      "effect": "write",
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "inFull": true,
+      "inShort": true,
+      "requiresAgentChannel": true,
+      "requiresNavigator": false,
+      "cohort": "residual",
+      "signature": {
+        "status": "available"
+      },
+      "disposition": "direct",
+      "migration": "disabled",
+      "nativePolicy": "unknown"
+    },
+    {
+      "name": "create_session",
+      "source": "session",
+      "schemaSha256": "0de6eba5f1c8603dc5ad2d2be78139740405147b16d1efb06c919b4557b0106f",
+      "descriptorSha256": "2058b4e729590b925b63071bdb7866f0b4187126f47005e36da86cfb6e539cc9",
+      "effect": "write",
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": true
+      },
+      "inFull": true,
+      "inShort": true,
+      "requiresAgentChannel": true,
+      "requiresNavigator": false,
+      "cohort": "residual",
+      "signature": {
+        "status": "available"
+      },
+      "disposition": "direct",
+      "migration": "disabled",
+      "nativePolicy": "unknown"
+    },
+    {
+      "name": "request_agent_switch",
+      "source": "session",
+      "schemaSha256": "5bcfe6a9b6351979d39ca263c602d633566f7e1afa2a086a847d3d4983556a7d",
+      "descriptorSha256": "70bcc5df06ebf50e6543f72466565494e147827a9429e9edd32c1991e8afe1ee",
+      "effect": "write",
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true
+      },
+      "inFull": true,
+      "inShort": true,
+      "requiresAgentChannel": true,
+      "requiresNavigator": false,
+      "cohort": "residual",
+      "signature": {
+        "status": "available"
+      },
+      "disposition": "direct",
+      "migration": "disabled",
+      "nativePolicy": "unknown"
+    },
+    {
+      "name": "create_swarm",
+      "source": "session",
+      "schemaSha256": "0fb875bc8d2af3132abc2eaf4cc45f1395671e89236a3c1f44d15d984c3351b3",
+      "descriptorSha256": "6fffe94c43b2a2f2e5c87b15f9b5bf2b8f00769fe0a150a8b2e7f4e7e228f763",
+      "effect": "write",
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": true
+      },
+      "inFull": true,
+      "inShort": true,
+      "requiresAgentChannel": true,
+      "requiresNavigator": false,
+      "cohort": "residual",
+      "signature": {
+        "status": "available"
+      },
+      "disposition": "direct",
+      "migration": "disabled",
+      "nativePolicy": "unknown"
+    },
+    {
+      "name": "swarm_add",
+      "source": "session",
+      "schemaSha256": "568b5b2e4f23720ee0b65535e3d63e8b8be38406bd607777154f809eda52a52c",
+      "descriptorSha256": "dc22c07e4a32eacff88c728ee6267b985dc5c0a6a73afba2d32a2113aaa659a2",
+      "effect": "write",
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": true
+      },
+      "inFull": true,
+      "inShort": true,
+      "requiresAgentChannel": true,
+      "requiresNavigator": false,
+      "cohort": "residual",
+      "signature": {
+        "status": "available"
+      },
+      "disposition": "direct",
+      "migration": "disabled",
+      "nativePolicy": "unknown"
+    }
+  ],
+  "historicalPin": {
+    "note": "Frozen copy of the r1 inventory (c15017db tool lists, accepted T3a) used to report what changed since. Its list hashes are anchored to baseline-manifest.json; do not regenerate it.",
+    "baseCommit": "c15017dba04162aa2bf174a9b7931013a45446ab",
+    "lists": {
+      "fullNoAgent": {
+        "count": 26,
+        "serializedSha256": "64de84b13afc25bbe55dde491e0d385e26684d23b21420eb870c3ff3134162a8"
+      },
+      "shortNoAgent": {
+        "count": 23,
+        "serializedSha256": "8b13014b5b214eab81f710a70a7c607221e11b9b7b7967a2aebd6df179b96cf1"
+      },
+      "fullNoAgentNavigator": {
+        "count": 27,
+        "serializedSha256": "6c838edf8cae6afc7a1994b32fa759004a23295a7859f89d261f1575f582af51"
+      },
+      "shortNoAgentNavigator": {
+        "count": 24,
+        "serializedSha256": "74f7e15efae613a9e00f70300ab9547143dcb1e2abff4009575a4cae8f630dbc"
+      },
+      "fullAgent": {
+        "count": 41,
+        "serializedSha256": "f6cfe99470ac92731f3834404320465171a6a4569756e09b27ad2bfe10ecea9c"
+      },
+      "shortAgent": {
+        "count": 38,
+        "serializedSha256": "1403d3fcb78e9d9336688339ba38c62f7d1595c431524c667236079d892db43d"
+      },
+      "fullAgentNavigator": {
+        "count": 42,
+        "serializedSha256": "4ed3a7a6c5de904a0fea4c387ee24b78e960cec4d735830d7357c5a5d376398d"
+      },
+      "shortAgentNavigator": {
+        "count": 39,
+        "serializedSha256": "6ff155751924223634d43792242874f4c06495cf1febaddbf5f00eee30272ad9"
+      }
+    },
+    "tools": [
+      {
+        "name": "publish_agent_plan",
+        "source": "core",
+        "schemaSha256": "4cdc2559a2689f5094c4ea64492a757388a70f7dfb39a7c6b431d68e038ef685",
+        "descriptorSha256": "a49c171b39e81baeb491cfeac477ba25e48451f4fc00eb9da2425b7e5f6c2e31",
+        "effect": "write",
+        "signature": {
+          "status": "available"
+        }
+      },
+      {
+        "name": "set_room_mode",
+        "source": "core",
+        "schemaSha256": "adff736dc10959d5c23cac37690c3ca9458a60dc9831ffa5cdb7658ac97fe6e5",
+        "descriptorSha256": "20be0b1e34f90383ef46eb91f417f6f9363145ff6b49e37f967ef85bca45cebd",
+        "effect": "write",
+        "signature": {
+          "status": "available"
+        }
+      },
+      {
+        "name": "plan_update",
+        "source": "core",
+        "schemaSha256": "499d56916ab2faddea0dbb1d1e3d09318f27d965a928b3e19aee899c1ab96388",
+        "descriptorSha256": "7a76de174f72fce13e6ffd7f6b49602ae31640dca01fffc94276145173a3668e",
+        "effect": "write",
+        "signature": {
+          "status": "available"
+        }
+      },
+      {
+        "name": "plan_submit",
+        "source": "core",
+        "schemaSha256": "f4ff815ec2c5b5b6b521b61223d1c63525670650bc606ff8ef7913b2dac3a049",
+        "descriptorSha256": "45da402e850c0673092f8a39f6f6abcbfbacafef636c6bdaa79b152ba98cbd78",
+        "effect": "write",
+        "signature": {
+          "status": "available"
+        }
+      },
+      {
+        "name": "plan_verify",
+        "source": "core",
+        "schemaSha256": "db292e99f9ffdb97386419a39074df57b50c23c749aa2a61674a78c0b5228960",
+        "descriptorSha256": "0becaf687fa83ff5a3e7f4bbfb2dd4080563e83ef60e468dbf4fe8deeffbd8f2",
+        "effect": "write",
+        "signature": {
+          "status": "available"
+        }
+      },
+      {
+        "name": "propose_completion",
+        "source": "core",
+        "schemaSha256": "d7fb4533a84ea9b371f804d65d6a7a54416afb69e63b3c78ba9915c0a009fda7",
+        "descriptorSha256": "b19a6c45f387d152a4ca333423ac0e16d2a35554e059adf42548f519a0569336",
+        "effect": "write",
+        "signature": {
+          "status": "available"
+        }
+      },
+      {
+        "name": "attempt_submit",
+        "source": "core",
+        "schemaSha256": "9590a9e4b4d83634fb42e0adfd2bf605104218a9170236d38cb1249ea5a7971e",
+        "descriptorSha256": "164094d4518cacc826bafefac0ed888b5c44310b12a2a8faa14c6d091b7e517b",
+        "effect": "write",
+        "signature": {
+          "status": "available"
+        }
+      },
+      {
+        "name": "attempt_verify",
+        "source": "core",
+        "schemaSha256": "0ef4da1d1047738ace767d07ce7d9b0ee620f11c545b8e3f60827bb8deeb9d19",
+        "descriptorSha256": "2c206e221e6960afb1c392006ec6ab84506671dce9dfdd765bc1db80e07d5d4b",
+        "effect": "write",
+        "signature": {
+          "status": "available"
+        }
+      },
+      {
+        "name": "attempt_status",
+        "source": "core",
+        "schemaSha256": "22dd3e04afb28c9e04dbd06d6d8a68fac7a70994767ebd52333e534c546eb2db",
+        "descriptorSha256": "dc2333f2eb8b4ffffd7ebaac5f6586cd90c2d68a1f8f650d0852956b00d08adb",
+        "effect": "read",
+        "signature": {
+          "status": "available"
+        }
+      },
+      {
+        "name": "backlog_list",
+        "source": "core",
+        "schemaSha256": "aa0f5f5f96508069d404870cc979c5da45e1eb26f6d565d29d8c8d09d021b538",
+        "descriptorSha256": "faec4d6991acd1206ab365ddd3d48249161155e9988f5f2e27c2c35334150ec1",
+        "effect": "read",
+        "signature": {
+          "status": "available"
+        }
+      },
+      {
+        "name": "backlog_suggest",
+        "source": "core",
+        "schemaSha256": "16d1cffac8fbe75b0599eedd54abfaf9adb428b5a32afa1de8ea9142e2ff087a",
+        "descriptorSha256": "2e7c626ff5fb6a5662d37c3cfae1a82dd3301c96d5aaece5bd0006a1a7c12172",
+        "effect": "write",
+        "signature": {
+          "status": "available"
+        }
+      },
+      {
+        "name": "remember",
+        "source": "core",
+        "schemaSha256": "8a1f60c48f2a2cc35c37485c6bc2858d2b451858244a88d0433d92083842d0f8",
+        "descriptorSha256": "a7b9db8272b21498b27ded554de416ad762bddd9be70ba0df56e93bcce9a6f1b",
+        "effect": "write",
+        "signature": {
+          "status": "available"
+        }
+      },
+      {
+        "name": "memory_read",
+        "source": "core",
+        "schemaSha256": "d880edfa55950a3ae0bb77e42030e802df3c3e26bb72c1184d40736b0ac47a81",
+        "descriptorSha256": "ffb58d95d253a25809b612c81a2a027e087fbd2a8b91796c668d6842a48f6bc1",
+        "effect": "read",
+        "signature": {
+          "status": "available"
+        }
+      },
+      {
+        "name": "search_history",
+        "source": "core",
+        "schemaSha256": "447572ae2d6c7895aac4f0bce12a0b53b5bff33d4d7e7afff1c04a15306d4405",
+        "descriptorSha256": "49b6a6fa991c6c900a9098369f73600851da9b12703c745a008c2ea44bddf66e",
+        "effect": "read",
+        "signature": {
+          "status": "available"
+        }
+      },
+      {
+        "name": "get_map",
+        "source": "core",
+        "schemaSha256": "d77db6a4fbb11efa2519b94c8be52943d5943451df3389f52c6931934ff3a162",
+        "descriptorSha256": "89ec75dc6ac52c4c23c621f9742c18a41ed053d86110a1f41716d071c737b9a6",
+        "effect": "read",
+        "signature": {
+          "status": "available"
+        }
+      },
+      {
+        "name": "report",
+        "source": "core",
+        "schemaSha256": "5d5ba735cd4a3453ef523d24c0e115c2f1a869bf546e31bc8385e42af03fa16b",
+        "descriptorSha256": "b3fd45f579dc29ad6c0aeab64c414d57080a9ac5cb6cc03aa252d1a5072dd73f",
+        "effect": "write",
+        "signature": {
+          "status": "available"
+        }
+      },
+      {
+        "name": "list_roles",
+        "source": "core",
+        "schemaSha256": "efddc7bd8bbcef73a14eb1ace1ffdaec81e518ef1e13c1e9271d0b8acb694a49",
+        "descriptorSha256": "fb1c189cf7af12478320c1a3048b320125f938f567e551a03d3ad3c9f53d4ba2",
+        "effect": "read",
+        "signature": {
+          "status": "available"
+        }
+      },
+      {
+        "name": "wait_for",
+        "source": "core",
+        "schemaSha256": "92faa6bdfc637ca4b59bb6daee9eaf2f62fa8126114b1c2b3228a9acde874117",
+        "descriptorSha256": "50f1ad0ccdde225e45fa5fca27d153a3408bd35d7f95bd2ec092f51ff6cfe00b",
+        "effect": "write",
+        "signature": {
+          "status": "available"
+        }
+      },
+      {
+        "name": "send_message",
+        "source": "core",
+        "schemaSha256": "119b919fb9b922809f12b51661010684f4b605fed0511dc734b893ae5573f450",
+        "descriptorSha256": "583759c1e90aafd6406f18c2f9837a07ace858c3617cfa5b52845a45f100b15d",
+        "effect": "write",
+        "signature": {
+          "status": "available"
+        }
+      },
+      {
+        "name": "check_inbox",
+        "source": "core",
+        "schemaSha256": "99334726611ccf58a148b0814696bfa6fe08c1b2d027e946beccf5a74331c9aa",
+        "descriptorSha256": "d59fd2ed07db9523c304b9e572cd7091990412dad4cdef4a3c39672477a68acf",
+        "effect": "write",
+        "signature": {
+          "status": "available"
+        }
+      },
+      {
+        "name": "create_room",
+        "source": "core",
+        "schemaSha256": "3b676176a87106685a85c07eb99193aa79da0d84fb4cd554f6502e7e93d2df29",
+        "descriptorSha256": "fa0522edc7333df62b5dbec5e40dd3dbdf74de94101203dc38a1c9b3db79bf17",
+        "effect": "write",
+        "signature": {
+          "status": "available"
+        }
+      },
+      {
+        "name": "add_to_room",
+        "source": "core",
+        "schemaSha256": "1939ca19b17909fad62caadd593f085924082d601c183e2145fe245d2f620cd2",
+        "descriptorSha256": "88df613235c03c3618586c9d53080f63427d9545ea048eb3dfcd7a0e2271a116",
+        "effect": "write",
+        "signature": {
+          "status": "available"
+        }
+      },
+      {
+        "name": "read_room",
+        "source": "core",
+        "schemaSha256": "3c153c0928a7e9ee77e212730d79804defe1b87ccb68cf3b672c78a48678343c",
+        "descriptorSha256": "c8ac23eb9c8fa00b743d0011d60044f43bbf51591406d1d5807e0066402b00aa",
+        "effect": "read",
+        "signature": {
+          "status": "available"
+        }
+      },
+      {
+        "name": "propose_decision",
+        "source": "core",
+        "schemaSha256": "2678227757e94770a99ea4b8b8099094d24d4200df881a71e009777827f2f2f9",
+        "descriptorSha256": "ddb5c7e58e5a0bfc9588064160ecf010fcd16cab00f168bc9d897faec2f2e16f",
+        "effect": "write",
+        "signature": {
+          "status": "available"
+        }
+      },
+      {
+        "name": "close_session",
+        "source": "core",
+        "schemaSha256": "c3b640e090197587ad401e3f39a3ea46a8f52200bf68b00bed3cdf0d3fb0ce63",
+        "descriptorSha256": "95201e088c2262ddbd8618a2a674ebd1eaabf8e8499612949e8142401147e0d8",
+        "effect": "destructive",
+        "signature": {
+          "status": "available"
+        }
+      },
+      {
+        "name": "read_guide",
+        "source": "core",
+        "schemaSha256": "ea685b636b1110119723d17f0db2ee95995a44b30bd84fce50ccf0ae8466239c",
+        "descriptorSha256": "2e8410eae81bb661ba2a367abc542964937367e0af01f603fe48e4c744969fd1",
+        "effect": "read",
+        "signature": {
+          "status": "available"
+        }
+      },
+      {
+        "name": "find_skill",
+        "source": "navigator",
+        "schemaSha256": "056bec2b5d5b1655a936d4fdc5729c6bfb853d4e54b53a9970c08476ded8c45a",
+        "descriptorSha256": "fca416465623791abacf06de9280d61746ff57fd708328e38f9f3004c33cf199",
+        "effect": "read",
+        "signature": {
+          "status": "available"
+        }
+      },
+      {
+        "name": "browser_tabs",
+        "source": "browser",
+        "schemaSha256": "99334726611ccf58a148b0814696bfa6fe08c1b2d027e946beccf5a74331c9aa",
+        "descriptorSha256": "ba1ef21b9b817fbda20d184685423342d991d667fed29d48a464b657847dd02c",
+        "effect": "read",
+        "signature": {
+          "status": "available"
+        }
+      },
+      {
+        "name": "browser_console",
+        "source": "browser",
+        "schemaSha256": "16a8cb590b861cbd56e68a5d0f5e67c3f2b78645e0c11b083087aee7a999cf22",
+        "descriptorSha256": "c179d482d724f24a3de62623be1ddd101b8c0823d929d23fc6d3fb1bca51baba",
+        "effect": "read",
+        "signature": {
+          "status": "available"
+        }
+      },
+      {
+        "name": "browser_network",
+        "source": "browser",
+        "schemaSha256": "42742f78d0a148c9a1845ba63a7897abe0e7bd456eace0cf8204cc3fef3956c4",
+        "descriptorSha256": "8f3d391d92eb95ff6e7e39e0a19f00048d438269eed52cd85a05da83bd02a409",
+        "effect": "read",
+        "signature": {
+          "status": "available"
+        }
+      },
+      {
+        "name": "browser_screenshot",
+        "source": "browser",
+        "schemaSha256": "043833f34ae927b4baec256b9419d06f654cd5b12bd28c6e50f70cb05f191826",
+        "descriptorSha256": "d156fcaea31f49fa3da2019657a46a5a65814530deb23e7ae25279315b937472",
+        "effect": "read",
+        "signature": {
+          "status": "available"
+        }
+      },
+      {
+        "name": "browser_open",
+        "source": "browser",
+        "schemaSha256": "f193383612f1dac184f2eca4282d2c098dc922e1185ea7b53e39ddf0586e06e0",
+        "descriptorSha256": "ea8d77c25d0d0235d2c7fa665080bfa7dc75c0a195cb84bbd1aca22f836ff0e2",
+        "effect": "write",
+        "signature": {
+          "status": "available"
+        }
+      },
+      {
+        "name": "browser_navigate",
+        "source": "browser",
+        "schemaSha256": "98a8484febb1a167e16335158e55356636605f210cde552300789bb45bd4ce1d",
+        "descriptorSha256": "ad044c042e59e5298ea4c54b10ae6ce20fc5c1836b3da87f81f00c722f59b067",
+        "effect": "write",
+        "signature": {
+          "status": "available"
+        }
+      },
+      {
+        "name": "browser_snapshot",
+        "source": "browser",
+        "schemaSha256": "9f82ac5ace45292b65931f06bd3ba8fef72d9f1ee538ad82a8413d6f589ddcb8",
+        "descriptorSha256": "4f95bef71dc709f5ffc962470b05b5850347275b4a9f648beb4b9e8aada65781",
+        "effect": "read",
+        "signature": {
+          "status": "available"
+        }
+      },
+      {
+        "name": "browser_action",
+        "source": "browser",
+        "schemaSha256": "7f38789c2769e219bda38bcd14a37e67ec7a27a5e5bb1c643b02b2ccabcb4531",
+        "descriptorSha256": "7111e1cca6a7725b0cf7384afe9fd359bf91a1f06bbf00bd8b70a04c89c044ae",
+        "effect": "write",
+        "signature": {
+          "status": "unavailable",
+          "reasons": [
+            "browser_action.inputSchema.properties.modifiers.items: union-valued array items (enum with several values, oneOf or a type array) are generated with wrong precedence"
+          ]
+        }
+      },
+      {
+        "name": "browser_wait_for",
+        "source": "browser",
+        "schemaSha256": "ec250e5280136209f9bf12287548773e125bf8a63677954511f2b6dc98e41d06",
+        "descriptorSha256": "c4ffc38220b140f3d0dc05fa79431b4eee4548471b8acb26c7f094de7a52867b",
+        "effect": "read",
+        "signature": {
+          "status": "available"
+        }
+      },
+      {
+        "name": "browser_resize",
+        "source": "browser",
+        "schemaSha256": "726cd92e88e93eec04dc4710c56ed6e5a47ac77420a4543217572a7949a65dbc",
+        "descriptorSha256": "17826aa0003dbfe16b03e4e0979261b58e0cbd1d1dbb4d16df7b15a7159090fc",
+        "effect": "write",
+        "signature": {
+          "status": "available"
+        }
+      },
+      {
+        "name": "browser_evaluate",
+        "source": "browser",
+        "schemaSha256": "3a4834a603a8a00f6e15a206725af1eacba2cd0fb10fe3454a6264b035f7bff5",
+        "descriptorSha256": "85c0ffbf94b5ba84543f3a237e1c1485b186305b658a9377a08844cc0c13181e",
+        "effect": "destructive",
+        "signature": {
+          "status": "available"
+        }
+      },
+      {
+        "name": "browser_cookies",
+        "source": "browser",
+        "schemaSha256": "3860e6ba3e48dcc8ffc35b3a676eb6e97d9cd1120d3b0cf5aaf802a983c87499",
+        "descriptorSha256": "ce68c58c6841309eb0864b7531bf70c4c3b3b0449473c8ad004ad79bd8711beb",
+        "effect": "destructive",
+        "signature": {
+          "status": "available"
+        }
+      },
+      {
+        "name": "browser_storage",
+        "source": "browser",
+        "schemaSha256": "cc7e52f777a48151f11a3ccfbcbac62ccc3fee5913997c6ed1dbb53cd12ec669",
+        "descriptorSha256": "85b664a0fe56113c31d435f3ee9fb1edaa0e4863982238c3ad7016e1d9e87464",
+        "effect": "destructive",
+        "signature": {
+          "status": "available"
+        }
+      },
+      {
+        "name": "browser_downloads",
+        "source": "browser",
+        "schemaSha256": "99334726611ccf58a148b0814696bfa6fe08c1b2d027e946beccf5a74331c9aa",
+        "descriptorSha256": "8d28a01eb00334350c087f89c5bf8d63228120621b4d5dae2ffa469539f55aa4",
+        "effect": "read",
+        "signature": {
+          "status": "available"
+        }
+      },
+      {
+        "name": "create_session",
+        "source": "session",
+        "schemaSha256": "0de6eba5f1c8603dc5ad2d2be78139740405147b16d1efb06c919b4557b0106f",
+        "descriptorSha256": "2058b4e729590b925b63071bdb7866f0b4187126f47005e36da86cfb6e539cc9",
+        "effect": "write",
+        "signature": {
+          "status": "available"
+        }
+      }
+    ]
+  },
+  "sincePin": {
+    "listCounts": {
+      "fullNoAgent": {
+        "from": 26,
+        "to": 30
+      },
+      "shortNoAgent": {
+        "from": 23,
+        "to": 27
+      },
+      "fullNoAgentNavigator": {
+        "from": 27,
+        "to": 31
+      },
+      "shortNoAgentNavigator": {
+        "from": 24,
+        "to": 28
+      },
+      "fullAgent": {
+        "from": 41,
+        "to": 49
+      },
+      "shortAgent": {
+        "from": 38,
+        "to": 46
+      },
+      "fullAgentNavigator": {
+        "from": 42,
+        "to": 50
+      },
+      "shortAgentNavigator": {
+        "from": 39,
+        "to": 47
+      }
+    },
+    "added": [
+      {
+        "name": "plan_progress",
+        "source": "core",
+        "effect": "write",
+        "disposition": "direct",
+        "signature": "available",
+        "t11Task": "T11-plan_progress"
+      },
+      {
+        "name": "plan_tasks",
+        "source": "core",
+        "effect": "read",
+        "disposition": "direct",
+        "signature": "available",
+        "t11Task": "T11-plan_tasks"
+      },
+      {
+        "name": "backlog_take",
+        "source": "core",
+        "effect": "write",
+        "disposition": "direct",
+        "signature": "available",
+        "t11Task": "T11-backlog_take"
+      },
+      {
+        "name": "get_capacity",
+        "source": "core",
+        "effect": "read",
+        "disposition": "direct",
+        "signature": "available",
+        "t11Task": "T11-get_capacity"
+      },
+      {
+        "name": "browser_close",
+        "source": "browser",
+        "effect": "write",
+        "disposition": "direct",
+        "signature": "available",
+        "t11Task": "T11-browser_close"
+      },
+      {
+        "name": "request_agent_switch",
+        "source": "session",
+        "effect": "write",
+        "disposition": "direct",
+        "signature": "available",
+        "t11Task": "T11-request_agent_switch"
+      },
+      {
+        "name": "create_swarm",
+        "source": "session",
+        "effect": "write",
+        "disposition": "direct",
+        "signature": "available",
+        "t11Task": "T11-create_swarm"
+      },
+      {
+        "name": "swarm_add",
+        "source": "session",
+        "effect": "write",
+        "disposition": "direct",
+        "signature": "available",
+        "t11Task": "T11-swarm_add"
+      }
+    ],
+    "removed": [],
+    "schemaChanged": [
+      "get_map",
+      "report",
+      "close_session"
+    ],
+    "descriptorChanged": [
+      "get_map",
+      "report",
+      "wait_for",
+      "close_session"
+    ],
+    "signatureChanged": [
+      {
+        "name": "report",
+        "from": "available",
+        "to": {
+          "status": "unavailable",
+          "reasons": [
+            "report.inputSchema.properties.backlog: unsupported keyword \"uniqueItems\""
+          ]
+        }
+      }
+    ]
+  }
+}

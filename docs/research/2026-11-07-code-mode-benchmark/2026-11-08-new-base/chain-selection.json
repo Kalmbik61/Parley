@@ -1,0 +1,152 @@
+{
+  "selection": "Five distinct adjacent MCP pair shapes; prefer overview-v3 windows, then other contemporary pairs; no synthetic replay. All tools, including non-MCP, participate in adjacency checking.",
+  "scanSince": "2026-11-07T00:00:00Z",
+  "scanFiles": [
+    {
+      "prefixBytes": 5302562,
+      "prefixSha256": "8b20f0a688dfa2d2b3a86178b62355ed0d45385a91fac5c6ac7b042c791bd9c7",
+      "lineCount": 1946,
+      "transcriptId": "tx-8b20f0a688dfa2d2"
+    },
+    {
+      "prefixBytes": 4850000,
+      "prefixSha256": "dc62c9704ec5a61a0fe9dab4e968221b7a7cc02a4ab3e99d18588d1c99a59721",
+      "lineCount": 2350,
+      "transcriptId": "tx-dc62c9704ec5a61a"
+    },
+    {
+      "prefixBytes": 3683270,
+      "prefixSha256": "d1195c1d9d2df9f01770e030cbd492d237e6edf7f123331e0d375dfdeb5e92e9",
+      "lineCount": 1457,
+      "transcriptId": "tx-d1195c1d9d2df9f0"
+    },
+    {
+      "prefixBytes": 18670675,
+      "prefixSha256": "016b96435ddbb5eb7c32bd46e53811299d2db5ab8918f121f4f222552b32ec9f",
+      "lineCount": 9463,
+      "transcriptId": "tx-016b96435ddbb5eb"
+    },
+    {
+      "prefixBytes": 831073,
+      "prefixSha256": "dcc3393696cb9201b7b12d731dd0748186eec41491a5dad0aaacdd3eb1094292",
+      "lineCount": 213,
+      "transcriptId": "tx-dcc3393696cb9201"
+    },
+    {
+      "prefixBytes": 12469813,
+      "prefixSha256": "bc7ac113ff2863b725a8558372e72f8a62568b330b887abac1610ef3b22e1fd6",
+      "lineCount": 6502,
+      "transcriptId": "tx-bc7ac113ff2863b7"
+    },
+    {
+      "prefixBytes": 40275023,
+      "prefixSha256": "4f2cb9cdd75282aa1d79e736bceba48a087393600847602b3831eca9598992ea",
+      "lineCount": 17319,
+      "transcriptId": "tx-4f2cb9cdd75282aa"
+    }
+  ],
+  "candidatePairCount": 766,
+  "overviewV3PairCount": 1,
+  "selected": [
+    {
+      "lines": [
+        62,
+        79
+      ],
+      "names": [
+        "mcp__parley__get_map",
+        "mcp__parley__report"
+      ],
+      "timestamps": [
+        "2026-11-08T06:09:10.777Z",
+        "2026-11-08T06:09:16.812Z"
+      ],
+      "overviewV3": [
+        true,
+        false
+      ],
+      "label": "overview-v3-report",
+      "transcriptId": "tx-dcc3393696cb9201"
+    },
+    {
+      "lines": [
+        7221,
+        7234
+      ],
+      "names": [
+        "mcp__parley__get_map",
+        "mcp__parley__get_map"
+      ],
+      "timestamps": [
+        "2026-11-08T05:59:56.329Z",
+        "2026-11-08T05:59:58.374Z"
+      ],
+      "overviewV3": [
+        false,
+        false
+      ],
+      "label": "map-detail-chain",
+      "transcriptId": "tx-016b96435ddbb5eb"
+    },
+    {
+      "lines": [
+        8019,
+        8028
+      ],
+      "names": [
+        "mcp__parley__create_session",
+        "mcp__parley__add_to_room"
+      ],
+      "timestamps": [
+        "2026-11-08T08:48:37.272Z",
+        "2026-11-08T08:48:40.282Z"
+      ],
+      "overviewV3": [
+        false,
+        false
+      ],
+      "label": "session-room",
+      "transcriptId": "tx-016b96435ddbb5eb"
+    },
+    {
+      "lines": [
+        1426,
+        1433
+      ],
+      "names": [
+        "mcp__parley__check_inbox",
+        "mcp__parley__read_room"
+      ],
+      "timestamps": [
+        "2026-11-08T10:35:06.704Z",
+        "2026-11-08T10:35:09.062Z"
+      ],
+      "overviewV3": [
+        false,
+        false
+      ],
+      "label": "inbox-room",
+      "transcriptId": "tx-8b20f0a688dfa2d2"
+    },
+    {
+      "lines": [
+        16926,
+        16933
+      ],
+      "names": [
+        "mcp__parley__backlog_list",
+        "mcp__parley__backlog_suggest"
+      ],
+      "timestamps": [
+        "2026-11-08T10:46:41.457Z",
+        "2026-11-08T10:46:47.674Z"
+      ],
+      "overviewV3": [
+        false,
+        false
+      ],
+      "label": "backlog-list-suggest",
+      "transcriptId": "tx-4f2cb9cdd75282aa"
+    }
+  ]
+}

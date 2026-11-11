@@ -1,0 +1,18 @@
+case                                            v3 B  v3 tok |  v4 B  v4 tok | saved tok
+value-only baseline (small)                       80      24
+completed clean, 1 op                            542     186 |   130     36 |    150
+completed clean, 2 ops                           735     260 |   130     36 |    224
+completed, op incomplete (cut/page.next)         540     186 |   235     65 |    121
+completed, caught failed call (denied)           679     224 |   391    107 |    117
+error stale-revision (pre-run)                   342      80 |   156     38 |     42
+error unavailable host 404, 1 op                 540     178 |   282     96 |     82
+error busy (pre-run)                             421     100 |   252     62 |     38
+error runtime after 1 ok op                      514     175 |   256     92 |     83
+partial-or-unknown unsettled                     647     213 |   406    135 |     78
+error quota + limit response-bytes               617     201 |   376    122 |     79
+completed + limit (guest refused op)             827     280 |   346     90 |    190
+
+sample v4 texts:
+completed clean, 1 op => {"status":"completed","incomplete":false,"value":{"detail":{"id":"s-02","label":"Lead","task":"Plan the work","summary":"Done."}}}
+completed, caught failed call (denied) => {"status":"completed","incomplete":true,"value":{"errorResult":{"content":[{"type":"text","text":"You are not a member of room r-01."}],"isError":true}},"operations":[{"ordinal":1,"method":"read_room","dispatched":true,"outcome":"failed","incomplete":false}],"diagnostics":[{"code":"call-failed","params":{"ordinal":1,"method":"read_room"},"message":"call 1 (read_room) returned an error"}]}
+error unavailable host 404, 1 op => {"status":"error","incomplete":true,"error":{"kind":"unavailable","message":"Code execution is not available for this session."},"runId":"3f2b8c1e-9a7d-4e21-b6f0-2c4d5e6f7a8b","operations":[{"ordinal":1,"method":"get_map","dispatched":false,"outcome":"refused","incomplete":false}]}

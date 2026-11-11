@@ -1,0 +1,518 @@
+{
+  "tokenizer": "js-tiktoken@1.0.21",
+  "encoder": "o200k_base",
+  "node": "v22.23.3",
+  "serialization": "JSON.stringify(tool_use.input) and JSON.stringify(tool_result.content); encode(text, [], [])",
+  "hostRevision": "unknown",
+  "executionProof": false,
+  "sourceComparisonRevision": "19b4444e2c526131433dab3f1d5d3eccadefedd7",
+  "inputValidator": {
+    "package": "ajv",
+    "version": "8.20.0",
+    "options": {
+      "strict": false,
+      "coerceTypes": false,
+      "useDefaults": false,
+      "removeAdditional": false
+    },
+    "entrySha256": "edaed56fc546f5551b0d6dc2ff2a9cc25c2d6c83318a086eaa8c3ad0b2479297",
+    "schemaCorpusSha256": "591e301d8c0a8645ab5081f03c6eb89e70bfed506d0ebf1ea266bf3d4e102ac3"
+  },
+  "candidatePairCount": 766,
+  "overviewV3PairCount": 1,
+  "provenance": [
+    {
+      "prefixBytes": 5302562,
+      "prefixSha256": "8b20f0a688dfa2d2b3a86178b62355ed0d45385a91fac5c6ac7b042c791bd9c7",
+      "lineCount": 1946,
+      "transcriptId": "tx-8b20f0a688dfa2d2"
+    },
+    {
+      "prefixBytes": 4850000,
+      "prefixSha256": "dc62c9704ec5a61a0fe9dab4e968221b7a7cc02a4ab3e99d18588d1c99a59721",
+      "lineCount": 2350,
+      "transcriptId": "tx-dc62c9704ec5a61a"
+    },
+    {
+      "prefixBytes": 3683270,
+      "prefixSha256": "d1195c1d9d2df9f01770e030cbd492d237e6edf7f123331e0d375dfdeb5e92e9",
+      "lineCount": 1457,
+      "transcriptId": "tx-d1195c1d9d2df9f0"
+    },
+    {
+      "prefixBytes": 18670675,
+      "prefixSha256": "016b96435ddbb5eb7c32bd46e53811299d2db5ab8918f121f4f222552b32ec9f",
+      "lineCount": 9463,
+      "transcriptId": "tx-016b96435ddbb5eb"
+    },
+    {
+      "prefixBytes": 831073,
+      "prefixSha256": "dcc3393696cb9201b7b12d731dd0748186eec41491a5dad0aaacdd3eb1094292",
+      "lineCount": 213,
+      "transcriptId": "tx-dcc3393696cb9201"
+    },
+    {
+      "prefixBytes": 12469813,
+      "prefixSha256": "bc7ac113ff2863b725a8558372e72f8a62568b330b887abac1610ef3b22e1fd6",
+      "lineCount": 6502,
+      "transcriptId": "tx-bc7ac113ff2863b7"
+    },
+    {
+      "prefixBytes": 40275023,
+      "prefixSha256": "4f2cb9cdd75282aa1d79e736bceba48a087393600847602b3831eca9598992ea",
+      "lineCount": 17319,
+      "transcriptId": "tx-4f2cb9cdd75282aa"
+    }
+  ],
+  "chains": [
+    {
+      "label": "overview-v3-report",
+      "transcriptId": "tx-dcc3393696cb9201",
+      "adjacentAcrossAllToolCalls": true,
+      "resultsBeforeNextCall": true,
+      "hostRevision": "unknown",
+      "newBaseExecutionProof": false,
+      "calls": [
+        {
+          "name": "mcp__parley__get_map",
+          "callLine": 62,
+          "callBlock": 0,
+          "callId": "toolu_011pXU16BFfyNv25GSJ3ttzw",
+          "messageId": "msg_011Cgpxmfd72gcCAcFiQ1kNp",
+          "timestamp": "2026-11-08T06:09:10.777Z",
+          "resultLine": 67,
+          "resultBlock": 0,
+          "resultTimestamp": "2026-11-08T06:09:10.843Z",
+          "isError": false,
+          "input": {
+            "utf8Bytes": 2,
+            "o200kTokens": 1,
+            "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+          },
+          "resultContent": {
+            "utf8Bytes": 16467,
+            "o200kTokens": 4852,
+            "sha256": "2597c49d4400b1f5acf51b930854a39cdda11911d5351c5e86a6994149dc3335"
+          },
+          "newBaseInputSchemaValid": true,
+          "inputValidationKeywords": [],
+          "shape": {
+            "requestBranch": "overview",
+            "resultTopKeys": [
+              "sessionId",
+              "map"
+            ],
+            "inputKeys": [],
+            "overviewSchemaVersion": 3,
+            "overviewCollectionNames": [
+              "sessions",
+              "rooms",
+              "plans",
+              "deletedSessions",
+              "unreadRooms"
+            ]
+          }
+        },
+        {
+          "name": "mcp__parley__report",
+          "callLine": 79,
+          "callBlock": 0,
+          "callId": "toolu_01QtWAuhPeeNy7P5KuAXLtSk",
+          "messageId": "msg_011CgpxmrYS4CUa5JC11tFQQ",
+          "timestamp": "2026-11-08T06:09:16.812Z",
+          "resultLine": 81,
+          "resultBlock": 0,
+          "resultTimestamp": "2026-11-08T06:09:16.997Z",
+          "isError": false,
+          "input": {
+            "utf8Bytes": 522,
+            "o200kTokens": 183,
+            "sha256": "3b922221ad77eac5b4de1c80b4475841eb9bab3bf366a0116e712f150226afb3"
+          },
+          "resultContent": {
+            "utf8Bytes": 622,
+            "o200kTokens": 224,
+            "sha256": "7d214fcf7e2b7859a4789ae43060c37ae2bb96b3143d6d5643f951a68606bec1"
+          },
+          "newBaseInputSchemaValid": true,
+          "inputValidationKeywords": [],
+          "shape": {
+            "requestBranch": "report",
+            "resultTopKeys": [
+              "sessionId",
+              "status",
+              "summary",
+              "artifacts"
+            ],
+            "inputKeys": [
+              "status",
+              "summary"
+            ],
+            "overviewSchemaVersion": null,
+            "overviewCollectionNames": []
+          }
+        }
+      ],
+      "sumInputTokens": 184,
+      "sumResultTokens": 5076,
+      "intermediateResultTokens": 4852
+    },
+    {
+      "label": "map-detail-chain",
+      "transcriptId": "tx-016b96435ddbb5eb",
+      "adjacentAcrossAllToolCalls": true,
+      "resultsBeforeNextCall": true,
+      "hostRevision": "unknown",
+      "newBaseExecutionProof": false,
+      "calls": [
+        {
+          "name": "mcp__parley__get_map",
+          "callLine": 7221,
+          "callBlock": 0,
+          "callId": "toolu_01Luc6daagPCgfv6vrmJgUxA",
+          "messageId": "msg_011Cgpx4f6icUCqHvHjsq4jV",
+          "timestamp": "2026-11-08T05:59:56.329Z",
+          "resultLine": 7223,
+          "resultBlock": 0,
+          "resultTimestamp": "2026-11-08T05:59:56.368Z",
+          "isError": true,
+          "input": {
+            "utf8Bytes": 36,
+            "o200kTokens": 12,
+            "sha256": "79cc6015b99102fa0f8fef705017ce6d43bbc271a50a76daf6c2bce69b3b938e"
+          },
+          "resultContent": {
+            "utf8Bytes": 1397,
+            "o200kTokens": 315,
+            "sha256": "d60cb72cd3d022ff6b451be9d1886d01684fde376cccb992d45f1f87bfd7e430"
+          },
+          "newBaseInputSchemaValid": false,
+          "inputValidationKeywords": [
+            "additionalProperties"
+          ],
+          "shape": {
+            "requestBranch": "invalid-request",
+            "resultTopKeys": [],
+            "inputKeys": [
+              "detail"
+            ],
+            "overviewSchemaVersion": null,
+            "overviewCollectionNames": []
+          }
+        },
+        {
+          "name": "mcp__parley__get_map",
+          "callLine": 7234,
+          "callBlock": 0,
+          "callId": "toolu_01DrcgdhXte6c5551SgTwHWr",
+          "messageId": "msg_011Cgpx4uxBCbXv8egKzmDhK",
+          "timestamp": "2026-11-08T05:59:58.374Z",
+          "resultLine": 7236,
+          "resultBlock": 0,
+          "resultTimestamp": "2026-11-08T05:59:58.407Z",
+          "isError": false,
+          "input": {
+            "utf8Bytes": 34,
+            "o200kTokens": 11,
+            "sha256": "82046672ed5595858a09ed9cb3dc86b8d2113edca779f4ba7427cd8b71a45f0d"
+          },
+          "resultContent": {
+            "utf8Bytes": 2127,
+            "o200kTokens": 441,
+            "sha256": "28fd2ce834ff751ec63bddc2cf7be1555c4b30c46634042813fd83baf34f937d"
+          },
+          "newBaseInputSchemaValid": true,
+          "inputValidationKeywords": [],
+          "shape": {
+            "requestBranch": "field:task",
+            "resultTopKeys": [
+              "session",
+              "field",
+              "text",
+              "offset",
+              "bytes",
+              "totalBytes",
+              "sha256",
+              "complete",
+              "next"
+            ],
+            "inputKeys": [
+              "session",
+              "field"
+            ],
+            "overviewSchemaVersion": null,
+            "overviewCollectionNames": []
+          }
+        }
+      ],
+      "sumInputTokens": 23,
+      "sumResultTokens": 756,
+      "intermediateResultTokens": 315
+    },
+    {
+      "label": "session-room",
+      "transcriptId": "tx-016b96435ddbb5eb",
+      "adjacentAcrossAllToolCalls": true,
+      "resultsBeforeNextCall": true,
+      "hostRevision": "unknown",
+      "newBaseExecutionProof": false,
+      "calls": [
+        {
+          "name": "mcp__parley__create_session",
+          "callLine": 8019,
+          "callBlock": 0,
+          "callId": "toolu_01XiF1KWqNpPJNzSurDLhcUa",
+          "messageId": "msg_011CgqAuydwWWWqsr6KwhHgU",
+          "timestamp": "2026-11-08T08:48:37.272Z",
+          "resultLine": 8021,
+          "resultBlock": 0,
+          "resultTimestamp": "2026-11-08T08:48:37.578Z",
+          "isError": false,
+          "input": {
+            "utf8Bytes": 2388,
+            "o200kTokens": 589,
+            "sha256": "45e96b9aaffb9e06ecf8f5125f9190cb49206ffc6a8b5f17c2a4d8a0f0105e1a"
+          },
+          "resultContent": {
+            "utf8Bytes": 76,
+            "o200kTokens": 24,
+            "sha256": "dda4cbc32e43695e99ea7c2b65733bd7359d6087804c2a479be39a53292a7b6f"
+          },
+          "newBaseInputSchemaValid": true,
+          "inputValidationKeywords": [],
+          "shape": {
+            "requestBranch": "create_session",
+            "resultTopKeys": [
+              "sessionId",
+              "provider"
+            ],
+            "inputKeys": [
+              "provider",
+              "model",
+              "effort",
+              "role",
+              "label",
+              "task"
+            ],
+            "overviewSchemaVersion": null,
+            "overviewCollectionNames": []
+          }
+        },
+        {
+          "name": "mcp__parley__add_to_room",
+          "callLine": 8028,
+          "callBlock": 0,
+          "callId": "toolu_013kGecKpqGjwh9v7VYdepeG",
+          "messageId": "msg_011CgqAvz8VjwMdjXCkY46Tz",
+          "timestamp": "2026-11-08T08:48:40.282Z",
+          "resultLine": 8033,
+          "resultBlock": 0,
+          "resultTimestamp": "2026-11-08T08:48:44.062Z",
+          "isError": false,
+          "input": {
+            "utf8Bytes": 33,
+            "o200kTokens": 13,
+            "sha256": "d6616887f3547c949e5ade690c37f80fbb5a071fd8c77ab1fefd0e390cd123b1"
+          },
+          "resultContent": {
+            "utf8Bytes": 62,
+            "o200kTokens": 26,
+            "sha256": "d74984c9a5237450f0637493f9d06185ab695c3c410856fd84d9615be28931e6"
+          },
+          "newBaseInputSchemaValid": true,
+          "inputValidationKeywords": [],
+          "shape": {
+            "requestBranch": "add_to_room",
+            "resultTopKeys": [
+              "messageId"
+            ],
+            "inputKeys": [
+              "room",
+              "session"
+            ],
+            "overviewSchemaVersion": null,
+            "overviewCollectionNames": []
+          }
+        }
+      ],
+      "sumInputTokens": 602,
+      "sumResultTokens": 50,
+      "intermediateResultTokens": 24
+    },
+    {
+      "label": "inbox-room",
+      "transcriptId": "tx-8b20f0a688dfa2d2",
+      "adjacentAcrossAllToolCalls": true,
+      "resultsBeforeNextCall": true,
+      "hostRevision": "unknown",
+      "newBaseExecutionProof": false,
+      "calls": [
+        {
+          "name": "mcp__parley__check_inbox",
+          "callLine": 1426,
+          "callBlock": 0,
+          "callId": "toolu_01SNDT77pVn8DVFV3DUspTap",
+          "messageId": "msg_011CgqK3jkw84CvW1XmYHn8R",
+          "timestamp": "2026-11-08T10:35:06.704Z",
+          "resultLine": 1428,
+          "resultBlock": 0,
+          "resultTimestamp": "2026-11-08T10:35:06.741Z",
+          "isError": false,
+          "input": {
+            "utf8Bytes": 2,
+            "o200kTokens": 1,
+            "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+          },
+          "resultContent": {
+            "utf8Bytes": 53,
+            "o200kTokens": 21,
+            "sha256": "2b0bb2ade31b38e4a14f194a9846a825128eb12c86619a13bc0c2643f2e626d4"
+          },
+          "newBaseInputSchemaValid": true,
+          "inputValidationKeywords": [],
+          "shape": {
+            "requestBranch": "check_inbox",
+            "resultTopKeys": [
+              "messages"
+            ],
+            "inputKeys": [],
+            "overviewSchemaVersion": null,
+            "overviewCollectionNames": []
+          }
+        },
+        {
+          "name": "mcp__parley__read_room",
+          "callLine": 1433,
+          "callBlock": 0,
+          "callId": "toolu_01YJDfHE9p2BYew5QcUR5add",
+          "messageId": "msg_011CgqK3xkH36YUadRjN4bar",
+          "timestamp": "2026-11-08T10:35:09.062Z",
+          "resultLine": 1435,
+          "resultBlock": 0,
+          "resultTimestamp": "2026-11-08T10:35:09.090Z",
+          "isError": false,
+          "input": {
+            "utf8Bytes": 41,
+            "o200kTokens": 17,
+            "sha256": "a92cdac92b42b0c06ba6d78a51e2c5d2b75a658f7d031cdf7d3734f83b24ac62"
+          },
+          "resultContent": {
+            "utf8Bytes": 7354,
+            "o200kTokens": 2190,
+            "sha256": "cec0c76772c34a9c3203eb226adaaaaa9f585265d4d9630685bc48c87ae115b5"
+          },
+          "newBaseInputSchemaValid": true,
+          "inputValidationKeywords": [],
+          "shape": {
+            "requestBranch": "read_room",
+            "resultTopKeys": [
+              "messages",
+              "page"
+            ],
+            "inputKeys": [
+              "room",
+              "limit",
+              "maxBytes"
+            ],
+            "overviewSchemaVersion": null,
+            "overviewCollectionNames": []
+          }
+        }
+      ],
+      "sumInputTokens": 18,
+      "sumResultTokens": 2211,
+      "intermediateResultTokens": 21
+    },
+    {
+      "label": "backlog-list-suggest",
+      "transcriptId": "tx-4f2cb9cdd75282aa",
+      "adjacentAcrossAllToolCalls": true,
+      "resultsBeforeNextCall": true,
+      "hostRevision": "unknown",
+      "newBaseExecutionProof": false,
+      "calls": [
+        {
+          "name": "mcp__parley__backlog_list",
+          "callLine": 16926,
+          "callBlock": 0,
+          "callId": "toolu_01TVYh9E8jcjp3hWBJ2qiK3b",
+          "messageId": "msg_011CgqKw4NnTukNr3S7qxbFE",
+          "timestamp": "2026-11-08T10:46:41.457Z",
+          "resultLine": 16928,
+          "resultBlock": 0,
+          "resultTimestamp": "2026-11-08T10:46:42.122Z",
+          "isError": false,
+          "input": {
+            "utf8Bytes": 15,
+            "o200kTokens": 5,
+            "sha256": "d0c0bf5a10cd948c544ef80f9037016500138466056cd992636e36396f214a02"
+          },
+          "resultContent": {
+            "utf8Bytes": 6126,
+            "o200kTokens": 1632,
+            "sha256": "86de1e0be6f3aa0a95327988cde341bee4bc7f236d0413643de64798de468213"
+          },
+          "newBaseInputSchemaValid": true,
+          "inputValidationKeywords": [],
+          "shape": {
+            "requestBranch": "backlog_list",
+            "resultTopKeys": [
+              "version",
+              "items",
+              "suggestions",
+              "rule",
+              "diagnostics"
+            ],
+            "inputKeys": [
+              "text"
+            ],
+            "overviewSchemaVersion": null,
+            "overviewCollectionNames": []
+          }
+        },
+        {
+          "name": "mcp__parley__backlog_suggest",
+          "callLine": 16933,
+          "callBlock": 0,
+          "callId": "toolu_01CdhaezeK5s5xQWS9mEar1b",
+          "messageId": "msg_011CgqKwDUi8vokypYUjke6h",
+          "timestamp": "2026-11-08T10:46:47.674Z",
+          "resultLine": 16936,
+          "resultBlock": 0,
+          "resultTimestamp": "2026-11-08T10:46:53.056Z",
+          "isError": false,
+          "input": {
+            "utf8Bytes": 1191,
+            "o200kTokens": 284,
+            "sha256": "691643769ba05560e901ff2b89761c31b85401e0d6595c78a9feb384200de66a"
+          },
+          "resultContent": {
+            "utf8Bytes": 148,
+            "o200kTokens": 56,
+            "sha256": "d24f86b7abc86c05890ceb2a819e4cdb515392ec764b09bcc04dba5ca404d490"
+          },
+          "newBaseInputSchemaValid": true,
+          "inputValidationKeywords": [],
+          "shape": {
+            "requestBranch": "backlog_suggest",
+            "resultTopKeys": [
+              "message",
+              "diagnostics"
+            ],
+            "inputKeys": [
+              "kind",
+              "title",
+              "why",
+              "details"
+            ],
+            "overviewSchemaVersion": null,
+            "overviewCollectionNames": []
+          }
+        }
+      ],
+      "sumInputTokens": 289,
+      "sumResultTokens": 1688,
+      "intermediateResultTokens": 1632
+    }
+  ]
+}
