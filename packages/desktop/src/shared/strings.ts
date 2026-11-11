@@ -2107,6 +2107,8 @@ export const S = {
       placeholder: 'Message Claude — Enter to send',
       codexLabel: 'Message to Codex',
       codexPlaceholder: 'Message Codex — Enter to send',
+      qwenLabel: 'Message to Qwen Code',
+      qwenPlaceholder: 'Message Qwen Code — Enter to send',
       send: 'Send',
       queue: 'Queue',
       attach: 'Attach a file',

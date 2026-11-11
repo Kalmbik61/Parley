@@ -2032,6 +2032,18 @@ describe('ChatView — агенты: тулбар, прокрутка к кар�
   });
 });
 
+describe('ChatView — Qwen Code', () => {
+  it('поле ввода подписано Qwen Code, а не Claude', () => {
+    useProvidersStore.setState({ providers: [{ id: 'qwen', label: 'Qwen Code', available: true, family: 'qwen', version: '0.27.2', limits: null } as never], loaded: true });
+    useHostStore.setState({ status: { state: 'connected', hostVersion: '0.4.0', methods: FEED_METHODS, features: ['feed-qwen'] } as never });
+    renderBody({ ...makeSession('s-01', 'S01'), provider: 'qwen' });
+    setFeed([prompt('p1', 'hi')]);
+    const field = screen.getByRole('textbox', { name: S.chat.composer.qwenLabel }) as HTMLTextAreaElement;
+    expect(field.placeholder).toBe(S.chat.composer.qwenPlaceholder);
+    expect(field.placeholder).toBe('Message Qwen Code — Enter to send');
+  });
+});
+
 describe('ChatView — Codex', () => {
   const CODEX_OK = { id: 'codex', label: 'Codex', available: true, version: '0.160.0', limits: null };
   const started = (model: string): FeedItem => ({ id: 'n1', at: AT, kind: 'notice', notice: { type: 'session-start', source: 'startup', model } });
