@@ -781,6 +781,8 @@ describe('ProviderCard: Qwen Code (spec 2026-11-11, 3.6)', () => {
     show(qwen({ available: false, needs: 'cli', version: null }));
     expect(screen.getByRole('button', { name: 'Install…' })).toBeTruthy();
     expect(screen.getByRole('button', { name: S.providerCard.checkAgain })).toBeTruthy();
+    // The sign-in hint is for an installed CLI only.
+    expect(document.querySelector('[data-qwen-auth]')).toBeNull();
     cleanup();
     show(glm());
     expect(document.querySelector('[data-qwen-auth]')).toBeNull();

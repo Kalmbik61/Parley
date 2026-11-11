@@ -361,7 +361,7 @@ export function ProviderCard({
           <p className="text-xs text-muted-foreground">{S.providerCard.path}</p>
         </div>
       ) : null}
-      {provider.id === 'qwen' ? (
+      {provider.id === 'qwen' && provider.available ? (
         // Qwen Code signs in inside its terminal (`/auth`): the card shows hints from local files, never a verdict.
         <div data-qwen-auth={qwenAuth?.hint ?? 'unknown'} className="space-y-1">
           <p className="text-xs text-muted-foreground">
