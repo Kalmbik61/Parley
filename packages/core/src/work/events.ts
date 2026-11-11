@@ -12,6 +12,7 @@
 import { watch, type FSWatcher } from 'node:fs';
 import { open, stat } from 'node:fs/promises';
 import path from 'node:path';
+import type { ProviderFamily } from '../providers.js';
 import { clampDetail } from './stuck.js';
 
 /**
@@ -88,6 +89,15 @@ export interface EventRecord {
    * держит: события лежат в памяти всю сессию. У других инструментов и без `tool_input` — `null`.
    */
   toolDetail: string | null;
+  /**
+   * Qwen family only (spec §3.4): `UserPromptSubmit` with an empty prompt is the follow-up Qwen
+   * emits after a turn. Absent for Claude and Codex records.
+   */
+  promptEmpty?: boolean;
+  /** Qwen family only: `context_usage` of `Stop`, a fraction. */
+  contextUsage?: number;
+  /** Qwen family only: `context_limit` of `Stop`, tokens. */
+  contextLimit?: number;
 }
 
 /** Состояние чтения одного журнала: докуда дочитали и что уже разобрали. */
@@ -218,21 +228,21 @@ export function parseTasks(value: unknown): BackgroundTask[] | null {
 }
 
 /** Разбирает строку журнала. `null` — битая строка или строка не про событие. */
-function parseEvent(line: string, at: string): EventRecord | null {
+function parseEvent(line: string, at: string, family?: ProviderFamily | null): EventRecord | null {
   let data: unknown;
   try {
     data = JSON.parse(line);
   } catch {
     return null;
   }
-  return eventRecordOf(data, at);
+  return eventRecordOf(data, at, family);
 }
 
 /**
  * Общие поля события хука из его stdin-JSON — тот же разбор, что у журнала `events/`; им же
  * пользуется лента вида «Chat», получая события HTTP-хуком. `null` — не объект или нет имени события.
  */
-export function eventRecordOf(data: unknown, at: string): EventRecord | null {
+export function eventRecordOf(data: unknown, at: string, family?: ProviderFamily | null): EventRecord | null {
   if (!isRecord(data)) return null;
 
   const name = data.hook_event_name;
@@ -256,7 +266,28 @@ export function eventRecordOf(data: unknown, at: string): EventRecord | null {
     message: textOf(data.message),
     toolName,
     toolDetail: toolDetailOf(toolName, data.tool_input),
+    ...(family === 'qwen' ? qwenFacts(name, data) : {}),
   };
+}
+
+const finiteNumber = (value: unknown): number | undefined =>
+  typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+
+/** Non-secret Qwen hook facts only: never the prompt text, the reply or tool input. */
+function qwenFacts(name: string, data: Record<string, unknown>): Partial<EventRecord> {
+  if (name === 'UserPromptSubmit') {
+    const text = typeof data.prompt === 'string' ? data.prompt : data.submitted_prompt;
+    return typeof text === 'string' ? { promptEmpty: text.trim() === '' } : {};
+  }
+  if (name === 'Stop') {
+    const usage = finiteNumber(data.context_usage);
+    const limit = finiteNumber(data.context_limit);
+    return {
+      ...(usage !== undefined ? { contextUsage: usage } : {}),
+      ...(limit !== undefined ? { contextLimit: limit } : {}),
+    };
+  }
+  return {};
 }
 
 const isDirectory = async (dir: string): Promise<boolean> => {
@@ -271,7 +302,7 @@ const isDirectory = async (dir: string): Promise<boolean> => {
  * Читатель журналов одной работы. Состояние живёт в замыкании по сессиям,
  * поэтому один читатель обслуживает всю работу и не перечитывает старые байты.
  */
-export function openEvents(eventsDir: string): EventsLog {
+export function openEvents(eventsDir: string, family?: ProviderFamily | null): EventsLog {
   const journals = new Map<string, Journal>();
   /**
    * Чтения одной сессии идут по очереди (fix-tests2): состояние журнала общее, и чтение,
@@ -316,7 +347,7 @@ export function openEvents(eventsDir: string): EventsLog {
       const fresh: EventRecord[] = [];
       for (const line of data.subarray(0, cut).toString('utf8').split('\n')) {
         if (line.trim() === '') continue;
-        const event = parseEvent(line, at);
+        const event = parseEvent(line, at, family);
         if (event !== null) fresh.push(event);
       }
       // Новый массив только при новых событиях: выданный раньше не меняется, а без новых строк уходит прежний.

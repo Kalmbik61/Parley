@@ -432,6 +432,8 @@ export function activityOf({
     }
     switch (event.name) {
       case 'UserPromptSubmit':
+        // Qwen's empty follow-up (spec §3.4) is not a turn: it neither starts one nor clears waits.
+        if (event.promptEmpty === true) break;
         turnBoundaryAt = event.at;
         waits = [];
         start();
