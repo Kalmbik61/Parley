@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { addRoom, addSession, createWork, listTrust, parleyHome, readMap, trustKey, updateMap, workDb, workPaths } from '@parley/core';
+import { RoleChoiceError, addRoom, addSession, createWork, listTrust, parleyHome, readMap, trustKey, updateMap, workDb, workPaths } from '@parley/core';
 import {
   ASSISTANT_ACTIONS_FEATURE,
   BROWSER_AGENT_FEATURE,
@@ -1589,6 +1589,15 @@ describe('роль remote: запуск с телефона (A2b, спека м�
       expect((await answer(remote.client, 670, 'sessions.create', { ...session, trustFolder: true })).error)
         .toMatchObject({ code: 'internal', message: 'trust.json is not writable' });
       expect(s.spies['sessions.create']).not.toHaveBeenCalled();
+      s.close();
+    });
+
+    it('отказ роли отвечает bad_request с понятным сообщением, а не internal', async () => {
+      const s = await a28Server({ enabled: true });
+      s.spies['sessions.create']!.mockRejectedValueOnce(new RoleChoiceError('role-permissions-unavailable'));
+      const desktop = await s.connect('desktop');
+      expect((await answer(desktop.client, 661, 'sessions.create', session)).error)
+        .toMatchObject({ code: 'bad_request', data: { reason: 'role-permissions-unavailable' }, message: expect.stringContaining('read-only') });
       s.close();
     });
 
