@@ -1135,14 +1135,19 @@ export function createSessionsService(
         // Клон зависимостей из основной копии (сбой шага запуск не останавливает: `run` не бросает).
         const seed = await timer.step('deps', () => depsSeeder.run(ref, worktree));
         if (seed !== null || worktree.seed !== undefined) {
-          await timer.step('deps', () => updateMap(ref.projectPath, ref.workId, (current) => {
-            const target = current.sessions.find((candidate) => candidate.id === ref.sessionId);
-            if (target?.worktree === null || target?.worktree === undefined) return;
-            if (seed !== null) target.worktree.seed = seed;
-            else delete target.worktree.seed;
-          }, { touch: false }));
-          if (seed !== null) worktree.seed = seed;
-          else delete worktree.seed;
+          // Итог клона не должен ронять запуск: не записался в карту — сессия всё равно стартует.
+          try {
+            await timer.step('deps', () => updateMap(ref.projectPath, ref.workId, (current) => {
+              const target = current.sessions.find((candidate) => candidate.id === ref.sessionId);
+              if (target?.worktree === null || target?.worktree === undefined) return;
+              if (seed !== null) target.worktree.seed = seed;
+              else delete target.worktree.seed;
+            }, { touch: false }));
+            if (seed !== null) worktree.seed = seed;
+            else delete worktree.seed;
+          } catch (error) {
+            host.log.error('итог клона зависимостей не записался в карту', { ref, error: String(error) });
+          }
         }
         // Копия поднята из ветки: сессия, у которой каталог убрали, узнаёт об этом заметкой (в брифе первого запуска это не нужно).
         if (reuseBranch) {

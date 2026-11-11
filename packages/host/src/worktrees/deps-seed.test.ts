@@ -63,6 +63,27 @@ describe('createDepsSeeder', () => {
     });
   });
 
+  it('сбой уведомления не теряет запись', async () => {
+    const { host, logs } = fakeHost();
+    const broken: HostContext = {
+      ...host,
+      broadcast: () => {
+        throw new Error('нет связи');
+      },
+    };
+    const seeder = createDepsSeeder(broken, {
+      seed: async () => report({ lockMismatch: ['pnpm-lock.yaml'] }),
+      now: () => NOW,
+    });
+    await expect(seeder.run(refOf('/p', 's-01'), INFO)).resolves.toEqual({
+      at: '2026-11-11T10:00:00.000Z',
+      cloned: 1,
+      first: 'node_modules',
+      lockMismatch: ['pnpm-lock.yaml'],
+    });
+    expect(logs.filter((item) => item.level === 'warn')).toHaveLength(1);
+  });
+
   it('нет списка — null, уведомлений нет', async () => {
     const { host, broadcasts } = fakeHost();
     const seeder = createDepsSeeder(host, { seed: async () => null, now: () => NOW });

@@ -64,20 +64,25 @@ export function createDepsSeeder(host: HostContext, deps: DepsSeederDeps = {}): 
       try {
         const report = await seed(ref.projectPath, info.path);
         if (report === null) return null;
-        const tag = sessionTag(ref.sessionId);
-        if (report.unavailable) {
-          notifyOnce(
-            'deps-clone-unavailable',
-            ref,
-            `Dependencies were not cloned into the worktree of ${tag}: the worktree root is on another volume or not on APFS. Set the worktree root to a folder on the same volume as ${report.sourceRoot}.`,
-          );
-        }
-        if (report.lockMismatch.length > 0 || report.stale) {
-          notifyOnce(
-            'deps-clone-mismatch',
-            ref,
-            `Dependencies cloned from ${report.sourceRoot} do not match the lock file of the worktree of ${tag}; its agent has to run the install. If this repeats, update the dependencies in ${report.sourceRoot}.`,
-          );
+        // Сбой уведомления не отменяет итог клона.
+        try {
+          const tag = sessionTag(ref.sessionId);
+          if (report.unavailable) {
+            notifyOnce(
+              'deps-clone-unavailable',
+              ref,
+              `Dependencies were not cloned into the worktree of ${tag}: the worktree root is on another volume or not on APFS. Set the worktree root to a folder on the same volume as ${report.sourceRoot}.`,
+            );
+          }
+          if (report.lockMismatch.length > 0 || report.stale) {
+            notifyOnce(
+              'deps-clone-mismatch',
+              ref,
+              `Dependencies cloned from ${report.sourceRoot} do not match the lock file of the worktree of ${tag}; its agent has to run the install. If this repeats, update the dependencies in ${report.sourceRoot}.`,
+            );
+          }
+        } catch (error) {
+          host.log.warn('уведомление о клоне зависимостей не отправлено', { ref, error: String(error) });
         }
         return toWorktreeSeed(report, now().toISOString());
       } catch (error) {
