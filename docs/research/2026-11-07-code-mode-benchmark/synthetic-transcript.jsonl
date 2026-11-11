@@ -1,0 +1,9 @@
+{"type":"user","timestamp":"2026-01-01T00:00:00.000Z","message":{"role":"user","content":"synthetic prompt"}}
+{"type":"assistant","message":{"id":"msg_synthetic_1","role":"assistant","content":[{"type":"tool_use","id":"toolu_synthetic_a","name":"mcp__parley__get_map","input":{"field":"rooms"}}]},"timestamp":"2026-01-01T00:00:01.000Z"}
+{"type":"user","timestamp":"2026-01-01T00:00:02.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_synthetic_a","content":[{"type":"text","text":"{\"rooms\":[{\"id\":\"r-01\",\"unread\":0}]}"}]}]}}
+{"type":"assistant","message":{"id":"msg_synthetic_2","role":"assistant","content":[{"type":"tool_use","id":"toolu_synthetic_b","name":"mcp__parley__read_guide","input":{"topic":"rooms"}}]},"timestamp":"2026-01-01T00:00:03.000Z"}
+{"type":"user","timestamp":"2026-01-01T00:00:04.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_synthetic_b","content":[{"type":"text","text":"synthetic guide text"}]}]}}
+{"type":"assistant","message":{"id":"msg_synthetic_3","role":"assistant","content":[{"type":"tool_use","id":"toolu_synthetic_c","name":"Bash","input":{"command":"true"}}]},"timestamp":"2026-01-01T00:00:05.000Z"}
+{"type":"user","timestamp":"2026-01-01T00:00:06.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_synthetic_c","content":[{"type":"text","text":"synthetic shell output"}]}]}}
+{"type":"assistant","message":{"id":"msg_synthetic_4","role":"assistant","content":[{"type":"tool_use","id":"toolu_synthetic_d","name":"mcp__parley__check_inbox","input":{}}]},"timestamp":"2026-01-01T00:00:07.000Z"}
+{"type":"user","timestamp":"2026-01-01T00:00:08.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_synthetic_d","content":[{"type":"text","text":"{\"messages\":[]}"}],"is_error":true}]}}

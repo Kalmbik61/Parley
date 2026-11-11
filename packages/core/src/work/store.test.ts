@@ -2140,6 +2140,24 @@ describe('deleteSessionFiles', () => {
     expect(await exists(path.join(paths.briefs, 's-02.md'))).toBe(true);
   });
 
+  it('запись запуска Code Mode и её claim-файлы уходят с сессией; соседка с похожим id остаётся', async () => {
+    const workId = await withFiles();
+    const dir = path.join(workPaths(project, workId).dir, 'code-mode');
+    await mkdir(dir, { recursive: true });
+    const nonce = 'a'.repeat(32);
+    for (const name of ['s-01.run', `s-01.run.claim.${nonce}`, 's-012.run', `s-012.run.claim.${nonce}`, 's-02.run', 's-01.running', 's-01.exposure.json', '.s-01.exposure.aa.tmp', 's-012.exposure.json', 's-01.launch.json', '.s-01.launch.aa.tmp', 's-012.launch.json', '.s-012.launch.aa.tmp', '.s-012.exposure.aa.tmp']) await writeFile(path.join(dir, name), '{}\n', 'utf8');
+
+    await deleteSessionFiles(project, workId, 's-01');
+
+    expect(await exists(path.join(dir, 's-01.run'))).toBe(false);
+    expect(await exists(path.join(dir, `s-01.run.claim.${nonce}`))).toBe(false);
+    expect(await exists(path.join(dir, 's-01.exposure.json'))).toBe(false);
+    expect(await exists(path.join(dir, '.s-01.exposure.aa.tmp'))).toBe(false);
+    expect(await exists(path.join(dir, 's-01.launch.json'))).toBe(false);
+    expect(await exists(path.join(dir, '.s-01.launch.aa.tmp'))).toBe(false);
+    for (const name of ['s-012.run', `s-012.run.claim.${nonce}`, 's-02.run', 's-01.running', 's-012.exposure.json', '.s-012.exposure.aa.tmp', 's-012.launch.json', '.s-012.launch.aa.tmp']) expect(await exists(path.join(dir, name)), name).toBe(true);
+  });
+
   it('26: файла уже нет — не ошибка', async () => {
     const map = await createWork(project, { title: 'Авторизация' });
 

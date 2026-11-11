@@ -342,7 +342,7 @@ export function createAutoSleepService(host: HostContext, deps: AutoSleepService
 
     // 2. Тот же `stop`, что у кнопки Stop: ждёт выхода процесса и записи перехода в `sleeping`.
     try {
-      await deps.sessions.stop(ref);
+      await deps.sessions.stop(ref, { by: 'sleep', reason: plan.reason });
     } catch (error) {
       host.log.warn('остановка агента при усыплении не удалась', { ref, error: String(error) });
     }

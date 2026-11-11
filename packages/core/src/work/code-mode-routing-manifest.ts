@@ -1,0 +1,99 @@
+// The routing manifest (plan T8a): every non-test source file whose string or template literals name a Parley operation, with what
+// the file is and who owns its wording. The guard test re-runs a TypeScript AST sweep over the repository and compares it with this
+// table by (file, name) PRESENCE, not by counts: rewording a text that keeps its names passes (the neutral operation-name
+// convention in code-mode-instructions.ts covers it), a new mention of an operation in a new file or a new name in a known file
+// fails until someone classifies it here. e2e specs and unit tests are out of the sweep: none of them is an agent-visible text.
+//
+// disposition: actionable (an agent reads it and the convention applies), identifier (a code name or data list), ui, vocabulary
+// (another surface's own action verbs) or internal (the Code Mode registry itself). A row that is not actionable carries a reason.
+// owner: the plan task that owns the wording (T8a = covered by the convention, no wording edit; T8b guide; T8c/T8d skills, roles).
+
+export type ManifestDisposition = 'actionable' | 'identifier' | 'ui' | 'vocabulary' | 'internal';
+
+export interface ManifestRow {
+  readonly file: string;
+  readonly disposition: ManifestDisposition;
+  readonly owner: 'T8a' | 'T8b' | 'T8c/T8d' | 'none';
+  readonly reason?: string;
+  readonly names: readonly string[];
+}
+
+export const ROUTING_MANIFEST: readonly ManifestRow[] = [
+  { file: 'packages/core/src/assistant/launch.ts', disposition: 'vocabulary', owner: 'none', reason: 'the voice assistant and Telegram surface has its own action verbs (do: "create_session"); they are not calls of the session tools and the session tool list is not its universe', names: ['propose_decision', 'report'] },
+  { file: 'packages/core/src/cli.ts', disposition: 'identifier', owner: 'none', reason: 'a code identifier or data list that names a tool, not an instruction text', names: ['report'] },
+  { file: 'packages/core/src/mcp/agent-plan-tool.ts', disposition: 'actionable', owner: 'T8a', names: ['publish_agent_plan'] },
+  { file: 'packages/core/src/mcp/assistant.ts', disposition: 'vocabulary', owner: 'none', reason: 'the voice assistant and Telegram surface has its own action verbs (do: "create_session"); they are not calls of the session tools and the session tool list is not its universe', names: ['add_to_room', 'create_room', 'create_session', 'propose_decision', 'report'] },
+  { file: 'packages/core/src/mcp/attempt-tools.ts', disposition: 'actionable', owner: 'T8a', names: ['attempt_status', 'attempt_submit', 'attempt_verify', 'report'] },
+  { file: 'packages/core/src/mcp/browser-tools.ts', disposition: 'actionable', owner: 'T8a', names: ['browser_action', 'browser_close', 'browser_console', 'browser_cookies', 'browser_downloads', 'browser_evaluate', 'browser_navigate', 'browser_network', 'browser_open', 'browser_resize', 'browser_screenshot', 'browser_snapshot', 'browser_storage', 'browser_tabs', 'browser_wait_for', 'wait_for'] },
+  { file: 'packages/core/src/mcp/code-mode/catalog.ts', disposition: 'internal', owner: 'none', reason: 'the Code Mode registry, catalogue and helper themselves: they define the names, they do not instruct with them', names: ['backlog_list', 'get_map', 'list_roles', 'read_guide', 'read_room'] },
+  { file: 'packages/core/src/mcp/code-mode/helper.ts', disposition: 'internal', owner: 'none', reason: 'the Code Mode registry, catalogue and helper themselves: they define the names, they do not instruct with them', names: ['report'] },
+  { file: 'packages/core/src/mcp/code-mode/migration-registry.ts', disposition: 'internal', owner: 'none', reason: 'the Code Mode registry, catalogue and helper themselves: they define the names, they do not instruct with them', names: ['add_to_room', 'attempt_status', 'attempt_submit', 'attempt_verify', 'backlog_list', 'backlog_suggest', 'backlog_take', 'browser_action', 'browser_close', 'browser_console', 'browser_cookies', 'browser_downloads', 'browser_evaluate', 'browser_navigate', 'browser_network', 'browser_open', 'browser_resize', 'browser_screenshot', 'browser_snapshot', 'browser_storage', 'browser_tabs', 'browser_wait_for', 'check_inbox', 'close_session', 'create_room', 'create_session', 'create_swarm', 'find_skill', 'get_capacity', 'get_map', 'list_roles', 'memory_read', 'plan_progress', 'plan_submit', 'plan_tasks', 'plan_update', 'plan_verify', 'propose_completion', 'propose_decision', 'publish_agent_plan', 'read_guide', 'read_room', 'remember', 'report', 'request_agent_switch', 'search_history', 'send_message', 'set_room_mode', 'swarm_add', 'wait_for'] },
+  { file: 'packages/core/src/mcp/inbox-watch.ts', disposition: 'actionable', owner: 'T8a', names: ['check_inbox'] },
+  { file: 'packages/core/src/mcp/plan-tasks.ts', disposition: 'actionable', owner: 'T8a', names: ['plan_tasks'] },
+  { file: 'packages/core/src/mcp/plan-tools.ts', disposition: 'actionable', owner: 'T8a', names: ['get_map', 'plan_progress', 'plan_submit', 'plan_tasks', 'plan_update', 'plan_verify', 'propose_completion', 'propose_decision', 'set_room_mode'] },
+  { file: 'packages/core/src/mcp/remote-tools.ts', disposition: 'identifier', owner: 'none', reason: 'a code identifier or data list that names a tool, not an instruction text', names: ['wait_for'] },
+  { file: 'packages/core/src/mcp/session-tools.ts', disposition: 'actionable', owner: 'T8a', names: ['create_session', 'get_map', 'list_roles', 'request_agent_switch', 'wait_for'] },
+  { file: 'packages/core/src/mcp/swarm-tools.ts', disposition: 'actionable', owner: 'T8a', names: ['create_swarm', 'get_map', 'list_roles', 'report', 'swarm_add'] },
+  { file: 'packages/core/src/mcp/tools.ts', disposition: 'actionable', owner: 'T8a', names: ['add_to_room', 'attempt_status', 'backlog_list', 'backlog_suggest', 'backlog_take', 'check_inbox', 'close_session', 'create_room', 'create_session', 'create_swarm', 'find_skill', 'get_capacity', 'get_map', 'list_roles', 'memory_read', 'plan_tasks', 'propose_decision', 'publish_agent_plan', 'read_guide', 'read_room', 'remember', 'report', 'request_agent_switch', 'search_history', 'send_message', 'swarm_add', 'wait_for'] },
+  { file: 'packages/core/src/recipes/builtin.ts', disposition: 'actionable', owner: 'T8c/T8d', names: ['backlog_suggest', 'find_skill', 'propose_completion'] },
+  { file: 'packages/core/src/roles/builtin.ts', disposition: 'actionable', owner: 'T8c/T8d', names: ['create_session', 'report'] },
+  { file: 'packages/core/src/work/board-card.ts', disposition: 'actionable', owner: 'T8a', names: ['report'] },
+  { file: 'packages/core/src/work/brief.ts', disposition: 'actionable', owner: 'T8a', names: ['attempt_status', 'attempt_submit', 'attempt_verify', 'get_map', 'plan_progress', 'propose_decision', 'publish_agent_plan', 'read_guide', 'report', 'send_message', 'wait_for'] },
+  { file: 'packages/core/src/work/code-mode-instructions.ts', disposition: 'internal', owner: 'none', reason: 'the routing convention itself: it names operations as examples of what it routes, rebuilds the Codex example rows and holds the guide name table, all from data', names: ['add_to_room', 'attempt_status', 'attempt_submit', 'attempt_verify', 'backlog_list', 'backlog_suggest', 'backlog_take', 'check_inbox', 'close_session', 'create_room', 'create_session', 'find_skill', 'get_capacity', 'get_map', 'list_roles', 'memory_read', 'plan_progress', 'plan_submit', 'plan_tasks', 'plan_update', 'plan_verify', 'propose_completion', 'propose_decision', 'publish_agent_plan', 'read_room', 'remember', 'report', 'request_agent_switch', 'search_history', 'send_message', 'set_room_mode', 'wait_for'] },
+  { file: 'packages/core/src/work/context-pages.ts', disposition: 'actionable', owner: 'T8a', names: ['get_map'] },
+  { file: 'packages/core/src/work/delivery.ts', disposition: 'actionable', owner: 'T8a', names: ['check_inbox'] },
+  { file: 'packages/core/src/work/guidance.ts', disposition: 'actionable', owner: 'T8a', names: ['backlog_list', 'backlog_suggest', 'browser_action', 'browser_console', 'browser_evaluate', 'browser_navigate', 'browser_network', 'browser_open', 'browser_screenshot', 'browser_snapshot', 'check_inbox', 'close_session', 'create_room', 'create_session', 'find_skill', 'get_map', 'memory_read', 'plan_progress', 'plan_submit', 'plan_tasks', 'plan_update', 'plan_verify', 'propose_decision', 'publish_agent_plan', 'read_guide', 'read_room', 'remember', 'report', 'search_history', 'send_message', 'wait_for'] },
+  { file: 'packages/core/src/work/guide.ts', disposition: 'actionable', owner: 'T8b', names: ['add_to_room', 'attempt_status', 'attempt_submit', 'attempt_verify', 'backlog_list', 'backlog_suggest', 'backlog_take', 'check_inbox', 'close_session', 'create_room', 'create_session', 'find_skill', 'get_capacity', 'get_map', 'list_roles', 'memory_read', 'plan_progress', 'plan_submit', 'plan_tasks', 'plan_update', 'plan_verify', 'propose_completion', 'propose_decision', 'publish_agent_plan', 'read_room', 'remember', 'report', 'request_agent_switch', 'search_history', 'send_message', 'set_room_mode', 'wait_for'] },
+  { file: 'packages/core/src/work/handover.ts', disposition: 'actionable', owner: 'T8a', names: ['get_map'] },
+  { file: 'packages/core/src/work/launch.ts', disposition: 'actionable', owner: 'T8a', names: ['get_map'] },
+  { file: 'packages/core/src/work/mcp-config.ts', disposition: 'identifier', owner: 'none', reason: 'a code identifier or data list that names a tool, not an instruction text', names: ['memory_read', 'remember', 'search_history'] },
+  { file: 'packages/core/src/work/memory-suggestions.ts', disposition: 'identifier', owner: 'none', reason: 'a code identifier or data list that names a tool, not an instruction text', names: ['remember'] },
+  { file: 'packages/core/src/work/minimal-development.ts', disposition: 'actionable', owner: 'T8c/T8d', names: ['report'] },
+  { file: 'packages/core/src/work/parley-browser-skill.ts', disposition: 'actionable', owner: 'T8c/T8d', names: ['browser_action', 'browser_close', 'browser_console', 'browser_cookies', 'browser_downloads', 'browser_evaluate', 'browser_navigate', 'browser_network', 'browser_open', 'browser_resize', 'browser_screenshot', 'browser_snapshot', 'browser_storage', 'browser_tabs', 'browser_wait_for'] },
+  { file: 'packages/core/src/work/parley-md.ts', disposition: 'actionable', owner: 'T8a', names: ['report'] },
+  { file: 'packages/core/src/work/plan-effects.ts', disposition: 'actionable', owner: 'T8a', names: ['backlog_list', 'backlog_suggest', 'plan_submit', 'plan_update', 'plan_verify', 'propose_completion'] },
+  { file: 'packages/core/src/work/plan-tasks.ts', disposition: 'actionable', owner: 'T8a', names: ['plan_tasks'] },
+  { file: 'packages/core/src/work/plans.ts', disposition: 'actionable', owner: 'T8a', names: ['plan_update'] },
+  { file: 'packages/core/src/work/research-swarm-skill.ts', disposition: 'actionable', owner: 'T8c/T8d', names: ['create_swarm', 'get_map', 'list_roles', 'report', 'swarm_add', 'wait_for'] },
+  { file: 'packages/core/src/work/resource-policy.ts', disposition: 'actionable', owner: 'T8a', names: ['report', 'send_message'] },
+  { file: 'packages/core/src/work/rooms.ts', disposition: 'actionable', owner: 'T8a', names: ['propose_decision', 'read_guide'] },
+  { file: 'packages/core/src/work/skill.ts', disposition: 'actionable', owner: 'T8c/T8d', names: ['add_to_room', 'check_inbox', 'close_session', 'create_room', 'create_session', 'create_swarm', 'get_map', 'propose_decision', 'read_guide', 'read_room', 'report', 'send_message', 'wait_for'] },
+  { file: 'packages/core/src/work/stuck.ts', disposition: 'actionable', owner: 'T8a', names: ['create_session', 'read_guide', 'wait_for'] },
+  { file: 'packages/core/src/work/task-giver.ts', disposition: 'actionable', owner: 'T8a', names: ['get_map'] },
+  { file: 'packages/desktop/src/main/browser/agent-actions.ts', disposition: 'actionable', owner: 'T8a', names: ['browser_snapshot'] },
+  { file: 'packages/desktop/src/main/browser/agent-capture.ts', disposition: 'actionable', owner: 'T8a', names: ['browser_console', 'browser_network', 'browser_snapshot'] },
+  { file: 'packages/desktop/src/main/browser/agent-dom.ts', disposition: 'actionable', owner: 'T8a', names: ['browser_snapshot', 'wait_for'] },
+  { file: 'packages/desktop/src/main/browser/agent-ops.ts', disposition: 'actionable', owner: 'T8a', names: ['browser_action', 'browser_close', 'browser_downloads', 'browser_open', 'browser_snapshot', 'browser_tabs', 'remember', 'wait_for'] },
+  { file: 'packages/desktop/src/main/browser/agent-pages.ts', disposition: 'actionable', owner: 'T8a', names: ['browser_open', 'browser_tabs'] },
+  { file: 'packages/desktop/src/main/ipc.ts', disposition: 'ui', owner: 'none', reason: 'interface text for the human, not an instruction to an agent', names: ['remember'] },
+  { file: 'packages/desktop/src/main/relay-setup/plan.ts', disposition: 'ui', owner: 'none', reason: 'interface text for the human, not an instruction to an agent', names: ['report'] },
+  { file: 'packages/desktop/src/preload/index.ts', disposition: 'ui', owner: 'none', reason: 'interface text for the human, not an instruction to an agent', names: ['remember'] },
+  { file: 'packages/desktop/src/renderer/components/rooms/plan-letter.ts', disposition: 'ui', owner: 'none', reason: 'interface text for the human, not an instruction to an agent', names: ['plan_submit', 'plan_update', 'plan_verify'] },
+  { file: 'packages/desktop/src/shared/keybindings.ts', disposition: 'ui', owner: 'none', reason: 'interface text for the human, not an instruction to an agent', names: ['report'] },
+  { file: 'packages/desktop/src/shared/strings.ts', disposition: 'ui', owner: 'none', reason: 'interface text for the human, not an instruction to an agent', names: ['create_session', 'report'] },
+  { file: 'packages/host/src/agent/swarm-endpoint.ts', disposition: 'actionable', owner: 'T8a', names: ['get_map'] },
+  { file: 'packages/host/src/agent/switch-endpoint.ts', disposition: 'actionable', owner: 'T8a', names: ['get_map'] },
+  { file: 'packages/host/src/agent/tools-endpoint.ts', disposition: 'identifier', owner: 'none', reason: 'a host log line or a set of tool names the host cancels; never shown to an agent as an instruction', names: ['get_map', 'wait_for'] },
+  { file: 'packages/host/src/assistant/actions.ts', disposition: 'vocabulary', owner: 'none', reason: 'the voice assistant and Telegram surface has its own action verbs (do: "create_session"); they are not calls of the session tools and the session tool list is not its universe', names: ['add_to_room', 'create_room', 'create_session'] },
+  { file: 'packages/host/src/assistant/assistant-endpoint.ts', disposition: 'vocabulary', owner: 'none', reason: 'the voice assistant and Telegram surface has its own action verbs (do: "create_session"); they are not calls of the session tools and the session tool list is not its universe', names: ['propose_decision'] },
+  { file: 'packages/host/src/assistant/assistant-service.ts', disposition: 'vocabulary', owner: 'none', reason: 'the voice assistant and Telegram surface has its own action verbs (do: "create_session"); they are not calls of the session tools and the session tool list is not its universe', names: ['propose_decision', 'report'] },
+  { file: 'packages/host/src/assistant/run-plan.ts', disposition: 'vocabulary', owner: 'none', reason: 'the voice assistant and Telegram surface has its own action verbs (do: "create_session"); they are not calls of the session tools and the session tool list is not its universe', names: ['add_to_room', 'create_room', 'create_session'] },
+  { file: 'packages/host/src/compaction/compaction-service.ts', disposition: 'identifier', owner: 'none', reason: 'a host log line or a set of tool names the host cancels; never shown to an agent as an instruction', names: ['report'] },
+  { file: 'packages/host/src/host.ts', disposition: 'identifier', owner: 'none', reason: 'a host log line or a set of tool names the host cancels; never shown to an agent as an instruction', names: ['get_capacity'] },
+  { file: 'packages/host/src/rooms/autonomous-engine.ts', disposition: 'actionable', owner: 'T8a', names: ['attempt_submit', 'attempt_verify', 'report'] },
+  { file: 'packages/host/src/sessions/sessions-service.ts', disposition: 'actionable', owner: 'T8a', names: ['create_session', 'get_map'] },
+  { file: 'packages/host/src/swarms/briefs.ts', disposition: 'actionable', owner: 'T8a', names: ['get_map', 'report', 'swarm_add', 'wait_for'] },
+  { file: 'packages/host/src/swarms/swarms-service.ts', disposition: 'actionable', owner: 'T8a', names: ['get_map', 'report'] },
+  { file: 'packages/host/src/telegram/cards.ts', disposition: 'vocabulary', owner: 'none', reason: 'the voice assistant and Telegram surface has its own action verbs (do: "create_session"); they are not calls of the session tools and the session tool list is not its universe', names: ['add_to_room', 'create_room', 'create_session'] },
+  { file: 'packages/mobile/src/cards/consent-model.ts', disposition: 'ui', owner: 'none', reason: 'interface or protocol data for the human surfaces, not an instruction to an agent', names: ['create_session'] },
+  { file: 'packages/mobile/src/dev/demo.ts', disposition: 'ui', owner: 'none', reason: 'interface or protocol data for the human surfaces, not an instruction to an agent', names: ['report'] },
+  { file: 'packages/mobile/src/dev/long-feed.ts', disposition: 'ui', owner: 'none', reason: 'interface or protocol data for the human surfaces, not an instruction to an agent', names: ['report'] },
+  { file: 'packages/protocol/src/assistant.ts', disposition: 'ui', owner: 'none', reason: 'interface or protocol data for the human surfaces, not an instruction to an agent', names: ['add_to_room', 'create_room', 'create_session'] },
+  { file: 'packages/protocol/src/browser-agent.ts', disposition: 'ui', owner: 'none', reason: 'interface or protocol data for the human surfaces, not an instruction to an agent', names: ['wait_for'] },
+  { file: 'tools/parley-token-benchmark-replay-judge.ts', disposition: 'internal', owner: 'none', reason: 'the T9a replay harness judge, a developer tool that is not shipped to agents: it holds the Codex call-example rows as literals to compare a launch layer against, and its own list of the five reads that the agent view leaves out of a completed run (contract v4)', names: ['backlog_list', 'check_inbox', 'get_map', 'list_roles', 'read_guide', 'read_room', 'report', 'send_message', 'wait_for'] },
+  { file: 'tools/parley-token-benchmark-replay-rollback.ts', disposition: 'internal', owner: 'none', reason: 'the T9a replay harness rollback executor, a developer tool that is not shipped to agents: its record holder names a read and a non-read method as data', names: ['get_map', 'send_message'] },
+  { file: 'tools/parley-token-benchmark-replay-run.ts', disposition: 'internal', owner: 'none', reason: 'the T9a replay run library, a developer tool that is not shipped to agents: the conservation phase names the guide and roles reads it makes on both arms', names: ['get_map', 'list_roles', 'read_guide'] },
+  { file: 'tools/parley-token-benchmark-replay.ts', disposition: 'internal', owner: 'none', reason: 'the T9a replay harness, a developer tool that is not shipped to agents: its self-check cases name reads as data', names: ['get_map', 'read_room'] },
+  { file: 'tools/parley-token-benchmark-t10-offline.ts', disposition: 'internal', owner: 'none', reason: 'the T10 offline accounting script, a developer tool that is not shipped to agents: its messages and labels say "report" for the T9a report and the T10 report', names: ['report'] },
+  { file: 'tools/parley-token-benchmark.ts', disposition: 'internal', owner: 'none', reason: 'a developer benchmark tool, not shipped to agents', names: ['find_skill', 'report'] },
+];

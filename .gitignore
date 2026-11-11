@@ -16,6 +16,9 @@ packages/desktop/build/node/
 packages/desktop/build/whisper/
 # Движок нейроголоса (speech и его лицензии): его кладёт scripts/fetch-speech.mjs, в git он не нужен.
 packages/desktop/build/speech/
+# Нативная проверка Code Mode (бинарь и manifest.json): её собирает packages/desktop/scripts/build-procinfo-probe.mjs
+# перед deploy, в git она не нужна; исходник packages/core/native/procinfo-probe.c в git есть.
+packages/core/native/darwin-arm64/
 test-results/
 **/.omc/state/
 # Снимок релизов для сайта: его пишет workflow Pages (см. site/README.md), в git он не нужен.

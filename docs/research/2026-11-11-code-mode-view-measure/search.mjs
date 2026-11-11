@@ -1,0 +1,21 @@
+// Renders code_search pages over the 49-tool replacement list (TOOLS + BROWSER_TOOLS + 4 session-agent tools), real dist code.
+import { createRequire } from 'node:module';
+import { pathToFileURL } from 'node:url';
+const W = process.argv[2], TOK = process.argv[3];
+const imp = (p) => import(pathToFileURL(W + '/packages/core/dist/mcp/' + p).href);
+const { TOOLS } = await imp('tools.js'); const { BROWSER_TOOLS } = await imp('browser-tools.js');
+const s = await imp('session-tools.js'); const w = await imp('swarm-tools.js');
+const cat = await imp('code-mode/catalog.js'); const t = await imp('code-mode-tools.js');
+const { getEncoding } = createRequire(TOK + '/noop.cjs')('js-tiktoken'); const enc = getEncoding('o200k_base');
+const tok = (x) => enc.encode(x).length, B = (x) => Buffer.byteLength(x, 'utf8');
+const list = [...TOOLS, ...BROWSER_TOOLS, s.CREATE_SESSION_TOOL, s.REQUEST_AGENT_SWITCH_TOOL, w.CREATE_SWARM_TOOL, w.SWARM_ADD_TOOL];
+console.log('tools', list.length);
+const catalog = cat.buildCatalog(list);
+const surface = t.createCodeModeSurface({ backend: () => ({ catalog, launchId: 'replay-launch', broker: null }) });
+const q = process.argv[4] ?? 'parley';
+const r = await surface.call('code_search', { query: q }); const text = r.content[0].text;
+console.log(`query "${q}": ${B(text)} B, ${tok(text)} tok`);
+const page = JSON.parse(text);
+console.log('envelope-only (items:[]):', tok(JSON.stringify({ ...page, items: [] })), 'tok; items', page.items.length, 'complete', page.complete);
+for (const it of page.items) console.log(' ', it.name.padEnd(20), it.effect.padEnd(8), it.availability.padEnd(12), tok(JSON.stringify(it)), 'tok', it.summary.length, 'ch');
+if (process.argv[5]) console.log(text);

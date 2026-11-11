@@ -8,6 +8,7 @@ import {
   EFFORT_TOKEN,
   MODEL_LABEL_MAX,
   PROVIDERS,
+  agentEnv,
   assistantCommand,
   codexModelsFile,
   commandInPath,
@@ -52,6 +53,13 @@ const CODEX_TUI_ARGS = [
 ];
 /** Всё, что codex получает при запуске без единой подстановки. */
 const CODEX_STATIC_ARGS = ['--no-daemon', ...CODEX_TUI_ARGS];
+
+describe('agentEnv', () => {
+  it('снимает метки родительской сессии и настройки, которые задаёт только сам запуск; остальное не трогает', () => {
+    const clean = agentEnv({ CLAUDE_CODE_CHILD_SESSION: '1', CLAUDE_CODE_SESSION_ID: 'x', CLAUDE_CODE_BRIDGE_SESSION_ID: 'y', PARLEY_CODE_MODE_LAUNCH: 'a'.repeat(32), HARNAS_CODE_MODE_LAUNCH: 'a'.repeat(32), PARLEY_HOME: '/h', PATH: '/bin' });
+    expect(clean).toEqual({ PARLEY_HOME: '/h', PATH: '/bin' });
+  });
+});
 
 describe('реестр провайдеров', () => {
   it('claude возобновляет сессию через --resume', () => {

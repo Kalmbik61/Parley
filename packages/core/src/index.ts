@@ -392,6 +392,7 @@ export { buildBrief, writeBrief } from './work/brief.js';
 export { appendAgentBinding, applyAgentSwitch, PREVIOUS_AGENTS_MAX, switchBlockers } from './work/agent-switch.js';
 export type { AgentTarget } from './work/agent-switch.js';
 export {
+  wantsClientProbe,
   applyAutoTitle,
   autoTitleOf,
   createNewSession,
@@ -410,7 +411,7 @@ export {
   startSession,
   UNTITLED_WORK,
 } from './work/launch.js';
-export type { LaunchOptions, LaunchPlan, NewSessionResult, StartedProcess } from './work/launch.js';
+export type { CodeModeGateSeams, LaunchOptions, LaunchPlan, NewSessionResult, StartedProcess } from './work/launch.js';
 export { querySpawnLimits, validateSpawnBudget, SpawnBudgetError } from './work/session-layer.js';
 export type { SpawnLimits } from './work/session-layer.js';
 export { grantTrust, isTrusted, listTrust, readTrust, revokeTrust, trustFilePath, trustKey } from './work/trust.js';
@@ -668,6 +669,17 @@ export {
 export type { ChannelProbe } from './work/channel.js';
 export { BROWSER_TOOL_HINTS, BROWSER_TOOL_LIMITS, BROWSER_TOOL_OPS, BROWSER_TOOLS, PAGE_DATA_NOTE } from './mcp/browser-tools.js';
 export { contextFromEnv } from './mcp/context.js';
+export { readExposureRecord } from './mcp/code-mode/exposure-record.js';
+export { exposureStatus, readLaunchDecision } from './mcp/code-mode/launch-decision.js';
+export { inspectRunRecord } from './mcp/code-mode/run-record.js';
+export type { RecordView } from './mcp/code-mode/run-record.js';
+export { CODE_MODE_REASONS, codeModeStateOf } from './mcp/code-mode/mode-state.js';
+export { probeClaudeClient, REVIEWED_CLAUDE_VERSIONS } from './mcp/code-mode/claude-client.js';
+export type { ClientProbe } from './mcp/code-mode/claude-client.js';
+export { CodeModeNotSaved, codeModeRequested, codeModeState, setCodeMode } from './work/code-mode-setting.js';
+export type { CodeModeSetResult } from './work/code-mode-setting.js';
+export type { CodeModeMode, CodeModeReason, CodeModeState } from './mcp/code-mode/mode-state.js';
+export type { ExposureStatus, LaunchDecision } from './mcp/code-mode/launch-decision.js';
 export type { McpContext } from './mcp/context.js';
 export type { ProviderRow } from './mcp/provider-rows.js';
 export {

@@ -31,6 +31,10 @@ export interface McpContext {
   agentRevision?: string;
   /** Профиль инструментов запуска (снимок окружения): `short` прячет три инструмента памяти; нет — полный набор. */
   toolProfile?: ToolProfile;
+  /** Code Mode этого процесса (план T8h): `replacement`, только если нонс окружения совпал с файлом решения запуска; нет поля — классика. На ходу не меняется. */
+  codeModeExposure?: 'replacement';
+  /** Нонс того же запуска: он попадает в запись об экспозиции и привязывает её к этому запуску. Есть только вместе с `codeModeExposure`. */
+  codeModeLaunch?: string;
   /** Internal isolated adapter fixture; never protocol/environment input. */
   skillCatalog?: (session: WorkSession, cwd: string) => Promise<SkillCatalog | null>;
   workId: string;
@@ -134,6 +138,23 @@ function agentFromEnv(env: NodeJS.ProcessEnv): AgentChannel | undefined {
  * Переменные читаются под обоими именами (`PARLEY_*`, запасные `HARNAS_*`): сохранённый конфиг
  * MCP старой сессии задаёт только прежние.
  */
+/** Why a process told to run replacement cannot: a fixed code, and a fixed text with no value in it. The MCP process exits on it. */
+export class CodeModeStartError extends Error {
+  constructor(readonly code: string) {
+    super(`code mode replacement cannot start: ${code}`);
+    this.name = 'CodeModeStartError';
+  }
+}
+
+/** The work directory from the environment, if it has the shape of one; `null` otherwise. */
+export function workDirFromEnv(env: NodeJS.ProcessEnv): string | null {
+  const raw = envValue(env, 'WORK_DIR');
+  if (raw === undefined) return null;
+  const workDir = path.resolve(raw);
+  const works = path.dirname(workDir);
+  return path.basename(works) === 'works' && STATE_DIRS.includes(path.basename(path.dirname(works))) ? workDir : null;
+}
+
 export function contextFromEnv(env: NodeJS.ProcessEnv = process.env): McpContext {
   const raw = envValue(env, 'WORK_DIR');
   if (raw === undefined)
@@ -142,7 +163,7 @@ export function contextFromEnv(env: NodeJS.ProcessEnv = process.env): McpContext
   const workDir = path.resolve(raw);
   const works = path.dirname(workDir);
   const state = path.dirname(works);
-  if (path.basename(works) !== 'works' || !STATE_DIRS.includes(path.basename(state))) {
+  if (workDirFromEnv(env) === null) {
     throw new Error(
       `${envName(env, 'WORK_DIR')}=${workDir} does not look like ${STATE_DIR}/works/<work-id> (or ${LEGACY_STATE_DIR}/works/<work-id>)`,
     );

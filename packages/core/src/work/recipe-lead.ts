@@ -11,12 +11,18 @@ export function recipeLeadBlock(recipe: Pick<RecipeSnapshot, 'name' | 'playbook'
   return `Recipe: ${recipe.name} — you lead this room.\n${recipe.playbook}`;
 }
 
-/** Блок рецепта сессии, если она сейчас ведёт комнату со снимком рецепта; иначе `null`. */
-export function leadRecipeBlock(map: WorkMap, sessionId: string): string | null {
+/** Снимок рецепта комнаты, которую сессия сейчас ведёт; иначе `null`. */
+export function leadRecipe(map: WorkMap, sessionId: string): RecipeSnapshot | null {
   for (const room of map.rooms) {
-    if (room.recipe != null && !isRoomArchived(room) && liveLead(map, room) === sessionId) return recipeLeadBlock(room.recipe);
+    if (room.recipe != null && !isRoomArchived(room) && liveLead(map, room) === sessionId) return room.recipe;
   }
   return null;
+}
+
+/** Блок рецепта сессии, если она сейчас ведёт комнату со снимком рецепта; иначе `null`. */
+export function leadRecipeBlock(map: WorkMap, sessionId: string): string | null {
+  const recipe = leadRecipe(map, sessionId);
+  return recipe === null ? null : recipeLeadBlock(recipe);
 }
 
 /**

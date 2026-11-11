@@ -510,6 +510,44 @@ export const S = {
   },
 
   /**
+   * Метка режима сессии в шапке чата (план T12a-indicator): что говорит запись запуска Parley, не доказательство того, что
+   * исполняется. `full` — слово в слово `CODE_MODE_REASONS` ядра (тест сверяет ключи и тексты); `short` — строка рядом с
+   * `Classic`. Неизвестный ключ (новее ядро) метка не показывает: `Mode unknown`. У `provider-unproven` показа нет (`null`): чип — просто `Classic`.
+   */
+  codeMode: {
+    mode: { 'code-mode': 'Code Mode', classic: 'Classic', unknown: 'Mode unknown' },
+    /** `aria-label` и тултип: имя метки, затем смысл состояния. */
+    name: 'Session mode',
+    meaning: {
+      'code-mode': 'This launch runs Code Mode, and its server has confirmed it.',
+      classic: 'This launch runs the classic tool list.',
+      unknown: 'Parley has no confirmed record of how this launch runs.',
+    },
+    /** Предел показа, в тултипе второй строкой. */
+    limit: "Parley's record of the launch, not proof of what the agent runs.",
+    reasons: {
+      'confined-attempt': { short: 'confined workspace', full: 'This session runs in a confined workspace, which Code Mode does not support yet.' },
+      'not-parley-launched': { short: 'not launched by Parley', full: 'This session was not launched by Parley with its agent channel.' },
+      // Решение человека (m-7348): окно не говорит, что Code Mode не доказан. Ключ остаётся в закрытом списке ядра, показа у него нет.
+      'provider-unproven': null,
+      'client-version': { short: 'client not reviewed', full: 'The agent client version has not been reviewed for Code Mode.' },
+      'instructions-undeliverable': { short: 'no instructions channel', full: 'This launch cannot carry the Code Mode instructions.' },
+      'helper-unavailable': { short: 'sandbox unavailable', full: 'The Code Mode sandbox is not available in this installation.' },
+      registry: { short: 'tool list mismatch', full: 'The tool list does not match what this build can move to Code Mode.' },
+      detector: { short: 'tool rule set', full: 'A rule or hook that targets Parley tools is set for this session.' },
+      'uninspected-source': { short: 'source not inspected', full: 'A settings or hook source for this session could not be inspected.' },
+      role: { short: 'role routes differently', full: "This session's role names an operation Code Mode would route differently." },
+      playbook: { short: 'playbook routes differently', full: "This session's playbook names an operation Code Mode would route differently." },
+      skills: { short: 'skill routes differently', full: 'An installed skill names an operation Code Mode would route differently.' },
+      'held-run': { short: 'earlier run unfinished', full: 'An earlier Code Mode run in this session may still be finishing or was not accounted for.' },
+      'not-requested': { short: 'not requested', full: 'Code Mode is turned off in Parley settings.' },
+      'decision-write-failed': { short: 'launch not recorded', full: 'Parley could not record the launch decision.' },
+      failed: { short: 'server did not start', full: 'Code Mode was asked for, but its server did not start.' },
+      unconfirmed: { short: 'not confirmed yet', full: 'Code Mode was asked for, but its server has not confirmed it yet.' },
+    },
+  },
+
+  /**
    * Рой работы (спека роя v1, раздел 7): строка в сайдбаре, чип шапки чата, значки карточки и группы, ряд острова и
    * правый статус капсулы. Слова интерфейса английские, как у остальных строк окна; «трутень» — `Drone`.
    */
@@ -1382,6 +1420,17 @@ export const S = {
     agentSkills: 'Install agent skills into projects',
     skillNavigator: 'Skill navigator',
     skillNavigatorHint: 'Applies to new and resumed sessions.',
+    /**
+     * Code Mode (план T12a, слайс D): переключатель и строка состояния под ним. Решение человека (m-7348): метка «Code Mode (Beta)»,
+     * у включённого состояния строки нет, окно нигде не говорит о доказанности. Строка есть только у выключенного: `off`,
+     * `off-next-launch` и `off-not-durable` — частичные исходы записи, которые вернул хост (`settings.set`).
+     */
+    codeMode: 'Code Mode (Beta)',
+    codeModeState: {
+      off: 'Off. New launches run with direct tools.',
+      'off-next-launch': 'Off for new launches. Running sessions do not see this change until they are relaunched.',
+      'off-not-durable': 'Off, but not durable: deleting config.json would turn it back on.',
+    },
     /** Три режима одобрений пишущих ролей Codex (спека 2026-10-21, 5.2). */
     codexWriteApprovals: 'Codex approvals (new and resumed sessions)',
     codexWriteApprovalsOptions: {
@@ -3302,6 +3351,7 @@ const NOTICE_DETAIL: Record<NoticeKind, string> = {
   'trust-wait': 'not responding since launch — may be waiting for folder trust',
   'startup-wait': 'waiting at startup — Codex may need sign-in or folder trust in its terminal',
   'limit-return-blocked': 'the limit has reset, but Parley could not continue this session — check its terminal',
+  'code-mode-failed': 'Code Mode did not start as asked for this session, or an earlier run was not accounted for',
   'codex-call-wait': 'unfinished Codex tool operation — check approvals and verify the result before retrying',
   'skill-foreign': "agent skill not installed — that path already exists and wasn't created by Parley",
   'parley-md-created': 'Parley added PARLEY.md — team rules for your agents',

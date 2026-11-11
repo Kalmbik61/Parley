@@ -1,4 +1,5 @@
 import { readNativeContext, readNativeSkillCatalog } from './native-context.js';
+import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { chmod, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -28,7 +29,16 @@ import {
   UNTITLED_WORK,
 } from './launch.js';
 import { writeBrief } from './brief.js';
-import { BROWSER_PRIORITY_RULE } from './guidance.js';
+import { BROWSER_PRIORITY_RULE, CODEX_APPROVAL_GUIDANCE, CODEX_TOOL_EXAMPLES } from './guidance.js';
+import { MIGRATION_REGISTRY } from '../mcp/code-mode/migration-registry.js';
+import { BUILTIN_ROLES } from '../roles/builtin.js';
+import type { NativeSkill } from '../skills/types.js';
+import { BUILTIN_RECIPES } from '../recipes/builtin.js';
+import { CLASSIC_ROUTING, PARLEY_OWNED_SKILLS, WRAPPER_NAMES, bootstrapText, codexToolExamples, fixtureRouting, guideRouting, roleRoutingNote, replacementRouting, routeOf, selectsClassic, type CodeModeRouting } from './code-mode-instructions.js';
+import { createBrowserTools } from '../mcp/browser-tools.js';
+import { CREATE_SESSION_TOOL, REQUEST_AGENT_SWITCH_TOOL } from '../mcp/session-tools.js';
+import { CREATE_SWARM_TOOL, SWARM_ADD_TOOL } from '../mcp/swarm-tools.js';
+import { createToolRunner } from '../mcp/tools.js';
 import { customProvidersFile, writeCustomProviders, type CustomProviderRecord } from '../custom-providers.js';
 import { PROVIDERS } from '../providers.js';
 import { setResult } from './map.js';
@@ -3501,6 +3511,950 @@ describe('доверие к папке у Claude Code (спека мобильн
       expect(plan.warnings.join('\n')).not.toContain('secret-marker');
     } finally {
       await chmod(dir, 0o700);
+    }
+  });
+});
+
+describe('classic session layers are byte-identical (T8a goldens, recorded on 7b499047 before any T8a edit)', () => {
+  const agent = { url: 'http://127.0.0.1:4321/agent/browser', token: 'ab'.repeat(32) };
+  const claudeLayer = (args: string[]): string => args[args.indexOf('--append-system-prompt') + 1] ?? '';
+  const codexLayer = (args: string[]): string => {
+    const arg = args.find((value) => value.startsWith('developer_instructions='));
+    return arg === undefined ? '' : (JSON.parse(arg.slice('developer_instructions='.length)) as string);
+  };
+  const sha = (text: string): string => createHash('sha256').update(text).digest('hex');
+  /** One layer per provider and channel: the exact text the agent is given (the brief is the first message). */
+  const layers = async (codeMode?: CodeModeRouting): Promise<Record<string, string>> => {
+    const out: Record<string, string> = {};
+    const mode = codeMode === undefined ? {} : { codeMode };
+    for (const [label, provider, withAgent] of [['claude', 'claude', false], ['claude+agent', 'claude', true], ['codex', 'codex', false], ['codex+agent', 'codex', true], ['glm', 'glm', false]] as const) {
+      const made = await pending(provider === 'glm' ? 'codex' : provider);
+      const base = await sessionOf(made.workId, made.sessionId);
+      const session = provider === 'glm' ? { ...base, provider: 'glm' } : base;
+      const plan = await planLaunch(project, made.workId, session, { ...(withAgent ? { agent } : {}), ...mode });
+      const layer = provider === 'codex' ? codexLayer(plan.args) : claudeLayer(plan.args);
+      out[label] = layer;
+    }
+    // resume rebuilds the same layer, and the brief of the same session is the text the agent gets first
+    const made = await pending('claude');
+    const session = await sessionOf(made.workId, made.sessionId);
+    const id = '7fa0e1ee-cc7b-4a1e-9d4e-0000000000b1';
+    await claudeTranscript(id);
+    const resumed = claudeLayer((await planResume(project, made.workId, { ...session, providerSessionId: id }, mode)).args);
+    out['claude resume'] = resumed;
+    const brief = await readBrief(project, made.workId, made.sessionId);
+    out['brief'] = brief;
+    return out;
+  };
+  const digest = (texts: Record<string, string>): Record<string, string> =>
+    Object.fromEntries(Object.entries(texts).map(([label, text]) => [label, `${Buffer.byteLength(text, 'utf8')} ${sha(text)}`]));
+  const render = async (): Promise<Record<string, string>> => digest(await layers());
+
+  it('every classic layer, the resume layer and the brief are exactly what 7b499047 produced (byte count and sha256)', async () => {
+    const golden: Record<string, string> = {
+      claude: '4109 b8642d32a5f651c476f65250a6bea1a41fe33d0ac7bb3966fde0286090e4e7f1',
+      'claude+agent': '4552 246af9b051eeffadd05371701900990fd88809bfc1f51d53a04ca8c0ed501181',
+      codex: '5430 a5d6e3b4ec84e8414c86c6966ee616842faf7d17d6a2c6a2f9306e3baecba93a',
+      'codex+agent': '5873 131dd9ada96d8458ec831694750ab256ed2862e760acd261c314c905d9ed5929',
+      glm: '4109 806bd1629e985ba1e6a07e9f732b0cc351b69ee6f70024caf3b3404143aba0a4',
+      'claude resume': '4148 a438def63f39f758a81c06da613521399c4f4b755695ddb52f9318bdb2d50a1f',
+      brief: '518 a465b6131d353f85bbe535fbb8aec255df831fadd859816cfd29716cf7e6d6a6',
+    };
+    expect(await render()).toEqual(golden);
+  });
+});
+
+describe('Code Mode bootstrap in the launch layer (T8a)', () => {
+  const agent = { url: 'http://127.0.0.1:4321/agent/browser', token: 'ab'.repeat(32) };
+  const claudeLayer = (args: string[]): string => args[args.indexOf('--append-system-prompt') + 1] ?? '';
+  const codexLayer = (args: string[]): string => {
+    const arg = args.find((value) => value.startsWith('developer_instructions='));
+    return arg === undefined ? '' : (JSON.parse(arg.slice('developer_instructions='.length)) as string);
+  };
+  const SHIPPED = replacementRouting(MIGRATION_REGISTRY);
+  const FIXTURE = fixtureRouting(['get_map']);
+  const ZERO = fixtureRouting(['get_map', 'send_message', 'check_inbox', 'wait_for', 'report']);
+  // Two renders in one test are two workspaces: only their ids and the brief revision differ, so both sides are compared with those masked.
+  const same = (text: string): string => text.replace(/w-\d{4}/g, 'w-XXXX').replace(/Brief revision: [0-9a-f]+/g, 'Brief revision: XXXX');
+  const render = async (codeMode?: CodeModeRouting): Promise<Record<string, string>> => {
+    const out: Record<string, string> = {};
+    const mode = codeMode === undefined ? {} : { codeMode };
+    for (const [label, provider, withAgent] of [['claude', 'claude', false], ['claude+agent', 'claude', true], ['codex', 'codex', false], ['codex+agent', 'codex', true], ['glm', 'glm', false]] as const) {
+      const made = await pending(provider === 'glm' ? 'codex' : provider);
+      const base = await sessionOf(made.workId, made.sessionId);
+      const session = provider === 'glm' ? { ...base, provider: 'glm' } : base;
+      const plan = await planLaunch(project, made.workId, session, { ...(withAgent ? { agent } : {}), ...mode });
+      out[label] = same(provider === 'codex' ? codexLayer(plan.args) : claudeLayer(plan.args));
+    }
+    const made = await pending('claude');
+    const session = await sessionOf(made.workId, made.sessionId);
+    const id = '7fa0e1ee-cc7b-4a1e-9d4e-0000000000b2';
+    await claudeTranscript(id);
+    out['claude resume'] = same(claudeLayer((await planResume(project, made.workId, { ...session, providerSessionId: id }, mode)).args));
+    out['brief'] = same(await readBrief(project, made.workId, made.sessionId));
+    return out;
+  };
+
+  it('an explicit classic routing is the absent routing: not one byte differs', async () => {
+    expect(await render(CLASSIC_ROUTING)).toEqual(await render());
+  });
+
+  it('the shipped replacement launch is the classic layer plus the bootstrap paragraph first, nothing else', async () => {
+    const classic = await render();
+    const shipped = await render(SHIPPED);
+    const boot = bootstrapText(SHIPPED);
+    for (const label of Object.keys(classic)) {
+      expect(shipped[label], label).toBe(label === 'brief' ? classic[label] : `${boot}\n${classic[label]}`);
+    }
+  });
+
+  it('a transitional fixture changes the bootstrap and, for Codex, the examples block only', async () => {
+    const classic = await render();
+    const fixture = await render(FIXTURE);
+    const boot = bootstrapText(FIXTURE);
+    for (const label of Object.keys(classic)) {
+      if (label === 'brief') expect(fixture[label]).toBe(classic[label]);
+      else if (label.startsWith('codex')) expect(fixture[label], label).toBe(`${boot}\n${classic[label]!.split(CODEX_TOOL_EXAMPLES).join(codexToolExamples(FIXTURE))}`);
+      else expect(fixture[label], label).toBe(`${boot}\n${classic[label]}`);
+    }
+    expect(fixture['codex']).not.toContain('tools.mcp__parley__get_map(');
+    expect(fixture['codex']).toContain("parley.get_map({})");
+  });
+
+  it('a zero-residual fixture leaves no direct call example in the Codex layer', async () => {
+    const zero = await render(ZERO);
+    for (const label of ['codex', 'codex+agent']) {
+      expect(zero[label], label).not.toMatch(/tools\.mcp__parley__(get_map|send_message|check_inbox|wait_for|report)\(/);
+      expect(zero[label], label).toContain('parley.report(');
+    }
+  });
+
+  it('a classic layer never names a wrapper tool; a replacement layer names them only inside the bootstrap and the examples', async () => {
+    const wrappers = /code_search|code_docs|code_execute/;
+    for (const [label, text] of Object.entries(await render())) expect(text, label).not.toMatch(wrappers);
+    const shipped = await render(SHIPPED);
+    for (const [label, text] of Object.entries(shipped)) {
+      if (label === 'brief') expect(text).not.toMatch(wrappers);
+      else expect(text.replace(bootstrapText(SHIPPED), ''), label).not.toMatch(wrappers);
+    }
+  });
+
+  it('a replacement launch whose runner cannot carry the bootstrap fails instead of running without it', async () => {
+    const { workId, sessionId } = await pending('codex');
+    await writeFile(path.join(home, 'providers.json'), JSON.stringify({ codex: { args: ['CUSTOM', '{prompt}'] } }));
+    const session = await sessionOf(workId, sessionId);
+    await expect(planLaunch(project, workId, session, { codeMode: SHIPPED })).rejects.toThrow('code-mode-bootstrap-unavailable');
+    await expect(planLaunch(project, workId, session, { codeMode: FIXTURE })).rejects.toThrow('code-mode-bootstrap-unavailable');
+    expect((await planLaunch(project, workId, session)).args[0]).toBe('CUSTOM');
+    expect((await planLaunch(project, workId, session, { codeMode: CLASSIC_ROUTING })).args[0]).toBe('CUSTOM');
+  });
+});
+
+describe('every operation name a launch renders resolves through its route (T8a audit)', () => {
+  const agent = { url: 'http://127.0.0.1:4321/agent/browser', token: 'ab'.repeat(32) };
+  const NAMES = MIGRATION_REGISTRY.entries.map((e) => e.name);
+  const namesIn = (text: string): string[] => [...new Set([...text.matchAll(new RegExp(`(?<![A-Za-z0-9_])(${NAMES.join('|')})(?![A-Za-z0-9_])`, 'g'))].map((m) => m[1]!))].sort();
+  const SHIPPED = replacementRouting(MIGRATION_REGISTRY);
+  const MODES: [string, CodeModeRouting][] = [
+    ['classic', CLASSIC_ROUTING],
+    ['replacement, shipped registry', SHIPPED],
+    ['replacement, transitional fixture', fixtureRouting(['get_map'])],
+    ['replacement, zero-residual fixture', fixtureRouting(['get_map', 'send_message', 'check_inbox', 'wait_for', 'report'])],
+  ];
+  /** The tool list each launch label really gets: the runner's list, the browser tools and the session tools when there is an agent channel. */
+  const universes = async (): Promise<Record<string, string[]>> => {
+    const made = await pending('claude');
+    const base = { projectPath: project, workId: made.workId, workDir: workPaths(project, made.workId).dir, sessionId: 's-01', channel: false };
+    const extra = [
+      ...createBrowserTools({ url: 'http://127.0.0.1:1', token: 'x' }, {}).tools,
+      CREATE_SESSION_TOOL, REQUEST_AGENT_SWITCH_TOOL, CREATE_SWARM_TOOL, SWARM_ADD_TOOL,
+    ].map((tool) => tool.name);
+    const full = (await createToolRunner(base).list()).map((tool) => tool.name);
+    const short = (await createToolRunner({ ...base, toolProfile: 'short' }).list()).map((tool) => tool.name);
+    return { claude: full, 'claude+agent': [...full, ...extra], codex: short, 'codex+agent': [...short, ...extra], glm: full, 'claude resume': full };
+  };
+  /** Measured on the classic layers: the guidance lists create_session for every launch, also one without an agent channel. */
+  const KNOWN_UNAVAILABLE: Record<string, string[]> = {
+    claude: ['create_session'], 'claude+agent': [], codex: ['create_session'], 'codex+agent': [], glm: ['create_session'], 'claude resume': ['create_session'],
+  };
+  const layers = async (codeMode: CodeModeRouting): Promise<Record<string, string>> => {
+    const out: Record<string, string> = {};
+    for (const [label, provider, withAgent] of [['claude', 'claude', false], ['claude+agent', 'claude', true], ['codex', 'codex', false], ['codex+agent', 'codex', true], ['glm', 'glm', false]] as const) {
+      const made = await pending(provider === 'glm' ? 'codex' : provider);
+      const base = await sessionOf(made.workId, made.sessionId);
+      const session = provider === 'glm' ? { ...base, provider: 'glm' } : base;
+      const plan = await planLaunch(project, made.workId, session, { ...(withAgent ? { agent } : {}), codeMode });
+      out[label] = provider === 'codex'
+        ? (JSON.parse((plan.args.find((a) => a.startsWith('developer_instructions=')) ?? 'developer_instructions=""').slice('developer_instructions='.length)) as string)
+        : (plan.args[plan.args.indexOf('--append-system-prompt') + 1] ?? '');
+    }
+    const made = await pending('claude');
+    const session = await sessionOf(made.workId, made.sessionId);
+    const id = '7fa0e1ee-cc7b-4a1e-9d4e-0000000000b3';
+    await claudeTranscript(id);
+    const resumed = await planResume(project, made.workId, { ...session, providerSessionId: id }, { codeMode });
+    out['claude resume'] = resumed.args[resumed.args.indexOf('--append-system-prompt') + 1] ?? '';
+    return out;
+  };
+
+  it.each(MODES)('%s: each name in each layer is in the launch list or one of the measured exceptions, and a migrated name is a declared one', async (_mode, codeMode) => {
+    const universe = await universes();
+    const rendered = await layers(codeMode);
+    for (const [label, text] of Object.entries(rendered)) {
+      const found = namesIn(text);
+      const routes = Object.fromEntries(found.map((name) => [name, routeOf(name, universe[label]!, codeMode)]));
+      expect(found.filter((name) => routes[name] === 'unavailable'), `${_mode}: ${label}`).toEqual(KNOWN_UNAVAILABLE[label]);
+      for (const name of found) {
+        if (routes[name] === 'migrated') expect(codeMode.mode === 'replacement' && codeMode.migrated.includes(name), `${_mode}: ${label}: ${name}`).toBe(true);
+      }
+    }
+  });
+
+  it('the wrappers are in no classic launch tool list (they exist only where the replacement surface lists them)', async () => {
+    const universe = await universes();
+    for (const names of Object.values(universe)) for (const wrapper of WRAPPER_NAMES) expect(names).not.toContain(wrapper);
+  });
+});
+
+describe('Code Mode routing of roles and lead playbooks in the launch layer (T8c)', () => {
+  const agent = { url: 'http://127.0.0.1:4321/agent/browser', token: 'ab'.repeat(32) };
+  const claudeLayer = (args: string[]): string => args[args.indexOf('--append-system-prompt') + 1] ?? '';
+  const codexLayer = (args: string[]): string => {
+    const arg = args.find((value) => value.startsWith('developer_instructions='));
+    return arg === undefined ? '' : (JSON.parse(arg.slice('developer_instructions='.length)) as string);
+  };
+  const same = (text: string): string => text.replace(/w-\d{4}/g, 'w-XXXX').replace(/Brief revision: [0-9a-f]+/g, 'Brief revision: XXXX');
+  const SHIPPED = replacementRouting(MIGRATION_REGISTRY);
+  // no skill catalogue is held at launch for these sessions (Claude, or no navigator): reported data, not a trigger (T8d2)
+  const NO_CATALOGUE = { status: 'unverified', skills: [], conservative: false };
+  const NOTE_NO_CREATE = 'Routing for this launch: create_session is not available here; say so instead of calling it.';
+  const featureLead = BUILTIN_ROLES.find((r) => r.id === 'builtin:feature-lead')!;
+  const roleTextOf = (id: string): string => {
+    const role = BUILTIN_ROLES.find((r) => r.id === id)!;
+    return `Your role in this workspace: ${role.name} (${role.id}).\n${role.prompt}`;
+  };
+
+  /** One launch of a session holding `role`, with or without the agent channel; the layer text and the plan. */
+  async function launched(provider: 'claude' | 'codex', role: { source: 'builtin' | 'codex' | 'claude'; name: string }, options: { withAgent: boolean; codeMode?: CodeModeRouting; roleCatalog?: Parameters<typeof planLaunch>[3] extends infer O ? (O extends { roleCatalog?: infer C } ? C : never) : never; recipe?: { id: string; name: string; playbook: string } }) {
+    const created = await createWork(project, { title: 'Roles', goal: '' });
+    const sessionId = await createPendingSession(project, created.work.id, { provider, label: '', task: '', role });
+    if (options.recipe !== undefined) {
+      const member = await createPendingSession(project, created.work.id, { provider, label: 'second', task: 'x' });
+      await updateMap(project, created.work.id, (map) => {
+        addRoom(map, { title: 'R', creator: 'human', members: [sessionId, member], lead: sessionId, recipe: options.recipe! });
+      });
+    }
+    const session = await sessionOf(created.work.id, sessionId);
+    const plan = await planLaunch(project, created.work.id, session, {
+      ...(options.withAgent ? { agent } : {}),
+      ...(options.codeMode === undefined ? {} : { codeMode: options.codeMode }),
+      ...(options.roleCatalog === undefined ? {} : { roleCatalog: options.roleCatalog }),
+    });
+    return { plan, layer: same(provider === 'codex' ? codexLayer(plan.args) : claudeLayer(plan.args)) };
+  }
+  const builtin = (name: string) => ({ source: 'builtin' as const, name });
+
+  it('classic: the feature-lead layer carries the role prompt untouched, no note, and the plan has no routing report', async () => {
+    for (const withAgent of [true, false]) {
+      const { plan, layer } = await launched('claude', builtin('feature-lead'), { withAgent });
+      expect(layer).toContain(featureLead.prompt);
+      expect(layer).not.toContain('Routing for this launch');
+      expect(plan.codeModeRouting).toBeUndefined();
+    }
+  });
+
+  it('shipped replacement with an agent channel: bootstrap + the classic layer, nothing appended, role verdict compatible', async () => {
+    const classic = await launched('claude', builtin('feature-lead'), { withAgent: true });
+    const replaced = await launched('claude', builtin('feature-lead'), { withAgent: true, codeMode: SHIPPED });
+    expect(replaced.layer).toBe(`${bootstrapText(SHIPPED)}\n${classic.layer}`);
+    expect(replaced.plan.codeModeRouting).toEqual({ role: { status: 'compatible', names: [], conservative: false }, skills: NO_CATALOGUE });
+  });
+
+  it.each(['claude', 'codex'] as const)('%s: without an agent channel create_session is unavailable, and the one sentence follows the role text', async (provider) => {
+    const classic = await launched(provider, builtin('feature-lead'), { withAgent: false });
+    const replaced = await launched(provider, builtin('feature-lead'), { withAgent: false, codeMode: SHIPPED });
+    const text = roleTextOf('builtin:feature-lead');
+    expect(classic.layer).toContain(text);
+    expect(replaced.layer).toBe(`${bootstrapText(SHIPPED)}\n${classic.layer.split(text).join(`${text}\n\n${NOTE_NO_CREATE}`)}`);
+    expect(replaced.plan.codeModeRouting).toEqual({ role: { status: 'compatible', names: ['create_session'], conservative: false }, skills: NO_CATALOGUE });
+  });
+
+  it('a role with no instruction name (planner) gets no sentence even without a channel', async () => {
+    const classic = await launched('claude', builtin('planner'), { withAgent: false });
+    const replaced = await launched('claude', builtin('planner'), { withAgent: false, codeMode: SHIPPED });
+    expect(replaced.layer).toBe(`${bootstrapText(SHIPPED)}\n${classic.layer}`);
+  });
+
+  it('a migrated instruction name is shown through code_execute in the role text', async () => {
+    const fixture = fixtureRouting(['create_session']);
+    const { layer } = await launched('claude', builtin('feature-lead'), { withAgent: true, codeMode: fixture });
+    expect(layer).toContain(`${roleTextOf('builtin:feature-lead')}\n\nRouting for this launch: create_session is called as parley.create_session(args) inside code_execute (read code_docs first).`);
+  });
+
+  it('the lead playbook of a shipped recipe gets its sentence after the playbook (here the navigator is off, so find_skill is unavailable); classic gets none', async () => {
+    const recipe = { id: 'builtin:debug', name: 'Debug', playbook: BUILTIN_RECIPES[2]!.playbook };
+    const classic = await launched('codex', builtin('planner'), { withAgent: true, recipe });
+    const replaced = await launched('codex', builtin('planner'), { withAgent: true, codeMode: SHIPPED, recipe });
+    const block = `Recipe: Debug — you lead this room.\n${recipe.playbook}`;
+    expect(classic.layer).toContain(block);
+    expect(classic.layer).not.toContain('Routing for this launch');
+    expect(replaced.layer).toContain(`${block}\n\nRouting for this launch: find_skill is not available here; say so instead of calling it.`);
+    expect(replaced.plan.codeModeRouting).toEqual({ role: { status: 'compatible', names: [], conservative: false }, playbook: { status: 'compatible', names: ['find_skill'], conservative: false }, skills: NO_CATALOGUE });
+  });
+
+  it('a migrated playbook name is shown through code_execute, before the unavailable one', async () => {
+    const recipe = { id: 'builtin:plan-build', name: 'Plan and build', playbook: BUILTIN_RECIPES[0]!.playbook };
+    const { layer } = await launched('codex', builtin('planner'), { withAgent: true, codeMode: fixtureRouting(['propose_completion']), recipe });
+    expect(layer).toContain(`${recipe.playbook}\n\nRouting for this launch: propose_completion is called as parley.propose_completion(args) inside code_execute (read code_docs first). find_skill is not available here; say so instead of calling it.`);
+  });
+
+  it('a custom lead playbook is judged by its text and never edited', async () => {
+    const recipe = { id: 'project:long', name: 'Long', playbook: 'Ask for get_map before anything.' };
+    const { plan, layer } = await launched('codex', builtin('planner'), { withAgent: true, codeMode: fixtureRouting(['get_map']), recipe });
+    expect(layer).toContain('Recipe: Long — you lead this room.\nAsk for get_map before anything.');
+    expect(layer).not.toContain('Routing for this launch');
+    expect(plan.codeModeRouting?.playbook).toEqual({ status: 'incompatible', names: ['get_map'], conservative: true });
+  });
+
+  it('a custom Codex role naming a migrated operation is reported incompatible, its text untouched, and the launch still goes ahead', async () => {
+    const custom = { roles: [{ id: 'codex:custom', source: 'codex' as const, provider: 'codex' as const, name: 'custom', description: '', path: '/fixture/custom.toml', prompt: 'First call get_map, then give a report.', model: null, effort: null, sandboxMode: null, readOnly: false }], diagnostics: [], partial: false };
+    const before = structuredClone(custom);
+    const { plan, layer } = await launched('codex', { source: 'codex', name: 'custom' }, { withAgent: true, codeMode: fixtureRouting(['get_map']), roleCatalog: custom });
+    expect(layer).toContain('First call get_map, then give a report.');
+    expect(layer).not.toContain('Routing for this launch');
+    expect(plan.codeModeRouting).toEqual({ role: { status: 'incompatible', names: ['get_map'], conservative: true }, skills: NO_CATALOGUE });
+    expect(plan.warnings).toEqual([]);
+    expect(custom).toEqual(before);
+    // a verdict is plain data on the plan: not a warning code, not a warning line
+    expect(JSON.stringify(plan.diagnostics ?? [])).not.toMatch(/routing/);
+  });
+
+  it('a native Claude role is delivered by --agent only: unverified, nothing appended or injected', async () => {
+    const native = { roles: [{ id: 'claude:native-reviewer', source: 'claude' as const, provider: 'claude' as const, name: 'native-reviewer', description: '', path: '/fixture/native-reviewer.md', nativeAgent: 'native-reviewer', readOnly: false }], diagnostics: [], partial: false };
+    const { plan, layer } = await launched('claude', { source: 'claude', name: 'native-reviewer' }, { withAgent: false, codeMode: SHIPPED, roleCatalog: native });
+    expect(plan.args[plan.args.indexOf('--agent') + 1]).toBe('native-reviewer');
+    expect(plan.codeModeRouting).toEqual({ role: { status: 'unverified', names: [], conservative: false }, skills: NO_CATALOGUE });
+    expect(JSON.stringify(plan.args)).not.toContain('Routing for this launch');
+    expect(JSON.stringify(plan.diagnostics ?? [])).not.toMatch(/routing/);
+    expect(layer.startsWith(bootstrapText(SHIPPED))).toBe(true);
+  });
+
+  it('no new diagnostic code: a replacement launch reports the same warning codes as the classic one', async () => {
+    const classic = await launched('claude', builtin('feature-lead'), { withAgent: false });
+    const replaced = await launched('claude', builtin('feature-lead'), { withAgent: false, codeMode: SHIPPED });
+    expect(replaced.plan.diagnostics?.map((d) => d.code) ?? []).toEqual(classic.plan.diagnostics?.map((d) => d.code) ?? []);
+    expect(replaced.plan.warnings).toEqual(classic.plan.warnings);
+  });
+
+  it('mixed concurrent launches (classic, shipped, fixture, custom, native) do not share state, and the shipped roles are never mutated', async () => {
+    const hash = (): string => JSON.stringify(BUILTIN_ROLES) + JSON.stringify(BUILTIN_RECIPES);
+    const before = hash();
+    const custom = { roles: [{ id: 'codex:custom', source: 'codex' as const, provider: 'codex' as const, name: 'custom', description: '', path: '/fixture/custom.toml', prompt: 'Call get_map.', model: null, effort: null, sandboxMode: null, readOnly: false }], diagnostics: [], partial: false };
+    const [a, b, c, d] = await Promise.all([
+      launched('claude', builtin('feature-lead'), { withAgent: false }),
+      launched('claude', builtin('feature-lead'), { withAgent: false, codeMode: SHIPPED }),
+      launched('claude', builtin('feature-lead'), { withAgent: true, codeMode: fixtureRouting(['create_session']) }),
+      launched('codex', { source: 'codex', name: 'custom' }, { withAgent: true, codeMode: fixtureRouting(['get_map']), roleCatalog: custom }),
+    ]);
+    expect(a.layer).not.toContain('Routing for this launch');
+    expect(b.layer).toContain(NOTE_NO_CREATE);
+    expect(c.layer).toContain('create_session is called as parley.create_session(args)');
+    expect(c.layer).not.toContain(NOTE_NO_CREATE);
+    expect(d.plan.codeModeRouting?.role?.status).toBe('incompatible');
+    expect(a.plan.codeModeRouting).toBeUndefined();
+    expect(hash()).toBe(before);
+  });
+});
+
+describe('Code Mode and the native skill catalogue: reduction, verdict and mixed launches (T8d2)', () => {
+  const agent = { url: 'http://127.0.0.1:4321/agent/browser', token: 'ab'.repeat(32) };
+  const SHIPPED = replacementRouting(MIGRATION_REGISTRY);
+  const FIXTURE = fixtureRouting(['get_map']);
+  const same = (text: string): string => text.replace(/w-\d{4}/g, 'w-XXXX').replace(/Brief revision: [0-9a-f]+/g, 'Brief revision: XXXX').replace(/s-\d+/g, 's-N').replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, 'UUID');
+  const claudeLayer = (args: string[]): string => args[args.indexOf('--append-system-prompt') + 1] ?? '';
+  const codexLayer = (args: string[]): string => JSON.parse((args.find((a) => a.startsWith('developer_instructions=')) ?? 'developer_instructions=""').slice('developer_instructions='.length)) as string;
+  const nativeSkill = (name: string, description: string, extra: Partial<NativeSkill> = {}): NativeSkill => ({
+    provider: 'codex', documentKind: 'skill', name, description, source: 'user', path: `/fixture/${name}/SKILL.md`, modelAvailable: true, unavailableReason: null, ...extra,
+  });
+  const withSkills = (skills: NativeSkill[], partial = false): SkillCatalog => ({ provider: 'codex', skills, diagnostics: [], partial });
+
+  async function launchOf(provider: 'claude' | 'codex', codeMode?: CodeModeRouting, options: { withAgent?: boolean } = {}) {
+    const { workId, sessionId } = await pending(provider);
+    const session = { ...(await sessionOf(workId, sessionId)), providerSessionId: 'c0ffee00-1111-2222-3333-444455556666' };
+    if (provider === 'claude') await claudeTranscript(session.providerSessionId);
+    const plan = await planNew(project, workId, session, { ...(options.withAgent === false ? {} : { agent }), ...(codeMode === undefined ? {} : { codeMode }) });
+    return { plan, workId, sessionId, layer: same(provider === 'codex' ? codexLayer(plan.args) : claudeLayer(plan.args)) };
+  }
+
+  it('Claude replacement: the skill verdict is unverified (no catalogue at launch) and does NOT send a default-ON Claude launch to classic', async () => {
+    await claudeConfig();
+    setEnv('PARLEY_SKILL_NAVIGATOR', '1');
+    const { plan } = await launchOf('claude', FIXTURE);
+    expect(plan.codeModeRouting?.skills).toEqual({ status: 'unverified', skills: [], conservative: false });
+    expect(selectsClassic(plan.codeModeRouting)).toEqual({ classic: false, source: null, names: [] });
+  });
+
+  it('Codex with a verified catalogue: a user skill whose description names a migrated operation is incompatible and selects classic, with its source named', async () => {
+    setEnv('PARLEY_SKILL_NAVIGATOR', '1');
+    codexSkillRoute.catalog = async () => withSkills([nativeSkill('helper', 'Call get_map before anything.'), nativeSkill('plain', 'Nothing here.')]);
+    const { plan } = await launchOf('codex', FIXTURE);
+    expect(plan.codeModeRouting?.skills).toEqual({ status: 'incompatible', skills: [{ name: 'helper', source: 'user', names: ['get_map'] }], conservative: true });
+    expect(selectsClassic(plan.codeModeRouting)).toEqual({ classic: true, source: 'skills', names: ['get_map'] });
+    expect(plan.warnings).toEqual(plan.warnings.filter((w) => !/routing|incompatible/i.test(w)));
+    expect(JSON.stringify(plan.diagnostics ?? [])).not.toMatch(/routing/);
+  });
+
+  it('Codex with a verified catalogue and the shipped registry: compatible, the reduction flag is still set', async () => {
+    setEnv('PARLEY_SKILL_NAVIGATOR', '1');
+    codexSkillRoute.catalog = async () => withSkills([nativeSkill('helper', 'Call get_map before anything.')]);
+    const { plan } = await launchOf('codex', SHIPPED);
+    expect(plan.codeModeRouting?.skills).toEqual({ status: 'compatible', skills: [], conservative: false });
+    expect(plan.args.join(' ')).toContain(SKILL_FLAG);
+    expect(selectsClassic(plan.codeModeRouting).classic).toBe(false);
+  });
+
+  it('Codex with an unread catalogue: unverified, the list stays full, no classic', async () => {
+    setEnv('PARLEY_SKILL_NAVIGATOR', '1');
+    codexSkillRoute.catalog = async () => null;
+    const { plan } = await launchOf('codex', FIXTURE);
+    expect(plan.codeModeRouting?.skills).toEqual({ status: 'unverified', skills: [], conservative: false });
+    expect(plan.args.join(' ')).not.toContain(SKILL_FLAG);
+    expect(selectsClassic(plan.codeModeRouting).classic).toBe(false);
+  });
+
+  it('Codex with a partial catalogue: unverified; with an incompatible skill already found: incompatible', async () => {
+    setEnv('PARLEY_SKILL_NAVIGATOR', '1');
+    codexSkillRoute.catalog = async () => withSkills([nativeSkill('ok', 'Plain.')], true);
+    expect((await launchOf('codex', FIXTURE)).plan.codeModeRouting?.skills?.status).toBe('unverified');
+    codexSkillRoute.catalog = async () => withSkills([nativeSkill('bad', 'Ask get_map.')], true);
+    expect((await launchOf('codex', FIXTURE)).plan.codeModeRouting?.skills?.status).toBe('incompatible');
+  });
+
+  it('Parley\'s own stubs in the catalogue never make a launch incompatible, a same-name user skill is judged on its own', async () => {
+    setEnv('PARLEY_SKILL_NAVIGATOR', '1');
+    const stubs = PARLEY_OWNED_SKILLS.map((s) => nativeSkill(s.name, s.description));
+    codexSkillRoute.catalog = async () => withSkills(stubs);
+    expect((await launchOf('codex', fixtureRouting(['get_map', 'report', 'create_swarm', 'send_message']))).plan.codeModeRouting?.skills?.status).toBe('compatible');
+    codexSkillRoute.catalog = async () => withSkills([...stubs, nativeSkill('parley', 'Mine: call get_map first.')]);
+    expect((await launchOf('codex', FIXTURE)).plan.codeModeRouting?.skills?.skills).toEqual([{ name: 'parley', source: 'user', names: ['get_map'] }]);
+  });
+
+  it('a classic launch has no verdict at all, with a catalogue or without', async () => {
+    setEnv('PARLEY_SKILL_NAVIGATOR', '1');
+    codexSkillRoute.catalog = async () => withSkills([nativeSkill('helper', 'Call get_map.')]);
+    expect((await launchOf('codex')).plan.codeModeRouting).toBeUndefined();
+    expect((await launchOf('codex', CLASSIC_ROUTING)).plan.codeModeRouting).toBeUndefined();
+  });
+
+  it('the reduction does not read the routing: Claude env, settings and layer, and the Codex flag, equal the classic launch of the same provider', async () => {
+    await claudeConfig([{}]);
+    setEnv('PARLEY_SKILL_NAVIGATOR', '1');
+    codexSkillRoute.catalog = async () => withSkills([nativeSkill('plain', 'Nothing here.')]);
+    const [claudeClassic, claudeReplaced, codexClassic, codexReplaced] = await Promise.all([
+      launchOf('claude'), launchOf('claude', SHIPPED), launchOf('codex'), launchOf('codex', SHIPPED),
+    ]);
+    for (const [classic, replaced] of [[claudeClassic, claudeReplaced], [codexClassic, codexReplaced]] as const) {
+      // two launches are two workspaces: only their ids differ, so both sides are compared with the ids masked
+      expect(same(JSON.stringify(replaced.plan.env))).toBe(same(JSON.stringify(classic.plan.env)));
+      expect(replaced.layer).toBe(`${bootstrapText(SHIPPED)}\n${classic.layer}`);
+    }
+    const settings = async (r: { plan: { args: string[] } }): Promise<string> => same(await readFile(r.plan.args[r.plan.args.indexOf('--settings') + 1]!, 'utf8'));
+    expect(await settings(claudeReplaced)).toEqual(await settings(claudeClassic));
+    expect(claudeReplaced.plan.env.SLASH_COMMAND_TOOL_CHAR_BUDGET).toBe('1');
+    expect(codexReplaced.plan.args.filter((a) => a === SKILL_FLAG)).toHaveLength(1);
+    expect(codexClassic.plan.args.filter((a) => a === SKILL_FLAG)).toHaveLength(1);
+    // each session wrote its own native-context file, none shared
+    const files = await Promise.all([claudeClassic, claudeReplaced, codexClassic, codexReplaced].map((r) => readNativeContext(project, r.workId, r.sessionId)));
+    expect(new Set(files.map((f) => f?.revision)).size).toBe(files.filter((f) => f !== null).length);
+  });
+
+  it('native sources are only read: skill documents of the project and the user keep their bytes through classic, shipped and fixture launches', async () => {
+    setEnv('PARLEY_SKILL_NAVIGATOR', '1');
+    const docs = [path.join(project, '.claude', 'skills', 'mine', 'SKILL.md'), path.join(project, '.agents', 'skills', 'theirs', 'SKILL.md')];
+    for (const doc of docs) { await mkdir(path.dirname(doc), { recursive: true }); await writeFile(doc, '---\nname: x\ndescription: "Call get_map."\n---\nbody\n'); }
+    const before = await Promise.all(docs.map((d) => readFile(d, 'utf8')));
+    codexSkillRoute.catalog = async () => withSkills([nativeSkill('helper', 'Call get_map.')]);
+    for (const mode of [undefined, SHIPPED, FIXTURE]) { await launchOf('codex', mode); await launchOf('claude', mode); }
+    expect(await Promise.all(docs.map((d) => readFile(d, 'utf8')))).toEqual(before);
+  });
+
+  it('find_skill is a tool exactly when the navigator is on, in all eight combinations of channel, profile and navigator', async () => {
+    const { originalToolNames } = await import('../mcp/tools.js');
+    for (const withAgent of [true, false]) for (const short of [true, false]) for (const navigator of [true, false]) {
+      const names = originalToolNames({ sessionId: 's-01', skillNavigator: navigator, ...(short ? { toolProfile: 'short' as const } : {}), ...(withAgent ? { agent } : {}) });
+      expect(names.includes('find_skill'), `${withAgent} ${short} ${navigator}`).toBe(navigator);
+    }
+  });
+});
+
+describe('Claude Code 2.1.319 replacement fixtures (T8e): launch parity and routing, no live client', () => {
+  // Observations by s-296 (m-6793, m-6809, m-6876): real Claude Code 2.1.319, fake model on loopback, ONE run each. A fixture of what the texts and
+  // the argv must survive, not proof of what any model does. 49/46/30 elsewhere are fixture counts for the pinned launch variants.
+  const CLAUDE_2_1_319 = Object.freeze({
+    appliesTo: ['claude'],
+    notEvidenceFor: ['codex', 'glm', 'custom'],
+    subagentGetsBootstrap: false,
+    subagentSameToolsSkillAndListing: true,
+    toolSearchForcedWithEnv: { parleyToolsListed: 0 },
+    toolSearchDefaultNonAnthropicBaseUrl: { parleyToolsListed: 0, note: 'a Claude binary fact at loopback, NOT a GLM or Z.ai observation' },
+    mcpChildKilledOnNormalEnd: 'about 60 ms (T9a)',
+  });
+  const agent = { url: 'http://127.0.0.1:4321/agent/browser', token: 'ab'.repeat(32) };
+  const SHIPPED = replacementRouting(MIGRATION_REGISTRY);
+  const MODES: [string, CodeModeRouting | undefined][] = [
+    ['classic (absent)', undefined],
+    ['classic (explicit)', CLASSIC_ROUTING],
+    ['replacement, shipped registry', SHIPPED],
+    ['replacement, fixture get_map', fixtureRouting(['get_map'])],
+    ['replacement, fixture find_skill', fixtureRouting(['find_skill'])],
+  ];
+  const same = (text: string): string =>
+    text.replace(/w-\d{4}/g, 'w-XXXX').replace(/Brief revision: [0-9a-f]+/g, 'Brief revision: XXXX').replace(/s-\d+/g, 's-N').replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, 'UUID');
+  const nativeCatalog = { roles: [{ id: 'claude:native-reviewer', source: 'claude' as const, provider: 'claude' as const, name: 'native-reviewer', description: '', path: '/fixture/native-reviewer.md', nativeAgent: 'native-reviewer', readOnly: false }], diagnostics: [], partial: false };
+
+  type RoleCase = { name: string; role?: { source: 'builtin' | 'claude'; name: string }; withAgent: boolean; catalog?: typeof nativeCatalog };
+  const ROLE_CASES: RoleCase[] = [
+    { name: 'no role, agent channel', withAgent: true },
+    { name: 'feature-lead with the agent channel', role: { source: 'builtin', name: 'feature-lead' }, withAgent: true },
+    { name: 'feature-lead without the agent channel', role: { source: 'builtin', name: 'feature-lead' }, withAgent: false },
+    { name: 'planner without the agent channel', role: { source: 'builtin', name: 'planner' }, withAgent: false },
+    { name: 'native Claude role', role: { source: 'claude', name: 'native-reviewer' }, withAgent: true, catalog: nativeCatalog },
+  ];
+
+  async function claudeLaunch(planner: typeof planNew, roleCase: RoleCase, codeMode: CodeModeRouting | undefined) {
+    const created = await createWork(project, { title: 'T8e', goal: '' });
+    const sessionId = await createPendingSession(project, created.work.id, { provider: 'claude', label: '', task: 'work', ...(roleCase.role === undefined ? {} : { role: roleCase.role }) });
+    const session = { ...(await sessionOf(created.work.id, sessionId)), providerSessionId: 'c0ffee00-1111-2222-3333-444455556666' };
+    await claudeTranscript(session.providerSessionId);
+    const plan = await planner(project, created.work.id, session, {
+      ...(roleCase.withAgent ? { agent } : {}),
+      ...(codeMode === undefined ? {} : { codeMode }),
+      ...(roleCase.catalog === undefined ? {} : { roleCatalog: roleCase.catalog }),
+    });
+    const layerAt = plan.args.indexOf('--append-system-prompt') + 1;
+    const layer = same(plan.args[layerAt] ?? '');
+    const argvWithoutLayer = same(JSON.stringify(plan.args.map((a, i) => (i === layerAt ? '<layer>' : a))));
+    const settingsAt = plan.args.indexOf('--settings');
+    const settings = settingsAt < 0 ? '' : same(await readFile(plan.args[settingsAt + 1]!, 'utf8'));
+    return { plan, layer, argvWithoutLayer, env: same(JSON.stringify(plan.env)), settings };
+  }
+
+  it('the fixture facts are bound to Claude and state what they are not evidence for', () => {
+    expect(CLAUDE_2_1_319.appliesTo).toEqual(['claude']);
+    expect(CLAUDE_2_1_319.notEvidenceFor).toEqual(['codex', 'glm', 'custom']);
+    expect(Object.keys(CLAUDE_2_1_319)).not.toContain('glm');
+  });
+
+  it.each([['planNew', planNew], ['planLaunch', planLaunch], ['planResume', planResume]] as const)('R2 %s: the argv, env and --settings of a replacement launch equal the classic launch, outside the layer (pins today only: native allow for the wrappers is T12a\'s open point)', async (_name, planner) => {
+    await claudeConfig();
+    for (const roleCase of ROLE_CASES) {
+      const classic = await claudeLaunch(planner, roleCase, undefined);
+      for (const [label, mode] of MODES.slice(1)) {
+        const other = await claudeLaunch(planner, roleCase, mode);
+        expect(other.argvWithoutLayer, `${roleCase.name}: ${label}`).toBe(classic.argvWithoutLayer);
+        expect(other.env, `${roleCase.name}: ${label}`).toBe(classic.env);
+        expect(other.settings, `${roleCase.name}: ${label}`).toBe(classic.settings);
+      }
+    }
+  });
+
+  it('R2: a native Claude role is delivered by --agent in every mode, with no text appended anywhere', async () => {
+    const native = ROLE_CASES[4]!;
+    for (const [label, mode] of MODES) {
+      const { plan } = await claudeLaunch(planNew, native, mode);
+      expect(plan.args[plan.args.indexOf('--agent') + 1], label).toBe('native-reviewer');
+      expect(JSON.stringify(plan.args), label).not.toContain('Routing for this launch');
+    }
+  });
+
+  it.each([['navigator on (names-only list)', '1'], ['navigator off', '0']] as const)('R3 %s: the Claude layer in every mode is the classic layer plus the bootstrap first and the T8c sentence, nothing else', async (_n, navigator) => {
+    await claudeConfig();
+    setEnv('PARLEY_SKILL_NAVIGATOR', navigator);
+    const banned = /tool list|in your list|your list/i;
+    const bareListed = (text: string): string[] => [...text.split('listed or loadable on demand').join('').matchAll(/\blisted\b/gi)].map((m) => m[0]);
+    for (const roleCase of ROLE_CASES) {
+      const classic = await claudeLaunch(planNew, roleCase, undefined);
+      expect(classic.layer, roleCase.name).not.toMatch(/code_search|code_docs|code_execute/);
+      expect(classic.layer, roleCase.name).not.toContain('Routing for this launch');
+      for (const [label, mode] of MODES.slice(1)) {
+        const replaced = await claudeLaunch(planNew, roleCase, mode);
+        const mine = `${roleCase.name}: ${label}`;
+        if (mode?.mode === 'classic') { expect(replaced.layer, mine).toBe(classic.layer); continue; }
+        const boot = bootstrapText(mode!);
+        expect(replaced.layer.startsWith(`${boot}\n`), mine).toBe(true);
+        const notes = [...replaced.layer.matchAll(/\n\nRouting for this launch: [^\n]*/g)].map((m) => m[0]);
+        let stripped = replaced.layer.slice(boot.length + 1);
+        for (const note of notes) stripped = stripped.replace(note, '');
+        expect(stripped, mine).toBe(classic.layer);
+        for (const piece of [boot, ...notes]) {
+          expect(piece, mine).not.toMatch(banned);
+          expect(bareListed(piece), mine).toEqual([]);
+        }
+        expect(notes.length, mine).toBeLessThanOrEqual(2);
+      }
+    }
+  });
+
+  it('R4: the bootstrap travels in exactly one place, the appended system prompt: no argument, env value or settings file carries it, so a subagent that gets no prompt has no convention (and has to route by the tool descriptions and the stub)', async () => {
+    const boot = bootstrapText(SHIPPED);
+    const { plan, settings } = await claudeLaunch(planNew, ROLE_CASES[0]!, SHIPPED);
+    expect(plan.args.filter((a) => a.includes(boot))).toHaveLength(1);
+    expect(plan.args[plan.args.indexOf('--append-system-prompt') + 1]).toContain(boot);
+    expect(JSON.stringify(plan.env)).not.toContain('Parley operation names');
+    expect(settings).not.toContain('Parley operation names');
+    const mcpAt = plan.args.indexOf('--mcp-config');
+    expect(mcpAt, 'a Claude launch carries an --mcp-config file').toBeGreaterThanOrEqual(0);
+    expect(await readFile(plan.args[mcpAt + 1]!, 'utf8')).not.toContain('Parley operation names');
+    expect(CLAUDE_2_1_319.subagentGetsBootstrap).toBe(false);
+  });
+});
+
+describe('Codex 0.162 replacement fixtures (T8f): launch parity and routing, no live client', () => {
+  // Observations by s-296 (m-6793, m-6876), real Codex CLI 0.162, fake model on loopback, ONE run each per listed case. A fixture of what the
+  // texts and the argv must survive, not proof of what any model does. Nothing here is taken from the Claude fixture, and the reverse.
+  const CODEX_0_162 = Object.freeze({
+    appliesTo: ['codex'],
+    notEvidenceFor: ['claude', 'glm', 'custom'],
+    subagentSpawnAgent: { getsDeveloperInstructions: true, sameParleyToolsAndSkillListing: true, hasSpawnToolItself: false, customAgentRolesMeasured: false },
+    firstRequestParleyTools: '0 of them in 5 of 6 runs with an instant fake model: a LATE START, not deferral; the tools arrived when the fake waited through a built-in call',
+    mcpChildKilledBy: 'SIGINT only; "SIGKILL" in the T8h legs means the native binary (SIGKILL of the npm shim left Codex running); measured on pipes, not a PTY: a real PTY is T12a\'s',
+    t8hExposureMeasuredOnCodex: { validNonce: 52, staleNonce: 49, noNonceWithLiveFile: 49 },
+    nativeCodeMode: 'unknown (not inspected); the examples call form was probed on 0.160',
+  });
+  const agent = { url: 'http://127.0.0.1:4321/agent/browser', token: 'ab'.repeat(32) };
+  const hookOptions = { hookUrl: 'http://127.0.0.1:41234/hooks', codexHookCommand: '/home/me/.parley/bin/parley-codex-hook' };
+  const SHIPPED = replacementRouting(MIGRATION_REGISTRY);
+  const FIX_GET_MAP = fixtureRouting(['get_map']);
+  const ZERO = fixtureRouting(['get_map', 'send_message', 'check_inbox', 'wait_for', 'report']);
+  const MODES: [string, CodeModeRouting][] = [['replacement, shipped registry', SHIPPED], ['replacement, fixture get_map', FIX_GET_MAP], ['replacement, zero-residual fixture', ZERO]];
+  const same = (text: string): string =>
+    text.replace(/w-\d{4}/g, 'w-XXXX').replace(/Brief revision: [0-9a-f]+/g, 'Brief revision: XXXX').replace(/s-\d+/g, 's-N').replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, 'UUID');
+  const customRole = (prompt: string) => ({ roles: [{ id: 'codex:custom', source: 'codex' as const, provider: 'codex' as const, name: 'custom', description: '', path: '/fixture/custom.toml', prompt, model: null, effort: null, sandboxMode: null, readOnly: false }], diagnostics: [], partial: false });
+
+  type RoleCase = { name: string; role?: { source: 'builtin' | 'codex'; name: string }; withAgent: boolean; catalog?: ReturnType<typeof customRole>; recipe?: { id: string; name: string; playbook: string }; workspace?: 'clone' | 'artifacts' };
+  const ROLE_CASES: RoleCase[] = [
+    { name: 'no role, agent channel', withAgent: true },
+    { name: 'feature-lead with the agent channel', role: { source: 'builtin', name: 'feature-lead' }, withAgent: true },
+    { name: 'feature-lead without the agent channel', role: { source: 'builtin', name: 'feature-lead' }, withAgent: false },
+    { name: 'planner without the agent channel', role: { source: 'builtin', name: 'planner' }, withAgent: false },
+    { name: 'custom codex role', role: { source: 'codex', name: 'custom' }, withAgent: true, catalog: customRole('Plain words, give a report.') },
+  ];
+
+  // Both kinds of confined attempt (m-6988): their approval_policy="never", sandbox_mode and exclude_* arguments must not move with the mode either.
+  const WORKSPACE_CASES: RoleCase[] = [
+    { name: 'autonomous clone, verifier', role: { source: 'builtin', name: 'verifier' }, withAgent: true, workspace: 'clone' },
+    { name: 'autonomous artifacts, executor', role: { source: 'builtin', name: 'executor' }, withAgent: true, workspace: 'artifacts' },
+  ];
+
+  async function codexLaunch(planner: typeof planNew, roleCase: RoleCase, codeMode: CodeModeRouting | undefined) {
+    const created = await createWork(project, { title: 'T8f', goal: '' });
+    const sessionId = await createPendingSession(project, created.work.id, { provider: 'codex', label: '', task: 'work', ...(roleCase.role === undefined ? {} : { role: roleCase.role }) });
+    if (roleCase.recipe !== undefined) {
+      const member = await createPendingSession(project, created.work.id, { provider: 'codex', label: 'second', task: 'x' });
+      await updateMap(project, created.work.id, (map) => { addRoom(map, { title: 'R', creator: 'human', members: [sessionId, member], lead: sessionId, recipe: roleCase.recipe! }); });
+    }
+    const session = { ...(await sessionOf(created.work.id, sessionId)), providerSessionId: 'native-thread' };
+    // A confined attempt: the same launch function serves it, with its own approval, sandbox and exclude arguments (autonomous clone or artifacts).
+    if (roleCase.workspace !== undefined) {
+      const dir = path.join(project, 'attempt', roleCase.workspace === 'clone' ? 'clone' : 'review');
+      await mkdir(dir, { recursive: true });
+      Object.assign(session, { workspace: roleCase.workspace === 'clone' ? { kind: 'clone', path: dir, branch: 'attempts/at-0001', sha: 'abc' } : { kind: 'artifacts', path: dir } });
+    }
+    const root = await realpath(project);
+    const plan = await planner(project, created.work.id, session, {
+      ...hookOptions, trust: { project: root, cwd: root },
+      ...(roleCase.withAgent ? { agent } : {}),
+      ...(codeMode === undefined ? {} : { codeMode }),
+      ...(roleCase.catalog === undefined ? {} : { roleCatalog: roleCase.catalog }),
+    });
+    const at = plan.args.findIndex((a) => a.startsWith('developer_instructions='));
+    const layer = at < 0 ? '' : same(JSON.parse(plan.args[at]!.slice('developer_instructions='.length)) as string);
+    return { plan, layer, argvWithoutLayer: same(JSON.stringify(plan.args.map((a, i) => (i === at ? '<layer>' : a)))), env: same(JSON.stringify(plan.env)) };
+  }
+  const bareListed = (text: string): string[] => [...text.split('listed or loadable on demand').join('').matchAll(/\blisted\b/gi)].map((m) => m[0]);
+
+  it('the fixture facts are bound to Codex, state what they are not evidence for, and share nothing with the Claude fixture', () => {
+    expect(CODEX_0_162.appliesTo).toEqual(['codex']);
+    expect(CODEX_0_162.notEvidenceFor).toEqual(['claude', 'glm', 'custom']);
+    expect(CODEX_0_162.subagentSpawnAgent.getsDeveloperInstructions).toBe(true);
+    expect(CODEX_0_162.t8hExposureMeasuredOnCodex).toEqual({ validNonce: 52, staleNonce: 49, noNonceWithLiveFile: 49 });
+  });
+
+  it.each([['planNew', planNew], ['planLaunch', planLaunch], ['planResume', planResume]] as const)('C3 %s: approvals, reviewer, hooks, trust and every other argument of a replacement launch equal the classic launch outside the layer (pins today only: native allow for the wrappers is T12a\'s open point)', async (_name, planner) => {
+    setEnv('PARLEY_CODEX_WRITE_APPROVALS', 'parley');
+    for (const navigator of ['0', '1']) {
+      setEnv('PARLEY_SKILL_NAVIGATOR', navigator);
+      codexSkillRoute.catalog = async () => codexCatalog;
+      for (const roleCase of [...ROLE_CASES, ...WORKSPACE_CASES]) {
+        const classic = await codexLaunch(planner, roleCase, undefined);
+        // a confined attempt takes no Parley hooks (its policy is audited and fixed); every other launch takes the seven
+        expect(classic.plan.args.filter((a) => a.startsWith('hooks.')), roleCase.name).toHaveLength(roleCase.workspace === undefined ? 7 : 0);
+        if (roleCase.workspace !== undefined) expect(classic.plan.args, roleCase.name).toContain('approval_policy="never"');
+        for (const [label, mode] of MODES) {
+          const other = await codexLaunch(planner, roleCase, mode);
+          expect(other.argvWithoutLayer, `${roleCase.name}, navigator ${navigator}: ${label}`).toBe(classic.argvWithoutLayer);
+          expect(other.env, `${roleCase.name}, navigator ${navigator}: ${label}`).toBe(classic.env);
+        }
+      }
+    }
+  });
+
+  it('C1/C2/C4/C7: the Codex layer in every mode is the classic layer with the bootstrap first, the examples block rebuilt only for migrated rows, and at most the T8c sentences', async () => {
+    setEnv('PARLEY_CODEX_WRITE_APPROVALS', 'parley');
+    const banned = /tool list|in your list|your list/i;
+    for (const navigator of ['0', '1']) {
+      setEnv('PARLEY_SKILL_NAVIGATOR', navigator);
+      codexSkillRoute.catalog = async () => codexCatalog;
+      for (const roleCase of ROLE_CASES) {
+        const classic = await codexLaunch(planNew, roleCase, undefined);
+        expect(classic.layer, roleCase.name).not.toMatch(/code_search|code_docs|code_execute/);
+        expect(classic.layer, roleCase.name).toContain(same(CODEX_TOOL_EXAMPLES));
+        expect(classic.layer, roleCase.name).toContain(same(CODEX_APPROVAL_GUIDANCE));
+        for (const [label, mode] of MODES) {
+          const replaced = await codexLaunch(planNew, roleCase, mode);
+          const mine = `${roleCase.name}, navigator ${navigator}: ${label}`;
+          const boot = bootstrapText(mode);
+          expect(replaced.layer.startsWith(`${boot}\n`), mine).toBe(true);
+          const notes = [...replaced.layer.matchAll(/\n\nRouting for this launch: [^\n]*/g)].map((m) => m[0]);
+          let stripped = replaced.layer.slice(boot.length + 1);
+          for (const note of notes) stripped = stripped.replace(note, '');
+          const examples = same(codexToolExamples(mode));
+          // shipped: the constant itself; migrated rows: rebuilt (and the constant is gone); the surrounding layer is the classic one
+          if (mode === SHIPPED) expect(examples, mine).toBe(same(CODEX_TOOL_EXAMPLES));
+          else { expect(stripped, mine).toContain(examples); expect(stripped, mine).not.toContain(same(CODEX_TOOL_EXAMPLES)); }
+          expect(stripped.split(examples).join(same(CODEX_TOOL_EXAMPLES)), mine).toBe(classic.layer);
+          for (const piece of [boot, ...notes, ...(mode === SHIPPED ? [] : [examples])]) {
+            expect(piece, mine).not.toMatch(banned);
+            expect(bareListed(piece), mine).toEqual([]);
+          }
+        }
+      }
+    }
+  });
+
+  it('C2: the short profile: no memory tool in the Codex layer or in any block built for its list, and the list sizes are the pinned fixture counts', async () => {
+    const { originalToolNames } = await import('../mcp/tools.js');
+    const withChannel = originalToolNames({ sessionId: 's-01', toolProfile: 'short', agent });
+    const noChannel = originalToolNames({ sessionId: 's-01', toolProfile: 'short' });
+    expect(withChannel).toHaveLength(46);
+    expect(noChannel).toHaveLength(27);
+    for (const hidden of ['remember', 'memory_read', 'search_history']) { expect(withChannel).not.toContain(hidden); expect(noChannel).not.toContain(hidden); }
+    for (const routing of [SHIPPED, FIX_GET_MAP, ZERO]) {
+      for (const list of [withChannel, noChannel]) {
+        for (const topic of [null, 'tools', 'lead']) expect(guideRouting(routing, list, topic, { toolProfile: 'short' }), String(topic)).not.toMatch(/remember|memory_read|search_history/);
+      }
+    }
+  });
+
+  it('C10: the bootstrap travels in exactly one place, the developer_instructions argument: a Codex spawn_agent subagent inherits it (observed), so it does NOT reuse the Claude no-bootstrap model', async () => {
+    const boot = bootstrapText(SHIPPED);
+    const { plan } = await codexLaunch(planNew, ROLE_CASES[0]!, SHIPPED);
+    const carrying = plan.args.filter((a) => a.includes('Parley operation names'));
+    expect(carrying).toHaveLength(1);
+    expect(carrying[0]!.startsWith('developer_instructions=')).toBe(true);
+    expect(JSON.parse(carrying[0]!.slice('developer_instructions='.length)) as string).toContain(boot);
+    expect(JSON.stringify(plan.env)).not.toContain('Parley operation names');
+    expect(CODEX_0_162.subagentSpawnAgent.getsDeveloperInstructions).toBe(true);
+  });
+
+  it('C1: a Codex runner without {developerInstructions} cannot carry the bootstrap: a replacement launch fails, the classic launch goes ahead', async () => {
+    await writeFile(path.join(home, 'providers.json'), JSON.stringify({ codex: { args: ['CUSTOM', '{prompt}'] } }));
+    const created = await createWork(project, { title: 'T8f', goal: '' });
+    const sessionId = await createPendingSession(project, created.work.id, { provider: 'codex', label: '', task: 'work' });
+    const session = await sessionOf(created.work.id, sessionId);
+    for (const mode of [SHIPPED, FIX_GET_MAP, ZERO]) await expect(planLaunch(project, created.work.id, session, { codeMode: mode })).rejects.toThrow('code-mode-bootstrap-unavailable');
+    expect((await planLaunch(project, created.work.id, session)).args[0]).toBe('CUSTOM');
+  });
+
+  it('C8: a Codex lead\'s layer starts with the bootstrap and carries the recipe block raw; the later letter is the same raw block', async () => {
+    const recipe = { id: 'builtin:plan-build', name: 'Plan and build', playbook: BUILTIN_RECIPES[0]!.playbook };
+    const classic = await codexLaunch(planNew, { name: 'lead', withAgent: true, recipe }, undefined);
+    const replaced = await codexLaunch(planNew, { name: 'lead', withAgent: true, recipe }, SHIPPED);
+    const block = `Recipe: Plan and build — you lead this room.\n${recipe.playbook}`;
+    expect(classic.layer).toContain(block);
+    expect(replaced.layer.startsWith(bootstrapText(SHIPPED))).toBe(true);
+    expect(replaced.layer).toContain(block);
+  });
+
+  it('C4/C5: a custom Codex role naming a migrated operation is reported incompatible, its prompt untouched; sandbox and reasoning arguments equal the classic launch', async () => {
+    codexSkillRoute.catalog = async () => codexCatalog;
+    const roleCase: RoleCase = { name: 'custom', role: { source: 'codex', name: 'custom' }, withAgent: true, catalog: customRole('First call get_map, then give a report.') };
+    const classic = await codexLaunch(planNew, roleCase, undefined);
+    const replaced = await codexLaunch(planNew, roleCase, FIX_GET_MAP);
+    expect(replaced.layer).toContain('First call get_map, then give a report.');
+    expect(replaced.plan.codeModeRouting?.role).toEqual({ status: 'incompatible', names: ['get_map'], conservative: true });
+    expect(selectsClassic(replaced.plan.codeModeRouting)).toEqual({ classic: true, source: 'role', names: ['get_map'] });
+    expect(replaced.argvWithoutLayer).toBe(classic.argvWithoutLayer);
+    expect(classic.plan.codeModeRouting).toBeUndefined();
+  });
+});
+
+describe('GLM replacement fixtures (T8g): the code path, with no GLM evidence, and Claude\'s confined attempts', () => {
+  // GLM has NO real-client observation: s-296's replays were Claude Code 2.1.319 and Codex 0.162 only. Every GLM row below cites this and asserts
+  // only what the code does. The one loopback fact about Claude (a non-Anthropic base URL did not turn tool search off) is a Claude binary fact,
+  // NOT a Z.ai observation: it is why T12b-GLM must check deferral first, and it is not recorded here as GLM behaviour.
+  const GLM_EVIDENCE = Object.freeze({ observed: null, source: 'none' });
+  const agent = { url: 'http://127.0.0.1:4321/agent/browser', token: 'ab'.repeat(32) };
+  const SENTINEL = 'GLM-SECRET-SENTINEL-8f3c';
+  const SHIPPED = replacementRouting(MIGRATION_REGISTRY);
+  const FIX_GET_MAP = fixtureRouting(['get_map']);
+  const MODES: [string, CodeModeRouting][] = [['replacement, shipped registry', SHIPPED], ['replacement, fixture get_map', FIX_GET_MAP]];
+  const same = (text: string): string =>
+    text.replace(/w-\d{4}/g, 'w-XXXX').replace(/Brief revision: [0-9a-f]+/g, 'Brief revision: XXXX').replace(/s-\d+/g, 's-N').replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, 'UUID');
+  const nativeCatalog = { roles: [{ id: 'claude:native-reviewer', source: 'claude' as const, provider: 'claude' as const, name: 'native-reviewer', description: '', path: '/fixture/native-reviewer.md', nativeAgent: 'native-reviewer', readOnly: false }], diagnostics: [], partial: false };
+  const bareListed = (text: string): string[] => [...text.split('listed or loadable on demand').join('').matchAll(/\blisted\b/gi)].map((m) => m[0]);
+
+  type Case = { name: string; role?: { source: 'builtin' | 'claude'; name: string }; withAgent: boolean; catalog?: typeof nativeCatalog; recipe?: { id: string; name: string; playbook: string }; workspace?: 'clone' | 'artifacts' };
+  async function launchOf(provider: 'glm' | 'claude', planner: typeof planNew, c: Case, codeMode: CodeModeRouting | undefined) {
+    const created = await createWork(project, { title: 'T8g', goal: '' });
+    const sessionId = await createPendingSession(project, created.work.id, { provider, label: '', task: 'work', ...(c.role === undefined ? {} : { role: c.role }) });
+    if (c.recipe !== undefined) {
+      const member = await createPendingSession(project, created.work.id, { provider, label: 'second', task: 'x' });
+      await updateMap(project, created.work.id, (map) => { addRoom(map, { title: 'R', creator: 'human', members: [sessionId, member], lead: sessionId, recipe: c.recipe! }); });
+    }
+    const session = { ...(await sessionOf(created.work.id, sessionId)), providerSessionId: 'c0ffee00-1111-2222-3333-444455556666' };
+    await claudeTranscript(session.providerSessionId);
+    if (c.workspace !== undefined) {
+      const dir = path.join(project, 'attempt', c.workspace === 'clone' ? 'clone' : 'review');
+      await mkdir(dir, { recursive: true });
+      Object.assign(session, { workspace: c.workspace === 'clone' ? { kind: 'clone', path: dir, branch: 'attempts/at-0001', sha: 'abc' } : { kind: 'artifacts', path: dir } });
+    }
+    const plan = await planner(project, created.work.id, session, {
+      ...(c.withAgent ? { agent } : {}), ...(codeMode === undefined ? {} : { codeMode }), ...(c.catalog === undefined ? {} : { roleCatalog: c.catalog }),
+    });
+    const layerAt = plan.args.indexOf('--append-system-prompt') + 1;
+    const settingsAt = plan.args.indexOf('--settings');
+    return {
+      plan,
+      layer: same(plan.args[layerAt] ?? ''),
+      argvWithoutLayer: same(JSON.stringify(plan.args.map((a, i) => (i === layerAt ? '<layer>' : a)))),
+      env: same(JSON.stringify(plan.env)),
+      settings: settingsAt < 0 ? '' : same(await readFile(plan.args[settingsAt + 1]!, 'utf8')),
+    };
+  }
+  const GLM_CASES: Case[] = [
+    { name: 'no role, agent channel', withAgent: true },
+    { name: 'feature-lead without the agent channel', role: { source: 'builtin', name: 'feature-lead' }, withAgent: false },
+    { name: 'planner without the agent channel', role: { source: 'builtin', name: 'planner' }, withAgent: false },
+    { name: 'native Claude role', role: { source: 'claude', name: 'native-reviewer' }, withAgent: true, catalog: nativeCatalog },
+  ];
+
+  it('GLM has no observation: the evidence const is empty and says where that comes from', () => {
+    expect(GLM_EVIDENCE).toEqual({ observed: null, source: 'none' });
+  });
+
+  it.each([['planNew', planNew], ['planLaunch', planLaunch], ['planResume', planResume]] as const)('G1/G3 %s: a glm launch in replacement equals the classic glm launch outside the layer, and the layer is classic + bootstrap first + the T8c sentences (code path, not a GLM observation)', async (_name, planner) => {
+    await claudeConfig();
+    for (const navigator of ['0', '1']) {
+      setEnv('PARLEY_SKILL_NAVIGATOR', navigator);
+      for (const c of GLM_CASES) {
+        const classic = await launchOf('glm', planner, c, undefined);
+        expect(classic.layer, c.name).not.toMatch(/code_search|code_docs|code_execute/);
+        for (const [label, mode] of MODES) {
+          const other = await launchOf('glm', planner, c, mode);
+          const mine = `${c.name}, navigator ${navigator}: ${label}`;
+          expect(other.argvWithoutLayer, mine).toBe(classic.argvWithoutLayer);
+          expect(other.env, mine).toBe(classic.env);
+          expect(other.settings, mine).toBe(classic.settings);
+          const boot = bootstrapText(mode);
+          expect(other.layer.startsWith(`${boot}\n`), mine).toBe(true);
+          const notes = [...other.layer.matchAll(/\n\nRouting for this launch: [^\n]*/g)].map((m) => m[0]);
+          let stripped = other.layer.slice(boot.length + 1);
+          for (const note of notes) stripped = stripped.replace(note, '');
+          expect(stripped, mine).toBe(classic.layer);
+          for (const piece of [boot, ...notes]) {
+            expect(piece, mine).not.toMatch(/tool list|in your list|your list/i);
+            expect(bareListed(piece), mine).toEqual([]);
+          }
+        }
+      }
+    }
+  });
+
+  it('G1: the Z.ai routing and host-managed marker of the runner are untouched, and no secret-like value enters the argv, the env, the settings or any new text', async () => {
+    for (const name of ['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY', 'ZAI_API_KEY', 'GLM_API_KEY']) setEnv(name, SENTINEL);
+    const c = GLM_CASES[2]!;
+    const classic = await launchOf('glm', planNew, c, undefined);
+    const replaced = await launchOf('glm', planNew, c, FIX_GET_MAP);
+    expect(JSON.parse(replaced.env)).toMatchObject({ ANTHROPIC_BASE_URL: 'https://api.z.ai/api/anthropic', CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: '1' });
+    for (const [label, run] of [['classic', classic], ['replacement', replaced]] as const) {
+      expect(JSON.stringify(run.plan), label).not.toContain(SENTINEL);
+      expect(run.settings, label).not.toContain(SENTINEL);
+    }
+    for (const text of [bootstrapText(FIX_GET_MAP), roleRoutingNote('builtin:feature-lead', FIX_GET_MAP, []), JSON.stringify(replaced.plan.codeModeRouting ?? {})]) expect(text).not.toContain(SENTINEL);
+  });
+
+  it('G2: the secret-backed runner validator is not bypassed by replacement: --bare, --safe-mode and --setting-sources still refuse the launch, and a non-claude command too', async () => {
+    const created = await createWork(project, { title: 'T8g', goal: '' });
+    const sessionId = await createPendingSession(project, created.work.id, { provider: 'glm', label: '', task: 'work' });
+    const session = await sessionOf(created.work.id, sessionId);
+    for (const flag of ['--bare', '--safe-mode', '--setting-sources=user']) {
+      await writeFile(path.join(home, 'providers.json'), JSON.stringify({ glm: { args: ['--append-system-prompt', '{systemPrompt}', flag, '{prompt}'] } }));
+      for (const mode of [undefined, CLASSIC_ROUTING, SHIPPED, FIX_GET_MAP]) {
+        await expect(planLaunch(project, created.work.id, session, mode === undefined ? {} : { codeMode: mode }), `${flag} ${mode?.mode}`).rejects.toThrow('runner template is unsupported');
+      }
+    }
+    await writeFile(path.join(home, 'providers.json'), JSON.stringify({ glm: { command: 'wrapper' } }));
+    for (const mode of [undefined, SHIPPED]) await expect(planLaunch(project, created.work.id, session, mode === undefined ? {} : { codeMode: mode })).rejects.toThrow('requires the official claude command');
+  });
+
+  it('G4: skills for glm follow the Claude-family code path: the names-only reduction is set the same in replacement, the verdict is unverified and does not select classic (code path, not a GLM observation)', async () => {
+    await claudeConfig();
+    setEnv('PARLEY_SKILL_NAVIGATOR', '1');
+    const c = GLM_CASES[0]!;
+    const classic = await launchOf('glm', planNew, c, undefined);
+    const replaced = await launchOf('glm', planNew, c, FIX_GET_MAP);
+    expect(JSON.parse(classic.env).SLASH_COMMAND_TOOL_CHAR_BUDGET).toBe('1');
+    expect(JSON.parse(replaced.env).SLASH_COMMAND_TOOL_CHAR_BUDGET).toBe('1');
+    expect(replaced.plan.codeModeRouting?.skills).toEqual({ status: 'unverified', skills: [], conservative: false });
+    expect(selectsClassic(replaced.plan.codeModeRouting).classic).toBe(false);
+  });
+
+  it('G5: a glm session with a native Claude role is delivered by --agent in every mode, nothing appended, the role verdict unverified (T8c: that selects classic for the launcher)', async () => {
+    const c = GLM_CASES[3]!;
+    for (const [label, mode] of [['classic', undefined] as const, ...MODES]) {
+      const { plan } = await launchOf('glm', planNew, c, mode);
+      expect(plan.args[plan.args.indexOf('--agent') + 1], label).toBe('native-reviewer');
+      expect(JSON.stringify(plan.args), label).not.toContain('Routing for this launch');
+      if (mode !== undefined) expect(plan.codeModeRouting?.role, label).toEqual({ status: 'unverified', names: [], conservative: false });
+    }
+  });
+
+  it('G8: a glm lead carries the recipe block raw after the bootstrap (the later letter is pinned in T8e R7)', async () => {
+    const recipe = { id: 'builtin:plan-build', name: 'Plan and build', playbook: BUILTIN_RECIPES[0]!.playbook };
+    const c: Case = { name: 'lead', role: { source: 'builtin', name: 'planner' }, withAgent: true, recipe };
+    const classic = await launchOf('glm', planNew, c, undefined);
+    const replaced = await launchOf('glm', planNew, c, SHIPPED);
+    const block = `Recipe: Plan and build \u2014 you lead this room.\n${recipe.playbook}`;
+    expect(classic.layer).toContain(block);
+    expect(replaced.layer.startsWith(bootstrapText(SHIPPED))).toBe(true);
+    expect(replaced.layer).toContain(block);
+  });
+
+  it('a confined attempt is not available to glm at all, in classic or in replacement: the launch refuses before any mode matters', async () => {
+    for (const workspace of ['clone', 'artifacts'] as const) {
+      const c: Case = { name: workspace, role: { source: 'builtin', name: 'executor' }, withAgent: true, workspace };
+      for (const mode of [undefined, SHIPPED]) await expect(launchOf('glm', planNew, c, mode), `${workspace} ${mode?.mode}`).rejects.toThrow('confinement-unavailable');
+    }
+  });
+
+  it.each([['planNew', planNew], ['planLaunch', planLaunch], ['planResume', planResume]] as const)('Claude confined attempts %s (the gap left by T8e R2): clone and artifacts launches equal the classic launch outside the layer, --disallowedTools and the permission mode unchanged (pins today only: native allow for the wrappers is T12a\'s open point)', async (_name, planner) => {
+    await claudeConfig();
+    for (const workspace of ['clone', 'artifacts'] as const) {
+      const c: Case = { name: workspace, role: { source: 'builtin', name: workspace === 'clone' ? 'verifier' : 'executor' }, withAgent: true, workspace };
+      const classic = await launchOf('claude', planner, c, undefined);
+      expect(classic.plan.args[classic.plan.args.indexOf('--permission-mode') + 1], workspace).toBe('auto');
+      if (workspace === 'artifacts') expect(classic.plan.args[classic.plan.args.indexOf('--disallowedTools') + 1]).toBe('Edit,Write,NotebookEdit,Bash');
+      for (const [label, mode] of MODES) {
+        const other = await launchOf('claude', planner, c, mode);
+        const mine = `${workspace}: ${label}`;
+        expect(other.argvWithoutLayer, mine).toBe(classic.argvWithoutLayer);
+        expect(other.env, mine).toBe(classic.env);
+        expect(other.settings, mine).toBe(classic.settings);
+        expect(other.plan.args[other.plan.args.indexOf('--permission-mode') + 1], mine).toBe('auto');
+        expect(other.plan.args[other.plan.args.indexOf('--disallowedTools') + 1], mine).toBe(classic.plan.args[classic.plan.args.indexOf('--disallowedTools') + 1]);
+        expect(other.layer.startsWith(`${bootstrapText(mode)}\n`), mine).toBe(true);
+      }
     }
   });
 });

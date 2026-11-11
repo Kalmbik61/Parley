@@ -7,7 +7,7 @@
  * какими аргументами его позвать.
  */
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { Dirent } from 'node:fs';
 import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
@@ -20,12 +20,14 @@ import { syncClaudeTrust } from './trust.js';
 import { prepareWorktreeGitWrites } from './worktree.js';
 import { findRunnerBinary } from './find-binary.js';
 import { CLAUDE_LEAN_ENV, CLAUDE_LEAN_FLAGS, codexLeanFlags, readCodexMcpServerIds, readUserPluginIds } from './lean.js';
+import type { SkillCatalog } from '../skills/catalog.js';
 import { writeNativeContext, writeNativeSkillCatalog, stampNativeContext, type NativeContextDescriptor } from './native-context.js';
 import { CLAUDE_PROJECTS_DIR_KEY, claudeProjectRoots } from '../discover.js';
 import { isServiceText, type SessionIndex } from '../session-index.js';
 import { bothEnv, envValue } from '../names.js';
 import { userClaudeConfigDir, wantLinks } from '../custom-provider-dir.js';
 import {
+  agentEnv,
   EFFORT_TOKEN,
   PROVIDERS,
   loadProviders,
@@ -45,18 +47,25 @@ import type { RoleCatalog } from '../roles/types.js';
 import type { RequiredRolePermissions } from '../roles/catalog.js';
 import { CHANNEL_VALUE, NO_CHANNEL_WARNING } from './channel.js';
 import { loadBrief, writeBrief } from './brief.js';
-import { BROWSER_PRIORITY_RULE, CODEX_APPROVAL_GUIDANCE, CODEX_TOOL_EXAMPLES, linkedSettingsRule, systemGuidance } from './guidance.js';
+import { BROWSER_PRIORITY_RULE, CODEX_APPROVAL_GUIDANCE, linkedSettingsRule, systemGuidance } from './guidance.js';
+import { CLASSIC_ROUTING, bootstrapText, heldRunRouting, replacementRouting, codexToolExamples, recipeCompatibility, recipeRoutingNote, roleCompatibility, roleRoutingNote, skillCompatibility, type CodeModeRouting, type CodeModeRoutingReport } from './code-mode-instructions.js';
 import { assignmentsBlock } from './plan-tasks.js';
 import { readParleyMd } from './parley-md.js';
 import { readProjectMemory } from './project-memory.js';
 import type { MemoryItem } from './project-memory.js';
-import { leadRecipeBlock } from './recipe-lead.js';
+import { leadRecipe, leadRecipeBlock } from './recipe-lead.js';
+import { codeModeRequested } from './code-mode-setting.js';
+import { decideLaunchExposure, PROVEN_PROVIDERS, type DetectorVerdict } from './launch-exposure.js';
+import { type ClientProbe, clientVersionReviewed } from '../mcp/code-mode/claude-client.js';
+import { newLaunchNonce, writeLaunchDecision, type LaunchDecision, type LaunchIdentities } from '../mcp/code-mode/launch-decision.js';
+import { checkReplacement, MIGRATION_REGISTRY } from '../mcp/code-mode/migration-registry.js';
+import { inspectRunRecord } from '../mcp/code-mode/run-record.js';
 import { buildSessionLayer, developerInstructions, validateLayerArguments, type SessionLayerInput, type SessionLayerWarning } from './session-layer.js';
 import { addSession, isCodexThreadBinding, removeSession, transitionSession, type NewSession } from './map.js';
 import { NEW_LABEL } from './names.js';
 import { mcpConfigValue, writeMcpConfig, type AgentChannel } from './mcp-config.js';
 import { finishSession, linkProviderSession, type FinishOptions, type MetricsRoots } from './metrics.js';
-import { writeWorkSettings } from './settings-file.js';
+import { type WorkSettingsOptions, workSettingsTarget, writeWorkSettings } from './settings-file.js';
 import { CLAUDE_SKILL_BUDGET_ENV, CODEX_SKILL_CATALOG_OVERRIDE, claudeSkillReduction, codexSkillRoute } from './skill-reduction.js';
 import { isPointerText } from './delivery.js';
 import { createWork, deleteSessionFiles, readMap, SharedStateError, updateMap, workPaths } from './store.js';
@@ -64,6 +73,13 @@ import type { LaunchedBy, WorkMap, WorkSession } from './types.js';
 
 /** Чего хочет запуск сверх самой сессии. */
 export interface LaunchOptions {
+  /**
+   * Как запуск выполняет операции Parley (план Code Mode, T8a). Нет значения — классический запуск: слой и примеры Codex прежние до
+   * байта. Режим замены ставит абзац о маршрутизации первой строкой слоя и показывает перенесённые операции в `code_execute`. Только
+   * ядро: `ToolLaunch` и хост не меняются. Раннер без `{systemPrompt}` и `{developerInstructions}` не несёт абзац — запуск падает
+   * с `code-mode-bootstrap-unavailable`, а не идёт без соглашения.
+   */
+  codeMode?: CodeModeRouting;
   /**
    * Будить ли сессию звонком: флаг канала в команде и `PARLEY_CHANNEL` (с прежней
    * `HARNAS_CHANNEL`) в конфиге MCP. Панель берёт значение из настроек и пробы версии (4.4).
@@ -135,6 +151,36 @@ export interface LaunchOptions {
   agent?: AgentChannel;
   /** Optional current role/recipe/memory snapshot, never persisted in the session map. */
   layer?: Omit<SessionLayerInput, 'guidance' | 'bridge' | 'links' | 'brief' | 'parleyMd'>;
+  /**
+   * Code Mode gates a provider row supplies (plan T12a): client version, detector, helper. Absent: the core's defaults, which refuse. Tests and the
+   * provider rows pass these; the host passes them once its provider row exists.
+   */
+  codeModeGates?: CodeModeGateSeams;
+}
+
+/** The parts of the Code Mode gates that belong to a provider row, or to a test. */
+export interface CodeModeGateSeams {
+  readonly proven?: readonly string[];
+  /**
+   * The client the host resolved and will spawn by realpath (T12a-Claude C1), probed with `--version`. It answers the client-version gate when
+   * `clientVersionReviewed` is not given, and a successful probe is recorded in the decision so the session process can check its parent.
+   */
+  readonly client?: ClientProbe;
+  clientVersionReviewed?(): Promise<boolean>;
+  helperAvailable?(): Promise<boolean>;
+  detector?(): Promise<DetectorVerdict>;
+  /** The human's setting; default: `codeModeRequested()` over config.json and the store. */
+  requested?(): Promise<boolean>;
+}
+
+/**
+ * Whether a launch of this provider may pay for the client probe and the spawn by realpath (T12a-Claude C1, s-292 B1 m-7532): only when the
+ * provider is proven, from the same source `decideLaunchExposure` reads, and Code Mode is requested. The proven check comes first, so with no
+ * proven provider nothing is read and nothing runs: the launch path stays what it was.
+ */
+export async function wantsClientProbe(providerId: string, gates?: Pick<CodeModeGateSeams, 'proven' | 'requested'>): Promise<boolean> {
+  if (!(gates?.proven ?? PROVEN_PROVIDERS).includes(providerId)) return false;
+  return (gates?.requested ?? (() => codeModeRequested()))().catch(() => false);
 }
 
 /** Чем и как поднимать процесс сессии в правой панели. */
@@ -153,6 +199,13 @@ export interface LaunchPlan {
   warnings: string[];
   /** Safe warning codes for host logging and deduplicated notices. */
   diagnostics?: Array<SessionLayerWarning | { code: 'role-missing'; message: string }>;
+  /**
+   * Replacement launches only (plan T8c): what Parley knows about the role and the lead playbook of this launch. A verdict, never a denial and not a
+   * warning code: the launch went ahead, and the selection of the classic fallback for an incompatible or unverified text is the launcher's.
+   */
+  codeModeRouting?: CodeModeRoutingReport;
+  /** The Code Mode decision of this launch, as written to its decision file (plan T12a). */
+  codeModeDecision?: { readonly effective: 'replacement' | 'classic'; readonly reason: string | null; readonly written: boolean };
 }
 
 async function entryOf(provider: string): Promise<ProviderEntry> {
@@ -351,6 +404,8 @@ async function plan(
   // (спека, 6.1): иначе список остаётся полным.
   let skillList: 'names' | 'removed' | undefined;
   let codexListUnread = false;
+  // The Codex skill catalogue this launch read itself (skills/list), for the replacement verdict; Claude's is read later, by the MCP process.
+  let codexCatalog: SkillCatalog | null = null;
   let disablePlugins: string[] = [];
   const claudeConfigDir = claudeConfigEnv ? path.resolve(cwd, claudeConfigEnv) : path.join(process.env.HOME ?? homedir(), '.claude');
   // Доверие к папке у Claude Code — отметкой в файле состояния профиля, флага у него нет (спека мобильного приложения,
@@ -385,10 +440,67 @@ async function plan(
       const { roots } = nativeDescriptor;
       const catalog = await codexSkillRoute.catalog({ cwd: nativeDescriptor.cwd, command: nativeDescriptor.command!, configArgs: nativeDescriptor.configArgs,
         env: { ...process.env, HOME: roots.homeDir, CODEX_HOME: roots.codexHome ?? path.join(roots.homeDir, '.codex') } });
+      codexCatalog = catalog;
       if (catalog !== null && await writeNativeSkillCatalog(projectPath, workId, session.id, nativeContextRevision, catalog)) skillList = 'removed';
       else codexListUnread = true;
     }
   }
+
+  // The `--settings` file's options are decided before the Code Mode decision, which records its path and sha256 (T12a-Claude C2a); the
+  // file itself is written further down, from the same options.
+  let settingsOptions: WorkSettingsOptions | undefined;
+  if (template.includes('{settingsFile}')) {
+    const hasProjectMcp = options.projectMcp !== undefined && (options.projectMcp.enabled.length > 0 || options.projectMcp.disabled.length > 0);
+    // Плагины пользователя lean выключает вместе с модом jev одним списком. Файл — свой у сессии: в общем файле работы
+    // список лёг бы и на сессии без lean.
+    if (lean && isClaudeCode(entry)) {
+      disablePlugins = [...new Set([...disablePlugins, ...(await readUserPluginIds(cwd, claudeConfigDir))])];
+    }
+    settingsOptions = {
+      ...(options.hookUrl === undefined ? {} : { hookUrl: options.hookUrl }),
+      ...(skillNavigator || lean || workspace || hasProjectMcp ? { sessionId: session.id } : {}),
+      ...(hasProjectMcp ? { projectMcp: options.projectMcp } : {}),
+      ...(workspace ? { autonomous: true } : {}),
+      ...(disablePlugins.length > 0 ? { disablePlugins } : {}),
+      // Инструменты `browser_*` у сессии есть, только когда канал агента лёг в конфиг MCP (спека браузера, 5.1).
+      ...(options.agent !== undefined && mcpRoute ? { allowBrowser: true } : {}),
+      // Свой токен хуков и свой файл настроек — у GLM, своего провайдера и аккаунта подписки (спека подписок 5.3, К13).
+      ...(ownsHookToken(entry)
+        ? {
+          hookTokenEnv: 'PARLEY_HOOK_CAPABILITY' as const,
+          ...(entry.id === 'glm' ? { provider: 'glm' as const } : { fileName: `settings-${entry.id}.json` }),
+        }
+        : {}),
+      ...(entry.runner.settingsModel === undefined
+        ? {}
+        : { model: options.model ?? session.model ?? entry.runner.settingsModel }),
+    };
+  }
+  const settingsTarget = settingsOptions === undefined ? undefined : workSettingsTarget(projectPath, workId, settingsOptions);
+
+  // Те же переменные, что у MCP-сервера в конфиге: сервер знает, кто звонит,
+  // даже унаследовав окружение от агента. Под обоими именами: старые скрипты и сервер
+  // прежней сборки читают `HARNAS_*` (R3). Один объект и для плана, и для проверки окружения Code Mode (T12a-Claude C2a, s-296 G3).
+  const planEnv: Record<string, string> = {
+    ...entry.runner.env,
+    ...bothEnv({ WORK_DIR: paths.dir, SESSION_ID: session.id, SKILL_NAVIGATOR: skillNavigator ? '1' : '0', NATIVE_CONTEXT_REVISION: nativeContextRevision,
+      ...(agentRevision === undefined ? {} : { AGENT_REVISION: agentRevision }),
+      ...(skillList === undefined ? {} : { SKILL_LIST_REDUCED: '1' }) }),
+    ...(isClaudeCode(entry) && skillList === 'names' ? CLAUDE_SKILL_BUDGET_ENV : {}),
+    ...(lean && isClaudeCode(entry) ? CLAUDE_LEAN_ENV : {}),
+    ...(workspace ? { TMPDIR: path.join(workspace.path, '.parley-tmp') } : {}),
+  };
+
+  // Code Mode (plan T12a, §5): decided here, before the MCP config is written, because only a replacement written as `true` gets a nonce
+  // into that config. Every launch writes its decision, classic with no nonce and its reason, so a stale config stops matching.
+  const exposure = await launchExposure({
+    projectPath, workId, session, entry, template, mcpRoute, workspace: workspace !== undefined && workspace !== null,
+    agent: options.agent, skillNavigator, role, codexCatalog, gates: options.codeModeGates,
+    cwd, settings: settingsTarget === undefined ? undefined : { path: settingsTarget.path, sha256: createHash('sha256').update(settingsTarget.content).digest('hex') },
+    ptyEnv: { ...agentEnv(process.env), ...planEnv },
+  });
+  if (exposure.blocked !== null) throw new Error(`code-mode-blocked: ${exposure.blocked}`);
+  const codeModeLaunch = exposure.nonce;
 
   // `env` — окружение запускающего процесса: Codex режет серверу MCP окружение, и нужные ему
   // `PARLEY_*` и `HARNAS_*` (дом харнесса, подмены бинарей) уходят в таблицу `env` сервера явно.
@@ -399,6 +511,7 @@ async function plan(
     skillListReduced: skillList !== undefined,
     nativeContextRevision,
     ...(agentRevision === undefined ? {} : { agentRevision }),
+    ...(codeModeLaunch === null ? {} : { codeModeLaunch }),
     // Короткий набор инструментов — только у Codex: Claude читает файл `--mcp-config` (он ниже, без профиля).
     ...(entry.id === 'codex' ? { toolProfile: 'short' as const } : {}),
     env: process.env,
@@ -415,6 +528,7 @@ async function plan(
           skillListReduced: skillList !== undefined,
           nativeContextRevision,
           ...(agentRevision === undefined ? {} : { agentRevision }),
+          ...(codeModeLaunch === null ? {} : { codeModeLaunch }),
           ...(options.agent === undefined ? {} : { agent: options.agent }),
         })
       : null;
@@ -458,33 +572,7 @@ async function plan(
     const roots = await prepareWorktreeGitWrites(projectPath, workId, session.id, session.worktree);
     subs.approvals = [...(subs.approvals ?? []), '-c', `sandbox_workspace_write.writable_roots=${JSON.stringify(roots)}`];
   }
-  if (template.includes('{settingsFile}')) {
-    const hasProjectMcp = options.projectMcp !== undefined && (options.projectMcp.enabled.length > 0 || options.projectMcp.disabled.length > 0);
-    // Плагины пользователя lean выключает вместе с модом jev одним списком. Файл — свой у сессии: в общем файле работы
-    // список лёг бы и на сессии без lean.
-    if (lean && isClaudeCode(entry)) {
-      disablePlugins = [...new Set([...disablePlugins, ...(await readUserPluginIds(cwd, claudeConfigDir))])];
-    }
-    subs.settingsFile = await writeWorkSettings(projectPath, workId, {
-      ...(options.hookUrl === undefined ? {} : { hookUrl: options.hookUrl }),
-      ...(skillNavigator || lean || workspace || hasProjectMcp ? { sessionId: session.id } : {}),
-      ...(hasProjectMcp ? { projectMcp: options.projectMcp } : {}),
-      ...(workspace ? { autonomous: true } : {}),
-      ...(disablePlugins.length > 0 ? { disablePlugins } : {}),
-      // Инструменты `browser_*` у сессии есть, только когда канал агента лёг в конфиг MCP (спека браузера, 5.1).
-      ...(options.agent !== undefined && mcpRoute ? { allowBrowser: true } : {}),
-      // Свой токен хуков и свой файл настроек — у GLM, своего провайдера и аккаунта подписки (спека подписок 5.3, К13).
-      ...(ownsHookToken(entry)
-        ? {
-          hookTokenEnv: 'PARLEY_HOOK_CAPABILITY' as const,
-          ...(entry.id === 'glm' ? { provider: 'glm' as const } : { fileName: `settings-${entry.id}.json` }),
-        }
-        : {}),
-      ...(entry.runner.settingsModel === undefined
-        ? {}
-        : { model: options.model ?? session.model ?? entry.runner.settingsModel }),
-    });
-  }
+  if (settingsOptions !== undefined) subs.settingsFile = await writeWorkSettings(projectPath, workId, settingsOptions);
   if (skillList === 'removed') subs.skillCatalog = CODEX_SKILL_CATALOG_OVERRIDE;
   // Хуки Codex — только в режиме `parley` настройки `codexWriteApprovals` (спека 2026-10-21, 5.2): без доверия в `/hooks`
   // Codex остановил бы старт экраном ревью, а в `auto` хук `PermissionRequest` шёл бы раньше авторевьюера.
@@ -504,6 +592,11 @@ async function plan(
       : hasSystemLayer || hasDeveloperLayer;
     if (!deliverable) throw new Error('role-delivery-unavailable: this runner cannot deliver the required role.');
   }
+  // What this launch renders follows the decision. `options.codeMode` is a test seam for rendering only: it never writes a nonce.
+  const codeMode = options.codeMode ?? exposure.routing;
+  if (codeMode.mode === 'replacement' && !hasSystemLayer && !hasDeveloperLayer) {
+    throw new Error('code-mode-bootstrap-unavailable: this runner cannot deliver the Code Mode instructions.');
+  }
   if (entry.id === 'codex' && !hasDeveloperLayer) {
     diagnostics.push({
       code: 'provider-override-gap',
@@ -520,6 +613,7 @@ async function plan(
   }
   // One current layer for launch/new/resume; only its provider channel differs.
   let blockBytes;
+  let routingReport: LaunchPlan['codeModeRouting'];
   if (hasSystemLayer || hasDeveloperLayer) {
     const map = await readMap(projectPath, workId);
     const brief = quiet ? await writtenBrief(projectPath, workId, session.id) : null;
@@ -548,16 +642,43 @@ async function plan(
       : '';
     // Плейбук рецепта — только ведущему комнаты и только по карте: поля `options.layer` его не задают.
     const recipeBlock = leadRecipeBlock(map, session.id);
+    // Replacement only (plan T8c): the launch's own tool list decides which operation names a shipped role or playbook can still call. One
+    // sentence is APPENDED to the shipped text when needed; a custom or native text is only judged, never edited.
+    let roleText = role.roleText;
+    let playbookText = recipeBlock ?? '';
+    if (codeMode.mode === 'replacement') {
+      const { originalToolNames } = await import('../mcp/tools.js');
+      const universe = originalToolNames({
+        sessionId: session.id,
+        skillNavigator,
+        ...(entry.id === 'codex' ? { toolProfile: 'short' as const } : {}),
+        ...(options.agent === undefined ? {} : { agent: options.agent }),
+      });
+      const roleId = role.role?.id ?? '';
+      const roleNote = roleRoutingNote(roleId, codeMode, universe);
+      if (roleNote !== '' && roleText !== '') roleText = `${roleText}\n\n${roleNote}`;
+      const recipe = leadRecipe(map, session.id);
+      const playbookNote = recipe === null ? '' : recipeRoutingNote(recipe.id, codeMode, universe);
+      if (playbookNote !== '') playbookText = `${playbookText}\n\n${playbookNote}`;
+      routingReport = {
+        ...(role.role === null || role.role === undefined
+          ? {}
+          : { role: roleCompatibility({ source: role.role.source, id: role.role.id, ...(role.role.source === 'codex' ? { prompt: role.role.prompt } : {}) }, codeMode, universe) }),
+        ...(recipe === null ? {} : { playbook: recipeCompatibility(recipe, codeMode, universe) }),
+        skills: skillCompatibility(codexCatalog, codeMode, universe),
+      };
+    }
     const layer = buildSessionLayer({
       ...options.layer,
-      playbook: recipeBlock ?? '',
+      playbook: playbookText,
       isLead: recipeBlock !== null,
-      ...(role.role ? { role: role.roleText } : {}),
+      ...(role.role ? { role: roleText } : {}),
       nativeClaudeRole,
       guidance: systemGuidance(map, session.id, {
         skillNavigator: skillNavigator && !nativeClaudeRole && template.includes('{mcpConfig}') && mcp !== undefined,
         ...(entry.id === 'codex' ? { toolProfile: 'short' as const } : {}),
         ...(skillList === undefined ? {} : { skillList }),
+        codeModeBootstrap: bootstrapText(codeMode),
         // Цель стоит в брифе, который уйдёт тем же запуском (системным слоем или первым сообщением): дважды не нужна.
         omitGoal: brief !== null || (!resuming && mode !== 'new' && !quiet),
       }),
@@ -565,7 +686,7 @@ async function plan(
       // забылось бы. Несут их лишь раннеры с `{systemPrompt}`/`{developerInstructions}`; у остальных блока нет
       // (известное ограничение), и задание доходит письмом и чтением `plan_tasks`.
       assignments: assignmentsBlock(map, session.id),
-      bridge: [entry.id === 'codex' && !workspace ? CODEX_APPROVAL_GUIDANCE : '', entry.id === 'codex' ? CODEX_TOOL_EXAMPLES : '', bridge].filter(Boolean).join('\n\n'),
+      bridge: [entry.id === 'codex' && !workspace ? CODEX_APPROVAL_GUIDANCE : '', entry.id === 'codex' ? codexToolExamples(codeMode) : '', bridge].filter(Boolean).join('\n\n'),
       links,
       // Правило — только там, где у агента есть `browser_open`: канал выдан и сервер MCP доходит шаблоном с `{mcpConfig}`.
       ...(options.agent !== undefined && mcpRoute ? { browser: BROWSER_PRIORITY_RULE } : {}),
@@ -642,22 +763,90 @@ async function plan(
     // Сессия в своём worktree живёт там во всех режимах, включая `resume`:
     // `claude --resume` ищет транскрипт по каталогу, а не по id (спецификация 8.1).
     cwd,
-    // Те же переменные, что у MCP-сервера в конфиге: сервер знает, кто звонит,
-    // даже унаследовав окружение от агента. Под обоими именами: старые скрипты и сервер
-    // прежней сборки читают `HARNAS_*` (R3).
-    env: {
-      ...entry.runner.env,
-      ...bothEnv({ WORK_DIR: paths.dir, SESSION_ID: session.id, SKILL_NAVIGATOR: skillNavigator ? '1' : '0', NATIVE_CONTEXT_REVISION: nativeContextRevision,
-        ...(agentRevision === undefined ? {} : { AGENT_REVISION: agentRevision }),
-        ...(skillList === undefined ? {} : { SKILL_LIST_REDUCED: '1' }) }),
-      ...(isClaudeCode(entry) && skillList === 'names' ? CLAUDE_SKILL_BUDGET_ENV : {}),
-      ...(lean && isClaudeCode(entry) ? CLAUDE_LEAN_ENV : {}),
-      ...(workspace ? { TMPDIR: path.join(workspace.path, '.parley-tmp') } : {}),
-    },
+    env: planEnv,
     providerSessionId,
     warnings,
     diagnostics,
+    ...(routingReport === undefined ? {} : { codeModeRouting: routingReport }),
+    codeModeDecision: exposure.recorded,
   };
+}
+
+/**
+ * One launch's Code Mode decision, written. `nonce` is set only for a replacement whose decision was written as `true`; `blocked` names why a
+ * launch must not start. A classic decision is written too, with no nonce, so an old config cannot match it.
+ */
+async function launchExposure(input: {
+  projectPath: string; workId: string; session: WorkSession; entry: ProviderEntry; template: readonly string[]; mcpRoute: boolean; workspace: boolean;
+  agent: AgentChannel | undefined; skillNavigator: boolean; role: Awaited<ReturnType<typeof prepareSessionRole>>; codexCatalog: SkillCatalog | null;
+  gates: CodeModeGateSeams | undefined;
+  /** The session's cwd, the `--settings` file Parley writes, and the env the PTY gets: the Claude row's launch facts (C2a). */
+  cwd: string; settings: { path: string; sha256: string } | undefined; ptyEnv: NodeJS.ProcessEnv;
+}): Promise<{ nonce: string | null; routing: CodeModeRouting; blocked: string | null; recorded: NonNullable<LaunchPlan['codeModeDecision']> }> {
+  const { projectPath, workId, session, entry, gates } = input;
+  const dir = workPaths(projectPath, workId).dir;
+  const universe = async (): Promise<string[]> => {
+    const { originalToolNames } = await import('../mcp/tools.js');
+    return originalToolNames({ sessionId: session.id, skillNavigator: input.skillNavigator, ...(entry.id === 'codex' ? { toolProfile: 'short' as const } : {}), ...(input.agent === undefined ? {} : { agent: input.agent }) });
+  };
+  const candidate = replacementRouting(MIGRATION_REGISTRY);
+  // What the launch scan recorded for the session process; set only when the detector gate ran.
+  let identities: LaunchIdentities = {};
+  const requested = await (gates?.requested ?? (() => codeModeRequested()))().catch(() => false);
+  const selection = await decideLaunchExposure({
+    requested,
+    record: inspectRunRecord(dir, session.id),
+    gates: {
+      provider: entry.id,
+      confined: input.workspace,
+      parleyLaunched: input.agent !== undefined && input.mcpRoute,
+      deliverable: input.template.includes('{systemPrompt}') || input.template.includes('{developerInstructions}'),
+      proven: gates?.proven ?? PROVEN_PROVIDERS,
+      // Claude's reviewed versions answer only for the claude provider: GLM runs `claude` too, and never inherits Claude's review (s-296 G1).
+      clientVersionReviewed: gates?.clientVersionReviewed ?? (async () => entry.id === 'claude' && clientVersionReviewed(gates?.client)),
+      helperAvailable: gates?.helperAvailable ?? (async () => { const { checkLaunchProof } = await import('../mcp/code-mode/helper.js'); return (await checkLaunchProof()).ok; }),
+      registryOk: async () => checkReplacement(await universe(), MIGRATION_REGISTRY).ok,
+      // The Claude row at launch (C2a): argv, env, a second `parley` server, and the settings class once; it records the identities the
+      // session process reads. Only the claude provider has a row; every other provider stays uninspected.
+      detector: gates?.detector ?? (entry.id === 'claude'
+        ? async () => {
+          const { claudeLaunchScan } = await import('../mcp/code-mode/claude-launch-sources.js');
+          const scan = await claudeLaunchScan({ entry, cwd: input.cwd, env: input.ptyEnv, ...(input.settings === undefined ? {} : { settings: input.settings }) });
+          identities = scan.identities;
+          return scan.verdict;
+        }
+        : async () => ({ kind: 'uninspected', sourceClass: 'no-provider-row' }) as const),
+      routingReport: async () => {
+        const names = await universe();
+        const recipe = leadRecipe(await readMap(projectPath, workId), session.id);
+        const role = input.role.role;
+        return {
+          ...(role === null || role === undefined ? {} : { role: roleCompatibility({ source: role.source, id: role.id, ...(role.source === 'codex' ? { prompt: role.prompt } : {}) }, candidate, names) }),
+          ...(recipe === null ? {} : { playbook: recipeCompatibility(recipe, candidate, names) }),
+          skills: skillCompatibility(input.codexCatalog, candidate, names),
+        };
+      },
+    },
+  });
+  const decision = (effective: 'replacement' | 'classic', reason: string | null, nonce: string | null): LaunchDecision =>
+    ({ v: 2, nonce, effective, requested, reason, provider: entry.id, at: new Date().toISOString(), ...(entry.id === 'claude' && gates?.client?.ok === true ? { client: gates.client.client } : {}),
+      ...(entry.id === 'claude' ? identities : {}) });
+  const classic = (reason: string): boolean => writeLaunchDecision(dir, session.id, decision('classic', reason, null));
+  if (selection.effective === 'blocked') {
+    const written = classic(selection.reason);
+    return { nonce: null, routing: CLASSIC_ROUTING, blocked: selection.reason, recorded: { effective: 'classic', reason: selection.reason, written } };
+  }
+  if (selection.effective === 'classic') {
+    const written = classic(selection.reason);
+    return { nonce: null, routing: selection.held === undefined ? CLASSIC_ROUTING : heldRunRouting(selection.held), blocked: null, recorded: { effective: 'classic', reason: selection.reason, written } };
+  }
+  // Replacement: the nonce goes to the config only if the decision carrying it is on disk.
+  const nonce = newLaunchNonce();
+  if (writeLaunchDecision(dir, session.id, decision('replacement', null, nonce))) {
+    return { nonce, routing: candidate, blocked: null, recorded: { effective: 'replacement', reason: null, written: true } };
+  }
+  const written = classic('decision-write-failed');
+  return { nonce: null, routing: CLASSIC_ROUTING, blocked: null, recorded: { effective: 'classic', reason: 'decision-write-failed', written } };
 }
 
 async function codexBridgeApplies(cwd: string): Promise<boolean> {

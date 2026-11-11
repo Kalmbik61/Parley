@@ -1,12 +1,14 @@
+import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { TOOLS as PARLEY_TOOLS } from '../mcp/tools.js';
 import { MCP_SERVER_NAME } from '../names.js';
 import { BUILTIN_ROLES } from '../roles/builtin.js';
 import { LEAD_ROLE, memberRole } from './brief.js';
-import { GUIDE, guideTopic } from './guide.js';
+import { GUIDE, GUIDE_TOPICS, guide as wholeGuide, guideTopic } from './guide.js';
 import { SKILL_MD } from './skill.js';
 import { contextBytes, GUIDANCE_MAX_BYTES, STABLE_POLICY_MAX_BYTES, textHash } from './context-budget.js';
-import { BROWSER_PRIORITY_RULE, CODEX_TOOL_EXAMPLES, guidanceBudgetProblems, linkedSettingsRule, stableGuidance, systemGuidance } from './guidance.js';
+import { bootstrapText, fixtureRouting } from './code-mode-instructions.js';
+import { BROWSER_PRIORITY_RULE, CODEX_APPROVAL_GUIDANCE, CODEX_TOOL_EXAMPLES, GUIDANCE_MAX_LINES, guidanceBudgetProblems, linkedSettingsRule, stableGuidance, systemGuidance } from './guidance.js';
 import { ACCEPTED_LETTER, RETURNED_LETTER } from './proposals.js';
 import type { WorkMap } from './types.js';
 
@@ -984,6 +986,83 @@ describe('профиль short, примеры для Codex и правило о
     // Новое правило: кого будит report.
     for (const text of [stableGuidance(), CODEX_TOOL_EXAMPLES, SKILL_MD]) {
       expect(text).toContain('notifies your room lead, room owner or task giver');
+    }
+  });
+});
+
+
+describe('classic text is byte-identical (T8a goldens, recorded on 7b499047 before any T8a edit)', () => {
+  const sha = (text: string): string => `${Buffer.byteLength(text, 'utf8')} ${createHash('sha256').update(text).digest('hex')}`;
+  const GOLDEN: Record<string, string> = {
+    'stableGuidance()': '4034 866b56efdaafd59e6a3086473b671f23bd9a73827e474c70289ec96e4c61a599',
+    'stableGuidance short': '3905 52fcd20519aa4188145b5b7a6f47db354886bff411e723be8c664df654f80d2b',
+    'stableGuidance navigator names': '4100 0333656059e64213a86f507cd67981bc256d06bf4244802e509aca02b4a223d4',
+    'stableGuidance navigator removed': '4124 2af1dd328b013f959b0a60d1b4069b855e7fabccf589b7bf02acdbf100ea257f',
+    CODEX_TOOL_EXAMPLES: '834 6af490541c2b110c59567ad6602906788a45a02fd89ce5aa7f08b8a936bdc1fd',
+    CODEX_APPROVAL_GUIDANCE: '612 570fd3324744a97deadc15bf004470936110d98679eead67f52257983cec200d',
+    BROWSER_PRIORITY_RULE: '441 6df3e9cd834a5105bbbc39179e517eb79205d9fcbb4b603e42a4448ad3b0c3ae',
+    'guide whole': '45420 33022ef73a2d267a9f62a211facbf5b11080da18968db2deef23ac46914b1c67',
+    'guide whole short': '44466 3f441651b87017b40cde58b9d38d0a38c15ba7ee146f38b77b7fe1846164cc3c',
+    'topic plans': '6864 a335940af2408522b304075e505d9ff53d8b813dff7f4f66654b10106d709a72',
+    'topic overview': '833 12ec5eab0073d950ae36b8c8a57f51bb414ec586a233465d4009d28f1a0ed3fb',
+    'topic lifecycle': '1985 b7928398eb59d187ad26294729b6f9eace1ae983892f660fb1767d62ec9d9680',
+    'topic tools': '9617 8825224f29122834831b6105f482f3daadad3b56f46ecc4eb7a128adcaeca2b4',
+    'topic rooms': '2719 ee457d24affa00fd1e4bede23dc095ed477fc4f9c5fc7daa331b07e0676e3db7',
+    'topic lead': '4404 15f788c63627bfcfd139d0f7a3c188328d03c2d2431c91dfc3ca56faf0ba43d7',
+    'topic member': '1940 6e41674f1e30e176f2b41d9f2d51e41ed747cbcbd39ca5b06b4419ba83f67d07',
+    'topic stuck': '2578 812a8823920813b6db012bb9c45477908646e1077835f2e622e03d8a9d9e5e8b',
+    'topic brief': '473 a2f49a36a917253de1a4a7f6dd8a9dd36a899c886ecfaecc60c8fd7c8d818fdc',
+    'topic window': '4818 b61055fe00d462a97671d0d1bbff4dfff6a0e119ed7c61f6b8c548697d77f2cf',
+    'topic worktrees': '1636 a171bd7b448ec763e46574d28b0c1ae49cc882d592b9c9ee7e8b304513984102',
+    'topic letters': '5682 d79ab3838596fee4875af39e9a6a0a1420ac2dd7ab5a50a03174807466753fc1',
+    'topic rules': '1834 893f241a351c9dee3dd3933552055729cfc24639f67e0e9f96983423a5094129',
+  };
+
+  it('guidance, the Codex blocks, the browser rule, the whole guide and each topic are exactly the recorded bytes', () => {
+    const now: Record<string, string> = {
+      'stableGuidance()': sha(stableGuidance()),
+      'stableGuidance short': sha(stableGuidance({ toolProfile: 'short' })),
+      'stableGuidance navigator names': sha(stableGuidance({ skillNavigator: true, skillList: 'names' })),
+      'stableGuidance navigator removed': sha(stableGuidance({ skillNavigator: true, skillList: 'removed' })),
+      CODEX_TOOL_EXAMPLES: sha(CODEX_TOOL_EXAMPLES),
+      CODEX_APPROVAL_GUIDANCE: sha(CODEX_APPROVAL_GUIDANCE),
+      BROWSER_PRIORITY_RULE: sha(BROWSER_PRIORITY_RULE),
+      'guide whole': sha(wholeGuide({})),
+      'guide whole short': sha(wholeGuide({ toolProfile: 'short' })),
+    };
+    for (const { topic } of GUIDE_TOPICS) now[`topic ${topic}`] = sha(guideTopic(topic, {}) ?? '');
+    expect(now).toEqual(GOLDEN);
+  });
+});
+
+describe('Code Mode bootstrap in the guidance (T8a)', () => {
+  const map = mapOf('Title', 'Goal');
+  const longest = bootstrapText(fixtureRouting(['backlog_list', 'get_map', 'list_roles', 'read_guide', 'read_room']));
+  const profiles = [{}, { toolProfile: 'short' as const }, { skillNavigator: true, skillList: 'names' as const }, { skillNavigator: true, skillList: 'removed' as const }];
+
+  it('no bootstrap, or an empty one, leaves the text exactly as it was', () => {
+    for (const options of profiles) {
+      expect(systemGuidance(map, 's-01', { ...options, codeModeBootstrap: '' })).toBe(systemGuidance(map, 's-01', options));
+    }
+  });
+
+  it('the bootstrap is the first line, the old text follows unchanged, and the stable policy does not contain it', () => {
+    for (const options of profiles) {
+      const plain = systemGuidance(map, 's-01', options);
+      const withBoot = systemGuidance(map, 's-01', { ...options, codeModeBootstrap: longest });
+      expect(withBoot).toBe(`${longest}\n${plain}`);
+      expect(withBoot.startsWith(`${longest}\n${stableGuidance(options)}\n`)).toBe(true);
+    }
+  });
+
+  it('the rules still hold with the longest bootstrap: 14 lines outside it, the stable cap, the 8192 total', () => {
+    for (const options of profiles) {
+      const text = systemGuidance(map, 's-01', { ...options, codeModeBootstrap: longest });
+      const rest = text.slice(longest.length + 1);
+      expect(rest.split('\n').length).toBeLessThanOrEqual(GUIDANCE_MAX_LINES);
+      expect(contextBytes(text)).toBeLessThanOrEqual(GUIDANCE_MAX_BYTES);
+      expect(guidanceBudgetProblems(rest, stableGuidance(options))).toEqual([]);
+      expect(contextBytes(stableGuidance(options))).toBeLessThanOrEqual(STABLE_POLICY_MAX_BYTES);
     }
   });
 });

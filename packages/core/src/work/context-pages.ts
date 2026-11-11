@@ -1172,7 +1172,25 @@ function topologyRows(map: WorkMap, caller: string | null, field: TopologyField,
   return Object.entries(snapshot.unread.byRoom).filter(([id]) => id !== '').sort(([a], [b]) => a.localeCompare(b)).map(([id, count]) => ({ id, count }));
 }
 
-interface TopologyQuery { field: TopologyField; cursor?: string; maxBytes?: number }
+/**
+ * `codeModeOf` — a display label for a session row (plan T12a-indicator): given only by the MCP `get_map`, which owns the work directory.
+ * Absent, every row is as it always was. It is asked for the rows a page returns, never for the whole list.
+ */
+export type CodeModeOf = (sessionId: string) => { readonly mode: string; readonly reason: string | null };
+interface TopologyQuery { field: TopologyField; cursor?: string; maxBytes?: number; codeModeOf?: CodeModeOf }
+
+/**
+ * The row's `codeMode`: the bare mode word, `code-mode`, `classic` or `unknown`, and nothing else (the reason stays in the one-session detail
+ * and the window: a row is paid for by every agent, every call). A reader that throws or answers anything else reads `unknown`.
+ */
+function withCodeMode(row: SummaryRow, codeModeOf: CodeModeOf): SummaryRow {
+  let codeMode = 'unknown';
+  try {
+    const { mode } = codeModeOf(String(row['id']));
+    if (mode === 'code-mode' || mode === 'classic') codeMode = mode;
+  } catch { /* display only: a read problem is unknown, never a failed page */ }
+  return { ...row, codeMode };
+}
 
 /** Собственная версия курсора списков: старые before/after и текстовые offset не меняются. */
 function topologySelection(map: WorkMap, caller: string | null, query: TopologyQuery, snapshot: TopologySnapshot) {
@@ -1218,7 +1236,7 @@ export function topologyListPage(map: WorkMap, caller: string | null, letters: L
   };
   update();
   for (const row of rows.slice(offset, offset + PAGE_MAX_ITEMS)) {
-    items.push(row);
+    items.push(query.field === 'sessions' && query.codeModeOf !== undefined ? withCodeMode(row, query.codeModeOf) : row);
     update();
     if (mcpResultBytes(result) > (budget ?? maxBytes)) {
       items.pop();
@@ -1231,11 +1249,11 @@ export function topologyListPage(map: WorkMap, caller: string | null, letters: L
 }
 
 /** Обзор — пять ограниченных коллекций с точными итогами; полные данные остаются в адресных страницах. */
-export function mapOverview(map: WorkMap, caller: string | null, letters: LetterReader) {
+export function mapOverview(map: WorkMap, caller: string | null, letters: LetterReader, codeModeOf?: CodeModeOf) {
   const cut: Cut = {};
   const snapshot = topologySnapshot(caller, letters);
   const { stats, unread } = snapshot;
-  const pages = Object.fromEntries(TOPOLOGY_FIELDS.map((field) => [field, topologyListPage(map, caller, letters, { field }, 6000, snapshot)])) as Record<TopologyField, ReturnType<typeof topologyListPage>>;
+  const pages = Object.fromEntries(TOPOLOGY_FIELDS.map((field) => [field, topologyListPage(map, caller, letters, { field, ...(codeModeOf === undefined ? {} : { codeModeOf }) }, 6000, snapshot)])) as Record<TopologyField, ReturnType<typeof topologyListPage>>;
   const result = {
     sessionId: caller,
     map: {

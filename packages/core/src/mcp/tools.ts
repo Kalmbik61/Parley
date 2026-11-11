@@ -48,6 +48,7 @@ import {
   mapOverview,
   topologyListPage,
   TOPOLOGY_FIELDS,
+  type CodeModeOf,
   type TopologyField,
 } from '../work/context-pages.js';
 import { heldWarning, settleDelayMs } from '../work/delivery.js';
@@ -103,6 +104,7 @@ import {
   type WorkSession,
 } from '../work/types.js';
 import { BROWSER_UNAVAILABLE, createBrowserTools } from './browser-tools.js';
+import type { CodeModeSurface, CodeModeSurfaceFactory } from './code-mode-tools.js';
 import type { McpContext } from './context.js';
 import { inboxPage, type InboxExtras } from './inbox-page.js';
 import { watchInbox, type Ring } from './inbox-watch.js';
@@ -674,12 +676,19 @@ export const TOOLS: Tool[] = [
 /** Подпись к локальным строкам, когда хост не ответил (спека подписок 5.8): вход аккаунтов и лимиты из процесса MCP не видны. */
 const HOST_UNREACHABLE_NOTE = 'host unreachable: sign-in state and limits unknown';
 
+/** The Code Mode label of a session row (plan T12a-indicator): Parley's own record in this work's directory, display only; a read problem is `unknown`. */
+async function codeModeLabelOf(context: McpContext): Promise<CodeModeOf> {
+  // Loaded when `get_map` first needs it, not at start: a classic start loads nothing of Code Mode (T8 R1, `code-mode-launch.test.ts`).
+  const { codeModeStateOf } = await import('./code-mode/mode-state.js');
+  return (sessionId) => codeModeStateOf(context.workDir, sessionId);
+}
+
 async function getMap(context: McpContext, args: Record<string, unknown> = {}, signal?: AbortSignal): Promise<unknown> {
   const map = await readMap(context.projectPath, context.workId);
   if (Object.keys(args).length > 0) return mapPage(context, map, args, signal);
   // Плейбук рецепта получает только ведущий (слоем и письмом): в топологии агенту видны id и имя рецепта.
   // Каталог провайдеров в карту не входит: он нужен только при создании сессии и приходит по `field: "providers"`.
-  return mapOverview(map, context.sessionId, storeLetterReader(context.projectPath, context.workId));
+  return mapOverview(map, context.sessionId, storeLetterReader(context.projectPath, context.workId), await codeModeLabelOf(context));
 }
 
 /**
@@ -762,7 +771,7 @@ async function mapPage(context: McpContext, map: WorkMap, args: Record<string, u
     if ((TOPOLOGY_FIELDS as readonly (string | undefined)[]).includes(field)) {
       if (sessionId !== undefined || roomId !== undefined || args['kind'] !== undefined || args['id'] !== undefined || args['rev'] !== undefined)
         throw new PageError('invalid-cursor', 'Collection pages accept only field, cursor and maxBytes; use session or room for detail.');
-      return topologyListPage(map, context.sessionId, letters, { field: field as TopologyField, ...(cursorRaw === undefined ? {} : { cursor: cursorRaw }), maxBytes });
+      return topologyListPage(map, context.sessionId, letters, { field: field as TopologyField, ...(cursorRaw === undefined ? {} : { cursor: cursorRaw }), maxBytes, codeModeOf: await codeModeLabelOf(context) });
     }
     if (field === 'plan') {
       const id = stringArg(args, 'id');
@@ -778,7 +787,7 @@ async function mapPage(context: McpContext, map: WorkMap, args: Record<string, u
       if (sessionId !== undefined) {
         const session = requireSession(map, sessionId);
         const entry = mapTopology({ ...map, sessions: [session], rooms: [], plans: [] }, context.sessionId, letters).sessions[0];
-        return { session: { ...entry, artifacts: session.artifacts.slice(0, 20), history: session.history.slice(-20) } };
+        return { session: { ...entry, codeMode: (await codeModeLabelOf(context))(session.id), artifacts: session.artifacts.slice(0, 20), history: session.history.slice(-20) } };
       }
       if (roomId !== undefined) {
         const room = requireRoom(map, roomId);
@@ -1596,18 +1605,42 @@ export function boundedGuide(text: string, what: string, limit = READ_GUIDE_MAX_
   );
 }
 
-function readGuide(context: McpContext, args: Record<string, unknown>): string {
+/**
+ * The guide answer with its routing block (plan T8b). `block` is empty for a classic launch: the answer is then the old bounded text, byte
+ * for byte. Otherwise the block comes FIRST and shares the one cap with the raw text (the separator is two escaped newlines), so the
+ * oversize fallback carries the routing too and the total never passes `READ_GUIDE_MAX_BYTES`.
+ */
+export function presentGuide(raw: string, what: string, block: string): string {
+  if (block === '') return boundedGuide(raw, what);
+  return `${block}\n\n${boundedGuide(raw, what, READ_GUIDE_MAX_BYTES - contextBytes(block) - 4)}`;
+}
+
+/**
+ * The routing block of this launch for one guide answer: empty unless the effective exposure is replacement and the server has a session (a
+ * session-less server cannot be a replacement launch). The Code Mode modules load only then, so a classic start never loads them.
+ */
+async function guideBlock(context: McpContext, topic: string | null): Promise<string> {
+  if (context.codeModeExposure !== 'replacement' || context.sessionId === null) return '';
+  const [{ guideRouting, replacementRouting }, { MIGRATION_REGISTRY }] = await Promise.all([import('../work/code-mode-instructions.js'), import('./code-mode/migration-registry.js')]);
+  return guideRouting(replacementRouting(MIGRATION_REGISTRY), originalToolNames(context), topic, {
+    skillNavigator: context.skillNavigator === true,
+    ...(context.toolProfile === 'short' ? { toolProfile: 'short' as const } : {}),
+  });
+}
+
+async function readGuide(context: McpContext, args: Record<string, unknown>): Promise<string> {
   const raw = args['topic'];
   const options = { skillNavigator: context.skillNavigator === true, ...(context.toolProfile === undefined ? {} : { toolProfile: context.toolProfile }) };
-  if (raw === undefined || raw === '') return boundedGuide(guide(options), 'The whole guide');
+  if (raw === undefined || raw === '') return presentGuide(guide(options), 'The whole guide', await guideBlock(context, null));
   if (typeof raw !== 'string') throw new Error('argument topic: expected a string');
-  const text = guideTopic(raw.trim().toLowerCase(), options);
+  const topic = raw.trim().toLowerCase();
+  const text = guideTopic(topic, options);
   if (text === null) {
     throw new Error(
       `unknown guide topic "${raw}"; topics: ${GUIDE_TOPICS.map((item) => item.topic).join(', ')}`,
     );
   }
-  return boundedGuide(text, `The guide topic ${raw.trim().toLowerCase()}`);
+  return presentGuide(text, `The guide topic ${topic}`, await guideBlock(context, topic));
 }
 
 async function closeSession(
@@ -2169,7 +2202,21 @@ export function createToolRunner(context: McpContext): ToolRunner {
  * поэтому сторож входящих — он читает карту сам — запускается только без него, а `claude/channel` с его instructions
  * сервер не объявляет: звонков в таком режиме не будет.
  */
-export function createParleyServer(context: McpContext, runner?: ToolRunner): Server<Request, ChannelNotification> {
+/**
+ * Names of the tools this launch has before any replacement, from local source: what a replacement start checks at once, and what a launcher
+ * can check before it sets the variable. The list a client gets is checked again, since a remote runner answers it.
+ */
+export function originalToolNames(context: Pick<McpContext, 'toolProfile' | 'skillNavigator' | 'agent' | 'sessionId'>): string[] {
+  const hidden = context.toolProfile === 'short' ? (SHORT_PROFILE_HIDDEN_TOOLS as readonly string[]) : [];
+  return [
+    ...TOOLS.map((t) => t.name).filter((name) => !hidden.includes(name)),
+    ...(context.skillNavigator === true ? ['find_skill'] : []),
+    ...(context.agent === undefined ? [] : createBrowserTools(context.agent).tools.map((t) => t.name)),
+    ...(context.sessionId !== null && context.agent !== undefined ? [CREATE_SESSION_TOOL, REQUEST_AGENT_SWITCH_TOOL, CREATE_SWARM_TOOL, SWARM_ADD_TOOL].map((t) => t.name) : []),
+  ];
+}
+
+export function createParleyServer(context: McpContext, runner?: ToolRunner, codeModeInput?: CodeModeSurface | CodeModeSurfaceFactory): Server<Request, ChannelNotification> {
   // Сессии нет — звонить некому: сервер без `PARLEY_SESSION_ID` умеет только
   // отдавать карту и гид (4.2). Нет и сторожа (удалённый исполнитель) — звонить тоже некому: объявить capability значило
   // бы обещать агенту звонки, которых он не дождётся (спека хранилища 6.9).
@@ -2204,13 +2251,19 @@ export function createParleyServer(context: McpContext, runner?: ToolRunner): Se
   // Инструмент браузера окна (спека браузера 2026-10-07, 3.7) — только при канале агента в окружении сервера.
   const browser = context.agent === undefined ? null : createBrowserTools(context.agent, { clientName: () => server.getClientVersion()?.name });
   const sessionAgent = sessionId === null ? undefined : context.agent;
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: [...await tools.list(), ...(browser?.tools ?? []), ...(sessionAgent ? [CREATE_SESSION_TOOL, REQUEST_AGENT_SWITCH_TOOL, CREATE_SWARM_TOOL, SWARM_ADD_TOOL] : [])],
-  }));
+  const listOriginal = async (): Promise<Tool[]> => [...await tools.list(), ...(browser?.tools ?? []), ...(sessionAgent ? [CREATE_SESSION_TOOL, REQUEST_AGENT_SWITCH_TOOL, CREATE_SWARM_TOOL, SWARM_ADD_TOOL] : [])];
+  // One surface per server, built here, so `names` below and the listing are the same one's. Classic passes nothing and pays for nothing.
+  const codeMode = typeof codeModeInput === 'function' ? codeModeInput(listOriginal) : codeModeInput;
+  server.setRequestHandler(ListToolsRequestSchema, async () => {
+    const original = await listOriginal();
+    return { tools: [...(codeMode?.directOf?.(original) ?? original), ...(codeMode?.tools ?? [])] };
+  });
   server.setRequestHandler(
     CallToolRequestSchema,
     async (request, extra): Promise<CallToolResult> => {
       const args = isRecord(request.params.arguments) ? request.params.arguments : {};
+      // A proven method is no longer direct in this launch: the same answer as any tool it does not have.
+      if (codeMode?.isMigrated?.(request.params.name) === true) return { content: [{ type: 'text', text: `unknown tool ${request.params.name}` }], isError: true };
       // Инструменты браузера отвечают сами: без канала — отказ с советом перезапустить сессию.
       if (request.params.name.startsWith('browser_')) {
         return browser === null ? { content: [{ type: 'text', text: BROWSER_UNAVAILABLE }], isError: true } : browser.call(request.params.name, args);
@@ -2229,6 +2282,11 @@ export function createParleyServer(context: McpContext, runner?: ToolRunner): Se
         return sessionAgent === undefined
           ? { content: [{ type: 'text', text: SWARM_UNAVAILABLE }], isError: true }
           : (request.params.name === 'create_swarm' ? createSwarm : swarmAdd)(sessionAgent, args, extra.signal);
+      }
+      // The Code Mode wrappers (T7a) exist only when a caller passed a surface; none does until T7b. A session that now belongs to
+      // another agent is fenced before any of them is asked, like the classic tools.
+      if (codeMode?.names.has(request.params.name)) {
+        return await staleAgent(context) ? { content: [{ type: 'text', text: STALE_AGENT }], isError: true } : codeMode.call(request.params.name, args, extra.signal);
       }
       return tools.call(request.params.name, args, request.params._meta, extra.signal);
     },

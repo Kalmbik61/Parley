@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { createCodeModeSurface } from './code-mode-tools.js';
 import { TOOLS } from './tools.js';
 import { CREATE_SESSION_TOOL } from './session-tools.js';
 import { CREATE_SWARM_TOOL, SWARM_ADD_TOOL } from './swarm-tools.js';
@@ -67,5 +68,13 @@ describe('размер описаний инструментов роя', () => 
 
   it(`JSON схем create_swarm и swarm_add целиком — не больше ${SWARM_SCHEMAS_MAX_BYTES} байт`, () => {
     expect(Buffer.byteLength(JSON.stringify(SWARM_TOOLS))).toBeLessThanOrEqual(SWARM_SCHEMAS_MAX_BYTES);
+  });
+});
+
+describe('обёртки Code Mode (план T7b)', () => {
+  it('три обёртки вместе — не больше измеренных байт: их описания не растут незаметно', () => {
+    const surface = createCodeModeSurface({ backend: () => { throw new Error('не нужен'); } });
+    expect(surface.tools.map((t) => t.name)).toEqual(['code_search', 'code_docs', 'code_execute']);
+    expect(Buffer.byteLength(JSON.stringify(surface.tools), 'utf8')).toBeLessThanOrEqual(1546);
   });
 });

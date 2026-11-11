@@ -28,6 +28,7 @@ import { sessionRowLabel } from '../lib/participant.js';
 import { RoleChip } from '../lib/role-summary.js';
 import { swarmOfSession } from '@parley/core/swarms';
 import { useWorksStore } from '../store/works.js';
+import { CodeModeChip } from './CodeModeChip.js';
 import { SwarmChip } from './SwarmChip.js';
 import { workKey as keyOf } from '../lib/tree-order.js';
 import { updateTab, findTab } from '../layout/tree.js';
@@ -295,6 +296,7 @@ export function ChatToolbar({ workKey, tabId, view, available, provider, modeLab
         </div>
       </div>
       {inSwarm === null || entry === undefined ? null : <SwarmChip swarm={inSwarm.swarm} member={inSwarm.member} projectPath={entry.projectPath} workId={entry.map.work.id} />}
+      {session && entry ? <CodeModeChip sessionRef={{ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id }} /> : null}
       {metrics === null ? null : <SessionUsageChip metrics={metrics} />}
       {contextChip}
       {agents === undefined ? null : (

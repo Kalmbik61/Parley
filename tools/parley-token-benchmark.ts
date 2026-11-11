@@ -19,10 +19,11 @@
  * Запуск: `pnpm exec tsx tools/parley-token-benchmark.ts <команда>`, список команд — `--help`.
  */
 
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, realpathSync } from 'node:fs';
 import { copyFile, cp, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -436,6 +437,50 @@ export function renderRunSheet(runs: PlannedRun[], file: ScenarioFile, budget: B
 }
 
 // ---------- Запись прогона ----------
+
+/**
+ * Code Mode schema accounting (plan T7b): what one launch's tool list costs, in named fields. A diagnostic, not a savings gate; baseline
+ * artifacts stay as they are. Bytes are UTF-8 of the JSON of the descriptors; tokens come from the counter the caller names.
+ */
+export interface ExposureAccounting {
+  exposure: 'classic' | 'replacement';
+  originalTools: number;
+  residualTools: number;
+  wrapperTools: number;
+  residualBytes: number;
+  wrappersBytes: number;
+  totalBytes: number;
+  residualTokens: number;
+  wrappersTokens: number;
+  tokenizer: string;
+  registryRevision: string | null;
+}
+
+export function exposureAccounting(input: {
+  original: readonly unknown[];
+  residual: readonly unknown[];
+  wrappers: readonly unknown[];
+  registryRevision: string | null;
+  tokenizer: { name: string; count: (text: string) => number };
+}): ExposureAccounting {
+  const residualText = JSON.stringify(input.residual);
+  const wrappersText = JSON.stringify(input.wrappers);
+  const residualBytes = Buffer.byteLength(residualText, 'utf8');
+  const wrappersBytes = input.wrappers.length === 0 ? 0 : Buffer.byteLength(wrappersText, 'utf8');
+  return {
+    exposure: input.wrappers.length === 0 ? 'classic' : 'replacement',
+    originalTools: input.original.length,
+    residualTools: input.residual.length,
+    wrapperTools: input.wrappers.length,
+    residualBytes,
+    wrappersBytes,
+    totalBytes: Buffer.byteLength(JSON.stringify([...input.residual, ...input.wrappers]), 'utf8'),
+    residualTokens: input.tokenizer.count(residualText),
+    wrappersTokens: input.wrappers.length === 0 ? 0 : input.tokenizer.count(wrappersText),
+    tokenizer: input.tokenizer.name,
+    registryRevision: input.registryRevision,
+  };
+}
 
 export type Provenance = 'synthetic-fixture' | 'live';
 
@@ -1860,6 +1905,614 @@ export async function dryRun(fixtureDir = FIXTURE_DIR): Promise<DryRunResult> {
   return { ok, lines };
 }
 
+// ---------- Code Mode: базовый корпус (T1a) ----------
+//
+// Замер «до» для Code Mode (спека `docs/specs/2026-11-07-code-mode-design.md`, §2 и приложение A; план, задача T1a):
+// размер объявлений инструментов Parley на закреплённой базе и пять настоящих цепочек вызовов из транскриптов Claude.
+// Счёт токенов здесь — фиксированный токенизатор (`js-tiktoken`, `o200k_base`), а не usage провайдера: это диагностика
+// корпуса, а не токены прогона, и в учёт `sumUsage` она не попадает. Ни платных ходов, ни вызовов инструментов.
+// Транскрипты — частные локальные входы: в репозитории лежат только их длины, хеши, номера строк и id вызовов.
+
+export const CODE_MODE_DIR = path.join(repoRoot, 'docs/research/2026-11-07-code-mode-benchmark');
+export const CODE_MODE_MANIFEST = path.join(CODE_MODE_DIR, 'baseline-manifest.json');
+
+/** Токенизатор приложения A: версия и хеши файлов пакета сверяются до первого подсчёта. */
+export const PINNED_TOKENIZER = {
+  package: 'js-tiktoken',
+  version: '1.0.21',
+  encoder: 'o200k_base',
+  entrySha256: '9ca95aad3c36db42d478b237d70a49a2b8693785a050d00407d3d586fde7c7a8',
+  encoderDataSha256: 'd2a4d9f263b2de045dcd98f347c50e38d71104141948918b6c30a92fb2411f42',
+} as const;
+
+/** Файлы базы, хеши которых определяют корпус схем (тот же список, что в приложении A). */
+export const CODE_MODE_SOURCES = [
+  'packages/core/src/mcp/tools.ts',
+  'packages/core/src/mcp/tools-size.test.ts',
+  'packages/core/src/mcp/server.ts',
+  'packages/core/src/mcp/server-profile.test.ts',
+  'packages/core/src/mcp/browser-tools.ts',
+  'packages/core/src/mcp/plan-tools.ts',
+  'packages/core/src/mcp/session-tools.ts',
+  'packages/core/src/work/mcp-config.ts',
+  'packages/host/src/agent/tools-endpoint.ts',
+] as const;
+
+
+export interface Tokenizer {
+  /** Что считало: пакет, версия и кодировка — попадает в запись замера. */
+  label: string;
+  count(text: string): number;
+}
+
+/**
+ * Закреплённый токенизатор из каталога вне репозитория (`npm install --save-exact js-tiktoken@1.0.21` во временный
+ * каталог). Другая версия или другие байты кода и словаря — отказ: числа иначе не сравнимы с приложением A.
+ */
+export async function loadPinnedTokenizer(dir: string): Promise<Tokenizer> {
+  const req = createRequire(path.join(path.resolve(dir), 'noop.cjs'));
+  let entry: string;
+  try {
+    entry = req.resolve(PINNED_TOKENIZER.package);
+  } catch {
+    throw new Error(`${dir}: нет пакета ${PINNED_TOKENIZER.package}; поставьте его туда: npm install --save-exact --no-audit --no-fund ${PINNED_TOKENIZER.package}@${PINNED_TOKENIZER.version}`);
+  }
+  const packageDir = path.dirname(path.dirname(entry));
+  const meta = JSON.parse(await readFile(path.join(packageDir, 'package.json'), 'utf8')) as { version?: unknown };
+  if (meta.version !== PINNED_TOKENIZER.version) throw new Error(`${packageDir}: версия ${String(meta.version)}, нужна ${PINNED_TOKENIZER.version}`);
+  const entryHash = sha256(await readFile(entry));
+  if (entryHash !== PINNED_TOKENIZER.entrySha256) throw new Error(`${entry}: sha256 ${entryHash} не совпадает с закреплённым`);
+  const ranks = path.join(packageDir, 'dist/ranks', `${PINNED_TOKENIZER.encoder}.cjs`);
+  const ranksHash = sha256(await readFile(ranks));
+  if (ranksHash !== PINNED_TOKENIZER.encoderDataSha256) throw new Error(`${ranks}: sha256 ${ranksHash} не совпадает с закреплённым`);
+  const { getEncoding } = req(PINNED_TOKENIZER.package) as { getEncoding(name: string): { encode(text: string, allowed: string[], disallowed: string[]): number[] } };
+  const encoding = getEncoding(PINNED_TOKENIZER.encoder);
+  return {
+    label: `${PINNED_TOKENIZER.package}@${PINNED_TOKENIZER.version}/${PINNED_TOKENIZER.encoder}`,
+    count: (text) => encoding.encode(text, [], []).length,
+  };
+}
+
+/** Сумма байт всех строк `description` на любой глубине (как `tools-size.test.ts`). */
+export function descriptionBytes(node: unknown): number {
+  if (Array.isArray(node)) return node.reduce<number>((sum, item) => sum + descriptionBytes(item), 0);
+  if (node === null || typeof node !== 'object') return 0;
+  let sum = 0;
+  for (const [key, value] of Object.entries(node)) sum += key === 'description' && typeof value === 'string' ? Buffer.byteLength(value) : descriptionBytes(value);
+  return sum;
+}
+
+/** Строка корпуса схем. `o200kTokens: null` — токенизатора не было: неизвестно, а не ноль. */
+export interface CorpusRow {
+  name: string;
+  toolCount: number;
+  utf8Bytes: number;
+  o200kTokens: number | null;
+  descriptionBytes: number;
+  sha256: string;
+}
+
+/** Сериализация приложения A: `JSON.stringify(массив)` без пробелов и перевода строки. */
+export function corpusRow(name: string, tools: readonly unknown[], tokenizer: Tokenizer | null): CorpusRow {
+  const json = JSON.stringify(tools);
+  return { name, toolCount: tools.length, utf8Bytes: Buffer.byteLength(json), o200kTokens: tokenizer?.count(json) ?? null, descriptionBytes: descriptionBytes(tools), sha256: sha256(json) };
+}
+
+export interface ParityRow {
+  profile: 'full' | 'short';
+  agent: boolean;
+  toolCount: number;
+  semanticMatch: boolean;
+  exactJsonMatch: boolean;
+  sdkParsedOrder: CorpusRow;
+}
+
+export interface WireRow {
+  name: string;
+  sourceOrderMatch: boolean;
+  utf8Bytes: number;
+  o200kTokens: number | null;
+  sha256: string;
+}
+
+export interface SchemaCorpus {
+  rows: CorpusRow[];
+  runtimeParity: ParityRow[];
+  wire: WireRow[];
+}
+
+/** Ключи объектов по алфавиту на любой глубине: сравнение содержания без порядка ключей. */
+const canonical = (value: unknown): unknown =>
+  Array.isArray(value) ? value.map(canonical)
+    : value !== null && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonical((value as Record<string, unknown>)[key])]))
+      : value;
+
+/** Модуль, собранный из исходников цели: открытые списки и три закрытые константы навигатора. */
+interface BaselineBundle {
+  TOOLS: unknown[];
+  FIND_SKILL: { description: string };
+  CLAUDE_NAMES_ONLY: string;
+  CODEX_NO_LIST_NO_NAMES: string;
+  BROWSER_TOOLS: unknown[];
+  CREATE_SESSION_TOOL: unknown;
+  SHORT_PROFILE_HIDDEN_TOOLS: readonly string[];
+  runtimeProbe(profile: 'full' | 'short', agent: boolean): Promise<unknown[]>;
+}
+
+/**
+ * Точка входа сборки — та же, что в приложении A: экспорт списков, проба `listTools()` через MCP-клиент в памяти и
+ * режим stdio-сервера `--baseline-stdio`. Канал агента подставной: ни одного запроса к хосту проба не делает.
+ */
+const BASELINE_ENTRY = `export { TOOLS, FIND_SKILL, CLAUDE_NAMES_ONLY, CODEX_NO_LIST_NO_NAMES } from './packages/core/src/mcp/tools.ts'; export { BROWSER_TOOLS } from './packages/core/src/mcp/browser-tools.ts'; export { CREATE_SESSION_TOOL } from './packages/core/src/mcp/session-tools.ts'; export { SHORT_PROFILE_HIDDEN_TOOLS } from './packages/core/src/work/mcp-config.ts';
+import {createParleyServer} from './packages/core/src/mcp/tools.ts';
+import {Client} from '@modelcontextprotocol/sdk/client/index.js';
+import {InMemoryTransport} from '@modelcontextprotocol/sdk/inMemory.js';
+import {StdioServerTransport} from '@modelcontextprotocol/sdk/server/stdio.js';
+const contextOf=(profile,agent)=>({ projectPath:'/unused', workId:'w-0000', workDir:'/unused', sessionId:'s-01', channel:false, ...(profile==='short'?{toolProfile:'short'}:{}), ...(agent?{agent:{url:'http://127.0.0.1:1',token:'measurement-fixture'}}:{}) });
+export async function runtimeProbe(profile, agent) {
+ const server=createParleyServer(contextOf(profile,agent)); const client=new Client({name:'baseline',version:'0'}); const [a,b]=InMemoryTransport.createLinkedPair();
+ await Promise.all([client.connect(a),server.connect(b)]); try {return (await client.listTools()).tools;} finally {await client.close(); await server.close();}
+}
+if(process.argv[2]==='--baseline-stdio') await createParleyServer(contextOf(process.argv[3],process.argv[4]==='true')).connect(new StdioServerTransport());
+`;
+
+interface EsbuildApi {
+  version: string;
+  build(options: Record<string, unknown>): Promise<{ outputFiles: { text: string }[] }>;
+}
+
+/** esbuild из зависимостей `tsx` (уже в lockfile): своей зависимости стенд не заводит. */
+function loadEsbuild(): EsbuildApi {
+  const req = createRequire(import.meta.url);
+  return createRequire(req.resolve('tsx/package.json'))('esbuild') as EsbuildApi;
+}
+
+/** Строка `tools/list` с id 2 от сервера, запущенного из сборки по stdio: точный ответ, с конвертом и переводом строки. */
+async function captureStdioList(bundle: string, profile: 'full' | 'short', agent: boolean): Promise<{ line: string; tools: unknown[] }> {
+  return await new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [bundle, '--baseline-stdio', profile, String(agent)], { stdio: ['pipe', 'pipe', 'pipe'] });
+    let buffer = '';
+    let errors = '';
+    let settled = false;
+    const finish = (error: Error | null, value?: { line: string; tools: unknown[] }): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      child.kill();
+      if (error !== null) reject(error);
+      else resolve(value!);
+    };
+    const timer = setTimeout(() => finish(new Error('stdio: нет ответа tools/list за 10 с')), 10_000);
+    child.stderr.on('data', (chunk: Buffer) => { errors += chunk.toString(); });
+    child.on('error', (error) => finish(error));
+    child.on('exit', (code) => finish(new Error(`stdio: сервер вышел с кодом ${String(code)}: ${errors}`)));
+    child.stdout.on('data', (chunk: Buffer) => {
+      buffer += chunk.toString();
+      for (let n = buffer.indexOf('\n'); n >= 0; n = buffer.indexOf('\n')) {
+        const line = buffer.slice(0, n + 1);
+        buffer = buffer.slice(n + 1);
+        let message: { id?: unknown; result?: { tools?: unknown[] } };
+        try { message = JSON.parse(line) as typeof message; } catch (error) { finish(error as Error); return; }
+        if (message.id === 1) {
+          child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`);
+          child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} })}\n`);
+        }
+        if (message.id === 2) {
+          if (!Array.isArray(message.result?.tools)) finish(new Error('stdio: в ответе нет result.tools'));
+          else finish(null, { line, tools: message.result.tools });
+        }
+      }
+    });
+    child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'baseline', version: '0' } } })}\n`);
+  });
+}
+
+/**
+ * Корпус схем исходников `target` по приложению A: исходный порядок, порядок после разбора SDK и точная строка stdio.
+ * Сборка и её запуск — во временном каталоге вне репозитория; исходники цели не меняются (константы навигатора
+ * открываются в памяти). Зависимости (SDK) берутся из `node_modules` этого чекаута.
+ */
+export async function measureSchemaCorpus(target: string, tokenizer: Tokenizer | null): Promise<SchemaCorpus & { esbuild: string }> {
+  const esbuild = loadEsbuild();
+  const result = await esbuild.build({
+    stdin: { contents: BASELINE_ENTRY, resolveDir: target, sourcefile: 'baseline-entry.ts' },
+    bundle: true, write: false, platform: 'node', format: 'esm', absWorkingDir: target,
+    banner: { js: "import { createRequire as baselineRequire } from 'node:module'; const require = baselineRequire(import.meta.url);" },
+    nodePaths: [path.join(repoRoot, 'packages/core/node_modules'), path.join(repoRoot, 'node_modules')],
+    plugins: [{
+      name: 'measurement-exports',
+      setup(build: { onLoad(options: { filter: RegExp }, callback: (args: { path: string }) => Promise<{ contents: string; loader: string }>): void }) {
+        build.onLoad({ filter: /\/mcp\/tools\.ts$/ }, async (args) => ({ contents: `${await readFile(args.path, 'utf8')}\nexport { FIND_SKILL, CLAUDE_NAMES_ONLY, CODEX_NO_LIST_NO_NAMES };`, loader: 'ts' }));
+      },
+    }],
+  });
+  const dir = await mkdtemp(path.join(tmpdir(), 'parley-code-mode-'));
+  try {
+    const bundle = path.join(dir, 'source-bundle.mjs');
+    await writeFile(bundle, result.outputFiles[0]!.text);
+    const m = (await import(pathToFileURL(bundle).href)) as BaselineBundle;
+    const rows: CorpusRow[] = [];
+    const parity: ParityRow[] = [];
+    const wire: WireRow[] = [];
+    const navigator = (suffix: string): unknown => ({ ...m.FIND_SKILL, description: m.FIND_SKILL.description + suffix });
+    rows.push(
+      corpusRow('create-session', [m.CREATE_SESSION_TOOL], tokenizer),
+      corpusRow('browser', m.BROWSER_TOOLS, tokenizer),
+      corpusRow('navigator-base', [m.FIND_SKILL], tokenizer),
+      corpusRow('navigator-claude-reduced', [navigator(m.CLAUDE_NAMES_ONLY)], tokenizer),
+      corpusRow('navigator-codex-reduced-unavailable', [navigator(m.CODEX_NO_LIST_NO_NAMES)], tokenizer),
+    );
+    for (const profile of ['full', 'short'] as const) {
+      const core = m.TOOLS.filter((tool) => profile === 'full' || !m.SHORT_PROFILE_HIDDEN_TOOLS.includes((tool as { name: string }).name));
+      rows.push(
+        corpusRow(`${profile}-runner`, core, tokenizer),
+        corpusRow(`${profile}-legacy-size-corpus`, [...core, m.CREATE_SESSION_TOOL], tokenizer),
+        corpusRow(`${profile}-server-agent`, [...core, ...m.BROWSER_TOOLS, m.CREATE_SESSION_TOOL], tokenizer),
+        corpusRow(`${profile}-server-agent-navigator-base`, [...core, m.FIND_SKILL, ...m.BROWSER_TOOLS, m.CREATE_SESSION_TOOL], tokenizer),
+      );
+      for (const agent of [false, true]) {
+        const expected = agent ? [...core, ...m.BROWSER_TOOLS, m.CREATE_SESSION_TOOL] : core;
+        const actual = await m.runtimeProbe(profile, agent);
+        const semanticMatch = JSON.stringify(canonical(actual)) === JSON.stringify(canonical(expected));
+        parity.push({ profile, agent, toolCount: actual.length, semanticMatch, exactJsonMatch: JSON.stringify(actual) === JSON.stringify(expected), sdkParsedOrder: corpusRow(`${profile}-sdk-${agent ? 'server-agent' : 'runner'}`, actual, tokenizer) });
+        const captured = await captureStdioList(bundle, profile, agent);
+        wire.push({
+          name: `${profile}-stdio-${agent ? 'server-agent' : 'runner'}`,
+          sourceOrderMatch: JSON.stringify(captured.tools) === JSON.stringify(expected),
+          utf8Bytes: Buffer.byteLength(captured.line),
+          o200kTokens: tokenizer?.count(captured.line) ?? null,
+          sha256: sha256(captured.line),
+        });
+      }
+    }
+    return { rows, runtimeParity: parity, wire, esbuild: esbuild.version };
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+// ----- Цепочки вызовов из транскриптов -----
+
+/** Транскрипт в манифесте: только имя файла, длина и хеш замороженного префикса. Путь на диске — локальный вход. */
+export interface TranscriptSpec {
+  key: string;
+  file: string;
+  prefixBytes: number;
+  prefixSha256: string;
+  lineCount: number;
+}
+
+export type PrefixCheck =
+  | { state: 'unchanged' | 'appended'; prefix: Buffer }
+  | { state: 'truncated' | 'modified'; reason: string };
+
+/**
+ * Замороженный префикс: дописанный в конец файл — тот же корпус (`appended`), изменённый или укороченный — нет.
+ * Изменение внутри префикса меняет хеш, поэтому числа по такому файлу не выдаются.
+ */
+export function checkPrefix(bytes: Buffer, spec: Pick<TranscriptSpec, 'prefixBytes' | 'prefixSha256'>): PrefixCheck {
+  if (bytes.length < spec.prefixBytes) return { state: 'truncated', reason: `файл ${bytes.length} байт, префикс ${spec.prefixBytes}` };
+  const prefix = bytes.subarray(0, spec.prefixBytes);
+  const hash = sha256(prefix);
+  if (hash !== spec.prefixSha256) return { state: 'modified', reason: `sha256 префикса ${hash} вместо ${spec.prefixSha256}` };
+  return { state: bytes.length === spec.prefixBytes ? 'unchanged' : 'appended', prefix };
+}
+
+export interface TranscriptCall {
+  line: number;
+  block: number;
+  id: string;
+  name: string;
+  input: unknown;
+  timestamp: string | null;
+  messageId: string | null;
+}
+
+export interface TranscriptResult {
+  line: number;
+  block: number;
+  toolUseId: string;
+  content: unknown;
+  isError: boolean;
+}
+
+export interface TranscriptIndex {
+  lineCount: number;
+  /** Все вызовы транскрипта по порядку, не только Parley: смежность считается по ним. */
+  calls: TranscriptCall[];
+  results: Map<string, TranscriptResult[]>;
+}
+
+/** Номера строк — как в приложении A: текст без хвостовых пробелов, по `\n`, каждая строка — JSON. */
+export function indexTranscript(text: string): TranscriptIndex {
+  const lines = text.trimEnd().split('\n');
+  const calls: TranscriptCall[] = [];
+  const results = new Map<string, TranscriptResult[]>();
+  lines.forEach((raw, i) => {
+    const data = JSON.parse(raw) as { timestamp?: unknown; message?: { id?: unknown; content?: unknown } };
+    const content = data.message?.content;
+    if (!Array.isArray(content)) return;
+    content.forEach((block: { type?: unknown; id?: unknown; name?: unknown; input?: unknown; tool_use_id?: unknown; content?: unknown; is_error?: unknown }, index) => {
+      if (block.type === 'tool_use') {
+        calls.push({
+          line: i + 1, block: index, id: String(block.id), name: String(block.name), input: block.input,
+          // Пустое и пробельное время — то же, что его нет (приложение A отвергает пустое): сжатая или повторённая запись.
+          timestamp: typeof data.timestamp === 'string' && data.timestamp.trim() !== '' ? data.timestamp : null,
+          messageId: typeof data.message?.id === 'string' ? data.message.id : null,
+        });
+      } else if (block.type === 'tool_result') {
+        const id = String(block.tool_use_id);
+        const list = results.get(id) ?? [];
+        list.push({ line: i + 1, block: index, toolUseId: id, content: block.content, isError: block.is_error === true });
+        results.set(id, list);
+      }
+    });
+  });
+  return { lineCount: lines.length, calls, results };
+}
+
+export interface PayloadStats {
+  utf8Bytes: number;
+  o200kTokens: number | null;
+  sha256: string;
+}
+
+export interface ChainCall {
+  name: string;
+  callLine: number;
+  callBlock: number;
+  callId: string;
+  messageId: string | null;
+  timestamp: string;
+  resultLine: number;
+  resultBlock: number;
+  isError: boolean;
+  input: PayloadStats;
+  resultContent: PayloadStats;
+}
+
+export interface ChainRecord {
+  label: string;
+  transcript: string;
+  calls: ChainCall[];
+  sumInputTokens: number | null;
+  sumResultTokens: number | null;
+  intermediateResultTokens: number | null;
+}
+
+/** Сериализация приложения A: `JSON.stringify` разобранного значения, порядок свойств как в записи. */
+export function payloadStats(value: unknown, tokenizer: Tokenizer | null): PayloadStats {
+  const text = JSON.stringify(value);
+  return { utf8Bytes: Buffer.byteLength(text), o200kTokens: tokenizer?.count(text) ?? null, sha256: sha256(text) };
+}
+
+const tokenSum = (values: PayloadStats[]): number | null =>
+  values.some((v) => v.o200kTokens === null) ? null : values.reduce((sum, v) => sum + v.o200kTokens!, 0);
+
+/**
+ * Цепочка по номерам строк вызовов. Отказ, если: на строке не ровно один вызов; между выбранными есть любой другой
+ * вызов (не только Parley); у вызова нет результата или их несколько; результат пришёл не между своим вызовом и
+ * следующим; у записи вызова нет времени (сжатая или повторённая запись).
+ */
+export function measureChain(index: TranscriptIndex, label: string, transcript: string, callLines: readonly number[], tokenizer: Tokenizer | null): ChainRecord {
+  const chosen = callLines.map((line) => {
+    const found = index.calls.filter((call) => call.line === line);
+    if (found.length !== 1) throw new Error(`${label}: на строке ${line} вызовов ${found.length}, нужен один`);
+    return found[0]!;
+  });
+  for (let i = 1; i < chosen.length; i++) {
+    const gap = index.calls.indexOf(chosen[i]!) - index.calls.indexOf(chosen[i - 1]!);
+    if (gap !== 1) throw new Error(`${label}: между строками ${chosen[i - 1]!.line} и ${chosen[i]!.line} ${gap < 1 ? 'обратный порядок' : `ещё ${gap - 1} вызов(ов)`}`);
+  }
+  const calls = chosen.map((call, i): ChainCall => {
+    const found = index.results.get(call.id) ?? [];
+    if (found.length !== 1) throw new Error(`${label}: у вызова ${call.id} (строка ${call.line}) результатов ${found.length}, нужен один`);
+    const result = found[0]!;
+    if (result.line < call.line) throw new Error(`${label}: результат ${call.id} на строке ${result.line} раньше вызова`);
+    const next = chosen[i + 1];
+    if (next !== undefined && result.line >= next.line) throw new Error(`${label}: результат ${call.id} на строке ${result.line} не раньше следующего вызова (${next.line})`);
+    if (call.timestamp === null) throw new Error(`${label}: у вызова на строке ${call.line} нет времени записи`);
+    return {
+      name: call.name, callLine: call.line, callBlock: call.block, callId: call.id, messageId: call.messageId, timestamp: call.timestamp,
+      resultLine: result.line, resultBlock: result.block, isError: result.isError,
+      input: payloadStats(call.input, tokenizer), resultContent: payloadStats(result.content, tokenizer),
+    };
+  });
+  return {
+    label, transcript, calls,
+    sumInputTokens: tokenSum(calls.map((c) => c.input)),
+    sumResultTokens: tokenSum(calls.map((c) => c.resultContent)),
+    intermediateResultTokens: tokenSum(calls.slice(0, -1).map((c) => c.resultContent)),
+  };
+}
+
+// ----- Манифест и сверка -----
+
+export interface ChainSpec {
+  label: string;
+  transcript: string;
+  callLines: number[];
+}
+
+export interface CodeModeManifest {
+  version: 1;
+  provenance: string;
+  base: string;
+  tokenizer: typeof PINNED_TOKENIZER;
+  serialization: { schema: string; chains: string };
+  sources: Record<string, string>;
+  schema: SchemaCorpus;
+  transcripts: TranscriptSpec[];
+  chainSpecs: ChainSpec[];
+  chains: ChainRecord[];
+  limitations: string[];
+}
+
+/** Итог по каждой части замера: совпало, разошлось (с причинами) или вход недоступен. */
+export interface Verdict {
+  part: string;
+  state: 'match' | 'mismatch' | 'unavailable';
+  details: string[];
+}
+
+/**
+ * Различия двух значений по путям; `null` в замере против числа в манифесте — «нет токенизатора», это не
+ * расхождение, а недоступность, и её отмечает `tokensUnavailable`.
+ */
+export function diffValues(expected: unknown, actual: unknown, trail = '', out: string[] = [], tokensUnavailable?: { hit: boolean }): string[] {
+  if (actual === null && typeof expected === 'number' && tokensUnavailable !== undefined && /o200kTokens$|Tokens$/.test(trail)) {
+    tokensUnavailable.hit = true;
+    return out;
+  }
+  if (Array.isArray(expected) && Array.isArray(actual)) {
+    if (expected.length !== actual.length) out.push(`${trail}: длина ${actual.length} вместо ${expected.length}`);
+    for (let i = 0; i < Math.min(expected.length, actual.length); i++) diffValues(expected[i], actual[i], `${trail}[${i}]`, out, tokensUnavailable);
+    return out;
+  }
+  if (expected !== null && actual !== null && typeof expected === 'object' && typeof actual === 'object' && !Array.isArray(expected) && !Array.isArray(actual)) {
+    for (const key of new Set([...Object.keys(expected), ...Object.keys(actual)])) {
+      diffValues((expected as Record<string, unknown>)[key], (actual as Record<string, unknown>)[key], trail === '' ? key : `${trail}.${key}`, out, tokensUnavailable);
+    }
+    return out;
+  }
+  if (expected !== actual) out.push(`${trail}: ${JSON.stringify(actual)} вместо ${JSON.stringify(expected)}`);
+  return out;
+}
+
+function verdictOf(part: string, expected: unknown, actual: unknown): Verdict {
+  const tokens = { hit: false };
+  const details = diffValues(expected, actual, '', [], tokens);
+  if (details.length > 0) return { part, state: 'mismatch', details };
+  return tokens.hit ? { part, state: 'unavailable', details: ['токенизатора нет: токены не посчитаны, байты и хеши совпали'] } : { part, state: 'match', details: [] };
+}
+
+export function compareSchema(expected: SchemaCorpus, actual: SchemaCorpus): Verdict[] {
+  return [
+    verdictOf('schema.rows', expected.rows, actual.rows),
+    verdictOf('schema.runtimeParity', expected.runtimeParity, actual.runtimeParity),
+    verdictOf('schema.wire', expected.wire, actual.wire),
+  ];
+}
+
+export function compareChain(expected: ChainRecord, actual: ChainRecord): Verdict {
+  return verdictOf(`chain.${expected.label}`, expected, actual);
+}
+
+/** Транскрипт по имени файла среди папок проектов Claude: ровно одна находка, иначе недоступно. */
+export async function findTranscript(root: string, file: string): Promise<string | null> {
+  let dirs: string[];
+  try { dirs = await readdir(root); } catch { return null; }
+  const found: string[] = [];
+  for (const dir of dirs) {
+    const candidate = path.join(root, dir, file);
+    if (existsSync(candidate)) found.push(candidate);
+  }
+  return found.length === 1 ? found[0]! : null;
+}
+
+export interface ChainsMeasurement {
+  verdicts: Verdict[];
+  transcripts: (TranscriptSpec & { state: PrefixCheck['state'] | 'unavailable' })[];
+  chains: ChainRecord[];
+}
+
+/** Пересчёт цепочек манифеста по локальным транскриптам; нет файла — `unavailable`, а не выдуманные числа. */
+export async function measureChains(manifest: Pick<CodeModeManifest, 'transcripts' | 'chainSpecs' | 'chains'>, root: string, tokenizer: Tokenizer | null): Promise<ChainsMeasurement> {
+  const verdicts: Verdict[] = [];
+  const transcripts: ChainsMeasurement['transcripts'] = [];
+  const chains: ChainRecord[] = [];
+  const indexes = new Map<string, TranscriptIndex>();
+  for (const spec of manifest.transcripts) {
+    const file = await findTranscript(root, spec.file);
+    if (file === null) {
+      transcripts.push({ ...spec, state: 'unavailable' });
+      verdicts.push({ part: `transcript.${spec.key}`, state: 'unavailable', details: [`${spec.file} не найден (или найден не один раз) в ${root}`] });
+      continue;
+    }
+    const check = checkPrefix(await readFile(file), spec);
+    transcripts.push({ ...spec, state: check.state });
+    if (!('prefix' in check)) {
+      verdicts.push({ part: `transcript.${spec.key}`, state: 'mismatch', details: [check.reason] });
+      continue;
+    }
+    const index = indexTranscript(check.prefix.toString('utf8'));
+    if (index.lineCount !== spec.lineCount) {
+      verdicts.push({ part: `transcript.${spec.key}`, state: 'mismatch', details: [`строк ${index.lineCount} вместо ${spec.lineCount}`] });
+      continue;
+    }
+    verdicts.push({ part: `transcript.${spec.key}`, state: 'match', details: [check.state] });
+    indexes.set(spec.key, index);
+  }
+  for (const spec of manifest.chainSpecs) {
+    const expected = manifest.chains.find((chain) => chain.label === spec.label);
+    const index = indexes.get(spec.transcript);
+    if (index === undefined) {
+      verdicts.push({ part: `chain.${spec.label}`, state: 'unavailable', details: [`транскрипт ${spec.transcript} недоступен или не прошёл сверку`] });
+      continue;
+    }
+    let measured: ChainRecord;
+    try {
+      measured = measureChain(index, spec.label, spec.transcript, spec.callLines, tokenizer);
+    } catch (error) {
+      verdicts.push({ part: `chain.${spec.label}`, state: 'mismatch', details: [(error as Error).message] });
+      continue;
+    }
+    chains.push(measured);
+    verdicts.push(expected === undefined ? { part: `chain.${spec.label}`, state: 'mismatch', details: ['в манифесте нет записи цепочки'] } : compareChain(expected, measured));
+  }
+  return { verdicts, transcripts, chains };
+}
+
+export async function loadCodeModeManifest(file = CODE_MODE_MANIFEST): Promise<CodeModeManifest> {
+  return JSON.parse(await readFile(file, 'utf8')) as CodeModeManifest;
+}
+
+export async function sourceHashes(target: string): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  for (const file of CODE_MODE_SOURCES) out[file] = sha256(await readFile(path.join(target, file)));
+  return out;
+}
+
+export interface CodeModeBaselineRun {
+  measuredAt: string;
+  target: string;
+  head: string | null;
+  node: string;
+  esbuild: string;
+  tokenizer: string | null;
+  sources: Record<string, string>;
+  schema: SchemaCorpus;
+  transcripts: ChainsMeasurement['transcripts'];
+  chains: ChainRecord[];
+  verdicts: Verdict[];
+}
+
+/** Полный замер T1a и сверка с замороженным манифестом. Пишет только запись прогона, ничего в репозиторий. */
+export async function codeModeBaseline(options: { target: string; transcriptsRoot: string; tokenizer: Tokenizer | null; manifest: CodeModeManifest }): Promise<CodeModeBaselineRun> {
+  const { target, transcriptsRoot, tokenizer, manifest } = options;
+  const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: target, encoding: 'utf8' });
+  const sources = await sourceHashes(target);
+  const schema = await measureSchemaCorpus(target, tokenizer);
+  const chains = await measureChains(manifest, transcriptsRoot, tokenizer);
+  const headSha = head.status === 0 ? head.stdout.trim() : null;
+  const verdicts: Verdict[] = [
+    headSha === manifest.base ? { part: 'base', state: 'match', details: [] } : { part: 'base', state: 'mismatch', details: [`HEAD ${String(headSha)}, база манифеста ${manifest.base}`] },
+    verdictOf('sources', manifest.sources, sources),
+    ...compareSchema(manifest.schema, schema),
+    ...chains.verdicts,
+  ];
+  return {
+    measuredAt: new Date().toISOString(), target, head: headSha, node: process.version, esbuild: schema.esbuild, tokenizer: tokenizer?.label ?? null,
+    sources, schema: { rows: schema.rows, runtimeParity: schema.runtimeParity, wire: schema.wire },
+    transcripts: chains.transcripts, chains: chains.chains, verdicts,
+  };
+}
+
+export function renderVerdicts(verdicts: readonly Verdict[]): string {
+  const mark = { match: 'ok  ', mismatch: 'FAIL', unavailable: 'N/A ' } as const;
+  return verdicts.map((v) => `${mark[v.state]} ${v.part}${v.details.length === 0 ? '' : `: ${v.details.slice(0, 5).join('; ')}${v.details.length > 5 ? ` (+${v.details.length - 5})` : ''}`}`).join('\n');
+}
+
 // ---------- Командная строка ----------
 
 /**
@@ -1892,6 +2545,12 @@ const HELP = `parley-token-benchmark — офлайн-стенд замера э
   report [--runs DIR] [--out FILE]  отчёт по записям прогонов
   labels [--count 15] [--root DIR] [--out FILE]  лист разметки P32 из ваших транскриптов (только локально)
   dry-run                       полная офлайн-проверка без платных ходов
+  code-mode-baseline [--tokenizer-dir DIR] [--target DIR] [--root DIR] [--out FILE]
+                                базовый корпус Code Mode (T1a): схемы исходников --target (по умолчанию этот чекаут)
+                                и пять цепочек из транскриптов Claude в --root (по умолчанию ~/.claude/projects),
+                                сверка с docs/research/2026-11-07-code-mode-benchmark/baseline-manifest.json;
+                                --tokenizer-dir — каталог вне репозитория с js-tiktoken@1.0.21, без него токены
+                                недоступны; запись прогона — в --out (по умолчанию .parley/benchmark/code-mode-baseline.json)
 `;
 
 const yesNo = (value: string | undefined): boolean | null => (value === 'yes' ? true : value === 'no' ? false : null);
@@ -1915,6 +2574,7 @@ export async function main(argv: string[]): Promise<number> {
       claude: { type: 'string', multiple: true }, codex: { type: 'string', multiple: true }, set: { type: 'string', multiple: true },
       accepted: { type: 'string' }, constraints: { type: 'string' }, corrections: { type: 'string' },
       'warm-interval-sec': { type: 'string' }, synthetic: { type: 'boolean' }, help: { type: 'boolean' },
+      'tokenizer-dir': { type: 'string' }, target: { type: 'string' },
     },
   });
   const [command, id] = positionals;
@@ -1939,6 +2599,25 @@ export async function main(argv: string[]): Promise<number> {
     await writeFile(target, `${JSON.stringify(sheet, null, 2)}\n`);
     console.log(`${target}: ${sheet.items.length} запросов (с выбором jev ${sheet.items.filter((i) => i.jevPick !== null).length}); пулы: ${JSON.stringify(sheet.pools)}`);
     return 0;
+  }
+  if (command === 'code-mode-baseline') {
+    const tokenizer = values['tokenizer-dir'] === undefined ? null : await loadPinnedTokenizer(values['tokenizer-dir']);
+    const run = await codeModeBaseline({
+      target: path.resolve(values.target ?? repoRoot),
+      transcriptsRoot: path.resolve(values.root ?? defaultRoot()),
+      tokenizer,
+      manifest: await loadCodeModeManifest(),
+    });
+    // В записи прогона — абсолютные пути и времена вызовов из личных транскриптов: только под .parley/ (git её игнорирует).
+    const target = path.resolve(values.out ?? path.join(DEFAULT_OUT, 'code-mode-baseline.json'));
+    if (!safeForPrivateData(target)) {
+      console.error(`${target}: git не игнорирует этот путь, а в записи прогона локальные пути; выберите путь под .parley/`);
+      return 1;
+    }
+    await mkdir(path.dirname(target), { recursive: true });
+    await writeFile(target, `${JSON.stringify(run, null, 2)}\n`);
+    console.log(`${renderVerdicts(run.verdicts)}\n${target}`);
+    return run.verdicts.some((v) => v.state === 'mismatch') ? 1 : 0;
   }
   if (command === 'report') {
     const { file, budget, problems } = await loadFixtures();

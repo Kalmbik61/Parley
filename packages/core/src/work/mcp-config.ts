@@ -62,6 +62,12 @@ export interface McpConfigParams {
   /** Профиль инструментов этого запуска: `PARLEY_TOOL_PROFILE` (и прежняя `HARNAS_TOOL_PROFILE`) в окружении сервера. */
   toolProfile?: ToolProfile;
   /**
+   * Нонс решения запуска Code Mode: `PARLEY_CODE_MODE_LAUNCH` (и прежняя `HARNAS_CODE_MODE_LAUNCH`). Само решение лежит в файле
+   * (`code-mode/launch-decision.ts`), а сервер верит ему только при совпадении нонса. Нет поля — классика, и в конфиге нет ничего о Code Mode.
+   * Пока его никто не передаёт: запись решения за T12a.
+   */
+  codeModeLaunch?: string;
+  /**
    * Канал агента к браузеру окна (спека браузера 3.7): с ним сервер объявляет инструмент `browser_open`. Хост выдаёт его
    * каждому запуску; нет — старый хост или сервер хуков не поднялся, и инструментов браузера у сессии нет.
    */
@@ -114,6 +120,7 @@ export function mcpConfig({
   nativeContextRevision,
   agentRevision,
   toolProfile,
+  codeModeLaunch,
   agent,
 }: McpConfigParams): McpConfigFile {
   return {
@@ -131,6 +138,7 @@ export function mcpConfig({
             ...(nativeContextRevision === undefined ? {} : { NATIVE_CONTEXT_REVISION: nativeContextRevision }),
             ...(agentRevision === undefined ? {} : { AGENT_REVISION: agentRevision }),
             ...(toolProfile === undefined ? {} : { TOOL_PROFILE: toolProfile }),
+            ...(codeModeLaunch === undefined ? {} : { CODE_MODE_LAUNCH: codeModeLaunch }),
           }),
           ...agentEnv(agent),
         },
@@ -176,7 +184,7 @@ const OWN_VARIABLE = new RegExp(`^(?:${ENV_PREFIX}|${LEGACY_ENV_PREFIX})[A-Z0-9_
  * агента — тоже только свой: хост, поднятый из сессии агента, унаследовал бы её адрес и токен.
  */
 const SESSION_VARIABLES = new Set([
-  ...Object.keys(bothEnv({ WORK_DIR: '', SESSION_ID: '', CHANNEL: '', SKILL_NAVIGATOR: '', SKILL_LIST_REDUCED: '', NATIVE_CONTEXT_REVISION: '', AGENT_REVISION: '', TOOL_PROFILE: '' })),
+  ...Object.keys(bothEnv({ WORK_DIR: '', SESSION_ID: '', CHANNEL: '', SKILL_NAVIGATOR: '', SKILL_LIST_REDUCED: '', NATIVE_CONTEXT_REVISION: '', AGENT_REVISION: '', TOOL_PROFILE: '', CODE_MODE_LAUNCH: '' })),
   ...Object.keys(bothEnv({ AGENT_URL: '', AGENT_TOKEN: '' })),
 ]);
 
@@ -190,8 +198,9 @@ function codexServerEnv({
   nativeContextRevision,
   agentRevision,
   toolProfile,
+  codeModeLaunch,
   agent,
-}: Pick<McpConfigParams, 'workDir' | 'sessionId' | 'env' | 'skillNavigator' | 'skillListReduced' | 'nativeContextRevision' | 'agentRevision' | 'toolProfile' | 'agent'>): Array<[string, string]> {
+}: Pick<McpConfigParams, 'workDir' | 'sessionId' | 'env' | 'skillNavigator' | 'skillListReduced' | 'nativeContextRevision' | 'agentRevision' | 'toolProfile' | 'codeModeLaunch' | 'agent'>): Array<[string, string]> {
   const inherited = Object.entries(env ?? {})
     .filter(
       (entry): entry is [string, string] =>
@@ -207,6 +216,7 @@ function codexServerEnv({
     ...(nativeContextRevision === undefined ? {} : { NATIVE_CONTEXT_REVISION: nativeContextRevision }),
     ...(agentRevision === undefined ? {} : { AGENT_REVISION: agentRevision }),
     ...(toolProfile === undefined ? {} : { TOOL_PROFILE: toolProfile }),
+    ...(codeModeLaunch === undefined ? {} : { CODE_MODE_LAUNCH: codeModeLaunch }),
   })), ...Object.entries(agentEnv(agent)), ...inherited];
 }
 
@@ -256,7 +266,7 @@ export async function writeMcpConfig(
   sessionId: string,
   command?: string,
   channel = false,
-  snapshot: Pick<McpConfigParams, 'skillNavigator' | 'skillListReduced' | 'nativeContextRevision' | 'agentRevision' | 'agent'> = {},
+  snapshot: Pick<McpConfigParams, 'skillNavigator' | 'skillListReduced' | 'nativeContextRevision' | 'agentRevision' | 'codeModeLaunch' | 'agent'> = {},
 ): Promise<string> {
   const paths = workPaths(projectPath, workId);
   const file = path.join(paths.mcp, `${sessionId}.json`);

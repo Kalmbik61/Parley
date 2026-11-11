@@ -11,7 +11,8 @@
  * молча пропускает, `saveConfig` сохраняет нетронутыми.
  */
 
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { randomBytes } from 'node:crypto';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { DEFAULT_WORKTREE_ROOT, envName, envValue } from './names.js';
 import {
@@ -96,6 +97,12 @@ export interface ParleyConfig extends ResourceLimits {
    */
   skillNavigator: boolean;
   /**
+   * Code Mode (план T12a): human m-4838 asks for it ON by default. It is a request, not a grant: a launch still runs classic until its provider
+   * passes its gates. Turning it off is the human's, kept also in the store (`work/code-mode-setting.ts`), so deleting or replacing this file
+   * cannot silently turn it back on. **Not** settable from the environment: an agent's environment must not be a way to turn it on.
+   */
+  codeMode: boolean;
+  /**
    * Одобрения пишущих ролей Codex (спека 2026-10-21, 5.2). Прежний булев `codexApprovals` переносится: `true` → `parley`,
    * `false` → `terminal` (файл и `PARLEY_CODEX_APPROVALS`, пока нового ключа нет).
    */
@@ -143,6 +150,7 @@ export const DEFAULT_CONFIG: Readonly<ParleyConfig> = {
   machineConcurrent: 'auto',
   agentSkills: true,
   skillNavigator: true,
+  codeMode: true,
   codexWriteApprovals: 'auto',
   telegramEnabled: true,
   telegramNeedsYou: true,
@@ -163,7 +171,7 @@ export const DEFAULT_CONFIG: Readonly<ParleyConfig> = {
  * Ключ переменной окружения для каждой настройки — без префикса: значение читается как `PARLEY_<ключ>`,
  * а нет его — как прежнее `HARNAS_<ключ>` (`envValue`). Один источник для загрузчика и оверлея.
  */
-export const ENV_NAMES: Readonly<Record<keyof ParleyConfig, string>> = {
+export const ENV_NAMES: Readonly<Record<Exclude<keyof ParleyConfig, 'codeMode'>, string>> = {
   silenceThresholdMs: 'SILENCE_MS',
   channelPush: 'CHANNEL_PUSH',
   messageRate: 'MESSAGE_RATE',
@@ -206,7 +214,7 @@ export interface LoadedConfig {
   /** Что не прочиталось. `null` — вопросов к настройкам нет. */
   warning: string | null;
   /** Ключи, чьё значение пришло из окружения: файл их не перекроет. */
-  fromEnv: ReadonlyArray<keyof ParleyConfig>;
+  fromEnv: ReadonlyArray<keyof typeof ENV_NAMES>;
 }
 
 /** Файл настроек. Его может не быть — тогда работают дефолты. */
@@ -342,6 +350,7 @@ function fromFile(data: Record<string, unknown>, complain: Complain): ConfigPatc
   }
   take('agentSkills', (value) => typeof value === 'boolean', 'true or false');
   take('skillNavigator', (value) => typeof value === 'boolean', 'true or false');
+  take('codeMode', (value) => typeof value === 'boolean', 'true or false');
   take('codexWriteApprovals', isCodexWriteApprovals, CODEX_WRITE_APPROVALS_EXPECTED);
   // Перенос прежнего булева ключа: новый ключ, если он есть в файле (хоть и битый), сильнее.
   if (data.codexWriteApprovals === undefined && typeof data.codexApprovals === 'boolean') {
@@ -373,9 +382,9 @@ function fromEnv(env: NodeJS.ProcessEnv, complain: Complain): ConfigPatch {
   const patch: ConfigPatch = {};
 
   // Пустая переменная — то же самое, что незаданная: так же ведёт себя `PARLEY_HOME` (`envValue`).
-  const text = (key: keyof ParleyConfig): string | undefined => envValue(env, ENV_NAMES[key]);
+  const text = (key: keyof typeof ENV_NAMES): string | undefined => envValue(env, ENV_NAMES[key]);
   // Имя, которое назвать человеку: то, под которым значение реально пришло.
-  const nameOf = (key: keyof ParleyConfig): string => envName(env, ENV_NAMES[key]) ?? ENV_NAMES[key];
+  const nameOf = (key: keyof typeof ENV_NAMES): string => envName(env, ENV_NAMES[key]) ?? ENV_NAMES[key];
 
   const flag = (
     key: 'channelPush' | 'agentSkills' | 'skillNavigator' | 'leanAgents' | 'remoteCreate'
@@ -527,7 +536,7 @@ export async function loadConfig(
     config: { ...DEFAULT_CONFIG, ...filePatch, ...envPatch },
     warning: problems.length === 0 ? null : problems.join('; '),
     // Битая переменная ключ не перекрывает, в патч не попадает — и в список тоже.
-    fromEnv: Object.keys(envPatch) as ReadonlyArray<keyof ParleyConfig>,
+    fromEnv: Object.keys(envPatch) as ReadonlyArray<keyof typeof ENV_NAMES>,
   };
 }
 
@@ -536,6 +545,7 @@ const BOOLEAN_KEYS: ReadonlySet<keyof ParleyConfig> = new Set([
   'channelPush',
   'agentSkills',
   'skillNavigator',
+  'codeMode',
   'leanAgents',
   'remoteCreate',
   'telegramEnabled',
@@ -622,11 +632,30 @@ export function parseSetting<K extends keyof ParleyConfig>(
 /**
  * Пишет часть настроек в файл, сохраняя чужие ключи. Каталог создаёт. Битый файл
  * перезаписывается целиком: пользователь правит настройку, а не чинит JSON.
+ *
+ * Атомарно (план T12a): временный файл рядом, затем `rename`. Читатель видит прежний файл или новый целиком, а не обрезанный: процесс MCP
+ * перечитывает настройки посреди прогона, и обрезанный файл выключил бы Code Mode для сессии до её перезапуска.
  */
-export async function saveConfig(
+export function saveConfig(
   patch: Partial<ParleyConfig>,
   file: string = configPath(),
 ): Promise<void> {
+  const key = path.resolve(file);
+  const next = (saveQueues.get(key) ?? Promise.resolve()).then(() => saveNow(patch, file));
+  const tail = next.then(() => undefined, () => undefined);
+  saveQueues.set(key, tail);
+  void tail.then(() => { if (saveQueues.get(key) === tail) saveQueues.delete(key); });
+  return next;
+}
+
+/**
+ * Очередь по файлу (план T12a, s-296 m-7139): чтение, слияние и запись идут одна за другой, иначе два одновременных `settings.set`
+ * прочли бы прежний файл и второй вернул бы ключ, который записал первый (например, выключенный Code Mode). Только внутри процесса:
+ * другой процесс того же пользователя, пишущий файл в то же время, не упорядочен.
+ */
+const saveQueues = new Map<string, Promise<void>>();
+
+async function saveNow(patch: Partial<ParleyConfig>, file: string): Promise<void> {
   let kept: Record<string, unknown> = {};
   try {
     const data: unknown = JSON.parse(await readFile(file, 'utf8'));
@@ -636,5 +665,12 @@ export async function saveConfig(
   }
 
   await mkdir(path.dirname(file), { recursive: true });
-  await writeFile(file, `${JSON.stringify({ ...kept, ...patch }, null, 2)}\n`, 'utf8');
+  const temp = path.join(path.dirname(file), `.${path.basename(file)}.${randomBytes(8).toString('hex')}.tmp`);
+  try {
+    await writeFile(temp, `${JSON.stringify({ ...kept, ...patch }, null, 2)}\n`, { encoding: 'utf8', flag: 'wx' });
+    await rename(temp, file);
+  } catch (error) {
+    await rm(temp, { force: true });
+    throw error;
+  }
 }

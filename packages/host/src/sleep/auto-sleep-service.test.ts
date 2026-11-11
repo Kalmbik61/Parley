@@ -1,7 +1,11 @@
+import { type ChildProcess, execFileSync, spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createInterface } from 'node:readline';
+import { fileURLToPath } from 'node:url';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   PARLEY,
   SYSTEM,
@@ -14,6 +18,7 @@ import {
   setResult,
   transitionSession,
   updateMap,
+  workPaths,
 } from '@parley/core';
 import type { AutoSleep, LetterTx, MemoryPressure, SessionActivity, WorkMap, WorkSession } from '@parley/core';
 import { refKey } from '@parley/protocol';
@@ -78,6 +83,7 @@ beforeEach(async () => {
   listeners = [];
   worksListeners = [];
   stops = [];
+  causes = [];
   retries = [];
   drafts = new Set();
   pointers = new Set();
@@ -161,7 +167,9 @@ async function defaultStop(ref: SessionRef): Promise<void> {
 }
 let stopImpl: (ref: SessionRef) => Promise<void> = defaultStop;
 
-const sessions: AutoSleepServiceDeps['sessions'] = { stop: (ref) => stopImpl(ref) };
+/** Что сон передаёт в `stop` вторым аргументом: строка журнала Code Mode называет сон и его причину (T12a, §9). */
+let causes: unknown[] = [];
+const sessions: AutoSleepServiceDeps['sessions'] = { stop: (ref, cause) => { causes.push(cause); return stopImpl(ref); } };
 
 function recordStop(ref: SessionRef): void {
   stops.push({ sessionId: ref.sessionId, pending: sessionOf(ref).autoSleepPending ?? null });
@@ -331,6 +339,7 @@ describe('сервис сна агентов', () => {
     const mark: AutoSleep = { reason: 'idle', at: iso(clock), waitTarget: null };
     // К моменту stop отметка уже стоит: письма за ней не выдаются.
     expect(stops).toEqual([{ sessionId: ref.sessionId, pending: mark }]);
+    expect(causes).toEqual([{ by: 'sleep', reason: 'idle' }]);
     const session = sessionOf(ref);
     expect(session.lifecycle).toBe('sleeping');
     expect(session.autoSleep).toEqual(mark);
@@ -1715,4 +1724,85 @@ describe('сервис сна: по давлению и ради слота', ()
     expect(sessionOf(next).lifecycle).toBe('active');
     expect(hasMarkKey(next)).toBe(false);
   });
+});
+
+// Настоящий процесс держит настоящий запуск Code Mode; сон его завершает. План T7a-sleep: сон не заблокирован, и ничего не освобождает.
+const coreDir = fileURLToPath(new URL('../../../core/', import.meta.url));
+const holderScript = fileURLToPath(new URL('../../../../tests/fixtures/code-mode/run-record-holder.mjs', import.meta.url));
+const nativeReady = process.platform === 'darwin' && process.arch === 'arm64' && existsSync('/usr/bin/sandbox-exec') && existsSync(path.join(coreDir, 'native/darwin-arm64/manifest.json'));
+
+describe.skipIf(!nativeReady)('сервис сна: запись запуска Code Mode переживает сон (T7a-sleep)', () => {
+  const NOW = T0 + 61 * MIN;
+  beforeAll(() => { execFileSync('pnpm', ['exec', 'tsc', '-p', path.join(coreDir, 'tsconfig.json')], { stdio: 'ignore', cwd: coreDir }); }, 120_000);
+
+  function holder(mode: string, workDir: string, sessionId: string): { child: ChildProcess; line: (pred: (o: Record<string, unknown>) => boolean) => Promise<Record<string, unknown>> } {
+    const child = spawn(process.execPath, [holderScript, path.join(coreDir, 'dist'), mode, workDir, sessionId], { stdio: ['pipe', 'pipe', 'ignore'] });
+    const seen: Record<string, unknown>[] = [];
+    const waiters: Array<() => void> = [];
+    createInterface({ input: child.stdout! }).on('line', (text) => { seen.push(JSON.parse(text) as Record<string, unknown>); for (const wake of waiters.splice(0)) wake(); });
+    return {
+      child,
+      line: async (pred) => {
+        for (;;) {
+          const hit = seen.find(pred);
+          if (hit !== undefined) return hit;
+          await new Promise<void>((resolve) => { waiters.push(resolve); });
+        }
+      },
+    };
+  }
+  /** `stop` хоста: процесс агента завершается по-настоящему, потом — как обычно. */
+  const stopKills = (child: ChildProcess): void => {
+    stopImpl = async (ref) => {
+      recordStop(ref);
+      await new Promise<void>((resolve) => { child.once('exit', () => resolve()); child.kill('SIGTERM'); });
+      await exitProcess(ref);
+    };
+  };
+  const untilAsleep = async (ref: SessionRef): Promise<void> => {
+    const end = performance.now() + 20_000;
+    while (sessionOf(ref).lifecycle !== 'sleeping') {
+      if (performance.now() > end) throw new Error('сессия не уснула');
+      await realTick();
+    }
+  };
+  const triggers: [string, (ref: SessionRef) => Promise<void>][] = [
+    ['idle', async () => { boot(); clock = NOW; await advance(AUTO_SLEEP_TICK_MS); }],
+    ['pressure', async () => {
+      let reader: ((reading: { level: MemoryPressure }) => void) | undefined;
+      boot({ pressure: { current: () => ({ level: 'normal' }), onReading: (listener) => { reader = listener; return () => { reader = undefined; }; } } });
+      clock = NOW;
+      reader?.({ level: 'warn' });
+      await quiet();
+    }],
+    ['slot', async () => { const service = boot(); clock = NOW; await quiet(); await service.freeSlot(); }],
+  ];
+
+  it.each(triggers)('%s: сон идёт, запись остаётся, разбуженный процесс получает busy, а не свободную аренду', async (reason, trigger) => {
+    const ref = await startSession();
+    const workDir = workPaths(project, workId).dir;
+    const { child, line } = holder('hanging', workDir, ref.sessionId);
+    await line((o) => o['called'] === true);
+    stopKills(child);
+    await trigger(ref);
+    await untilAsleep(ref);
+    expect(sessionOf(ref).autoSleep?.reason).toBe(reason);
+    expect(slept()).toEqual([ref.sessionId]);
+    expect(existsSync(path.join(workDir, 'code-mode', `${ref.sessionId}.run`))).toBe(true);
+    expect(await holder('probe', workDir, ref.sessionId).line(() => true)).toEqual({ ok: false, busy: 'previous-process-unaccounted' });
+  }, 40_000);
+
+  it('запуск, который завершился, сну не мешает и ничего не оставляет: следующий процесс свободен', async () => {
+    const ref = await startSession();
+    const workDir = workPaths(project, workId).dir;
+    const { child, line } = holder('settled', workDir, ref.sessionId);
+    await line((o) => o['drained'] === true);
+    stopKills(child);
+    boot();
+    clock = NOW;
+    await advance(AUTO_SLEEP_TICK_MS);
+    await untilAsleep(ref);
+    expect(existsSync(path.join(workDir, 'code-mode', `${ref.sessionId}.run`))).toBe(false);
+    expect(await holder('probe', workDir, ref.sessionId).line(() => true)).toEqual({ ok: true });
+  }, 40_000);
 });

@@ -225,6 +225,7 @@ describe('исключения рамки: statusline.ts среди них бо�
       'packages/host/src/capabilities/snapshot.ts | запись в каталоги агентов',
       'packages/core/src/custom-provider-dir.ts | запись в каталоги агентов',
       'packages/core/src/work/claude-trust.ts | запись в каталоги агентов',
+      'packages/core/src/mcp/code-mode/claude-launch-sources.ts | запись в каталоги агентов',
       'packages/host/src/limits/zai-quota.ts | API провайдеров',
       'packages/host/src/limits/zai-check.ts | API провайдеров',
       'packages/core/src/providers.ts | API провайдеров',
@@ -421,7 +422,7 @@ describe('рамочный тест репозитория (тест 6)', () => 
         'packages/core/src/codex/discover.ts:9',
         'packages/core/src/providers.ts:18',
         'packages/core/src/providers.ts:359',
-        'packages/core/src/work/mcp-config.ts:215',
+        'packages/core/src/work/mcp-config.ts:225',
         // Комментарии кэша каталога ролей: правка `.codex/config.toml` (строка 21) и список проектных `.codex/config.toml`
         // (строка 44) — слова в описании подписи входов; сама подпись собирает путь из частей и регэксп не задевает.
         'packages/host/src/methods/role-catalog-cache.ts:21',

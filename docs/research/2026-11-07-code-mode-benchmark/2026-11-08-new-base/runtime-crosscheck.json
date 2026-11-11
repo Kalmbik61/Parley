@@ -1,0 +1,19 @@
+{
+  "primaryNode": "v22.23.3",
+  "secondaryNode": "v22.16.0",
+  "equalFields": [
+    "rows",
+    "parity",
+    "wire",
+    "sourceHashes",
+    "dependencyHashes",
+    "tokenizerEntrySha256",
+    "encoderDataSha256",
+    "bundleSha256"
+  ],
+  "sdkCasesPerNode": 8,
+  "stdioCasesPerNode": 8,
+  "result": "PASS",
+  "chainCountsAndHashesEqual": true,
+  "chainReplayPerNode": 5
+}

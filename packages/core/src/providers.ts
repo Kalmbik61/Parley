@@ -734,10 +734,18 @@ const PARENT_SESSION_ENV = [
   'CLAUDE_CODE_BRIDGE_SESSION_ID',
 ];
 
-/** Окружение запускаемого агента: всё то же, кроме меток родительской сессии. */
+/**
+ * Не метка родителя, а настройка одного запуска: режим Code Mode сессии задаёт только явный параметр запуска (`mcp-config.ts`), в таблице
+ * `env` её сервера. Claude Code передаёт серверу окружение целиком, поэтому значение из окружения хоста включило бы режим всем его
+ * сессиям мимо решения запуска и мимо выбора человека.
+ */
+const LAUNCH_ONLY_ENV = ['PARLEY_CODE_MODE_LAUNCH', 'HARNAS_CODE_MODE_LAUNCH'];
+
+/** Окружение запускаемого агента: всё то же, кроме меток родительской сессии и настроек, которые задаёт только сам запуск. */
 export function agentEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const clean = { ...env };
   for (const name of PARENT_SESSION_ENV) delete clean[name];
+  for (const name of LAUNCH_ONLY_ENV) delete clean[name];
   return clean;
 }
 

@@ -1,0 +1,622 @@
+{
+  "version": 1,
+  "provenance": "Frozen from docs/specs/2026-11-07-code-mode-design.md §2 and Appendix A.3 (measured by s-291 at the pinned base). Original local corpus: native Claude transcripts identified by file name and frozen prefix hash; no message content and no local paths are stored here.",
+  "base": "f7978af8156cfb426016f999fb6d36798adf7d73",
+  "tokenizer": {
+    "package": "js-tiktoken",
+    "version": "1.0.21",
+    "encoder": "o200k_base",
+    "entrySha256": "9ca95aad3c36db42d478b237d70a49a2b8693785a050d00407d3d586fde7c7a8",
+    "encoderDataSha256": "d2a4d9f263b2de045dcd98f347c50e38d71104141948918b6c30a92fb2411f42"
+  },
+  "serialization": {
+    "schema": "JSON.stringify(toolArray) in source order, no whitespace or trailing newline; SDK rows are the same arrays after MCP Client.listTools() parsing; wire rows are the exact tools/list JSON-RPC stdout line (request id 2) including LF; tokens = encode(text, [], []).length",
+    "chains": "JSON.stringify(tool_use.input) and JSON.stringify(tool_result.content) as stored, no whitespace or newline; line numbers over the frozen prefix split by \\n after trimEnd"
+  },
+  "sources": {
+    "packages/core/src/mcp/tools.ts": "17c6af32f1aa93074da55bceaf83bceb6163b3a1ab279b80599b508856555c13",
+    "packages/core/src/mcp/tools-size.test.ts": "6b501f44ee439c501df003a11736c52ee97dee9f8f25293a93ae86a2eeccc200",
+    "packages/core/src/mcp/server.ts": "d9242a851eaf1b177168f01396cd92b932154f5099c58ff36f08e8155138a46a",
+    "packages/core/src/mcp/server-profile.test.ts": "d8c9ef049c6ff50e384a024257aba85d04e132a79218fadcb975c4e26a7dc07c",
+    "packages/core/src/mcp/browser-tools.ts": "87d8add9ee3db18ca1ed82b3afa312485107a62fd890d15d19b8cd9df2845262",
+    "packages/core/src/mcp/plan-tools.ts": "075e7780b1187a9b96c1e037169aaf511c313aea7e3ead307739412e1de71470",
+    "packages/core/src/mcp/session-tools.ts": "0244d3ada76080bb80d01fde575f097c732ead8bc83e771267211b90dbd666a0",
+    "packages/core/src/work/mcp-config.ts": "f8d8f7042e4c0b394fd94d3cf02b78ade01fa9f904098aaa432bdae4b28ab2bb",
+    "packages/host/src/agent/tools-endpoint.ts": "990049fd49b3f9c97568534ce82b5ebe7bcf4336b05684ff13cc5e4366284e7e"
+  },
+  "schema": {
+    "rows": [
+      {
+        "name": "create-session",
+        "toolCount": 1,
+        "utf8Bytes": 1172,
+        "o200kTokens": 274,
+        "descriptionBytes": 547,
+        "sha256": "9c5c9c3d0987eed2fd5e911516565f2eba056986b59a4e11266a5d2dec68b15f"
+      },
+      {
+        "name": "browser",
+        "toolCount": 14,
+        "utf8Bytes": 16225,
+        "o200kTokens": 3966,
+        "descriptionBytes": 8258,
+        "sha256": "074dd25dd98177830c713a1123b783a76f248ab8d1d8c0f7f6046b036321c043"
+      },
+      {
+        "name": "navigator-base",
+        "toolCount": 1,
+        "utf8Bytes": 732,
+        "o200kTokens": 160,
+        "descriptionBytes": 366,
+        "sha256": "33674550476658e4bf5874a4c0b31b82d98909afb2d5b744b7958e6104220803"
+      },
+      {
+        "name": "navigator-claude-reduced",
+        "toolCount": 1,
+        "utf8Bytes": 809,
+        "o200kTokens": 174,
+        "descriptionBytes": 443,
+        "sha256": "ae0276db10c6d874231b5fa1ba9ddd358f235ada9129598a9660721f44dce849"
+      },
+      {
+        "name": "navigator-codex-reduced-unavailable",
+        "toolCount": 1,
+        "utf8Bytes": 823,
+        "o200kTokens": 179,
+        "descriptionBytes": 457,
+        "sha256": "503054c8826666955a2eec7593e8e98c12f3703d75afee945248dd1ec5cccc36"
+      },
+      {
+        "name": "full-runner",
+        "toolCount": 26,
+        "utf8Bytes": 19710,
+        "o200kTokens": 4837,
+        "descriptionBytes": 5033,
+        "sha256": "64de84b13afc25bbe55dde491e0d385e26684d23b21420eb870c3ff3134162a8"
+      },
+      {
+        "name": "full-legacy-size-corpus",
+        "toolCount": 27,
+        "utf8Bytes": 20881,
+        "o200kTokens": 5109,
+        "descriptionBytes": 5580,
+        "sha256": "2c41cfea05c3186f89f2a67a69cf2965164e8022eea111c9b3417f0077bbc4bf"
+      },
+      {
+        "name": "full-server-agent",
+        "toolCount": 41,
+        "utf8Bytes": 37105,
+        "o200kTokens": 9073,
+        "descriptionBytes": 13838,
+        "sha256": "f6cfe99470ac92731f3834404320465171a6a4569756e09b27ad2bfe10ecea9c"
+      },
+      {
+        "name": "full-server-agent-navigator-base",
+        "toolCount": 42,
+        "utf8Bytes": 37836,
+        "o200kTokens": 9231,
+        "descriptionBytes": 14204,
+        "sha256": "4ed3a7a6c5de904a0fea4c387ee24b78e960cec4d735830d7357c5a5d376398d"
+      },
+      {
+        "name": "short-runner",
+        "toolCount": 23,
+        "utf8Bytes": 18144,
+        "o200kTokens": 4462,
+        "descriptionBytes": 4607,
+        "sha256": "8b13014b5b214eab81f710a70a7c607221e11b9b7b7967a2aebd6df179b96cf1"
+      },
+      {
+        "name": "short-legacy-size-corpus",
+        "toolCount": 24,
+        "utf8Bytes": 19315,
+        "o200kTokens": 4734,
+        "descriptionBytes": 5154,
+        "sha256": "524587683cee69b5b8f25f016736d11365a96779d3881f512700ffc9b06ccbf4"
+      },
+      {
+        "name": "short-server-agent",
+        "toolCount": 38,
+        "utf8Bytes": 35539,
+        "o200kTokens": 8698,
+        "descriptionBytes": 13412,
+        "sha256": "1403d3fcb78e9d9336688339ba38c62f7d1595c431524c667236079d892db43d"
+      },
+      {
+        "name": "short-server-agent-navigator-base",
+        "toolCount": 39,
+        "utf8Bytes": 36270,
+        "o200kTokens": 8856,
+        "descriptionBytes": 13778,
+        "sha256": "6ff155751924223634d43792242874f4c06495cf1febaddbf5f00eee30272ad9"
+      }
+    ],
+    "runtimeParity": [
+      {
+        "profile": "full",
+        "agent": false,
+        "toolCount": 26,
+        "semanticMatch": true,
+        "exactJsonMatch": false,
+        "sdkParsedOrder": {
+          "name": "full-sdk-runner",
+          "toolCount": 26,
+          "utf8Bytes": 19710,
+          "o200kTokens": 4838,
+          "descriptionBytes": 5033,
+          "sha256": "d1e6e535c5c1b0ed3ae226a40fbe0b31713bbf8e8b7d9b9391815f11dbb19ac3"
+        }
+      },
+      {
+        "profile": "full",
+        "agent": true,
+        "toolCount": 41,
+        "semanticMatch": true,
+        "exactJsonMatch": false,
+        "sdkParsedOrder": {
+          "name": "full-sdk-server-agent",
+          "toolCount": 41,
+          "utf8Bytes": 37105,
+          "o200kTokens": 9074,
+          "descriptionBytes": 13838,
+          "sha256": "2cec7bec856619892b10921eeebd727373c101f90485ca2bdd0665f1e73661cf"
+        }
+      },
+      {
+        "profile": "short",
+        "agent": false,
+        "toolCount": 23,
+        "semanticMatch": true,
+        "exactJsonMatch": false,
+        "sdkParsedOrder": {
+          "name": "short-sdk-runner",
+          "toolCount": 23,
+          "utf8Bytes": 18144,
+          "o200kTokens": 4463,
+          "descriptionBytes": 4607,
+          "sha256": "b7747bee5bb22b14ba18668b73d69fd39b9cc17b28d69116af04780e9545e460"
+        }
+      },
+      {
+        "profile": "short",
+        "agent": true,
+        "toolCount": 38,
+        "semanticMatch": true,
+        "exactJsonMatch": false,
+        "sdkParsedOrder": {
+          "name": "short-sdk-server-agent",
+          "toolCount": 38,
+          "utf8Bytes": 35539,
+          "o200kTokens": 8699,
+          "descriptionBytes": 13412,
+          "sha256": "69ff535143549a2fe312f582f6ecd41d223a56b3ecd454caa95cdcf16a22cb6d"
+        }
+      }
+    ],
+    "wire": [
+      {
+        "name": "full-stdio-runner",
+        "sourceOrderMatch": true,
+        "utf8Bytes": 19755,
+        "o200kTokens": 4853,
+        "sha256": "7de9f743bdbd508e6b55f036aeed09d8b060ffbe97f2b1d1db1963e76bf8b6c4"
+      },
+      {
+        "name": "full-stdio-server-agent",
+        "sourceOrderMatch": true,
+        "utf8Bytes": 37150,
+        "o200kTokens": 9089,
+        "sha256": "7f931edcf850e77c495678fed6ad3357aaad3f3106a67770fcb28d2cd0d8556d"
+      },
+      {
+        "name": "short-stdio-runner",
+        "sourceOrderMatch": true,
+        "utf8Bytes": 18189,
+        "o200kTokens": 4478,
+        "sha256": "8536a19b4d8885fb5abbdeab28a6e69aef13153419a24a3af8717c9c887bd91d"
+      },
+      {
+        "name": "short-stdio-server-agent",
+        "sourceOrderMatch": true,
+        "utf8Bytes": 35584,
+        "o200kTokens": 8714,
+        "sha256": "753153767edea0ac6b68b0b068e0089798e7be4108de072864a1b3203d80372f"
+      }
+    ]
+  },
+  "transcripts": [
+    {
+      "key": "s-269",
+      "file": "9fa9a92a-063b-471b-b3b7-a49d7555ad80.jsonl",
+      "prefixBytes": 2943816,
+      "prefixSha256": "3b7f5364fa82cb41028393a5b3db5bce245ecee6b012ec643425e41eb95b501e",
+      "lineCount": 1222
+    },
+    {
+      "key": "s-285",
+      "file": "4857aa99-28f9-4f24-8823-393498dffe32.jsonl",
+      "prefixBytes": 1624338,
+      "prefixSha256": "f2aebd44deb3c22eee8308d404a79f65dec2919600d5a84787741373bcfdf8dd",
+      "lineCount": 500
+    },
+    {
+      "key": "s-174",
+      "file": "d0e89983-39a4-43bd-8f30-b1b31f3fd840.jsonl",
+      "prefixBytes": 77912037,
+      "prefixSha256": "ae5f877237788edceb3c6862f19c779fc7418775d2f8db1c57d241b188c36afd",
+      "lineCount": 19896
+    }
+  ],
+  "chainSpecs": [
+    {
+      "label": "browser",
+      "transcript": "s-269",
+      "callLines": [
+        775,
+        794,
+        802,
+        809
+      ]
+    },
+    {
+      "label": "session-creation",
+      "transcript": "s-285",
+      "callLines": [
+        391,
+        397,
+        409
+      ]
+    },
+    {
+      "label": "map-guide",
+      "transcript": "s-174",
+      "callLines": [
+        99,
+        118
+      ]
+    },
+    {
+      "label": "map-drilldown",
+      "transcript": "s-174",
+      "callLines": [
+        584,
+        596
+      ]
+    },
+    {
+      "label": "inbox-map",
+      "transcript": "s-174",
+      "callLines": [
+        523,
+        534
+      ]
+    }
+  ],
+  "chains": [
+    {
+      "label": "browser",
+      "transcript": "s-269",
+      "calls": [
+        {
+          "name": "mcp__parley__browser_open",
+          "callLine": 775,
+          "callBlock": 0,
+          "callId": "toolu_01DuALNZAFfFmNZLMWjkEsv4",
+          "messageId": "msg_011CgiTLwKabJs4DtRAf5R4n",
+          "timestamp": "2026-11-04T19:39:45.970Z",
+          "resultLine": 780,
+          "resultBlock": 0,
+          "isError": false,
+          "input": {
+            "utf8Bytes": 43,
+            "o200kTokens": 21,
+            "sha256": "1a9708e8c9910a43b9db3e39b3265ac0dcd3992105cea6da41e29805a7563756"
+          },
+          "resultContent": {
+            "utf8Bytes": 385,
+            "o200kTokens": 119,
+            "sha256": "0ec0c753e8c32186cceb4fe10650894410bc0d167daebab6b51a78be777623a2"
+          }
+        },
+        {
+          "name": "mcp__parley__browser_tabs",
+          "callLine": 794,
+          "callBlock": 0,
+          "callId": "toolu_01PfEzetywvrkVdr6in87cpS",
+          "messageId": "msg_011CgiTMXQBM7uwxXtFZLFfi",
+          "timestamp": "2026-11-04T19:39:52.397Z",
+          "resultLine": 796,
+          "resultBlock": 0,
+          "isError": false,
+          "input": {
+            "utf8Bytes": 2,
+            "o200kTokens": 1,
+            "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+          },
+          "resultContent": {
+            "utf8Bytes": 221,
+            "o200kTokens": 77,
+            "sha256": "777312b33e0954ddc2201049d52e6edf82e24b55baa2e4741fe8087da2f02181"
+          }
+        },
+        {
+          "name": "mcp__parley__browser_snapshot",
+          "callLine": 802,
+          "callBlock": 0,
+          "callId": "toolu_01VR3s2caKSKyrDuWvZMWV8t",
+          "messageId": "msg_011CgiTMppgnAhB3rUdAYBpn",
+          "timestamp": "2026-11-04T19:39:56.237Z",
+          "resultLine": 804,
+          "resultBlock": 0,
+          "isError": false,
+          "input": {
+            "utf8Bytes": 35,
+            "o200kTokens": 11,
+            "sha256": "32d5e2aba8ccc8e75934c2cc90e792ca7ddc23cb19579a9c7a6cef75cf61751b"
+          },
+          "resultContent": {
+            "utf8Bytes": 236,
+            "o200kTokens": 75,
+            "sha256": "84bdb476869b2fb1e22db4f0ceafad3678512e3e0968ea742f0f0e3bccc0c97e"
+          }
+        },
+        {
+          "name": "mcp__parley__browser_action",
+          "callLine": 809,
+          "callBlock": 0,
+          "callId": "toolu_01UN8bypVPEzFkc7jTRaHGWG",
+          "messageId": "msg_011CgiTN8PcKJb9AXsCv3x8R",
+          "timestamp": "2026-11-04T19:39:59.999Z",
+          "resultLine": 811,
+          "resultBlock": 0,
+          "isError": true,
+          "input": {
+            "utf8Bytes": 40,
+            "o200kTokens": 15,
+            "sha256": "79b8dd7546f073d9e0cfb54b2ed01624317842b305cdbcce3d645d4e9d26e1e7"
+          },
+          "resultContent": {
+            "utf8Bytes": 237,
+            "o200kTokens": 56,
+            "sha256": "57842b0e6ad4e1836556f1643b22c05e0fc8f05a675512d049961a2527e2ff3c"
+          }
+        }
+      ],
+      "sumInputTokens": 48,
+      "sumResultTokens": 327,
+      "intermediateResultTokens": 271
+    },
+    {
+      "label": "session-creation",
+      "transcript": "s-285",
+      "calls": [
+        {
+          "name": "mcp__parley__list_roles",
+          "callLine": 391,
+          "callBlock": 0,
+          "callId": "toolu_01T1vSo3gVcLaCtx7AR9vPeZ",
+          "messageId": "msg_011CgmevzhDHSbNbpJL8h4xT",
+          "timestamp": "2026-11-06T12:13:27.294Z",
+          "resultLine": 393,
+          "resultBlock": 0,
+          "isError": false,
+          "input": {
+            "utf8Bytes": 2,
+            "o200kTokens": 1,
+            "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+          },
+          "resultContent": {
+            "utf8Bytes": 11267,
+            "o200kTokens": 3132,
+            "sha256": "cfa0cdf5488f72d9765161b71e8b3f467ad72607ec9390d9fb61b76e4d221584"
+          }
+        },
+        {
+          "name": "mcp__parley__create_session",
+          "callLine": 397,
+          "callBlock": 0,
+          "callId": "toolu_01QMdngEFiQ4LEf97NWR7hXs",
+          "messageId": "msg_011Cgmew9JtnNNpPQfXgUYLJ",
+          "timestamp": "2026-11-06T12:13:37.786Z",
+          "resultLine": 405,
+          "resultBlock": 0,
+          "isError": false,
+          "input": {
+            "utf8Bytes": 2973,
+            "o200kTokens": 798,
+            "sha256": "3938f99ac35b48acaeda2437afea3b1d030c6adacbe3d1d73d2aa15d4df81e76"
+          },
+          "resultContent": {
+            "utf8Bytes": 76,
+            "o200kTokens": 24,
+            "sha256": "e12d31c9928f5060679e497da898baf9076d37566381503533c94b2dec8ff118"
+          }
+        },
+        {
+          "name": "mcp__parley__wait_for",
+          "callLine": 409,
+          "callBlock": 0,
+          "callId": "toolu_01LgJfcfNe666Z7Mct8iB34r",
+          "messageId": "msg_011Cgmewt9qhK7cXg2o5PJti",
+          "timestamp": "2026-11-06T12:13:39.825Z",
+          "resultLine": 411,
+          "resultBlock": 0,
+          "isError": false,
+          "input": {
+            "utf8Bytes": 36,
+            "o200kTokens": 12,
+            "sha256": "ea66285eaf633132366ff26440c98def64584a1e78467558adf8443ae0289533"
+          },
+          "resultContent": {
+            "utf8Bytes": 692,
+            "o200kTokens": 200,
+            "sha256": "e1097ef3a9d17ab3cfd6d09e3a20ce92229db3fe6699b781c11d439494f4e541"
+          }
+        }
+      ],
+      "sumInputTokens": 811,
+      "sumResultTokens": 3356,
+      "intermediateResultTokens": 3156
+    },
+    {
+      "label": "map-guide",
+      "transcript": "s-174",
+      "calls": [
+        {
+          "name": "mcp__parley__get_map",
+          "callLine": 99,
+          "callBlock": 0,
+          "callId": "toolu_01N8k6MKiiyTA1xEwFKh1cgG",
+          "messageId": "msg_011Cga2Rh8FTrsSrvDNeTMfY",
+          "timestamp": "2026-10-31T08:48:13.376Z",
+          "resultLine": 104,
+          "resultBlock": 0,
+          "isError": false,
+          "input": {
+            "utf8Bytes": 34,
+            "o200kTokens": 11,
+            "sha256": "baf624446832c34b2fe33292c015cf4eb98ae99ba43c3f677cb051b5cda27d4f"
+          },
+          "resultContent": {
+            "utf8Bytes": 3633,
+            "o200kTokens": 1076,
+            "sha256": "c437c3da589626b23e2a9a2ec3a7eeca3da0dcf5409d8d8c2603facb76c9bcdc"
+          }
+        },
+        {
+          "name": "mcp__parley__read_guide",
+          "callLine": 118,
+          "callBlock": 0,
+          "callId": "toolu_018J6vXgqfU8wJqwsdaT6624",
+          "messageId": "msg_011Cga2RvHX1NKYummQGDmvu",
+          "timestamp": "2026-10-31T08:48:19.316Z",
+          "resultLine": 122,
+          "resultBlock": 0,
+          "isError": false,
+          "input": {
+            "utf8Bytes": 21,
+            "o200kTokens": 6,
+            "sha256": "4c2360c9f510a713541d885593b0b5137358842f284e3f9aa2bd8350287b62ba"
+          },
+          "resultContent": {
+            "utf8Bytes": 1449,
+            "o200kTokens": 363,
+            "sha256": "4b451f27adfc7006c03780b173d71f14a5c94ccb79cda0ddaba23d5de981c6e3"
+          }
+        }
+      ],
+      "sumInputTokens": 17,
+      "sumResultTokens": 1439,
+      "intermediateResultTokens": 1076
+    },
+    {
+      "label": "map-drilldown",
+      "transcript": "s-174",
+      "calls": [
+        {
+          "name": "mcp__parley__get_map",
+          "callLine": 584,
+          "callBlock": 0,
+          "callId": "toolu_013jCGYW3SPmkS8EFMTNge7Q",
+          "messageId": "msg_011Cga3BjqhS1Yqz6g6T8Tdu",
+          "timestamp": "2026-10-31T08:58:11.148Z",
+          "resultLine": 586,
+          "resultBlock": 0,
+          "isError": false,
+          "input": {
+            "utf8Bytes": 2,
+            "o200kTokens": 1,
+            "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+          },
+          "resultContent": {
+            "utf8Bytes": 15129,
+            "o200kTokens": 4433,
+            "sha256": "b87c1244c4b1c912743539c15ccfbb4fc12968ccf3cd0e4a462da23f3b61ac5c"
+          }
+        },
+        {
+          "name": "mcp__parley__get_map",
+          "callLine": 596,
+          "callBlock": 0,
+          "callId": "toolu_015xC6ygW6c21fNvYy5FsmvF",
+          "messageId": "msg_011Cga3Bzkd7LKuB2Tj92aDt",
+          "timestamp": "2026-10-31T08:58:15.101Z",
+          "resultLine": 599,
+          "resultBlock": 0,
+          "isError": false,
+          "input": {
+            "utf8Bytes": 19,
+            "o200kTokens": 7,
+            "sha256": "c138862f7499e649d7acca6988881f07d08e60ec315c27cfc46b5451484800d1"
+          },
+          "resultContent": {
+            "utf8Bytes": 2033,
+            "o200kTokens": 691,
+            "sha256": "08c7ac06c0936567424c3bbf36ef4950df1512e1537e2d08899c4dd174e45745"
+          }
+        }
+      ],
+      "sumInputTokens": 8,
+      "sumResultTokens": 5124,
+      "intermediateResultTokens": 4433
+    },
+    {
+      "label": "inbox-map",
+      "transcript": "s-174",
+      "calls": [
+        {
+          "name": "mcp__parley__check_inbox",
+          "callLine": 523,
+          "callBlock": 0,
+          "callId": "toolu_01NtjbU6aNMtBcNtYHo7mBN3",
+          "messageId": "msg_011Cga3AQvcwmb3A8ktUzbwi",
+          "timestamp": "2026-10-31T08:57:53.475Z",
+          "resultLine": 528,
+          "resultBlock": 0,
+          "isError": false,
+          "input": {
+            "utf8Bytes": 2,
+            "o200kTokens": 1,
+            "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+          },
+          "resultContent": {
+            "utf8Bytes": 53,
+            "o200kTokens": 21,
+            "sha256": "2b0bb2ade31b38e4a14f194a9846a825128eb12c86619a13bc0c2643f2e626d4"
+          }
+        },
+        {
+          "name": "mcp__parley__get_map",
+          "callLine": 534,
+          "callBlock": 0,
+          "callId": "toolu_01Xp8ZJTqvWfjrwcHEKWXmem",
+          "messageId": "msg_011Cga3AgGMCjDFzis3g8cCL",
+          "timestamp": "2026-10-31T08:57:57.217Z",
+          "resultLine": 537,
+          "resultBlock": 0,
+          "isError": false,
+          "input": {
+            "utf8Bytes": 15,
+            "o200kTokens": 7,
+            "sha256": "f7bec6c98bdc24ba3e714c08aa476c75f67f52ba2418e7196510d643ba128b7f"
+          },
+          "resultContent": {
+            "utf8Bytes": 654,
+            "o200kTokens": 249,
+            "sha256": "50d5ec574c5a2067c9e719634b81a06f812c148a4afdae6e20a161a9c4272906"
+          }
+        }
+      ],
+      "sumInputTokens": 8,
+      "sumResultTokens": 270,
+      "intermediateResultTokens": 21
+    }
+  ],
+  "limitations": [
+    "Fixed-encoder corpus counts (o200k_base), not provider billing, cache or context usage.",
+    "The five chains are purposeful historical examples, not a sample of production traffic; their server revision is unknown.",
+    "Chain payloads exclude provider framing, tool names and ids, reasoning, history and schema injection.",
+    "Transcripts are private local inputs: without them the chain rows are unavailable, never synthesized.",
+    "Numbers describe the pinned base only; a newer tool surface needs a separately identified run."
+  ]
+}

@@ -1,0 +1,8 @@
+apiRevision alone: 39 tok
+"parley" items 8 (callable 1) complete true | now 2409 B 582 tok | D3a names-only 507 B 139 tok | D3a+b 120ch 461 B 129 tok
+"get_map" items 3 (callable 1) complete true | now 997 B 239 tok | D3a names-only 471 B 130 tok | D3a+b 120ch 329 B 99 tok
+"read_room" items 1 (callable 1) complete true | now 334 B 100 tok | D3a names-only 351 B 104 tok | D3a+b 120ch 351 B 104 tok
+"map" items 3 (callable 1) complete true | now 997 B 239 tok | D3a names-only 471 B 130 tok | D3a+b 120ch 329 B 99 tok
+" " items 30 (callable 3) complete false | now 8153 B 1934 tok | D3a names-only 1416 B 429 tok | D3a+b 120ch 1274 B 398 tok
+summary now: The detailed Parley guide: rooms and the roles in them (lead, participant), reports, waiting, what not to do. Read it when unsure; topic picks one section. 
+  first<=120: The detailed Parley guide: rooms and the roles in them (lead, participant), reports, waiting, what not to do.

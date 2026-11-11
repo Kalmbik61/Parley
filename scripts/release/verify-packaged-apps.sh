@@ -25,6 +25,10 @@ fail() {
   exit 1
 }
 
+# Проверки Code Mode, которым нужен JavaScript (план T9b-packaging): копии @parley/core и mac.signIgnore по настоящим путям.
+code_mode_checks="$root/scripts/release/verify-code-mode-package.mjs"
+builder_yml="$root/packages/desktop/electron-builder.yml"
+
 # $1 — каталог вывода electron-builder, $2 — архитектура в выводе lipo, $3 — каталог prebuilds node-pty.
 check_app() {
   local out="$1" lipo_arch="$2" pty_arch="$3"
@@ -75,7 +79,67 @@ check_app() {
   for license in NOTICE licenses/Figtree-OFL.txt licenses/Caprasimo-OFL.txt; do
     [ -f "$resources/$license" ] || fail "$app has no Contents/Resources/$license"
   done
+  check_code_mode_probe "$app" "$resources"
+  check_core_copies "$app" "$out"
   echo "$out: ok"
+}
+
+# Копии @parley/core (план T9b-packaging, предложение §3, пункты 1 и 4): хост — та, что запускает Code Mode; мост и app.asar
+# окна несут её байты, но до помощника не доходят. Неизвестная четвёртая копия или нехватка одной из трёх — отказ: расклад
+# поменялся, и доказательство инертности больше не про это приложение. Каждый бинарь проверки на диске (в хосте, в мосте, в
+# app.asar.unpacked) должен попадать под mac.signIgnore по своему настоящему пути: иначе electron-builder его переподпишет.
+# $1 — .app, $2 — каталог вывода.
+check_core_copies() {
+  local app="$1" out="$2" copies probes
+  copies="$(node "$code_mode_checks" copies "$app")" ||
+    fail "$app: the @parley/core copies are not exactly host, remote and app.asar"
+  echo "$out: @parley/core copies: $(printf '%s' "$copies" | node -e 'let s = ""; process.stdin.on("data", (d) => { s += d; }).on("end", () => console.log(JSON.parse(s).copies.map((c) => c.where).sort().join(", ")))')"
+  probes="$(node "$code_mode_checks" sign-ignore "$app" "$builder_yml")" ||
+    fail "$app: mac.signIgnore does not cover every Code Mode probe path"
+  echo "$out: mac.signIgnore covers $(printf '%s' "$probes" | node -e 'let s = ""; process.stdin.on("data", (d) => { s += d; }).on("end", () => console.log(JSON.parse(s).probes.length))') probe paths"
+}
+
+# Каталог @parley/core внутри хоста (pnpm deploy кладёт его в .pnpm). $1 — Contents/Resources.
+# Пусто, если каталога нет: отказ с понятной причиной даёт вызывающий, а не `find` под pipefail.
+core_dir() {
+  [ -d "$1/host/node_modules/.pnpm" ] || return 0
+  find "$1/host/node_modules/.pnpm" -maxdepth 4 -type d -path '*/node_modules/@parley/core' | head -n 1
+}
+
+# Нативная проверка Code Mode (план T4a) едет внутри @parley/core в ОБОИХ приложениях: deploy хоста один. Её байты должны
+# совпасть с manifest.json — то есть electron-builder её не переподписал (`mac.signIgnore`), — и подпись ad-hoc,
+# сделанная build-procinfo-probe.mjs, должна оставаться целой. $1 — .app, $2 — Contents/Resources.
+check_code_mode_probe() {
+  local app="$1" resources="$2" core probe manifest
+  core="$(core_dir "$resources")"
+  [ -n "$core" ] || fail "$app: @parley/core is missing from the host"
+  probe="$core/native/darwin-arm64/procinfo-probe"
+  manifest="$core/native/darwin-arm64/manifest.json"
+  [ -x "$probe" ] || fail "$app: the Code Mode probe is missing: build-procinfo-probe.mjs must run before deploy"
+  [ -s "$manifest" ] || fail "$app: the Code Mode probe manifest is missing"
+  [ "$(lipo -archs "$probe")" = "arm64" ] || fail "$app: the Code Mode probe is not an arm64 binary"
+  [ "$(shasum -a 256 "$probe" | cut -d ' ' -f 1)" = "$(node -p 'require(process.argv[1]).binarySha256' "$manifest")" ] ||
+    fail "$app: the Code Mode probe bytes differ from its manifest (re-signed after build?)"
+  codesign -v "$probe" || fail "$app: the Code Mode probe signature is not valid"
+}
+
+# Проверка запуска Code Mode встроенным node: на arm64 нативная проверка должна получить EPERM, x64-процесс (Rosetta)
+# должен отказаться по архитектуре, хотя arm64-бинарь лежит рядом. $1 — каталог вывода, $2 — ожидание (ok|refuse),
+# остальное — префикс запуска.
+run_code_mode_probe() {
+  local out="$1" expect="$2"
+  shift 2
+  local resources="$dist/$out/Parley.app/Contents/Resources" core verdict
+  core="$(core_dir "$resources")"
+  [ -n "$core" ] || fail "$out: @parley/core is missing from the host"
+  verdict="$(cd "$core" && "$@" "$resources/node/bin/node" --input-type=module -e \
+    "const h = await import('./dist/mcp/code-mode/helper.js'); const r = await h.checkLaunchProof(); console.log(r.ok ? 'ok' : 'refused: ' + r.reason)")" ||
+    fail "$out: the Code Mode launch proof did not run"
+  case "$expect:$verdict" in
+    ok:ok) echo "$out: Code Mode launch probe denied foreign process info (EPERM)" ;;
+    refuse:"refused: unsupported platform"*) echo "$out: Code Mode refuses this architecture ($verdict)" ;;
+    *) fail "$out: Code Mode launch proof: expected $expect, got: $verdict" ;;
+  esac
 }
 
 # Запуск встроенного node и загрузка node-pty. $1 — каталог вывода electron-builder, остальное — префикс
@@ -107,14 +171,19 @@ check_app mac x86_64 x64
 case "$(uname -m)" in
   arm64)
     run_app mac-arm64
+    run_code_mode_probe mac-arm64 ok
     # x64 на Apple Silicon идёт через Rosetta. Её может не быть (чистый раннер) — тогда это предупреждение,
     # а не отказ: файлы x64 уже проверены выше.
     if arch -x86_64 /usr/bin/true 2>/dev/null; then
       run_app mac arch -x86_64
+      run_code_mode_probe mac refuse arch -x86_64
     else
       echo "::warning::Rosetta is not available on this machine: the x64 app was checked by its files only, its embedded node was not run"
     fi
     ;;
-  x86_64) run_app mac ;;
+  x86_64)
+    run_app mac
+    run_code_mode_probe mac refuse
+    ;;
   *) fail "unsupported machine architecture: $(uname -m)" ;;
 esac
