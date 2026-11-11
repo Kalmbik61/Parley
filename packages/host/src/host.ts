@@ -34,6 +34,7 @@ import {
   PARLEY,
   providerLabel,
   updateMap,
+  defaultQwenRoot,
   userClaudeConfigDir,
   migrateMapsToDb,
   migrateProjects,
@@ -141,6 +142,7 @@ import { createSilentEndings } from './endings/silent-endings.js';
 import { createSessionsService } from './sessions/sessions-service.js';
 import { providerLaunchEnv } from './sessions/provider-env.js';
 import { createReadyJournal } from './sessions/ready-journal.js';
+import { createQwenBinding } from './activity/qwen-binding.js';
 import { createAutoSleepService } from './sleep/auto-sleep-service.js';
 import { limitAlternatives } from './stuck/limit-alternatives.js';
 import { createStuckService, stuckReportFromEnv } from './stuck/stuck-service.js';
@@ -575,9 +577,21 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     provider: (ref) => worksService.entry(ref.projectPath, ref.workId)?.map.sessions.find((session) => session.id === ref.sessionId)?.provider,
     context: toolContextFor,
   });
+  const qwenBinding = createQwenBinding({
+    log,
+    qwenRoot: defaultQwenRoot(),
+    session: (ref) => worksService.entry(ref.projectPath, ref.workId)?.map.sessions.find((session) => session.id === ref.sessionId),
+    store: async (ref, binding) => {
+      await updateMap(ref.projectPath, ref.workId, (map) => {
+        const target = map.sessions.find((session) => session.id === ref.sessionId);
+        if (target !== undefined) target.qwenTranscript = binding;
+      }, { touch: false });
+    },
+  });
   const hookServer = createHookServer({
     log,
     onHook: (request) => {
+      void qwenBinding.onHook(request);
       readyJournal.onHook(request.ref);
       try {
         compactionService?.onHook(request.ref, request.body);

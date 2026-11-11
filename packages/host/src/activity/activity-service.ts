@@ -1629,8 +1629,11 @@ export function createActivityService(
       for (const session of entry.map.sessions) {
         if (!isLive(session)) continue;
         if (watch !== undefined) void readJournal(entry.projectPath, entry.map.work.id, watch.journal, session.id);
-        // The log index serves the Claude family only; Codex has `codex-log-poll.ts`, Qwen its own watcher (plan A7a).
-        const file = byFamily(session.provider, { claude: true, codex: false, qwen: false, neutral: false }) ? logIndex.index(session)?.file : undefined;
+        // The log index serves the Claude family and Qwen; Codex has `codex-log-poll.ts`.
+        // A Qwen session not yet indexed (created after the watcher attached, event missed) is probed through its binding.
+        const file = byFamily(session.provider, { claude: true, codex: false, qwen: true, neutral: false })
+          ? (logIndex.index(session)?.file ?? session.qwenTranscript?.path)
+          : undefined;
         if (file !== undefined) logs.push(file);
       }
     }

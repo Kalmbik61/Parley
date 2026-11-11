@@ -2,6 +2,8 @@ import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import { codexLogId, defaultCodexRoot, discoverCodexSessions } from '../codex/discover.js';
 import { indexCodexSession } from '../codex/index-session.js';
+import { defaultQwenRoot, discoverQwenSessions, qwenLogId } from '../qwen/discover.js';
+import { indexQwenSession } from '../qwen/index-session.js';
 import { claudeRootFor, discoverSession, discoverSessions, findClaudeSessionFile } from '../discover.js';
 import { isClaudeCode, type ProviderEntry } from '../providers.js';
 import { indexSessionFile, type SessionIndex } from '../session-index.js';
@@ -15,6 +17,7 @@ import type { SessionMetrics, SessionResult, WorkMap, WorkProvider, WorkSession 
 export interface MetricsRoots {
   claudeRoot?: string;
   codexRoot?: string;
+  qwenRoot?: string;
 }
 
 /** Метрики живой сессии: в карту не пишутся, пересчитываются при чтении (спецификация, раздел 6). */
@@ -82,6 +85,19 @@ function adapterFor(provider: WorkProvider, roots: MetricsRoots) {
       },
       // Потомков Codex (порождённые треды) по родителю в одиночном разборе не найти: их складывает хост.
       index: (file: string): Promise<SessionIndex> => indexCodexSession(file),
+    };
+  }
+  if (provider === 'qwen') {
+    const root = roots.qwenRoot ?? defaultQwenRoot();
+    return {
+      list: async (): Promise<ProviderLog[]> =>
+        (await discoverQwenSessions(root)).map((session) => ({ id: session.id, file: session.file })),
+      // A known path is taken by its name; otherwise a walk of `<root>/<project>/chats` (readdir only).
+      find: async (id: string, known?: string | null): Promise<string | null> => {
+        if (known != null && qwenLogId(path.basename(known)) === id.toLowerCase() && (await isFile(known))) return known;
+        return (await discoverQwenSessions(root)).find((candidate) => candidate.id === id.toLowerCase())?.file ?? null;
+      },
+      index: (file: string): Promise<SessionIndex> => indexQwenSession(file),
     };
   }
   return null;

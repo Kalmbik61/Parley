@@ -16,6 +16,10 @@ import {
   customProviderProjectRoots,
   claudeSource,
   codexSource,
+  qwenSource,
+  defaultQwenRoot,
+  isQwenTranscriptPath,
+  qwenBindingHolds,
   defaultRoot,
   discoverSession,
   claudeCostIn,
@@ -116,8 +120,8 @@ export interface LogIndex {
  * Чьи логи читает сессия: Codex — свои, всё прочее (Claude и его надстройки вроде GLM) — Claude Code.
  * Один и тот же нативный id у двух семейств друг друга не вытесняет.
  */
-const logFamily = (provider: string): 'codex' | 'claude' | 'other' =>
-  byFamily(provider, { claude: 'claude' as const, codex: 'codex' as const, qwen: 'other' as const, neutral: 'other' as const });
+const logFamily = (provider: string): 'codex' | 'claude' | 'qwen' | 'other' =>
+  byFamily(provider, { claude: 'claude' as const, codex: 'codex' as const, qwen: 'qwen' as const, neutral: 'other' as const });
 const logKey = (provider: string, id: string): string => `${logFamily(provider)}\u0000${id}`;
 
 /**
@@ -157,6 +161,7 @@ export function createLogIndex(roots: LogIndexRoots = {}, options: LogIndexOptio
   // Свои корни по умолчанию читаются с диска, только если основной корень не подменён (тесты и E2E уводят хост от истории человека).
   const customRoots = roots.customRoots ?? (roots.claudeRoot === undefined ? () => customProviderProjectRoots() : () => []);
   const mainRoot = roots.claudeRoot ?? defaultRoot();
+  const qwenRoot = roots.qwenRoot ?? defaultQwenRoot();
   /** Корни Claude, за которыми следит или будет следить индекс; в `usageIn` по ним находится корень файла. */
   const claudeRoots = new Set<string>([mainRoot]);
   /** Наблюдатели корней, добавленных `watchClaudeRoot` после старта. */
@@ -256,10 +261,16 @@ export function createLogIndex(roots: LogIndexRoots = {}, options: LogIndexOptio
     for (const listener of listeners) listener(affected);
   };
 
-  const indexOf = (session: WorkSession): SessionIndex | undefined =>
-    session.providerSessionId === null
-      ? undefined
-      : byId.get(logKey(session.provider, session.providerSessionId));
+  const indexOf = (session: WorkSession): SessionIndex | undefined => {
+    if (session.providerSessionId === null) return undefined;
+    const found = byId.get(logKey(session.provider, session.providerSessionId));
+    // A Qwen session with a binding from `SessionStart` trusts only that file, and only while its records agree
+    // (`sessionId`, `cwd`); another file with the same id is not this session's transcript (spec 3.5).
+    if (found !== undefined && session.qwenTranscript !== undefined && logFamily(session.provider) === 'qwen') {
+      return qwenBindingHolds(found, { sessionId: session.providerSessionId, binding: session.qwenTranscript }) ? found : undefined;
+    }
+    return found;
+  };
 
   /** Порождённые треды Codex под корнем (дети, внуки…); цикл в данных их не зациклит. */
   const descendantIndexes = (root: SessionIndex): SessionIndex[] => {
@@ -360,7 +371,7 @@ export function createLogIndex(roots: LogIndexRoots = {}, options: LogIndexOptio
       const cacheOptions =
         options.cache !== undefined
           ? options.cache
-          : roots.claudeRoot === undefined && roots.codexRoot === undefined && hostVersion !== 'unknown'
+          : roots.claudeRoot === undefined && roots.codexRoot === undefined && roots.qwenRoot === undefined && hostVersion !== 'unknown'
             ? { file: path.join(hostPaths().dir, LOG_INDEX_CACHE_FILE), version: hostVersion }
             : null;
       const previous = cacheOptions === null ? new Map<string, LogIndexCacheEntry>() : await loadLogIndexCache(cacheOptions.file, cacheOptions.version);
@@ -391,7 +402,7 @@ export function createLogIndex(roots: LogIndexRoots = {}, options: LogIndexOptio
       // Корни, чьи сессии уже в `built`: `watchClaudeRoot` может добавить корень, пока список строится.
       const builtRoots = new Set<string>([mainRoot]);
       try {
-        built = await buildAllSessions({ ...roots, signal: building.signal, ...(reuse === undefined ? {} : { reuse }) });
+        built = await buildAllSessions({ ...roots, qwenRoot, signal: building.signal, ...(reuse === undefined ? {} : { reuse }) });
         // Корни своих провайдеров — только Claude-формат; Codex в общем списке уже один раз.
         // Цикл ловит и корни, появившиеся за время самой сборки: после последней проверки `await` нет.
         for (let pending = unbuiltRoots(builtRoots); pending.length > 0; pending = unbuiltRoots(builtRoots)) {
@@ -414,6 +425,7 @@ export function createLogIndex(roots: LogIndexRoots = {}, options: LogIndexOptio
           claudeSource(roots.claudeRoot, undefined, indexer),
           ...[...claudeRoots].filter((root) => root !== mainRoot).map((root) => claudeSource(root, undefined, indexer)),
           codexSource(roots.codexRoot, indexer),
+          qwenSource(qwenRoot, indexer),
         ],
         // Сбой ре-парса одного файла не должен ронять хост — следующее событие
         // попробует снова, как и у остальных наблюдателей хоста.
@@ -453,7 +465,7 @@ export function createLogIndex(roots: LogIndexRoots = {}, options: LogIndexOptio
     },
     async usageIn(session, windows, excludeIds) {
       const found = indexOf(session);
-      if (found === undefined) return undefined;
+      if (found === undefined || found.provider === 'qwen') return undefined;
       if (found.provider === 'codex') {
         const children = descendantIndexes(found);
         const key = `codex\u0000${JSON.stringify(windows)}\u0000${await signature([found.file, ...children.map((child) => child.file)])}`;
@@ -480,12 +492,12 @@ export function createLogIndex(roots: LogIndexRoots = {}, options: LogIndexOptio
     },
     async costIn(session, window) {
       const found = indexOf(session);
-      if (found === undefined || found.provider === 'codex') return undefined;
+      if (found === undefined || found.provider === 'codex' || found.provider === 'qwen') return undefined;
       return claudeCostIn(await timelineOf(found.file, 'claude'), window);
     },
     async idsIn(session, windows) {
       const found = indexOf(session);
-      if (found === undefined || found.provider === 'codex') return undefined;
+      if (found === undefined || found.provider === 'codex' || found.provider === 'qwen') return undefined;
       const root = [...claudeRoots].find((known) => found.file.startsWith(known + path.sep)) ?? mainRoot;
       const subagents = await subagentsOf(found.file, root);
       const parent = await timelineOf(found.file, 'claude');
@@ -510,7 +522,8 @@ export function createLogIndex(roots: LogIndexRoots = {}, options: LogIndexOptio
       if (stopped) return;
       let session: SessionIndex;
       try {
-        session = await indexer.codex(file);
+        // A Qwen transcript is never read as a Codex rollout.
+        session = await (isQwenTranscriptPath(file, qwenRoot) ? indexer.qwen(file) : indexer.codex(file));
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
         if (!stopped) applyChange({ kind: 'removed', file });

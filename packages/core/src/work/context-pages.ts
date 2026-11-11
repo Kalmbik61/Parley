@@ -499,6 +499,7 @@ function windowMapBase(map: WorkMap, textMax: number, cuts: CutRecord[], omitted
   const sessions = map.sessions.map((session) => {
     let next: WorkSession = { ...session };
     delete next.codexThreadBinding;
+    delete next.qwenTranscript;
     if (session.history.length > WINDOW_LIST_MAX) {
       omitted[`sessions.${session.id}.history`] = session.history.length - WINDOW_LIST_MAX;
       next = { ...next, history: session.history.slice(-WINDOW_LIST_MAX) };
@@ -811,6 +812,7 @@ export function projectWindowMail(map: WorkMap, captured: CapturedWindowMail, op
     for (const session of map.sessions) {
       const next = { ...session };
       delete next.codexThreadBinding;
+      delete next.qwenTranscript;
       if (session.history.length > WINDOW_LIST_MAX) {
         omitted[`sessions.${session.id}.history`] = session.history.length - WINDOW_LIST_MAX;
         next.history = session.history.slice(-WINDOW_LIST_MAX);

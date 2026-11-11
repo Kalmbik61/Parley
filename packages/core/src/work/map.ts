@@ -772,6 +772,9 @@ function migrateSession(session: Record<string, unknown>): void {
   session['startedAtProcess'] ??= null;
   session['launchedBy'] ??= null;
   if (session['provider'] !== 'codex' || !isCodexThreadBinding(session['codexThreadBinding'])) delete session['codexThreadBinding'];
+  const transcript = session['qwenTranscript'];
+  if (session['provider'] !== 'qwen' || !isRecord(transcript) || typeof transcript['path'] !== 'string' || transcript['path'] === '' || typeof transcript['cwd'] !== 'string' || transcript['cwd'] === '') delete session['qwenTranscript'];
+  else session['qwenTranscript'] = { path: transcript['path'], cwd: transcript['cwd'] };
   // Роли появились 2026-09-08: до них сессия запускалась только сама собой.
   if (!Object.hasOwn(session, 'role')) {
     session['role'] = typeof session['agent'] === 'string' && session['agent'] !== ''

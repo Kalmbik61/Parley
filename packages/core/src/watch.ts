@@ -5,6 +5,8 @@ import { adapterV1, type SchemaAdapter } from './adapter-v1.js';
 import { assistantCwd, defaultRoot, discoverSession, sessionFileForPath } from './discover.js';
 import { defaultCodexRoot } from './codex/discover.js';
 import { indexCodexSession } from './codex/index-session.js';
+import { defaultQwenRoot, isQwenTranscriptPath } from './qwen/discover.js';
+import { indexQwenSession } from './qwen/index-session.js';
 import { indexSessionFile, type SessionIndex } from './session-index.js';
 import type { SessionIndexer } from './session-indexer.js';
 
@@ -80,6 +82,18 @@ export function codexSource(root: string = defaultCodexRoot(), indexer?: Session
     index: async (file) => {
       const session = await (indexer === undefined ? indexCodexSession(file) : indexer.codex(file));
       // Ход помощника (спека 2026-10-14, 15.6) — не сессия Parley.
+      return session.cwd === assistantCwd() ? null : session;
+    },
+  };
+}
+
+/** Qwen Code source: `<qwenHome>/projects/*\/chats/<uuid>.jsonl`, one file per session. */
+export function qwenSource(root: string = defaultQwenRoot(), indexer?: SessionIndexer): WatchSource {
+  return {
+    root,
+    resolve: (changedPath, sourceRoot) => (isQwenTranscriptPath(changedPath, sourceRoot) ? changedPath : null),
+    index: async (file) => {
+      const session = await (indexer === undefined ? indexQwenSession(file) : indexer.qwen(file));
       return session.cwd === assistantCwd() ? null : session;
     },
   };
