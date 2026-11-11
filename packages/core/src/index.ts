@@ -932,6 +932,16 @@ export { JOB_CANCEL_SAFE_TOOLS, JOB_ONLY_TOOLS, JOB_TOKEN_PREFIX, JOB_TOOL_ALLOW
 export type { AgentPlanStatus, AgentPlanItem, AgentPlanState, AgentPlanSummary, AgentPlan, PlanCall } from './agent-plan.js';
 export { fetchLatestVersion, installMethod, isNewer } from './cli-updates.js';
 export type { CliUpdateProvider, InstallMethod, LatestVersionSource } from './cli-updates.js';
+export { CLI_TOOLS, LATEST_SOURCE_URLS } from './cli-tools.js';
+export type {
+  CliDescriptor,
+  CliInstallMethod,
+  CliInstallPlan,
+  CliLatestSource,
+  CliPlatform,
+  CliTool,
+  CliUpdatePlan,
+} from './cli-tools.js';
 export { sessionWorktreeFinished } from './work/worktree-owner.js';
 export type { WorktreeLeftover } from './work/worktree-owner.js';
 export {
