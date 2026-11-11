@@ -937,3 +937,10 @@ export {
   resolveIncludePaths,
   WORKTREE_INCLUDE_FILE,
 } from './work/worktree-include.js';
+export {
+  LOCK_FILE_NAMES,
+  SEED_MAX_ENTRIES,
+  SEED_TIMEOUT_MS,
+  seedWorktree,
+} from './work/worktree-seed.js';
+export type { SeedDeps, SeedReport, SeedSkip, SeedSkipReason } from './work/worktree-seed.js';
