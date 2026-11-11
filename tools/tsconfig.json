@@ -12,6 +12,12 @@
     "parley-token-benchmark.ts",
     "parley-token-benchmark.test.ts",
     "parley-token-benchmark-drive.ts",
-    "parley-token-benchmark-drive.test.ts"
+    "parley-token-benchmark-drive.test.ts",
+    "parley-token-benchmark-replay.ts",
+    "parley-token-benchmark-replay-schema.ts",
+    "parley-token-benchmark-replay-judge.ts",
+    "parley-token-benchmark-replay.test.ts",
+    "code-mode-isolated-run.ts",
+    "code-mode-isolated-run.test.ts"
   ]
 }

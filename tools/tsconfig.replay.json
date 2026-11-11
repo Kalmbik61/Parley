@@ -1,0 +1,33 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "..",
+    "paths": { "@modelcontextprotocol/sdk/*": ["../packages/core/node_modules/@modelcontextprotocol/sdk/dist/esm/*"] }
+  },
+  "include": [
+    "parley-token-benchmark-replay.ts",
+    "parley-token-benchmark-replay-schema.ts",
+    "parley-token-benchmark-replay-judge.ts",
+    "parley-token-benchmark-replay.test.ts",
+    "parley-token-benchmark-replay-data.ts",
+    "parley-token-benchmark-replay-data.test.ts",
+    "parley-token-benchmark-replay-probe.ts",
+    "parley-token-benchmark-replay-host.ts",
+    "parley-token-benchmark-replay-host.test.ts",
+    "parley-token-benchmark-replay-arms.ts",
+    "parley-token-benchmark-replay-arms.test.ts",
+    "parley-token-benchmark-replay-launch.ts",
+    "parley-token-benchmark-replay-launch.test.ts",
+    "parley-token-benchmark-replay-rollback.ts",
+    "parley-token-benchmark-replay-rollback.test.ts",
+    "parley-token-benchmark-replay-preflight.ts",
+    "parley-token-benchmark-replay-preflight.test.ts",
+    "parley-token-benchmark-replay-busy.ts",
+    "parley-token-benchmark-replay-gate.test.ts",
+    "parley-token-benchmark-replay-run.ts",
+    "parley-token-benchmark-replay-sources.ts",
+    "parley-token-benchmark-replay-sources.test.ts",
+    "parley-token-benchmark-replay-run.test.ts",
+    "parley-token-benchmark-replay.run.test.ts"
+  ]
+}

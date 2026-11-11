@@ -1,9 +1,13 @@
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { cp, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  CODE_MODE_DIR,
+  CODE_MODE_MANIFEST,
+  CODE_MODE_SOURCES,
   DEFAULT_OUT,
   FIXTURE_DIR,
   PROMPT_MAX_CHARS,
@@ -11,23 +15,33 @@ import {
   beginRun,
   buildLabelSheet,
   buildReport,
+  checkPrefix,
+  compareSchema,
+  corpusRow,
   collectClaudeSession,
   collectCodexSessions,
   collectCodexTranscript,
   collectRun,
+  descriptionBytes,
   dryRun,
   estimateBudget,
   extractPrompts,
   findMcpServerNames,
   hashTree,
   hostEnv,
+  indexTranscript,
   isEmptyFindSkillResult,
+  loadCodeModeManifest,
   loadFixtures,
+  loadPinnedTokenizer,
   main,
+  measureChain,
+  measureChains,
   median,
   nearestRank,
   pairSection,
   parseRun,
+  payloadStats,
   planRuns,
   renderReport,
   renderRunSheet,
@@ -38,7 +52,9 @@ import {
   type BeginRecord,
   type Budget,
   type RunRecord,
+  type Tokenizer,
 } from './parley-token-benchmark.js';
+import { PINNED_TOKENIZER, exposureAccounting } from './parley-token-benchmark.js';
 import type { UsageSummary } from '../packages/core/src/work/usage-ledger.js';
 
 let tmp: string;
@@ -1068,11 +1084,14 @@ describe('сухой прогон', () => {
     expect(result.lines.some((l) => l.includes('принятие long-rule'))).toBe(true);
   }, 60000);
 
-  it('стенд не запускает модели: единственные внешние программы — git, sh и --version у CLI', async () => {
+  it('стенд не запускает модели: единственные внешние программы — git, sh, --version у CLI и сервер MCP Parley для замера stdio', async () => {
     const source = await readFile(path.join(FIXTURE_DIR, '../../../tools/parley-token-benchmark.ts'), 'utf8');
     const spawns = [...source.matchAll(/spawnSync\(([^,]+),/g)].map((m) => m[1]);
-    expect(spawns.sort()).toEqual(["'git'", "'git'", "'git'", "'git'", "'sh'", 'bin']);
+    expect(spawns.sort()).toEqual(["'git'", "'git'", "'git'", "'git'", "'git'", "'sh'", 'bin']);
     expect(source).toContain("spawnSync(bin, ['--version']");
+    // Асинхронный запуск один: node со сборкой исходников в режиме `--baseline-stdio` (Code Mode, T1a) — только `tools/list`.
+    expect([...source.matchAll(/[^.\w]spawn\(([^,]+),/g)].map((m) => m[1])).toEqual(['process.execPath']);
+    expect(source).toContain("spawn(process.execPath, [bundle, '--baseline-stdio', profile, String(agent)]");
   });
 });
 
@@ -1407,5 +1426,218 @@ describe('сбор из журнала Codex', () => {
     expect(run.bytes['toolResultBytes']).toBeNull();
     // Первый запрос и старт MCP — у Claude, если он есть.
     expect(run.firstRequest).toEqual({ cacheRead: 100, totalInput: 130 });
+  });
+});
+
+// ---------- Code Mode: базовый корпус (T1a) ----------
+
+const SYNTHETIC_TRANSCRIPT = path.join(CODE_MODE_DIR, 'synthetic-transcript.jsonl');
+
+/** Подставной токенизатор — только для арифметики тестов: настоящие числа даёт закреплённый js-tiktoken. */
+const wordTokenizer: Tokenizer = { label: 'test-words', count: (text) => text.split(/[^A-Za-z0-9]+/).filter(Boolean).length };
+
+const transcriptLines = async (): Promise<string[]> => (await readFile(SYNTHETIC_TRANSCRIPT, 'utf8')).trimEnd().split('\n');
+const indexOf = (lines: string[]): ReturnType<typeof indexTranscript> => indexTranscript(`${lines.join('\n')}\n`);
+/** Запись транскрипта в том объёме, который правят тесты. */
+interface TranscriptRecord { timestamp?: string; message: { content: { tool_use_id?: string }[] } }
+const edit = (line: string, change: (record: TranscriptRecord) => void): string => {
+  const record = JSON.parse(line) as TranscriptRecord;
+  change(record);
+  return JSON.stringify(record);
+};
+
+describe('Code Mode: замороженный манифест T1a', () => {
+  it('числа приложения A: схемы, stdio, пять цепочек; суммы сходятся с вызовами', async () => {
+    const manifest = await loadCodeModeManifest();
+    expect(manifest.base).toBe('f7978af8156cfb426016f999fb6d36798adf7d73');
+    expect(manifest.tokenizer).toEqual(PINNED_TOKENIZER);
+    expect(Object.keys(manifest.sources)).toEqual([...CODE_MODE_SOURCES]);
+    const row = (name: string) => manifest.schema.rows.find((r) => r.name === name);
+    expect(manifest.schema.rows).toHaveLength(13);
+    expect(row('full-server-agent')).toMatchObject({ toolCount: 41, utf8Bytes: 37105, o200kTokens: 9073 });
+    expect(row('short-server-agent')).toMatchObject({ toolCount: 38, utf8Bytes: 35539, o200kTokens: 8698 });
+    expect(row('full-legacy-size-corpus')).toMatchObject({ utf8Bytes: 20881, o200kTokens: 5109, descriptionBytes: 5580 });
+    expect(manifest.schema.wire.map((w) => [w.name, w.utf8Bytes, w.o200kTokens])).toEqual([
+      ['full-stdio-runner', 19755, 4853], ['full-stdio-server-agent', 37150, 9089],
+      ['short-stdio-runner', 18189, 4478], ['short-stdio-server-agent', 35584, 8714],
+    ]);
+    expect(manifest.chains.map((c) => [c.label, c.sumResultTokens, c.intermediateResultTokens])).toEqual([
+      ['browser', 327, 271], ['session-creation', 3356, 3156], ['map-guide', 1439, 1076], ['map-drilldown', 5124, 4433], ['inbox-map', 270, 21],
+    ]);
+    for (const chain of manifest.chains) {
+      const tokens = chain.calls.map((c) => c.resultContent.o200kTokens!);
+      expect(chain.sumResultTokens).toBe(tokens.reduce((a, b) => a + b, 0));
+      expect(chain.intermediateResultTokens).toBe(tokens.slice(0, -1).reduce((a, b) => a + b, 0));
+      expect(chain.sumInputTokens).toBe(chain.calls.reduce((a, c) => a + c.input.o200kTokens!, 0));
+      expect(manifest.chainSpecs.find((s) => s.label === chain.label)?.callLines).toEqual(chain.calls.map((c) => c.callLine));
+    }
+  });
+
+  it('в манифесте и синтетической фикстуре нет локальных путей', async () => {
+    for (const file of [CODE_MODE_MANIFEST, SYNTHETIC_TRANSCRIPT]) {
+      const text = await readFile(file, 'utf8');
+      expect(text).not.toContain('/Users/');
+      expect(text).not.toContain(homedir());
+      expect(text).not.toContain('.claude/projects');
+    }
+  });
+});
+
+describe('Code Mode: корпус схем', () => {
+  const tools = [{ name: 'a', description: 'one two', inputSchema: { type: 'object', properties: { x: { type: 'string', description: 'three' } } } }];
+
+  it('байты, описания и хеш — по JSON.stringify без пробелов; без токенизатора токены неизвестны, а не ноль', () => {
+    const json = JSON.stringify(tools);
+    const row = corpusRow('demo', tools, null);
+    expect(row).toMatchObject({ name: 'demo', toolCount: 1, utf8Bytes: Buffer.byteLength(json), o200kTokens: null, descriptionBytes: 'one two'.length + 'three'.length });
+    expect(corpusRow('demo', tools, wordTokenizer).o200kTokens).toBe(wordTokenizer.count(json));
+    expect(descriptionBytes([{ description: 'ё' }])).toBe(2);
+  });
+
+  it('изменённое описание — расхождение; нет токенизатора — недоступно; другое число токенов — расхождение', () => {
+    const base = { rows: [corpusRow('demo', tools, wordTokenizer)], runtimeParity: [], wire: [] };
+    const mutated = { ...base, rows: [corpusRow('demo', [{ ...tools[0], description: 'one two!' }], wordTokenizer)] };
+    const [rows] = compareSchema(base, mutated);
+    expect(rows).toMatchObject({ part: 'schema.rows', state: 'mismatch' });
+    expect(rows!.details.join('\n')).toMatch(/sha256/);
+    expect(compareSchema(base, { ...base, rows: [corpusRow('demo', tools, null)] })[0]).toMatchObject({ state: 'unavailable' });
+    expect(compareSchema(base, { ...base, rows: [{ ...base.rows[0]!, o200kTokens: 999 }] })[0]).toMatchObject({ state: 'mismatch' });
+    expect(compareSchema(base, base).map((v) => v.state)).toEqual(['match', 'match', 'match']);
+  });
+});
+
+describe('Code Mode: цепочки из транскриптов', () => {
+  it('префикс: тот же и дописанный — годны, изменённый и укороченный — нет', () => {
+    const bytes = Buffer.from('{"a":1}\n{"b":2}\n');
+    const spec = { prefixBytes: bytes.length, prefixSha256: createHash('sha256').update(bytes).digest('hex') };
+    expect(checkPrefix(bytes, spec).state).toBe('unchanged');
+    expect(checkPrefix(Buffer.concat([bytes, Buffer.from('{"c":3}\n')]), spec).state).toBe('appended');
+    expect(checkPrefix(Buffer.from('{"a":2}\n{"b":2}\n'), spec).state).toBe('modified');
+    expect(checkPrefix(bytes.subarray(0, 5), spec).state).toBe('truncated');
+  });
+
+  it('смежные вызовы со своими результатами: строки, блоки, id и хеши полезной нагрузки', async () => {
+    const lines = await transcriptLines();
+    const chain = measureChain(indexOf(lines), 'demo', 'synthetic', [2, 4], wordTokenizer);
+    expect(chain.calls.map((c) => [c.name, c.callLine, c.resultLine, c.callId])).toEqual([
+      ['mcp__parley__get_map', 2, 3, 'toolu_synthetic_a'], ['mcp__parley__read_guide', 4, 5, 'toolu_synthetic_b'],
+    ]);
+    expect(chain.calls[0]!.resultContent).toEqual(payloadStats(JSON.parse(lines[2]!).message.content[0].content, wordTokenizer));
+    expect(chain.intermediateResultTokens).toBe(chain.calls[0]!.resultContent.o200kTokens);
+    expect(measureChain(indexOf(lines), 'demo', 'synthetic', [2, 4], null).sumResultTokens).toBeNull();
+    expect(measureChain(indexOf(lines), 'last', 'synthetic', [8], null).calls[0]!.isError).toBe(true);
+  });
+
+  it('вызов не Parley между выбранными (Bash) — отказ, смежность считается по всем вызовам', async () => {
+    const lines = await transcriptLines();
+    expect(() => measureChain(indexOf(lines), 'gap', 'synthetic', [4, 8], null)).toThrow(/ещё 1 вызов/);
+  });
+
+  it('нет времени у записи вызова — отказ', async () => {
+    const lines = await transcriptLines();
+    lines[3] = edit(lines[3]!, (r) => { delete r.timestamp; });
+    expect(() => measureChain(indexOf(lines), 'ts', 'synthetic', [2, 4], null)).toThrow(/нет времени/);
+  });
+
+  it('пустое или пробельное время у записи вызова — тоже отказ; настоящее время сохраняется как есть', async () => {
+    for (const blank of ['', '  \t']) {
+      const lines = await transcriptLines();
+      lines[3] = edit(lines[3]!, (r) => { r.timestamp = blank; });
+      expect(() => measureChain(indexOf(lines), 'ts', 'synthetic', [2, 4], null)).toThrow(/нет времени/);
+    }
+    const chain = measureChain(indexOf(await transcriptLines()), 'ts', 'synthetic', [2, 4], null);
+    expect(chain.calls.map((c) => c.timestamp)).toEqual(['2026-01-01T00:00:01.000Z', '2026-01-01T00:00:03.000Z']);
+  });
+
+  it('результат с id чужого вызова, второй результат и результат после следующего вызова — отказ', async () => {
+    const wrongId = await transcriptLines();
+    wrongId[2] = edit(wrongId[2]!, (r) => { r.message.content[0]!.tool_use_id = 'toolu_synthetic_b'; });
+    expect(() => measureChain(indexOf(wrongId), 'join', 'synthetic', [2, 4], null)).toThrow(/результатов 0/);
+    expect(() => measureChain(indexOf(wrongId), 'join', 'synthetic', [4], null)).toThrow(/результатов 2/);
+    const late = await transcriptLines();
+    [late[2], late[3]] = [late[3]!, late[2]!];
+    expect(() => measureChain(indexOf(late), 'order', 'synthetic', [2, 3], null)).toThrow(/не раньше следующего вызова/);
+  });
+
+  it('на строке нет вызова — отказ', async () => {
+    const lines = await transcriptLines();
+    expect(() => measureChain(indexOf(lines), 'none', 'synthetic', [1], null)).toThrow(/вызовов 0/);
+  });
+});
+
+describe('Code Mode: пересчёт цепочек по локальным транскриптам', () => {
+  async function syntheticManifest(): Promise<{ manifest: Parameters<typeof measureChains>[0]; bytes: Buffer }> {
+    const bytes = await readFile(SYNTHETIC_TRANSCRIPT);
+    const spec = { key: 'synthetic', file: 'synthetic-transcript.jsonl', prefixBytes: bytes.length, prefixSha256: createHash('sha256').update(bytes).digest('hex'), lineCount: 9 };
+    const chain = measureChain(indexTranscript(bytes.toString('utf8')), 'demo', 'synthetic', [2, 4], wordTokenizer);
+    return { manifest: { transcripts: [spec], chainSpecs: [{ label: 'demo', transcript: 'synthetic', callLines: [2, 4] }], chains: [chain] }, bytes };
+  }
+  async function place(bytes: Buffer): Promise<string> {
+    await mkdir(path.join(tmp, 'projects/-synthetic'), { recursive: true });
+    await writeFile(path.join(tmp, 'projects/-synthetic/synthetic-transcript.jsonl'), bytes);
+    return path.join(tmp, 'projects');
+  }
+
+  it('тот же и дописанный транскрипт — совпадение', async () => {
+    const { manifest, bytes } = await syntheticManifest();
+    const same = await measureChains(manifest, await place(bytes), wordTokenizer);
+    expect(same.verdicts.map((v) => v.state)).toEqual(['match', 'match']);
+    const appended = await measureChains(manifest, await place(Buffer.concat([bytes, Buffer.from('{"type":"user"}\n')])), wordTokenizer);
+    expect(appended.transcripts[0]!.state).toBe('appended');
+    expect(appended.verdicts.map((v) => v.state)).toEqual(['match', 'match']);
+  });
+
+  it('изменённый префикс — расхождение, цепочка не считается; нет файла — недоступно, а не числа', async () => {
+    const { manifest, bytes } = await syntheticManifest();
+    const changed = Buffer.from(bytes.toString('utf8').replace('synthetic guide text', 'synthetic guide TEXT'));
+    const modified = await measureChains(manifest, await place(changed), wordTokenizer);
+    expect(modified.verdicts.map((v) => v.state)).toEqual(['mismatch', 'unavailable']);
+    expect(modified.chains).toEqual([]);
+    const missing = await measureChains(manifest, path.join(tmp, 'nowhere'), wordTokenizer);
+    expect(missing.verdicts.map((v) => v.state)).toEqual(['unavailable', 'unavailable']);
+    expect(missing.chains).toEqual([]);
+  });
+
+  it('замороженная запись с другим id вызова или строкой результата — расхождение (неверная связка)', async () => {
+    const { manifest, bytes } = await syntheticManifest();
+    const frozen = manifest.chains[0]!;
+    const forged = { ...manifest, chains: [{ ...frozen, calls: [{ ...frozen.calls[0]!, callId: 'toolu_other', resultLine: 5 }, frozen.calls[1]!] }] };
+    const result = await measureChains(forged, await place(bytes), wordTokenizer);
+    expect(result.verdicts[1]).toMatchObject({ state: 'mismatch' });
+    expect(result.verdicts[1]!.details.join('\n')).toMatch(/callId/);
+    expect(result.verdicts[1]!.details.join('\n')).toMatch(/resultLine/);
+  });
+});
+
+describe('Code Mode: закреплённый токенизатор', () => {
+  async function fakePackage(version: string): Promise<string> {
+    const dir = path.join(tmp, `tok-${version}`);
+    await mkdir(path.join(dir, 'node_modules/js-tiktoken/dist/ranks'), { recursive: true });
+    await writeFile(path.join(dir, 'node_modules/js-tiktoken/package.json'), JSON.stringify({ name: 'js-tiktoken', version, main: './dist/index.cjs' }));
+    await writeFile(path.join(dir, 'node_modules/js-tiktoken/dist/index.cjs'), 'exports.getEncoding = () => ({ encode: () => [] });\n');
+    await writeFile(path.join(dir, 'node_modules/js-tiktoken/dist/ranks/o200k_base.cjs'), 'module.exports = {};\n');
+    return dir;
+  }
+
+  it('нет пакета, другая версия или другие байты — отказ до подсчёта', async () => {
+    await expect(loadPinnedTokenizer(path.join(tmp, 'empty'))).rejects.toThrow(/нет пакета js-tiktoken/);
+    await expect(loadPinnedTokenizer(await fakePackage('1.0.20'))).rejects.toThrow(/версия 1\.0\.20/);
+    await expect(loadPinnedTokenizer(await fakePackage('1.0.21'))).rejects.toThrow(/sha256 .* не совпадает/);
+  });
+});
+
+describe('exposureAccounting (T7b): named fields, a diagnostic', () => {
+  const tokenizer = { name: 'test-counter', count: (text: string) => text.length };
+  it('classic has no wrappers and no replacement fields to claim', () => {
+    const r = exposureAccounting({ original: [{ name: 'a' }], residual: [{ name: 'a' }], wrappers: [], registryRevision: null, tokenizer });
+    expect(r).toMatchObject({ exposure: 'classic', originalTools: 1, residualTools: 1, wrapperTools: 0, wrappersBytes: 0, wrappersTokens: 0, tokenizer: 'test-counter', registryRevision: null });
+  });
+  it('replacement counts residual and wrappers apart, and the total is the real list', () => {
+    const residual = [{ name: 'é' }];
+    const wrappers = [{ name: 'code_search' }];
+    const r = exposureAccounting({ original: [...residual, { name: 'get_map' }], residual, wrappers, registryRevision: 'abc', tokenizer });
+    expect(r).toMatchObject({ exposure: 'replacement', originalTools: 2, residualTools: 1, wrapperTools: 1, registryRevision: 'abc' });
+    expect(r.residualBytes).toBe(Buffer.byteLength(JSON.stringify(residual), 'utf8'));
+    expect(r.totalBytes).toBe(Buffer.byteLength(JSON.stringify([...residual, ...wrappers]), 'utf8'));
   });
 });
