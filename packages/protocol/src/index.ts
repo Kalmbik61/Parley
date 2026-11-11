@@ -26,6 +26,7 @@ export type {
   CapabilitySkill,
   CapabilitySource,
   CapacitySnapshot,
+  CliStatus,
   CliUpdate,
   CompactResult,
   NoticeKind,

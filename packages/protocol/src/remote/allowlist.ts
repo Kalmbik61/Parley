@@ -149,6 +149,9 @@ export const REMOTE_FORBIDDEN: readonly string[] = [
   'providers.clearKey',
   'providers.check',
   'providers.refreshLimits',
+  // Обновление и проверка версий CLI запускают процессы и ходят в сеть от имени хоста: только на Маке.
+  'providers.update',
+  'providers.checkUpdates',
   'telegram.*',
   'voiceProvider.*',
   'trust.grant',

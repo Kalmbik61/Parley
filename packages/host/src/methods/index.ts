@@ -67,6 +67,7 @@ import {
   createProvidersClearKey,
   createProvidersList,
   createProvidersRefreshLimits,
+  createProvidersCheckUpdates,
   createProvidersSkipUpdate,
   createProvidersUpdate,
   createProvidersSetKey,
@@ -302,6 +303,7 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     // Метод есть всегда (hello перечисляет все METHODS); без службы проверки пропускать нечего.
     'providers.skipUpdate': createProvidersSkipUpdate(deps.cliUpdates) as AnyHandler,
     'providers.update': createProvidersUpdate(deps.cliUpdateRunner) as AnyHandler,
+    'providers.checkUpdates': createProvidersCheckUpdates(deps.providerVersions, deps.cliUpdates) as AnyHandler,
     ...(deps.limits === undefined
       ? {}
       : { 'providers.refreshLimits': createProvidersRefreshLimits(deps.limits, deps.providerVersions, deps.auth) as AnyHandler }),

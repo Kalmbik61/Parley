@@ -12,6 +12,7 @@ const HOUR = 60 * 60 * 1000;
 const GITHUB = 'https://api.github.com/repos/openai/codex/releases/latest';
 const BREW = 'https://formulae.brew.sh/api/cask/codex.json';
 const NPM = 'https://registry.npmjs.org/-/package/@anthropic-ai/claude-code/dist-tags';
+const QWEN_NPM = 'https://registry.npmjs.org/-/package/@qwen-code/qwen-code/dist-tags';
 
 let root = '';
 let userHome = '';
@@ -51,6 +52,7 @@ function net(): Net {
     [GITHUB, { tag_name: 'rust-v0.166.0', prerelease: false }],
     [BREW, { version: '0.165.0' }],
     [NPM, { latest: '2.1.320', stable: '2.1.300' }],
+    [QWEN_NPM, { latest: '0.28.0' }],
   ]);
   const fetchImpl = (async (url: string | URL | Request) => {
     urls.push(String(url));
@@ -79,7 +81,8 @@ describe('проверка версий CLI', () => {
     const n = net();
     const updates = service(n, () => Date.UTC(2026, 10, 2));
     await updates.checkAll();
-    expect(n.urls.sort()).toEqual([GITHUB, NPM].sort());
+    // Qwen не установлен, но последнюю версию для него тоже спрашиваем.
+    expect(n.urls.sort()).toEqual([GITHUB, NPM, QWEN_NPM].sort());
     const file = JSON.parse(await readFile(cacheFile(), 'utf8')) as { version: number; providers: Record<string, unknown> };
     expect(file.version).toBe(1);
     expect(file.providers['codex']).toEqual({
@@ -87,6 +90,7 @@ describe('проверка версий CLI', () => {
       checkedAt: '2026-11-02T00:00:00.000Z',
       method: 'standalone',
       skipped: null,
+      lastError: null,
     });
     expect(file.providers['claude']).toMatchObject({ latest: '2.1.320', method: 'native' });
   });
@@ -96,13 +100,13 @@ describe('проверка версий CLI', () => {
     let at = Date.UTC(2026, 10, 2);
     const updates = service(n, () => at);
     await updates.checkAll();
-    expect(n.urls).toHaveLength(2);
+    expect(n.urls).toHaveLength(3);
     at += CLI_UPDATE_MIN_AGE_MS - HOUR;
     await updates.checkAll();
-    expect(n.urls).toHaveLength(2);
+    expect(n.urls).toHaveLength(3);
     at += 2 * HOUR;
     await updates.checkAll();
-    expect(n.urls).toHaveLength(4);
+    expect(n.urls).toHaveLength(6);
   });
 
   it('кэш переживает перезапуск: свежая запись не даёт новой проверки', async () => {
@@ -110,7 +114,7 @@ describe('проверка версий CLI', () => {
     const at = Date.UTC(2026, 10, 2);
     await service(n, () => at).checkAll();
     await service(n, () => at + HOUR).checkAll();
-    expect(n.urls).toHaveLength(2);
+    expect(n.urls).toHaveLength(3);
   });
 
   it('текущее обновление: новее установленной и не пропущено', async () => {
@@ -175,7 +179,7 @@ describe('проверка версий CLI', () => {
     at += 25 * HOUR;
     await updates.checkAll();
     const codex = JSON.parse(await readFile(cacheFile(), 'utf8')).providers.codex;
-    expect(codex).toEqual({ latest: '0.166.0', checkedAt: new Date(at).toISOString(), method: 'standalone', skipped: null });
+    expect(codex).toEqual({ latest: '0.166.0', checkedAt: new Date(at).toISOString(), method: 'standalone', skipped: null, lastError: 'offline' });
     expect(await updates.current('codex', '0.162.0')).toMatchObject({ latest: '0.166.0' });
   });
 
@@ -184,10 +188,11 @@ describe('проверка версий CLI', () => {
     n.replies.set(GITHUB, new TypeError('fetch failed'));
     n.replies.set(NPM, new TypeError('fetch failed'));
     const updates = service(n, () => Date.UTC(2026, 10, 2));
+    n.replies.set(QWEN_NPM, new TypeError('fetch failed'));
     await updates.checkAll();
     expect(await updates.current('codex', '0.162.0')).toBeNull();
     await updates.checkAll();
-    expect(n.urls).toHaveLength(2);
+    expect(n.urls).toHaveLength(3);
   });
 
   it('битый кэш — пустой кэш', async () => {
@@ -204,7 +209,7 @@ describe('проверка версий CLI', () => {
     await writeFile(cacheFile(), JSON.stringify({ version: 2, providers: { codex: { latest: '9.9.9', checkedAt: '2026-11-02T00:00:00.000Z', method: 'npm', skipped: null } } }));
     const n = net();
     await service(n, () => Date.UTC(2026, 10, 2)).checkAll();
-    expect(n.urls).toHaveLength(2);
+    expect(n.urls).toHaveLength(3);
   });
 
   it('PARLEY_CODEX_BIN: способ установки берётся из пути подмены, ссылки раскрываются', async () => {
@@ -223,12 +228,21 @@ describe('проверка версий CLI', () => {
     });
   });
 
-  it('CLI не найден — источник не спрашивается и записи нет', async () => {
+  it('CLI не найден — последняя версия всё равно спрашивается; обновления для него нет, состояние missing', async () => {
     const n = net();
     const updates = service(n, () => Date.UTC(2026, 10, 2), { codex: path.join(root, 'нет-такого'), claude: path.join(root, 'тоже-нет') });
     await updates.checkAll();
-    expect(n.urls).toEqual([]);
-    expect(await updates.current('codex', '0.1.0')).toBeNull();
+    expect(n.urls.sort()).toEqual([GITHUB, NPM, QWEN_NPM].sort());
+    expect(await updates.current('codex', null)).toBeNull();
+    expect(await updates.status('codex', null)).toEqual({
+      installed: null,
+      latest: '0.166.0',
+      method: null,
+      checkedAt: '2026-11-02T00:00:00.000Z',
+      state: 'missing',
+      lastError: null,
+    });
+    expect(await updates.status('qwen', null)).toMatchObject({ state: 'missing', latest: '0.28.0' });
   });
 
   it('Claude: канал из ~/.claude/settings.json (autoUpdatesChannel), иначе latest', async () => {
@@ -274,10 +288,10 @@ describe('проверка версий CLI', () => {
       onChange: (command) => changes.push(command),
     });
     await updates.checkAll();
-    expect(changes.sort()).toEqual(['claude', 'codex']);
+    expect(changes.sort()).toEqual(['claude', 'codex', 'qwen']);
     at += 25 * HOUR;
     await updates.checkAll();
-    expect(changes).toHaveLength(2);
+    expect(changes).toHaveLength(3);
   });
 
   it('start() ничего не ждёт: сеть спрашивается позже, в фоне; stop() гасит таймеры', async () => {
@@ -285,7 +299,85 @@ describe('проверка версий CLI', () => {
     const updates = service(n, () => Date.UTC(2026, 10, 2));
     updates.start();
     expect(n.urls).toEqual([]);
-    await vi.waitFor(() => expect(n.urls).toHaveLength(2));
+    await vi.waitFor(() => expect(n.urls).toHaveLength(3));
     updates.stop();
+  });
+});
+
+describe('status и checkOne (спека Qwen, §4.4)', () => {
+  it('состояния: up-to-date, available, skipped, missing, unknown', async () => {
+    const n = net();
+    const updates = service(n, () => Date.UTC(2026, 10, 2));
+    await updates.checkAll();
+    expect(await updates.status('codex', '0.166.0')).toMatchObject({ state: 'up-to-date', installed: '0.166.0', latest: '0.166.0', method: 'standalone' });
+    expect(await updates.status('codex', '0.162.0')).toMatchObject({ state: 'available', lastError: null });
+    expect(await updates.status('codex', null)).toMatchObject({ state: 'missing', method: null });
+    await updates.skip('codex');
+    expect(await updates.status('codex', '0.162.0')).toMatchObject({ state: 'skipped', latest: '0.166.0' });
+    // Версия после пропущенной снова available.
+    expect(await updates.status('codex', '0.166.0')).toMatchObject({ state: 'up-to-date' });
+    // Не проверяли вовсе: unknown без времени.
+    const fresh = createCliUpdates({ fetchImpl: n.fetchImpl, log, home: path.join(root, 'empty'), userHome, env: { PATH: '' } });
+    expect(await fresh.status('claude', '2.1.316')).toEqual({
+      installed: '2.1.316', latest: null, method: null, checkedAt: null, state: 'unknown', lastError: null,
+    });
+    expect(await updates.status('other', '1.0.0')).toBeNull();
+  });
+
+  it('офлайн с самого начала: unknown и lastError offline', async () => {
+    const n = net();
+    n.replies.set(GITHUB, new TypeError('fetch failed'));
+    const updates = service(n, () => Date.UTC(2026, 10, 2));
+    await updates.checkAll();
+    expect(await updates.status('codex', '0.162.0')).toMatchObject({ state: 'unknown', latest: null, lastError: 'offline', checkedAt: '2026-11-02T00:00:00.000Z' });
+  });
+
+  it('lastError: http-статус и разбор; успех его сбрасывает', async () => {
+    const n = net();
+    let status = 503;
+    const fetchImpl = (async (url: string | URL | Request) => {
+      if (String(url) === GITHUB) return { status, json: async () => ({ tag_name: 'rust-v0.166.0', prerelease: false }) } as Response;
+      if (String(url) === NPM) return { status: 200, json: async () => ({ nothing: true }) } as Response;
+      return n.fetchImpl(url);
+    }) as typeof fetch;
+    let at = Date.UTC(2026, 10, 2);
+    const updates = service({ ...n, fetchImpl }, () => at);
+    await updates.checkAll();
+    expect(await updates.status('codex', '0.162.0')).toMatchObject({ state: 'unknown', lastError: 'http 503' });
+    expect(await updates.status('claude', '2.1.316')).toMatchObject({ state: 'unknown', lastError: 'parse' });
+    status = 200;
+    at += 60_000;
+    await updates.checkOne('codex', { force: true });
+    expect(await updates.status('codex', '0.162.0')).toMatchObject({ state: 'available', lastError: null });
+  });
+
+  it('сбой после успеха: прежняя latest остаётся, состояние по ней, lastError записан', async () => {
+    const n = net();
+    let at = Date.UTC(2026, 10, 2);
+    const updates = service(n, () => at);
+    await updates.checkAll();
+    n.replies.set(GITHUB, new TypeError('fetch failed'));
+    at += 25 * HOUR;
+    await updates.checkAll();
+    expect(await updates.status('codex', '0.162.0')).toMatchObject({ state: 'available', latest: '0.166.0', lastError: 'offline' });
+  });
+
+  it('force обходит порог 20 часов, без force проверка пропускается', async () => {
+    const n = net();
+    const at = Date.UTC(2026, 10, 2);
+    const updates = service(n, () => at);
+    await updates.checkOne('codex');
+    await updates.checkOne('codex');
+    expect(n.urls).toEqual([GITHUB]);
+    n.replies.set(GITHUB, { tag_name: 'rust-v0.167.0', prerelease: false });
+    await updates.checkOne('codex', { force: true });
+    expect(n.urls).toEqual([GITHUB, GITHUB]);
+    expect(await updates.status('codex', '0.162.0')).toMatchObject({ latest: '0.167.0' });
+  });
+
+  it('кэш прежнего вида (без lastError) читается', async () => {
+    await mkdir(parley, { recursive: true });
+    await writeFile(cacheFile(), JSON.stringify({ version: 1, providers: { codex: { latest: '0.166.0', checkedAt: '2026-11-02T00:00:00.000Z', method: 'npm', skipped: null } } }));
+    expect(await service(net(), () => 0).status('codex', '0.162.0')).toMatchObject({ state: 'available', lastError: null, method: 'npm' });
   });
 });

@@ -21,6 +21,7 @@ import {
   type CliUpdateProvider,
   type LatestVersionSource,
 } from '@parley/core';
+import type { CliStatus } from '@parley/protocol';
 import type { Log } from '../log.js';
 
 /** Что видит окно: новая версия, способ установки и когда спрашивали. */
@@ -35,6 +36,10 @@ export interface CliUpdates {
   start(): void;
   /** Проверка сейчас; команды, спрошенные меньше 20 часов назад, пропускаются. Не бросает. */
   checkAll(): Promise<void>;
+  /** Проверка одной команды; `force` обходит 20-часовой порог. Не бросает: сбой источника уходит в `lastError`. */
+  checkOne(command: UpdateCommand, options?: { force?: boolean }): Promise<void>;
+  /** Состояние CLI для `providers.list.cli`: `installed` — версия по пробе, `null` — CLI нет. Читает только кэш. */
+  status(command: string, installed: string | null): Promise<CliStatus | null>;
   /** Обновление для команды: `null`, если версия не новее установленной, её пропустили или проверки не было. */
   current(command: string, installed: string | null): Promise<CliUpdateInfo | null>;
   /** Последняя найденная версия как есть (даже пропущенная); `null` — проверки не было или сеть молчала. */
@@ -69,6 +74,8 @@ interface Record_ {
   checkedAt: string;
   method: string;
   skipped: string | null;
+  /** Почему последняя проверка не удалась (`offline`, `http 503`, `parse`); `null` — удалась. */
+  lastError: string | null;
 }
 type Cache = Partial<Record<UpdateCommand, Record_>>;
 
@@ -78,10 +85,13 @@ const isObject = (value: unknown): value is Record<string, unknown> =>
 function readRecord(value: unknown): Record_ | null {
   if (!isObject(value)) return null;
   const { latest, checkedAt, method, skipped } = value;
+  // Файлы до B3 поля не знают.
+  const lastError = value['lastError'] ?? null;
+  if (lastError !== null && typeof lastError !== 'string') return null;
   if (typeof checkedAt !== 'string' || Number.isNaN(Date.parse(checkedAt)) || typeof method !== 'string') return null;
   if (latest !== null && typeof latest !== 'string') return null;
   if (skipped !== null && typeof skipped !== 'string') return null;
-  return { latest, checkedAt, method, skipped };
+  return { latest, checkedAt, method, skipped, lastError };
 }
 
 /** Битый файл или запись не той формы — пустой кэш. */
@@ -145,10 +155,11 @@ export function createCliUpdates(options: CliUpdatesOptions): CliUpdates {
     return run;
   };
 
-  const checkOne = async (command: UpdateCommand): Promise<void> => {
+  const checkOne = async (command: UpdateCommand, checkOptions: { force?: boolean } = {}): Promise<void> => {
     const before = (await loaded())[command];
-    if (before !== undefined && now() - Date.parse(before.checkedAt) < CLI_UPDATE_MIN_AGE_MS) return;
-    let method: string;
+    if (checkOptions.force !== true && before !== undefined && now() - Date.parse(before.checkedAt) < CLI_UPDATE_MIN_AGE_MS) return;
+    // Нет CLI — всё равно спрашиваем последнюю версию: строка «не установлен · latest X». Способ тогда неизвестен.
+    let method: string | null = null;
     try {
       // Тот же бинарь, что запускает Parley (с подменой `PARLEY_<КОМАНДА>_BIN`), без ссылок.
       const real = await realpath(await findRunnerBinary(command, env));
@@ -156,7 +167,7 @@ export function createCliUpdates(options: CliUpdatesOptions): CliUpdates {
       const home = await realpath(options.userHome).catch(() => options.userHome);
       method = installMethod(command, real, home, existsSync);
     } catch {
-      return; // CLI не установлен — проверять нечего
+      method = null;
     }
     const source: LatestVersionSource =
       command === 'claude'
@@ -166,14 +177,30 @@ export function createCliUpdates(options: CliUpdatesOptions): CliUpdates {
           : method === 'brew'
             ? { kind: 'codex-brew' }
             : { kind: 'codex-github' };
-    const latest = await fetchLatestVersion(source, options.fetchImpl);
+    // `fetchLatestVersion` отдаёт только `null`; причину запоминает обёртка над `fetch`.
+    let failure: string | null = null;
+    const watched: typeof fetch = async (input, init) => {
+      try {
+        const response = await options.fetchImpl(input, init);
+        if (response.status !== 200) failure = `http ${response.status}`;
+        return response;
+      } catch (error) {
+        failure = 'offline';
+        throw error;
+      }
+    };
+    const latest = await fetchLatestVersion(source, watched);
+    const lastError = latest !== null ? null : (failure ?? 'parse');
     let changed = false;
     await mutate((current) => {
       const previous = current[command];
-      current[command] =
-        latest === null
-          ? { latest: previous?.latest ?? null, checkedAt: new Date(now()).toISOString(), method: previous?.method ?? method, skipped: previous?.skipped ?? null }
-          : { latest, checkedAt: new Date(now()).toISOString(), method, skipped: previous?.skipped ?? null };
+      current[command] = {
+        latest: latest ?? previous?.latest ?? null,
+        checkedAt: new Date(now()).toISOString(),
+        method: latest === null ? (previous?.method ?? method ?? 'unknown') : (method ?? 'unknown'),
+        skipped: previous?.skipped ?? null,
+        lastError,
+      };
       changed = latest !== null && latest !== previous?.latest;
       return true;
     });
@@ -198,6 +225,30 @@ export function createCliUpdates(options: CliUpdatesOptions): CliUpdates {
       timer.unref();
     },
     checkAll,
+    checkOne,
+    async status(command, installed) {
+      if (!UPDATE_COMMANDS.includes(command as UpdateCommand)) return null;
+      const record = (await loaded())[command as UpdateCommand];
+      const latest = record?.latest ?? null;
+      const state: CliStatus['state'] =
+        installed === null
+          ? 'missing'
+          : latest === null
+            ? 'unknown'
+            : !isNewer(installed, latest)
+              ? 'up-to-date'
+              : record?.skipped === latest
+                ? 'skipped'
+                : 'available';
+      return {
+        installed,
+        latest,
+        method: installed === null ? null : (record?.method ?? null),
+        checkedAt: record?.checkedAt ?? null,
+        state,
+        lastError: record?.lastError ?? null,
+      };
+    },
     async current(command, installed) {
       if (!UPDATE_COMMANDS.includes(command as UpdateCommand)) return null;
       const record = (await loaded())[command as UpdateCommand];

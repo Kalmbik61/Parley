@@ -41,7 +41,7 @@ describe('белый список против запретного списка
     const mustBeForbidden = [
       'settings.set', 'settings.get', 'host.shutdown', 'wake.now', 'pty.input', 'pty.resize', 'works.create', 'works.delete',
       'sessions.delete', 'sessions.rename', 'rooms.reopen', 'rooms.setMode', 'worktrees.merge', 'changes.commitProject',
-      'providers.setKey', 'trust.grant', 'memory.write', 'backlog.add', 'plans.resumeAutonomous', 'assistant.send', 'browser.agentResult',
+      'providers.setKey', 'providers.update', 'providers.checkUpdates', 'trust.grant', 'memory.write', 'backlog.add', 'plans.resumeAutonomous', 'assistant.send', 'browser.agentResult',
     ];
     for (const name of mustBeForbidden) {
       expect(isRemoteForbidden(name), name).toBe(true);
@@ -62,7 +62,8 @@ describe('белый список против запретного списка
     // `works.list` и `works.changed`.
     'works.mailState', 'works.sync',
     // Из ветки s-209 (обновление CLI провайдера из Parley): действие на Маке, телефону не открыто.
-    'providers.update', 'providers.skipUpdate',
+    // `providers.update` и `providers.checkUpdates` — в REMOTE_FORBIDDEN (спека Qwen, §4.4).
+    'providers.skipUpdate',
     // Процессы сессии для тулбара окна (PR #196): телефону пока не открыты.
     'processes.subscribe', 'processes.unsubscribe',
   ];

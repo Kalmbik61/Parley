@@ -53,7 +53,7 @@ import type { WorksMailStateResult } from './works-mail-state.js';
 import { feedDecision } from './feed.js';
 import type { FeedDecisions } from './feed.js';
 import type { ProgressResult } from './feed-progress.js';
-import type { Capabilities, CapacitySnapshot, CliUpdate, CompactResult, HostDiagnostics, ModelOption, ProfileStatus, ProviderCheck, ProviderLimits, SendResult, SessionRef, WorksSnapshot } from './types.js';
+import type { Capabilities, CapacitySnapshot, CliStatus, CliUpdate, CompactResult, HostDiagnostics, ModelOption, ProfileStatus, ProviderCheck, ProviderLimits, SendResult, SessionRef, WorksSnapshot } from './types.js';
 
 /** Снимок рецепта комнаты: границы те же, что у карты (`parseMap`). */
 const recipeSnapshot = z
@@ -133,6 +133,8 @@ export const METHODS = {
   'providers.skipUpdate': z.object({ provider: z.string() }),
   // Обновить CLI провайдера его собственной командой `update` (спека 2026-11-02, раздел 4); сессии не трогаются.
   'providers.update': z.object({ provider: z.string() }),
+  // Проверить версии сейчас (спека Qwen, §4.4): свежая проба CLI и свежий запрос последней версии; не чаще раза в 10 с на CLI.
+  'providers.checkUpdates': z.object({ provider: z.string() }),
   'providers.check': z.object({ provider: z.string() }),
   // Key normalization belongs to core: trim edges before checking the length or whitespace.
   'providers.setKey': z.object({ provider: z.string(), key: z.string() }),
@@ -415,6 +417,8 @@ export interface Results extends AssistantMethodResults, VoiceMethodResults, Car
   'providers.refreshLimits': { ok: true };
   /** Версия `update.latest` провайдера помечена пропущенной; пропускать нечего — `bad_request`. */
   'providers.skipUpdate': { ok: true };
+  /** Состояние CLI провайдера после проверки; в пределах 10 с от прошлой проверки — текущее состояние без новой. */
+  'providers.checkUpdates': { cli: CliStatus };
   /**
    * `busy` — обновление этого CLI уже идёт. `done`: `ok` — выход 0 и версия выросла (или равна найденной);
    * `output` — последние 4 КБ stdout и stderr; `manualCommand` — при `ok: false`; `smoke` — пробный запуск Codex с
@@ -492,6 +496,8 @@ export interface Results extends AssistantMethodResults, VoiceMethodResults, Car
       custom?: CustomProviderInfo | null;
       /** Новая версия CLI провайдера; `null` — версия не новее, её пропустили или проверки не было. Хост до T2 поля не знает. */
       update?: CliUpdate | null;
+      /** Состояние CLI (claude, codex, qwen; GLM и свои провайдеры делят строку `claude`); хост до этой версии поля не знает. */
+      cli?: CliStatus;
     }>;
   };
   'providers.setKey': { keyHint: string };
