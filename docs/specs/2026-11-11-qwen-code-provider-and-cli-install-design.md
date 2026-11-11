@@ -1,8 +1,11 @@
 # Qwen Code as a built-in provider, and installing and updating CLIs from Settings → Providers: design
 
-Status: draft waiting for the human's decision. Lead s-322, owner s-320, room r-27, spike s-323 (2026-11-11).
+Status: revision 2, waiting for the human's decision.
+- Revision 1 (5738e6d9) was critiqued by s-325 (Codex gpt-6-astra, verdict "revise", 15 findings). This revision answers every finding; the mapping is in appendix B.
+- Lead s-322, owner s-320, room r-27, spike s-323 (2026-11-11).
+
 Plan: `docs/plans/2026-11-11-qwen-code-provider-and-cli-install-plan.md`.
-Branch: `parley/w-0054/s-322`, fast-forwarded to `origin/master` 8048054c. Both parts land in this branch.
+Branch: `parley/w-0054/s-322` (from `origin/master` 8048054c). Both parts land here.
 
 ## 1. The request
 
@@ -10,418 +13,509 @@ The human, 2026-11-11 (translated): "Make Qwen Code ours rather than affiliating
 provider settings the ability to install the always-current version of a CLI (Claude or Codex) and to update it in
 the same place. Do all of it within one branch."
 
-The human confirmed, through s-320 on the same day (r-27, m-7812):
+Confirmed by the human through s-320 on the same day (r-27, m-7812):
 
-- **Part B** is what s-320 assumed. It has three pieces:
-  - an Install action when the CLI is missing, which the host runs with the official installer of the latest version;
-  - the installed version always visible, with "Check now" and an "Up to date" state;
-  - the same for Claude, Codex and Qwen.
-- **No Qwen credentials.** There is no subscription and no key, and the human will not be asked again.
-  - Everything that needs a live model turn goes to "Not verified".
-  - Code paths that depend on a live login must fail visibly.
-- **Budget** is not a reason to cut scope.
+- **Part B is authorized as assumed.** The host installs a missing CLI with the official installer of the latest version. The installed version is always visible, with "Check now" and an "Up to date" state. This covers Claude, Codex and Qwen.
+- **No Qwen credentials.** The human will not be asked for them again. Anything that needs a live model turn goes to "Not verified", and those code paths must fail visibly.
+- **Budget** does not cut scope.
 
 ## 2. Facts
 
-Legend:
+**Legend:**
 - **[O]** observed on a real run;
 - **[S]** read in source or bundled docs;
 - **[N]** not verified.
 
-Spike setup:
-- The spike installed `@qwen-code/qwen-code` **0.27.2** (npm `latest`, published 2026-11-10) into a scratch prefix.
-- It ran with a throwaway `HOME`/`QWEN_HOME`.
-- **The model in every live run was a local OpenAI-compatible mock** on 127.0.0.1 with a fake key.
-- The Parley MCP server was replaced by a small stdio MCP mock.
-- Report and lab: the s-322 scratchpad, folder `spike/` (`qwen-spike-report.md`, `lab/`, `home2/.qwen/projects/…/chats/*.jsonl`).
+**Spike setup:**
+- **CLI:** `@qwen-code/qwen-code` **0.27.2** (npm `latest`, 2026-11-10), installed into a scratch prefix and run with a throwaway `HOME`/`QWEN_HOME`.
+- **The model in every live run was a local OpenAI-compatible mock** on 127.0.0.1 with a fake key, plus a one-tool stdio MCP mock.
+
+**Evidence:** the spike report and its addendum A1–A10. Copies sit in the s-322 scratchpad, `spike/qwen-spike-report.md`, along with `spike/lab/`, `spike/home2/`, `spike/home3/` and `spike/dl/install.sh`. Plan task A0 versions the lab and sanitized fixtures in the repo, because scratchpads are temporary.
 
 ### 2.1 Qwen Code CLI
 
-| # | Fact | |
-|---|---|---|
-| Q1 | `QWEN_CODE_SYSTEM_SETTINGS_PATH=<file>` loads a settings file per process. Its `mcpServers` connect and its `hooks` fire. | O |
-| Q2 | The variable **replaces** the platform's standard system file (macOS `/Library/Application Support/QwenCode/settings.json`, Linux `/etc/qwen-code/settings.json`); the standard file is then not read. A project `.env` cannot set it. | S |
-| Q3 | Settings merge: user `~/.qwen/settings.json`, the system file and `--mcp-config` are unioned. On a server-name clash between user and system, the system definition wins. User and system hooks both fire. | O |
-| Q4 | Precedence, low to high: defaults < system defaults < user < project `.qwen/settings.json` < system settings < env < CLI flags. Project-scope MCP servers and hooks need a one-time approval; system-scope ones do not. | S, O |
-| Q5 | No `--settings` flag. `--mcp-config <json\|file>` exists, and `"trust": true` set through it works. Hooks come only from settings files. | O |
-| Q6 | `QWEN_HOME` moves `~/.qwen` (all state). | O |
-| Q7 | A stdio MCP server from the system file starts without a trust prompt. | O |
-| Q8 | By default MCP tools are **deferred**: the model sees `tool_search` and `tool_call` and needs two extra steps per tool. `tools.toolSearch.enabled: false` declares MCP tools directly. | O |
-| Q9 | In `--approval-mode default`, an MCP tool call asks "Allow execution of MCP tool …? 1 once / 2 always in project / 3 always for user / 4 no" and fires `Notification` `permission_prompt`. `"trust": true` on the server removes the question. | O |
-| Q10 | Without auth, the TUI stops at a "Connect a Provider" picker. SessionStart has already fired at that point, and no other hook fires. With `OPENAI_API_KEY`, `OPENAI_BASE_URL` and `OPENAI_MODEL` set, it starts in under 6 s with no question and fires `Notification` `auth_success`. Folder trust is off by default. | O |
-| Q11 | A fresh `QWEN_HOME` starts in `auto` approval mode (LLM-classifier approvals) and prints a banner. `--approval-mode plan\|default\|auto-edit\|auto\|yolo` sets the mode. | O |
-| Q12 | Hooks fire in an interactive pty: SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Stop (once per turn), Notification (`idle_prompt` after every turn, `permission_prompt`, `auth_success`). 24 events exist, including StopFailure, PermissionRequest, PreCompact and SessionEnd. Hook types: command, http, function, prompt. | O (fired), S (list, types) |
-| Q13 | Every hook payload has `session_id, transcript_path, cwd, hook_event_name, timestamp, permission_mode`. Stop adds `last_assistant_message, context_usage, context_limit, input_tokens`. After tool results, a second UserPromptSubmit arrives with `prompt: ""`; it is a model follow-up, not a user turn. | O |
-| Q14 | SessionStart and UserPromptSubmit can add context to the model through stdout or `hookSpecificOutput.additionalContext`. | S |
-| Q15 | `--session-id <uuid>` sets the id. It is used verbatim in hooks, stream-json and the transcript file name. | O |
-| Q16 | The transcript is `$QWEN_HOME/projects/<cwd with every non-alphanumeric character → "->/chats/<sessionId>.jsonl`. The encoding is not collision-free, so use `transcript_path` from the hook. `--resume <id>` and `--continue` append to the same file and keep the id. | O, S (rule) |
-| Q17 | Transcript record types (samples in appendix A): **(a)** `user` with `provenance: real_user`; **(b)** `assistant`, whose `message.parts[]` hold `text`, `thought: true` or `functionCall`, plus `usageMetadata`; **(c)** `tool_result` with `functionResponse` and `toolCallResult.status`; **(d)** `system` (telemetry, memory snapshots; many lines). | O |
-| Q18 | After every turn a background memory extractor makes a second model call. `memory.enableManagedAutoMemory: false` and `memory.enableManagedAutoDream: false` remove it. | O |
-| Q19 | A positional prompt is one-shot: the CLI answers and exits. `-i <prompt>` runs the prompt and stays interactive. `--append-system-prompt` and `-m` work in a pty. Writing `text\r` to the pty in one write submits a turn. `/compress` exists. | O |
-| Q20 | `qwen --acp` answers `initialize` and `session/new`. `-o stream-json` gives Claude-shaped events. | O |
-| Q21 | Auth types: openai, openai-responses, anthropic, qwen-oauth, qwen-subscription, gemini, vertex-ai. | O (help) |
-| Q22 | Qwen OAuth is interactive and browser-only, inside `/auth`. `qwen auth` was removed. | S, O (help) |
-| Q23 | OAuth credentials live in `$QWEN_HOME/oauth_creds.json`. The non-secret `security.auth.selectedType` in `$QWEN_HOME/settings.json` names the chosen type. Env-only auth leaves no trace in files. | S, O |
-| Q24 | `qwen --version` prints `0.27.2`. `general.enableAutoUpdate: false` turns off the startup check and auto-install. | O, S |
-| Q25 | `qwen update` is non-interactive. Exit codes: 0 when up to date or updated, 1 on failure. **For a standalone install it updates itself; for npm, pnpm and brew installs it only prints the command to run and exits 0.** | S |
-| Q26 | Official install, npm: `npm install -g @qwen-code/qwen-code@latest`. The package needs Node ≥ 22. After install, the realpath of `qwen` is inside `node_modules/@qwen-code/qwen-code`. | O, S |
-| Q27 | Official install, standalone script: `https://qwen-code-assets.oss-cn-hangzhou.aliyuncs.com/installation/install-qwen-standalone.sh`. | S, not run |
-| Q28 | What the standalone script does: (a) downloads a SHA-256-checked archive; (b) unpacks it to `~/.local/lib/qwen-code/`; (c) writes a shell wrapper `~/.local/bin/qwen` and `~/.qwen/source.json`; (d) adds the bin dir to the shell rc unless given `--no-modify-path`; (e) runs without prompts. With `--method detect` (the default) it falls back to npm through `registry.npmmirror.com`; `--method standalone` stops the fallback. | S, not run |
-| Q29 | Brew formula `qwen-code`. | S |
-| Q30 | Latest version: npm `dist-tags.latest`. Many experimental dist-tags exist (`jobbench`, `gdpval-*`); use only `latest`. | O |
+| # | Fact | Mark | Evidence |
+|---|---|---|---|
+| Q1 | `QWEN_CODE_SYSTEM_SETTINGS_PATH=<file>` loads a settings file per process. Its `mcpServers` connect and its `hooks` fire. | O | report §1 |
+| Q2 | The variable **replaces** the standard system file: macOS `/Library/Application Support/QwenCode/settings.json`, Linux `/etc/qwen-code/settings.json`. The standard file is then not read. A project `.env` cannot set the variable. | S | addendum A5 |
+| Q3 | Settings merge: the user `~/.qwen/settings.json`, the system file and `--mcp-config` are unioned. On a server-name clash between user and system, the system definition wins. User and system hooks both fire. | O | §1 |
+| Q4 | Precedence, low to high: defaults < system defaults < user < project < system < env < flags. Project-scope MCP servers and hooks need a one-time approval; system-scope ones do not. | S, O | §1, §2 |
+| Q5 | There is no `--settings` flag. `--mcp-config <json\|file>` exists, and `"trust": true` set through it works. Hooks come only from settings files. | O | §1, A10 |
+| Q6 | `QWEN_HOME` moves `~/.qwen`, including all state. | O | §1 |
+| Q7 | A stdio MCP server from the system file starts without a trust prompt. | O | §2 |
+| Q8 | MCP tools are **deferred** by default: the model sees `tool_search` and `tool_call`. `tools.toolSearch.enabled: false` declares MCP tools directly. This is a global switch for every merged server. It was observed with a one-tool mock only. | O | §2, A3 |
+| Q9 | `--approval-mode default` asks before an MCP tool call ("1 once / 2 always in project / 3 always for user / 4 no") and fires `Notification` `permission_prompt`. `"trust": true` on the server skips the question for every tool of that server. A read-only shell command (`echo hi`) was auto-approved in default mode. | O | §2 |
+| Q10 | Without auth, the TUI stops at a "Connect a Provider" picker. SessionStart has already fired at that point, and no other hook fires. With `OPENAI_API_KEY`, `OPENAI_BASE_URL` and `OPENAI_MODEL`, it starts in under 6 s and fires `Notification` `auth_success`. Folder trust is off by default. | O | §2, A7 |
+| Q11 | A fresh `QWEN_HOME` starts in `auto` approval mode (LLM-classifier approvals). `--approval-mode plan\|default\|auto-edit\|auto\|yolo` sets the mode. | O | §2, §7 |
+| Q12 | Hooks fire in an interactive pty: SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Stop (once per turn), Notification (`idle_prompt` after every turn, `permission_prompt`, `auth_success`). 24 events exist. Hook types: command, http, function, prompt. The `http` type was not exercised. | O (fired), S (list, types) | §3 |
+| Q13 | Hook payloads carry `session_id, transcript_path, cwd, hook_event_name, timestamp, permission_mode`. Stop adds `last_assistant_message, context_usage, context_limit, input_tokens`. After tool results, a second UserPromptSubmit arrives with `prompt: ""`: a model follow-up, not a user turn. | O | §3 |
+| Q14 | SessionStart and UserPromptSubmit can add context through stdout or `additionalContext`. | S | A8 |
+| Q15 | `--session-id <uuid>` sets the id, which is used verbatim in hooks, stream-json and the transcript name. | O | §4 |
+| Q16 | The transcript is `$QWEN_HOME/projects/<cwd, each non-alphanumeric → "-">/chats/<id>.jsonl`. This encoding is lossy. `--resume <id>` and `--continue` append to the same file and keep the id. | O, S | §4, A6 |
+| Q17 | Transcript records: `user` (`provenance: real_user`); `assistant` (`message.parts[]`: `text`, `thought: true`, `functionCall`; `usageMetadata`); `tool_result` (`functionResponse`, `toolCallResult.status`); many `system` lines (telemetry, memory snapshots). Samples are in appendix A. | O | §5 |
+| Q18 | After each turn a background memory extractor makes a second model call. `memory.enableManagedAutoMemory: false` and `memory.enableManagedAutoDream: false` remove it: one request per turn instead of two, on the mock. | O | §5, A3 |
+| Q19 | A positional prompt is one-shot. `-i <prompt>` runs the prompt and stays interactive. `--append-system-prompt` and `-m` work in a pty. Writing `text\r` in one write submits a turn. Bracketed paste was not tried. `/compress` exists. | O | §6, A4 |
+| Q20 | `qwen --acp` answers `initialize` and `session/new`. `-o stream-json` gives Claude-shaped events. | O | §6 |
+| Q21 | Auth types: openai, openai-responses, anthropic, qwen-oauth, qwen-subscription, gemini, vertex-ai. Qwen OAuth is interactive and browser-only, inside `/auth`. `qwen auth` was removed. | O, S | §8 |
+| Q22 | OAuth credentials are stored in `$QWEN_HOME/oauth_creds.json`. The non-secret `security.auth.selectedType` sits in `$QWEN_HOME/settings.json`. Env-only auth leaves no trace in files. | S, O | A9 |
+| Q23 | `general.enableAutoUpdate: false` turns off the startup check and auto-install. `qwen --version` prints `0.27.2`. | S, O | §9 |
+| Q24 | `qwen update` is non-interactive: exit 0 when up to date or updated, exit 1 on failure. **A standalone install updates itself. npm, pnpm and brew installs only print the command to run and exit 0.** | S | A2 |
+| Q25 | The npm install is `npm install -g @qwen-code/qwen-code@latest` and needs Node ≥ 22. The realpath of `qwen` then lies inside `node_modules/@qwen-code/qwen-code`. | O, S | A1 |
+| Q26 | The standalone installer is `https://qwen-code-assets.oss-cn-hangzhou.aliyuncs.com/installation/install-qwen-standalone.sh` (not run). It: verifies a SHA-256-checked archive; unpacks to `~/.local/lib/qwen-code/`; writes the wrapper `~/.local/bin/qwen` and `~/.qwen/source.json`; edits the shell rc unless `--no-modify-path`; asks no questions. `--method detect`, the default, falls back to npm through `registry.npmmirror.com`; `--method standalone` does not. | S | A1 |
+| Q27 | The latest version is npm `dist-tags.latest`. Many experimental dist-tags exist and are ignored. The Brew formula is `qwen-code`. | O, S | §9, A1 |
 
 ### 2.2 Parley today
 
-**Families**
-- `ProviderFamily = 'claude'` is the only value (`packages/core/src/providers.ts:30`). Codex has no family.
-- About 62 files branch on `id === 'codex'` or `isClaudeCode(...)`.
-- At least 13 sites treat "not codex" as Claude, with no compile error. Examples:
-  - `host/src/activity/log-index.ts:118`
+**Families.**
+- `ProviderFamily = 'claude'` is the only family (`core/src/providers.ts:30`), and Codex has no family. About 62 files branch on `id === 'codex'` or `isClaudeCode(...)`.
+- At least these sites treat "not codex" as Claude:
+  - `host/src/activity/log-index.ts:118, 409-414, 507-511`
   - `host/src/hooks/hook-server.ts:328`
   - `host/src/hooks/inline-mail.ts:60`
-  - `host/src/feed/feed-service.ts:851`
+  - `host/src/feed/feed-service.ts:794-805, 851`
   - `host/src/compaction/compaction-service.ts:40`
   - `host/src/pty/process-monitor.ts:44`
   - `host/src/context/context-service.ts:64`
   - `core/src/work/room-usage.ts:83`
   - `core/src/work/role-choice.ts:23`
-  - `host/src/activity/activity-service.ts:656,714,1130,1153`
+  - `core/src/watch.ts:55-85`
+  - `host/src/activity/activity-service.ts:656, 714, 1130, 1153`
   - `desktop/src/renderer/lib/feed-view.ts:49-53`
-- No exhaustive switch exists. Adding `'qwen'` to `Provider` (`core/src/session-index.ts:23`) breaks compile only at `PROVIDERS: Record<Provider, …>`.
+- No exhaustive switch exists.
 
-**Qwen today**
-- Qwen exists only as the custom preset `qwen` (`desktop/src/renderer/components/providers/custom-presets.ts:96-126`): Claude Code pointed at Alibaba's Anthropic-compatible endpoints. It becomes `custom-<slug>` with `family: 'claude'`.
-- A `qwen` CLI added through `providers.json` gets no family: a bare terminal with no MCP, hooks or Chat view.
+**Host launch gates.**
+- `host/src/sessions/sessions-service.ts:734-745` gives a hook URL only to Claude-family and Codex sessions, gated on version. Lines 1314-1324 register a hook token only when that URL exists.
+- `core/src/work/launch.ts:321` treats MCP as present only when the argv template contains `{mcpConfig}`. Browser guidance depends on this (line 571).
 
-**Updates**
-- `core/src/cli-updates.ts` and `host/src/providers/updates.ts` know only `'codex' | 'claude'`. The latest-version check runs daily, at most once every 20 h. It **skips a CLI that is not installed** (`updates.ts:156-157`).
-- `current()` reports only "newer and not skipped". There is no forced check.
-- `update-run.ts` runs `<binary> update`. Its safety properties:
-  - `shell: false`, own process group;
-  - 5 min timeout, 4 KB output tail;
-  - per-command busy guard, env scrub;
-  - absent from the remote and island allowlists.
+**Roles.**
+- `core/src/work/agents.ts:129-199` validates role delivery with a Claude or Codex flag grammar. It fails closed for any other template, and read-only delivery exists only for Claude (`--disallowedTools`) and Codex (`sandbox_mode`).
+- Built-in roles planner, critic, reviewer, architect, feature-lead and researcher are read-only (`core/src/roles/builtin.ts`).
 
-**Install**
-- `provider-install.ts` shows a command to copy:
-  - Claude: `curl -fsSL https://claude.ai/install.sh | bash`
-  - Codex: `curl -fsSL https://chatgpt.com/codex/install.sh | sh`
-- The decision on record is "Parley installs and downloads nothing" (`docs/specs/2026-10-02-providers-connect-design.md:66`).
-- The README (`README.md:122-127`) says Parley starts "the unmodified `claude` and `codex` from your PATH" and lists Parley's own network requests. The CLI version checks are already missing from that list.
+**Durable events.**
+- `core/src/work/events.ts:235-259` drops the prompt text from journal records.
+- `core/src/work/activity.ts:434-454` treats every UserPromptSubmit as a new turn and SessionStart as ready for input.
 
-**UI**
-- `ProviderUpdateRow` draws nothing unless a newer version is known.
-- "Check again" on the card only reloads `providers.list`.
-- Not drawn anywhere: Up to date, Check now, last-checked time, check failed, un-skip, Install.
+**Pty input.**
+- `host/src/pty/send.ts:105-135` and `type-and-submit.ts:69-118` use bracketed paste and a separate delayed submit. They check draft, PID and blocked state, with Codex-specific submit keys.
 
-**PATH**
-- The host's PATH is captured once at app launch from a login shell (`desktop/src/main/shell-env.ts`).
-- Native installers put binaries in `~/.local/bin`; `npm -g` uses the active Node's bin.
-- A freshly installed CLI may not be on the host PATH until restart. The card says so today (`strings.ts:827`).
+**Claude permissions.**
+- Ordinary Claude sessions pre-allow only browser tools and `close_session`.
+- The whole Parley server is allowed only in autonomous mode (`core/src/work/settings-file.ts:254-256`).
+- Claude workspace sessions run with `--permission-mode auto` (`launch.ts:633`).
+
+**Session settings files.**
+- `settings-file.ts:275-330` writes them with checks against redirected parents and leaves.
+
+**Qwen today.**
+- Qwen exists only as the custom preset `qwen` (`desktop/src/renderer/components/providers/custom-presets.ts:96-126`): Claude Code pointed at Alibaba's Anthropic-compatible endpoints, with `family: 'claude'`.
+- A `qwen` CLI listed in `providers.json` gets a bare terminal.
+
+**Updates.**
+- `core/src/cli-updates.ts` and `host/src/providers/updates.ts` know only `codex` and `claude`.
+- The daily check skips CLIs that are not installed (`updates.ts:156-157`) and reports only "newer and not skipped". It cannot be forced.
+- `update-run.ts` runs `<binary> update` as follows:
+  - `shell: false`, in its own process group;
+  - 5 min timeout, keeps the last 4 KB of output;
+  - per-command busy guard;
+  - strips only Codex install markers from the env (`:58-63`; `agentEnv` strips three parent-session markers, `providers.ts:731-741`);
+  - success means the version grew or equals the latest (`:145-148`);
+  - the method is absent from the remote and island allowlists.
+
+**Install.**
+- `provider-install.ts` shows copy-only commands.
+- On record: "Parley installs and downloads nothing" (`docs/specs/2026-10-02-providers-connect-design.md:66`).
+- The README lists Parley's network requests (`README.md:122-127`). The version checks are already missing from that list.
+
+**UI.**
+- The update row draws nothing unless a newer version is known.
+- "Check again" only reloads the list.
+
+**PATH.**
+- The host PATH is captured once at app launch (`desktop/src/main/shell-env.ts`).
 
 ## 3. Part A: Qwen Code as a built-in provider
 
 ### 3.1 Integration route
 
-| Route | What Parley gets | Cost | Verdict |
+| Route | Gives | Cost | Verdict |
 |---|---|---|---|
-| **pty + per-process system settings file (MCP, hooks, switches) + transcript tail** | The real Qwen TUI in Parley's terminal, sign-in inside it, hooks for state, the transcript for Chat, `--session-id` and `--resume`. The same shape as Claude. | The transcript parser and the hook mapping are new code | **Chosen** |
-| ACP (`qwen --acp`) | Structured events and permission requests over JSON-RPC | No terminal. Parley would need an ACP client and its own UI for everything the TUI does, including sign-in. `session/prompt` and permissions are unverified. | Rejected for v1 |
-| `-o stream-json` | Claude-shaped events | One-shot only; multi-turn over stdin is unverified; no TUI | Rejected for sessions. Possible later for one-shot assistant turns. |
+| **pty + per-process system settings file + transcript tail** | The real Qwen TUI in Parley's terminal, sign-in inside it, hooks for state, the transcript for Chat, `--session-id` and `--resume`: the same shape as Claude | New parser, hook mapping, watcher and typing strategy | **Chosen** |
+| ACP (`qwen --acp`) | Structured events and permissions | No terminal; needs a new ACP client and UI, including sign-in; `session/prompt` not verified | Rejected for v1 |
+| `-o stream-json` | Claude-shaped events | One-shot; multi-turn over stdin not verified | Rejected for sessions |
 
-Reason: Parley's promise is the unmodified official CLI in a terminal the human can see and type into, with state
-from hooks and Chat from the transcript. Every piece of that is observed for Qwen (Q1, Q7, Q12, Q15–Q17, Q19). ACP
-would make Qwen the only provider without a terminal and needs a new client.
+The reason: Parley's promise is the unmodified official CLI in a terminal the human sees and types into. Every piece
+of that is observed for Qwen (Q1, Q7, Q12, Q15–Q17, Q19).
 
 ### 3.2 Family model
 
 - `ProviderFamily` becomes `'claude' | 'codex' | 'qwen'`.
-  - The `codex` entry gets `family: 'codex'`.
-  - A helper `providerFamily(entry): ProviderFamily | null` replaces the open-coded checks wherever a family is meant.
-  - Custom providers and Claude accounts stay `claude`. `providers.json` entries stay family-less.
-- Every "not codex, so Claude" site from §2.2 becomes an explicit family check.
-  - A family-less id takes the neutral path (no Claude hooks or transcript), not the Claude path.
-  - This changes nothing for claude, codex, glm, custom and account providers.
-  - It does change `providers.json` CLIs, which today wrongly take the Claude path in those sites.
-  - It lands **before** the `qwen` entry exists, so a missed site cannot send a Qwen session down the Claude path.
-- New code that switches on family uses an exhaustive `switch` with a `never` check.
-- The wire field `providers.list` `family?: 'claude' | null` (`protocol/src/methods.ts:455`) widens to the three values.
-  - `core/src/mcp/provider-rows.ts`, `AgentIcon.tsx` and `feed-view.ts` follow.
-  - Agents will see `family: "codex"` for Codex where they saw `null`.
+- Codex gets `family: 'codex'`.
+- A helper `providerFamily(entry)` replaces the open-coded checks wherever a family is meant.
+- Custom providers and Claude accounts stay `claude`. `providers.json` entries stay family-less.
+- Every site of §2.2 becomes an explicit family check, and new family switches are exhaustive (`never`). The full inventory is plan appendix 1.
+- Intentional behaviour changes, listed so they are not mistaken for regressions:
+  - a family-less `providers.json` CLI takes the neutral path, where today it wrongly takes the Claude path;
+  - the wire field `providers.list.family` shows `"codex"` for Codex instead of `null`.
+- Claude, Codex, GLM, custom and account providers keep their behaviour. A synthetic `qwen` entry and an unknown family are tested on every converted site **before** the real entry is registered.
 
 ### 3.3 Launch
 
-**Registry entry `qwen`**
-- Built-in; id `qwen`; label "Qwen Code"; command `qwen`.
-- `family: 'qwen'`, `linkBy: 'session-id'`, `hasHistory: true`, `minVersion: '0.27.2'` (the observed version).
+**Registry entry.**
+- Id `qwen`, label "Qwen Code", command `qwen`.
+- `family: 'qwen'`, `linkBy: 'session-id'`, `hasHistory: true`, `minVersion: '0.27.2'`.
+- New MCP route kind `mcpConfig: 'qwen-system-settings'`. `launch.ts` decides "MCP present" by this route kind, not by the `{mcpConfig}` placeholder, so `find_skill` and browser guidance reach qwen sessions.
 
-**Argv**
+**Argv.**
 - New session: `qwen --session-id {sessionUuid} --approval-mode {approvalMode} --append-system-prompt {systemPrompt} -m {model} -i {prompt}`.
-  - Empty substitutions drop their pair, as for Claude.
-  - `-i`, because a positional prompt is one-shot (Q19).
-- Resume: `qwen --resume {providerSessionId}` with the same flags minus `--session-id`.
+- Resume: `qwen --resume {providerSessionId}` with the same flags, without `--session-id`.
+- Empty substitutions drop their pair.
 
-**Env**
-- `QWEN_CODE_SYSTEM_SETTINGS_PATH=<per-session file>`, plus the usual Parley env (`PARLEY_WORK_DIR`, `PARLEY_SESSION_ID`, hook token).
-- Parley does **not** set `QWEN_HOME`, `OPENAI_*` or any key. Qwen runs with the user's own `~/.qwen` and sign-in.
+**Env.**
+- `QWEN_CODE_SYSTEM_SETTINGS_PATH=<per-session file>`, plus Parley's usual env.
+- Parley never sets `QWEN_HOME`, `OPENAI_*` or keys.
 
-**Per-session system settings file** (written by Parley into the work dir, like Claude's `--settings` file)
-1. **Base.** If the platform's standard system file exists and is readable, its content is the base (Q2 says it would otherwise be dropped). A file that cannot be parsed is skipped with a host-log warning.
-2. **`mcpServers.parley`.** The same stdio command and env Parley gives Claude, plus `"trust": true` (Q9). Only Parley's own server is trusted; the user's servers keep their settings.
-3. **`hooks`.** SessionStart, SessionEnd, UserPromptSubmit, PreToolUse, PostToolUse, PostToolUseFailure, Stop, StopFailure, Notification and PermissionRequest each get the pair Claude gets (`core/src/work/settings-file.ts`): the `cat >>` journal command and the HTTP feed hook to the host. Entries are appended to any base hooks of the same event.
-   - Qwen's `http` hook type is [S]. The launch task proves it on the mock lab. If it fails, the command hook alone carries the events.
-4. **`tools.toolSearch.enabled: false`.** Parley's tools are declared directly (Q8). Without it every Parley call costs two extra steps, and agents trained on Parley guidance would fail.
-5. **`general.enableAutoUpdate: false`.** Updates go through Parley's row (Part B), mirroring Codex's `check_for_update_on_startup=false`.
-6. **Memory switches.** `memory.enableManagedAutoMemory` and `memory.enableManagedAutoDream` are set only if the human chooses so (D6).
+**Host gates.**
+- `sessions-service.ts` gives qwen a hook URL and a token when `qwen` ≥ `minVersion`, registers and cleans up the token like Claude, and applies the same to resume.
 
-**Approval mode:** decision D5. Never `--yolo` (README: "No YOLO flags").
+**The per-session system settings file** is written with the protected writer of `settings-file.ts` (redirect checks, `0600`). It is built in this order.
 
-### 3.4 State, mail and stuck detection
+1. **Base.**
+   - The effective original system file is the one Qwen would read without Parley: the inherited `QWEN_CODE_SYSTEM_SETTINGS_PATH` if the host env has one, else the platform default.
+   - If that file is **absent**, there is no base.
+   - If it **exists but is unreadable, not a regular file, or not valid JSON**, the launch is refused. The message names the file; nothing is silently dropped.
+   - Otherwise its content is the base, and all of its keys are kept.
+2. **Required keys.** If the base makes integration impossible, the launch is refused with a message naming the key. Those cases are:
+   - it defines a server named `parley`;
+   - `mcp.allowed` excludes `parley`, or `mcp.excluded` includes it;
+   - hooks are disabled globally.
+3. **Parley additions.**
+   - `mcpServers.parley`: the same stdio command and env Claude gets, with trust per D7.
+   - Hook groups for SessionStart, SessionEnd, UserPromptSubmit, PreToolUse, PostToolUse, PostToolUseFailure, Stop, StopFailure, Notification and PermissionRequest: the `cat >>` journal command plus the HTTP feed hook. They are appended to any base groups.
+4. **Defaults Parley sets only when the base does not set them:**
+   - `general.enableAutoUpdate: false`;
+   - `tools.toolSearch.enabled: false` (D8);
+   - the memory switches (D9).
+   - If the base sets one of them, the base wins and the session notice says so. Parley never relaxes an administrator's value.
 
-**Hook mapping** (the hook server registers qwen sessions with a qwen event set):
+**HTTP hooks.** The required route for state and Chat is the HTTP hook. The command journal is the durable record (restart and replay), not a silent substitute. If the qwen version or the host cannot provide the HTTP route, the session runs as a bare terminal, and the card and Chat say so. Plan task A4 proves that the `http` hook type works on the mock lab before any dependent task.
 
-| Hook | Parley activity |
+**Approval mode** follows D6. `--yolo` is never used.
+
+### 3.4 Readiness, state, mail
+
+**Normalization.** One contract serves both the live HTTP path and the journal/replay path (`core/src/work/events.ts`, `activity.ts`). The journal record keeps only non-secret facts:
+- `promptEmpty` for UserPromptSubmit;
+- `notificationType`;
+- `contextUsage` and `contextLimit` from Stop.
+
+**Hook mapping:**
+
+| Hook | Activity |
 |---|---|
-| UserPromptSubmit, non-empty `prompt` | turn started (an empty prompt is ignored, Q13) |
+| UserPromptSubmit with `promptEmpty: false` | turn started (`promptEmpty: true` is ignored, on live and on replay) |
 | PreToolUse / PostToolUse | tool activity |
 | Stop | turn finished, idle |
-| Notification `permission_prompt` / PermissionRequest | waiting for the human |
+| Notification `permission_prompt` / PermissionRequest | waiting for the human in the terminal |
 | Notification `idle_prompt` | idle |
-| StopFailure | turn failed: stuck, with the message |
+| StopFailure | turn failed, shown as stuck with the message |
 | SessionEnd | exited |
 
-**Sign-in wait.** SessionStart fires even while the auth picker blocks the TUI (Q10). So a qwen session whose SessionStart arrived, but neither `auth_success` nor a UserPromptSubmit within the startup grace, is shown as "Qwen is waiting for sign-in: choose a provider in the terminal (/auth)". The state is visible, never silent.
+**Readiness state machine** (per process; replaces Claude's "SessionStart = ready"):
+- `starting`: from spawn.
+- SessionStart → `started`. It is **not** ready, because Q10 shows SessionStart under the auth picker.
+- `auth_success`, the first UserPromptSubmit with `promptEmpty: false`, or `idle_prompt` → `ready`.
+- `started` past the grace (the existing startup grace) → "Qwen needs attention at startup (sign-in or a dialog): see the terminal". It does not assert that sign-in failed.
+- Later evidence of readiness clears the state.
+- Nothing is typed into the pty before `ready`.
 
-**Mail.** After Stop the host types the wake pointer into the pty as `text\r` in one write (Q19), on the path Codex uses.
-- Hook context injection exists (Q14) but is [S] only.
-- Claude's inline delivery (`inline-mail.ts`) explicitly excludes qwen in v1.
+**Mail and typing.** This is a Qwen-specific typing strategy, not the Codex one.
+- It keeps every guarantee of `send.ts` and `type-and-submit.ts`: the human's draft, the human typing at the same time, process-generation and PID checks, blocked-dialog recheck, sanitization, retry and dedup.
+- The submit is `text` and then `\r`, written as observed (Q19). Bracketed paste is used only if A6 proves it.
+- An idle session that is `ready` but has never run a turn gets mail too.
+- Inline hook delivery (Q14) is excluded for qwen in v1.
 
-**Context fill** comes from the Stop payload `context_usage` (Q13), instead of Claude's statusline file.
+**Context fill** comes from `contextUsage`.
 
-**Compaction** sends `/compress` (Q19).
+**Compaction** sends `/compress`.
 
-### 3.5 Session identity, history and Chat view
+### 3.5 History, transcript binding, Chat view
 
-- **Identity.** The session id is the `{sessionUuid}` Parley passes (Q15). The transcript path comes from the SessionStart payload.
-- **Parser.** `core/src/feed/qwen/` turns transcript records into feed items:
-  - user (`provenance: real_user`);
-  - assistant text and thinking (`thought: true`);
-  - tool call (`functionCall`; for the `tool_call` wrapper, the inner MCP name);
-  - tool result (`functionResponse`, status);
-  - usage (`usageMetadata`).
-  - `system` records are skipped. Unknown types are counted and skipped, never thrown on.
-- **Feed.** The feed service seeds and tails qwen transcripts. The Chat gate (`feed-view.ts`) opens for family `qwen`.
-- **History.** The session index discovers `$QWEN_HOME/projects/*/chats/*.jsonl` (`~/.qwen` unless the host env sets `QWEN_HOME`), so the sessions list and resume show Qwen sessions.
-- **Sleep and wake** use `--resume <id>`.
+**Binding.**
+- The session id is `{sessionUuid}`. SessionStart's `transcript_path` is stored in the session map as the binding, so it survives a host restart.
+- Before a binding is used, the first transcript records are checked for `sessionId` equal to the binding and `cwd` equal to the session cwd.
+- The lossy directory encoding (Q16) is never decoded into a cwd.
 
-### 3.6 Models, sign-in, card, roles
+**Discovery and watching.**
+- A qwen `WatchSource` (`core/src/watch.ts`) watches `<qwenHome>/projects/*/chats/*.jsonl`.
+- The `log-index.ts` registration and reindex dispatch get a qwen branch. A generic reindex never reads qwen files as Codex.
+- Tests cover: creation after host start, append, a partial last line, truncation, missed watch events with periodic rescan, a host restart with no new hook, and the same native id under two families.
 
-**Models**
-- No catalog is available without a login. v1 offers "Default" (no `-m`) or a typed model id.
-- If present, the card also shows `model.name` from `~/.qwen/settings.json`.
-- Effort is not offered in v1.
+**Parser.** `core/src/feed/qwen/` turns records into feed items:
+- user records with `real_user`;
+- assistant text and thinking;
+- tool calls, using the inner MCP name of the `tool_call` wrapper;
+- tool results with their status;
+- usage.
 
-**Sign-in state on the card**
+`system` records are skipped. Unknown types are counted and skipped.
 
-| Condition | Card text |
+**Feed ownership.**
+- The transcript owns the turn, message and tool items.
+- Hooks own only state: busy, idle, waiting and stuck.
+- The feed `onHook` path gets an explicit qwen branch that creates no transcript-like items and no permission cards. Qwen approvals are answered in the terminal in v1, and the Chat view shows "waiting for approval in the terminal".
+
+**Resume.** Sleep and wake use `--resume <id>`.
+
+**Qwen home.** One resolver `qwenHome(env)` returns `$QWEN_HOME` from the host env, else `~/.qwen`. Launch, discovery, card state and tests all use it.
+
+### 3.6 Models, sign-in hints, card, roles
+
+**Models.**
+- "Default" (no `-m`) or a typed model id.
+- The card shows `model.name` from `<qwenHome>/settings.json` if present.
+- No effort.
+
+**Sign-in hints.** These are hints, never an authentication verdict.
+
+| Found | Card text |
 |---|---|
-| `security.auth.selectedType` set | "Configured: <type>" |
-| `oauth_creds.json` exists (presence only) | "Qwen account" |
-| `OPENAI_API_KEY` present in the host env (presence only) | "Key in environment" |
-| otherwise | "Not signed in: start a Qwen session and choose a provider in the terminal (/auth)" |
+| `security.auth.selectedType` | "Configured: <type>" |
+| `oauth_creds.json` (presence only) | "Qwen account sign-in found" |
+| `OPENAI_API_KEY` in the host env (presence only) | "Key found in environment" |
+| none | "Sign-in not detected: start a Qwen session and use /auth in the terminal" |
 
-- "Configured" means a type is chosen, not that a token is valid; the card says so.
-- Parley reads only `model.name` and `security.auth.selectedType` from `~/.qwen/settings.json`, never logs the file, and never opens the credential file.
+Parley reads only `model.name` and `security.auth.selectedType`, never logs the file and never opens the credential file.
 
-**Card**
-- Settings → Providers shows the card next to Claude, Codex and GLM (`CORE_IDS`).
-- It has an icon, the status bar segment, and the Part B rows.
+**Card.** Settings → Providers next to Claude, Codex and GLM, with an icon, a status bar segment and the Part B rows.
 
-**Roles**
-- Parley's built-in roles reach qwen through the system prompt layer (`--append-system-prompt`).
-- Native Claude and Codex roles do not fit qwen; the catalog rule says so.
-- `modelForTier` gives qwen `null` (the CLI default).
+**Roles** (D10):
+- Built-in roles that are **not** read-only (executor, debugger, verifier) run on qwen through `--append-system-prompt`.
+- Read-only roles stay **refused** on qwen with the existing `role-permissions-unavailable` error. Qwen has no enforcement Parley has verified: `--approval-mode plan` and `--exclude-tools` are [N].
+- Native Claude and Codex roles do not fit qwen.
+- `assertRoleDelivery` gets an explicit qwen grammar. Qwen's flags are `--session-id`, `--resume`, `--approval-mode`, `--append-system-prompt`, `-m` and a trailing `-i {prompt}`. The fail-closed behaviour is kept for everything else.
+- `modelForTier` gives `null` for qwen.
 
-### 3.7 What v1 includes and excludes
+### 3.7 v1 includes and excludes
 
-**Includes**
+**Includes:**
 - the family refactor;
-- the registry entry, launch and resume;
+- launch and resume;
 - the settings file;
-- state, mail and stuck detection;
-- the transcript parser, Chat view and history;
-- the card with sign-in state, and built-in roles;
+- readiness, state, mail and stuck;
+- the parser, watcher, Chat view and history;
+- the card with hints;
+- non-read-only built-in roles;
 - Part B for qwen;
-- a stub `qwen` for tests and a mock lab for live checks;
-- the preset rename (§5).
+- the stub and mock lab;
+- the preset rename.
 
-**Excludes** (each is a later step):
-- several Qwen accounts (`QWEN_HOME` per account);
-- Parley-held Qwen keys (D4);
-- usage and limit readers (Qwen has no quota API);
-- the capabilities panel (skills, plugins, MCP per CLI);
-- autonomous rooms, the one-shot assistant, swarms and phone launch on qwen (those allowlists stay `claude`/`codex`);
-- ACP and stream-json routes;
+**Excludes:**
+- several Qwen accounts;
+- Parley-held keys (D5);
+- usage and limit readers;
+- the capabilities panel;
+- read-only roles on qwen;
+- autonomous rooms, the one-shot assistant, swarms and phone launch on qwen;
+- ACP and stream-json;
 - effort and a model catalog;
-- hook-based inline mail.
+- inline hook mail;
+- approval cards in Chat.
 
 ## 4. Part B: install and update from Settings → Providers
 
 ### 4.1 One descriptor per CLI
 
-New `core/src/cli-tools.ts` replaces the hard-coded pairs in `cli-updates.ts`, `updates.ts`, `update-run.ts` and `provider-install.ts` with one table keyed by command:
+New `core/src/cli-tools.ts` replaces the hard-coded pairs in `cli-updates.ts`, `updates.ts`, `update-run.ts` and `provider-install.ts`:
 
 | | claude | codex | qwen |
 |---|---|---|---|
-| Latest version | npm dist-tags of `@anthropic-ai/claude-code`, channel from Claude settings (as today) | GitHub releases, or the brew cask API for brew installs (as today) | npm `dist-tags.latest` of `@qwen-code/qwen-code` |
-| Install method | npm / native (as today) | npm / standalone / brew (as today) | npm (realpath in `node_modules/@qwen-code/qwen-code`) / standalone (`~/.local/lib/qwen-code/` exists and the found binary is the `~/.local/bin/qwen` wrapper) / brew (Homebrew prefix) / unknown |
-| Update argv | `claude update` | `codex update` | standalone: `qwen update`. npm: `<npm next to the install> install -g @qwen-code/qwen-code@latest` (Q25: `qwen update` only prints this). brew / unknown: no run, manual command only |
-| Install (macOS, Linux) | download `https://claude.ai/install.sh`, run with `/bin/bash` | download `https://chatgpt.com/codex/install.sh`, run with `/bin/sh` | decision D2 |
-| Expected install dir | `~/.local/bin` | `~/.local/bin` | `~/.local/bin` (standalone) or the npm global bin |
-| Smoke after update or install | `claude --version` | `codex -c check_for_update_on_startup=false --version` (as today) | `qwen --version` |
+| Latest version | npm dist-tags of `@anthropic-ai/claude-code`, channel from Claude settings (as today) | GitHub releases, or the brew cask API (as today) | npm `dist-tags.latest` of `@qwen-code/qwen-code` |
+| Install method | npm / native (as today) | npm / standalone / brew (as today) | npm (realpath in `node_modules/@qwen-code/qwen-code`) / standalone (`~/.local/lib/qwen-code/` and the `~/.local/bin/qwen` wrapper) / brew / unknown |
+| Update | `claude update` | `codex update` | standalone: `qwen update`; npm: bound npm route (§4.3); brew or unknown: manual command only |
+| Install (macOS, Linux) | script `https://claude.ai/install.sh` with bash | script `https://chatgpt.com/codex/install.sh` with sh | D2 |
+| Expected binary | `~/.local/bin/claude` | `~/.local/bin/codex` | `~/.local/bin/qwen` (standalone) |
+| Smoke | `claude --version` | `codex -c check_for_update_on_startup=false --version` (as today) | `qwen --version` |
 
-- "npm next to the install" is `<prefix>/bin/npm` derived from the realpath `<prefix>/lib/node_modules/…`. If it does not exist, the npm on the host PATH is used.
-- Windows: Install and the qwen npm update show copy-only commands. Parley runs no installer on Windows in v1.
+On Windows, Install and the bound npm route show copy-only commands.
 
 ### 4.2 Running an installer
 
-`providers.install {provider}` runs on the host with the safety properties of `providers.update`; the runner is extracted from `update-run.ts` and shared.
+`providers.install {provider}` runs on the host. The runner is extracted from `update-run.ts` and shared with update.
 
 1. **Constant argv.** Only built-in commands from the table. Nothing from the request or from settings reaches the argv.
 2. **Download, then run.**
-   - The host downloads a script installer over HTTPS from the constant URL: HTTPS-only redirects, 1 MB cap, 15 s timeout.
-   - It writes the script into a fresh `0700` temp dir and runs `[/bin/bash or /bin/sh, <file>, …constant args]` with `shell: false`.
-   - Nothing is piped from the network into a shell. The script's SHA-256 and size go to the host log. The temp dir is removed afterwards.
-3. **npm installs** run `[<npm>, 'install', '-g', '<package>@latest']`, using the official registry (no `--registry`).
-   - If npm is missing, or Node is below the package's `engines.node`, the action fails before running, with the reason and the manual command.
-4. **Env and privileges.** `agentEnv`, scrubbed as for update. No `sudo`, ever. A permission failure (npm prefix not writable) shows the error and the manual command.
+   - The host downloads the script over HTTPS from the constant URL. Redirects are allowed only to HTTPS, the body is capped at 1 MB and the timeout is 15 s.
+   - The script goes into a fresh `0700` temp dir and runs as `[/bin/bash --noprofile --norc | /bin/sh, <file>, …constant args]` with `shell: false`.
+   - Nothing is piped from the network into a shell. The SHA-256 and size are logged, and the temp dir is removed.
+3. **Installer env.** It starts from `agentEnv` with the update scrub, then:
+   - **removes** shell startup and runtime injection variables: `BASH_ENV`, `ENV`, `PROMPT_COMMAND`, `NODE_OPTIONS`, `NODE_PATH`, `npm_config_*`, `NPM_CONFIG_*`, `npm_package_*`;
+   - **keeps** proxy and CA variables deliberately: `HTTP(S)_PROXY`, `NO_PROXY`, `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`.
+   - For npm routes it passes `--registry=https://registry.npmjs.org/` and `--userconfig=<empty temp file>`. If the global npmrc sets a scoped registry for `@qwen-code`, the action refuses with the reason.
+4. **No sudo, ever.** A permission failure shows the error and the manual command.
 5. **Process control.**
-   - Own process group; 10 min timeout; the group is killed on timeout and on host shutdown.
-   - Last 4 KB of output kept.
+   - Own process group, 10 min timeout.
+   - The group is killed on timeout and on host shutdown.
+   - The last 4 KB of output are kept.
    - Install and update share the per-CLI busy guard.
-6. **After exit.**
-   - Look for the binary on the host PATH, then in the table's expected dir.
-   - If it is found only in the expected dir, the host prepends that dir to its own PATH and to `agentEnv`. The result carries `pathNote`: "<dir> is not on your shell PATH; Parley uses it until restart."
-   - Then: probe the version, run the smoke, broadcast `providers.changed`, and re-check the latest version for that CLI.
-7. **Success** means exit 0, no timeout, a version found and the smoke passing. Otherwise the result carries the error, the output tail and the manual command.
-8. **Allowlists.** `providers.install` and `providers.checkUpdates` are mutating or networked methods. They go into `REMOTE_FORBIDDEN` (`protocol/src/remote/allowlist.ts`) and stay out of `ISLAND_METHODS`. `providers.update` moves from NOT_DECIDED to `REMOTE_FORBIDDEN` as well.
-9. **Confirmation.** Before the call the window shows a confirmation with the exact command, the source URL and, for script installers, the note that the installer may add its bin dir to the shell profile. "Install" is the only accept button.
-   - The host does not rely on that confirmation for safety; the constant argv is the guarantee.
+6. **Locating the binary afterwards.**
+   - The shared resolver looks for this command on the host PATH, then at the table's **exact expected binary** for this command only. `PARLEY_<CMD>_BIN` overrides both.
+   - The host PATH is not changed, so other executables in that dir are unaffected.
+   - The fallback works after a restart too, because the resolver always checks it.
+   - If the binary was found only through the fallback, the result carries `pathNote`: "<dir> is not on your shell PATH; Parley finds qwen there".
+7. **After locating.** The host probes the version of that exact binary, runs the smoke, broadcasts `providers.changed` and re-checks the latest version.
+8. **Success** requires all of: exit 0, no timeout, a version on the resolved binary, and a passing smoke. Otherwise the result carries the error, the output tail and the manual command.
+9. **Allowlists.** `providers.install`, `providers.checkUpdates` and `providers.update` go into `REMOTE_FORBIDDEN` and stay out of `ISLAND_METHODS`.
+10. **Confirmation.** The window shows the exact command and the source URL. It also says plainly what is trusted: "This downloads the vendor's installer and runs it as you. Parley logs its fingerprint but cannot verify the vendor's code or what the installer downloads." For profile effects it shows the D3 choice.
+    - The host does not rely on this confirmation; the constant argv and env policy are the guarantee.
 
-### 4.3 Status always visible, Check now
+### 4.3 Update binding (npm)
 
-- `updates.ts` also checks the latest version for missing CLIs, so Install can say "Install 2.1.340". The cache keeps `{latest, checkedAt, method, skipped, lastError}`.
-- Each `providers.list` item for the three CLIs gets:
-  `cli: { installed: string | null, latest: string | null, method: string | null, checkedAt: string | null, state: 'missing' | 'up-to-date' | 'available' | 'skipped' | 'unknown', lastError: string | null }`.
-  The existing `update` field stays unchanged, because the phone and island read it.
-- `providers.checkUpdates {provider}` forces a fresh version probe and a latest-version fetch, ignoring the 20 h gate. The host allows one check per CLI per 10 s.
-- For an installed CLI the row is always drawn:
+The npm route updates the installation Parley launches, and only that one.
+
+1. Resolve the active binary's realpath, then `<prefix>` from `<prefix>/lib/node_modules/@qwen-code/qwen-code`.
+2. Require `<prefix>/bin/node` (or the node on whose bin the wrapper sits) and `<prefix>/lib/node_modules/npm/bin/npm-cli.js` to exist.
+3. Check that node against `engines.node`.
+4. Run `[<node>, <npm-cli.js>, 'install', '-g', '--prefix', <prefix>, '--registry=https://registry.npmjs.org/', '--userconfig', <empty>, '@qwen-code/qwen-code@latest']`.
+
+If any part cannot be bound, the route returns the manual command and runs nothing. It never falls back to the npm on PATH.
+
+**Success** follows the existing rule: the same resolved binary reports a version that grew or equals the latest. An unchanged older version or a downgrade is a failure.
+
+### 4.4 Status always visible, Check now
+
+- `updates.ts` checks the latest version for missing CLIs too. The cache keeps `{latest, checkedAt, method, skipped, lastError}`.
+- Each `providers.list` item for the three CLIs gets `cli: { installed, latest, method, checkedAt, state: 'missing'|'up-to-date'|'available'|'skipped'|'unknown', lastError }`. `update` stays as is for the phone and island.
+- `providers.checkUpdates {provider}` forces a fresh probe and a fresh fetch. The host allows at most one per CLI per 10 s.
+- The row is always drawn for an installed CLI:
   - `Claude Code 2.1.340 · Up to date · checked 14:05 · [Check now]`
   - `Codex 0.162.0 → 0.166.0 · standalone · [Update] · Skip this version · [Check now]`
-  - `Qwen Code 0.27.2 → 0.28.0 · skipped · [Update anyway] · [Check now]` (updating un-skips)
+  - `Qwen Code 0.27.2 → 0.28.0 · skipped · [Update anyway] · [Check now]`
   - `Codex 0.162.0 · Could not check (offline) · checked 09:12 · [Check now]`
-  - `Qwen Code 0.27.2 → 0.28.0 · brew · update with: brew upgrade qwen-code · [Copy]` (no run for brew/unknown)
-- For a missing CLI the card shows `Not installed · latest 0.27.2 · [Install…] · [Copy command] · Guide`.
-- The status bar "↑" mark covers qwen too.
+  - `Qwen Code 0.27.2 → 0.28.0 · brew · update with: brew upgrade qwen-code · [Copy]`
+- A missing CLI shows `Not installed · latest X · [Install…] · [Copy command] · Guide`.
+- The status bar "↑" covers qwen.
 
-### 4.4 README and earlier decisions
+### 4.5 README and earlier decisions
 
-The README's "How it works" changes in two places:
-- Parley starts the official CLIs from your PATH, and installs or updates them only when you press Install or Update.
-- Parley's own requests now include the daily version check (npm registry, GitHub, brew cask API) and the installer downloads.
-
-This spec supersedes the decision of 2026-10-02 that "Parley installs nothing". The header comment of `provider-install.ts` changes accordingly.
+- **README "How it works":**
+  - Parley starts the official CLIs from your PATH and installs or updates them only when you press Install or Update.
+  - Parley's own requests include the daily version check (npm registry, GitHub, brew cask API) and installer downloads.
+- **Earlier decision:** "Parley installs nothing" (2026-10-02) is superseded by this spec. The header of `provider-install.ts` changes too.
 
 ## 5. The existing Qwen custom preset
 
-The preset stays. It is the working route for Alibaba Coding Plan and Token Plan keys through Claude Code, and it needs no `qwen` CLI.
-
-- To avoid two things called "Qwen", its label becomes **"Qwen models in Claude Code (Alibaba key)"**.
-- The preset id and existing `custom-*` providers do not change, so a configured provider keeps working.
-- The built-in provider is "Qwen Code".
-
-This is s-320's recommendation; decision D3.
+The preset is kept, as the route for Alibaba Coding Plan and Token Plan keys through Claude Code. Its label becomes
+**"Qwen models in Claude Code (Alibaba key)"**. Its id and the existing `custom-*` providers do not change (D4).
 
 ## 6. Security
 
-**Installers.** An installer is vendor code run as the user. The guarantees:
-- a constant argv and URL per CLI;
+**Installers.** The guarantees are:
+- a constant argv and URL;
 - HTTPS only;
-- download, then run; never `curl | sh`;
-- a logged SHA-256;
+- download, then run;
+- a controlled env: no startup injection, a forced registry, an empty npm userconfig;
+- the npm route bound to the active install;
 - no sudo;
-- an explicit click plus a confirmation showing the command;
+- a click plus a confirmation that states the real trust boundary;
 - no phone or island route;
 - a timeout and a group kill.
 
-Parley does not pin script hashes. The vendors change the scripts without notice, so pinning would break Install every time.
-
-**Qwen standalone installer.** It is fetched from Alibaba's CDN in Hangzhou. Running it with `--method standalone` disables its npm fallback through `registry.npmmirror.com`. The archive is SHA-256-checked by the script itself (Q28, [S]).
+What is **not** guaranteed: the vendor's code, and whatever the installer itself downloads. The logged fingerprint gives auditability, not verification. Script hashes are not pinned, because vendors change the scripts without notice.
 
 **Qwen settings file.**
-- It trusts only Parley's own MCP server and sets no approval bypass. The approval mode is D5.
-- It keeps an administrator's standard system file as its base (§3.3).
+- The administrator's system file is preserved or the launch refuses.
+- No administrator value is relaxed.
+- The trust of Parley's MCP server is an explicit human decision (D7). Server-side authorization of Parley tools is unchanged either way.
 
-**Qwen credentials.** Parley reads two non-secret keys from `~/.qwen/settings.json`. It checks the credential file and env keys for presence only.
+**Qwen credentials.** Parley reads two non-secret keys and checks presence only for the credential file and env keys.
+
+**Read-only roles** stay refused on qwen until enforcement is proven.
 
 ## 7. Decisions for the human
 
-**D1. Install from Parley.**
-- What changes: "Parley installs nothing" is superseded. The host runs the official installer when you press Install, after a confirmation showing the command. Phone and island can neither install nor update.
-- Recommendation: yes; this is the request.
+The install/update scope is already authorized (§1). The README and the superseded 2026-10-02 rule change as described in §4.5. The decisions left:
 
-**D2. Qwen installer.** Options:
-- (a) the official standalone script with `--method standalone`. No Node needed, updates itself through `qwen update`, binary in `~/.local/bin` like Claude and Codex. The script adds `~/.local/bin` to the shell profile, which is its default.
-- (b) `npm install -g @qwen-code/qwen-code@latest` from the official npm registry. Needs Node ≥ 22 on the host's PATH (this machine has 22.23.3).
+**D2. Qwen installer.**
+- (a) The standalone script with `--method standalone`. It needs no Node and updates itself through `qwen update`; the binary lands in `~/.local/bin` like Claude and Codex. The source is Alibaba's CDN (Hangzhou).
+- (b) npm from the official registry. It needs Node ≥ 22 on the host; this machine has 22.23.3.
+- Recommendation: (a).
 
-Recommendation: (a), and let the script edit the shell profile, as the official default does.
+**D3. Shell profile edits by the qwen installer.**
+- (a) Allow the installer's default, which adds `~/.local/bin` to the shell profile so `qwen` works in your own terminal.
+- (b) `--no-modify-path`: Parley still finds qwen through §4.2.6.
+- Recommendation: (a), stated in the confirmation. The Claude and Codex scripts run with their own defaults; their profile behaviour is not verified.
 
-**D3. Preset name.**
-- Rename the Qwen preset to "Qwen models in Claude Code (Alibaba key)".
+**D4. Preset rename** to "Qwen models in Claude Code (Alibaba key)".
 - Recommendation: yes.
 
-**D4. Qwen keys in Parley.**
-- v1 uses only the sign-in done inside Qwen (`/auth`) or the user's own environment, and Parley stores no Qwen key.
-- The alternative is a key field for a Coding Plan or DashScope key, passed as env.
-- Recommendation: not in v1.
+**D5. Qwen keys in Parley.**
+- v1 uses only Qwen's own sign-in (`/auth`) or your environment.
+- Recommendation: no Parley-held key in v1.
 
-**D5. Qwen approval mode.** Options:
-- (a) Mirror Claude: `--approval-mode auto` in workspace sessions, where Claude gets `--permission-mode auto`, and `default` elsewhere.
-- (b) `default` everywhere: every edit and shell command waits for the human in the terminal.
+**D6. Qwen approval mode.**
+- (a) Mirror Claude: `--approval-mode auto` in workspace sessions (Claude has `--permission-mode auto` there) and `default` elsewhere.
+- (b) `default` everywhere: edits and non-read-only shell commands wait in the terminal. Read-only shell was auto-approved on the mock.
+- `auto` uses an LLM classifier that adds model calls (not measured).
+- Recommendation: (a).
 
-Recommendation: (a). Qwen's `auto` uses an LLM classifier, which adds model calls (not measured).
+**D7. Trust of Parley's MCP server.**
+- (a) `"trust": true` on the `parley` server. Every Parley tool, including mutating ones and future ones, runs without a question in the terminal. Ordinary Claude sessions pre-allow only browser tools and `close_session`, but Claude workspace sessions in auto mode effectively do not ask either.
+- (b) A tool-level allow list equal to Claude's ordinary policy, if A5 proves Qwen supports one (`--allowed-tools` with MCP names, [N]). Otherwise (c).
+- (c) No trust: Parley tool calls wait for approval in the terminal (default mode) or for the classifier (auto).
+- Recommendation: (b) if proven, else (a), because (c) makes every mail and map call wait.
 
-**D6. Memory extractor.**
-- Qwen makes a second model call after each turn and writes memories into `~/.qwen` (Q18).
-- Should Parley sessions turn it off with `memory.enableManagedAutoMemory: false` and `memory.enableManagedAutoDream: false`?
-- Recommendation: yes. It halves model requests per turn (observed on the mock), and Parley has its own project memory.
+**D8. Tool search off in Parley qwen sessions** (`tools.toolSearch.enabled: false`).
+- This affects every MCP server merged into the session, yours too: all their tools are declared directly.
+- It is kept only if A5 shows the full Parley tool list plus a representative user server reaching the mock with usable schemas, with the tool count and payload size recorded.
+- Otherwise the sessions keep tool search, and Parley guidance teaches `tool_search` → `tool_call`.
+- Recommendation: off, subject to that check.
+
+**D9. Memory extractor off in Parley qwen sessions.**
+- On the mock this went from two model requests per turn to one (other calls such as tool turns or the classifier are not counted). It also stops Qwen writing memories from Parley sessions into `~/.qwen`.
+- Recommendation: off.
+
+**D10. Roles on qwen in v1.**
+- Only non-read-only built-in roles (executor, debugger, verifier). Read-only roles (planner, critic, reviewer, architect, feature-lead, researcher) are refused until enforcement is proven.
+- Recommendation: yes.
+
+**V1 real install.**
+- Accepting this spec also authorizes one real qwen Install through Parley into a scratch `HOME` during verification. It downloads and runs Alibaba's installer once.
 
 ## 8. Acceptance without a login
 
-**Checked by tests and on the mock lab.** The mock lab is a local OpenAI-compatible mock, the real `qwen` 0.27.2 and a throwaway `QWEN_HOME`.
-- The generated argv and settings file for new and resumed sessions (unit tests).
-- A real `qwen` started by Parley's launch code against the mock:
-  - Parley MCP connects with no prompt;
-  - a Parley tool call succeeds as a direct tool;
-  - hooks reach the host;
-  - state goes busy → idle;
-  - the wake pointer typed after Stop starts a turn;
-  - `--resume` continues the same transcript;
-  - the Chat view renders the mock transcript.
-- Without auth env, the "waiting for sign-in" state appears.
-- Install and update against stub binaries and a local HTTPS stub script (tests).
-- One real qwen Install into a scratch prefix, run by the verifier and not in CI.
-- The UI states of §4.3: component tests and an e2e on stub binaries.
+**Mock lab.** A local OpenAI-compatible mock, the real `qwen` 0.27.2, a throwaway `QWEN_HOME`, and the real Parley host and MCP server. It is versioned in the repo by A0.
 
-**Needs a live login** (goes to "Not verified"):
-- the transcript records of a real Qwen model (thinking format, usage);
-- the Qwen OAuth flow end to end;
-- resuming a real session;
-- StopFailure on a real quota error;
-- real model ids;
-- whether `auth_success` fires for OAuth at every start.
+**Checked through `sessions-service`** (not only `launch.ts`), for new and resumed sessions:
+- HTTP and command hooks reach the host receiver with the token;
+- Parley MCP connects with no prompt and the Parley tools are usable (D7/D8 as chosen);
+- busy → idle;
+- readiness and the startup-attention state without auth env;
+- a message wakes an idle session, including one before its first turn;
+- `/compress`;
+- `--resume` into the same transcript;
+- the Chat view renders the run;
+- the watcher finds a new session after host start;
+- a host restart keeps the binding;
+- read-only roles are refused and the executor role launches;
+- an administrator system file is preserved; an invalid one refuses the launch.
 
-## Appendix A. Transcript and hook samples (observed, mock model)
+**Tests:**
+- the empty-prompt replay;
+- installer env policy (inherited `BASH_ENV`, `npm_config_registry` and a scoped registry);
+- the npm binding with two prefixes and with an unchanged version;
+- resolver fallback without PATH change;
+- UI states.
+
+**Mocked failure sequences:** mocked auth failure and quota error responses from the mock model (StopFailure path).
+
+**Needs a live login** (these go to "Not verified"):
+- a real Qwen model's records (thinking, usage);
+- the OAuth flow end to end;
+- whether `auth_success` fires for OAuth at every start;
+- a real quota error;
+- real model ids.
+
+## Appendix A. Samples (observed, mock model)
 
 ```json
 {"type":"user","provenance":"real_user","executionContext":{"modelId":"mock-model","authType":"openai","approvalMode":"yolo"},"message":{"role":"user","parts":[{"text":"call the echo tool"}]},"promptId":"<sid>########0"}
@@ -431,9 +525,29 @@ Recommendation: (a). Qwen's `auto` uses an LLM classifier, which adds model call
 {"type":"tool_result","provenance":"tool_result","message":{"role":"user","parts":[{"functionResponse":{"id":"call_1","name":"run_shell_command","response":{"output":"…"}}}]},"toolCallResult":{"callId":"call_1","status":"success"}}
 ```
 
-Every record also carries `uuid, parentUuid, sessionId, timestamp, cwd, version`.
+Every record also has `uuid, parentUuid, sessionId, timestamp, cwd, version`.
 
 ```json
 {"session_id":"4444…","transcript_path":"…/projects/<enc-cwd>/chats/4444….jsonl","cwd":"…","hook_event_name":"SessionStart","permission_mode":"yolo","source":"startup","model":"mock-model"}
 {"…":"…","hook_event_name":"Stop","stop_hook_active":false,"last_assistant_message":"…","context_usage":0.0001,"context_limit":200000,"input_tokens":20}
 ```
+
+## Appendix B. Critique of revision 1 and the answer (s-325)
+
+| # | Finding | Answer |
+|---|---|---|
+| 1 | Administrator system policy can be lost | §3.3 base resolution: absent, refuse, or keep; required keys; never relax. Senior-only A5. |
+| 2 | Host hook URL/token gate and MCP-route detection missing | §2.2, §3.3 host gates and the route kind; A5/A6 acceptance through `sessions-service` |
+| 3 | Role delivery and read-only enforcement | §3.6, D10: qwen grammar, read-only refused; senior-only A9 |
+| 4 | Empty prompt and context on the durable path | §3.4 normalization contract in `events.ts`/`activity.ts`; HTTP route required, not a silent fallback |
+| 5 | `trust: true` is an approval expansion | D7 |
+| 6 | Readiness, sign-in inference, pty guarantees | §3.4 state machine, neutral wording, Qwen typing strategy keeping `send.ts` guarantees; Codex claim removed |
+| 7 | Installer env and registry | §4.2.3 |
+| 8 | npm update bound to the active install | §4.3 |
+| 9 | Broad PATH change | §4.2.6 exact-binary fallback, no PATH change |
+| 10 | Watcher, reindex, feed ownership, restart binding | §3.5 |
+| 11 | One effective Qwen home; hints, not verdicts | §3.5 `qwenHome`, §3.6 |
+| 12 | Bounded refactor, task splits, seniority, shared files | Plan: inventory appendix, A1 split, A7 split, senior-only marks, serialization |
+| 13 | Tool search is global | D8 and its A5 check |
+| 14 | Evidence labels | §2 evidence column cites addendum A1–A10; lab versioned by A0 |
+| 15 | Decision framing | D1 dropped (already authorized); D2/D3 split; D6/D9 wording; V1 install authorized with acceptance |
