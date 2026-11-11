@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
+import { createRequire } from 'node:module';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { describe, expect, it } from 'vitest';
 import type { SchemaReportResult } from './schema-report.js';
@@ -8,12 +9,18 @@ import type { SchemaReportResult } from './schema-report.js';
 const run = promisify(execFile);
 const here = path.dirname(fileURLToPath(import.meta.url));
 const CLI = path.join(here, 'cli.ts');
+/** Загрузчик tsx для `node --import`: тот же приём, что в `work/store.test.ts`. */
+const tsxLoader = pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href;
 const FIXTURES = path.join(here, '..', 'test', 'fixtures', 'projects');
 
-/** Запускаем исходник через tsx: тест проверяет контракт, а не артефакт сборки. */
+/**
+ * Запускаем исходник через tsx: тест проверяет контракт, а не артефакт сборки. Напрямую через node, а не
+ * `pnpm exec tsx`: дом теста подменён (`test/sandbox-home.ts`), и pnpm, поставленный через corepack, при каждом
+ * запуске заново скачивал бы себя (около 20 МБ) в этот временный дом.
+ */
 async function cli(...args: string[]): Promise<{ stdout: string; stderr: string; code: number }> {
   try {
-    const { stdout, stderr } = await run('pnpm', ['exec', 'tsx', CLI, ...args], {
+    const { stdout, stderr } = await run(process.execPath, ['--import', tsxLoader, CLI, ...args], {
       cwd: path.join(here, '..', '..', '..'),
       maxBuffer: 32 * 1024 * 1024,
     });
