@@ -23,6 +23,8 @@ import type { ProviderVersions } from './versions.js';
 export const CLI_INSTALL_TIMEOUT_MS = 10 * 60 * 1000;
 export const CLI_INSTALL_SMOKE_TIMEOUT_MS = 5000;
 export const INSTALLER_DOWNLOAD_TIMEOUT_MS = 15_000;
+/** Сколько install ждёт перепроверку версии: медленный реестр не должен задерживать итог установки. */
+export const CLI_INSTALL_RECHECK_TIMEOUT_MS = 5000;
 export const INSTALLER_MAX_BYTES = 1024 * 1024;
 const MAX_REDIRECTS = 5;
 
@@ -66,6 +68,7 @@ export interface CliInstallerOptions {
   platform?: NodeJS.Platform;
   timeoutMs?: number;
   smokeTimeoutMs?: number;
+  recheckTimeoutMs?: number;
   downloadTimeoutMs?: number;
   /** Только для тестов: агент HTTPS (тестовый CA и соединение со стабом). */
   agent?: https.Agent;
@@ -198,9 +201,18 @@ export function createCliInstaller(options: CliInstallerOptions): CliInstaller {
     const version = await options.versions.fresh(command, { force: true });
     const check = await cli.exec(found.path, descriptor.smokeArgs, cliEnv(source()), smokeTimeoutMs);
     const smoke = { ok: check.code === 0 && !check.timedOut, output: check.output };
-    void options.updates?.checkOne(command, { force: true }).catch((error: unknown) => {
-      options.log.warn('CLI latest re-check after install failed', { command, error: String(error) });
-    });
+    // Способ установки (`method`) пишет эта перепроверка: ждём её до рассылки `providers.changed`, но недолго.
+    if (options.updates !== undefined) {
+      const recheck = options.updates.checkOne(command, { force: true }).catch((error: unknown) => {
+        options.log.warn('CLI latest re-check after install failed', { command, error: String(error) });
+      });
+      let timer: NodeJS.Timeout | undefined;
+      const limit = new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, options.recheckTimeoutMs ?? CLI_INSTALL_RECHECK_TIMEOUT_MS);
+      });
+      await Promise.race([recheck, limit]);
+      clearTimeout(timer);
+    }
     const extra = { ...(pathNote === undefined ? {} : { pathNote }), smoke };
     if (version === null) return { ...fail(`The installed ${command} did not report a version`, output, extra), version: null };
     if (!smoke.ok) return { ...fail(`The installed ${command} failed its check run`, output, extra), version };

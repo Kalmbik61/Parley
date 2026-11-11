@@ -11,6 +11,7 @@ import { findRunnerBinary, probeCliVersion } from '@parley/core';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createCliRun } from './cli-run.js';
 import { createCliInstaller, INSTALLER_MAX_BYTES } from './install-run.js';
+import { createCliUpdates } from './updates.js';
 import { createCliUpdateRunner } from './update-run.js';
 
 /**
@@ -192,6 +193,41 @@ describe('установка CLI: успех', () => {
     const argv = (await readFile(path.join(home, 'installer-argv'), 'utf8')).trimEnd().split('\n');
     expect(argv.slice(1)).toEqual(['--method', 'standalone']);
     expect(path.basename(argv[0] as string)).toBe('install.sh');
+  });
+
+  it('qwen: после установки status() уже знает способ (перепроверка дожидается до ответа)', async () => {
+    const wrapper = `mkdir -p "$HOME/.local/lib/qwen-code/bin" && mv "$HOME/.local/bin/qwen" "$HOME/.local/lib/qwen-code/bin/qwen" && ln -s "$HOME/.local/lib/qwen-code/bin/qwen" "$HOME/.local/bin/qwen"`;
+    routes.set('qwen-code-assets.oss-cn-hangzhou.aliyuncs.com/installation/install-qwen-standalone.sh', { body: installerScript('qwen', '0.28.0', wrapper) });
+    const parley = path.join(home, 'parley-home');
+    await mkdir(parley, { recursive: true });
+    const env = { HOME: home, PATH: '/usr/bin:/bin' };
+    const updates = createCliUpdates({
+      fetchImpl: (async () => ({ status: 200, json: async () => ({ latest: '0.28.0' }) })) as unknown as typeof fetch,
+      log,
+      home: parley,
+      userHome: home,
+      env,
+    });
+    expect(await updates.status('qwen', null)).toMatchObject({ method: null });
+    const instance = createCliInstaller({ log, versions: { fresh: async () => '0.28.0' }, updates, env, agent, timeoutMs: 20_000, smokeTimeoutMs: 20_000, downloadTimeoutMs: 5000 });
+    expect(await instance.install('qwen', 'w')).toMatchObject({ ok: true });
+    expect(await updates.status('qwen', '0.28.0')).toMatchObject({ method: 'standalone', state: 'up-to-date' });
+  });
+
+  it('медленная перепроверка не задерживает результат установки дольше своего срока', async () => {
+    routes.set('claude.ai/install.sh', { body: installerScript('claude') });
+    const instance = createCliInstaller({
+      log,
+      versions: { fresh: async () => '2.1.400' },
+      updates: { checkOne: () => new Promise<void>(() => undefined) },
+      env: { HOME: home, PATH: '/usr/bin:/bin' },
+      agent,
+      timeoutMs: 20_000,
+      smokeTimeoutMs: 20_000,
+      downloadTimeoutMs: 5000,
+      recheckTimeoutMs: 50,
+    });
+    expect(await instance.install('claude', 'w')).toMatchObject({ ok: true });
   });
 
   it('папка бинаря есть в PATH — pathNote нет', async () => {
