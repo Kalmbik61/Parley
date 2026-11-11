@@ -146,7 +146,7 @@ export function createProvidersList(
           available: readiness.needs === null && readiness.error === null,
           needs: readiness.needs,
           ...(entry.runner.secret === undefined ? {} : { keyHint: key === null ? null : secretHint(key) }),
-          family: entry.family ?? null,
+          family: entry.family === 'claude' ? ('claude' as const) : null, // A1c widens the wire; until then codex stays null
           models: selectableModels(entry),
           effort: supportsEffort(entry),
           argsOverridden: entry.argsOverridden === true,

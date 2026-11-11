@@ -99,6 +99,7 @@ export {
   providerReadinessError,
   loadProviders,
   isClaudeCode,
+  providerFamily,
   isManagedEntry,
   managedRecord,
   ownsHookToken,

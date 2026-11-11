@@ -26,7 +26,8 @@ import {
   type CustomAccountRecord,
   type CustomEndpointRecord,
 } from './custom-providers.js';
-import { PROVIDERS, claudeConfigDirFor, isClaudeCode, isManagedEntry, loadProviders, managedRecord, ownsHookToken } from './providers.js';
+import { PROVIDERS, claudeConfigDirFor, isClaudeCode, isManagedEntry, loadProviders, managedRecord, ownsHookToken, providerFamily } from './providers.js';
+import { QWEN_FAMILY_ENTRY, UNKNOWN_FAMILY_ENTRY } from '../test/family-fixtures.js';
 
 const kimi: CustomEndpointRecord = {
   kind: 'endpoint',
@@ -408,5 +409,32 @@ describe('запись аккаунта (спека подписок 5.1)', () =
     expect(registry['custom-kimi']?.account).toBeUndefined();
     await writeCustomProviders([kimi], file);
     expect(Object.keys(await loadProviders(none('p.json'), none('c.json'), file)).sort()).toEqual(['claude', 'codex', 'custom-kimi', 'glm']);
+  });
+});
+
+describe('providerFamily', () => {
+  it('reads the trusted family: built-ins, custom endpoint, account, providers.json CLI, synthetic entries', async () => {
+    expect(providerFamily(PROVIDERS.claude)).toBe('claude');
+    expect(providerFamily(PROVIDERS.codex)).toBe('codex');
+    expect(providerFamily(PROVIDERS.glm)).toBe('claude');
+    expect(providerFamily('claude')).toBe('claude');
+    expect(providerFamily('codex')).toBe('codex');
+    expect(providerFamily('glm')).toBe('claude');
+    expect(providerFamily('unknown')).toBeNull();
+    expect(providerFamily(customProviderEntry(kimi, home))).toBe('claude');
+    expect(providerFamily(kimi.id)).toBe('claude');
+    const providersJson = path.join(home, 'providers.json');
+    await writeFile(providersJson, JSON.stringify({ mycli: { badge: 'My CLI', command: 'mycli', args: ['{prompt}'] } }));
+    const registry = await loadProviders(providersJson, path.join(home, 'codex.json'), path.join(home, 'custom.json'));
+    expect(registry['mycli']).toBeDefined();
+    expect(providerFamily(registry['mycli']!)).toBeNull();
+    expect(providerFamily(accountProviderEntry({ kind: 'claude-account', id: 'custom-claude-2', label: '', link: true }, registry, home))).toBe('claude');
+    expect(providerFamily(QWEN_FAMILY_ENTRY)).toBe('qwen');
+    expect(providerFamily(UNKNOWN_FAMILY_ENTRY)).toBe('mystery');
+  });
+
+  it('codex having a family does not make it Claude Code', () => {
+    expect(isClaudeCode(PROVIDERS.codex)).toBe(false);
+    expect(isClaudeCode('codex')).toBe(false);
   });
 });

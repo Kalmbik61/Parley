@@ -27,7 +27,7 @@ export type McpConfigKind = 'json-file' | 'codex-override';
  */
 export type SessionLink = 'session-id' | 'cwd+time';
 
-export type ProviderFamily = 'claude';
+export type ProviderFamily = 'claude' | 'codex' | 'qwen';
 
 export interface RunnerConfig {
   /** Trusted built-in nonsensitive process environment; never settings.env or a key. */
@@ -344,6 +344,7 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
   },
   codex: {
     id: 'codex',
+    family: 'codex',
     label: 'Codex',
     mark: 'Cx',
     hasHistory: true,
@@ -474,6 +475,19 @@ export function isClaudeCode(entry: ProviderEntry | WorkProvider): boolean {
         (provider) => provider.id === entry && provider.family === 'claude',
       ) || isCustomProviderId(entry)
     : entry.family === 'claude';
+}
+
+/**
+ * Trusted family of a registry entry (or of a built-in / custom id). Custom endpoints and Claude accounts are
+ * 'claude'; a providers.json entry carries no `family`, so it is null.
+ */
+export function providerFamily(entry: ProviderEntry | WorkProvider): ProviderFamily | null {
+  if (typeof entry === 'string') {
+    const builtin = Object.values(PROVIDERS).find((provider) => provider.id === entry);
+    if (builtin !== undefined) return builtin.family ?? null;
+    return isCustomProviderId(entry) ? 'claude' : null;
+  }
+  return entry.family ?? null;
 }
 
 /**
