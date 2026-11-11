@@ -59,7 +59,7 @@ export { buildIndex, buildSessionTree, loadSessionTree } from './session-tree.js
 export type { SessionTree } from './session-tree.js';
 export { readSessionWorkflows, readWorkflowDescriptor } from './workflow.js';
 export type { WorkflowInfo } from './workflow.js';
-export { claudeSource, codexSource, watchSessions } from './watch.js';
+export { claudeSource, codexSource, qwenSource, watchSessions } from './watch.js';
 export type { SessionChange, SessionWatcher, WatchOptions, WatchSource } from './watch.js';
 export { gitBranch } from './git.js';
 export { buildAllSessions } from './all-sessions.js';
@@ -67,6 +67,16 @@ export type { IndexReuse } from './index-reuse.js';
 export type { AllSessionsOptions } from './all-sessions.js';
 export { codexLogId, defaultCodexRoot, discoverCodexSessions } from './codex/discover.js';
 export type { DiscoveredCodexSession } from './codex/discover.js';
+export { qwenHome } from './qwen/home.js';
+export { QWEN_HOOK_EVENTS, QwenSettingsError } from './work/qwen-settings-file.js';
+export { qwenAuthHints } from './qwen/auth-state.js';
+export { defaultQwenRoot, discoverQwenSessions, isQwenTranscriptPath, qwenLogId } from './qwen/discover.js';
+export type { DiscoveredQwenSession } from './qwen/discover.js';
+export { buildQwenIndex, extendQwenSessionIndex, indexQwenSession, QwenIndexAccumulator } from './qwen/index-session.js';
+export type { QwenIndexState } from './qwen/index-session.js';
+export { qwenBindingCandidate, qwenBindingHolds } from './qwen/binding.js';
+export type { QwenTranscriptBinding } from './qwen/binding.js';
+export type { QwenAuthDeps, QwenAuthHint, QwenAuthHints } from './qwen/auth-state.js';
 export { buildCodexIndex, indexCodexSession } from './codex/index-session.js';
 export { CODEX_LIMITS_DAY_DIRS, createCodexLimitsReader, readCodexLimits } from './codex/limits.js';
 export type { CodexLimitsReader } from './codex/limits.js';
@@ -75,6 +85,7 @@ export type { LimitWindow, ProviderLimits } from './limits.js';
 export {
   claudeContextFill,
   codexContextFill,
+  qwenContextFill,
   CODEX_BASELINE_TOKENS,
   CONTEXT_DIR,
   contextFile,
@@ -99,6 +110,8 @@ export {
   providerReadinessError,
   loadProviders,
   isClaudeCode,
+  providerFamily,
+  byFamily,
   isManagedEntry,
   managedRecord,
   ownsHookToken,
@@ -418,10 +431,13 @@ export type { TrustFile, TrustRecord } from './work/trust.js';
 export {
   BinaryNotFoundError,
   findBinary,
+  expectedRunnerBinary,
   findRunnerBinary,
   overrideValue,
   overrideVariable,
+  resolveRunnerBinary,
 } from './work/find-binary.js';
+export type { RunnerBinary, RunnerBinarySource } from './work/find-binary.js';
 export { GUIDE } from './work/guide.js';
 export { SKILL_MD } from './work/skill.js';
 export { PARLEY_BROWSER_SKILL_MD, PARLEY_BROWSER_SKILL_NAME } from './work/parley-browser-skill.js';
@@ -542,6 +558,7 @@ export {
   textOf,
   watchEvents,
 } from './work/events.js';
+export type { EventsFamily } from './work/events.js';
 export {
   JOURNAL_CUT_SEARCH,
   JOURNAL_ROTATE_BUDGET_MS,
@@ -932,6 +949,16 @@ export { JOB_CANCEL_SAFE_TOOLS, JOB_ONLY_TOOLS, JOB_TOKEN_PREFIX, JOB_TOOL_ALLOW
 export type { AgentPlanStatus, AgentPlanItem, AgentPlanState, AgentPlanSummary, AgentPlan, PlanCall } from './agent-plan.js';
 export { fetchLatestVersion, installMethod, isNewer } from './cli-updates.js';
 export type { CliUpdateProvider, InstallMethod, LatestVersionSource } from './cli-updates.js';
+export { CLI_TOOLS, LATEST_SOURCE_URLS } from './cli-tools.js';
+export type {
+  CliDescriptor,
+  CliInstallMethod,
+  CliInstallPlan,
+  CliLatestSource,
+  CliPlatform,
+  CliTool,
+  CliUpdatePlan,
+} from './cli-tools.js';
 export { sessionWorktreeFinished } from './work/worktree-owner.js';
 export type { WorktreeLeftover } from './work/worktree-owner.js';
 export {

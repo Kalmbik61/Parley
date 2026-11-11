@@ -7,7 +7,7 @@ import { accountProviderEntry, customProviderEntry, customProvidersFile, isAccou
 import { readSecret, type SecretId } from './secrets.js';
 import { parseVersion } from './work/channel.js';
 import type { Provider } from './session-index.js';
-import { overrideValue } from './work/find-binary.js';
+import { expectedRunnerBinary, overrideValue, resolveRunnerBinary } from './work/find-binary.js';
 import { parleyHome } from './work/store.js';
 import type { WorkProvider } from './work/types.js';
 
@@ -16,9 +16,11 @@ import type { WorkProvider } from './work/types.js';
  * подстановка `{mcpConfig}`. `json-file` — путь к JSON (`claude --mcp-config`),
  * `codex-override` — `-c`-переопределение инлайн-таблицей TOML (у codex флага
  * под файл конфига нет, MCP-серверы живут в `~/.codex/config.toml`).
+ * `qwen-system-settings` — сервер лежит в системном файле настроек сессии (`QWEN_CODE_SYSTEM_SETTINGS_PATH`,
+ * `work/qwen-settings-file.ts`): подстановки `{mcpConfig}` у Qwen Code нет, сервер доходит через окружение.
  * `undefined` — провайдер MCP не принимает, координация ему недоступна.
  */
-export type McpConfigKind = 'json-file' | 'codex-override';
+export type McpConfigKind = 'json-file' | 'codex-override' | 'qwen-system-settings';
 
 /**
  * Чем запись карты связывается с сессией в логах провайдера: id задан снаружи
@@ -27,7 +29,7 @@ export type McpConfigKind = 'json-file' | 'codex-override';
  */
 export type SessionLink = 'session-id' | 'cwd+time';
 
-export type ProviderFamily = 'claude';
+export type ProviderFamily = 'claude' | 'codex' | 'qwen';
 
 export interface RunnerConfig {
   /** Trusted built-in nonsensitive process environment; never settings.env or a key. */
@@ -344,6 +346,7 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
   },
   codex: {
     id: 'codex',
+    family: 'codex',
     label: 'Codex',
     mark: 'Cx',
     hasHistory: true,
@@ -465,6 +468,47 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
       assistantResumeArgs: CLAUDE_ASSISTANT_RESUME_ARGS,
     },
   },
+  // Qwen Code (spec 2026-11-11, 3.3): the official CLI in a pty. The Parley MCP server and hooks come from the
+  // per-session system settings file (`QWEN_CODE_SYSTEM_SETTINGS_PATH`, `work/qwen-settings-file.ts`); there is no
+  // `--settings` flag. `--yolo` is never used: the approval mode is `{approvalMode}` (D6). No `-i {prompt}` (spec 3.4
+  // amendment): Qwen sends that turn before its MCP discovery ends, so the first turn has no Parley tools; the brief
+  // goes out as `LaunchPlan.deferredPrompt`, typed once the session is ready. A positional prompt would be one-shot.
+  // No model catalog and no effort in v1.
+  qwen: {
+    id: 'qwen',
+    family: 'qwen',
+    label: 'Qwen Code',
+    mark: 'Qw',
+    hasHistory: true,
+    // `--session-id <uuid>` names the transcript and is used verbatim in hooks.
+    linkBy: 'session-id',
+    runner: {
+      command: 'qwen',
+      minVersion: '0.27.2',
+      args: [
+        '--session-id',
+        '{sessionUuid}',
+        '--approval-mode',
+        '{approvalMode}',
+        '--append-system-prompt',
+        '{systemPrompt}',
+        '-m',
+        '{model}',
+      ],
+      // `--resume` appends to the same transcript and keeps the id; the system prompt is not stored there.
+      resumeArgs: [
+        '--resume',
+        '{providerSessionId}',
+        '--approval-mode',
+        '{approvalMode}',
+        '--append-system-prompt',
+        '{systemPrompt}',
+        '-m',
+        '{model}',
+      ],
+      mcpConfig: 'qwen-system-settings',
+    },
+  },
 };
 
 /** Built-in Claude Code family, independent of provider label, command or allowed overrides. */
@@ -474,6 +518,46 @@ export function isClaudeCode(entry: ProviderEntry | WorkProvider): boolean {
         (provider) => provider.id === entry && provider.family === 'claude',
       ) || isCustomProviderId(entry)
     : entry.family === 'claude';
+}
+
+/**
+ * Trusted family of a registry entry (or of a built-in / custom id). Custom endpoints and Claude accounts are
+ * 'claude'; a providers.json entry carries no `family`, so it is null.
+ */
+export function providerFamily(entry: ProviderEntry | WorkProvider): ProviderFamily | null {
+  if (typeof entry === 'string') {
+    const builtin = Object.values(PROVIDERS).find((provider) => provider.id === entry);
+    if (builtin !== undefined) return builtin.family ?? null;
+    return isCustomProviderId(entry) ? 'claude' : null;
+  }
+  return entry.family ?? null;
+}
+
+/**
+ * Exhaustive dispatch on the provider family. Every family has its own branch, so a new `ProviderFamily` member
+ * breaks the compile at every caller; a null or unrecognised family takes `neutral` (no Claude hooks, transcript,
+ * statusline or inline mail).
+ */
+export function byFamily<T>(
+  entry: ProviderEntry | WorkProvider,
+  branches: { claude: T; codex: T; qwen: T; neutral: T },
+): T {
+  const family = providerFamily(entry);
+  switch (family) {
+    case 'claude':
+      return branches.claude;
+    case 'codex':
+      return branches.codex;
+    case 'qwen':
+      return branches.qwen;
+    case null:
+      return branches.neutral;
+    default: {
+      const unreachable: never = family;
+      void unreachable;
+      return branches.neutral;
+    }
+  }
 }
 
 /**
@@ -539,11 +623,13 @@ export interface RunnerSubstitutions {
   effort?: EffortLevel;
   disallowedTools?: string;
   sandbox?: string;
+  /** `--approval-mode` Qwen Code (решение D6): `auto` в сессиях workspace, иначе `default`; `yolo` — никогда. */
+  approvalMode?: string;
 }
 
 // `notify` остался в списке ради старых записей providers.json: значения нет, и пара `-c {notify}` выпадает.
 const PLACEHOLDER =
-  /^\{(sessionUuid|mcpConfig|settingsFile|systemPrompt|developerInstructions|prompt|providerSessionId|channel|agent|notify|skillCatalog|codexHooks|approvals|trust|model|effort|disallowedTools|sandbox|leanFlags)\}$/;
+  /^\{(sessionUuid|mcpConfig|settingsFile|systemPrompt|developerInstructions|prompt|providerSessionId|channel|agent|notify|skillCatalog|codexHooks|approvals|trust|model|effort|disallowedTools|sandbox|leanFlags|approvalMode)\}$/;
 
 /**
  * Усилие можно подставить и внутрь строки шаблона (`model_reasoning_effort="{effort}"`):
@@ -772,13 +858,17 @@ export async function commandInPath(
     if (dir === '') continue;
     if (await isExecutableFile(path.join(dir, binary))) return true;
   }
-  return false;
+  // Точный ожидаемый бинарь CLI из таблицы — тот же запасной путь, что у `resolveRunnerBinary`; не при подмене.
+  const expected = binary === command ? expectedRunnerBinary(command, env) : null;
+  return expected !== null && isExecutableFile(expected);
 }
 
 /** Local, bounded version-only probe; no session/config/authentication operation. */
-export function probeCliVersion(command: string, timeoutMs = 3000, env: NodeJS.ProcessEnv = process.env): Promise<string | null> {
+export async function probeCliVersion(command: string, timeoutMs = 3000, env: NodeJS.ProcessEnv = process.env): Promise<string | null> {
+  // Тот же бинарь, что запускается (подмена, PATH, точный ожидаемый путь); не нашли — как раньше, по имени.
+  const binary = await resolveRunnerBinary(command, env).then((found) => found.path, () => commandBinary(command, env));
   return new Promise((resolve) => {
-    const child = execFile(commandBinary(command, env), ['--version'], {
+    const child = execFile(binary, ['--version'], {
       env, timeout: timeoutMs, killSignal: 'SIGKILL', windowsHide: true,
     }, (error, stdout) => {
       const version = error === null ? parseVersion(stdout) : null;
@@ -852,11 +942,13 @@ export async function providerReadiness(entry: ProviderEntry, options: ProviderR
 export function providerReadinessError(entry: ProviderEntry, readiness: ProviderReadiness): string | null {
   if (readiness.error !== null) return readiness.error;
   // Провайдер окна называется своим именем (`entry.label`: у аккаунта с пустой меткой стандартное уже посчитано).
-  const name = isManagedEntry(entry) ? entry.label : 'GLM';
+  const name = isManagedEntry(entry) || entry.family === 'qwen' ? entry.label : 'GLM';
+  // The CLI the version belongs to: Qwen Code has its own; every other versioned entry runs Claude Code.
+  const cli = entry.family === 'qwen' ? entry.runner.command : 'Claude Code';
   if (readiness.needs === 'sign-in') return `${name} is not signed in: open Settings → Providers and press Sign in`;
   if (readiness.needs === 'cli') return entry.runner.minVersion === undefined
     ? `command ${entry.runner.command} is not in PATH — provider ${entry.id} is unavailable`
-    : `${name} requires Claude Code ${entry.runner.minVersion} or newer; install or update the CLI and check again`;
+    : `${name} requires ${cli} ${entry.runner.minVersion} or newer; install or update the CLI and check again`;
   if (readiness.needs !== 'key') return null;
   return entry.custom === undefined
     ? 'GLM requires a saved Z.ai key in Providers'

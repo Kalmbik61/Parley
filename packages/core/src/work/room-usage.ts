@@ -3,6 +3,7 @@
  * счёта — целиком и по провайдерам. Цифры даёт `UsageResolver`: хост — индекс логов и срез, тесты — свои данные.
  */
 
+import { byFamily } from '../providers.js';
 import type { LetterReads } from './letter-store.js';
 import { isCurrentMember, roomMembership } from './room-membership.js';
 import { roomLead } from './rooms.js';
@@ -80,7 +81,7 @@ function wholeInside(bounds: { startedAt: string | null; endedAt: string | null 
 
 /** Ключ разговора для `sumUsage`: семейство логов и id у провайдера (эпоха не входит). */
 const conversationKey = (session: WorkSession): string =>
-  `${session.provider === 'codex' ? 'codex' : 'claude'}\u0000${session.providerSessionId ?? session.id}`;
+  `${byFamily(session.provider, { claude: 'claude', codex: 'codex', qwen: 'qwen', neutral: 'other' })}\u0000${session.providerSessionId ?? session.id}`;
 
 /** Итог группы: никого не посчитали и никто не пропал — ноль; кто-то пропал — итог не полнее нижней границы. */
 function settle(total: UsageTotal, missing: boolean): UsageTotal {

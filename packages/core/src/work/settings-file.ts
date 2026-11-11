@@ -154,7 +154,7 @@ const FEED_TIMEOUT_SEC: Readonly<Record<string, number>> = {
 };
 
 /** Переменные окружения агента, которые Claude Code подставляет в заголовки HTTP-хука. */
-const HOOK_TOKEN_ENV = `${ENV_PREFIX}HOOK_TOKEN`;
+export const HOOK_TOKEN_ENV = `${ENV_PREFIX}HOOK_TOKEN`;
 const SESSION_ID_ENV = `${ENV_PREFIX}SESSION_ID`;
 
 export interface WorkSettingsOptions {
@@ -195,7 +195,7 @@ export interface WorkSettingsOptions {
   projectMcp?: { enabled: readonly string[]; disabled: readonly string[] };
 }
 
-function feedHook(url: string, event: string, tokenEnv: string): HookHttp {
+export function feedHook(url: string, event: string, tokenEnv: string): HookHttp {
   const hook: HookHttp = {
     type: 'http',
     url,
@@ -277,7 +277,7 @@ export function workSettingsJson(options: WorkSettingsOptions = {}): string {
  * file. Directory handles and repeated identity checks bound path redirects; Node's
  * portable rename API still has a final parent-check/rename race (no openat/renameat).
  */
-async function writeSessionSettings(stateRoot: string, workDir: string, file: string, json: string): Promise<void> {
+export async function writeSessionSettings(stateRoot: string, workDir: string, file: string, json: string): Promise<void> {
   const unsafe = (): Error => new Error('unsafe-session-settings-path');
   const same = (a: Stats, b: Stats): boolean => a.dev === b.dev && a.ino === b.ino;
   const rootStat = await lstat(stateRoot);

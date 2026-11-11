@@ -343,6 +343,7 @@ export const S = {
     numbers: (used: string, window: string, percent: string): string => `${used} of ${window} tokens · ${percent}`,
     instructionsLabel: 'Focus instructions',
     codexNoFocus: 'Codex compacts without focus',
+    qwenNoFocus: 'Qwen Code compresses without focus',
     compact: 'Compact',
     compactAll: 'Compact all',
     cancel: 'Cancel',
@@ -365,6 +366,8 @@ export const S = {
   },
   roles: {
     readOnly: 'Read only', unavailable: 'Role unavailable', providerLocked: 'Native roles use their own provider',
+    /** New-session dialog: read-only roles on Qwen Code (spec 2026-11-11, 3.6). */
+    readOnlyUnavailableOnQwen: 'Read-only roles are not available on Qwen Code yet',
     option: (name: string, source: 'builtin' | 'claude' | 'codex'): string => `${name} · ${{ builtin: 'Builtin', claude: 'Claude', codex: 'Codex' }[source]}`,
     defaultEffort: (effort: string): string => `Default effort: ${effort}`,
   },
@@ -740,6 +743,18 @@ export const S = {
     sessions: (count: number, name: string, from: string | null): string =>
       `${count} ${name} ${count === 1 ? 'session' : 'sessions'} will stay on ${from ?? 'the old version'} until restarted`,
     smokeFailed: "The new version rejected Parley's launch flags. New sessions may fail to start.",
+    /** Строка состояния CLI (спека 2026-11-11, §4.4). */
+    upToDate: 'Up to date',
+    checked: (time: string): string => `checked ${time}`,
+    lastSuccess: (time: string): string => `last successful check ${time}`,
+    checkNow: 'Check now',
+    checking: 'Checking…',
+    updateAnyway: 'Update anyway',
+    skipped: 'skipped',
+    couldNotCheck: (reason: string | null): string => (reason === null ? 'Could not check' : `Could not check (${reason})`),
+    manualUpdate: 'update with:',
+    copy: 'Copy',
+    copied: 'Copied',
   },
 
   /** Строка статуса — `shell/StatusBar.tsx`. */
@@ -809,11 +824,43 @@ export const S = {
 
   /** Общая карточка подключения: строка статуса и диалог новой сессии. */
   providerCard: {
+    /** Qwen Code card (spec 2026-11-11, 3.6): sign-in hints, never a verdict. */
+    qwen: {
+      hint: {
+        configured: (type: string): string => `Configured: ${type}`,
+        'qwen-account': 'Qwen account sign-in found',
+        'env-key': 'Key found in environment',
+        'not-detected': 'Sign-in not detected: start a Qwen session and use /auth in the terminal',
+      },
+      hintNote: 'This is a hint from local files, not a check that the sign-in works.',
+      model: (name: string | null): string => (name === null ? 'Model: Default' : `Model: Default (${name} in Qwen settings)`),
+      modelHelp: 'Pick Default, or type a model id when you start a session.',
+    },
     connected: 'Connected',
     notConnected: 'Not connected',
     copy: 'Copy',
+    copyCommand: 'Copy command',
     copied: 'Copied',
     installationGuide: 'Installation guide',
+    /** Установка из Parley (спека 2026-11-11, §4.2, §4.4). */
+    notInstalled: 'Not installed',
+    latestVersion: (latest: string): string => `latest ${latest}`,
+    installAction: 'Install…',
+    installConfirm: {
+      title: (name: string): string => `Install ${name}?`,
+      command: 'Command',
+      source: 'Source',
+      trust:
+        "This downloads the vendor's installer and runs it as you. Parley logs its fingerprint but cannot verify the vendor's code or what the installer downloads.",
+      profile: 'The installer may add ~/.local/bin to your shell profile so qwen works in your own terminal.',
+      accept: 'Install',
+    },
+    installing: (name: string): string => `Installing ${name}…`,
+    installBusy: 'An install or update of this CLI is already running.',
+    installed: (name: string, version: string | null): string => `${name} installed${version === null ? '' : ` · ${version}`}`,
+    installFailed: 'Install failed',
+    installSmokeFailed: "The installed version rejected Parley's launch flags. New sessions may fail to start.",
+    installManual: 'Run it yourself:',
     signInGuide: 'Sign-in guide',
     checkAgain: 'Check again',
     /**
@@ -1035,6 +1082,8 @@ export const S = {
       modelField: 'Model',
       /** Первый пункт списка моделей: без флага `--model`, модель CLI по умолчанию (решение 5). */
       modelDefault: 'Default',
+      /** Qwen Code has no model catalog: a typed model id (empty is Default). */
+      modelTyped: 'Model id (empty: Default)',
       effortField: 'Effort',
       /** Первый пункт списка уровней: без флага `--effort` — CLI берёт уровень, сохранённый у себя (нормалайзер 2026-10-06). */
       effortDefault: 'Default',
@@ -2058,6 +2107,8 @@ export const S = {
       placeholder: 'Message Claude — Enter to send',
       codexLabel: 'Message to Codex',
       codexPlaceholder: 'Message Codex — Enter to send',
+      qwenLabel: 'Message to Qwen Code',
+      qwenPlaceholder: 'Message Qwen Code — Enter to send',
       send: 'Send',
       queue: 'Queue',
       attach: 'Attach a file',
@@ -2106,6 +2157,8 @@ export const S = {
     /** Баннер над полем ввода: агент ждёт в терминале (диалог без хука). */
     waitingBanner: {
       text: 'Claude Code is waiting in the terminal',
+      /** Qwen Code approvals are answered in the terminal in v1: the Chat view has no approval cards for it. */
+      qwenApproval: 'Waiting for approval in the terminal',
       open: 'Open terminal',
     },
     /** Баннер замены агента над полем ввода (спека 2026-10-30, 5.7). */
@@ -2788,6 +2841,8 @@ export const S = {
       loadProviders: 'load providers',
       refreshProviderLimits: 'refresh provider limits',
       updateProvider: 'update the provider CLI',
+      checkProviderUpdates: 'check for updates',
+      installProvider: 'install the provider CLI',
       decideProjectMcp: 'save the MCP server choice',
       skipProviderUpdate: 'skip this version',
       saveDiagnostics: 'save diagnostics',

@@ -6,7 +6,7 @@ import type { Params, PermissionModeChoice, Result } from './methods.js';
 import type { CustomAccountInfo, CustomProviderInfo } from './custom-providers.js';
 import type { EventData } from './events.js';
 import type { FeedDecisions } from './feed.js';
-import type { Capabilities, CliUpdate, FeedCardState, FeedDecision, FeedItem, ModelOption, ProviderCheck, ProviderCheckReason, ProviderLimits } from './types.js';
+import type { Capabilities, CliStatus, CliUpdate, FeedCardState, FeedDecision, FeedItem, ModelOption, ProviderCheck, ProviderCheckReason, ProviderLimits } from './types.js';
 import { PROVIDER_CHECK_REASONS } from './types.js';
 import * as protocolExports from './index.js';
 import { progressLine, progressResult, type ProgressResult } from './feed-progress.js';
@@ -383,6 +383,39 @@ describe('providers.skipUpdate и providers.list.update (спека 2026-11-02)'
     expect([busy.state, finished.state]).toEqual(['busy', 'done']);
   });
 
+  it('providers.install: {provider}, ответ busy или done с итогом установки', () => {
+    expect(METHODS['providers.install'].safeParse({ provider: 'qwen' }).success).toBe(true);
+    expect(METHODS['providers.install'].safeParse({}).success).toBe(false);
+    expect(METHODS['providers.install'].safeParse({ provider: 7 }).success).toBe(false);
+    // Лишние поля не проходят в обработчик: ни URL, ни аргументы из запроса.
+    expect(METHODS['providers.install'].parse({ provider: 'qwen', args: ['--evil'], url: 'https://x' })).toEqual({ provider: 'qwen' });
+    const busy: Result<'providers.install'> = { state: 'busy' };
+    const done: Result<'providers.install'> = {
+      state: 'done',
+      ok: false,
+      version: null,
+      output: 'tail',
+      error: 'The installer exited with code 1',
+      manualCommand: 'curl -fsSL https://claude.ai/install.sh | bash',
+      pathNote: '/Users/x/.local/bin is not on your shell PATH; Parley finds qwen there',
+      smoke: { ok: false, output: '' },
+    };
+    expect([busy, done]).toHaveLength(2);
+  });
+
+  it('providers.checkUpdates: {provider}, ответ — cli; cli в providers.list необязателен и круговой обход схемы цел', () => {
+    expect(METHODS['providers.checkUpdates'].safeParse({ provider: 'qwen' }).success).toBe(true);
+    expect(METHODS['providers.checkUpdates'].safeParse({}).success).toBe(false);
+    expect(METHODS['providers.checkUpdates'].safeParse({ provider: 7 }).success).toBe(false);
+    const cli: CliStatus = { installed: null, latest: '0.28.0', method: null, checkedAt: '2026-11-11T00:00:00.000Z', state: 'missing', lastError: null };
+    const result: Result<'providers.checkUpdates'> = { cli };
+    expect(JSON.parse(JSON.stringify(result))).toEqual(result);
+    const list: Result<'providers.list'> = { providers: [{ id: 'qwen', label: 'Qwen', available: false, cli }] };
+    expect(list.providers[0]?.cli?.state).toBe('missing');
+    expectTypeOf<CliStatus['state']>().toEqualTypeOf<'missing' | 'up-to-date' | 'available' | 'skipped' | 'unknown'>();
+    expect(Object.keys(METHODS)).toContain('providers.checkUpdates');
+  });
+
   it('update в providers.list необязателен (старый хост молчит) и может быть null', () => {
     const update: CliUpdate = { latest: '0.166.0', method: 'standalone', checkedAt: '2026-11-02T00:00:00.000Z' };
     const list: Result<'providers.list'> = {
@@ -477,6 +510,7 @@ describe('модель, усилие и поля providers.list (дизайн к
       check?: ProviderCheck | null;
       custom?: CustomProviderInfo | null;
       update?: CliUpdate | null;
+      cli?: CliStatus;
     }>();
     // Хост до дизайна комнат отдаёт элементы без новых полей — тип обязан это допускать.
     const legacy: Result<'providers.list'> = { providers: [{ id: 'claude', label: 'Claude', available: true }] };

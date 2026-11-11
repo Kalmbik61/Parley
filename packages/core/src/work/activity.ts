@@ -432,6 +432,8 @@ export function activityOf({
     }
     switch (event.name) {
       case 'UserPromptSubmit':
+        // Qwen's empty follow-up (spec §3.4) is not a turn: it neither starts one nor clears waits.
+        if (event.promptEmpty === true) break;
         turnBoundaryAt = event.at;
         waits = [];
         start();
@@ -482,6 +484,13 @@ export function activityOf({
         }
         break;
       }
+      case 'PreToolUse':
+      case 'PostToolUse':
+      case 'PostToolUseFailure':
+        // Tool activity (spec 2026-11-11, 3.4). Only Qwen Code journals these hooks; Claude Code sends them to the feed
+        // over HTTP only. A tool running after a permission prompt means the human answered it in the terminal.
+        start();
+        break;
       case PERMISSION_ANSWERED_EVENT:
         // На запрос ответили, инструмент работает. Вне `blocked` отметка ничего не значит: хода она не начинает.
         if (phase === 'blocked') start();

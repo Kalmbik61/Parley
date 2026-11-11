@@ -67,6 +67,16 @@ describe('agent providers endpoint (спека подписок 5.8, К7)', () =
   });
 });
 
+describe('providerRowsOf family', () => {
+  it('codex and qwen reach the agent unchanged', () => {
+    const rows = providerRowsOf({ providers: [
+      { id: 'codex', label: 'Codex', available: true, family: 'codex' },
+      { id: 'qwen', label: 'Qwen', available: true, family: 'qwen' },
+    ] });
+    expect(rows.map((row) => row.family)).toEqual(['codex', 'qwen']);
+  });
+});
+
 describe('providerRowsOf', () => {
   it('берёт из строки providers.list только то, что нужно агенту: без keyHint, check, custom; пропуски — безопасными значениями', () => {
     const result: Result<'providers.list'> = {

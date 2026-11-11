@@ -81,6 +81,8 @@ export interface ComposerProps {
   slashCommands?: boolean;
   /** Сессия Codex: подпись и подсказка поля — «Codex», а не «Claude» (спека 2026-10-07, 5.4). */
   codex?: boolean;
+  /** Сессия Qwen Code: подпись и подсказка поля — «Qwen Code», а не «Claude». */
+  qwen?: boolean;
   /** Диалог выбора файлов (скрепка): пути выбранных, `[]` — отмена. Отказ владелец показывает тостом. */
   onPickFiles: () => Promise<string[]>;
   /** Скриншот из буфера обмена → путь сохранённого файла; `null` — нет картинки или отказ (тост у владельца). */
@@ -107,6 +109,7 @@ export function Composer({
   source,
   slashCommands = true,
   codex = false,
+  qwen = false,
   onPickFiles,
   onPasteImage,
   dictationId,
@@ -297,10 +300,10 @@ export function Composer({
         <MicButton targetId={dictationId} />
         <textarea
           ref={field}
-          aria-label={codex ? S.chat.composer.codexLabel : S.chat.composer.label}
+          aria-label={codex ? S.chat.composer.codexLabel : qwen ? S.chat.composer.qwenLabel : S.chat.composer.label}
           aria-expanded={open}
           aria-controls={open ? 'chat-suggestions' : undefined}
-          placeholder={codex ? S.chat.composer.codexPlaceholder : S.chat.composer.placeholder}
+          placeholder={codex ? S.chat.composer.codexPlaceholder : qwen ? S.chat.composer.qwenPlaceholder : S.chat.composer.placeholder}
           value={text}
           rows={1}
           onChange={(event) => {

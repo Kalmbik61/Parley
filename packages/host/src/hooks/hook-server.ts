@@ -14,7 +14,7 @@ import { randomBytes } from 'node:crypto';
 import { createServer } from 'node:http';
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import type { AddressInfo, Socket } from 'node:net';
-import { CODEX_HOOK_EVENTS, FEED_HOOK_EVENTS } from '@parley/core';
+import { byFamily, CODEX_HOOK_EVENTS, FEED_HOOK_EVENTS, QWEN_HOOK_EVENTS } from '@parley/core';
 import { refKey } from '@parley/protocol';
 import type { SessionRef } from '@parley/protocol';
 import type { Log } from '../log.js';
@@ -34,6 +34,10 @@ const CLOSE_FLUSH_MS = 1_000;
 
 const FEED_EVENTS: ReadonlySet<string> = new Set(FEED_HOOK_EVENTS);
 const CODEX_EVENTS: ReadonlySet<string> = new Set(CODEX_HOOK_EVENTS);
+/** Qwen Code: the events its per-session system settings file sends (spec 2026-11-11, 3.3). */
+const QWEN_EVENTS: ReadonlySet<string> = new Set(QWEN_HOOK_EVENTS);
+/** Neutral family: no hook event is accepted. */
+const NO_EVENTS: ReadonlySet<string> = new Set();
 
 /** Принятое событие хука одной сессии. */
 export interface HookRequest {
@@ -325,7 +329,7 @@ export function createHookServer(options: HookServerOptions): HookServer {
         ref: { ...ref },
         token,
         providerSessionId,
-        events: provider === 'codex' ? CODEX_EVENTS : FEED_EVENTS,
+        events: byFamily(provider, { claude: FEED_EVENTS, codex: CODEX_EVENTS, qwen: QWEN_EVENTS, neutral: NO_EVENTS }),
         ...(agentRevision === undefined ? {} : { agentRevision }),
       });
       tokenOfSession.set(key, token);

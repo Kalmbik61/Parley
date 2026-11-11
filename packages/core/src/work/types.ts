@@ -239,6 +239,8 @@ export interface WorkSession {
   /** Id сессии у провайдера: для Claude — uuid jsonl-файла. */
   providerSessionId: string | null;
   codexThreadBinding?: CodexThreadBinding;
+  /** Qwen Code only: transcript path from `SessionStart`'s `transcript_path`; trusted only after its records' `sessionId` and `cwd` match. Private, like `codexThreadBinding`. */
+  qwenTranscript?: { path: string; cwd: string };
   metrics: SessionMetrics | null;
   summary: string | null;
   summarySource: SummarySource | null;

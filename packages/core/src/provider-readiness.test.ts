@@ -92,6 +92,10 @@ describe('providerReadiness своих провайдеров (спека 5.1)',
     expect(readiness.needs).toBe('cli');
     expect(providerReadinessError(entry, readiness)).toBe('Kimi requires Claude Code 2.1.302 or newer; install or update the CLI and check again');
   });
+  it('qwen below minVersion: the text names Qwen Code and its own CLI, not GLM or Claude Code', () => {
+    expect(providerReadinessError(PROVIDERS.qwen, { needs: 'cli', error: null, version: '0.27.1' }))
+      .toBe('Qwen Code requires qwen 0.27.2 or newer; install or update the CLI and check again');
+  });
 });
 
 describe('providerReadiness аккаунта (спека подписок 5.5)', () => {

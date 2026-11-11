@@ -627,6 +627,31 @@ describe('ChatView — баннер ожидания в терминале (ку
     });
   };
 
+  it('a Qwen Code session blocked without a card shows "Waiting for approval in the terminal"', () => {
+    useLayoutStore.setState({
+      activeWorkKey: WORK_KEY,
+      layouts: {
+        [WORK_KEY]: {
+          root: { type: 'group', id: 'g1', tabs: [{ kind: 'terminal', id: 'terminal:s-01', sessionId: 's-01' }], activeTabId: 'terminal:s-01' },
+          activeGroupId: 'g1',
+          closedTabs: [],
+        },
+      },
+      hydrated: { [WORK_KEY]: true },
+      pending: {},
+      history: EMPTY_HISTORY,
+      mru: {},
+      navigating: false,
+    });
+    useProvidersStore.setState({ providers: [{ id: 'qwen', label: 'Qwen Code', available: true, family: 'qwen', version: '0.27.2', limits: null } as never], loaded: true });
+    useHostStore.setState({ status: { state: 'connected', hostVersion: '0.4.0', methods: FEED_METHODS, features: ['feed-qwen'] } as never });
+    activity('blocked');
+    renderBody({ ...makeSession('s-01', 'S01'), provider: 'qwen' });
+    setFeed([prompt('p1', 'hi')]);
+    settle();
+    expect(screen.getByTestId('chat-waiting-banner').textContent).toContain('Waiting for approval in the terminal');
+  });
+
   it('blocked без pending-карточки — баннер есть через 300 мс; клик уводит вкладку в терминал', () => {
     useLayoutStore.setState({
       activeWorkKey: WORK_KEY,
@@ -2004,6 +2029,18 @@ describe('ChatView — агенты: тулбар, прокрутка к кар�
     ]);
     expect(screen.getByTestId('chat-stop')).toBeTruthy();
     expect(running()).toBeNull();
+  });
+});
+
+describe('ChatView — Qwen Code', () => {
+  it('поле ввода подписано Qwen Code, а не Claude', () => {
+    useProvidersStore.setState({ providers: [{ id: 'qwen', label: 'Qwen Code', available: true, family: 'qwen', version: '0.27.2', limits: null } as never], loaded: true });
+    useHostStore.setState({ status: { state: 'connected', hostVersion: '0.4.0', methods: FEED_METHODS, features: ['feed-qwen'] } as never });
+    renderBody({ ...makeSession('s-01', 'S01'), provider: 'qwen' });
+    setFeed([prompt('p1', 'hi')]);
+    const field = screen.getByRole('textbox', { name: S.chat.composer.qwenLabel }) as HTMLTextAreaElement;
+    expect(field.placeholder).toBe(S.chat.composer.qwenPlaceholder);
+    expect(field.placeholder).toBe('Message Qwen Code — Enter to send');
   });
 });
 

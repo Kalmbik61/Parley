@@ -34,6 +34,7 @@ import {
   PARLEY,
   providerLabel,
   updateMap,
+  defaultQwenRoot,
   userClaudeConfigDir,
   migrateMapsToDb,
   migrateProjects,
@@ -103,6 +104,8 @@ import type { CatalogProbe } from './providers/codex-catalog.js';
 import { startProviderVersions } from './providers/versions.js';
 import { createCliUpdates, type CliUpdatesOptions } from './providers/updates.js';
 import { createCliUpdateRunner } from './providers/update-run.js';
+import { createCliInstaller } from './providers/install-run.js';
+import { createCliRun } from './providers/cli-run.js';
 import type { VersionProbe } from './providers/versions.js';
 import { createPtyManager } from './pty/pty-manager.js';
 import { createProcessMonitor } from './pty/process-monitor.js';
@@ -139,6 +142,7 @@ import { createSilentEndings } from './endings/silent-endings.js';
 import { createSessionsService } from './sessions/sessions-service.js';
 import { providerLaunchEnv } from './sessions/provider-env.js';
 import { createReadyJournal } from './sessions/ready-journal.js';
+import { createQwenBinding } from './activity/qwen-binding.js';
 import { createAutoSleepService } from './sleep/auto-sleep-service.js';
 import { limitAlternatives } from './stuck/limit-alternatives.js';
 import { createStuckService, stuckReportFromEnv } from './stuck/stuck-service.js';
@@ -565,15 +569,30 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     authenticate: (req) => browserEndpoint.authenticate(req),
     contextFor: toolContextFor,
     log,
+    // Qwen readiness needs the agent's Parley MCP client connected (spec 2026-11-11, 3.4 amendment).
+    generationOf: (ref) => activityService.processGeneration(ref),
+    onList: (ref, generation) => activityService.mcpListed(ref, generation),
   });
   const inlineMail = createInlineMail({
     log,
     provider: (ref) => worksService.entry(ref.projectPath, ref.workId)?.map.sessions.find((session) => session.id === ref.sessionId)?.provider,
     context: toolContextFor,
   });
+  const qwenBinding = createQwenBinding({
+    log,
+    qwenRoot: defaultQwenRoot(),
+    session: (ref) => worksService.entry(ref.projectPath, ref.workId)?.map.sessions.find((session) => session.id === ref.sessionId),
+    store: async (ref, binding) => {
+      await updateMap(ref.projectPath, ref.workId, (map) => {
+        const target = map.sessions.find((session) => session.id === ref.sessionId);
+        if (target !== undefined) target.qwenTranscript = binding;
+      }, { touch: false });
+    },
+  });
   const hookServer = createHookServer({
     log,
     onHook: (request) => {
+      void qwenBinding.onHook(request);
       readyJournal.onHook(request.ref);
       try {
         compactionService?.onHook(request.ref, request.body);
@@ -702,6 +721,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       consents: consentsService,
       projectMcp,
       hooks: hookServer,
+      // Qwen's brief is typed by the wake service once the process is ready (spec 2026-11-11, 3.4 amendment).
+      deferFirst: (ref, pid, text) => wakeService.deferFirst(ref, pid, text),
       providerVersions,
       signedIn: accountSignedIn,
       codexHookCommand: codexHookCommandOnce,
@@ -1048,12 +1069,15 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
           onChange: (command) => handle.context.broadcast('providers.changed', { provider: command }),
         });
   cliUpdates?.start();
+  // Один раннер процессов CLI на хост: флаг занятости на CLI общий у обновления и установки (спека Qwen, §4.2 п. 5).
+  const cliRun = createCliRun();
   // Обновление CLI по просьбе человека (`providers.update`): сессии считаются, но не трогаются.
   const cliUpdateRunner =
     cliUpdates === undefined
       ? undefined
       : createCliUpdateRunner({
           log,
+          cli: cliRun,
           versions: providerVersions,
           updates: cliUpdates,
           ...(options.cliUpdates?.env === undefined ? {} : { env: options.cliUpdates.env }),
@@ -1062,7 +1086,19 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
             return ptyManager.list().filter((pty) => pty.provider !== null && registry[pty.provider]?.runner.command === command).length;
           },
         });
-  handle.context.onShutdown(async () => cliUpdateRunner?.stop());
+  // Установка CLI по просьбе человека (`providers.install`): тот же раннер, затем перепроверка последней версии.
+  const cliInstaller =
+    cliUpdates === undefined
+      ? undefined
+      : createCliInstaller({
+          log,
+          cli: cliRun,
+          versions: providerVersions,
+          updates: cliUpdates,
+          ...(options.cliUpdates?.env === undefined ? {} : { env: options.cliUpdates.env }),
+        });
+  // Остановка хоста убивает идущие установщики и обновления целыми группами.
+  handle.context.onShutdown(async () => cliRun.stop());
   handle.context.onShutdown(async () => cliUpdates?.stop());
 
   const glmCheck = createGlmCheckService(handle.context, options.glmCheck);
@@ -1115,6 +1151,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     providerVersions,
     ...(cliUpdates === undefined ? {} : { cliUpdates }),
     ...(cliUpdateRunner === undefined ? {} : { cliUpdateRunner }),
+    ...(cliInstaller === undefined ? {} : { cliInstaller }),
     codexCatalog,
     limits: limitsService,
     glmCheck,

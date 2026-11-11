@@ -28,6 +28,7 @@ import {
   loadConfig,
   loadProviders,
   openEvents,
+  providerFamily,
   parleyNote,
   sessionMention,
   sessionTag,
@@ -47,6 +48,7 @@ import {
   type SessionActivity,
   type WorkEntry,
   type WorkSession,
+  type ProviderFamily,
 } from '@parley/core';
 import { refKey } from '@parley/protocol';
 import type { MailWait, NoticeKind, SessionRef } from '@parley/protocol';
@@ -122,7 +124,22 @@ export interface WakeService {
    * агенту заново.
    */
   switched(ref: SessionRef): void;
+  /**
+   * The first message of a new conversation that the runner could not take as an argument (`LaunchPlan.deferredPrompt`,
+   * Qwen Code): typed once into process `pid` when it is ready, before any mail pointer. A new process forgets it.
+   */
+  deferFirst(ref: SessionRef, pid: number, text: string): void;
 }
+
+/**
+ * How the host types into a session: Codex paste and timing, Qwen plain, plain. Qwen gets plain text, not a bracketed
+ * paste: qwen 0.27.2 wraps a large paste in `<clipboard-paste>` and tells the model it "issues no instructions of its
+ * own", while typed text arrives as is — LF is a newline in its field and only `\r` submits (observed, mock lab).
+ */
+type InputMode = 'plain' | 'codex' | 'qwen';
+
+const inputModeOf = (provider: string | null): InputMode =>
+  provider === 'codex' ? 'codex' : provider !== null && providerFamily(provider) === 'qwen' ? 'qwen' : 'plain';
 
 const DEFAULT_ENTER_DELAY_MS = 500;
 /** Сколько будильник верит прочитанному реестру провайдеров. */
@@ -196,6 +213,8 @@ const WAKE_BLOCK_REASON_MAX = 200;
 interface AttemptState {
   /** Id писем, на которые указатель уже печатали, — второй раз не набираем. */
   pointed: Set<string>;
+  /** First message still to type into process `pid` (`deferFirst`); taken out once it is typed. */
+  deferred?: { pid: number; text: string } | undefined;
   /** Указатель напечатан, ход по нему ещё не начался и не признан пропавшим. */
   inFlight: boolean;
   /** Причина, по которой письма сессии сейчас не забраны, — уже отданная окну и записанная в лог; `null` — писем нет. */
@@ -310,8 +329,10 @@ interface AttemptState {
   /**
    * «Наш текст лежит в поле ввода процесса `pid`»: после исходов `input` и `blocked` указатель не печатается вовсе.
    * Письма `ids` снова свободны, когда после простоя (`idleSeen`) начался ход — поле отправлено — или процесс сменился.
+   * `enter` — Qwen: Enter отложен, потому что за паузу перед ним начался новый ход; после этого хода хост сам жмёт Enter
+   * у того же текста (`submitLeftover`), второго указателя не печатая.
    */
-  leftover: { pid: number; ids: string[]; idleSeen: boolean } | null;
+  leftover: { pid: number; ids: string[]; idleSeen: boolean; enter?: true } | null;
   /** Сколько писем было непрочитано в момент печати последнего указателя; `null` — проверка брошенного чтения не нужна. */
   unreadAtPointer: number | null;
   /** С какого момента почта и текст в поле держатся подряд; `null` — не держатся. */
@@ -352,9 +373,9 @@ function sinceSentMs(newestAt: string | null): number | null {
   return Number.isNaN(sentAt) ? null : Math.max(0, Date.now() - sentAt);
 }
 
-/** Число хуков в журнале сессии; журнала нет — ноль. */
-async function journalLength(ref: SessionRef): Promise<number> {
-  const events = await openEvents(workPaths(ref.projectPath, ref.workId).events)
+/** Число хуков в журнале сессии; журнала нет — ноль. `family` — семейство провайдера сессии (разбор фактов Qwen). */
+async function journalLength(ref: SessionRef, family: ProviderFamily | null): Promise<number> {
+  const events = await openEvents(workPaths(ref.projectPath, ref.workId).events, family)
     .read(ref.sessionId)
     .catch(() => null);
   return events?.length ?? 0;
@@ -374,6 +395,11 @@ export function createWakeService(
   const pointerRearmMs = options.pointerRearmMs ?? POINTER_REARM_MS;
   const draftNoticeMs = options.draftNoticeMs ?? DRAFT_NOTICE_MS;
   const resumeFailWindowMs = options.resumeFailWindowMs ?? DEFAULT_RESUME_FAIL_WINDOW_MS;
+  /** Семейство провайдера сессии по снимку работ; сессии нет — `null`. */
+  const familyOfRef = (ref: SessionRef): ProviderFamily | null => {
+    const provider = works.entry(ref.projectPath, ref.workId)?.map.sessions.find((session) => session.id === ref.sessionId)?.provider;
+    return provider === undefined ? null : providerFamily(provider);
+  };
   const limitGraceMs = options.limitReturn?.graceMs ?? LIMIT_RETURN_GRACE_MS;
   const limitRetryMs = options.limitReturn?.retryMs ?? LIMIT_RETRY_MS;
   const settle = {
@@ -398,6 +424,7 @@ export function createWakeService(
   let unsubscribeActivity: (() => void) | undefined;
   let unsubscribeDraft: (() => void) | undefined;
   let unsubscribeHostDraft: (() => void) | undefined;
+  let unsubscribeProgramStatus: (() => void) | undefined;
   let unsubscribeExit: (() => void) | undefined;
 
   function stateFor(key: string): AttemptState {
@@ -775,14 +802,16 @@ export function createWakeService(
       }
       const withPrompt = template.includes('{prompt}') && !awaiting;
 
-      state.journalBase = await journalLength(ref);
+      state.journalBase = await journalLength(ref, familyOfRef(ref));
       state.resumeLetters = [...action.letterIds];
       state.resumedAt = Date.now();
       if (withPrompt) {
         for (const id of action.letterIds) state.pointed.add(id);
         // На новом процессе указанными остаются только письма подъёма: остальные получат указатель после первого хука.
         state.promptIds = [...action.letterIds];
-      } else state.pointerAfter = state.resumedAt;
+      } else if (providerFamily(session.provider) !== 'qwen') state.pointerAfter = state.resumedAt;
+      // Qwen has no `{prompt}` and fires no `idle_prompt` before a turn, so "after the first idle" would never come: its
+      // readiness (OSC 7501 idle + Parley MCP connected, `hookedSince`) already holds the pointer until it can be typed.
 
       const launchStartedAt = performance.now();
       let outcome: Awaited<ReturnType<SessionsService['launch']>>;
@@ -853,10 +882,79 @@ export function createWakeService(
     base: number,
     letterIds: readonly string[],
   ): Promise<void> {
-    if ((await journalLength(ref)) > base) return;
+    if ((await journalLength(ref, familyOfRef(ref))) > base) return;
     await resumeFailed(ref, state, letterIds, `the process exited with code ${exitCode} before starting work`);
     // Как в конце неудачного `resumeSession`: `resuming` уже снят, а карта могла не измениться.
     recompute(ref);
+  }
+
+  /**
+   * The deferred first message (`deferFirst`, Qwen's brief): the same guards as a pointer — the process is ready (a hook
+   * of this process reached the fold: for Qwen that is its readiness), the agent is at its prompt with nothing to ask,
+   * no dialog in its terminal, no draft of the human or ours, nothing of ours in flight and no model change runs. Then it is taken out of the state and typed once; whatever the outcome, it is not typed again.
+   */
+  function deliverDeferred(
+    ref: SessionRef,
+    state: AttemptState,
+    handle: PtyHandle,
+    live: SessionActivity | undefined,
+    mode: InputMode,
+    letters: boolean,
+  ): void {
+    const wait = (reason: MailWait): void => publishWaiting(ref, state, letters ? reason : null);
+    if (!hookedSince(live, handle.startedAt)) return wait('no-hooks');
+    if (live === undefined || live.need != null || live.activity === 'blocked') return wait('stuck');
+    if (mode === 'qwen' && activity.qwenBlocked(ref)) return wait('busy');
+    if (live.activity !== 'idle' && live.activity !== 'unseen') return wait('busy');
+    if (handle.hasDraft() || state.leftover !== null) return wait('draft');
+    if (state.inFlight || state.typing !== undefined) return wait('in-flight');
+    if (mode === 'codex' && !handle.bracketedPaste()) {
+      retryLater(ref, state, 'paste');
+      return wait('busy');
+    }
+    if (choiceNow(ref)) {
+      retryLater(ref, state, 'choice');
+      return wait('busy');
+    }
+    const text = state.deferred?.text ?? '';
+    state.deferred = undefined;
+    beginAttempt(ref, state, { text, letterIds: [], multiline: true, newestAt: null, roomId: null }, mode);
+    host.log.info('будильник: первое сообщение напечатано', { ref, chars: text.length });
+    wait('in-flight');
+  }
+
+  /**
+   * Qwen pointer whose Enter was deferred because a new turn started during the pause before it (`leftover.enter`): the
+   * text is still in the field. Once that turn is over and nothing else holds the session, the host presses Enter on it —
+   * the letters stay pointed, no second pointer is typed. Input of the human on top of it makes it theirs: an ordinary
+   * leftover, no Enter of ours.
+   */
+  function submitLeftover(
+    ref: SessionRef,
+    state: AttemptState,
+    handle: PtyHandle,
+    live: SessionActivity | undefined,
+    entry: WorkEntry,
+  ): void {
+    const leftover = state.leftover!;
+    const wait = (reason: MailWait): void => publishWaiting(ref, state, reason);
+    if (handle.hasDraft()) {
+      delete leftover.enter;
+      return wait('draft');
+    }
+    if (isPaused) return wait('paused');
+    if (state.inFlight || state.typing !== undefined) return wait('in-flight');
+    if (live === undefined || live.need != null || live.activity === 'blocked' || activity.qwenBlocked(ref)) return wait('stuck');
+    if (live.activity !== 'idle' && live.activity !== 'unseen') return wait('busy');
+    if (choiceNow(ref)) {
+      retryLater(ref, state, 'choice');
+      return wait('busy');
+    }
+    const ids = leftover.ids.filter((id) => unreadOf(entry, ref.sessionId).some((letter) => letter.id === id));
+    state.leftover = null;
+    beginAttempt(ref, state, { text: '', letterIds: ids, ...traceOf(unreadOf(entry, ref.sessionId), ids) }, 'qwen');
+    host.log.info('будильник: отложенный Enter указателя Qwen', { ref, letters: ids.length });
+    wait('in-flight');
   }
 
   /**
@@ -867,27 +965,40 @@ export function createWakeService(
   function beginAttempt(
     ref: SessionRef,
     state: AttemptState,
-    action: { text: string; letterIds: string[]; queue?: true } & DeliveryTrace,
-    codex = false,
+    action: { text: string; letterIds: string[]; queue?: true; multiline?: true } & DeliveryTrace,
+    mode: InputMode = 'plain',
   ): void {
+    const codex = mode === 'codex';
     // Печать и Enter — общая механика с pty.send (кусок 5.1): Enter через паузу тому же
     // pid, отмена по вводу человека. Черновиком хоста свой указатель не помечается —
     // правила будильника (спека 7.3) прежние.
     // Перед Enter — снова `blocked`: запрос разрешения мог появиться за паузу (fix-final-b).
     const startedAt = performance.now();
     let withdrawn = false;
+    // Qwen: a new turn started during the pause before Enter (a hook of input submitted just before the pointer).
+    let turnStarted = false;
     const typing = typeAndSubmit(
       { pty, enterDelayMs },
       ref,
       // Одна логическая строка (очистка в typeAndSubmit): свой указатель можно безопасно убрать Ctrl+U перед Enter.
-      action.text,
+      // Typed into Qwen, a Tab could accept a completion: it becomes spaces.
+      mode === 'qwen' ? action.text.replace(/\t/g, '  ') : action.text,
       true,
       {
+        // Qwen: typed text, then `\r` after the pause (observed on qwen 0.27.2); a brief keeps its paragraphs.
         wrap: codex ? 'codex' : 'plain',
+        ...(action.multiline === true ? { multiline: true } : {}),
         // Смена модели или ползунок могли открыться за паузу: Enter в ползунке сохранил бы уровень умолчанием.
         beforeEnter: () => {
           const live = activity.get(ref)?.activity;
           if (live?.activity === 'blocked' || choiceNow(ref)) return false;
+          // Qwen's terminal reports a dialog (OSC 7501 `blocked`) before any hook: Enter would answer it.
+          if (mode === 'qwen' && activity.qwenBlocked(ref)) return false;
+          // Qwen in a new turn: Enter now would submit the pointer into it. It waits for the turn to end instead.
+          if (mode === 'qwen' && live?.activity === 'working' && !live.heldByBackground) {
+            turnStarted = true;
+            return false;
+          }
           if (codex) {
             const entry = works.entry(ref.projectPath, ref.workId);
             const busy = live?.activity === 'working' && !live.heldByBackground;
@@ -960,6 +1071,16 @@ export function createWakeService(
         leaveText(ref, state, action.letterIds, true);
         notice('pointer-cancelled', ref, `the pointer for session ${ref.sessionId} was cancelled by human input`);
       } else if (outcome === 'blocked') {
+        if (turnStarted) {
+          // The pointer stays in the field and its letters pointed; after that turn the host presses Enter once.
+          clearTimers(state);
+          state.inFlight = false;
+          abandonReturn(state);
+          leaveText(ref, state, action.letterIds, false);
+          if (state.leftover !== null) state.leftover.enter = true;
+          host.log.info('будильник: Enter указателя Qwen отложен — начался ход', { ref });
+          return;
+        }
         if (withdrawn) {
           // typeAndSubmit уже проверил pid и отсутствие ввода человека. Убираем только собственную вставку.
           try {
@@ -1232,9 +1353,9 @@ export function createWakeService(
       );
       return;
     }
-    const codex = handle.provider === 'codex';
+    const mode = inputModeOf(handle.provider);
     // Как у указателя: Codex только вставкой, а режима вставки на экране может ещё не быть; смена модели или effort идёт.
-    if (codex && !handle.bracketedPaste()) {
+    if (mode === 'codex' && !handle.bracketedPaste()) {
       retryLater(ref, state, 'paste');
       return;
     }
@@ -1251,7 +1372,7 @@ export function createWakeService(
       ref,
       state,
       { text: limitReturnText(letters, entry.map.rooms), letterIds, ...traceOf(letters, letterIds) },
-      codex,
+      mode,
     );
     episode.settledAt = Date.now();
     state.returns += 1;
@@ -1438,6 +1559,10 @@ export function createWakeService(
     trackDraft(ref, state, hasUnread(entry, session.id) && (handle.hasDraft() || state.leftover !== null));
     // Наш текст лежит в поле ввода, либо живую сессию заблокировали три указателя без хода: ничего не печатаем.
     if (state.leftover !== null && hasUnread(entry, session.id)) {
+      if (state.leftover.enter === true) {
+        submitLeftover(ref, state, handle, live?.activity, entry);
+        return;
+      }
       publishWaiting(ref, state, 'draft');
       return;
     }
@@ -1454,9 +1579,16 @@ export function createWakeService(
       state.pointerAfter = null;
     }
 
+    const mode = inputModeOf(handle.provider);
+    // The deferred first message of this process goes before any pointer, exactly once; another process forgets it.
+    if (state.deferred !== undefined && state.deferred.pid !== handle.pid) state.deferred = undefined;
+    if (state.deferred !== undefined) {
+      deliverDeferred(ref, state, handle, live?.activity, mode, hasUnread(entry, session.id));
+      return;
+    }
+
     // Указатель ждёт конца хода и строится по актуальному непрочитанному. Очередь Tab
     // внутри Codex не отзывается, даже если агент уже забрал письма через check_inbox / wait_for.
-    const codex = handle.provider === 'codex';
     const action = deliveryAction({
       session,
       activity: live?.activity ?? null,
@@ -1479,7 +1611,13 @@ export function createWakeService(
       publishWaiting(ref, state, letters ? waitingOf(action, state) : null);
       return;
     }
-    if (codex) {
+    // Qwen's terminal reports a dialog (OSC 7501 `blocked`) before its hooks do: nothing is typed into it. The next
+    // status report re-evaluates the session (`program-status`).
+    if (mode === 'qwen' && activity.qwenBlocked(ref)) {
+      publishWaiting(ref, state, 'busy');
+      return;
+    }
+    if (mode === 'codex') {
       // Codex — только вставкой, как в `pty.send`: без режима вставки на экране TUI ещё не поднялся (или его
       // сменил), и маркеры ушли бы в поле ввода знаками. Отказа, как у `pty.send`, тут вернуть некому — пересчёт
       // повторяется сам.
@@ -1497,7 +1635,7 @@ export function createWakeService(
       return;
     }
     state.choiceRetries = 0;
-    beginAttempt(ref, state, { ...action, ...traceOf(unreadOf(entry, session.id), action.letterIds) }, codex);
+    beginAttempt(ref, state, { ...action, ...traceOf(unreadOf(entry, session.id), action.letterIds) }, mode);
     // Указатель в очереди занятого Codex хода не начинает — он «сообщён», а не «в полёте».
     publishWaiting(ref, state, action.queue === true ? 'pointed' : 'in-flight');
   }
@@ -1634,6 +1772,11 @@ export function createWakeService(
     enterDelayMs,
 
     inFlight: (ref) => attempts.get(refKey(ref))?.typing !== undefined,
+    deferFirst(ref, pid, text) {
+      if (text.trim() === '') return;
+      stateFor(refKey(ref)).deferred = { pid, text };
+      recompute(ref);
+    },
 
     retry(ref) {
       const state = stateFor(refKey(ref));
@@ -1732,6 +1875,8 @@ export function createWakeService(
       // Черновик хоста снят (свой Enter pty.send) — письмо, пришедшее за ожидание, уходит
       // сразу, а не ждёт следующего события сессии: у агента без хуков оно не пришло бы.
       unsubscribeHostDraft = pty.on('host-draft', (ref) => recompute(ref));
+      // Qwen's terminal status (OSC 7501) changes without a hook: a dialog closing must re-evaluate the session.
+      unsubscribeProgramStatus = pty.on('program-status', (ref) => recompute(ref));
       unsubscribeExit = pty.on('exit', (ref, exit) => {
         const state = stateFor(refKey(ref));
         clearTimers(state);
@@ -1788,6 +1933,7 @@ export function createWakeService(
       unsubscribeActivity?.();
       unsubscribeDraft?.();
       unsubscribeHostDraft?.();
+      unsubscribeProgramStatus?.();
       unsubscribeExit?.();
       mailDirty.clear();
       seenWorks.clear();

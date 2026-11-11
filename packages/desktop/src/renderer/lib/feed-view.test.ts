@@ -18,6 +18,23 @@ const REF: SessionRef = { projectPath: '/tmp/p', workId: 'w-01', sessionId: 's-0
 const FEED = new Set(['hello', 'feed.snapshot', 'feed.subscribe', 'feed.unsubscribe']);
 const NO_FEED = new Set(['hello', 'pty.attach']);
 
+describe('feedAvailable by family', () => {
+  it('the gate opens for family qwen with the host feature and a CLI at the Qwen minimum; an unknown family stays closed', () => {
+    const qwen = new Set(['feed-qwen']);
+    expect(feedUnavailableReason({ hostMethods: FEED, features: qwen, provider: 'qwen', family: 'qwen', version: '0.27.2' })).toBeNull();
+    expect(feedUnavailableReason({ hostMethods: FEED, features: qwen, provider: 'qwen', family: 'qwen', version: '0.27.1' })).toBe('old-version');
+    expect(feedUnavailableReason({ hostMethods: FEED, features: qwen, provider: 'qwen', family: 'qwen', version: null })).toBe('unknown-version');
+    expect(feedUnavailableReason({ hostMethods: FEED, features: new Set(), provider: 'qwen', family: 'qwen', version: '0.27.2' })).toBe('host-unsupported');
+    expect(feedUnavailableReason({ hostMethods: FEED, provider: 'qwen', family: 'qwen', version: '0.27.2' })).toBe('host-unsupported');
+    expect(feedUnavailableReason({ hostMethods: FEED, features: qwen, provider: 'x', family: 'mystery' as never, version: '1.0.0' })).toBe('provider-unsupported');
+    expect(feedUnavailableReason({ hostMethods: FEED, provider: 'codex', family: 'codex', version: null, features: new Set() })).toBe('host-unsupported');
+  });
+
+  it('a qwen tab waits for the first providers snapshot instead of flashing the terminal', () => {
+    expect(feedAvailability({ hostMethods: FEED, features: new Set(['feed-qwen']), provider: 'qwen', family: 'qwen', version: null, loaded: false })).toBeNull();
+  });
+});
+
 describe('feedAvailable', () => {
   it('Chat доступен доверенному семейству Claude, а версия берётся у выбранной записи', () => {
     expect(feedAvailable({ hostMethods: FEED, provider: 'glm', family: 'claude', version: '2.1.287' })).toBe(true);

@@ -432,6 +432,7 @@ export function createWorksService(
       const sessions = work.map.sessions.map((session) => {
         const publicSession = { ...session };
         delete publicSession.codexThreadBinding;
+        delete publicSession.qwenTranscript;
         return publicSession;
       });
       return {

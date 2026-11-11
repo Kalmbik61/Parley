@@ -1,5 +1,6 @@
 import type { SchemaAdapter } from './adapter-v1.js';
 import { extendCodexSessionIndex, type CodexIndexState } from './codex/index-session.js';
+import { extendQwenSessionIndex, type QwenIndexState } from './qwen/index-session.js';
 import type { DiscoveredSubagent } from './discover.js';
 import { DEFAULT_TIMELINE_READER, isMissingFile, type TimelineReader } from './jsonl-tail.js';
 import { extendClaudeSessionIndex, type ClaudeIndexState, type SessionIndex } from './session-index.js';
@@ -26,6 +27,8 @@ export interface SessionIndexer {
   ): Promise<SessionIndex>;
   /** SessionIndex rollout-лога Codex: так же, дочитыванием. */
   codex(file: string): Promise<SessionIndex>;
+  /** SessionIndex of a Qwen Code transcript: the same, by reading only what was appended. */
+  qwen(file: string): Promise<SessionIndex>;
 }
 
 /**
@@ -88,5 +91,7 @@ export function createSessionIndexer({
       ),
     codex: (file) =>
       extend<CodexIndexState>(`codex\u0000${file}`, (previous) => extendCodexSessionIndex(previous, file, { reader })),
+    qwen: (file) =>
+      extend<QwenIndexState>(`qwen\u0000${file}`, (previous) => extendQwenSessionIndex(previous, file, { reader })),
   };
 }

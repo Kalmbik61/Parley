@@ -48,6 +48,27 @@ describe('openEvents', () => {
     expect(events?.[1]?.notificationType).toBe('permission_prompt');
   });
 
+  it('qwen: a line keeps its own payload timestamp, not the journal mtime; other families and lines without it keep mtime', async () => {
+    const old = '2026-11-11T10:00:00.000Z';
+    await writeFile(
+      journal(),
+      raw({ hook_event_name: 'UserPromptSubmit', prompt: 'old', timestamp: old }) +
+        raw({ hook_event_name: 'Stop' }) +
+        raw({ hook_event_name: 'Stop', timestamp: 'not a date' }),
+      'utf8',
+    );
+
+    const [stamped, bare, broken] = (await openEvents(dir, 'qwen').read(SESSION)) ?? [];
+    expect(stamped).toMatchObject({ at: old, atFromPayload: true });
+    for (const event of [bare, broken]) {
+      expect(event?.at).not.toBe(old);
+      expect(event?.atFromPayload).toBeUndefined();
+    }
+    const [claude] = (await openEvents(dir, 'claude').read(SESSION)) ?? [];
+    expect(claude?.at).not.toBe(old);
+    expect(claude?.atFromPayload).toBeUndefined();
+  });
+
   // Пункт 7.
   it('пропускает битые строки и строки без имени события', async () => {
     await writeFile(

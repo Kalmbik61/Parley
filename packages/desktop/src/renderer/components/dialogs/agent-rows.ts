@@ -59,6 +59,8 @@ export const blankRow = (key: number, provider: string | null = null): AgentRow 
  * диалогом (`providers.changed`): исчезнувшая модель не показывается выбранной и не уходит в `sessions.create`.
  */
 export function chosenModel(row: Pick<AgentRow, 'model'>, info: ProviderOption | undefined): string | null {
+  // Qwen Code has no model catalog: a typed model id goes as typed (spec 2026-11-11, 3.6); the host checks its syntax.
+  if (info?.family === 'qwen' && (info.models ?? []).length === 0) return row.model;
   return row.model !== null && (info?.models ?? []).some((option) => option.id === row.model) ? row.model : null;
 }
 

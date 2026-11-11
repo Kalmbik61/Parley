@@ -31,6 +31,8 @@ import {
   applyHookEvent,
   applyCodexHookEvent,
   applyCodexRecords,
+  applyQwenRecords,
+  feedFromQwenTranscript,
   claudeProjectRoots,
   closeFeedTurn,
   codexAgentMeta,
@@ -44,6 +46,7 @@ import {
   forEachJsonlRecord,
   interruptedAt,
   isCodexThreadBinding,
+  byFamily,
   isClaudeCode,
   loadConfig,
   parleyHome,
@@ -55,6 +58,7 @@ import {
 import type {
   CodexAgentMeta,
   CodexCursor,
+  QwenCursor,
   FeedCard,
   FeedCardState,
   FeedDecision,
@@ -80,6 +84,7 @@ import type { PendingHooks } from '../hooks/pending.js';
 import type { PtyManager } from '../pty/pty-manager.js';
 import type { WorksService } from '../works/works-service.js';
 import { createRolloutTail } from './codex-source.js';
+import { createQwenTail } from './qwen-source.js';
 import { createFeedImageStore } from './image-store.js';
 import { stashClaudeRecord, stashCodexRecord, stashHookBody } from './stash.js';
 
@@ -230,6 +235,14 @@ interface CodexAgentTrack {
   done: boolean;
 }
 
+/** Qwen Code feed: the bound transcript read by its tail (spec 2026-11-11, 3.5). Hooks feed state only, never items. */
+interface QwenFeed {
+  tail: ReturnType<typeof createQwenTail>;
+  cursor: QwenCursor;
+  /** Tails are read one at a time: the position is the tail's own. */
+  queue: Promise<void>;
+}
+
 interface CodexFeed {
   tail: ReturnType<typeof createRolloutTail>;
   cursor: CodexCursor;
@@ -310,7 +323,14 @@ interface SessionFeed {
   transcriptPath: string | null;
   /** Состояние ленты Codex: журнал сессии и журналы её агентов. */
   codex?: CodexFeed;
-  /** Опрос журналов Codex, пока есть подписчики. */
+  /** Qwen Code: state of the feed read from the bound transcript. */
+  qwen?: QwenFeed;
+  /**
+   * Qwen Code: when its last turn ended (Stop hook or the journal going idle). The transcript has no end-of-turn record, so
+   * this closes the turn it leaves open; it survives reseeding and a reconnect.
+   */
+  qwenStoppedAt?: string | undefined;
+  /** Опрос журналов Codex и Qwen, пока есть подписчики. */
   codexPoll?: NodeJS.Timeout | undefined;
   /** Кто отвечает на одобрения Codex: `null` — пока неизвестно (у Claude всегда). */
   decisions: FeedDecisions | null;
@@ -791,8 +811,23 @@ export function createFeedService(
     } catch {
       provider = undefined;
     }
-    if (provider === 'codex') {
+    const hookFamily = provider === undefined ? 'claude' : byFamily(provider, { claude: 'claude' as const, codex: 'codex' as const, qwen: null, neutral: null });
+    if (hookFamily === 'codex') {
       onCodexHook(request);
+      return;
+    }
+    // Qwen Code, null or unknown family: no Claude hook handling, and the hook is answered at once — Qwen waits for the
+    // HTTP answer (PermissionRequest and PreToolUse up to an hour) before it goes on. A Qwen hook creates no feed items
+    // and no permission cards (spec 2026-11-11, 3.5, Feed ownership); it only prompts the transcript to be read now.
+    if (hookFamily === null) {
+      request.respond(EMPTY_HOOK_RESPONSE);
+      if (provider !== undefined && byFamily(provider, { claude: false, codex: false, qwen: true, neutral: false })) {
+        if (body['hook_event_name'] === 'Stop' || body['hook_event_name'] === 'StopFailure') {
+          const stamp = textOf(body['timestamp']);
+          feedOf(ref).qwenStoppedAt = stamp !== null && !Number.isNaN(Date.parse(stamp)) ? new Date(stamp).toISOString() : at();
+        }
+        void seedAside(ref);
+      }
       return;
     }
     const feed = feedOf(ref);
@@ -848,7 +883,12 @@ export function createFeedService(
     if (foreground) promoteSeed(key);
     const existing = coldReads.get(key);
     if (existing !== undefined) return existing;
-    const run = provider === 'codex' ? seedCodex(feed, foreground) : seedClaude(feed, provider, foreground);
+    const run = byFamily(provider, {
+      claude: () => seedClaude(feed, provider, foreground),
+      codex: () => seedCodex(feed, foreground),
+      qwen: () => seedQwen(feed, foreground),
+      neutral: () => Promise.resolve(),
+    })();
     if (feed.seeding === undefined) return run;
     const held = run.finally(() => {
       if (coldReads.get(key) === held) coldReads.delete(key);
@@ -988,6 +1028,102 @@ export function createFeedService(
     })();
     feed.seeding = run.then(() => (stale && feedCurrent(feed) ? seedCodex(feed, foreground) : undefined));
     return feed.seeding;
+  }
+
+  /**
+   * Qwen Code seed: the transcript the log index trusts for the session (its `sessionId` and `cwd` match the binding),
+   * parsed by the A4 parser. The tail stays for polling. A transcript the index does not know yet seeds nothing; the next
+   * poll or hook tries again. The Chat view of Qwen has no permission cards: the terminal answers approvals.
+   */
+  function seedQwen(feed: SessionFeed, foreground = false): Promise<void> {
+    if (feed.seeding !== undefined) return feed.seeding;
+    const file = deps.activity.logFile(feed.ref);
+    if (file === null) return Promise.resolve();
+    feed.seeding = (async () => {
+      const release = await seedSlot(refKey(feed.ref), foreground);
+      try {
+        if (!feedCurrent(feed)) return;
+        const tail = createQwenTail(file);
+        const records = await tail.read();
+        if (!feedCurrent(feed)) return;
+        const seeded = feedFromQwenTranscript(records, { limit: maxItems });
+        // A turn left open by the transcript is closed only without a live process (a host restart killed it with the host).
+        const state = deps.pty.get(feed.ref) === undefined ? closeBrokenTurn(seeded.state) : closedByQwenStop(feed, seeded.state);
+        feed.state = state;
+        feed.qwen = { tail, cursor: seeded.cursor, queue: Promise.resolve() };
+        feed.sizes = new Map();
+        feed.bytes = 0;
+        for (const item of state.items) {
+          const size = itemBytes(item);
+          feed.sizes.set(item.id, size);
+          feed.bytes += size;
+        }
+        trim(feed, false);
+        setDecisions(feed, 'terminal');
+        if (seeded.cursor.skipped > 0) {
+          log.info('qwen feed: unknown transcript records skipped', { sessionId: feed.ref.sessionId, skipped: seeded.cursor.skipped });
+        }
+      } catch (error) {
+        log.warn('qwen feed: transcript not read', { sessionId: feed.ref.sessionId, error: String(error) });
+      } finally {
+        release();
+        feed.seeded = true;
+        feed.seeding = undefined;
+      }
+    })();
+    return feed.seeding;
+  }
+
+  /** The session is bound to another transcript than the one the feed was seeded from: seed again. */
+  async function reseedQwenIfRebound(feed: SessionFeed): Promise<void> {
+    const qwen = feed.qwen;
+    if (qwen === undefined || feed.seeding !== undefined) return;
+    const file = deps.activity.logFile(feed.ref);
+    if (file === null || file === qwen.tail.file) return;
+    feed.state = emptyFeedState();
+    feed.sizes = new Map();
+    feed.bytes = 0;
+    delete feed.qwen;
+    for (const clients of [subscribers.get(refKey(feed.ref))]) {
+      if (clients !== undefined && clients.size > 0) feed.modeChanged = true;
+    }
+    await seedQwen(feed);
+  }
+
+  /** The turn the transcript leaves open is closed by the recorded end of the turn, unless a newer prompt followed it. */
+  function closedByQwenStop(feed: SessionFeed, state: FeedState): FeedState {
+    const stoppedAt = feed.qwenStoppedAt;
+    if (stoppedAt === undefined || !turnActive(state.items)) return state;
+    const prompt = state.items.findLast((item) => item.kind === 'prompt');
+    if (prompt !== undefined && prompt.at > stoppedAt) return state;
+    return closeFeedTurn(state, stoppedAt).state;
+  }
+
+  function closeQwenTurn(feed: SessionFeed): void {
+    const closed = closedByQwenStop(feed, feed.state);
+    if (closed !== feed.state) commit(feed, closeFeedTurn(feed.state, feed.qwenStoppedAt ?? at()));
+  }
+
+  /** New transcript records of a Qwen session go into the feed. */
+  function pollQwen(feed: SessionFeed): Promise<void> {
+    const qwen = feed.qwen;
+    if (qwen === undefined) return Promise.resolve();
+    const run = qwen.queue.then(async () => {
+      if (!feedCurrent(feed) || feed.qwen !== qwen) return;
+      const records = await qwen.tail.read();
+      // The feed was seeded again from another transcript while the tail read: these records are foreign.
+      if (!feedCurrent(feed) || feed.qwen !== qwen) return;
+      if (records.length === 0) {
+        closeQwenTurn(feed);
+        return;
+      }
+      const { update, cursor } = applyQwenRecords(feed.state, records, qwen.cursor);
+      qwen.cursor = cursor;
+      commit(feed, update);
+      closeQwenTurn(feed);
+    });
+    qwen.queue = run.catch(() => {});
+    return run;
   }
 
   /**
@@ -1375,6 +1511,14 @@ export function createFeedService(
         flush(known);
         return;
       }
+    } else if (provider !== undefined && byFamily(provider, { claude: false, codex: false, qwen: true, neutral: false })) {
+      const known = feedOf(ref);
+      if (known.qwen !== undefined) {
+        await reseedQwenIfRebound(known);
+        await pollQwen(known);
+        flush(known);
+        return;
+      }
     } else if (!isClaudeCode(provider)) return;
     const feed = feedOf(ref);
     if (feed.live || feed.seeded || feed.seeding !== undefined) return;
@@ -1428,6 +1572,8 @@ export function createFeedService(
     const notFound = (): HostError =>
       new HostError('not_found', `no transcript for agent ${agentId}`);
     if (!SAFE_AGENT_ID.test(agentId)) throw notFound();
+    // Qwen Code has no subagent transcripts in the feed: never fall through to the Claude layout.
+    if (byFamily(sessionOf(ref).provider, { claude: false, codex: false, qwen: true, neutral: false })) throw notFound();
     if (sessionOf(ref).provider === 'codex') {
       const file = deps.activity.childLogFile(ref, agentId);
       if (file === null) throw notFound();
@@ -1469,6 +1615,14 @@ export function createFeedService(
     // отдала бы хуку `{}`, Codex ушёл бы в окно TUI, и `exec` ждал бы там без срока (разбор 2026-10-16).
     try {
       if (sessionOf(feed.ref).provider === 'codex') return;
+      // Qwen Code has no feed cards to settle (approvals are answered in the terminal). Its journal going idle ends the turn.
+      if (byFamily(sessionOf(feed.ref).provider, { claude: false, codex: false, qwen: true, neutral: false })) {
+        if (turnActive(feed.state.items)) {
+          feed.qwenStoppedAt = at();
+          void seedAside(feed.ref);
+        }
+        return;
+      }
     } catch {
       // Сессии уже нет в работах — поведение прежнее.
     }
@@ -1824,7 +1978,8 @@ export function createFeedService(
         subscribers.set(key, clients);
       }
       clients.add(client);
-      if (!stopped && sessionOf(ref).provider === 'codex') startCodexPoll(feedOf(ref));
+      const subscribed = sessionOf(ref).provider;
+      if (!stopped && (subscribed === 'codex' || byFamily(subscribed, { claude: false, codex: false, qwen: true, neutral: false }))) startCodexPoll(feedOf(ref));
     },
 
     unsubscribe(ref, client) {
@@ -1899,7 +2054,8 @@ export function createFeedService(
       if (handle === undefined) throw new HostError('not_found', 'session is not running');
       deps.pty.write(ref, ESC);
       // У Codex приглашения `❯` и возвращённого в поле промпта нет: ход закроет запись `turn_aborted`.
-      if (sessionOf(ref).provider === 'codex') return;
+      // Qwen Code: no `❯` prompt check as Claude's; the next transcript record or hook settles the turn.
+      if (sessionOf(ref).provider === 'codex' || byFamily(sessionOf(ref).provider, { claude: false, codex: false, qwen: true, neutral: false })) return;
       const feed = feeds.get(refKey(ref));
       // Хода в ленте нет — присматривать не за чем: Esc ушёл, остальное за CLI.
       if (stopped || feed === undefined || feed.state.turnStartedAt === null) return;

@@ -165,7 +165,7 @@ describe('письма вместе с указателем', () => {
 
   it('сессия Codex и сессия без записи в карте: не наш случай', async () => {
     await say('письмо');
-    for (const provider of ['codex', undefined]) {
+    for (const provider of ['codex', 'qwen', 'mystery', undefined]) {
       const { inline } = make({ provider: () => provider });
       expect(inline.handle(hook(POINTER(1)).request)).toBe(false);
     }

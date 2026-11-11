@@ -1,10 +1,11 @@
 import { createServer as createNetServer } from 'node:net';
 import { performance } from 'node:perf_hooks';
 import type { Server, Socket } from 'node:net';
-import { startsShellLine } from '@parley/core';
+import { RoleChoiceError, startsShellLine } from '@parley/core';
 import {
   COMPACT_WORKS_FEATURE,
   FEED_CODEX_FEATURE,
+  FEED_QWEN_FEATURE,
   LineDecoder,
   LineTooLongError,
   PROTOCOL_VERSION,
@@ -24,6 +25,13 @@ import type { Client } from './client.js';
 import type { AnyHandler, AnyNotificationHandler, HostContext, RequestInfo } from './context.js';
 import { HostError } from './errors.js';
 import { resolvePreparedWorksSyncReply } from './works/works-sync.js';
+
+const ROLE_CHOICE_MESSAGES: Record<RoleChoiceError['code'], string> = {
+  'role-missing': 'The selected role was not found',
+  'role-provider-mismatch': 'The selected role is not available for this provider',
+  'role-permissions-unavailable': 'This role needs permissions (such as read-only) that this provider cannot enforce yet',
+  'role-context-unverified': 'The selected role context could not be verified',
+};
 
 export interface ServerOptions {
   context: HostContext;
@@ -112,7 +120,7 @@ interface HelloParams {
  * Что хост умеет сверх протокола 1: окно по этому списку знает, что снимок работ компактный, что лента Chat есть у Codex и
  * что письма приходят событием `rooms.mail`, а не вместе со снимком.
  */
-const HOST_FEATURES = [COMPACT_WORKS_FEATURE, FEED_CODEX_FEATURE, ROOMS_MAIL_FEATURE, REMOTE_POLICY_FEATURE];
+const HOST_FEATURES = [COMPACT_WORKS_FEATURE, FEED_CODEX_FEATURE, FEED_QWEN_FEATURE, ROOMS_MAIL_FEATURE, REMOTE_POLICY_FEATURE];
 
 const REMOTE_METHOD_SET: ReadonlySet<string> = new Set(REMOTE_METHODS);
 const REMOTE_NOTIFICATION_SET: ReadonlySet<string> = new Set(REMOTE_NOTIFICATIONS);
@@ -594,6 +602,12 @@ function handleMessage(raw: unknown, client: Client, options: ServerOptions): vo
           : { code: error.code, message: error.message, data: error.data };
         client.send({ id, error: errorField });
         logIfSlow({ ok: false, code: error.code });
+        return;
+      }
+      // Отказ роли — ошибка запроса, а не сбой хоста: понятное сообщение вместо `internal`.
+      if (error instanceof RoleChoiceError) {
+        client.send({ id, error: { code: 'bad_request', message: ROLE_CHOICE_MESSAGES[error.code], data: { reason: error.code } } });
+        logIfSlow({ ok: false, code: 'bad_request' });
         return;
       }
       const message = error instanceof Error ? error.message : String(error);

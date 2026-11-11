@@ -45,6 +45,22 @@ export interface CliUpdate {
   checkedAt: string;
 }
 
+/**
+ * Состояние CLI провайдера в `providers.list.cli` (спека Qwen, §4.4): видно всегда, не только когда есть новая версия.
+ * `method` — способ установки (`null`, пока CLI не установлен); `checkedAt` — ISO-время последней проверки источника
+ * (`null` — не проверяли); `lastError` — почему последняя проверка не удалась (`offline`, `http 503`, `parse`).
+ */
+export interface CliStatus {
+  installed: string | null;
+  latest: string | null;
+  method: string | null;
+  checkedAt: string | null;
+  state: 'missing' | 'up-to-date' | 'available' | 'skipped' | 'unknown';
+  lastError: string | null;
+  /** Когда проверка в последний раз удалась; `checkedAt` — последняя попытка, в том числе неудачная. Старый хост поля не шлёт. */
+  lastSuccessAt?: string | null;
+}
+
 export type ProviderCheckReason = (typeof PROVIDER_CHECK_REASONS)[number];
 
 /**

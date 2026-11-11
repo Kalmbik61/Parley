@@ -130,6 +130,15 @@ describe('AgentIcon — аккаунты подписки (спека подпи
     expect(imageOf(container)?.getAttribute('src')).toMatch(/claude\.svg$/);
   });
 
+  it('an account row with an unknown family gets the neutral Parley icon; a codex family gets the Codex icon', () => {
+    useProvidersStore.setState({ providers: [row('custom-claude-2', account, 'mystery' as never), row('custom-claude-3', account, 'codex' as never)] });
+    const unknown = render(<AgentIcon provider="custom-claude-2" />);
+    expect(imageOf(unknown.container)?.getAttribute('src')).toMatch(/parley\.svg$/);
+    unknown.unmount();
+    const codex = render(<AgentIcon provider="custom-claude-3" />);
+    expect(imageOf(codex.container)?.getAttribute('src')).toMatch(/codex/);
+  });
+
   it('свой провайдер с адресом (в том числе без kind у хоста до подписок) — значок Parley', () => {
     useProvidersStore.setState({ providers: [row('custom-kimi', endpoint), row('custom-glm2', { ...endpoint, kind: 'endpoint' })] });
     const kimi = render(<AgentIcon provider="custom-kimi" />);

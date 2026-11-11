@@ -6,7 +6,7 @@ import { buildRoleCatalog, resolveRoleChoice, RoleChoiceError, type RoleChoice, 
 import { discoverCodexRoles } from '../roles/codex.js';
 import { readCodexRoleContext, type CodexContextOptions } from '../roles/context.js';
 import { findRunnerBinary } from './find-binary.js';
-import { claudeConfigDirFor, isClaudeCode, loadProviders, type ProviderEntry } from '../providers.js';
+import { byFamily, claudeConfigDirFor, isClaudeCode, loadProviders, providerFamily, type ProviderEntry } from '../providers.js';
 import type { RoleCatalog } from '../roles/types.js';
 import type { SessionRole, WorkSession } from './types.js';
 
@@ -126,21 +126,31 @@ export async function sessionRoleCatalog(cwd: string, options: SessionRoleCatalo
 /** Prove native option positions with the supported default template grammar only.
  * Unknown arity, option terminators and positional channel values cannot prove delivery.
  * Other providers may explicitly use the same Claude-like layer grammar for role text.
+ * Qwen Code has its own (spec 2026-11-11, 3.6): `--session-id`, `--resume`, `--approval-mode`, `--append-system-prompt`
+ * and `-m`, each with a value; no first-prompt flag (3.4 amendment). Anything else fails closed.
  */
-function nativeRolePairs(template: readonly string[], codex: boolean): Map<string, string[]> | null {
-  const valueFlags = codex
-    ? new Set(['-c', '--config', '--model', '-a'])
-    : new Set(['--session-id', '--resume', '--mcp-config', '--settings', '--append-system-prompt',
-      '--dangerously-load-development-channels', '--model', '--effort', '--agent', '--disallowedTools']);
+type RoleGrammar = 'claude' | 'codex' | 'qwen';
+const ROLE_VALUE_FLAGS: Readonly<Record<RoleGrammar, ReadonlySet<string>>> = {
+  codex: new Set(['-c', '--config', '--model', '-a']),
+  claude: new Set(['--session-id', '--resume', '--mcp-config', '--settings', '--append-system-prompt',
+    '--dangerously-load-development-channels', '--model', '--effort', '--agent', '--disallowedTools']),
+  qwen: new Set(['--session-id', '--resume', '--approval-mode', '--append-system-prompt', '-m']),
+};
+const roleGrammarOf = (entry: ProviderEntry): RoleGrammar =>
+  entry.id === 'codex' ? 'codex' : providerFamily(entry) === 'qwen' ? 'qwen' : 'claude';
+
+function nativeRolePairs(template: readonly string[], grammar: RoleGrammar): Map<string, string[]> | null {
+  const codex = grammar === 'codex';
+  const valueFlags = ROLE_VALUE_FLAGS[grammar];
   const pairs = new Map<string, string[]>();
   for (let i = 0; i < template.length; i++) {
     const flag = template[i]!;
     // `{leanFlags}` — готовые флаги облегчённого запуска отдельным элементом, у Claude и у Codex.
-    if (flag === '{leanFlags}' || (codex && (flag === '--no-daemon' || flag === '{codexHooks}' || flag === '{approvals}' || flag === '{trust}'))) continue;
+    if ((flag === '{leanFlags}' && grammar !== 'qwen') || (codex && (flag === '--no-daemon' || flag === '{codexHooks}' || flag === '{approvals}' || flag === '{trust}'))) continue;
     if (codex && i === 0 && flag === 'resume' && template[i + 1] === '{providerSessionId}') { i++; continue; }
-    // `--` прямо перед хвостовым `{prompt}` — закрывает вариадические флаги, а не канал роли.
-    if (flag === '--' && template[i + 1] === '{prompt}' && i + 2 === template.length) { i++; continue; }
-    if (flag === '{prompt}' && i === template.length - 1) continue;
+    // `--` прямо перед хвостовым `{prompt}` — закрывает вариадические флаги, а не канал роли. Qwen has neither.
+    if (grammar !== 'qwen' && flag === '--' && template[i + 1] === '{prompt}' && i + 2 === template.length) { i++; continue; }
+    if (grammar !== 'qwen' && flag === '{prompt}' && i === template.length - 1) continue;
     if (!valueFlags.has(flag)) return null;
     const value = template[++i];
     if (value === undefined || value.startsWith('-')) return null;
@@ -182,7 +192,7 @@ export function assertRoleDelivery(entry: ProviderEntry, choice: ResolvedRoleCho
     }
     const required = choice.nativeAgent !== null || choice.roleText !== '' || sandboxRequired || choice.readOnly;
     if (!required) continue; // Plain custom runners keep their existing compatibility/warning behavior.
-    const pairs = nativeRolePairs(template, entry.id === 'codex');
+    const pairs = nativeRolePairs(template, roleGrammarOf(entry));
     if (!pairs) throw new RoleChoiceError('role-permissions-unavailable');
     // A native Claude body may use --agent alone. Any present common layer must still use its native route.
     if (template.includes('{systemPrompt}') && (entry.id === 'codex' || !singleRoleValue(pairs, '--append-system-prompt', '{systemPrompt}'))) throw new RoleChoiceError('role-permissions-unavailable');
@@ -223,7 +233,8 @@ export async function roleForProvider(cwd: string, entry: ProviderEntry, role: S
       throw error;
     }
   };
-  const source = entry.id === 'codex' ? 'codex' : isClaudeCode(entry) ? 'claude' : null;
+  // Qwen Code has no native roles: a Claude or Codex role does not carry over (spec 2026-11-11, 3.6, D10).
+  const source = byFamily(entry, { claude: 'claude' as const, codex: 'codex' as const, qwen: null, neutral: null });
   if (source === role.source) return await accepts(role, 'existing') ? role : null;
   if (source === null) return null;
   const sameName: SessionRole = { source, name: role.name };

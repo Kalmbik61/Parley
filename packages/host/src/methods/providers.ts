@@ -1,8 +1,10 @@
 import {
+  CLI_TOOLS,
   clearSecret,
   syncApiKeyApproval,
   loadProviders,
   providerReadiness,
+  qwenAuthHints,
   readSecret,
   SecretFormatError,
   secretHint,
@@ -10,7 +12,7 @@ import {
   supportsEffort,
   writeSecret,
 } from '@parley/core';
-import type { ProviderEntry, SecretId } from '@parley/core';
+import type { CliTool, ProviderEntry, SecretId } from '@parley/core';
 import type { CustomProviderInfo } from '@parley/protocol';
 import type { Handler } from '../context.js';
 import { HostError } from '../errors.js';
@@ -25,6 +27,7 @@ import type { ProviderVersions } from '../providers/versions.js';
 import type { CliUpdates } from '../providers/updates.js';
 import { UPDATE_COMMANDS, type UpdateCommand } from '../providers/updates.js';
 import type { CliUpdateRunner } from '../providers/update-run.js';
+import type { CliInstaller } from '../providers/install-run.js';
 
 /**
  * Состояние входа аккаунтов подписки для `providers.list` (спека подписок 5.5): его даёт служба входа, пока её нет —
@@ -95,7 +98,7 @@ export function createProvidersList(
   catalog?: Pick<CodexCatalog, 'refreshIfStale'>,
   customCheck?: CustomCheckService,
   auth?: AccountAuth,
-  updates?: Pick<CliUpdates, 'current'>,
+  updates?: Pick<CliUpdates, 'current'> & Partial<Pick<CliUpdates, 'status'>>,
 ): Handler<'providers.list'> {
   return async () => {
     catalog?.refreshIfStale();
@@ -150,6 +153,8 @@ export function createProvidersList(
           argsOverridden: entry.argsOverridden === true,
           ...(check === undefined ? {} : { check }),
           ...(custom === undefined ? {} : { custom }),
+          // Hints only, from `qwenAuthHints`: presence and two non-secret strings (spec 2026-11-11, 3.6).
+          ...(entry.family === 'qwen' && entry.custom === undefined ? { qwenAuth: await qwenAuthHints() } : {}),
         };
       }),
     );
@@ -164,11 +169,14 @@ export function createProvidersList(
           const version = versions?.get(command) ?? null;
           // `update` читает только кэш на диске: сеть спрашивает фоновая проверка, а не этот ответ.
           const update = updates === undefined ? undefined : await updates.current(command, version);
+          // `cli` — состояние для строки «всегда видно» (спека Qwen, §4.4); тоже только из кэша.
+          const cli = (await updates?.status?.(command, version)) ?? undefined;
           return {
             ...item,
             version,
             limits: limits?.get(item.id) ?? null,
             ...(update === undefined ? {} : { update }),
+            ...(cli === undefined ? {} : { cli }),
           };
         }),
       ),
@@ -213,6 +221,74 @@ export function createProvidersUpdate(runner?: CliUpdateRunner): Handler<'provid
     }
     if (result.state === 'done') request.host.broadcast('providers.changed', { provider });
     return result;
+  };
+}
+
+/**
+ * Установить CLI провайдера (спека Qwen, §4.2). Провайдер выбирает команду реестра (GLM и свои провайдеры делят
+ * `claude`); CLI таблицы, которого ещё нет в реестре, выбирается по своему имени. Из запроса в установку не идёт ничего,
+ * кроме этой команды. После установки окно узнаёт о новом CLI событием `providers.changed`.
+ */
+export function createProvidersInstall(installer?: CliInstaller): Handler<'providers.install'> {
+  return async ({ provider }, request) => {
+    const registry = await loadProviders();
+    const entry = Object.hasOwn(registry, provider) ? registry[provider] : undefined;
+    const command = entry?.runner.command ?? provider;
+    if (installer === undefined || !Object.hasOwn(CLI_TOOLS, command)) {
+      throw new HostError('bad_request', 'Provider CLI cannot be installed from Parley');
+    }
+    let result;
+    try {
+      result = await installer.install(command as CliTool, `${request.client.name} (${request.client.id})`);
+    } catch {
+      throw new HostError('internal', 'Unable to start the provider install');
+    }
+    if (result.state === 'done') request.host.broadcast('providers.changed', { provider });
+    return result;
+  };
+}
+
+/** Не чаще одной явной проверки версий на CLI за это время. */
+export const CHECK_UPDATES_MIN_INTERVAL_MS = 10_000;
+
+/**
+ * «Проверить сейчас» (спека Qwen, §4.4): свежая проба версии CLI и свежий запрос последней версии. Провайдер выбирает
+ * команду реестра (GLM и свои провайдеры делят `claude`). Не чаще раза в 10 с на CLI: в пределах окна отдаётся текущее
+ * состояние без проверки и без события. После проверки окно узнаёт об изменении событием `providers.changed`.
+ */
+export function createProvidersCheckUpdates(
+  versions?: ProviderVersions,
+  updates?: Pick<CliUpdates, 'checkOne' | 'status'>,
+  now: () => number = Date.now,
+): Handler<'providers.checkUpdates'> {
+  const lastCheck = new Map<UpdateCommand, number>();
+  return async ({ provider }, request) => {
+    const registry = await loadProviders();
+    const entry = Object.hasOwn(registry, provider) ? registry[provider] : undefined;
+    const command = entry?.runner.command as UpdateCommand | undefined;
+    if (updates === undefined || command === undefined || !UPDATE_COMMANDS.includes(command)) {
+      throw new HostError('bad_request', 'Provider CLI cannot be checked from Parley');
+    }
+    const previous = lastCheck.get(command);
+    if (previous !== undefined && now() - previous < CHECK_UPDATES_MIN_INTERVAL_MS) {
+      const cli = await updates.status(command, versions?.get(command) ?? null);
+      if (cli === null) throw new HostError('internal', 'Unable to read the CLI status');
+      return { cli };
+    }
+    // Метка ставится до ожидания: параллельные вызовы не запускают вторую проверку.
+    lastCheck.set(command, now());
+    await versions?.ready;
+    let installed: string | null;
+    try {
+      installed = (await versions?.fresh(command, { force: true })) ?? null;
+      await updates.checkOne(command, { force: true });
+    } catch {
+      throw new HostError('internal', 'Unable to check the provider CLI version');
+    }
+    const cli = await updates.status(command, installed);
+    if (cli === null) throw new HostError('internal', 'Unable to read the CLI status');
+    request.host.broadcast('providers.changed', { provider });
+    return { cli };
   };
 }
 

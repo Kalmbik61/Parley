@@ -122,12 +122,15 @@ describe('providers.list: модели, усилие и версия CLI (диз
     expect(byId(providers, 'codex')).toMatchObject({ label: 'Codex', effort: true, version: '0.44.0' });
     expect(byId(providers, 'glm')).toMatchObject({ label: 'GLM', effort: true, version: '2.1.276', available: false });
     expect(byId(providers, 'glm').models?.length).toBeGreaterThan(0);
+    expect(byId(providers, 'claude').family).toBe('claude');
+    expect(byId(providers, 'codex').family).toBe('codex');
+    expect(byId(providers, 'glm').family).toBe('claude');
     expect(typeof byId(providers, 'claude').available).toBe('boolean');
   });
 
   it('без пробы версий нет: null у всех — это окно и тесты, где команды не запускаются', async () => {
     const providers = await list(await boot());
-    expect(providers.map((provider) => provider.version)).toEqual([null, null, null]);
+    expect(providers.map((provider) => provider.version)).toEqual([null, null, null, null]);
   });
 
   it('проба падает — версия null, список отвечает', async () => {
@@ -155,7 +158,7 @@ describe('providers.list: модели, усилие и версия CLI (диз
     await list(client);
     await list(client);
     await list(client);
-    expect(calls.sort()).toEqual(['claude', 'codex']);
+    expect(calls.sort()).toEqual(['claude', 'codex', 'qwen']);
   });
 
   it('первый providers.list дожидается пробы, а не отвечает пустой версией', async () => {
@@ -547,7 +550,7 @@ describe('providers.list: аккаунт подписки и состояние 
       custom: { kind: 'claude-account', link: false, signedIn: true, signingIn: false },
     });
     expect(row?.custom).toMatchObject({ folder: expect.stringContaining('custom-claude-2') });
-    expect(providers.map((provider) => provider.id)).toEqual(['claude', 'codex', 'glm', 'custom-claude-2']);
+    expect(providers.map((provider) => provider.id)).toEqual(['claude', 'codex', 'glm', 'qwen', 'custom-claude-2']);
     expect(asked).toEqual(['custom-claude-2']);
   });
 
@@ -559,5 +562,32 @@ describe('providers.list: аккаунт подписки и состояние 
     expect((await accountRows(null, true)).row).toMatchObject({
       available: false, needs: 'sign-in', custom: { signedIn: null, signingIn: true },
     });
+  });
+});
+
+
+describe('providers.list: Qwen Code sign-in hints (spec 2026-11-11, 3.6)', () => {
+  it('qwen carries hints only (presence and two non-secret strings); no secret leaves the host; other rows have none', async () => {
+    const qwenHome = await mkdtemp(path.join(tmpdir(), 'parley-qwen-home-'));
+    homes.push(qwenHome);
+    await writeFile(
+      path.join(qwenHome, 'settings.json'),
+      JSON.stringify({
+        security: { auth: { selectedType: 'openai', apiKey: 'SECRET-SETTINGS-KEY' } },
+        env: { OPENAI_API_KEY: 'SECRET-SETTINGS-ENV' },
+        modelProviders: [{ apiKey: 'SECRET-PROVIDER-KEY' }],
+        model: { name: 'qwen3-coder-plus' },
+      }),
+    );
+    await writeFile(path.join(qwenHome, 'oauth_creds.json'), '{"access_token":"SECRET-OAUTH"}');
+    process.env['QWEN_HOME'] = qwenHome;
+    process.env['OPENAI_API_KEY'] = 'SECRET-ENV-KEY';
+    extraEnv.push('QWEN_HOME', 'OPENAI_API_KEY');
+    await boot({});
+    const { providers } = await createProvidersList()({}, {} as RequestInfo);
+    const qwen = providers.find((provider) => provider.id === 'qwen');
+    expect(qwen?.qwenAuth).toEqual({ selectedType: 'openai', model: 'qwen3-coder-plus', oauthFilePresent: true, envKeyPresent: true, hint: 'configured' });
+    expect(JSON.stringify(providers)).not.toContain('SECRET');
+    expect(providers.filter((provider) => provider.id !== 'qwen').every((provider) => !('qwenAuth' in provider))).toBe(true);
   });
 });

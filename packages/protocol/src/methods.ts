@@ -29,6 +29,7 @@ import { voiceMethodSchemas } from './remote/voice.js';
 import type { VoiceMethodResults } from './remote/voice.js';
 import { customProviderMethodSchemas } from './custom-providers.js';
 import type { CustomProviderInfo, CustomProviderMethodResults } from './custom-providers.js';
+import type { QwenAuthHints } from './qwen-auth.js';
 import type { AssistantMethodResults } from './assistant.js';
 import { telegramMethodSchemas } from './telegram.js';
 import { voiceProviderMethodSchemas } from './voice-provider.js';
@@ -53,7 +54,7 @@ import type { WorksMailStateResult } from './works-mail-state.js';
 import { feedDecision } from './feed.js';
 import type { FeedDecisions } from './feed.js';
 import type { ProgressResult } from './feed-progress.js';
-import type { Capabilities, CapacitySnapshot, CliUpdate, CompactResult, HostDiagnostics, ModelOption, ProfileStatus, ProviderCheck, ProviderLimits, SendResult, SessionRef, WorksSnapshot } from './types.js';
+import type { Capabilities, CapacitySnapshot, CliStatus, CliUpdate, CompactResult, HostDiagnostics, ModelOption, ProfileStatus, ProviderCheck, ProviderLimits, SendResult, SessionRef, WorksSnapshot } from './types.js';
 
 /** Снимок рецепта комнаты: границы те же, что у карты (`parseMap`). */
 const recipeSnapshot = z
@@ -133,6 +134,10 @@ export const METHODS = {
   'providers.skipUpdate': z.object({ provider: z.string() }),
   // Обновить CLI провайдера его собственной командой `update` (спека 2026-11-02, раздел 4); сессии не трогаются.
   'providers.update': z.object({ provider: z.string() }),
+  // Проверить версии сейчас (спека Qwen, §4.4): свежая проба CLI и свежий запрос последней версии; не чаще раза в 10 с на CLI.
+  'providers.checkUpdates': z.object({ provider: z.string() }),
+  // Установить CLI провайдера установщиком вендора (спека Qwen, §4.2): argv константный, из запроса — только провайдер.
+  'providers.install': z.object({ provider: z.string() }),
   'providers.check': z.object({ provider: z.string() }),
   // Key normalization belongs to core: trim edges before checking the length or whitespace.
   'providers.setKey': z.object({ provider: z.string(), key: z.string() }),
@@ -415,11 +420,30 @@ export interface Results extends AssistantMethodResults, VoiceMethodResults, Car
   'providers.refreshLimits': { ok: true };
   /** Версия `update.latest` провайдера помечена пропущенной; пропускать нечего — `bad_request`. */
   'providers.skipUpdate': { ok: true };
+  /** Состояние CLI провайдера после проверки; в пределах 10 с от прошлой проверки — текущее состояние без новой. */
+  'providers.checkUpdates': { cli: CliStatus };
   /**
    * `busy` — обновление этого CLI уже идёт. `done`: `ok` — выход 0 и версия выросла (или равна найденной);
    * `output` — последние 4 КБ stdout и stderr; `manualCommand` — при `ok: false`; `smoke` — пробный запуск Codex с
    * флагами Parley; `runningSessions` — активные сессии этого CLI, они остаются на старой версии до перезапуска.
    */
+  /**
+   * `busy` — установка или обновление этого CLI уже идёт. `done`: `ok` — выход 0, без таймаута, версия у найденного
+   * бинаря и успешная проба; `version` — версия найденного бинаря; `output` — последние 4 КБ вывода установщика;
+   * `error` и `manualCommand` — при `ok: false`; `pathNote` — бинарь найден только по точному ожидаемому пути.
+   */
+  'providers.install':
+    | { state: 'busy' }
+    | {
+        state: 'done';
+        ok: boolean;
+        version: string | null;
+        output: string;
+        error?: string;
+        manualCommand?: string;
+        pathNote?: string;
+        smoke?: { ok: boolean; output: string };
+      };
   'providers.update':
     | { state: 'busy' }
     | {
@@ -448,11 +472,10 @@ export interface Results extends AssistantMethodResults, VoiceMethodResults, Car
       /** Only a masked hint is returned for providers that use a saved key. */
       keyHint?: string | null;
       /**
-       * Trusted built-in CLI family; older hosts omit this field. Temporarily `'claude' | null` only: the window's feed
-       * availability checks type `family` that narrowly, so `'codex'` (Codex accounts, subscriptions spec 5.2, stage 3)
-       * is added in the task that updates those consumers.
+       * Trusted built-in CLI family; older hosts omit this field, and an entry without a family (providers.json) is
+       * `null`. A reader that meets a value it does not know treats it as neutral.
        */
-      family?: 'claude' | null;
+      family?: 'claude' | 'codex' | 'qwen' | null;
       // Три поля ниже необязательны, как `hello.methods`: хост переживает окно, а `PROTOCOL_VERSION`
       // остаётся 1, поэтому новое окно с хостом, оставшимся с живыми сессиями, получит элементы без
       // них. Нынешний хост отдаёт их всегда; нет поля — окно читает «контрола нет» и «версии нет».
@@ -492,6 +515,14 @@ export interface Results extends AssistantMethodResults, VoiceMethodResults, Car
       custom?: CustomProviderInfo | null;
       /** Новая версия CLI провайдера; `null` — версия не новее, её пропустили или проверки не было. Хост до T2 поля не знает. */
       update?: CliUpdate | null;
+      /** Состояние CLI (claude, codex, qwen; GLM и свои провайдеры делят строку `claude`); хост до этой версии поля не знает. */
+      cli?: CliStatus;
+      /**
+       * Qwen Code only: sign-in hints (spec 2026-11-11, 3.6). Presence and two non-secret strings, never a verdict and never
+       * a secret: `selectedType` and `model` come from `security.auth.selectedType` and `model.name` of the Qwen home's
+       * settings file; the credential file and the env key are reported as presence only. A host before this field omits it.
+       */
+      qwenAuth?: QwenAuthHints | null;
     }>;
   };
   'providers.setKey': { keyHint: string };

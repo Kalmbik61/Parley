@@ -22,6 +22,7 @@ import { findRunnerBinary } from './find-binary.js';
 import { CLAUDE_LEAN_ENV, CLAUDE_LEAN_FLAGS, codexLeanFlags, readCodexMcpServerIds, readUserPluginIds } from './lean.js';
 import { writeNativeContext, writeNativeSkillCatalog, stampNativeContext, type NativeContextDescriptor } from './native-context.js';
 import { CLAUDE_PROJECTS_DIR_KEY, claudeProjectRoots } from '../discover.js';
+import { defaultQwenRoot, discoverQwenSessions } from '../qwen/discover.js';
 import { isServiceText, type SessionIndex } from '../session-index.js';
 import { bothEnv, envValue } from '../names.js';
 import { userClaudeConfigDir, wantLinks } from '../custom-provider-dir.js';
@@ -57,6 +58,7 @@ import { NEW_LABEL } from './names.js';
 import { CLAUDE_MCP_AUTO_BACKGROUND_MS, mcpConfigValue, writeMcpConfig, type AgentChannel } from './mcp-config.js';
 import { finishSession, linkProviderSession, type FinishOptions, type MetricsRoots } from './metrics.js';
 import { writeWorkSettings } from './settings-file.js';
+import { QWEN_SYSTEM_SETTINGS_ENV, writeQwenSettings } from './qwen-settings-file.js';
 import { CLAUDE_SKILL_BUDGET_ENV, CODEX_SKILL_CATALOG_OVERRIDE, claudeSkillReduction, codexSkillRoute } from './skill-reduction.js';
 import { isPointerText } from './delivery.js';
 import { createWork, deleteSessionFiles, readMap, SharedStateError, updateMap, workPaths } from './store.js';
@@ -153,6 +155,12 @@ export interface LaunchPlan {
   warnings: string[];
   /** Safe warning codes for host logging and deduplicated notices. */
   diagnostics?: Array<SessionLayerWarning | { code: 'role-missing'; message: string }>;
+  /**
+   * The first message of a new conversation that the runner cannot take as an argument: the host types it once the
+   * session is ready. Qwen Code only (spec 2026-11-11, 3.4 amendment): its `-i` turn would go out before its MCP
+   * discovery ends. Absent — nothing to type.
+   */
+  deferredPrompt?: string;
 }
 
 async function entryOf(provider: string): Promise<ProviderEntry> {
@@ -227,6 +235,29 @@ async function claudeConversationExists(id: string, roots: string[] = claudeProj
 }
 
 /**
+ * Is there a Qwen Code transcript for this id: the bound path (from `SessionStart`) or `<id>.jsonl` under
+ * `<qwenHome>/projects/*\/chats`. Qwen creates it with the first prompt, and `qwen --resume` of a session that slept before
+ * that fails, so such a session starts again with the same id (`--session-id`), as Claude's does. Like Claude's check, only
+ * an exact "no" counts: a history root that cannot be read leaves the plain `--resume`.
+ */
+async function qwenConversationExists(id: string, bound?: string): Promise<boolean> {
+  if (bound !== undefined) {
+    try {
+      if ((await stat(bound)).isFile()) return true;
+    } catch {
+      // The bound file is gone: look by id.
+    }
+  }
+  const root = defaultQwenRoot();
+  try {
+    await readdir(root);
+  } catch {
+    return true;
+  }
+  return (await discoverQwenSessions(root)).some((found) => found.id === id.toLowerCase());
+}
+
+/**
  * Корни, где искать разговор записи провайдера: известна своя папка конфигурации (аккаунт Claude, свой провайдер) —
  * только её `projects`, чтобы транскрипт чужого аккаунта не сошёл за свой. Подмена тестов и записи без своей
  * папки — все корни, как раньше.
@@ -298,7 +329,11 @@ async function plan(
     forkFrom !== undefined ||
     (mode === 'resume' &&
       session.providerSessionId !== null &&
-      (!isClaudeCode(entry) || (await claudeConversationExists(session.providerSessionId, conversationRoots(entry)))));
+      (isClaudeCode(entry)
+        ? await claudeConversationExists(session.providerSessionId, conversationRoots(entry))
+        : entry.runner.mcpConfig === 'qwen-system-settings'
+          ? await qwenConversationExists(session.providerSessionId, session.qwenTranscript?.path)
+          : true));
   let providerSessionId: string | null = null;
 
   // Navigator launches isolate the generated settings file per session; off keeps the work path.
@@ -317,8 +352,10 @@ async function plan(
 
   // Нативная роль Claude берёт список инструментов у себя: Skill и `find_skill` ей не гарантированы (спека, 6.1).
   const nativeClaudeRole = !workspace && (role.nativeAgent !== null || (isClaudeCode(entry) && options.layer?.nativeClaudeRole === true));
-  // Сервер `parley`, а с ним `find_skill`, доходит до агента только шаблоном с `{mcpConfig}`.
-  const mcpRoute = template.includes('{mcpConfig}') && entry.runner.mcpConfig !== undefined;
+  // Сервер `parley`, а с ним `find_skill`, доходит до агента по виду маршрута: файл конфига и `-c` Codex — шаблоном с
+  // `{mcpConfig}`, системный файл настроек Qwen Code — окружением процесса, без подстановки.
+  const mcpRoute = entry.runner.mcpConfig === 'qwen-system-settings'
+    || (entry.runner.mcpConfig !== undefined && template.includes('{mcpConfig}'));
 
   // Доверие к папке — только Codex, только то, что выдал хост (`options.trust`), и только если шаблон несёт `{trust}`:
   // иначе пара не уйдёт в процесс, и в родной контекст навигатора ей тоже нечего попадать (диагностика пробела ниже).
@@ -485,6 +522,21 @@ async function plan(
         : { model: options.model ?? session.model ?? entry.runner.settingsModel }),
     });
   }
+  // Qwen Code: сервер `parley` и хуки — в системном файле настроек сессии (спека 2026-11-11, 3.3). Режим одобрений —
+  // решение D6: `auto` там, где Claude получает `--permission-mode auto`, иначе `default`; `--yolo` — никогда.
+  let qwenSettingsFile: string | undefined;
+  if (entry.runner.mcpConfig === 'qwen-system-settings') {
+    const written = await writeQwenSettings(projectPath, workId, session.id, {
+      mcp: params,
+      ...(options.hookUrl === undefined ? {} : { hookUrl: options.hookUrl }),
+      ...(options.agent !== undefined ? { allowBrowser: true } : {}),
+    });
+    qwenSettingsFile = written.file;
+    if (written.kept.length > 0) {
+      warnings.push(`The Qwen system settings file sets ${written.kept.join(', ')}; Parley keeps the administrator's value instead of its default.`);
+    }
+    subs.approvalMode = workspace ? 'auto' : 'default';
+  }
   if (skillList === 'removed') subs.skillCatalog = CODEX_SKILL_CATALOG_OVERRIDE;
   // Хуки Codex — только в режиме `parley` настройки `codexWriteApprovals` (спека 2026-10-21, 5.2): без доверия в `/hooks`
   // Codex остановил бы старт экраном ревью, а в `auto` хук `PermissionRequest` шёл бы раньше авторевьюера.
@@ -555,7 +607,7 @@ async function plan(
       ...(role.role ? { role: role.roleText } : {}),
       nativeClaudeRole,
       guidance: systemGuidance(map, session.id, {
-        skillNavigator: skillNavigator && !nativeClaudeRole && template.includes('{mcpConfig}') && mcp !== undefined,
+        skillNavigator: skillNavigator && !nativeClaudeRole && mcpRoute,
         ...(entry.id === 'codex' ? { toolProfile: 'short' as const } : {}),
         ...(skillList === undefined ? {} : { skillList }),
         // Цель стоит в брифе, который уйдёт тем же запуском (системным слоем или первым сообщением): дважды не нужна.
@@ -623,6 +675,8 @@ async function plan(
   }
 
   const { command, args } = resuming ? resumeCommand(entry, subs) : startCommand(entry, subs);
+  const deferredPrompt = entry.runner.mcpConfig === 'qwen-system-settings' && !resuming && subs.prompt !== undefined && !template.includes('{prompt}')
+    ? subs.prompt : undefined;
   if (forkFrom !== undefined) {
     // Форк, а не продолжение копии (5.4.1, п. 1): у нового агента свой id, и один разговор не живёт в двух корнях.
     const at = args.findIndex((arg, index) => arg === '--resume' && args[index + 1] === forkFrom);
@@ -656,10 +710,12 @@ async function plan(
       ...(isClaudeCode(entry) && process.env['CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS'] === undefined
         ? { CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS: String(CLAUDE_MCP_AUTO_BACKGROUND_MS) } : {}),
       ...(workspace ? { TMPDIR: path.join(workspace.path, '.parley-tmp') } : {}),
+      ...(qwenSettingsFile === undefined ? {} : { [QWEN_SYSTEM_SETTINGS_ENV]: qwenSettingsFile }),
     },
     providerSessionId,
     warnings,
     diagnostics,
+    ...(deferredPrompt === undefined ? {} : { deferredPrompt }),
   };
 }
 

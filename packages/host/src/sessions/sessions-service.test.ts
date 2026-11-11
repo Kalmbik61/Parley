@@ -45,6 +45,7 @@ import { createWorktreesService } from '../worktrees/worktrees-service.js';
 import type { SessionsFeedOptions, SessionsService } from './sessions-service.js';
 
 const STUB = fileURLToPath(new URL('../../test/stub-agent.mjs', import.meta.url));
+const QWEN_STUB = fileURLToPath(new URL('../../test/stub-qwen-agent.mjs', import.meta.url));
 const runGit = promisify(execFile);
 
 /** Репозиторий с одним коммитом на ветке `main` — общая точка отсчёта тестов worktree. */
@@ -863,6 +864,53 @@ describe('launch(): лента вида «Chat» — адрес приёмник
     expect(launched.settings?.hooks.PermissionRequest).toBeDefined();
 
     await launched.stop();
+  });
+
+  it('qwen 0.27.2: hook token in the env, HTTP hooks to the receiver in its system settings file, token revoked on stop', async () => {
+    const qwenArgs = await tempArgsFile();
+    setEnv('PARLEY_QWEN_BIN', QWEN_STUB);
+    setEnv('STUB_QWEN_ARGS_FILE', qwenArgs);
+    setEnv('QWEN_CODE_SYSTEM_SETTINGS_PATH', path.join(project, 'no-admin-settings.json'));
+    const { hooks, registered, unregistered } = fakeHooks();
+    const work = await createWork(project, { title: 'Work', goal: '' });
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity(), {
+      hooks, providerVersions: fakeVersions({ qwen: '0.27.2' }),
+    });
+    const ref = await service.create({ projectPath: project, workId: work.work.id, provider: 'qwen', label: 'qwen', task: '', parent: null });
+    await vi.waitFor(async () => expect((await readFile(qwenArgs, 'utf8')).length).toBeGreaterThan(0));
+    const started = JSON.parse(await readFile(qwenArgs, 'utf8')) as { argv: string[]; env: Record<string, string> };
+    expect(registered).toHaveLength(1);
+    expect(registered[0]?.ref).toEqual(ref);
+    expect(started.env.PARLEY_HOOK_TOKEN).toBe(registered[0]?.token);
+    expect(started.env.PARLEY_HOOK_URL).toBeUndefined();
+    expect(started.argv).not.toContain('--yolo');
+    const settings = JSON.parse(await readFile(started.env.QWEN_CODE_SYSTEM_SETTINGS_PATH as string, 'utf8')) as Launched['settings'];
+    expect(new Set(httpHookUrls(settings))).toEqual(new Set([HOOK_URL]));
+    await service.stop(ref);
+    await vi.waitFor(() => expect(unregistered).toContainEqual(ref));
+  });
+
+  it('qwen: the brief is not an argument; it goes to deferFirst with the pid of the started process', async () => {
+    const qwenArgs = await tempArgsFile();
+    setEnv('PARLEY_QWEN_BIN', QWEN_STUB);
+    setEnv('STUB_QWEN_ARGS_FILE', qwenArgs);
+    setEnv('QWEN_CODE_SYSTEM_SETTINGS_PATH', path.join(project, 'no-admin-settings.json'));
+    const deferred: Array<{ ref: SessionRef; pid: number; text: string }> = [];
+    const work = await createWork(project, { title: 'Work', goal: '' });
+    const pty = createPtyManager(fakeHost());
+    const service = createSessionsService(fakeHost(), fakeWorks(), pty, fakeActivity(), {
+      providerVersions: fakeVersions({ qwen: '0.27.2' }),
+      deferFirst: (ref, pid, text) => deferred.push({ ref, pid, text }),
+    });
+    const ref = await service.create({ projectPath: project, workId: work.work.id, provider: 'qwen', label: 'qwen', task: 'run the e2e suite', parent: null });
+    await vi.waitFor(async () => expect((await readFile(qwenArgs, 'utf8')).length).toBeGreaterThan(0));
+    const started = JSON.parse(await readFile(qwenArgs, 'utf8')) as { argv: string[] };
+    expect(started.argv).not.toContain('-i');
+    expect(started.argv.join('\n')).not.toContain('run the e2e suite');
+    expect(deferred).toHaveLength(1);
+    expect(deferred[0]).toMatchObject({ ref, pid: pty.get(ref)?.pid });
+    expect(deferred[0]?.text).toContain('run the e2e suite');
+    await service.stop(ref);
   });
 
   it('claude 2.1.280 (ниже порога): ни токена, ни HTTP-хуков, прежние хуки на месте', async () => {

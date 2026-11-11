@@ -60,6 +60,8 @@ describe('createSender', () => {
   /** Последнее событие хуков; по умолчанию — после запуска процесса (fake: startedAt 0). */
   let lastEventAt: string | null;
   let wakeInFlight: boolean;
+  /** The Qwen process reports OSC 7501 `blocked` (`ActivityService.qwenBlocked`). */
+  let qwenBlocked = false;
   /** Замок смены модели и effort этой сессии занят (`SessionsService.exclusive.held`). */
   let switching: boolean;
 
@@ -70,6 +72,7 @@ describe('createSender', () => {
     activityState = 'idle';
     lastEventAt = new Date(1000).toISOString();
     wakeInFlight = false;
+    qwenBlocked = false;
   });
 
   afterEach(() => {
@@ -79,6 +82,7 @@ describe('createSender', () => {
   function sender() {
     const activity = {
       get: () => ({ activity: { activity: activityState, lastEventAt } }),
+      qwenBlocked: () => qwenBlocked,
     } as unknown as ActivityService;
     return createSender({
       pty: pty.manager,
@@ -94,6 +98,29 @@ describe('createSender', () => {
       code: 'not_found',
       message: 'session is not running',
     });
+  });
+
+  it('qwen: typed, not pasted, even with paragraphs and the paste mode on; a Tab becomes spaces', async () => {
+    pty.provider = 'qwen';
+    pty.paste = true;
+    const sending = sender()({ ref, text: 'line one\n\tline two', submit: true });
+    await vi.advanceTimersByTimeAsync(500);
+    await expect(sending).resolves.toEqual({ inserted: true, submitted: true, reason: null });
+    expect(pty.writes).toEqual(['line one\n  line two', '\r']);
+  });
+
+  it('qwen OSC blocked (a dialog in its terminal) — refused, nothing written; one opening before Enter withholds Enter', async () => {
+    pty.provider = 'qwen';
+    pty.paste = true;
+    qwenBlocked = true;
+    await expect(sender()({ ref, text: 'hi', submit: true })).resolves.toEqual({ inserted: false, submitted: false, reason: 'blocked' });
+    expect(pty.writes).toEqual([]);
+    qwenBlocked = false;
+    const sending = sender()({ ref, text: 'hi', submit: true });
+    qwenBlocked = true;
+    await vi.advanceTimersByTimeAsync(500);
+    await expect(sending).resolves.toEqual({ inserted: true, submitted: false, reason: 'blocked-before-enter' });
+    expect(pty.writes).toEqual(['hi']);
   });
 
   it('blocked — ни одной записи, текст не вставлен', async () => {
@@ -466,6 +493,7 @@ describe('createSender: codex (спека комнат Organic, 3.6, «Ввод�
   function sender() {
     const activity = {
       get: () => ({ activity: { activity: activityState, lastEventAt } }),
+      qwenBlocked: () => false,
     } as unknown as ActivityService;
     return createSender({
       pty: pty.manager,

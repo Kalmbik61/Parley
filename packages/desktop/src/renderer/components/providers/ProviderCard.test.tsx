@@ -10,6 +10,7 @@ import { useProvidersStore } from '../../store/providers.js';
 import { REQUIRED_METHODS } from '../../lib/capabilities.js';
 import { createFakeBridge } from '../../test-utils/fake-bridge.js';
 import { ProviderCard } from './ProviderCard.js';
+import { ProviderInstall } from './ProviderInstall.js';
 
 type Provider = Result<'providers.list'>['providers'][number];
 const glm = (patch: Partial<Provider> = {}): Provider => ({
@@ -602,5 +603,188 @@ describe('ProviderCard — аккаунт подписки (спека подп�
   it('CLI в порядке (needs: sign-in): требования к версии нет', () => {
     const { container } = render(<ProviderCard provider={account()} onReload={async () => {}} onRestartHost={() => {}} />);
     expect(container.querySelector('[data-account-needs-cli]')).toBeNull();
+  });
+});
+
+describe('ProviderCard: установка CLI из окна (спека 2026-11-11, §4.2, §4.4)', () => {
+  const AT2 = '2026-11-11T14:05:00.000Z';
+  const missing = (id = 'codex', label = 'Codex'): Provider =>
+    ({
+      id, label, available: false,
+      cli: { installed: null, latest: '0.166.0', method: null, checkedAt: AT2, state: 'missing', lastError: null },
+    }) as Provider;
+  const withInstall = (): void =>
+    useHostStore.setState({
+      status: { state: 'connected', hostVersion: '0.4.0', methods: [...REQUIRED_METHODS, 'providers.install', 'providers.checkUpdates'] },
+      connections: 1,
+    });
+  const doneOk = { state: 'done', ok: true, version: '0.166.0', output: '' } as const;
+
+  it('хост без providers.install: кнопки Install нет, остаётся Copy', () => {
+    render(<ProviderCard provider={missing()} onReload={async () => {}} onRestartHost={() => {}} />);
+    expect(screen.queryByRole('button', { name: 'Install…' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Copy' })).toBeTruthy();
+  });
+
+  it('отсутствует: «Not installed · latest X», Install…, Copy command и Installation guide', () => {
+    withInstall();
+    const { container } = render(<ProviderCard provider={missing()} onReload={async () => {}} onRestartHost={() => {}} />);
+    expect(container.querySelector('[data-not-installed]')!.textContent).toBe('Not installed · latest 0.166.0');
+    expect(screen.getByRole('button', { name: 'Install…' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Copy command' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Installation guide' })).toBeTruthy();
+    expect(screen.getByText(/Quit Parley/).textContent).toContain('PATH');
+  });
+
+  it('подтверждение: точная команда, источник, слова о доверии; Install — единственная кнопка принятия; qwen добавляет заметку о профиле', () => {
+    withInstall();
+    const { unmount } = render(<ProviderCard provider={missing()} onReload={async () => {}} onRestartHost={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Install…' }));
+    const dialog = screen.getByRole('dialog');
+    expect(dialog.querySelector('[data-install-command]')!.textContent).toBe('curl -fsSL https://chatgpt.com/codex/install.sh | sh');
+    expect(dialog.querySelector('[data-install-source]')!.textContent).toBe('https://chatgpt.com/codex/install.sh');
+    expect(dialog.textContent).toContain("This downloads the vendor's installer and runs it as you. Parley logs its fingerprint but cannot verify the vendor's code or what the installer downloads.");
+    expect(dialog.querySelector('[data-install-profile]')).toBeNull();
+    expect(screen.getAllByRole('button', { name: 'Install' })).toHaveLength(1);
+    unmount();
+    cleanup();
+    // Карточка Qwen — задача A10; D3-заметка живёт в самом компоненте установки.
+    render(<ProviderInstall id="qwen" name="Qwen Code" missing onReload={async () => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Install…' }));
+    expect(screen.getByRole('dialog').querySelector('[data-install-profile]')!.textContent).toContain('~/.local/bin');
+    expect(screen.getByRole('dialog').querySelector('[data-install-source]')!.textContent).toContain('install-qwen-standalone.sh');
+  });
+
+  it('отмена: хост не зван, диалог закрыт', async () => {
+    withInstall();
+    render(<ProviderCard provider={missing()} onReload={async () => {}} onRestartHost={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Install…' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(bridge.calls).toEqual([]);
+  });
+
+  it('идёт установка: индикатор, кнопки Install… нет, второй вызов не уходит; затем итог с версией', async () => {
+    withInstall();
+    let finish!: () => void;
+    bridge.setHandler('providers.install', () => new Promise((resolve) => (finish = () => resolve(doneOk))));
+    const reload = vi.fn(async () => {});
+    const { container } = render(<ProviderCard provider={missing()} onReload={reload} onRestartHost={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Install…' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Install' }));
+    expect(await screen.findByText('Installing Codex…')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Install…' })).toBeNull();
+    expect(bridge.calls.filter((call) => call.method === 'providers.install')).toEqual([
+      { method: 'providers.install', params: { provider: 'codex' } },
+    ]);
+    finish();
+    expect(await screen.findByText('Codex installed · 0.166.0')).toBeTruthy();
+    expect(container.querySelector('[data-install-result="ok"]')).not.toBeNull();
+    expect(reload).toHaveBeenCalled();
+  });
+
+  it('итог остаётся на месте, когда карточка уже видит найденный CLI', async () => {
+    withInstall();
+    bridge.setHandler('providers.install', () => doneOk);
+    const props = { onReload: async () => {}, onRestartHost: () => {} };
+    const { rerender } = render(<ProviderCard provider={missing()} {...props} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Install…' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Install' }));
+    await screen.findByText('Codex installed · 0.166.0');
+    rerender(<ProviderCard provider={{ ...missing(), available: true, version: '0.166.0' } as Provider} {...props} />);
+    expect(screen.getByText('Codex installed · 0.166.0')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Install…' })).toBeNull();
+  });
+
+  it('успех с pathNote: заметка о PATH показана', async () => {
+    withInstall();
+    bridge.setHandler('providers.install', () => ({ ...doneOk, pathNote: '~/.local/bin is not on your shell PATH; Parley finds codex there' }));
+    render(<ProviderCard provider={missing()} onReload={async () => {}} onRestartHost={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Install…' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Install' }));
+    expect(await screen.findByText(/is not on your shell PATH/)).toBeTruthy();
+  });
+
+  it('ошибка установки: текст, хвост вывода и команда для ручного запуска', async () => {
+    withInstall();
+    bridge.setHandler('providers.install', () => ({
+      state: 'done', ok: false, version: null, output: 'curl: (6) Could not resolve host', error: 'The installer exited with code 6',
+      manualCommand: 'curl -fsSL https://chatgpt.com/codex/install.sh | sh',
+    }));
+    const { container } = render(<ProviderCard provider={missing()} onReload={async () => {}} onRestartHost={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Install…' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Install' }));
+    expect(await screen.findByText('The installer exited with code 6')).toBeTruthy();
+    expect(container.querySelector('[data-install-result="failed"]')).not.toBeNull();
+    expect(screen.getByText('curl: (6) Could not resolve host')).toBeTruthy();
+    expect(container.querySelector('[data-provider-install] code')!.textContent).toBe('curl -fsSL https://chatgpt.com/codex/install.sh | sh');
+    // Повторить можно: кнопка вернулась.
+    expect(screen.getByRole('button', { name: 'Install…' })).toBeTruthy();
+  });
+
+  it('хост ответил busy; отказ хоста — строка по коду без сырого текста', async () => {
+    withInstall();
+    bridge.setHandler('providers.install', () => ({ state: 'busy' }));
+    const { container } = render(<ProviderCard provider={missing()} onReload={async () => {}} onRestartHost={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Install…' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Install' }));
+    expect(await screen.findByText('An install or update of this CLI is already running.')).toBeTruthy();
+    bridge.setHandler('providers.install', () => {
+      throw new Error(encodeIpcError('internal', '/private/path leaked'));
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Install…' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Install' }));
+    await waitFor(() => expect(container.textContent).toContain("Couldn't install the provider CLI"));
+    expect(container.textContent).not.toContain('/private/path');
+  });
+});
+
+
+
+describe('ProviderCard: Qwen Code (spec 2026-11-11, 3.6)', () => {
+  const qwen = (patch: Partial<Provider> = {}): Provider => ({
+    id: 'qwen', label: 'Qwen Code', available: true, family: 'qwen', needs: null, version: '0.27.2', ...patch,
+  });
+  const auth = (patch: Partial<NonNullable<Provider['qwenAuth']>>): Provider['qwenAuth'] => ({
+    selectedType: null, model: null, oauthFilePresent: false, envKeyPresent: false, hint: 'not-detected', ...patch,
+  });
+  const show = (provider: Provider) => render(<ProviderCard provider={provider} onReload={async () => {}} onRestartHost={() => {}} />);
+  const text = (): string => document.querySelector('[data-qwen-auth]')!.textContent ?? '';
+
+  it.each([
+    ['configured', auth({ hint: 'configured', selectedType: 'openai' }), 'Configured: openai'],
+    ['qwen-account', auth({ hint: 'qwen-account', oauthFilePresent: true }), 'Qwen account sign-in found'],
+    ['env-key', auth({ hint: 'env-key', envKeyPresent: true }), 'Key found in environment'],
+    ['not-detected', auth({}), 'Sign-in not detected: start a Qwen session and use /auth in the terminal'],
+  ])('hint %s is shown with the note that it is not a verdict', (_name, qwenAuth, expected) => {
+    show(qwen({ qwenAuth }));
+    expect(text()).toContain(expected);
+    expect(text()).toContain(S.providerCard.qwen.hintNote);
+    expect(document.querySelector('[data-qwen-auth]')!.getAttribute('data-qwen-auth')).toBe(qwenAuth!.hint);
+  });
+
+  it('a host without the hints field shows the not-detected text, never a claim', () => {
+    show(qwen());
+    expect(text()).toContain('Sign-in not detected');
+  });
+
+  it('model: Default, plus model.name when known', () => {
+    show(qwen({ qwenAuth: auth({ model: 'qwen3-coder-plus' }) }));
+    expect(document.querySelector('[data-qwen-model]')!.textContent).toBe('Model: Default (qwen3-coder-plus in Qwen settings)');
+    cleanup();
+    show(qwen({ qwenAuth: auth({}) }));
+    expect(document.querySelector('[data-qwen-model]')!.textContent).toBe('Model: Default');
+  });
+
+  it('a missing qwen offers Install… and Check again; the other providers show no Qwen hints', () => {
+    useHostStore.setState({ status: { state: 'connected', hostVersion: '0.4.0', methods: [...REQUIRED_METHODS, 'providers.install'] } });
+    show(qwen({ available: false, needs: 'cli', version: null }));
+    expect(screen.getByRole('button', { name: 'Install…' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: S.providerCard.checkAgain })).toBeTruthy();
+    // The sign-in hint is for an installed CLI only.
+    expect(document.querySelector('[data-qwen-auth]')).toBeNull();
+    cleanup();
+    show(glm());
+    expect(document.querySelector('[data-qwen-auth]')).toBeNull();
   });
 });

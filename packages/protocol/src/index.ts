@@ -26,6 +26,7 @@ export type {
   CapabilitySkill,
   CapabilitySource,
   CapacitySnapshot,
+  CliStatus,
   CliUpdate,
   CompactResult,
   NoticeKind,
@@ -51,6 +52,8 @@ export {
   FEED_DECISION_ANSWER_LIMIT,
   FEED_DECISION_MESSAGE_LIMIT,
   FEED_CODEX_FEATURE,
+  FEED_QWEN_FEATURE,
+  QWEN_FEED_MIN_VERSION,
   FEED_RESYNC_FEATURE,
   FEED_IMAGE_MIME_LIMIT,
   FEED_IMAGE_PATH_LIMIT,
@@ -251,5 +254,6 @@ export type { VoiceProviderCheck, VoiceProviderCheckCode, VoiceProviderMethodRes
 export { consentMethodSchemas } from './consents.js';
 export type { AgentSwitchCard, ConsentCard, ConsentMethodResults, FolderTrustCard, ProjectMcpCard, ProjectMcpServer, TrustRecord } from './consents.js';
 export { CODEX_ACCOUNT_PREFIX, CUSTOM_PROVIDER_PREFIX, customProviderMethodSchemas, isCodexAccountId, isCustomProviderId, isManagedProviderId } from './custom-providers.js';
+export type { QwenAuthHints } from './qwen-auth.js';
 export type { CustomAccountInfo, CustomEndpointInfo, CustomProviderAuth, CustomProviderInfo, CustomProviderKind, CustomProviderMethodResults, CustomProviderSaveParams, CustomProviderModels } from './custom-providers.js';
 export type * from './human-overview.js';

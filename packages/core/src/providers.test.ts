@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -11,6 +11,7 @@ import {
   assistantCommand,
   codexModelsFile,
   commandInPath,
+  probeCliVersion,
   commandBinary,
   effortsFor,
   loadProviders,
@@ -100,7 +101,25 @@ describe('реестр провайдеров', () => {
       providersWithHistory()
         .map((p) => p.id)
         .sort(),
-    ).toEqual(['claude', 'codex', 'glm']);
+    ).toEqual(['claude', 'codex', 'glm', 'qwen']);
+  });
+
+  it('qwen: the spec 3.3 entry, the system-settings MCP route, no first prompt and no --yolo', () => {
+    const qwen = PROVIDERS.qwen;
+    expect(qwen).toMatchObject({ id: 'qwen', family: 'qwen', label: 'Qwen Code', linkBy: 'session-id', hasHistory: true });
+    expect(qwen.runner).toMatchObject({ command: 'qwen', minVersion: '0.27.2', mcpConfig: 'qwen-system-settings' });
+    expect(qwen.runner.args).toEqual(['--session-id', '{sessionUuid}', '--approval-mode', '{approvalMode}',
+      '--append-system-prompt', '{systemPrompt}', '-m', '{model}']);
+    expect(qwen.runner.resumeArgs).toEqual(['--resume', '{providerSessionId}', '--approval-mode', '{approvalMode}',
+      '--append-system-prompt', '{systemPrompt}', '-m', '{model}']);
+    // No first-prompt flag (spec 3.4 amendment): the brief is typed once the session is ready.
+    for (const template of [qwen.runner.args, qwen.runner.resumeArgs]) {
+      expect(template).not.toContain('--yolo');
+      expect(template).not.toContain('{prompt}');
+    }
+    expect(startCommand(qwen, { sessionUuid: 'u', approvalMode: 'default' })).toEqual({
+      command: 'qwen', args: ['--session-id', 'u', '--approval-mode', 'default'],
+    });
   });
 
   it('у каждого провайдера есть подпись и команда', () => {
@@ -789,6 +808,20 @@ describe('commandInPath', () => {
     expect(await commandInPath('стаб-агент', env())).toBe(true);
   });
 
+  it('CLI из таблицы по точному ожидаемому пути ~/.local/bin находится и без PATH; подмена важнее; чужая команда туда не смотрит', async () => {
+    const bin = path.join(dir, 'home/.local/bin');
+    await mkdir(bin, { recursive: true });
+    for (const name of ['qwen', 'opencode']) {
+      await writeFile(path.join(bin, name), '#!/bin/sh\necho 0.28.0\n', 'utf8');
+      await chmod(path.join(bin, name), 0o755);
+    }
+    const home = { HOME: path.join(dir, 'home'), PATH: '' };
+    expect(await commandInPath('qwen', home)).toBe(true);
+    expect(await probeCliVersion('qwen', 5000, home)).toBe('0.28.0');
+    expect(await commandInPath('opencode', home)).toBe(false);
+    expect(await commandInPath('qwen', { ...home, PARLEY_QWEN_BIN: path.join(dir, 'нет') })).toBe(false);
+  });
+
   it('неисполняемый файл и отсутствующая команда — нет в PATH', async () => {
     const file = path.join(dir, 'не-исполняемый');
     await writeFile(file, 'текст', 'utf8');
@@ -828,7 +861,7 @@ describe('переопределения из PARLEY_HOME/providers.json', () =>
 
   it('файла нет — работает встроенный реестр', async () => {
     const registry = await loadProviders();
-    expect(Object.keys(registry).sort()).toEqual(['claude', 'codex', 'glm']);
+    expect(Object.keys(registry).sort()).toEqual(['claude', 'codex', 'glm', 'qwen']);
     expect(registry['claude']?.runner.command).toBe('claude');
   });
 

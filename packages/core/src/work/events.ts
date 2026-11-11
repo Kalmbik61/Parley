@@ -12,6 +12,7 @@
 import { watch, type FSWatcher } from 'node:fs';
 import { open, stat } from 'node:fs/promises';
 import path from 'node:path';
+import type { ProviderFamily } from '../providers.js';
 import { clampDetail } from './stuck.js';
 
 /**
@@ -88,6 +89,20 @@ export interface EventRecord {
    * держит: события лежат в памяти всю сессию. У других инструментов и без `tool_input` — `null`.
    */
   toolDetail: string | null;
+  /**
+   * Qwen family only (spec §3.4): `UserPromptSubmit` with an empty prompt is the follow-up Qwen
+   * emits after a turn. Absent for Claude and Codex records.
+   */
+  promptEmpty?: boolean;
+  /** Qwen family only: `context_usage` of `Stop`, a fraction. */
+  contextUsage?: number;
+  /** Qwen family only: `context_limit` of `Stop`, tokens. */
+  contextLimit?: number;
+  /**
+   * Qwen family only: `at` is the hook payload's own `timestamp`, not the journal mtime. A record read late (after a
+   * relaunch) keeps the time it was written, so it cannot pass for a line of a newer process (spec 2026-11-11, 3.4).
+   */
+  atFromPayload?: true;
 }
 
 /** Состояние чтения одного журнала: докуда дочитали и что уже разобрали. */
@@ -218,21 +233,32 @@ export function parseTasks(value: unknown): BackgroundTask[] | null {
 }
 
 /** Разбирает строку журнала. `null` — битая строка или строка не про событие. */
-function parseEvent(line: string, at: string): EventRecord | null {
+function parseEvent(line: string, at: string, family?: ProviderFamily | null): EventRecord | null {
   let data: unknown;
   try {
     data = JSON.parse(line);
   } catch {
     return null;
   }
-  return eventRecordOf(data, at);
+  // Qwen sends its own `timestamp`: the journal mtime is the time of the last append and would make every older line of
+  // the batch look as fresh as the newest one.
+  const stamped = family === 'qwen' ? payloadTime(data) : null;
+  const record = eventRecordOf(data, stamped ?? at, family);
+  return record !== null && stamped !== null ? { ...record, atFromPayload: true } : record;
+}
+
+/** The hook payload's `timestamp` as an ISO time; absent or not a date — `null`. */
+function payloadTime(data: unknown): string | null {
+  if (!isRecord(data) || typeof data.timestamp !== 'string') return null;
+  const ms = Date.parse(data.timestamp);
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
 }
 
 /**
  * Общие поля события хука из его stdin-JSON — тот же разбор, что у журнала `events/`; им же
  * пользуется лента вида «Chat», получая события HTTP-хуком. `null` — не объект или нет имени события.
  */
-export function eventRecordOf(data: unknown, at: string): EventRecord | null {
+export function eventRecordOf(data: unknown, at: string, family?: ProviderFamily | null): EventRecord | null {
   if (!isRecord(data)) return null;
 
   const name = data.hook_event_name;
@@ -256,7 +282,28 @@ export function eventRecordOf(data: unknown, at: string): EventRecord | null {
     message: textOf(data.message),
     toolName,
     toolDetail: toolDetailOf(toolName, data.tool_input),
+    ...(family === 'qwen' ? qwenFacts(name, data) : {}),
   };
+}
+
+const finiteNumber = (value: unknown): number | undefined =>
+  typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+
+/** Non-secret Qwen hook facts only: never the prompt text, the reply or tool input. */
+function qwenFacts(name: string, data: Record<string, unknown>): Partial<EventRecord> {
+  if (name === 'UserPromptSubmit') {
+    const text = typeof data.prompt === 'string' ? data.prompt : data.submitted_prompt;
+    return typeof text === 'string' ? { promptEmpty: text.trim() === '' } : {};
+  }
+  if (name === 'Stop') {
+    const usage = finiteNumber(data.context_usage);
+    const limit = finiteNumber(data.context_limit);
+    return {
+      ...(usage !== undefined ? { contextUsage: usage } : {}),
+      ...(limit !== undefined ? { contextLimit: limit } : {}),
+    };
+  }
+  return {};
 }
 
 const isDirectory = async (dir: string): Promise<boolean> => {
@@ -267,11 +314,16 @@ const isDirectory = async (dir: string): Promise<boolean> => {
   }
 };
 
+/** Family of the journal's writer: one for every session, or per session (one reader serves a whole work). */
+export type EventsFamily = ProviderFamily | null | ((sessionId: string) => ProviderFamily | null);
+
 /**
  * Читатель журналов одной работы. Состояние живёт в замыкании по сессиям,
  * поэтому один читатель обслуживает всю работу и не перечитывает старые байты.
+ * `family` включает разбор фактов семейства (у Qwen — `promptEmpty`, `contextUsage`); у работы с разными провайдерами
+ * это функция от id сессии.
  */
-export function openEvents(eventsDir: string): EventsLog {
+export function openEvents(eventsDir: string, family?: EventsFamily): EventsLog {
   const journals = new Map<string, Journal>();
   /**
    * Чтения одной сессии идут по очереди (fix-tests2): состояние журнала общее, и чтение,
@@ -283,6 +335,7 @@ export function openEvents(eventsDir: string): EventsLog {
 
   const readOnce = async (sessionId: string): Promise<readonly EventRecord[] | null> => {
     const file = path.join(eventsDir, `${sessionId}.jsonl`);
+    const sessionFamily = typeof family === 'function' ? family(sessionId) : family;
     let handle;
     try {
       handle = await open(file, 'r');
@@ -316,7 +369,7 @@ export function openEvents(eventsDir: string): EventsLog {
       const fresh: EventRecord[] = [];
       for (const line of data.subarray(0, cut).toString('utf8').split('\n')) {
         if (line.trim() === '') continue;
-        const event = parseEvent(line, at);
+        const event = parseEvent(line, at, sessionFamily);
         if (event !== null) fresh.push(event);
       }
       // Новый массив только при новых событиях: выданный раньше не меняется, а без новых строк уходит прежний.

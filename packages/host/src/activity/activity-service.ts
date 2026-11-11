@@ -57,6 +57,8 @@ import {
   type Activity,
   type ContextFill,
   type ActivityLog,
+  byFamily,
+  providerFamily,
   type EventRecord,
   type EventsLog,
   type EventsWatcher,
@@ -87,6 +89,7 @@ import type { HostContext } from '../context.js';
 import type { WindowCounters } from '../health/window-counters.js';
 import type { LimitsService } from '../limits/limits-service.js';
 import type { CodexSignal } from '../pty/codex-terminal.js';
+import type { QwenStatus } from '../pty/qwen-terminal.js';
 import { mailSessions } from '../mail-sessions.js';
 import { createSettler } from '../watch-settle.js';
 import type { MailNotice, WorksService, WorksView } from '../works/works-service.js';
@@ -175,7 +178,25 @@ export interface ActivityService {
    * и «новые» строки журнала (спека «Застрявшие сессии», 3.2). У возобновлённой сессии журнал прошлого запуска не пуст, и
    * экран старта ловится по тому, что с запуска нынешнего процесса ничего не прибавилось.
    */
-  processStarted(ref: SessionRef): void;
+  processStarted(ref: SessionRef, spawnedAt?: number): void;
+  /** Qwen Code program status (OSC 7501) of the session's current process (spec 2026-11-11, 3.4 amendment). */
+  qwenStatus(ref: SessionRef, status: QwenStatus): void;
+  /**
+   * The process generation of the session (`processStarted` counts them); `null` — no process started under this host.
+   * The tools endpoint takes it when a `tools/list` request arrives and hands it back to `mcpListed`.
+   */
+  processGeneration(ref: SessionRef): number | null;
+  /**
+   * The session's Parley MCP server got its tool list answered: the agent's MCP client is connected. Counts only for the
+   * generation that sent the request and only while it is still the current one: a list of a replaced process does not
+   * certify its successor (spec 2026-11-11, 3.4 amendment).
+   */
+  mcpListed(ref: SessionRef, generation: number | null): void;
+  /**
+   * The session's current Qwen process last reported OSC 7501 `state=blocked` (sign-in, a permission or a question in
+   * its terminal): nothing may be typed or submitted. Other providers and sessions without a report — `false`.
+   */
+  qwenBlocked(ref: SessionRef): boolean;
   /**
    * План 2026-10-01, кусок 4a, решение О: окно держит вопрос агента (хук `PreToolUse`) — сессия
    * 'blocked', пока хук не отпущен: журнал событий удержанного вопроса не видит и по тишине считал бы её
@@ -441,6 +462,34 @@ interface Launch {
  * время одно — mtime файла. Её время — запуск процесса: новее всего прошлого, в том числе записи об ошибке API в логе, с
  * которой запасной путь лимита сверяет начало работы.
  */
+/** Need detail of a Qwen session past the startup grace without readiness (spec 2026-11-11, 3.4). */
+export const QWEN_STARTUP_ATTENTION = 'Qwen needs attention at startup (sign-in or a dialog): see the terminal';
+/** The same when the process never reported its program status (OSC 7501), as another qwen version might not. */
+export const QWEN_STARTUP_NO_STATUS = 'Qwen needs attention at startup: see the terminal';
+
+/** Readiness facts of one Qwen process (spec 2026-11-11, 3.4 amendment). */
+interface QwenProcess {
+  /** The process generation (`processStarted`): facts of another generation are not this process's. */
+  generation: number;
+  /** Spawn time of the process, taken before the spawn: journal lines written earlier belong to a past process. */
+  spawnedAt: number;
+  /** Any OSC 7501 report arrived. */
+  statusSeen: boolean;
+  /** `state=idle` arrived: the prompt accepts input. */
+  idleSeen: boolean;
+  /** Since when it reports `blocked:kind=auth` (the sign-in picker); `null` — not now. */
+  authAt: number | null;
+  /** The session's Parley MCP server listed its tools through the host. */
+  mcpListed: boolean;
+  /** The last report was `state=blocked`. */
+  blocked: boolean;
+}
+
+/** A journal line that proves the Qwen process accepts input (spec 2026-11-11, 3.4). */
+export const isQwenReadiness = (event: EventRecord): boolean =>
+  (event.name === 'Notification' && (event.notificationType === 'auth_success' || event.notificationType === 'idle_prompt')) ||
+  (event.name === 'UserPromptSubmit' && event.promptEmpty !== true);
+
 function withLaunchBoundary(
   journal: readonly EventRecord[] | null,
   launch: Launch | null,
@@ -489,7 +538,8 @@ export function wholeSessionUsage(selected: UsageSummary, hasLog: boolean, provi
     input: 0,
     output: 0,
     cacheRead: 0,
-    cacheWrite: provider === 'codex' ? null : 0,
+    // Cache writes are not observed for Codex or Qwen Code: unknown, not zero.
+    cacheWrite: byFamily(provider, { claude: 0, codex: null, qwen: null, neutral: 0 }),
     totalInput: 0,
     source: 'native-index',
     observedAt: null,
@@ -551,6 +601,10 @@ export function createActivityService(
   const trustWaitNotified = new Set<string>();
   /** Срок экрана старта у Claude и GLM (`startupEventOf`): по таймеру на сессию, чтобы пересчитать её на сроке. */
   const startupTimers = new Map<string, NodeJS.Timeout>();
+  /** What the current Qwen process has shown since its start: OSC 7501 reports and the Parley MCP tool list. */
+  const qwenProcesses = new Map<string, QwenProcess>();
+  /** Process generations by session key (`processStarted`); they only grow, so a stale one never matches again. */
+  const generations = new Map<string, number>();
   /** Запуски процессов, которые видел хост (`processStarted`), по ключу сессии: отсчёт срока и «новых» строк журнала. */
   const launches = new Map<string, Launch>();
   /**
@@ -643,6 +697,37 @@ export function createActivityService(
   }
 
   /**
+   * Sessions whose state comes from the hook journal: the Claude Code family and Qwen Code (its per-session system
+   * settings file journals the same way). Codex and a null or unknown family do not.
+   */
+  function hooksExpected(session: WorkSession): boolean {
+    return byFamily(session.provider, { claude: true, codex: false, qwen: true, neutral: false });
+  }
+
+  const isQwen = (session: WorkSession): boolean =>
+    byFamily(session.provider, { claude: false, codex: false, qwen: true, neutral: false });
+
+  /**
+   * Qwen readiness (spec 2026-11-11, 3.4 and its amendment): `SessionStart` is not ready, because Qwen fires it under its
+   * sign-in picker. The current process is ready once its terminal reported OSC 7501 `state=idle` and its Parley MCP
+   * client listed the tools, or once its journal shows input: `auth_success`, `idle_prompt` or a real prompt
+   * (`UserPromptSubmit` that is not Qwen's empty follow-up). A journal line counts only by its own payload time at or
+   * after the spawn of the current process: its position past the cached journal length proves nothing, because the
+   * journal is read asynchronously and a read finishing after a fast resume brings old lines past that length.
+   */
+  function qwenReady(key: string): boolean {
+    const current = qwenProcesses.get(key);
+    // The terminal says the prompt is idle and the agent's Parley MCP client has its tools: the first turn can use them.
+    if (current?.idleSeen === true && current.mcpListed) return true;
+    // The journal shows the process took input (a real prompt, idle after a turn, a finished sign-in).
+    const journal = journals.get(key) ?? [];
+    if (current === undefined) return journal.slice(launches.get(key)?.journalLength ?? 0).some(isQwenReadiness);
+    return journal.some(
+      (event) => isQwenReadiness(event) && event.atFromPayload === true && Date.parse(event.at) >= current.spawnedAt,
+    );
+  }
+
+  /**
    * События сессии для свёртки. У Claude Code — журнал хуков. У codex хуков нет: журнал `events/` пишет
    * только скрипт `notify` (конец хода), поэтому его отсутствие не поломка хуков, а к журналу добавляется
    * последнее известное состояние терминала — по времени, как если бы это был хук. Сессия codex — и та,
@@ -653,7 +738,13 @@ export function createActivityService(
   function eventsFor(session: WorkSession, key: string): readonly EventRecord[] | null {
     const journal = journals.get(key) ?? null;
     const terminal = terminals.get(key);
-    if (terminal === undefined && session.provider !== 'codex') {
+    // Qwen states `starting` and `started` (spec 3.4): until the current process shows readiness, its lines stay out of
+    // the fold. Its `SessionStart` alone must not make the session look ready (`hookedSince`), so nothing is typed
+    // into the pty before `ready`; past the grace `startupEventOf` adds the startup attention.
+    if (terminal === undefined && journal !== null && isQwen(session) && hostProcessLive(session, key) && !qwenReady(key)) {
+      return journal.slice(0, launches.get(key)?.journalLength ?? 0);
+    }
+    if (terminal === undefined && hooksExpected(session)) {
       return withLaunchBoundary(journal, launchBoundaryOf(session, key));
     }
     // Строки до запуска процесса Codex — прошлых процессов (прежний агент до замены, прошлый запуск): за ними граница
@@ -711,7 +802,7 @@ export function createActivityService(
     return (
       session.launchedBy === 'host' &&
       session.lifecycle === 'active' &&
-      session.provider !== 'codex' &&
+      hooksExpected(session) &&
       !terminals.has(key)
     );
   }
@@ -732,10 +823,10 @@ export function createActivityService(
    * процесса не прибавилось. Без записи о запуске (`processStarted`) отсчёт идёт от пустого журнала.
    */
   function waitsForStartup(session: WorkSession, key: string): boolean {
-    return (
-      hostProcessLive(session, key) &&
-      (journals.get(key)?.length ?? 0) === (launches.get(key)?.journalLength ?? 0)
-    );
+    if (!hostProcessLive(session, key)) return false;
+    // Qwen waits until readiness, not until its first line (`SessionStart` fires under the sign-in picker).
+    if (isQwen(session)) return !qwenReady(key);
+    return (journals.get(key)?.length ?? 0) === (launches.get(key)?.journalLength ?? 0);
   }
 
   /**
@@ -754,12 +845,17 @@ export function createActivityService(
     log: ActivityLog | null,
   ): EventRecord | null {
     if (!waitsForStartup(session, key)) return null;
-    const due = startupDue(session, key);
+    const qwen = isQwen(session) ? qwenProcesses.get(key) : undefined;
+    // Qwen under its sign-in picker says so itself: attention at once, not after the grace.
+    const due = qwen?.authAt ?? startupDue(session, key);
     if (!(due <= now)) return null;
     if (Date.parse(log?.lastRecordAt ?? '') > launchedAtOf(session, key)) return null;
     return {
       ...bareEvent(new Date(due).toISOString(), 'Notification'),
       notificationType: PARLEY_STARTUP_NOTIFICATION,
+      // It does not assert that sign-in failed: Qwen may stand at any startup dialog. No OSC 7501 at all (another qwen
+      // version): the shorter text, and nothing is ever typed (`hookedSince` stays false).
+      ...(isQwen(session) ? { message: qwen?.statusSeen === true ? QWEN_STARTUP_ATTENTION : QWEN_STARTUP_NO_STATUS } : {}),
     };
   }
 
@@ -1127,13 +1223,13 @@ export function createActivityService(
   ): void {
     if (session.launchedBy !== 'host' || session.lifecycle !== 'active') return;
     // Хуков Codex харнесс не включает: их отсутствие у него — норма, состояние ведёт терминал.
-    if (terminals.has(key) || session.provider === 'codex') return;
+    if (terminals.has(key) || !hooksExpected(session)) return;
     if (events !== null || hooksMissingNotified.has(key)) return;
     hooksMissingNotified.add(key);
     host.broadcast('host.notice', {
       kind: 'hooks-missing',
       ref,
-      text: `Claude Code hooks did not arrive for session ${ref.sessionId} — status comes from the log`,
+      text: `${isQwen(session) ? 'Qwen Code' : 'Claude Code'} hooks did not arrive for session ${ref.sessionId} — status comes from the log`,
       at: new Date().toISOString(),
     });
   }
@@ -1149,8 +1245,9 @@ export function createActivityService(
       clearTrustWaitTimer(key);
       return;
     }
-    // Экраны старта Codex ловит свой срок (`terminalStarted`): хуков у него не будет ни в одной папке.
-    if (terminals.has(key) || session.provider === 'codex') {
+    // Экраны старта Codex ловит свой срок (`terminalStarted`): хуков у него не будет ни в одной папке. Qwen has folder
+    // trust off by default; its startup screens are the readiness state's startup attention.
+    if (terminals.has(key) || !hooksExpected(session) || isQwen(session)) {
       clearTrustWaitTimer(key);
       return;
     }
@@ -1489,7 +1586,16 @@ export function createActivityService(
     const eventsDir = workPaths(entry.projectPath, entry.map.work.id).events;
     let watch = workWatches.get(wk);
     if (watch === undefined) {
-      watch = { journal: openEvents(eventsDir), watcher: null };
+      // One reader for the whole work; each session's journal is parsed with its own provider family.
+      const projectPath = entry.projectPath;
+      const workId = entry.map.work.id;
+      watch = {
+        journal: openEvents(eventsDir, (sessionId) => {
+          const provider = works.entry(projectPath, workId)?.map.sessions.find((session) => session.id === sessionId)?.provider;
+          return provider === undefined ? null : providerFamily(provider);
+        }),
+        watcher: null,
+      };
       workWatches.set(wk, watch);
     }
     // Наблюдатель нужен работе не в архиве с активной сессией: хуки пишет только живой процесс. Он заводится лениво и при
@@ -1549,7 +1655,11 @@ export function createActivityService(
       for (const session of entry.map.sessions) {
         if (!isLive(session)) continue;
         if (watch !== undefined) void readJournal(entry.projectPath, entry.map.work.id, watch.journal, session.id);
-        const file = session.provider === 'codex' ? undefined : logIndex.index(session)?.file;
+        // The log index serves the Claude family and Qwen; Codex has `codex-log-poll.ts`.
+        // A Qwen session not yet indexed (created after the watcher attached, event missed) is probed through its binding.
+        const file = byFamily(session.provider, { claude: true, codex: false, qwen: true, neutral: false })
+          ? (logIndex.index(session)?.file ?? session.qwenTranscript?.path)
+          : undefined;
         if (file !== undefined) logs.push(file);
       }
     }
@@ -1882,9 +1992,49 @@ export function createActivityService(
       terminals.set(key, state);
       recomputeOnStart(ref);
     },
-    processStarted(ref) {
+    qwenStatus(ref, status) {
       if (stopped) return;
       const key = refKey(ref);
+      const current = qwenProcesses.get(key);
+      // Reports before `processStarted` of this generation have no process to belong to.
+      if (current === undefined) return;
+      current.statusSeen = true;
+      if (status.state === 'idle') current.idleSeen = true;
+      current.blocked = status.state === 'blocked';
+      const auth = status.state === 'blocked' && status.kind === 'auth';
+      // The picker is left once Qwen reports any other state.
+      current.authAt = auth ? (current.authAt ?? nowFn()) : null;
+      recompute(ref);
+    },
+    qwenBlocked(ref) {
+      return qwenProcesses.get(refKey(ref))?.blocked === true;
+    },
+    processGeneration(ref) {
+      return generations.get(refKey(ref)) ?? null;
+    },
+    mcpListed(ref, generation) {
+      if (stopped) return;
+      const current = qwenProcesses.get(refKey(ref));
+      // The list was asked by another (replaced) process, or before any process of this host: not this process's tools.
+      if (current === undefined || generation === null || current.generation !== generation || current.mcpListed) return;
+      current.mcpListed = true;
+      recompute(ref);
+    },
+    processStarted(ref, spawnedAt) {
+      if (stopped) return;
+      const key = refKey(ref);
+      const generation = (generations.get(key) ?? 0) + 1;
+      generations.set(key, generation);
+      // A new process generation: nothing it has not shown yet counts (stale OSC or MCP of the previous process).
+      qwenProcesses.set(key, {
+        generation,
+        spawnedAt: spawnedAt ?? nowFn(),
+        statusSeen: false,
+        idleSeen: false,
+        authAt: null,
+        mcpListed: false,
+        blocked: false,
+      });
       launches.set(key, { at: nowFn(), journalLength: journals.get(key)?.length ?? 0 });
       // Срок и счёт новых строк начинаются заново: таймер прежнего запуска (Resume) к этому процессу не относится.
       clearStartupTimer(key);

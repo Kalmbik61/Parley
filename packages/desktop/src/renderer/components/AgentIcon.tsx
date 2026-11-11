@@ -60,11 +60,11 @@ const isVendor = (value: unknown): value is Vendor => typeof value === 'string' 
  * Семейство CLI аккаунта подписки (спека подписок 5.9): значок аккаунта — значок его CLI, а не Parley. Берётся из строки
  * `providers.list` (`family` отдаёт хост); у записи с адресом, хоть она и запускается через `claude`, значка CLI нет.
  * Вендор узнаётся по пресету endpoint-записи, а не по пользовательскому имени или id.
- * Протокол пока знает только `family: 'claude'`; Codex — по виду аккаунта до этапа 3.
+ * Семейство, которого окно не знает (qwen до A10 или новое), даёт нейтральный значок.
  */
 function providerBrand(row: ProviderInfo | undefined): 'claude' | 'codex' | Vendor | null {
   const kind = kindOf(row?.custom);
-  if (kind === 'claude-account') return row?.family ?? 'claude';
+  if (kind === 'claude-account') return row?.family === 'codex' ? 'codex' : row?.family === 'claude' || row?.family == null ? 'claude' : null;
   if (kind === 'codex-account') return 'codex';
   if (kind === 'endpoint' && row?.custom && 'preset' in row.custom && isVendor(row.custom.preset)) return row.custom.preset;
   return null;
