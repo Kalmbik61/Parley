@@ -139,12 +139,11 @@ describe('обновление CLI из Parley', () => {
     expect(result).toMatchObject({ ok: true, smoke: { ok: false } });
   });
 
-  it('Claude: та же команда update, пробы нет', async () => {
+  it('Claude: та же команда update; проба из таблицы — безобидное `--version` (спека 2026-11-11, §4.1)', async () => {
     bin = await script('    echo claude-updated; exit 0');
     const result = await runner({ command: 'claude', versions: { now: '2.1.300', after: '2.1.320' }, latest: '2.1.320' }).run('claude', 'w');
-    expect(result).toMatchObject({ ok: true, to: '2.1.320' });
-    expect(result).not.toHaveProperty('smoke');
-    expect(existsSync(path.join(dir, 'smoke-args'))).toBe(false);
+    expect(result).toMatchObject({ ok: true, to: '2.1.320', smoke: { ok: true } });
+    expect((await readFile(path.join(dir, 'smoke-args'), 'utf8')).trim()).toBe('--version');
   });
 
   it('таймаут: процесс убивается, ответ — ok false с пометкой', async () => {

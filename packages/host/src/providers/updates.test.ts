@@ -126,6 +126,24 @@ describe('проверка версий CLI', () => {
     expect(await updates.current('other', '0.1.0')).toBeNull();
   });
 
+  it('qwen: последняя версия из npm dist-tags.latest пакета @qwen-code/qwen-code, способ — по таблице', async () => {
+    const QWEN = 'https://registry.npmjs.org/-/package/@qwen-code/qwen-code/dist-tags';
+    const qwenBin = await executable(path.join(userHome, '.local/lib/qwen-code/bin/qwen'));
+    const n = net();
+    n.replies.set(QWEN, { latest: '0.28.0', nightly: '0.29.0-nightly.1' });
+    const updates = createCliUpdates({
+      fetchImpl: n.fetchImpl,
+      log,
+      home: parley,
+      userHome,
+      env: { PARLEY_CODEX_BIN: codexBin, PARLEY_CLAUDE_BIN: claudeBin, PARLEY_QWEN_BIN: qwenBin, PATH: '' },
+      now: () => Date.UTC(2026, 10, 2),
+    });
+    await updates.checkAll();
+    expect(n.urls).toContain(QWEN);
+    expect(await updates.current('qwen', '0.27.2')).toMatchObject({ latest: '0.28.0', method: 'standalone' });
+  });
+
   it('без проверки обновления нет', async () => {
     const updates = service(net(), () => 0);
     expect(await updates.current('codex', '0.162.0')).toBeNull();

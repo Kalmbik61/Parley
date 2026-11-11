@@ -1,5 +1,5 @@
 /**
- * Проверка новых версий CLI `codex` и `claude` раз в сутки (спека 2026-11-02, обновление CLI из Parley, T2).
+ * Проверка новых версий CLI `codex`, `claude` и `qwen` раз в сутки (спека 2026-11-02, обновление CLI из Parley, T2).
  * Хост спрашивает публичный источник последней версии (`fetchLatestVersion` в core), кладёт ответ в
  * `<parleyHome>/cli-updates.json` и отдаёт `providers.list` как поле `update`. Проверка идёт в фоне со своим таймером
  * и ничего не задерживает: ни старт хоста, ни `providers.list`, ни запуск сессии. Без сети — тишина: в кэш пишется
@@ -7,9 +7,11 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { mkdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
+  CLI_TOOLS,
   fetchLatestVersion,
   findRunnerBinary,
   installMethod,
@@ -57,7 +59,7 @@ export interface CliUpdatesOptions {
 
 export type UpdateCommand = CliUpdateProvider;
 /** Команды реестра, у которых есть проверка; GLM и свои провайдеры показывают строку `claude`. */
-export const UPDATE_COMMANDS: readonly UpdateCommand[] = ['codex', 'claude'];
+export const UPDATE_COMMANDS: readonly UpdateCommand[] = ['codex', 'claude', 'qwen'];
 
 export const CLI_UPDATE_MIN_AGE_MS = 20 * 60 * 60 * 1000;
 export const CLI_UPDATE_PERIOD_MS = 24 * 60 * 60 * 1000;
@@ -152,16 +154,18 @@ export function createCliUpdates(options: CliUpdatesOptions): CliUpdates {
       const real = await realpath(await findRunnerBinary(command, env));
       // Домашняя папка тоже без ссылок: путь бинаря уже раскрыт, и сравниваться они должны в одном виде.
       const home = await realpath(options.userHome).catch(() => options.userHome);
-      method = installMethod(command, real, home);
+      method = installMethod(command, real, home, existsSync);
     } catch {
       return; // CLI не установлен — проверять нечего
     }
     const source: LatestVersionSource =
       command === 'claude'
         ? { kind: 'claude-npm', channel: await claudeChannel(options.userHome, env) }
-        : method === 'brew'
-          ? { kind: 'codex-brew' }
-          : { kind: 'codex-github' };
+        : command === 'qwen'
+          ? CLI_TOOLS.qwen.latest
+          : method === 'brew'
+            ? { kind: 'codex-brew' }
+            : { kind: 'codex-github' };
     const latest = await fetchLatestVersion(source, options.fetchImpl);
     let changed = false;
     await mutate((current) => {

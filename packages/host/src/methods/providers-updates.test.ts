@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -76,6 +76,15 @@ describe('providers.update', () => {
     expect(await createProvidersUpdate({ run })({ provider: 'glm' }, req)).toEqual(done);
     expect(run).toHaveBeenCalledWith('claude', 'window (c-1)');
     expect(broadcast).toHaveBeenCalledWith('providers.changed', { provider: 'glm' });
+  });
+
+  it('qwen: CLI qwen из providers.json обновляется из Parley', async () => {
+    await writeFile(path.join(home, 'providers.json'), JSON.stringify({ qwen: { badge: 'Qwen', command: 'qwen', args: ['{prompt}'] } }), 'utf8');
+    const run = vi.fn(async () => done);
+    const { broadcast, req } = request();
+    expect(await createProvidersUpdate({ run })({ provider: 'qwen' }, req)).toEqual(done);
+    expect(run).toHaveBeenCalledWith('qwen', 'window (c-1)');
+    expect(broadcast).toHaveBeenCalledWith('providers.changed', { provider: 'qwen' });
   });
 
   it('busy отдаётся как есть и событие не шлёт', async () => {
