@@ -787,6 +787,12 @@ export async function deleteSessionFiles(
     contextFile(paths.dir, sessionId),
   ];
   await Promise.all(files.map((file) => rm(file, { force: true })));
+  // Записи Code Mode: `<id>.run`, `<id>.run.claim.<nonce>`, `<id>.exposure.json`, `<id>.launch.json` и их временные файлы. Точный префикс: `s-1` не трогает `s-12`.
+  const codeMode = path.join(paths.dir, 'code-mode');
+  const names = await readdir(codeMode).catch((): string[] => []);
+  await Promise.all(names
+    .filter((name) => name === `${sessionId}.run` || name.startsWith(`${sessionId}.run.claim.`) || name === `${sessionId}.exposure.json` || name.startsWith(`.${sessionId}.exposure.`) || name === `${sessionId}.launch.json` || name.startsWith(`.${sessionId}.launch.`))
+    .map((name) => rm(path.join(codeMode, name), { force: true })));
 }
 
 /**

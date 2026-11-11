@@ -27,6 +27,32 @@ const SESSION_ENV = {
   HARNAS_SESSION_ID: 's-02',
 };
 
+describe('Code Mode в конфиге сервера (план T8h)', () => {
+  const base = { workDir: '/p/.parley/works/w-1', sessionId: 's-1', command: 'parley-mcp' };
+  const NAMES = ['PARLEY_CODE_MODE_LAUNCH', 'HARNAS_CODE_MODE_LAUNCH'];
+  const NONCE = 'a'.repeat(32);
+  const hostEnv = { PARLEY_CODE_MODE_LAUNCH: NONCE, HARNAS_CODE_MODE_LAUNCH: NONCE, PARLEY_HOME: '/h' };
+  const stdioEnv = (over = {}) => mcpConfig({ ...base, ...over }).mcpServers[MCP_SERVER_NAME]!.env;
+  const codexEnv = (over = {}) => {
+    const { value } = parseTomlAssignment(codexMcpOverride({ ...base, ...over }));
+    return (value as { env: Record<string, string> }).env;
+  };
+  it('у классического запуска в конфиге нет ничего о Code Mode: ни в одном маршруте', () => {
+    for (const env of [stdioEnv(), codexEnv()]) expect(Object.keys(env).filter((name) => name.includes('CODE_MODE'))).toEqual([]);
+  });
+  it('нонс запуска уходит под обоими именами, в обоих маршрутах', () => {
+    for (const name of NAMES) {
+      expect(stdioEnv({ codeModeLaunch: NONCE })[name], name).toBe(NONCE);
+      expect(codexEnv({ codeModeLaunch: NONCE })[name], name).toBe(NONCE);
+    }
+  });
+  it('унаследованный от хоста нонс в таблицу Codex не попадает, остальные PARLEY_* проходят', () => {
+    const env = codexEnv({ env: hostEnv });
+    for (const name of NAMES) expect(env[name], name).toBeUndefined();
+    expect(env.PARLEY_HOME).toBe('/h');
+  });
+});
+
 describe('конфиг MCP-сервера на сессию', () => {
   it('описывает один stdio-сервер по абсолютному пути с окружением сессии', () => {
     // Bin `parley-mcp` есть в PATH только под pnpm; агент стартует откуда угодно,

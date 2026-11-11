@@ -279,7 +279,9 @@ export type NoticeKind =
   | 'swarm-done'
   | 'swarm-failed'
   // Запуск человека пошёл сверх потолка машины (спека ёмкости, 4.2, «Классы запусков»): `ref` — запущенная сессия.
-  | 'machine-over-limit';
+  | 'machine-over-limit'
+  // Code Mode: запуск просил замену, а процесс её не подтвердил, или прежний запуск оставил неучтённый прогон (план T8h).
+  | 'code-mode-failed';
 
 export interface HostNotice {
   kind: NoticeKind;

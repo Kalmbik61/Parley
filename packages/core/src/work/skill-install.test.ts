@@ -19,7 +19,12 @@ import {
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { fileURLToPath } from 'node:url';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { MIGRATION_REGISTRY } from '../mcp/code-mode/migration-registry.js';
+import { CLASSIC_ROUTING, type CodeModeRouting, bootstrapText, fixtureRouting, heldRunRouting, replacementRouting } from './code-mode-instructions.js';
+import { createPendingSession, planLaunch } from './launch.js';
+import { createWork, readMap } from './store.js';
 import { gitLocationSpawnCount, installAgentSkill, resetGitLocationCache } from './skill-install.js';
 import { SKILL_MD } from './skill.js';
 import { MINIMAL_DEVELOPMENT_SKILL_MD, MINIMAL_DEVELOPMENT_LICENSE } from './minimal-development.js';
@@ -1332,5 +1337,196 @@ describe('кэш расположения git', () => {
     await installAgentSkill({ projectPath: project });
     expect(gitLocationSpawnCount() - before).toBe(1);
     expect(await exists(path.join(project, '.git'))).toBe(false);
+  });
+});
+
+/**
+ * Смешанные запуски (план Code Mode, T8d1): настоящий `planLaunch` и настоящая установка, один проект и два worktree, в одном `Promise.all`. Один процесс: о гонке
+ * двух хостов этот набор ничего не говорит (карточка b-036). Прежняя сборка — тот же код с прежним текстом в свежем графе модулей, а не настоящая старая сборка.
+ */
+describe('смешанные запуски делят одни байты', () => {
+  const AGENT = { url: 'http://127.0.0.1:4321/agent/browser', token: 'ab'.repeat(32) };
+  const STUB = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'test', 'stub-agent.mjs');
+  const NEW_RULE =
+    "A name such as `get_map` is a Parley operation. Call it as a tool of the `parley` server, unless this launch's instructions or your Parley tools' descriptions route it another way; those win. A name that none of these routes and your client does not offer, listed or loadable on demand, is unavailable here: say so and do not guess.\n\n";
+  /** Текст заглушки до T8d1, точно: его хеш зафиксирован на коммите 0ca49aa4. */
+  const PREVIOUS = SKILL_MD
+    .replace('the parley MCP server (get_map, report, ', 'the parley MCP server (tools get_map, report, ')
+    .replace('the `read_guide` operation of', 'the `read_guide` tool of')
+    .replace('`parley` MCP server (`get_map`, `report`', '`parley` MCP server (tools `get_map`, `report`')
+    .replace(NEW_RULE, '');
+  const PREVIOUS_SHA = '298b5e29d340252fe787a1eca689f292458917348f50a00da13442667e27dd1a';
+  const failing = async (): Promise<void> => { throw Object.assign(new Error('нельзя'), { code: 'EPERM' }); };
+  const ENV = ['PARLEY_HOME', 'PARLEY_CLAUDE_BIN', 'PARLEY_CODEX_BIN', 'PARLEY_GLM_BIN', 'PARLEY_SKILL_NAVIGATOR', 'HARNAS_SKILL_NAVIGATOR', 'PARLEY_CLAUDE_PROJECTS_DIR'];
+  const savedEnv: Record<string, string | undefined> = {};
+  let treeA = '';
+  let treeB = '';
+  const roots = (): string[] => [project, treeA, treeB];
+  const ROUTES: readonly (readonly [string, CodeModeRouting])[] = [
+    ['classic', CLASSIC_ROUTING],
+    ['classic after a refused gate', CLASSIC_ROUTING],
+    ['held classic', heldRunRouting('unaccounted')],
+    ['held classic, holder alive', heldRunRouting('may-be-finishing')],
+    ['shipped replacement', replacementRouting(MIGRATION_REGISTRY)],
+    ['five proven', fixtureRouting(['backlog_list', 'get_map', 'list_roles', 'read_guide', 'read_room'])],
+  ];
+  const layerOf = (args: string[]): string => args[args.indexOf('--append-system-prompt') + 1] ?? '';
+
+  beforeEach(async () => {
+    for (const name of ENV) savedEnv[name] = process.env[name];
+    process.env['PARLEY_HOME'] = path.join(root, 'home');
+    process.env['PARLEY_CLAUDE_BIN'] = STUB;
+    process.env['PARLEY_CODEX_BIN'] = STUB;
+    process.env['PARLEY_GLM_BIN'] = '';
+    process.env['PARLEY_SKILL_NAVIGATOR'] = '0';
+    delete process.env['HARNAS_SKILL_NAVIGATOR'];
+    process.env['PARLEY_CLAUDE_PROJECTS_DIR'] = path.join(root, 'logs');
+    await mkdir(path.join(root, 'logs'));
+    await initRepo(project);
+    treeA = path.join(root, 'tree-a');
+    treeB = path.join(root, 'tree-b');
+    await git(project, 'worktree', 'add', '-b', 'a', treeA);
+    await git(project, 'worktree', 'add', '-b', 'b', treeB);
+  });
+  afterEach(() => {
+    for (const name of ENV) { if (savedEnv[name] === undefined) delete process.env[name]; else process.env[name] = savedEnv[name]; }
+  });
+
+  /** Установка той же сборки с другим текстом заглушки: свежий граф модулей, свой `skill.js`. */
+  const buildWith = async (text: string): Promise<typeof installAgentSkill> => {
+    vi.resetModules();
+    vi.doMock('./skill.js', () => ({ SKILL_MD: text, skillStub: () => text }));
+    try { return (await import('./skill-install.js')).installAgentSkill; } finally { vi.doUnmock('./skill.js'); vi.resetModules(); }
+  };
+  /** Один запуск: как у хоста, сначала установка в проект и worktree, затем план. Возвращает итог установки и слой. */
+  const launchOne = async (routing: CodeModeRouting, worktreePath: string, symlinkFn?: typeof failing): Promise<{ written: string[]; skipped: { path: string; reason: string }[]; layer: string; routing: CodeModeRouting }> => {
+    const created = await createWork(project, { title: 'Смешанные запуски' });
+    const sessionId = await createPendingSession(project, created.work.id, { provider: 'claude', label: 'тесты', task: 'проверка' });
+    const session = (await readMap(project, created.work.id)).sessions.find((item) => item.id === sessionId)!;
+    const installed = await installAgentSkill({ projectPath: project, worktreePath, ...(symlinkFn === undefined ? {} : { symlink: symlinkFn }) });
+    const plan = await planLaunch(project, created.work.id, session, { agent: AGENT, codeMode: routing });
+    return { written: installed.written, skipped: installed.skipped, layer: layerOf(plan.args), routing };
+  };
+  const mix = (symlinkFn?: typeof failing) =>
+    Promise.all(ROUTES.flatMap(([, routing], i) => [treeA, treeB].map((tree, j) => launchOne(routing, i % 2 === j ? tree : treeA, symlinkFn))));
+  /** Что на диске у своих путей: файл, его байты, inode и время; и учёт. */
+  const diskState = async (): Promise<unknown> => {
+    const out: unknown[] = [];
+    for (const dir of roots()) for (const target of installedPaths(dir)) {
+      const info = await lstat(target);
+      const file = path.join(target, 'SKILL.md');
+      const st = await stat(file);
+      out.push([target, info.isSymbolicLink() ? await readlink(target) : 'dir', st.ino, st.mtimeMs, sha256(await readFile(file, 'utf8'))]);
+    }
+    return { out, receipt: await readFile(receiptFile(project), 'utf8'), receiptTime: (await stat(receiptFile(project))).mtimeMs };
+  };
+  const expectEverywhere = async (text: string): Promise<void> => {
+    for (const dir of roots()) {
+      expect(await readFile(path.join(canonical(dir), 'SKILL.md'), 'utf8'), dir).toBe(text);
+      expect(await readFile(path.join(alias(dir), 'SKILL.md'), 'utf8'), dir).toBe(text);
+    }
+  };
+
+  it('восстановленный прежний текст — ровно тот, что был отгружен', () => {
+    expect(sha256(PREVIOUS)).toBe(PREVIOUS_SHA);
+    expect(PREVIOUS).not.toBe(SKILL_MD);
+  });
+
+  it.each([['без навигатора', '0'], ['с навигатором и сокращённым списком', '1']])('%s: каждый план несёт свой абзац, на диске один текст, а со второго круга не двигается ни один файл', async (_name, navigator) => {
+    process.env['PARLEY_SKILL_NAVIGATOR'] = navigator;
+    const first = await mix();
+    await expectEverywhere(SKILL_MD);
+    expect(first.flatMap((r) => r.skipped)).toEqual([]);
+    const settled = await diskState();
+    for (let round = 0; round < 3; round++) {
+      for (const result of await mix()) {
+        const own = bootstrapText(result.routing);
+        expect(result.written).toEqual([]);
+        expect(result.skipped).toEqual([]);
+        if (own === '') expect(result.layer).not.toContain('Parley operation names in authoritative');
+        else expect(result.layer.startsWith(own)).toBe(true);
+        for (const [, other] of ROUTES) {
+          const foreign = bootstrapText(other);
+          if (foreign !== '' && foreign !== own) expect(result.layer).not.toContain(foreign);
+        }
+      }
+      expect(await diskState()).toEqual(settled);
+    }
+    const receipt = await readReceipt(project);
+    for (const dir of roots()) for (const target of installedPaths(dir)) expect(receipt.entries[target], target).toBeDefined();
+    expect(receipt.entries[canonical(project)]!['sha256']).toBe(sha256(SKILL_MD));
+  });
+
+  it.each([['ссылка', undefined], ['запасная копия', failing]] as const)('обновление под нагрузкой (%s): прежний текст заменён один раз в каждом корне', async (_name, symlinkFn) => {
+    const old = await buildWith(PREVIOUS);
+    for (const tree of [treeA, treeB]) await old({ projectPath: project, worktreePath: tree, ...(symlinkFn === undefined ? {} : { symlink: symlinkFn }) });
+    await expectEverywhere(PREVIOUS);
+    const results = await mix(symlinkFn);
+    await expectEverywhere(SKILL_MD);
+    expect(results.flatMap((r) => r.skipped)).toEqual([]);
+    const writes = results.flatMap((r) => r.written);
+    for (const dir of roots()) expect(writes.filter((w) => w === canonical(dir)), dir).toHaveLength(1);
+    for (const dir of roots()) {
+      if (symlinkFn === undefined) expect((await lstat(alias(dir))).isSymbolicLink()).toBe(true);
+      else expect(writes.filter((w) => w === alias(dir)), dir).toHaveLength(1);
+    }
+    expect((await readReceipt(project)).entries[canonical(treeB)]!['sha256']).toBe(sha256(SKILL_MD));
+  });
+
+  it.each([['ссылка', undefined], ['запасная копия', failing]] as const)('откат и возврат (%s): каждый раз точный текст, учёт следует за ним, ни чужого, ни правленого', async (_name, symlinkFn) => {
+    const options = (tree: string) => ({ projectPath: project, worktreePath: tree, ...(symlinkFn === undefined ? {} : { symlink: symlinkFn }) });
+    for (const tree of [treeA, treeB]) await installAgentSkill(options(tree));
+    const old = await buildWith(PREVIOUS);
+    for (const tree of [treeA, treeB]) expect((await old(options(tree))).skipped).toEqual([]);
+    await expectEverywhere(PREVIOUS);
+    expect((await readReceipt(project)).entries[canonical(project)]!['sha256']).toBe(PREVIOUS_SHA);
+    for (const tree of [treeA, treeB]) expect((await installAgentSkill(options(tree))).skipped).toEqual([]);
+    await expectEverywhere(SKILL_MD);
+    expect((await readReceipt(project)).entries[canonical(project)]!['sha256']).toBe(sha256(SKILL_MD));
+  });
+
+  it('правка человека, чужой скилл и правленая ссылка не тронуты ни запусками, ни обновлением, ни откатом; другие корни обслужены', async () => {
+    await installAgentSkill({ projectPath: project, worktreePath: treeA });
+    const edited = path.join(canonical(treeA), 'SKILL.md');
+    await writeFile(edited, 'моя правка\n', 'utf8');
+    const foreign = path.join(canonical(treeB), 'SKILL.md');
+    await mkdir(path.dirname(foreign), { recursive: true });
+    await writeFile(foreign, 'чужой скилл\n', 'utf8');
+    await rm(alias(project));
+    await mkdir(alias(project), { recursive: true });
+    await writeFile(path.join(alias(project), 'SKILL.md'), 'своя копия человека\n', 'utf8');
+    const hashes = async (): Promise<string[]> => Promise.all([edited, foreign, path.join(alias(project), 'SKILL.md')].map(async (f) => sha256(await readFile(f, 'utf8'))));
+    const before = await hashes();
+    const results = await mix();
+    expect(await hashes()).toEqual(before);
+    expect(results.flatMap((r) => r.written)).not.toContain(canonical(treeA));
+    expect(results.flatMap((r) => r.skipped).map((s) => [path.basename(path.dirname(path.dirname(path.dirname(s.path)))), s.reason])).toEqual(expect.arrayContaining([['tree-a', 'edited'], ['tree-b', 'foreign']]));
+    expect(await readFile(path.join(canonical(project), 'SKILL.md'), 'utf8')).toBe(SKILL_MD);
+    const old = await buildWith(PREVIOUS);
+    await old({ projectPath: project, worktreePath: treeA });
+    await old({ projectPath: project, worktreePath: treeB });
+    expect(await hashes()).toEqual(before);
+    expect(await readFile(path.join(canonical(project), 'SKILL.md'), 'utf8')).toBe(PREVIOUS);
+    await mix();
+    expect(await hashes()).toEqual(before);
+    expect(await readFile(path.join(canonical(project), 'SKILL.md'), 'utf8')).toBe(SKILL_MD);
+  });
+
+  it('установка выключена или не удалась: на диске прежний текст, а запуск всё равно несёт свой абзац', async () => {
+    const old = await buildWith(PREVIOUS);
+    await old({ projectPath: project });
+    const five = ROUTES[5]![1];
+    const created = await createWork(project, { title: 'Без установки' });
+    const sessionId = await createPendingSession(project, created.work.id, { provider: 'claude', label: 'тесты', task: 'проверка' });
+    const session = (await readMap(project, created.work.id)).sessions.find((item) => item.id === sessionId)!;
+    const plan = await planLaunch(project, created.work.id, session, { agent: AGENT, codeMode: five });
+    expect(await readFile(path.join(canonical(project), 'SKILL.md'), 'utf8')).toBe(PREVIOUS);
+    expect(layerOf(plan.args).startsWith(bootstrapText(five))).toBe(true);
+    // Сбой на пути: файл вместо каталога. Установка говорит о нём и не бросает, запуск не меняется.
+    await writeFile(path.join(treeA, '.agents'), 'файл вместо каталога\n', 'utf8');
+    const failed = await installAgentSkill({ projectPath: project, worktreePath: treeA });
+    expect(failed.skipped.map((s) => s.reason)).toContain('unsafe');
+    const again = await launchOne(five, treeB);
+    expect(again.layer.startsWith(bootstrapText(five))).toBe(true);
   });
 });

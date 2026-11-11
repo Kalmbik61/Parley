@@ -134,6 +134,13 @@ export const FRAME_EXCEPTIONS: readonly FrameException[] = [
       'спека мобильного приложения 4.2 и 14 (план A29): перед запуском Claude — только projects[<папка из trust.json>].hasTrustDialogAccepted, под блокировкой CLI, слиянием с текущим файлом',
   },
   {
+    file: 'packages/core/src/mcp/code-mode/claude-launch-sources.ts',
+    rule: 'запись в каталоги агентов',
+    line: "const GLOBAL_CONFIG_NAME = '.claude.json';",
+    reason:
+      'T12a-Claude C2a B2 (lead m-7557, m-7578): only reads ~/.claude.json (fs.readFile, bounded) for a server named parley; never writes; a test keeps the file free of fs writes',
+  },
+  {
     file: 'packages/host/src/limits/zai-quota.ts',
     rule: 'API провайдеров',
     line: "export const ZAI_QUOTA_URL = 'https://api.z.ai/api/monitor/usage/quota/limit';",

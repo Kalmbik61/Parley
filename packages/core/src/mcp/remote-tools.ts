@@ -9,6 +9,8 @@ import { randomUUID } from 'node:crypto';
 import { request } from 'node:http';
 import { setTimeout as sleep } from 'node:timers/promises';
 import type { CallToolResult, Tool } from '@modelcontextprotocol/sdk/types.js';
+import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
+import { types as utilTypes } from 'node:util';
 import type { AgentChannel, ToolProfile } from '../work/mcp-config.js';
 import type { McpContext } from './context.js';
 import { waitTimeoutMs, type ToolRunner } from './tools.js';
@@ -282,4 +284,324 @@ export function createRemoteToolRunner(agent: AgentChannel, launch: ToolLaunch, 
       return Array.isArray(answer.result['content']) ? (answer.result as unknown as CallToolResult) : failure(UNREADABLE_ANSWER);
     },
   };
+}
+
+// ----- Code Mode: the remote-only caller (plan T5b1) -----
+//
+// A separate client for Code Mode's broker. It shares the route, token, envelope and retry statuses with the classic
+// runner above, which stays unchanged, but it has no fallback at all (a host without the route is never answered by a
+// local runner), reads every answer under a byte cap, and reports a typed outcome instead of agent text. Only a
+// complete HTTP 200 whose body parses strictly into exactly `{ ok: true, result }`, with `result` a valid MCP
+// `CallToolResult`, settles a call. A 200 that cannot be read as one (cut by the cap, or a complete body that is not a result) is
+// `unread`: the answering attempt is done, which says nothing about earlier attempts, and nothing is known about what the body said. Every other outcome after the
+// first attempt left the process is `unknown` (it may have executed). `observedBytes` are the response-body bytes actually read on every attempt, never a re-serialized size.
+
+/** Why a call's outcome is unknown. */
+export type UnknownWhy =
+  | '401' | '404' | '413' | `status:${number}` | 'route-refusal' | 'unreadable' | 'invalid-result'
+  | 'body-over-cap' | 'gave-up' | 'aborted' | 'retry-not-authorized';
+
+/**
+ * Why a 200 was not read as a result: the response was cut by this caller's own cap, or its complete body is not a result.
+ * The host writes its 200 only after the attempt that answered has no work outstanding (`/agent/tools` `reply`; a test on the
+ * real endpoint pins the order). Two limits, so that a method with an effect does not inherit this: a 200 does not prove the
+ * handler ran (a refused request also answers 200), and an earlier attempt can still be running if its replay record was
+ * evicted. This is a fact for the caller's owner to weigh; the Code Mode broker accepts it for read effects only.
+ */
+export type UnreadWhy = 'body-over-cap' | 'route-refusal' | 'unreadable' | 'invalid-result';
+
+/**
+ * `not-dispatched`: the host has no tools route (spec §5.2, "Code Mode treats host 404 as unavailable"). Its endpoint never answers 404
+ * itself, so a 404 means the route is absent and the call never reached a tool. That proves nothing about an EARLIER attempt (a reset after
+ * the body left, then a host without the route): so only a 404 that answers attempt 1 is `not-dispatched`; a 404 after any retry stays
+ * `unknown('404')` (s-296 m-7463, lead m-7464).
+ */
+export type RemoteOutcome =
+  | { readonly kind: 'ok' | 'tool-error'; readonly text: string; readonly observedBytes: number; readonly attempts: number }
+  /**
+   * `runBudgetCut` is present (true) only on a `body-over-cap` whose cap was the run's remaining response budget, not this caller's
+   * per-call ceiling: typed evidence for the run's own diagnostic, never inferred from `why` alone.
+   */
+  | { readonly kind: 'unread'; readonly why: UnreadWhy; readonly observedBytes: number; readonly attempts: number; readonly runBudgetCut?: true }
+  | { readonly kind: 'not-dispatched'; readonly why: '404'; readonly observedBytes: number; readonly attempts: 1 }
+  | { readonly kind: 'unknown'; readonly why: UnknownWhy; readonly observedBytes: number; readonly attempts: number };
+
+/** The exact request body of one call, built before dispatch (frozen). */
+export interface PreparedCall { readonly body: string; readonly bytes: number }
+
+export interface SendOptions {
+  /** Aborted at the run deadline or by the caller; stops pauses and sends at once. */
+  readonly signal: AbortSignal;
+  /** The run's remaining raw byte budget (settled bytes), read at every attempt. */
+  remainingRaw(): number;
+  /** Asked before every retry (never before attempt 1); false stops with `retry-not-authorized`. */
+  beforeRetry(): boolean;
+  /** Retry window from the start of `send`. */
+  readonly retryBudgetMs: number;
+}
+
+export interface ListOutcome { readonly ok: boolean; readonly why: UnknownWhy | null; readonly observedBytes: number }
+
+export interface RemoteOnlyCaller {
+  /** Pure and synchronous: builds the exact body `{op:'call', launch, name, args, meta?, callId}`. Nothing is sent. */
+  prepare(name: string, args: unknown, meta: unknown): PreparedCall | { readonly refused: 'too-large' };
+  /** Sends attempt 1 synchronously (before any await), then retries 502/503/504 and network failures. */
+  send(call: PreparedCall, options: SendOptions): Promise<RemoteOutcome>;
+  /** One `list` attempt read under `cap` bytes: the preflight. Its bytes are reported, not charged to a call. */
+  list(options: { readonly signal: AbortSignal; readonly cap: number }): Promise<ListOutcome>;
+}
+
+/** Test-only timing; production uses the classic runner's delays and timeouts. */
+export interface RemoteOnlyOptions {
+  readonly retryDelaysMs?: readonly number[];
+  readonly callTimeoutMs?: number;
+  readonly listTimeoutMs?: number;
+}
+
+/** A call's cumulative read cap never exceeds this (the run response budget, `RUN_LIMITS.responseBytes`). */
+export const REMOTE_ONLY_MAX_CALL_BYTES = 1024 * 1024;
+
+/** The `ToolLaunch` fields and their checks. Null prototype: `constructor`, `toString` and the like are not fields. */
+const LAUNCH_KEYS: Readonly<Record<string, (v: unknown) => boolean>> = Object.freeze(Object.assign(Object.create(null) as Record<string, (v: unknown) => boolean>, {
+  skillNavigator: (v: unknown) => typeof v === 'boolean',
+  skillListReduced: (v: unknown) => typeof v === 'boolean',
+  nativeContextRevision: (v: unknown) => typeof v === 'string',
+  // Forwarded exactly: the host keys the session's one tool slot on it, and its agent fence compares it with the map.
+  // Never empty from `launchOf`: `contextFromEnv` drops an empty variable.
+  agentRevision: (v: unknown) => typeof v === 'string' && v !== '',
+  toolProfile: (v: unknown) => v === 'short',
+}));
+
+/**
+ * Plain JSON data only: null, booleans, strings, finite numbers, arrays and plain objects (prototype Object or null) of
+ * own enumerable data properties with string keys, no proxies, no cycles, depth at most 64, and no `toJSON` reachable
+ * on any object or array, own or inherited (a polluted `Object.prototype.toJSON` would rewrite what `JSON.stringify`
+ * emits, so such input is refused). The broker passes values that already crossed strict validation; this keeps
+ * `JSON.stringify` exact for anything else.
+ */
+function plainJson(value: unknown, depth = 0): boolean {
+  if (depth > 64) return false;
+  if (value === null || typeof value === 'boolean' || typeof value === 'string') return true;
+  if (typeof value === 'number') return Number.isFinite(value);
+  if (typeof value !== 'object' || utilTypes.isProxy(value)) return false;
+  if ('toJSON' in value) return false;
+  if (Array.isArray(value)) {
+    if (Object.getPrototypeOf(value) !== Array.prototype) return false;
+    const keys = Reflect.ownKeys(value);
+    if (keys.length !== value.length + 1) return false; // the indices plus `length`
+    for (let i = 0; i < value.length; i++) {
+      const d = Object.getOwnPropertyDescriptor(value, i);
+      if (d === undefined || !('value' in d) || !plainJson(d.value, depth + 1)) return false;
+    }
+    return true;
+  }
+  const proto = Object.getPrototypeOf(value);
+  if (proto !== Object.prototype && proto !== null) return false;
+  for (const key of Reflect.ownKeys(value)) {
+    const d = Object.getOwnPropertyDescriptor(value, key)!;
+    if (typeof key !== 'string' || key === 'toJSON' || key === '__proto__' || !d.enumerable || !('value' in d) || !plainJson(d.value, depth + 1)) return false;
+  }
+  return true;
+}
+
+/** The strict JSON module (code-mode/validation.ts) is loaded lazily so a classic session never loads it. */
+let strictJson: Promise<typeof import('./code-mode/validation.js')> | null = null;
+const loadStrictJson = (): Promise<typeof import('./code-mode/validation.js')> => (strictJson ??= import('./code-mode/validation.js'));
+const RESPONSE_LIMITS = Object.freeze({ maxBytes: REMOTE_ONLY_MAX_CALL_BYTES, maxDepth: 64, maxNodes: 1_000_000 });
+
+/** One attempt read under a cap: the body when complete, or what is known when it is not. */
+type Attempt =
+  | { readonly kind: 'reply'; readonly status: number; readonly body: Buffer; readonly bytes: number }
+  | { readonly kind: 'truncated'; readonly status: number; readonly bytes: number }
+  | { readonly kind: 'failed'; readonly bytes: number };
+
+/**
+ * Like `post` above, but the body is counted as it arrives: once more than `cap` bytes were read, the request is
+ * destroyed and nothing more is buffered. Never rejects; a network failure, timeout or abort is `failed` with the bytes
+ * read so far. The request is created synchronously.
+ */
+function postBounded(url: URL, token: string, payload: string, signal: AbortSignal, cap: number): Promise<Attempt> {
+  return new Promise<Attempt>((resolve) => {
+    let bytes = 0;
+    let done = false;
+    const finish = (a: Attempt): void => { if (!done) { done = true; resolve(a); } };
+    const req = request(
+      url,
+      {
+        method: 'POST',
+        agent: false,
+        signal,
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) },
+      },
+      (res) => {
+        const status = res.statusCode ?? 0;
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk: Buffer) => {
+          if (done) return;
+          bytes += chunk.length;
+          if (bytes > cap) {
+            chunks.length = 0;
+            finish({ kind: 'truncated', status, bytes });
+            req.destroy();
+            return;
+          }
+          chunks.push(chunk);
+        });
+        res.on('end', () => finish({ kind: 'reply', status, body: Buffer.concat(chunks), bytes }));
+        res.on('error', () => finish({ kind: 'failed', bytes }));
+        res.on('close', () => { if (!res.complete) finish({ kind: 'failed', bytes }); });
+      },
+    );
+    req.on('error', () => finish({ kind: 'failed', bytes }));
+    req.end(payload);
+  });
+}
+
+/** The parsed envelope of a complete 200 body, strictly: `{ ok: true, result: <object> }` and nothing else. */
+async function envelopeOf(body: Buffer): Promise<{ result: Record<string, unknown> } | 'route-refusal' | 'unreadable'> {
+  let text: string;
+  try { text = new TextDecoder('utf-8', { fatal: true }).decode(body); } catch { return 'unreadable'; }
+  let parsed: unknown;
+  try {
+    const { parseStrictJson } = await loadStrictJson();
+    parsed = parseStrictJson(text, RESPONSE_LIMITS);
+  } catch { return 'unreadable'; }
+  if (!isRecord(parsed)) return 'unreadable';
+  if (parsed['ok'] === false) return 'route-refusal';
+  const keys = Object.keys(parsed);
+  if (parsed['ok'] !== true || keys.length !== 2 || !keys.includes('result') || !isRecord(parsed['result'])) return 'unreadable';
+  return { result: parsed['result'] };
+}
+
+/**
+ * The Code Mode broker's caller (plan T5b1). `agent` and `launch` are copied, checked and frozen once; the launch JSON is
+ * serialized once and reused byte for byte. There is no fallback runner: a 404 is never a switch to reading the map in this process. It is
+ * `not-dispatched` when it answers attempt 1, and `unknown` after any retry.
+ */
+export function createRemoteOnlyCaller(agent: AgentChannel, launch: ToolLaunch, options: RemoteOnlyOptions = {}): RemoteOnlyCaller {
+  if (!isRecord(agent) || typeof agent.url !== 'string' || typeof agent.token !== 'string' || agent.token === '') throw new TypeError('remote-only caller: invalid agent channel');
+  let url: URL;
+  try { url = new URL(AGENT_TOOLS_PATH, agent.url); } catch { throw new TypeError('remote-only caller: invalid agent channel'); }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new TypeError('remote-only caller: invalid agent channel');
+  const token = agent.token;
+  if (!isRecord(launch) || !plainJson(launch)) throw new TypeError('remote-only caller: invalid launch');
+  // Own keys only, into a null-prototype snapshot: nothing inherited is read, and no inherited serializer hook can reach
+  // the copy when it is turned into JSON.
+  if (Object.keys(launch).some((k) => !Object.hasOwn(LAUNCH_KEYS, k))) throw new TypeError('remote-only caller: invalid launch');
+  const launchCopy = Object.create(null) as Record<string, unknown>;
+  for (const key of Object.keys(LAUNCH_KEYS)) {
+    if (!Object.hasOwn(launch, key)) continue;
+    const v = (launch as Record<string, unknown>)[key];
+    if (!LAUNCH_KEYS[key]!(v)) throw new TypeError('remote-only caller: invalid launch');
+    launchCopy[key] = v;
+  }
+  const launchJson = JSON.stringify(Object.freeze(launchCopy));
+  const retryDelaysMs = [...(options.retryDelaysMs ?? RETRY_DELAYS_MS)];
+  const callTimeoutMs = options.callTimeoutMs ?? CALL_TIMEOUT_MS;
+  const listTimeoutMs = options.listTimeoutMs ?? LIST_TIMEOUT_MS;
+  // Start loading the strict parser now, so the first answer does not wait for it.
+  void loadStrictJson().catch(() => undefined);
+  // Prepared calls of THIS caller that have not been sent yet: a prepared call is single-use and cannot cross callers.
+  const unsent = new WeakSet<PreparedCall>();
+
+  const attemptSignal = (signal: AbortSignal, ms: number): AbortSignal => AbortSignal.any([signal, AbortSignal.timeout(Math.ceil(ms))]);
+  const fixed = (n: unknown): number => (typeof n === 'number' && Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 0);
+
+  return Object.freeze({
+    prepare(name: string, args: unknown, meta: unknown): PreparedCall | { readonly refused: 'too-large' } {
+      if (typeof name !== 'string' || name === '' || !isRecord(args) || !plainJson(args) || (meta !== undefined && (!isRecord(meta) || !plainJson(meta)))) {
+        throw new TypeError('remote-only caller: prepare needs a name, plain JSON object arguments and optional plain JSON meta');
+      }
+      const body = `{"op":"call","launch":${launchJson},"name":${JSON.stringify(name)},"args":${JSON.stringify(args)}${meta === undefined ? '' : `,"meta":${JSON.stringify(meta)}`},"callId":${JSON.stringify(randomUUID())}}`;
+      const bytes = Buffer.byteLength(body, 'utf8');
+      if (bytes > AGENT_TOOLS_REQUEST_BYTES) return Object.freeze({ refused: 'too-large' as const });
+      const prepared: PreparedCall = Object.freeze({ body, bytes });
+      unsent.add(prepared);
+      return prepared;
+    },
+
+    send(call: PreparedCall, o: SendOptions): Promise<RemoteOutcome> {
+      // Consumed before attempt 1: a second send, or a call prepared by another caller, is refused and sends nothing.
+      if (typeof call !== 'object' || call === null || !unsent.delete(call)) throw new TypeError('remote-only caller: not an unsent prepared call of this caller');
+      const started = performance.now();
+      const remaining = (): number => { try { return fixed(o.remainingRaw()); } catch { return 0; } };
+      const budgetMs = fixed(o.retryBudgetMs);
+      const startRemaining = remaining();
+      const callCap = Math.min(REMOTE_ONLY_MAX_CALL_BYTES, startRemaining);
+      // Whether the cap of the latest attempt was set by the run budget (below the per-call ceiling) and not by the ceiling itself; set by `nextCap`.
+      let runBound = false;
+      let observed = 0;
+      let attempts = 0;
+      const unknown = (why: UnknownWhy): RemoteOutcome => Object.freeze({ kind: 'unknown', why, observedBytes: observed, attempts });
+      const unread = (why: UnreadWhy): RemoteOutcome => Object.freeze({ kind: 'unread', why, observedBytes: observed, attempts, ...(why === 'body-over-cap' && runBound ? { runBudgetCut: true as const } : {}) });
+      /** The byte cap of the next attempt: what the call may still read. Runs the `remainingRaw` callback. */
+      const nextCap = (): number => {
+        const now = remaining();
+        runBound = Math.min(startRemaining, now) < REMOTE_ONLY_MAX_CALL_BYTES;
+        return Math.max(0, Math.min(callCap, now) - observed);
+      };
+      /** Sends one attempt with a cap computed BEFORE the final checks; no callback runs between them and the request. */
+      const attempt = (cap: number): Promise<Attempt> => {
+        attempts += 1;
+        return postBounded(url, token, call.body, attemptSignal(o.signal, callTimeoutMs), cap);
+      };
+      // Attempt 1 leaves synchronously: nothing awaits between the caller's dispatch and this request. A zero cap means
+      // no answer could be read at all, so nothing is sent.
+      const firstCap = nextCap();
+      const first: Promise<Attempt> | 'aborted' | 'no-cap' = o.signal.aborted ? 'aborted' : firstCap <= 0 ? 'no-cap' : attempt(firstCap);
+      return (async () => {
+        if (first === 'aborted') return unknown('aborted');
+        if (first === 'no-cap') return unknown('body-over-cap');
+        let reply = await first;
+        for (let failures = 0; ; failures += 1) {
+          observed += reply.bytes;
+          if (reply.kind === 'truncated') return reply.status === 200 ? unread('body-over-cap') : unknown('body-over-cap');
+          const retryable = reply.kind === 'failed' || RETRY_STATUSES.has(reply.status);
+          if (!retryable) break;
+          if (o.signal.aborted) return unknown('aborted');
+          const pause = retryDelaysMs[Math.min(failures, retryDelaysMs.length - 1)] ?? 0;
+          if (performance.now() - started + pause > budgetMs) return unknown('gave-up');
+          try { await sleep(pause, undefined, { signal: o.signal }); } catch { return unknown('aborted'); }
+          // Before every retry: first all callback work (re-authorization, then the remaining budget), THEN the final
+          // monotonic window and signal checks immediately before the request, with the cap computed above.
+          let allowed = false;
+          try { allowed = o.beforeRetry() === true; } catch { allowed = false; }
+          const cap = nextCap();
+          if (o.signal.aborted) return unknown('aborted');
+          if (performance.now() - started > budgetMs) return unknown('gave-up');
+          if (!allowed) return unknown('retry-not-authorized');
+          if (cap <= 0) return unknown('body-over-cap');
+          reply = await attempt(cap);
+        }
+        if (reply.kind !== 'reply') return unknown('gave-up');
+        // A missing route answering the first and only attempt: nothing reached a tool. After any retry it proves nothing about the earlier ones.
+        if (reply.status === 404 && attempts === 1) return Object.freeze({ kind: 'not-dispatched', why: '404', observedBytes: observed, attempts: 1 });
+        if (reply.status === 401 || reply.status === 404 || reply.status === 413) return unknown(String(reply.status) as '401' | '404' | '413');
+        if (reply.status !== 200) return unknown(`status:${reply.status}`);
+        const env = await envelopeOf(reply.body);
+        if (env === 'route-refusal' || env === 'unreadable') return unread(env);
+        const result = env.result;
+        if (!Array.isArray(result['content']) || !CallToolResultSchema.safeParse(result).success) return unread('invalid-result');
+        let text: string;
+        try {
+          const { serializeStrict } = await loadStrictJson();
+          text = serializeStrict(result, RESPONSE_LIMITS);
+        } catch { return unread('invalid-result'); }
+        return Object.freeze({ kind: result['isError'] === true ? 'tool-error' : 'ok', text, observedBytes: observed, attempts });
+      })();
+    },
+
+    async list(o: { readonly signal: AbortSignal; readonly cap: number }): Promise<ListOutcome> {
+      const no = (why: UnknownWhy, bytes: number): ListOutcome => Object.freeze({ ok: false, why, observedBytes: bytes });
+      if (o.signal.aborted) return no('aborted', 0);
+      const reply = await postBounded(url, token, `{"op":"list","launch":${launchJson}}`, attemptSignal(o.signal, listTimeoutMs), Math.min(REMOTE_ONLY_MAX_CALL_BYTES, fixed(o.cap)));
+      if (reply.kind === 'truncated') return no('body-over-cap', reply.bytes);
+      if (reply.kind === 'failed') return no(o.signal.aborted ? 'aborted' : 'gave-up', reply.bytes);
+      if (reply.status !== 200) return no(reply.status === 401 || reply.status === 404 || reply.status === 413 ? (String(reply.status) as '401' | '404' | '413') : `status:${reply.status}`, reply.bytes);
+      const env = await envelopeOf(reply.body);
+      if (env === 'route-refusal' || env === 'unreadable') return no(env, reply.bytes);
+      if (!Array.isArray(env.result['tools'])) return no('invalid-result', reply.bytes);
+      return Object.freeze({ ok: true, why: null, observedBytes: reply.bytes });
+    },
+  });
 }

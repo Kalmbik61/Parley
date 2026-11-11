@@ -1,5 +1,7 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { createParleyServer } from '../mcp/tools.js';
 import { LEGACY_SKILL_NAME, MCP_SERVER_NAME, SKILL_NAME } from '../names.js';
@@ -238,5 +240,47 @@ describe('заглушка и гид согласованы', () => {
       await client.close();
       await server.close();
     }
+  });
+});
+
+describe('заглушка одна на все запуски (план Code Mode, T8d1)', () => {
+  const lines2 = SKILL_MD.split('\n');
+  const body2 = lines2.slice(lines2.indexOf('---', 1) + 1).join('\n');
+  const description2 = (): string => JSON.parse(/^description: (".*")$/m.exec(SKILL_MD)![1]!) as string;
+  const RULE =
+    "A name such as `get_map` is a Parley operation. Call it as a tool of the `parley` server, unless this launch's instructions or your Parley tools' descriptions route it another way; those win. A name that none of these routes and your client does not offer, listed or loadable on demand, is unavailable here: say so and do not guess.";
+
+  it('ни о какой операции не сказано «инструмент» как о безусловном: ни в теле, ни в описании', () => {
+    for (const [where, text] of [['body', body2], ['description', description2()]] as const) {
+      expect(text, where).not.toMatch(/`[a-z_]+` tools?\b/);
+      expect(text, where).not.toMatch(/\btools? `[a-z_]+`/);
+      expect(text, where).not.toMatch(/\btools? [a-z]+_[a-z_]+/);
+    }
+  });
+  it('ни обёрток, ни режимов: классическая сессия не читает о Code Mode ничего', () => {
+    expect(SKILL_MD).not.toMatch(/code_(search|docs|execute)|parley\.[a-z_]+\(|classic|replacement|code mode|migrated/i);
+  });
+  it('правило стоит дословно, перед первым вызовом, один раз', () => {
+    expect(body2.split(RULE)).toHaveLength(2);
+    expect(body2.indexOf(RULE)).toBeLessThan(body2.indexOf('Call `read_guide` with no arguments'));
+    expect(body2.indexOf('## How to load the guide')).toBeLessThan(body2.indexOf(RULE));
+  });
+  it('верно там, где обвязки нет: подагент без абзаца запуска идёт по описаниям своих инструментов (s-296 B2)', () => {
+    expect(body2).toContain("your Parley tools' descriptions route it");
+    expect(body2).toContain('those win');
+  });
+  it('верно при отложенных инструментах: список пуст, а инструменты можно загрузить, и это не «недоступно» (s-296 B1)', () => {
+    expect(body2).toContain('does not offer, listed or loadable on demand');
+    expect(body2).not.toMatch(/\bin your tool list\b/);
+  });
+  it('заглушка не зависит ни от чего на входе: у неё нет параметров, и установка не знает о режиме', () => {
+    expect(skillStub.length).toBe(0);
+    for (const file of ['./skill.ts', './skill-install.ts', '../../../host/src/sessions/agent-skills.ts']) {
+      const text = readFileSync(fileURLToPath(new URL(file, import.meta.url)), 'utf8');
+      expect(text, file).not.toMatch(/code-mode|codeMode|CodeMode|launch-decision|replacementRouting/);
+    }
+    const install = readFileSync(fileURLToPath(new URL('./skill-install.ts', import.meta.url)), 'utf8');
+    const options = /export interface SkillInstallOptions \{([\s\S]*?)\n\}/.exec(install)![1]!;
+    expect([...options.matchAll(/^ {2}([a-zA-Z]+)\??:/gm)].map((m) => m[1])).toEqual(['projectPath', 'worktreePath', 'symlink']);
   });
 });

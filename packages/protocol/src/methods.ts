@@ -225,6 +225,8 @@ export const METHODS = {
   'sessions.setModel': z.object({ ref: sessionRef, model: z.string().max(200).regex(/^[^\s-]\S*$/) }),
   // Замена агента сессии (спека 2026-10-30, 5.2): какие цели есть и что сессия сохранит; сама замена.
   'sessions.switchOptions': z.object({ ref: sessionRef }),
+  // Метка режима для окна (план T12a-indicator): только чтение записи запуска; рабочий каталог хост берёт из `ref`, не из запроса.
+  'sessions.codeMode': z.object({ ref: sessionRef }).strict(),
   'sessions.switchAgent': z.object({
     ref: sessionRef,
     requestId: z.string().uuid(),
@@ -535,6 +537,8 @@ export interface Results extends AssistantMethodResults, VoiceMethodResults, Car
    * переписал в карте.
    */
   'sessions.setModel': { model: string; effort: string | null; restarted: boolean };
+  /** Display only (plan T12a-indicator): what Parley's own launch record says. `reason` is a closed token of core's `CODE_MODE_REASONS` or null; a newer core's unknown token is the window's to show as unknown. */
+  'sessions.codeMode': { mode: 'code-mode' | 'classic' | 'unknown'; reason: string | null };
   /** Цели замены агента; `suggested` — предвыбор окна (спека 2026-10-30, 5.2 и 6.10); `blockers` пуст — замена возможна. */
   'sessions.switchOptions': {
     current: { provider: string; available: boolean; reason: 'limit' | 'sign-in' | 'provider-missing' | null };
@@ -577,8 +581,16 @@ export interface Results extends AssistantMethodResults, VoiceMethodResults, Car
   'wake.resume': { paused: boolean };
   'wake.state': { paused: boolean };
   'capacity.get': CapacitySnapshot;
-  'settings.get': { config: ParleyConfig; locked: Record<string, string> };
-  'settings.set': { config: ParleyConfig };
+  /**
+   * `codeMode` (plan T12a, lead m-7289): which of the setting's four states is on disk, read from config.json and the store row together, so
+   * the window shows a partial off on open, not only in the reply to the write. A host older than T12a omits it.
+   */
+  'settings.get': { config: ParleyConfig; locked: Record<string, string>; codeMode?: 'on' | 'off' | 'off-not-durable' | 'off-next-launch' };
+  /**
+   * `codeMode` only when the key was `codeMode` (plan T12a). `off-not-durable`: off holds while config.json says so, not after its deletion.
+   * `off-next-launch`: off for new launches; running sessions are not stopped. `config.codeMode` is what new launches get.
+   */
+  'settings.set': { config: ParleyConfig; codeMode?: 'on' | 'off' | 'off-not-durable' | 'off-next-launch' };
   'rooms.create': { roomId: string };
   /** `messageId` — системная строка ленты «@s04 joined the room». */
   'rooms.addMember': { messageId: string };

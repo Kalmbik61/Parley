@@ -356,11 +356,11 @@ async function writeSessionSettings(stateRoot: string, workDir: string, file: st
  * Пишет `settings.json` работы и заводит каталог `events/`: хук умеет только
  * дописывать файл, каталог под него создаём мы.
  */
-export async function writeWorkSettings(
-  projectPath: string,
-  workId: string,
-  options: WorkSettingsOptions = {},
-): Promise<string> {
+/**
+ * Куда `writeWorkSettings` положит файл и что в нём будет, без записи. Code Mode (T12a-Claude C2a) записывает путь и sha256 этого файла в
+ * решение запуска раньше, чем файл пишется.
+ */
+export function workSettingsTarget(projectPath: string, workId: string, options: WorkSettingsOptions = {}): { readonly path: string; readonly content: string } {
   if (options.sessionId !== undefined && !/^s-\d+$/.test(options.sessionId)) throw new Error('invalid-session-id');
   const paths = workPaths(projectPath, workId);
   // Файл сессии (навигатор) важнее файла провайдера: у него свой путь и безопасная запись.
@@ -372,9 +372,19 @@ export async function writeWorkSettings(
         : options.provider === 'glm'
           ? path.join(paths.dir, 'settings-glm.json')
           : paths.settings;
+  return { path: file, content: workSettingsJson(options) };
+}
+
+export async function writeWorkSettings(
+  projectPath: string,
+  workId: string,
+  options: WorkSettingsOptions = {},
+): Promise<string> {
+  const { path: file, content } = workSettingsTarget(projectPath, workId, options);
+  const paths = workPaths(projectPath, workId);
   const root = await ensureStateDir(projectPath);
-  if (options.sessionId !== undefined) await writeSessionSettings(root, paths.dir, file, workSettingsJson(options));
+  if (options.sessionId !== undefined) await writeSessionSettings(root, paths.dir, file, content);
   await mkdir(paths.events, { recursive: true });
-  if (options.sessionId === undefined) await writeFile(file, workSettingsJson(options), 'utf8');
+  if (options.sessionId === undefined) await writeFile(file, content, 'utf8');
   return file;
 }

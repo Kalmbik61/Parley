@@ -285,6 +285,14 @@ const SCHEMA_ASSISTANT_REQUESTS = `
     PRIMARY KEY (request_id, consumer));
 `;
 
+/** Code Mode off (plan T12a): at most one row; its presence is the human's off. Written only through `work/code-mode-setting.ts`. */
+const SCHEMA_CODE_MODE_PREFERENCE = `
+  CREATE TABLE IF NOT EXISTS code_mode_preference (
+    singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+    off INTEGER NOT NULL CHECK(off = 1),
+    at TEXT NOT NULL);
+`;
+
 /** Шаг миграции: `up` выполняется внутри транзакции раннера, `user_version` ставит раннер. */
 export interface MigrationStep {
   version: number;
@@ -376,6 +384,8 @@ export const MIGRATIONS: readonly MigrationStep[] = [
       if (!has) db.exec('ALTER TABLE assistant_jobs ADD COLUMN context_json TEXT');
     },
   },
+  // 15: the human turned Code Mode off (plan T12a, §3): one row, kept beside config.json so deleting or replacing that file does not turn it on.
+  { version: 15, up: (db) => db.exec(SCHEMA_CODE_MODE_PREFERENCE) },
 ];
 
 export const WORK_DB_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]!.version;

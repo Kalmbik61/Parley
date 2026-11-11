@@ -49,6 +49,11 @@ export const CODEX_TOOL_EXAMPLES = [
 const oneLine = (text: string): string => text.replace(/\s+/g, ' ').trim();
 
 export interface GuidanceOptions {
+  /**
+   * Абзац о маршрутизации имён операций у запуска в режиме замены (план Code Mode, T8a; текст — `bootstrapText`). Идёт первой строкой,
+   * ВНЕ `stableGuidance`: у стабильной политики остаются её четырнадцать строк и потолок байтов. Нет значения или пусто — вставка прежняя.
+   */
+  codeModeBootstrap?: string;
   skillNavigator?: boolean;
   /** Профиль инструментов запуска: `short` (Codex) — вставка не упоминает `remember`, `memory_read` и `search_history`. */
   toolProfile?: ToolProfile;
@@ -145,7 +150,8 @@ function sessionLine(map: WorkMap, sessionId: string, omitGoal: boolean): string
 
 /** Built-in guidance shared by the Claude and Codex layer channels; optional blocks stay outside it. */
 export function systemGuidance(map: WorkMap, sessionId: string, options: GuidanceOptions = {}): string {
-  return `${stableGuidance(options)}\n${sessionLine(map, sessionId, options.omitGoal === true)}`;
+  const body = `${stableGuidance(options)}\n${sessionLine(map, sessionId, options.omitGoal === true)}`;
+  return options.codeModeBootstrap ? `${options.codeModeBootstrap}\n${body}` : body;
 }
 
 /**

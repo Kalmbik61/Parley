@@ -10,6 +10,9 @@ import { GUIDE_TOPICS } from './guide.js';
  * Список тем печатается из `GUIDE_TOPICS` (`guide.ts`): темы живут в одном месте, и заглушка с
  * `read_guide` разойтись не могут — это держит и тест.
  *
+ * Текст один на все запуски: ни классика, ни режим замены его не меняют, и ни один его вход не зависит от режима (план Code Mode, T8d1). Поэтому два запуска в одном
+ * проекте не могут спорить о байтах. Что запуск знает о маршрутах, он берёт из своего: абзаца запуска, блока `read_guide` и описаний своих инструментов.
+ *
  * Требования к файлу — открытая спецификация Agent Skills (agentskills.io/specification), общая для
  * обоих CLI: `name` — строчные латиница, цифры и дефис, до 64 знаков, равно имени каталога; `description`
  * — до 1024 знаков и отвечает на «когда подключаться». Claude Code режет в списке навыков описание по
@@ -25,7 +28,7 @@ import { GUIDE_TOPICS } from './guide.js';
  */
 const DESCRIPTION =
   'Working inside Parley: the workspace map, sessions, rooms, the lead and decisions, messages between sessions, reports. ' +
-  'Use it when Parley launched you and the session has the parley MCP server (tools get_map, report, ' +
+  'Use it when Parley launched you and the session has the parley MCP server (get_map, report, ' +
   'send_message, create_room, propose_decision, add_to_room) — you need to coordinate with other sessions or the human. ' +
   'Without the parley server the skill is not needed.';
 
@@ -42,17 +45,19 @@ description: ${JSON.stringify(DESCRIPTION)}
 
 # Parley
 
-This is a stub. The full guide lives in Parley itself and matches the version of the running app: the \`read_guide\` tool of the \`parley\` MCP server returns it. Do not retell the guide from memory.
+This is a stub. The full guide lives in Parley itself and matches the version of the running app: the \`read_guide\` operation of the \`parley\` MCP server returns it. Do not retell the guide from memory.
 
 ## When to use it
 
-- The session has the \`parley\` MCP server (tools \`get_map\`, \`report\`, \`send_message\`, \`create_room\`, \`propose_decision\`, \`add_to_room\` and others) — you are working inside a Parley workspace.
+- The session has the \`parley\` MCP server (\`get_map\`, \`report\`, \`send_message\`, \`create_room\`, \`propose_decision\`, \`add_to_room\` and others) — you are working inside a Parley workspace.
 - You need to coordinate: the workspace map, inviting existing sessions, messages, rooms, a decision for the human, a report.
 - For the built-in browser (open, read and drive pages your human sees) load the parley-browser skill.
 - For a research swarm (create_swarm, or you are a queen) load the research-swarm skill.
 - There is no \`parley\` server — the skill is not for you: do nothing with it and do not invent tools.
 
 ## How to load the guide
+
+A name such as \`get_map\` is a Parley operation. Call it as a tool of the \`parley\` server, unless this launch's instructions or your Parley tools' descriptions route it another way; those win. A name that none of these routes and your client does not offer, listed or loadable on demand, is unavailable here: say so and do not guess.
 
 Call \`read_guide\` with no arguments for the whole guide, or with \`topic\` for one section:
 

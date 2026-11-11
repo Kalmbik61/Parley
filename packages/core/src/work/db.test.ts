@@ -69,16 +69,16 @@ describe('workDb', () => {
     expect(modes.every(([, mode]) => mode === 0o600)).toBe(true);
   });
 
-  it('создаёт parley.db в PARLEY_HOME с WAL и user_version = 14', () => {
+  it('создаёт parley.db в PARLEY_HOME с WAL и user_version = 15', () => {
     expect(WORK_DB_FILE).toBe('parley.db');
-    expect(WORK_DB_SCHEMA_VERSION).toBe(14);
+    expect(WORK_DB_SCHEMA_VERSION).toBe(15);
     expect(existsSync(home)).toBe(false);
 
     workDb();
 
     expect(existsSync(path.join(home, 'parley.db'))).toBe(true);
     expect(pragma('journal_mode')).toBe('wal');
-    expect(pragma('user_version')).toBe(14);
+    expect(pragma('user_version')).toBe(15);
   });
 
   it('шаг 4 создаёт таблицы Assistant Core: idempotency_key уникален, состояния ограничены', () => {
@@ -156,7 +156,7 @@ describe('workDb', () => {
     closeWorkDb();
 
     expect(indexColumns('messages_sender')).toEqual(['project_path', 'work_id', 'room_id', 'sender', 'seq']);
-    expect(pragma('user_version')).toBe(14);
+    expect(pragma('user_version')).toBe(15);
     expect(workDb().prepare('SELECT id, sender FROM messages').all()).toEqual([{ id: 'm-01', sender: 'human' }]);
     expect(workDb().prepare('SELECT id FROM works').all()).toEqual([{ id: 'w-0001' }]);
   });
@@ -190,7 +190,7 @@ describe('workDb', () => {
   it('база версии 1 (письма в entries) поднимается до 2 при открытии: письмо в таблице с кандидатом, строки message ушли, версия работы прежняя', () => {
     writeV1(goodLetter);
 
-    expect(pragma('user_version')).toBe(14);
+    expect(pragma('user_version')).toBe(15);
 
     const db = workDb();
     expect(db.prepare('SELECT seq, id, sender, recipients, body FROM messages').all()).toEqual([
@@ -217,7 +217,7 @@ describe('workDb', () => {
     check.prepare(`UPDATE entries SET json = ?`).run(goodLetter);
     check.close();
 
-    expect(pragma('user_version')).toBe(14);
+    expect(pragma('user_version')).toBe(15);
   });
 
   it('отдаёт один и тот же дескриптор, пока PARLEY_HOME не меняется', () => {
@@ -229,7 +229,7 @@ describe('workDb', () => {
     insertEntry('w-0001', 'a');
     closeWorkDb();
 
-    expect(pragma('user_version')).toBe(14);
+    expect(pragma('user_version')).toBe(15);
     const works = workDb().prepare('SELECT id FROM works').all();
     expect(works).toEqual([{ id: 'w-0001' }]);
     expect(countEntries()).toBe(1);
@@ -493,9 +493,19 @@ describe('реестр миграций', () => {
     const db = workDb();
     const column = (db.prepare('PRAGMA table_info(assistant_jobs)').all() as Array<{ name: string; type: string; notnull: number }>).find((row) => row.name === 'context_json');
     expect(column).toMatchObject({ type: 'TEXT', notnull: 0 });
-    const step = MIGRATIONS[MIGRATIONS.length - 1]!;
+    const step = MIGRATIONS.find((m) => m.version === 14)!;
     expect(step.version).toBe(14);
     expect(() => step.up(db)).not.toThrow();
+  });
+
+  it('шаг 15 (Code Mode, план T12a) заводит одну строку выключения: только singleton 1 и только off = 1; повтор не падает', () => {
+    const db = workDb();
+    const step = MIGRATIONS[MIGRATIONS.length - 1]!;
+    expect(step.version).toBe(15);
+    expect(() => step.up(db)).not.toThrow();
+    db.prepare('INSERT INTO code_mode_preference (singleton, off, at) VALUES (1, 1, ?)').run('t');
+    expect(() => db.prepare('INSERT INTO code_mode_preference (singleton, off, at) VALUES (2, 1, ?)').run('t')).toThrow();
+    expect(() => db.prepare('UPDATE code_mode_preference SET off = 0 WHERE singleton = 1').run()).toThrow();
   });
 
   it('база версии 12 поднимается до 13 с сохранением строк voice_telemetry', () => {

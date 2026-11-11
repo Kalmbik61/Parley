@@ -71,6 +71,16 @@ describe('профиль short сервера parley', () => {
     expect(short.filter((name) => !full.includes(name))).toEqual([]);
   });
 
+  it('без поверхности Code Mode список классических инструментов не меняется ни на байт: 49 / 43 063 и short 46 / 41 497 (канал агента)', async () => {
+    const agent = { url: 'http://127.0.0.1:1/agent/browser', token: 'a'.repeat(64) };
+    const tools = async (extra: Partial<McpContext>) => (await (await connect({ agent, ...extra })).listTools()).tools;
+    const full = await tools({});
+    const short = await tools({ toolProfile: 'short' });
+    expect([full.length, Buffer.byteLength(JSON.stringify(full), 'utf8')]).toEqual([49, 43_063]);
+    expect([short.length, Buffer.byteLength(JSON.stringify(short), 'utf8')]).toEqual([46, 41_497]);
+    for (const list of [full, short]) expect(list.filter((tool) => tool.name.startsWith('code_'))).toEqual([]);
+  });
+
   it('read_guide при short отдаёт гид без памяти — и целиком, и темой tools; без профиля — с памятью', async () => {
     for (const topic of [undefined, 'tools']) {
       const full = await guideText({}, topic);

@@ -45,6 +45,7 @@ describe('loadConfig', () => {
       machineConcurrent: 'auto',
       agentSkills: true,
       skillNavigator: true,
+      codeMode: true,
       codexWriteApprovals: 'auto',
       telegramEnabled: true,
       telegramNeedsYou: true,
@@ -91,6 +92,7 @@ describe('loadConfig', () => {
       machineConcurrent: 'auto',
       agentSkills: true,
       skillNavigator: true,
+      codeMode: true,
       codexWriteApprovals: 'auto',
       telegramEnabled: true,
       telegramNeedsYou: true,
@@ -122,6 +124,7 @@ describe('loadConfig', () => {
       machineConcurrent: 'auto',
       agentSkills: true,
       skillNavigator: true,
+      codeMode: true,
       codexWriteApprovals: 'auto',
       telegramEnabled: true,
       telegramNeedsYou: true,
@@ -618,6 +621,23 @@ describe('saveConfig', () => {
     await saveConfig({ messageRate: 7 }, file());
 
     expect(JSON.parse(await readFile(file(), 'utf8'))).toEqual({ messageRate: 7, comment: 'моё' });
+  });
+
+  it('два одновременных сохранения не теряют ключ друг друга: очередь по файлу (план T12a, s-296 m-7139)', async () => {
+    await write({ codeMode: true, messageRate: 5 });
+    await Promise.all([saveConfig({ codeMode: false }, file()), saveConfig({ messageRate: 7 }, file())]);
+
+    expect(JSON.parse(await readFile(file(), 'utf8'))).toEqual({ codeMode: false, messageRate: 7 });
+  });
+
+  it('упавшее сохранение не останавливает очередь', async () => {
+    await mkdir(file(), { recursive: true });
+    const failed = saveConfig({ codeMode: false }, file());
+    await expect(failed).rejects.toThrow();
+    await rm(file(), { recursive: true });
+    await saveConfig({ messageRate: 7 }, file());
+
+    expect(JSON.parse(await readFile(file(), 'utf8'))).toEqual({ messageRate: 7 });
   });
 
   it('битый файл перезаписывается целиком', async () => {
