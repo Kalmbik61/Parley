@@ -3,7 +3,8 @@
 // Usage: node mock.mjs <log-file> [port]   (binds 127.0.0.1 only; the port is written to <log-file>.port)
 //
 // The mode is chosen per request by a trigger word anywhere in the conversation, or by MOCK_MODE:
-//   mcpflow    - tool_search select:mcp__parley__echo, then tool_call {name: mcp__parley__echo}, then text
+//   mcpflow    - tool search ON: tool_search select:mcp__parley__echo, then tool_call {name: mcp__parley__echo}, then text
+//   mcpdirect  - tool search OFF (Parley sessions): call mcp__parley__echo directly by its name, then text
 //   shellflow  - run_shell_command `echo hi`, then text
 //   thinkflow  - reasoning_content + content
 //   autherr    - HTTP 401 (invalid api key)
@@ -21,7 +22,7 @@ if (!log) {
 let seq = 0;
 
 const modeOf = (text) => {
-  for (const m of ['autherr', 'quotaerr', 'mcpflow', 'shellflow', 'thinkflow']) if (text.includes(m)) return m;
+  for (const m of ['autherr', 'quotaerr', 'mcpflow', 'mcpdirect', 'shellflow', 'thinkflow']) if (text.includes(m)) return m;
   return process.env.MOCK_MODE || 'text';
 };
 
@@ -53,6 +54,7 @@ http
       let call = null;
       if (mode === 'mcpflow' && nTool === 0) call = ['tool_search', { query: 'select:mcp__parley__echo' }];
       else if (mode === 'mcpflow' && nTool === 1) call = ['tool_call', { name: 'mcp__parley__echo', arguments: { text: 'hi' } }];
+      else if (mode === 'mcpdirect' && nTool === 0) call = ['mcp__parley__echo', { text: 'hi' }];
       else if (mode === 'shellflow' && nTool === 0) call = ['run_shell_command', { command: 'echo hi', is_background: false, description: 'x' }];
       const toolCalls = call ? [{ index: 0, id: `call_${nTool}`, type: 'function', function: { name: call[0], arguments: JSON.stringify(call[1]) } }] : undefined;
       const text = call ? 'step' : 'Hello from mock';

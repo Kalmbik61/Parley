@@ -6,7 +6,7 @@ pty driver. Everything binds to `127.0.0.1`.
 
 | File | Role |
 | --- | --- |
-| `mock.mjs` | OpenAI-compatible mock: `/v1/chat/completions` (stream and non-stream), `/v1/models`. Modes by trigger word in the prompt: `mcpflow`, `shellflow`, `thinkflow`, `autherr` (401), `quotaerr` (429 quota); default: thinking + text. `MOCK_MODE` sets the default. |
+| `mock.mjs` | OpenAI-compatible mock: `/v1/chat/completions` (stream and non-stream), `/v1/models`. Modes by trigger word in the prompt: `mcpflow` (tool search on: `tool_search` → `tool_call`), `mcpdirect` (tool search off, as in Parley sessions: calls `mcp__parley__echo` directly), `shellflow`, `thinkflow`, `autherr` (401), `quotaerr` (429 quota); default: thinking + text. `MOCK_MODE` sets the default. |
 | `mcp.mjs` | stdio MCP server, one tool `echo` (`text: "fail"` returns `isError`). |
 | `hook.mjs`, `hook-server.mjs` | command-hook and http-hook targets that log the payloads. |
 | `gen-settings.mjs` | writes the `QWEN_CODE_SYSTEM_SETTINGS_PATH` file: MCP server `parley` + hooks. |
@@ -33,8 +33,9 @@ export QWEN_CODE_SYSTEM_SETTINGS_PATH=$W/settings.json
 cd $W/proj
 ID=11111111-1111-4111-8111-111111111111
 
-# 1. headless, MCP flow (tool_search, then tool_call -> mcp__parley__echo), approvals bypassed
-$QWEN --session-id $ID --approval-mode yolo -o stream-json "mcpflow" > $W/out.jsonl
+# 1. headless, MCP flow, approvals bypassed. Parley runs qwen with tool search off, so use "mcpdirect"
+#    (direct mcp__parley__echo call); "mcpflow" is for runs with tool search on (tool_search -> tool_call)
+$QWEN --session-id $ID --approval-mode yolo -o stream-json "mcpdirect" > $W/out.jsonl
 # 2. resume appends to the same transcript
 $QWEN --resume $ID --approval-mode yolo -o stream-json "second turn" >> $W/out.jsonl
 # 3. interactive TUI in a pty: -i prompt, then two typed lines
