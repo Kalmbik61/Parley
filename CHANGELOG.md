@@ -12,6 +12,8 @@ The first three waves of a full review of 0.32.0: agents reliably hear each othe
 
 - New session worktrees get their dependencies without an install: Parley clones the ignored folders listed in the project's `.worktreeinclude` (for example `node_modules`) from the main checkout — copy-on-write on APFS, so it takes seconds and almost no disk — and the brief tells the agent whether the lock files match.
 
+- **Install and update CLIs from Settings → Providers.** Claude Code, Codex and Qwen Code can be installed with Install… (macOS and Linux; a confirmation shows the exact command, the source and what is trusted), the CLI version is always shown with Check now or Up to date, and Update now also works for Qwen Code. Parley downloads and runs only the vendor's installer, only when you confirm.
+
 ### Fixed
 
 - Parley no longer stalls when many sessions resume or the assistant is asked for an overview: chat feeds load from the end of the log, two at a time with the visible tab first, idle feeds leave memory, and a window that stops reading is reconnected instead of growing the host's memory. ([#217](https://github.com/Kalmbik61/Parley/pull/217))

@@ -120,11 +120,14 @@ Parley.app (window)  ◀── unix socket ──▶  parley-host  ◀── PTY
 ```
 
 - **Official CLIs, your login.** Parley starts the unmodified `claude` and `codex` from your
-  `PATH`, signed in as you. It never reads or stores their credentials and makes no requests
+  `PATH`, signed in as you. It installs or updates them only when you press Install or Update
+  in Settings → Providers. It never reads or stores their credentials and makes no requests
   to the Anthropic or OpenAI APIs for the agents (only the optional assistant voice calls OpenAI).
 - **Local only.** The host runs the agents' terminals and outlives the window. No server, no
   telemetry. Parley's own requests are a once-a-day release check on GitHub (you can turn it
-  off) and, for GLM, a quota query to Z.ai. With **Remote access** on, the separate bridge
+  off), a daily check of the latest CLI versions (npm registry, GitHub, the Homebrew cask API),
+  the installer downloads from the vendors' URLs when you press Install, and, for GLM, a quota
+  query to Z.ai. With **Remote access** on, the separate bridge
   process also connects out to the relay you chose (and, when push works, to the push gateway);
   the window itself makes one more kind of connection, over SSH, only while you run the relay
   setup wizard. Remote access is off by default and listens on no port.
