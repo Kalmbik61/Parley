@@ -504,7 +504,7 @@ describe('служба «застрял» — доклад (спека заст�
     await emit(worker, needOf('limit'));
     await until(async () => (await stuckOf(worker)) != null);
     const text = letters(readStoredMap(project, workId))[0]?.text ?? '';
-    expect(text).toContain('Other qwen accounts in Parley right now: Qwen 2');
+    expect(text).toContain('Other Qwen Code accounts in Parley right now: Qwen 2');
     expect(text).not.toContain('Other Claude Code accounts');
   });
 

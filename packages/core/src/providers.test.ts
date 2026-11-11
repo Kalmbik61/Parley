@@ -101,7 +101,21 @@ describe('реестр провайдеров', () => {
       providersWithHistory()
         .map((p) => p.id)
         .sort(),
-    ).toEqual(['claude', 'codex', 'glm']);
+    ).toEqual(['claude', 'codex', 'glm', 'qwen']);
+  });
+
+  it('qwen: the spec 3.3 entry, the system-settings MCP route and no --yolo', () => {
+    const qwen = PROVIDERS.qwen;
+    expect(qwen).toMatchObject({ id: 'qwen', family: 'qwen', label: 'Qwen Code', linkBy: 'session-id', hasHistory: true });
+    expect(qwen.runner).toMatchObject({ command: 'qwen', minVersion: '0.27.2', mcpConfig: 'qwen-system-settings' });
+    expect(qwen.runner.args).toEqual(['--session-id', '{sessionUuid}', '--approval-mode', '{approvalMode}',
+      '--append-system-prompt', '{systemPrompt}', '-m', '{model}', '-i', '{prompt}']);
+    expect(qwen.runner.resumeArgs).toEqual(['--resume', '{providerSessionId}', '--approval-mode', '{approvalMode}',
+      '--append-system-prompt', '{systemPrompt}', '-m', '{model}', '-i', '{prompt}']);
+    for (const template of [qwen.runner.args, qwen.runner.resumeArgs]) expect(template).not.toContain('--yolo');
+    expect(startCommand(qwen, { sessionUuid: 'u', approvalMode: 'default' })).toEqual({
+      command: 'qwen', args: ['--session-id', 'u', '--approval-mode', 'default'],
+    });
   });
 
   it('у каждого провайдера есть подпись и команда', () => {
@@ -843,7 +857,7 @@ describe('переопределения из PARLEY_HOME/providers.json', () =>
 
   it('файла нет — работает встроенный реестр', async () => {
     const registry = await loadProviders();
-    expect(Object.keys(registry).sort()).toEqual(['claude', 'codex', 'glm']);
+    expect(Object.keys(registry).sort()).toEqual(['claude', 'codex', 'glm', 'qwen']);
     expect(registry['claude']?.runner.command).toBe('claude');
   });
 

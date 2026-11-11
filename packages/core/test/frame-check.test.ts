@@ -420,7 +420,7 @@ describe('рамочный тест репозитория (тест 6)', () => 
         'packages/core/src/codex/discover.ts:10',
         'packages/core/src/codex/discover.ts:9',
         'packages/core/src/providers.ts:18',
-        'packages/core/src/providers.ts:359',
+        'packages/core/src/providers.ts:362',
         'packages/core/src/work/mcp-config.ts:215',
         // Комментарии кэша каталога ролей: правка `.codex/config.toml` (строка 21) и список проектных `.codex/config.toml`
         // (строка 44) — слова в описании подписи входов; сама подпись собирает путь из частей и регэксп не задевает.

@@ -16,9 +16,11 @@ import type { WorkProvider } from './work/types.js';
  * подстановка `{mcpConfig}`. `json-file` — путь к JSON (`claude --mcp-config`),
  * `codex-override` — `-c`-переопределение инлайн-таблицей TOML (у codex флага
  * под файл конфига нет, MCP-серверы живут в `~/.codex/config.toml`).
+ * `qwen-system-settings` — сервер лежит в системном файле настроек сессии (`QWEN_CODE_SYSTEM_SETTINGS_PATH`,
+ * `work/qwen-settings-file.ts`): подстановки `{mcpConfig}` у Qwen Code нет, сервер доходит через окружение.
  * `undefined` — провайдер MCP не принимает, координация ему недоступна.
  */
-export type McpConfigKind = 'json-file' | 'codex-override';
+export type McpConfigKind = 'json-file' | 'codex-override' | 'qwen-system-settings';
 
 /**
  * Чем запись карты связывается с сессией в логах провайдера: id задан снаружи
@@ -466,6 +468,49 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
       assistantResumeArgs: CLAUDE_ASSISTANT_RESUME_ARGS,
     },
   },
+  // Qwen Code (spec 2026-11-11, 3.3): the official CLI in a pty. The Parley MCP server and hooks come from the
+  // per-session system settings file (`QWEN_CODE_SYSTEM_SETTINGS_PATH`, `work/qwen-settings-file.ts`); there is no
+  // `--settings` flag. `--yolo` is never used: the approval mode is `{approvalMode}` (D6). `-i` runs the first
+  // prompt and stays interactive; a positional prompt would be one-shot. No model catalog and no effort in v1.
+  qwen: {
+    id: 'qwen',
+    family: 'qwen',
+    label: 'Qwen Code',
+    mark: 'Qw',
+    hasHistory: true,
+    // `--session-id <uuid>` names the transcript and is used verbatim in hooks.
+    linkBy: 'session-id',
+    runner: {
+      command: 'qwen',
+      minVersion: '0.27.2',
+      args: [
+        '--session-id',
+        '{sessionUuid}',
+        '--approval-mode',
+        '{approvalMode}',
+        '--append-system-prompt',
+        '{systemPrompt}',
+        '-m',
+        '{model}',
+        '-i',
+        '{prompt}',
+      ],
+      // `--resume` appends to the same transcript and keeps the id; the system prompt is not stored there.
+      resumeArgs: [
+        '--resume',
+        '{providerSessionId}',
+        '--approval-mode',
+        '{approvalMode}',
+        '--append-system-prompt',
+        '{systemPrompt}',
+        '-m',
+        '{model}',
+        '-i',
+        '{prompt}',
+      ],
+      mcpConfig: 'qwen-system-settings',
+    },
+  },
 };
 
 /** Built-in Claude Code family, independent of provider label, command or allowed overrides. */
@@ -580,11 +625,13 @@ export interface RunnerSubstitutions {
   effort?: EffortLevel;
   disallowedTools?: string;
   sandbox?: string;
+  /** `--approval-mode` Qwen Code (решение D6): `auto` в сессиях workspace, иначе `default`; `yolo` — никогда. */
+  approvalMode?: string;
 }
 
 // `notify` остался в списке ради старых записей providers.json: значения нет, и пара `-c {notify}` выпадает.
 const PLACEHOLDER =
-  /^\{(sessionUuid|mcpConfig|settingsFile|systemPrompt|developerInstructions|prompt|providerSessionId|channel|agent|notify|skillCatalog|codexHooks|approvals|trust|model|effort|disallowedTools|sandbox|leanFlags)\}$/;
+  /^\{(sessionUuid|mcpConfig|settingsFile|systemPrompt|developerInstructions|prompt|providerSessionId|channel|agent|notify|skillCatalog|codexHooks|approvals|trust|model|effort|disallowedTools|sandbox|leanFlags|approvalMode)\}$/;
 
 /**
  * Усилие можно подставить и внутрь строки шаблона (`model_reasoning_effort="{effort}"`):

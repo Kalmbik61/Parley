@@ -393,7 +393,7 @@ describe('запись аккаунта (спека подписок 5.1)', () =
       await writeCustomProviders([{ kind: 'codex-account', id: 'codex-2', label: '', link: true }, account], file);
       const registry = await loadProviders(none('p.json'), none('c.json'), file);
       expect(registry['codex-2']).toBeUndefined();
-      expect(Object.keys(registry).sort()).toEqual(['claude', 'codex', 'custom-claude-2', 'glm']);
+      expect(Object.keys(registry).sort()).toEqual(['claude', 'codex', 'custom-claude-2', 'glm', 'qwen']);
       // этап 3: запись читается (хост считает по ней номера), но в реестр не попадает
       expect((await readCustomProviders(file)).map((record) => record.id)).toEqual(['codex-2', 'custom-claude-2']);
       expect(warn).not.toHaveBeenCalled();
@@ -408,7 +408,7 @@ describe('запись аккаунта (спека подписок 5.1)', () =
     expect(registry['custom-kimi']?.custom).toEqual(kimi);
     expect(registry['custom-kimi']?.account).toBeUndefined();
     await writeCustomProviders([kimi], file);
-    expect(Object.keys(await loadProviders(none('p.json'), none('c.json'), file)).sort()).toEqual(['claude', 'codex', 'custom-kimi', 'glm']);
+    expect(Object.keys(await loadProviders(none('p.json'), none('c.json'), file)).sort()).toEqual(['claude', 'codex', 'custom-kimi', 'glm', 'qwen']);
   });
 });
 
@@ -449,7 +449,7 @@ describe('byFamily', () => {
     expect(byFamily('codex', branches)).toBe('x');
     expect(byFamily(QWEN_FAMILY_ENTRY, branches)).toBe('q');
     expect(byFamily(UNKNOWN_FAMILY_ENTRY, branches)).toBe('n');
-    expect(byFamily('qwen', branches)).toBe('n');
+    expect(byFamily('qwen', branches)).toBe('q');
     expect(byFamily('mystery', branches)).toBe('n');
   });
 });

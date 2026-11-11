@@ -57,6 +57,7 @@ import { NEW_LABEL } from './names.js';
 import { CLAUDE_MCP_AUTO_BACKGROUND_MS, mcpConfigValue, writeMcpConfig, type AgentChannel } from './mcp-config.js';
 import { finishSession, linkProviderSession, type FinishOptions, type MetricsRoots } from './metrics.js';
 import { writeWorkSettings } from './settings-file.js';
+import { QWEN_SYSTEM_SETTINGS_ENV, writeQwenSettings } from './qwen-settings-file.js';
 import { CLAUDE_SKILL_BUDGET_ENV, CODEX_SKILL_CATALOG_OVERRIDE, claudeSkillReduction, codexSkillRoute } from './skill-reduction.js';
 import { isPointerText } from './delivery.js';
 import { createWork, deleteSessionFiles, readMap, SharedStateError, updateMap, workPaths } from './store.js';
@@ -317,8 +318,10 @@ async function plan(
 
   // Нативная роль Claude берёт список инструментов у себя: Skill и `find_skill` ей не гарантированы (спека, 6.1).
   const nativeClaudeRole = !workspace && (role.nativeAgent !== null || (isClaudeCode(entry) && options.layer?.nativeClaudeRole === true));
-  // Сервер `parley`, а с ним `find_skill`, доходит до агента только шаблоном с `{mcpConfig}`.
-  const mcpRoute = template.includes('{mcpConfig}') && entry.runner.mcpConfig !== undefined;
+  // Сервер `parley`, а с ним `find_skill`, доходит до агента по виду маршрута: файл конфига и `-c` Codex — шаблоном с
+  // `{mcpConfig}`, системный файл настроек Qwen Code — окружением процесса, без подстановки.
+  const mcpRoute = entry.runner.mcpConfig === 'qwen-system-settings'
+    || (entry.runner.mcpConfig !== undefined && template.includes('{mcpConfig}'));
 
   // Доверие к папке — только Codex, только то, что выдал хост (`options.trust`), и только если шаблон несёт `{trust}`:
   // иначе пара не уйдёт в процесс, и в родной контекст навигатора ей тоже нечего попадать (диагностика пробела ниже).
@@ -485,6 +488,21 @@ async function plan(
         : { model: options.model ?? session.model ?? entry.runner.settingsModel }),
     });
   }
+  // Qwen Code: сервер `parley` и хуки — в системном файле настроек сессии (спека 2026-11-11, 3.3). Режим одобрений —
+  // решение D6: `auto` там, где Claude получает `--permission-mode auto`, иначе `default`; `--yolo` — никогда.
+  let qwenSettingsFile: string | undefined;
+  if (entry.runner.mcpConfig === 'qwen-system-settings') {
+    const written = await writeQwenSettings(projectPath, workId, session.id, {
+      mcp: params,
+      ...(options.hookUrl === undefined ? {} : { hookUrl: options.hookUrl }),
+      ...(options.agent !== undefined ? { allowBrowser: true } : {}),
+    });
+    qwenSettingsFile = written.file;
+    if (written.kept.length > 0) {
+      warnings.push(`The Qwen system settings file sets ${written.kept.join(', ')}; Parley keeps the administrator's value instead of its default.`);
+    }
+    subs.approvalMode = workspace ? 'auto' : 'default';
+  }
   if (skillList === 'removed') subs.skillCatalog = CODEX_SKILL_CATALOG_OVERRIDE;
   // Хуки Codex — только в режиме `parley` настройки `codexWriteApprovals` (спека 2026-10-21, 5.2): без доверия в `/hooks`
   // Codex остановил бы старт экраном ревью, а в `auto` хук `PermissionRequest` шёл бы раньше авторевьюера.
@@ -555,7 +573,7 @@ async function plan(
       ...(role.role ? { role: role.roleText } : {}),
       nativeClaudeRole,
       guidance: systemGuidance(map, session.id, {
-        skillNavigator: skillNavigator && !nativeClaudeRole && template.includes('{mcpConfig}') && mcp !== undefined,
+        skillNavigator: skillNavigator && !nativeClaudeRole && mcpRoute,
         ...(entry.id === 'codex' ? { toolProfile: 'short' as const } : {}),
         ...(skillList === undefined ? {} : { skillList }),
         // Цель стоит в брифе, который уйдёт тем же запуском (системным слоем или первым сообщением): дважды не нужна.
@@ -656,6 +674,7 @@ async function plan(
       ...(isClaudeCode(entry) && process.env['CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS'] === undefined
         ? { CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS: String(CLAUDE_MCP_AUTO_BACKGROUND_MS) } : {}),
       ...(workspace ? { TMPDIR: path.join(workspace.path, '.parley-tmp') } : {}),
+      ...(qwenSettingsFile === undefined ? {} : { [QWEN_SYSTEM_SETTINGS_ENV]: qwenSettingsFile }),
     },
     providerSessionId,
     warnings,
