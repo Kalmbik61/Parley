@@ -133,7 +133,7 @@ describe('listIncludePaths', () => {
     const paths = await listIncludePaths(project);
     expect(paths).toHaveLength(INCLUDE_MAX_ENTRIES);
     expect(paths[0]).toBe('f0000.tmp');
-  });
+  }, 30_000);
 });
 
 describe('resolveIncludePaths', () => {

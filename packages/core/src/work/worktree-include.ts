@@ -18,13 +18,16 @@ export const INCLUDE_MAX_ENTRIES = 1000;
 /** Предел вывода git: в большом проекте игнорируемых файлов много. */
 const MAX_BUFFER = 256 * 1024 * 1024;
 
+/** Срок одного вызова git: зависший вызов считается сбоем. */
+const GIT_TIMEOUT_MS = 30_000;
+
 /** Результат вызова git: код выхода и stdout; сбой запуска (нет git) — код -1. */
 async function gitRaw(args: string[], input?: string): Promise<{ code: number; stdout: string }> {
   return new Promise((resolve) => {
     const child = execFile(
       'git',
       [...NO_FSMONITOR, ...args],
-      { encoding: 'utf8', maxBuffer: MAX_BUFFER },
+      { encoding: 'utf8', maxBuffer: MAX_BUFFER, timeout: GIT_TIMEOUT_MS, killSignal: 'SIGTERM' },
       (error, stdout) => {
         if (!error) return resolve({ code: 0, stdout });
         const code =
@@ -81,7 +84,7 @@ function safeEntry(entry: string): boolean {
 /** Записи списка в основной копии: пути от корня без завершающего «/», по алфавиту, без вложенных в уже выбранный каталог. Сбой — []. */
 export async function listIncludePaths(sourceRoot: string): Promise<string[]> {
   try {
-    const listFile = path.join(sourceRoot, WORKTREE_INCLUDE_FILE);
+    const listFile = path.resolve(sourceRoot, WORKTREE_INCLUDE_FILE);
     const info = await lstat(listFile).catch(() => null);
     if (!info || !info.isFile() || info.size === 0 || info.size > INCLUDE_MAX_FILE_BYTES) return [];
 
