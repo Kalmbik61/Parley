@@ -3323,6 +3323,8 @@ const NOTICE_DETAIL: Record<NoticeKind, string> = {
   'swarm-done': 'swarm finished',
   'swarm-failed': "swarm didn't finish",
   'machine-over-limit': 'started over the machine limit',
+  'deps-clone-unavailable': 'dependencies were not cloned into the new worktree',
+  'deps-clone-mismatch': 'cloned dependencies do not match the lock file',
 };
 
 /**

@@ -110,6 +110,7 @@ import {
   swarmOfSession,
   SYSTEM,
   ENGINE,
+  describeSeed,
   transitionSession,
   trustKey,
   updateMap,
@@ -136,6 +137,7 @@ import type { HookServer } from '../hooks/hook-server.js';
 import type { ProviderVersions } from '../providers/versions.js';
 import type { PtyHandle, PtyManager } from '../pty/pty-manager.js';
 import type { WorksService, WorksView } from '../works/works-service.js';
+import { createDepsSeeder, type DepsSeeder } from '../worktrees/deps-seed.js';
 import { gitFailure } from '../worktrees/worktrees-service.js';
 import { createStepTimer } from '../timing.js';
 import { admitSwarmSession, swarmBudgetRefusal, swarmMemberRefusal } from '../swarms/spawn.js';
@@ -398,6 +400,8 @@ export interface SessionsFeedOptions {
    * запуск. Всем провайдерам, в отличие от хуков ленты; без него сессии запускаются без инструмента `browser_open`.
    */
   agent?: { url(): string | null; register(ref: SessionRef): string; unregister(ref: SessionRef): void };
+  /** Клон зависимостей в новую копию (спека 2026-11-11, 4.1); без него служба заводит свой через `createDepsSeeder`. */
+  depsSeeder?: Pick<DepsSeeder, 'run'>;
   /** Замена агента сессии (спека 2026-10-30): службы застревания, будильника и лимитов. */
   takeover?: SessionsTakeoverOptions;
   /**
@@ -573,6 +577,7 @@ export function createSessionsService(
 
   // Скилл `parley` в проект и в worktree сессии перед каждым запуском (`agent-skills.ts`).
   const installSkill = createSkillInstaller(host);
+  const depsSeeder = feed.depsSeeder ?? createDepsSeeder(host);
 
   // Поколение этого хоста: им подписаны резервы бюджета. Резерв прошлого поколения без свидетельств неоднозначен —
   // он считается занятым и сам по сроку не снимается (`resource-policy.ts`); новая попытка той же сессии его подхватывает.
@@ -1126,6 +1131,33 @@ export function createSessionsService(
             delete target.worktree.removedAt;
           }
         }));
+
+        // Клон зависимостей из основной копии (сбой шага запуск не останавливает: `run` не бросает).
+        const seed = await timer.step('deps', () => depsSeeder.run(ref, worktree));
+        if (seed !== null || worktree.seed !== undefined) {
+          await timer.step('deps', () => updateMap(ref.projectPath, ref.workId, (current) => {
+            const target = current.sessions.find((candidate) => candidate.id === ref.sessionId);
+            if (target?.worktree === null || target?.worktree === undefined) return;
+            if (seed !== null) target.worktree.seed = seed;
+            else delete target.worktree.seed;
+          }, { touch: false }));
+          if (seed !== null) worktree.seed = seed;
+          else delete worktree.seed;
+        }
+        // Копия поднята из ветки: сессия, у которой каталог убрали, узнаёт об этом заметкой (в брифе первого запуска это не нужно).
+        if (reuseBranch) {
+          const restored = `Your worktree folder was removed while this session was not running and is restored from branch \`${worktree.branch}\`. Its commits are intact.`;
+          const text = seed === null ? restored : `${restored} ${describeSeed(seed)}`;
+          try {
+            await writeLettersAsync(ref.projectPath, ref.workId, (letters, current) => {
+              if (current.sessions.some((candidate) => candidate.id === ref.sessionId)) {
+                letters.add({ roomId: null, from: SYSTEM, to: [ref.sessionId], text, kind: 'note' });
+              }
+            });
+          } catch (mapError) {
+            host.log.error('заметка о поднятой копии не записалась', { ref, error: String(mapError) });
+          }
+        }
       }
 
       // Скилл ставится после worktree: его корень к этому моменту уже на диске. Сбой установки запуск не

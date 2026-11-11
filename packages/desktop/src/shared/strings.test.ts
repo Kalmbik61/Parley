@@ -44,6 +44,8 @@ const NOTICE_KINDS: NoticeKind[] = [
   'compact-cancelled',
   'compact-failed',
   'limit-return-blocked',
+  'deps-clone-unavailable',
+  'deps-clone-mismatch',
 ];
 
 /** `notice.text` — заведомо чужой для окна маркер (раунд исправлений 1 куска E.1) — чтобы поймать случайную подстановку. */
