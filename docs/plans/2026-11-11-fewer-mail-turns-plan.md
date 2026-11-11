@@ -75,11 +75,18 @@ Rules:
 Authority is unchanged: letters stay data from colleagues. They arrive as hook context, which Claude Code marks as a system reminder,
 not as text typed by the human.
 
-### 3.3 Not in this phase
+### 3.3 M3. The wait rides in the message of the call it follows (phase 2, added after the phase 1 numbers)
 
-- M3, a guidance line that lets the agent put `wait_for` in the same message as its last `send_message` (0.6%). Decided after the
-  phase 1 numbers.
-- Codex inline delivery. Decided after the Codex baseline (T3) shows what Codex spends.
+Phase 1 runs showed that after M1 an agent still spends one response on `send_message` and the next one only on `wait_for`, and that
+Codex 0.166, which calls every Parley tool inside its `exec` tool, polls a waiting script with `wait` (11 polls in one run). Text only:
+
+- Claude and common guidance: one `wait_for("inbox", 1500)` in one message with the call it follows.
+- Codex: the `exec` script that waits starts with `// @exec: {"yield_time_ms": 1560000}` and holds the preceding call and the wait; if
+  `exec` still yields, one `wait` with the same `yield_time_ms`.
+
+### 3.4 Not done
+
+- Mail delivered with the pointer for Codex (M2 covers Claude-family sessions only).
 - Any change to which letters wake a waiting agent.
 
 ## 4. Tasks
@@ -147,10 +154,36 @@ Worktree `/Users/kalmbik61/parley/worktrees/my_harnas-00f205/w-0054-fewer-mail-t
 One senior reviewer reads the T1 and T2 diff before the treatment runs: authority and mark-read semantics, the 9,000-character rule,
 failure paths, tests that would pass without the change.
 
-## 5. Not verified by this document
+### T4. M3: guidance (executor A, phase 2)
 
-- That Claude Code calls the HTTP `UserPromptSubmit` hook for a pointer typed into the PTY and for a resumed session's first prompt,
-  and waits for its answer.
-- That the threshold variable is honoured by the installed Claude Code (2.1.322) for stdio MCP servers.
-- Codex behaviour on long waits and on the pointer.
+- Files: `packages/core/src/work/guidance.ts`, `guide.ts`, `brief.ts` and their tests. Budgets and pins of the guidance tests hold.
+- Done in `b153f12c`. To fit the Codex examples budget (1024 bytes, 8 lines) other words of the same examples were shortened, among
+  them the `kind: "question"` field of the `send_message` example.
+
+## 5. Results
+
+Measured on 2026-11-11; method, every value and the limits are in `docs/research/2026-11-11-mail-turns/README.md`. Arms: baseline
+(`origin/master` 79428593), phase 1 (M1 and M2, `6a0a838b`), phase 2 (plus M3, `b153f12c`). Weighted cost uses the weights of
+section 2 and is not provider billing.
+
+| Provider, scenario | Baseline | Phase 1 | Phase 2 |
+|---|---|---|---|
+| Claude sonnet, W: model responses | 10, 8, 10 | 10, 11, 11 | 7, 7, 7 |
+| Claude sonnet, W: weighted cost, median | 100.9k | 104.9k | 81.9k |
+| Claude sonnet, P: model responses | 9, 8, 8 | 6, 6, 7 | 7 (one run) |
+| Claude sonnet, P: weighted cost, median | 83.1k | 70.8k | 77.7k (one run) |
+| Codex gpt-6.1-sol, W: model responses | 22 (one run) | not run | 7 (one run) |
+| Codex gpt-6.1-sol, W: weighted cost | 84.6k (one run) | not run | 44.9k (one run) |
+
+Every run that reached a model gave the correct answers. In W, M1 alone removed the backgrounded waits (2 per run to 0) and the agent
+answered a letter within seconds instead of about 100 s late, but it did not lower the number of responses: the late baseline agent
+received two letters in one delivery.
+
+## 6. Not verified
+
+- Anything beyond these two designed scenarios, these two models and fresh sessions of about 55k tokens of context.
+- Codex with more than one run per arm; Codex scenario P (its one attempt stopped at Codex's "Hooks need review" dialog before any
+  model call).
+- The first prompt of a resumed session (whether the hook answer reaches the model there).
 - The effect on provider billing.
+- The measurement harness was not reviewed by a senior model.
