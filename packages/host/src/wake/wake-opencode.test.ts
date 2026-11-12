@@ -132,7 +132,8 @@ beforeEach(async () => {
           }, found ? 300 : 0);
           return;
         }
-        // Both lists answer and the prompt is in neither: a definite "not queued" (a 404 would be a look without an answer).
+        // Both lists answer and the prompt is in neither: a definite "not queued", so the one retry POST follows. A 404 would
+        // count the same (any answer is an answer); 200 with an empty list is simply what a running server returns here.
         if (req.url?.endsWith('/inbox') === true || req.url?.includes('/message') === true) {
           return void res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ data: [] }));
         }
