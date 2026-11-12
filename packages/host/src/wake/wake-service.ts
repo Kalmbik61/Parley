@@ -1152,16 +1152,10 @@ export function createWakeService(
       // The safety timer ran out while the API attempt was unresolved: decide now, once.
       if (apiTimerDue && state.inFlight) {
         apiTimerDue = false;
-        if (state.apiDelivery === true && state.apiAccepted === true) {
-          // The server has the prompt (found queued after an ambiguous answer): delivered, not lost; nothing to re-send.
-          clearTimers(state);
-          state.inFlight = false;
-          state.timeouts = 0;
-          recompute(ref);
-          return;
-        }
         if (state.apiDelivery === true) {
-          // Not confirmed (cancelled): the usual timeout and rearm.
+          // Confirmed or not, the timer's usual verdict now: a turn of an accepted prompt settles it (`apiTurnHappened`
+          // requires the acceptance recorded above); a queued prompt that started no turn, or an unconfirmed one, times out
+          // and is rearmed as usual.
           pointerTimedOut();
           return;
         }

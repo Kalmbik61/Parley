@@ -44,7 +44,7 @@ let apiUp = true;
 let apiStatus = 202;
 /** `normal`: the turn is journaled after the answer (300 ms); `fast`: the whole turn is journaled BEFORE the answer returns; `batch`: the answer returns at once and the whole turn lands in the journal in ONE write 150 ms later (the fold sees no
  * `working`, only the end); `none`: no turn. */
-let apiTurn: 'normal' | 'fast' | 'batch' | 'none' | 'late-queue' = 'normal';
+let apiTurn: 'normal' | 'fast' | 'batch' | 'none' | 'late-queue' | 'late-queue-turn' = 'normal';
 /** `late-queue`: inbox reads so far (the first finds nothing, the second finds the prompt queued). */
 let inboxReads = 0;
 let apiPosts: string[] = [];
@@ -85,9 +85,13 @@ beforeEach(async () => {
     req.on('end', () => {
       if (req.method !== 'POST') {
         // `late-queue`: the server did queue the prompt, but the host learns it only from its second inbox read.
-        if (apiTurn === 'late-queue' && req.url?.endsWith('/inbox') === true) {
+        if ((apiTurn === 'late-queue' || apiTurn === 'late-queue-turn') && req.url?.endsWith('/inbox') === true) {
           inboxReads += 1;
           const found = inboxReads >= 2;
+          // `late-queue-turn`: the queued prompt also ran: its turn is journaled before the host learns it was queued.
+          if (found && apiTurn === 'late-queue-turn') {
+            void appendFile(events(), journalLine('UserPromptSubmit', { prompt: apiPosts[0] }) + journalLine('Stop') + journalLine('Notification', { notification_type: 'idle_prompt' }));
+          }
           setTimeout(() => res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({
             data: found ? [{ id: 'msg_late', type: 'user', time: { created: Date.now() }, payload: { text: apiPosts[0] }, delivery: 'steer' }] : [],
           })), found ? 300 : 0);
@@ -98,7 +102,7 @@ beforeEach(async () => {
       const text = (JSON.parse(body) as { text: string }).text;
       apiPosts.push(text);
       // `late-queue`: the POST never answers (the host times out: an ambiguous outcome).
-      if (apiTurn === 'late-queue') return;
+      if (apiTurn === 'late-queue' || apiTurn === 'late-queue-turn') return;
       if (apiStatus < 300 && apiTurn === 'fast') {
         // The bridge is quicker than the answer: the turn starts and ends while the host still waits for the POST.
         void appendFile(events(), journalLine('UserPromptSubmit', { prompt: text }))
@@ -310,9 +314,9 @@ describe('wake and opencode: delivery through the API', () => {
     expect(r.stream()).not.toContain('field:');
   }, 30_000);
 
-  it('a queued prompt confirmed only after the safety timer: no pointer-timeout and no second POST of the pointer', async () => {
+  it('a queued prompt confirmed only after the safety timer, with its turn: no pointer-timeout and no re-send', async () => {
     // Two POSTs that time out (400 ms each) and two inbox reads: the confirmation comes after the 800 ms safety timer.
-    apiTurn = 'late-queue';
+    apiTurn = 'late-queue-turn';
     const r = await rig({}, 300, { pointerTimeoutMs: 800, pointerRearmMs: [300] });
     await r.letter();
     const posts = (): number => apiPosts.filter((text) => text === POINTER).length;
@@ -323,6 +327,20 @@ describe('wake and opencode: delivery through the API', () => {
     expect(timeouts()).toBe(0);
     // The original POST and sendOpencodePrompt's own single retry; no re-send of the pointer by the wake service.
     expect(posts()).toBe(2);
+    expect(r.stream()).not.toContain('field:');
+  }, 30_000);
+
+  it('a queued prompt confirmed only after the safety timer, but no turn ever starts: one pointer-timeout and the normal rearm', async () => {
+    apiTurn = 'late-queue';
+    const r = await rig({}, 300, { pointerTimeoutMs: 800, pointerRearmMs: [300] });
+    await r.letter();
+    const posts = (): number => apiPosts.filter((text) => text === POINTER).length;
+    await waitFor(() => inboxReads >= 2, 8000);
+    await waitFor(() => timeouts() === 1, 8000);
+    // No notice before the attempt resolved: the timeout came from the resolution, once.
+    expect(posts()).toBe(2);
+    // The rearm points the letter again: a new API attempt.
+    await waitFor(() => posts() >= 3, 8000);
     expect(r.stream()).not.toContain('field:');
   }, 30_000);
 });
