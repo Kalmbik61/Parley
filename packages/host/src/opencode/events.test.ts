@@ -271,4 +271,44 @@ describe('OpenCode event bridge (O6)', () => {
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(records).toHaveLength(waiting);
   });
+
+  it('O6b. a catch-up whose snapshot went stale writes nothing: inactive at the snapshot, then a new prompt before the GETs resolve', async () => {
+    const url = await startServer();
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let snapshots = 0;
+    bridge = createOpencodeBridge({
+      log: silent,
+      hook: (request: HookRequest) => hooks.push(request.body),
+      journal: async (_ref, record) => { records.push(record); },
+      backoffInitialMs: 50,
+      backoffMaxMs: 200,
+      mcpPollMs: 50,
+      // The server answers "not running" (no active file), but only after the gate opens.
+      fetchImpl: async (input, init) => {
+        if (String(input).endsWith('/api/session/active')) {
+          snapshots += 1;
+          const answer = await fetch(input, init);
+          await gate;
+          return answer;
+        }
+        return fetch(input, init);
+      },
+    });
+    bridge.attach(ref, { url, password: PASSWORD, sessionId: SES, tuiAlive: () => true, source: 'startup' });
+    await vi.waitFor(() => expect(bridge!.ready(ref)).toBe(true));
+    const turn = await lines('events-turn.jsonl');
+    await push(turn.slice(0, 7));
+    await vi.waitFor(() => expect(records.at(-1)?.hook_event_name).toBe('PreToolUse'));
+    await push(['{"stub":"drop"}']);
+    await vi.waitFor(() => expect(snapshots).toBe(1), { timeout: 5000 });
+    // A new turn's prompt arrives on the new connection while the catch-up still waits for its answer.
+    const enqueued = JSON.parse(turn[2]!) as { id: string; created: number };
+    await push([JSON.stringify({ ...enqueued, id: 'evt_demo_new01', created: enqueued.created + 60_000 })]);
+    await vi.waitFor(() => expect(records.at(-1)?.hook_event_name).toBe('UserPromptSubmit'));
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(records.at(-1)?.hook_event_name).toBe('UserPromptSubmit');
+    expect(records.some((record) => record.source === 'reconnect-catch-up')).toBe(false);
+  });
 });

@@ -85,6 +85,8 @@ interface Bridge {
   connections: number;
   /** The last journal record written: whether the journal shows a turn open or a permission wait. */
   last: OpencodeJournalRecord | null;
+  /** Events of this session applied so far: a catch-up whose snapshot is older than the newest event is dropped. */
+  generation: number;
   /** Journal writes of this session, in order. */
   writes: Promise<void>;
   pollTimer: NodeJS.Timeout | undefined;
@@ -221,12 +223,14 @@ export function createOpencodeBridge(options: OpencodeBridgeOptions): OpencodeBr
   async function catchUp(bridge: Bridge): Promise<void> {
     if (!bridge.ready || bridge.detached) return;
     const id = bridge.attach.sessionId;
+    // The server state is read across awaits; an event of the session applied meanwhile is newer than that state.
+    const generation = bridge.generation;
     try {
       const [active, permissions] = await Promise.all([
         getJson(bridge, '/api/session/active'),
         getJson(bridge, `/api/session/${encodeURIComponent(id)}/permission`),
       ]);
-      if (bridge.detached) return;
+      if (bridge.detached || bridge.generation !== generation) return;
       const running = isRecord(active) && isRecord(active['data']) && active['data'][id] !== undefined;
       const pending = isRecord(permissions) && Array.isArray(permissions['data'])
         ? permissions['data'].filter((item): item is Record<string, unknown> => isRecord(item) && item['sessionID'] === id)
@@ -260,6 +264,7 @@ export function createOpencodeBridge(options: OpencodeBridgeOptions): OpencodeBr
       void checkReady(bridge);
     }
     if (isRecord(raw['data']) && raw['data']['sessionID'] === bridge.attach.sessionId) {
+      bridge.generation += 1;
       try {
         options.onSessionEvent?.(bridge.ref);
       } catch (error) {
@@ -352,6 +357,7 @@ export function createOpencodeBridge(options: OpencodeBridgeOptions): OpencodeBr
         detached: false,
         connections: 0,
         last: null,
+        generation: 0,
         writes: Promise.resolve(),
         pollTimer: undefined,
         polling: false,
