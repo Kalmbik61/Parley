@@ -840,6 +840,14 @@ export const S = {
     notConnected: 'Not connected',
     copy: 'Copy',
     copyCommand: 'Copy command',
+    /** OpenCode card (spec 2026-11-12, 4.12): the count from `opencode auth list`, a hint and never a verdict. */
+    opencode: {
+      hint: {
+        connected: (count: number): string => (count === 1 ? '1 connected provider found' : `${count} connected providers found`),
+        none: 'No connected provider found. Sign in inside OpenCode: Connect provider, or `opencode auth login --standalone` in a terminal',
+      },
+      hintNote: 'This is a hint from `opencode auth list`, not a check that the sign-in works.',
+    },
     copied: 'Copied',
     installationGuide: 'Installation guide',
     /** Установка из Parley (спека 2026-11-11, §4.2, §4.4). */

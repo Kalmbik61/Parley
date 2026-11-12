@@ -150,7 +150,7 @@ export function startOpencodeCatalog(
   };
 }
 
-interface ProbeOptions {
+export interface ProbeOptions {
   timeoutMs?: number;
   maxBytes?: number;
   killGraceMs?: number;
@@ -230,10 +230,11 @@ function collect(child: ChildProcess, timeoutMs: number, maxBytes: number): Prom
 }
 
 /**
- * The real probe: `<command> models` as the leader of its own process group, in an empty temporary `cwd`. Never throws:
- * any failure is `null`. The process and the temporary directory are always cleaned up, in `finally`.
+ * Runs `<command> <args>` as the leader of its own process group, in an empty temporary `cwd`, and returns its stdout.
+ * Never throws: any failure is `null`. The process and the temporary directory are always cleaned up, in `finally`.
+ * Shared by the catalog probe and the sign-in hint (`opencode-auth-hint.ts`).
  */
-export async function probeOpencodeModels(command: string, options: ProbeOptions = {}): Promise<string | null> {
+export async function runOpencodeCli(command: string, args: string[], options: ProbeOptions = {}): Promise<string | null> {
   const env = options.env ?? process.env;
   let cwd: string;
   try {
@@ -243,7 +244,7 @@ export async function probeOpencodeModels(command: string, options: ProbeOptions
   }
   let child: ChildProcess | undefined;
   try {
-    child = spawn(commandBinary(command, env), ['models', '--standalone'], {
+    child = spawn(commandBinary(command, env), args, {
       cwd,
       env,
       detached: true,
@@ -258,3 +259,7 @@ export async function probeOpencodeModels(command: string, options: ProbeOptions
     await rm(cwd, { recursive: true, force: true }).catch(() => {});
   }
 }
+
+/** The real catalog probe: `<command> models --standalone`. */
+export const probeOpencodeModels = (command: string, options: ProbeOptions = {}): Promise<string | null> =>
+  runOpencodeCli(command, ['models', '--standalone'], options);
