@@ -1292,12 +1292,12 @@ export function createFeedService(
    * дошла до `maxItems` либо `maxBytes`. В первых двух случаях результат равен чтению файла целиком, в третьем
    * могут отличаться только самые старые элементы у края хвоста. `null` — читать нельзя (см. `readTranscript`).
    */
-  async function readFeedTail(file: string): Promise<FeedState | null> {
+  async function readFeedTail(file: string, context: 'root' | 'child' = 'root'): Promise<FeedState | null> {
     let bytes = seedTailBytes;
     for (;;) {
       const read = await readTranscript(file, bytes);
       if (read === null) return null;
-      const state = feedFromTranscript(stashClaude(read.records), { limit: maxItems });
+      const state = feedFromTranscript(stashClaude(read.records), { limit: maxItems, context });
       if (bytes >= read.size || read.records.length >= SEED_RECORD_WINDOW || state.items.length >= maxItems) return state;
       let total = 0;
       for (const item of state.items) {
@@ -1582,6 +1582,7 @@ export function createFeedService(
       const { state } = feedFromCodexRollout(stashCodex(records), {
         limit: maxItems,
         historyStart: meta.historyStart,
+        context: 'child',
       });
       return {
         items: tailByBytes(state.items, maxBytes),
@@ -1593,7 +1594,7 @@ export function createFeedService(
     const base = deps.activity.logFile(ref) ?? feeds.get(refKey(ref))?.transcriptPath ?? null;
     if (base === null) throw notFound();
     const file = path.join(base.replace(/\.jsonl$/, ''), 'subagents', `agent-${agentId}.jsonl`);
-    const state = await readFeedTail(file);
+    const state = await readFeedTail(file, 'child');
     if (state === null) throw notFound();
     return {
       items: tailByBytes(state.items, maxBytes),

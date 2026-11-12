@@ -11,6 +11,7 @@
  * событие, которое пришло первым.
  */
 
+import { mailFromTool } from './mail.js';
 import { eventRecordOf, isRecord, textOf, type EventRecord } from '../work/events.js';
 import { summarizeImageBlocks } from './images.js';
 import { isHookNoise } from './noise.js';
@@ -459,6 +460,15 @@ export function finishTool(
   return next;
 }
 
+/**
+ * Письма законченного вызова верхнего уровня встают в ленту после него (порядок завершения, спека почты 3.2b).
+ * Тот же `id` при повторе записей заменяет элемент на месте.
+ */
+export function putMail(draft: FeedDraft, tool: FeedTool): void {
+  const mail = mailFromTool(tool);
+  if (mail !== null) draft.put(mail);
+}
+
 /** Новая карточка агента из входа вызова `Agent`. */
 export function newAgent(toolUseId: string, input: Record<string, unknown>, at: string): FeedAgent {
   const prompt = textOf(input['prompt']);
@@ -799,7 +809,9 @@ function onPostToolUse(
     draft.put(failed ? finishAgent(agent, 'failed', at) : applyAgentResponse(agent, response, at));
   } else {
     const tool = mainTool(draft, toolUseId) ?? newTool(toolUseId, name, raw, at, null);
-    draft.put(finishTool(tool, status, response, at));
+    const finished = finishTool(tool, status, response, at);
+    draft.put(finished);
+    putMail(draft, finished);
   }
 
   const { input } = limitInput(raw);

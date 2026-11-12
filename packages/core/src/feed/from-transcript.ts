@@ -25,6 +25,7 @@ import {
   newText,
   newTool,
   parseTaskNotification,
+  putMail,
 } from './reduce.js';
 import type { FeedError, FeedState, FeedTool, FeedToolStatus } from './types.js';
 
@@ -140,6 +141,7 @@ function onToolResult(
   block: Record<string, unknown>,
   toolUseResult: unknown,
   at: string,
+  mail: boolean,
 ): void {
   const toolUseId = textOf(block['tool_use_id']);
   if (toolUseId === null) return;
@@ -156,10 +158,12 @@ function onToolResult(
   if (tool === undefined) return;
   const rejected = typeof toolUseResult === 'string' && toolUseResult.startsWith(REJECTED);
   const status: FeedToolStatus = rejected ? 'rejected' : isError ? 'failed' : 'done';
-  draft.put(finishTool(tool, status, responseOf(toolUseResult, block['content']), at));
+  const finished = finishTool(tool, status, responseOf(toolUseResult, block['content']), at);
+  draft.put(finished);
+  if (mail) putMail(draft, finished);
 }
 
-function onUser(draft: FeedDraft, raw: RawRecord, content: unknown, at: string): void {
+function onUser(draft: FeedDraft, raw: RawRecord, content: unknown, at: string, mail: boolean): void {
   if (typeof content === 'string') {
     onUserText(draft, content, 0, at);
     return;
@@ -169,7 +173,7 @@ function onUser(draft: FeedDraft, raw: RawRecord, content: unknown, at: string):
   let images = 0;
   for (const block of content) {
     if (!isRecord(block)) continue;
-    if (block['type'] === 'tool_result') onToolResult(draft, block, raw['toolUseResult'], at);
+    if (block['type'] === 'tool_result') onToolResult(draft, block, raw['toolUseResult'], at, mail);
     else if (block['type'] === 'image') images += 1;
     else if (block['type'] === 'text' && typeof block['text'] === 'string')
       texts.push(block['text']);
@@ -225,6 +229,11 @@ const EPOCH = new Date(0).toISOString();
 export interface FeedFromTranscriptOptions {
   /** Сколько последних элементов вернуть; нет — все. */
   limit?: number;
+  /**
+   * Чей это журнал: сессии (`root`, по умолчанию) или субагента (`child`). Письма в ленту субагента не идут:
+   * их вызовы почты — не доставка этой сессии.
+   */
+  context?: 'root' | 'child';
 }
 
 /**
@@ -234,8 +243,9 @@ export interface FeedFromTranscriptOptions {
  */
 export function feedFromTranscript(
   records: Iterable<RawRecord>,
-  { limit }: FeedFromTranscriptOptions = {},
+  { limit, context = 'root' }: FeedFromTranscriptOptions = {},
 ): FeedState {
+  const mail = context === 'root';
   const draft = new FeedDraft(emptyFeedState());
   let seq = 0;
   let at = EPOCH;
@@ -247,7 +257,7 @@ export function feedFromTranscript(
     const message = isRecord(raw['message']) ? raw['message'] : null;
 
     if (record.type === 'user') {
-      if (!record.isMeta) onUser(draft, raw, message?.['content'], at);
+      if (!record.isMeta) onUser(draft, raw, message?.['content'], at, mail);
     } else if (record.type === 'assistant') {
       onAssistant(draft, raw, uuid, record.messageId, message?.['content'], at);
     } else if (record.type === 'system' && raw['subtype'] === 'api_error') {

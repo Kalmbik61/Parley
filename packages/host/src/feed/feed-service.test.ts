@@ -1897,6 +1897,22 @@ describe('сев из журнала', () => {
     expect(reader.files).toHaveLength(2);
   });
 
+  it('mail: the Claude session transcript shows delivered letters, a subagent transcript does not', async () => {
+    const { root, session } = await history();
+    const mailLog = path.join(FIXTURES, 'mail', 'claude-tools.transcript.jsonl');
+    await copyFile(mailLog, session);
+    await copyFile(mailLog, path.join(root, '-proj', 'sess', 'subagents', 'agent-ad2fe21e96ffde3ba.jsonl'));
+    fakes.setSessions([{ ref: REF, provider: 'glm' }]);
+    fakes.setLogFile(session);
+    start({ roots: () => [root] });
+
+    const main = await service.snapshot(REF);
+    expect(main.items.filter((item) => item.kind === 'mail').map((item) => item.id)).toEqual(['mail:m-9001', 'mail:m-9003', 'mail:m-9010']);
+    const agent = await service.snapshot(REF, 'ad2fe21e96ffde3ba');
+    expect(agent.items.some((item) => item.kind === 'tool' && item.toolUseId === 'toolu_mail_check')).toBe(true);
+    expect(agent.items.some((item) => item.kind === 'mail')).toBe(false);
+  });
+
   it('GLM transcript discovered after subscription seeds and sends a delta', async () => {
     const { root } = await history();
     fakes.setSessions([{ ref: REF, provider: 'glm' }]);
@@ -2786,6 +2802,30 @@ describe('лента Codex', () => {
     });
     const sub = await service.snapshot(REF, 'th-child');
     expect(sub.items.some((entry) => entry.kind === 'tool' && entry.toolUseId === 'cc1')).toBe(true);
+  });
+
+  const mailCall = (n: number, id: string, thread: string) =>
+    item(n, thread, {
+      type: 'McpToolCall',
+      id,
+      server: 'parley',
+      tool: 'check_inbox',
+      arguments: {},
+      status: 'completed',
+      result: { content: [{ type: 'text', text: JSON.stringify({ messages: [{ id: `m-${id}`, from: 's-9', fromLabel: null, at: '2030-01-05T10:00:00.000Z', text: 'hello', kind: 'note', room: null }] }) }] },
+    });
+
+  it('mail: the Codex root feed shows delivered letters, the child agent snapshot does not', async () => {
+    await writeRollout(file, [meta('th-main'), started(1), subagent(2, 'th-child', 'started'), mailCall(3, 'root-mail', 'th-main')]);
+    const childFile = path.join(dir, 'child.jsonl');
+    await writeRollout(childFile, [childMeta('th-child', 'th-main', 3), parentCopy(1), parentCopy(2), task(3, 'Read the mail'), mailCall(4, 'child-mail', 'th-child')]);
+    fakes.setChildLogFile('th-child', childFile);
+    start();
+    const root = await service.snapshot(REF);
+    expect(root.items.filter((entry) => entry.kind === 'mail').map((entry) => entry.id)).toEqual(['mail:m-root-mail']);
+    const sub = await service.snapshot(REF, 'th-child');
+    expect(sub.items.some((entry) => entry.kind === 'tool' && entry.toolUseId === 'child-mail')).toBe(true);
+    expect(sub.items.some((entry) => entry.kind === 'mail')).toBe(false);
   });
 
   it('сессия Codex без providerSessionId, активная: журнал появился — сеется по изменению, задевшему её', async () => {
