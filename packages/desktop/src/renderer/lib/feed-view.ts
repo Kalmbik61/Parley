@@ -28,7 +28,7 @@ export interface FeedAvailabilityInput {
   /** `WorkSession.provider`: встроенный или свой провайдер. */
   provider: string;
   /** Семейство текущей записи; нет поля у старого хоста — Claude только по id. */
-  family?: 'claude' | 'codex' | 'qwen' | null | undefined;
+  family?: 'claude' | 'codex' | 'qwen' | 'opencode' | null | undefined;
   /** Версия CLI провайдера из `providers.list`; `null` — неизвестна. */
   version: string | null;
 }

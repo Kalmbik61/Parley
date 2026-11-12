@@ -30,6 +30,10 @@ describe('feedAvailable by family', () => {
     expect(feedUnavailableReason({ hostMethods: FEED, provider: 'codex', family: 'codex', version: null, features: new Set() })).toBe('host-unsupported');
   });
 
+  it('family opencode has no Chat feed yet: provider-unsupported, with or without feature flags', () => {
+    expect(feedUnavailableReason({ hostMethods: FEED, features: new Set(['feed-qwen', 'feed-codex']), provider: 'opencode', family: 'opencode', version: '2.2.7' })).toBe('provider-unsupported');
+  });
+
   it('a qwen tab waits for the first providers snapshot instead of flashing the terminal', () => {
     expect(feedAvailability({ hostMethods: FEED, features: new Set(['feed-qwen']), provider: 'qwen', family: 'qwen', version: null, loaded: false })).toBeNull();
   });

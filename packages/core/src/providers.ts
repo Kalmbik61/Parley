@@ -29,7 +29,7 @@ export type McpConfigKind = 'json-file' | 'codex-override' | 'qwen-system-settin
  */
 export type SessionLink = 'session-id' | 'cwd+time';
 
-export type ProviderFamily = 'claude' | 'codex' | 'qwen';
+export type ProviderFamily = 'claude' | 'codex' | 'qwen' | 'opencode';
 
 export interface RunnerConfig {
   /** Trusted built-in nonsensitive process environment; never settings.env or a key. */
@@ -540,7 +540,8 @@ export function providerFamily(entry: ProviderEntry | WorkProvider): ProviderFam
  */
 export function byFamily<T>(
   entry: ProviderEntry | WorkProvider,
-  branches: { claude: T; codex: T; qwen: T; neutral: T },
+  // `opencode` is optional until O1b gives every caller its own branch; a caller without one takes `neutral`.
+  branches: { claude: T; codex: T; qwen: T; opencode?: T; neutral: T },
 ): T {
   const family = providerFamily(entry);
   switch (family) {
@@ -550,6 +551,8 @@ export function byFamily<T>(
       return branches.codex;
     case 'qwen':
       return branches.qwen;
+    case 'opencode':
+      return 'opencode' in branches ? (branches.opencode as T) : branches.neutral;
     case null:
       return branches.neutral;
     default: {

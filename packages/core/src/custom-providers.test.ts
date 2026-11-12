@@ -26,8 +26,8 @@ import {
   type CustomAccountRecord,
   type CustomEndpointRecord,
 } from './custom-providers.js';
-import { PROVIDERS, claudeConfigDirFor, isClaudeCode, isManagedEntry, loadProviders, managedRecord, ownsHookToken, providerFamily, byFamily } from './providers.js';
-import { QWEN_FAMILY_ENTRY, UNKNOWN_FAMILY_ENTRY } from '../test/family-fixtures.js';
+import { PROVIDERS, claudeConfigDirFor, isClaudeCode, isManagedEntry, loadProviders, managedRecord, ownsHookToken, providerFamily, byFamily, type ProviderFamily } from './providers.js';
+import { OPENCODE_FAMILY_ENTRY, QWEN_FAMILY_ENTRY, UNKNOWN_FAMILY_ENTRY } from '../test/family-fixtures.js';
 
 const kimi: CustomEndpointRecord = {
   kind: 'endpoint',
@@ -430,6 +430,7 @@ describe('providerFamily', () => {
     expect(providerFamily(registry['mycli']!)).toBeNull();
     expect(providerFamily(accountProviderEntry({ kind: 'claude-account', id: 'custom-claude-2', label: '', link: true }, registry, home))).toBe('claude');
     expect(providerFamily(QWEN_FAMILY_ENTRY)).toBe('qwen');
+    expect(providerFamily(OPENCODE_FAMILY_ENTRY)).toBe('opencode');
     expect(providerFamily(UNKNOWN_FAMILY_ENTRY)).toBe('mystery');
   });
 
@@ -451,5 +452,13 @@ describe('byFamily', () => {
     expect(byFamily(UNKNOWN_FAMILY_ENTRY, branches)).toBe('n');
     expect(byFamily('qwen', branches)).toBe('q');
     expect(byFamily('mystery', branches)).toBe('n');
+  });
+
+  it('opencode: its own branch when a caller gives one, neutral until then (O1b makes the branch required)', () => {
+    expect(byFamily(OPENCODE_FAMILY_ENTRY, { ...branches, opencode: 'o' })).toBe('o');
+    expect(byFamily(OPENCODE_FAMILY_ENTRY, branches)).toBe('n');
+    // A table over every family keeps this test honest: a new `ProviderFamily` member fails the compile here.
+    const table: Record<ProviderFamily, string> = { claude: 'c', codex: 'x', qwen: 'q', opencode: 'o' };
+    expect(Object.keys(table).sort()).toEqual(['claude', 'codex', 'opencode', 'qwen']);
   });
 });

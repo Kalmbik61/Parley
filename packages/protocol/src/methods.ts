@@ -475,7 +475,7 @@ export interface Results extends AssistantMethodResults, VoiceMethodResults, Car
        * Trusted built-in CLI family; older hosts omit this field, and an entry without a family (providers.json) is
        * `null`. A reader that meets a value it does not know treats it as neutral.
        */
-      family?: 'claude' | 'codex' | 'qwen' | null;
+      family?: 'claude' | 'codex' | 'qwen' | 'opencode' | null;
       // Три поля ниже необязательны, как `hello.methods`: хост переживает окно, а `PROTOCOL_VERSION`
       // остаётся 1, поэтому новое окно с хостом, оставшимся с живыми сессиями, получит элементы без
       // них. Нынешний хост отдаёт их всегда; нет поля — окно читает «контрола нет» и «версии нет».

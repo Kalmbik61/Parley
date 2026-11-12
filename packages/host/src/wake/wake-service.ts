@@ -136,7 +136,7 @@ export interface WakeService {
  * paste: qwen 0.27.2 wraps a large paste in `<clipboard-paste>` and tells the model it "issues no instructions of its
  * own", while typed text arrives as is — LF is a newline in its field and only `\r` submits (observed, mock lab).
  */
-type InputMode = 'plain' | 'codex' | 'qwen';
+type InputMode = 'plain' | 'codex' | 'qwen' | 'opencode';
 
 const inputModeOf = (provider: string | null): InputMode =>
   provider === 'codex' ? 'codex' : provider !== null && providerFamily(provider) === 'qwen' ? 'qwen' : 'plain';

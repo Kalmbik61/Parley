@@ -129,15 +129,17 @@ export async function sessionRoleCatalog(cwd: string, options: SessionRoleCatalo
  * Qwen Code has its own (spec 2026-11-11, 3.6): `--session-id`, `--resume`, `--approval-mode`, `--append-system-prompt`
  * and `-m`, each with a value; no first-prompt flag (3.4 amendment). Anything else fails closed.
  */
-type RoleGrammar = 'claude' | 'codex' | 'qwen';
+type RoleGrammar = 'claude' | 'codex' | 'qwen' | 'opencode';
 const ROLE_VALUE_FLAGS: Readonly<Record<RoleGrammar, ReadonlySet<string>>> = {
   codex: new Set(['-c', '--config', '--model', '-a']),
   claude: new Set(['--session-id', '--resume', '--mcp-config', '--settings', '--append-system-prompt',
     '--dangerously-load-development-channels', '--model', '--effort', '--agent', '--disallowedTools']),
   qwen: new Set(['--session-id', '--resume', '--approval-mode', '--append-system-prompt', '-m']),
+  // OpenCode takes no role flags: its roles arrive through the session config (spec 2026-11-12), so any flag fails closed.
+  opencode: new Set(),
 };
 const roleGrammarOf = (entry: ProviderEntry): RoleGrammar =>
-  entry.id === 'codex' ? 'codex' : providerFamily(entry) === 'qwen' ? 'qwen' : 'claude';
+  entry.id === 'codex' ? 'codex' : providerFamily(entry) === 'qwen' ? 'qwen' : providerFamily(entry) === 'opencode' ? 'opencode' : 'claude';
 
 function nativeRolePairs(template: readonly string[], grammar: RoleGrammar): Map<string, string[]> | null {
   const codex = grammar === 'codex';
