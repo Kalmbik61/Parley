@@ -100,6 +100,7 @@ import type { CustomCheckOptions } from './providers/custom-check.js';
 import { createLimitsService } from './limits/limits-service.js';
 import type { LimitsServiceOptions } from './limits/limits-service.js';
 import { startCodexCatalog } from './providers/codex-catalog.js';
+import { startQwenCatalog, type QwenModelsProbe } from './providers/qwen-catalog.js';
 import type { CatalogProbe } from './providers/codex-catalog.js';
 import { startProviderVersions } from './providers/versions.js';
 import { createCliUpdates, type CliUpdatesOptions } from './providers/updates.js';
@@ -180,6 +181,11 @@ export interface HostOptions {
    * зовут `startHost` без пробы или с подменой.
    */
   probeCodexCatalog?: CatalogProbe;
+  /**
+   * Проба каталога моделей Qwen Code на старте (`qwen --acp`, спека 2026-11-12, 8.4). Без неё каталога нет и `models` у
+   * `qwen` остаётся как есть: подключает её только `main.ts`, тесты настоящий qwen не запускают.
+   */
+  probeQwenCatalog?: QwenModelsProbe;
   /**
    * Проверка новых версий CLI раз в сутки (`codex`, `claude`; спека 2026-11-02). Без неё ничего не спрашивается и в
    * `providers.list` нет поля `update`: сетевой `fetch` подключает только `main.ts`, тесты передают подмену.
@@ -416,7 +422,19 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
 
   // Вход в аккаунты подписки (спека подписок 5.5): состояние по команде самого CLI, вход в своём маленьком PTY. Создаётся
   // до сессий и службы «застрял»: обе берут у неё `status`. Проверка на старте (К5) идёт в фоне, старт хоста её не ждёт.
-  const authService = createAuthService(handle.context, options.auth);
+  // Каталог моделей Qwen Code (спека 2026-11-12, 8.4): проба на старте и раз в 6 часов в фоне, после входа в Qwen — заново.
+  // Новый список хост пишет в `qwen-models.json` (его читает `loadProviders`) и сообщает окну `providers.changed`. Заводится до
+  // службы входа: конец входа в Qwen просит у каталога свежую пробу.
+  const qwenCatalog = startQwenCatalog(options.probeQwenCatalog, log, () => {
+    handle.context.broadcast('providers.changed', { provider: 'qwen' });
+  });
+  const authService = createAuthService(handle.context, {
+    ...options.auth,
+    onSignInExit: (provider, signedIn) => {
+      options.auth?.onSignInExit?.(provider, signedIn);
+      if (provider === 'qwen') void qwenCatalog.refresh();
+    },
+  });
   handle.context.onShutdown(async () => authService.stop());
   // Вошёл ли аккаунт для запуска сессии и помощника: кэш службы входа, а пока он пуст (старт хоста, первая проверка ещё
   // идёт) — исход самой проверки, общей с фоновой. Иначе вошедший аккаунт отказывал бы первые секунды после старта (спека
@@ -1156,6 +1174,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     ...(cliUpdateRunner === undefined ? {} : { cliUpdateRunner }),
     ...(cliInstaller === undefined ? {} : { cliInstaller }),
     codexCatalog,
+    qwenCatalog,
     limits: limitsService,
     glmCheck,
     customCheck,

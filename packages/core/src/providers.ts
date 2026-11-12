@@ -971,6 +971,14 @@ export function codexModelsFile(): string {
 }
 
 /**
+ * Каталог моделей Qwen Code, снятый хостом через `qwen --acp` (спека 2026-11-12, 8.4): файл Parley в доме, форма та же, что у
+ * `codexModelsFile`. Пишет его только хост, атомарно, после удачной пробы; `loadProviders` кладёт его модели в запись `qwen`.
+ */
+export function qwenModelsFile(): string {
+  return path.join(parleyHome(), 'qwen-models.json');
+}
+
+/**
  * Пределы подписи модели и описания уровня из каталога CLI: длиннее обрезают и разбор `codex debug models` в хосте,
  * и чтение `codexModelsFile` — внешний ввод не растягивает ни окно, ни ответ `get_map`.
  */
@@ -1301,8 +1309,9 @@ export async function loadProviders(
   file = providersFile(),
   codexFile = codexModelsFile(),
   customFile = customProvidersFile(),
+  qwenFile = qwenModelsFile(),
 ): Promise<Record<WorkProvider, ProviderEntry>> {
-  const registry = await loadBaseProviders(file, codexFile);
+  const registry = await loadBaseProviders(file, codexFile, qwenFile);
   // Свои провайдеры (спека 5.3) и аккаунты подписок (спека подписок 5.2) — после providers.json; занятый id
   // (встроенный или из файла) не перекрывают. Аккаунту нужна запись `claude` уже со всеми переопределениями.
   for (const record of await readCustomProviders(customFile)) {
@@ -1317,6 +1326,7 @@ export async function loadProviders(
 async function loadBaseProviders(
   file: string,
   codexFile: string,
+  qwenFile: string,
 ): Promise<Record<WorkProvider, ProviderEntry>> {
   const registry: Record<WorkProvider, ProviderEntry> = Object.fromEntries(
     Object.values(PROVIDERS).map((entry) => [
@@ -1335,6 +1345,10 @@ async function loadBaseProviders(
   const codex = registry['codex'];
   const live = await readCodexModels(codexFile);
   if (codex !== undefined && live !== null) registry['codex'] = { ...codex, models: live };
+  // Каталог Qwen Code с ACP — тоже раньше `providers.json`; нет файла или он негоден — `models: null`, как раньше.
+  const qwen = registry['qwen'];
+  const qwenLive = await readCodexModels(qwenFile);
+  if (qwen !== undefined && qwenLive !== null) registry['qwen'] = { ...qwen, models: qwenLive };
 
   let raw: string;
   try {

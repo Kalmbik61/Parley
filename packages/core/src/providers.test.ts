@@ -12,6 +12,7 @@ import {
   codexModelsFile,
   commandInPath,
   probeCliVersion,
+  qwenModelsFile,
   commandBinary,
   effortsFor,
   loadProviders,
@@ -1150,6 +1151,45 @@ describe('переопределения из PARLEY_HOME/providers.json', () =>
         },
       });
       await expect(loadProviders()).rejects.toThrow(/codex.*unexpected entry shape/);
+    });
+  });
+
+  describe('Qwen Code model catalog from the host file (spec 2026-11-12, 8.4)', () => {
+    const LIVE: ModelOption[] = [
+      { id: 'qwen-demo-max', label: 'qwen-demo-max', efforts: null },
+      { id: 'qwen-demo-flash', label: 'qwen-demo-flash', efforts: null },
+      { id: 'qwen-demo-preview', label: 'qwen-demo-preview', efforts: null },
+    ];
+    const writeLive = (data: unknown): Promise<void> => writeFile(qwenModelsFile(), JSON.stringify(data), 'utf8');
+
+    it('the file lives in the Parley home; no file means models stay null', async () => {
+      expect(qwenModelsFile()).toBe(path.join(home, 'qwen-models.json'));
+      expect(selectableModels((await loadProviders())['qwen'] as ProviderEntry)).toBeNull();
+    });
+
+    it('a valid file gives the qwen entry its models in file order; other providers are untouched', async () => {
+      await writeLive({ fetchedAt: '2030-01-05T10:00:00.000Z', models: LIVE });
+      const registry = await loadProviders();
+      expect(selectableModels(registry['qwen'] as ProviderEntry)).toStrictEqual(LIVE);
+      expect(selectableModels(registry['claude'] as ProviderEntry)).toEqual(selectableModels(PROVIDERS.claude));
+      expect(selectableModels(registry['codex'] as ProviderEntry)).toEqual(selectableModels(PROVIDERS.codex));
+      expect(modelChoiceError(registry['qwen'] as ProviderEntry, 'qwen-demo-flash')).toBeNull();
+      expect(modelChoiceError(registry['qwen'] as ProviderEntry, 'not-listed')).toContain('not in the list');
+    });
+
+    it.each([
+      ['malformed JSON', '{not json'],
+      ['an empty list', JSON.stringify({ models: [] })],
+      ['a model of the wrong shape', JSON.stringify({ models: [{ id: 'ok', label: 'Ok' }, { id: 'bad id', label: 'Bad' }] })],
+    ])('%s: models stay null', async (_title, body) => {
+      await writeFile(qwenModelsFile(), body, 'utf8');
+      expect(selectableModels((await loadProviders())['qwen'] as ProviderEntry)).toBeNull();
+    });
+
+    it('models from providers.json win over the host file', async () => {
+      await writeLive({ models: LIVE });
+      await write({ qwen: { models: [{ id: 'mine', label: 'Mine' }] } });
+      expect(selectableModels((await loadProviders())['qwen'] as ProviderEntry)).toStrictEqual([{ id: 'mine', label: 'Mine' }]);
     });
   });
 

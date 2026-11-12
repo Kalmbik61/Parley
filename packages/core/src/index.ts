@@ -101,6 +101,7 @@ export {
   agentEnv,
   assistantCommand,
   codexModelsFile,
+  qwenModelsFile,
   commandBinary,
   commandInPath,
   effortsFor,

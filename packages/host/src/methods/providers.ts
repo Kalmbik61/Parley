@@ -23,6 +23,7 @@ import type { AuthService } from '../providers/auth-service.js';
 import type { CustomCheckService } from '../providers/custom-check.js';
 import { serialized } from './custom-providers.js';
 import type { CodexCatalog } from '../providers/codex-catalog.js';
+import type { QwenCatalog } from '../providers/qwen-catalog.js';
 import type { ProviderVersions } from '../providers/versions.js';
 import type { CliUpdates } from '../providers/updates.js';
 import { UPDATE_COMMANDS, type UpdateCommand } from '../providers/updates.js';
@@ -85,6 +86,7 @@ function customInfo(entry: ProviderEntry, signedIn: boolean | null, auth: Accoun
  * `models` у `codex` — из `loadProviders`: каталог самого CLI (`codex debug models`) из `codex-models.json`, пока
  * `providers.json` не задаёт свой список (спека нормалайзера, 5.2). Первую пробу ответ не ждёт: новый каталог
  * придёт событием `providers.changed`, а устаревший список просит обновить в фоне (`refreshIfStale`).
+ * `models` у `qwen` — так же, из `qwen-models.json` (проба `qwen --acp`, спека 2026-11-12, 8.4); нет файла — `null`, как раньше.
  * `argsOverridden` — `args` провайдера взяты из `providers.json`: окно объясняет этим пропавший выбор модели или
  * effort.
  *
@@ -99,9 +101,11 @@ export function createProvidersList(
   customCheck?: CustomCheckService,
   auth?: AccountAuth,
   updates?: Pick<CliUpdates, 'current'> & Partial<Pick<CliUpdates, 'status'>>,
+  qwenCatalog?: Pick<QwenCatalog, 'refreshIfStale'>,
 ): Handler<'providers.list'> {
   return async () => {
     catalog?.refreshIfStale();
+    qwenCatalog?.refreshIfStale();
     const registry = await loadProviders();
     await versions?.ready;
     const probes = new Map<string, Promise<string | null>>();
