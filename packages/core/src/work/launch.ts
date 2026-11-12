@@ -46,7 +46,7 @@ import type { RoleCatalog } from '../roles/types.js';
 import type { RequiredRolePermissions } from '../roles/catalog.js';
 import { CHANNEL_VALUE, NO_CHANNEL_WARNING } from './channel.js';
 import { loadBrief, writeBrief } from './brief.js';
-import { BROWSER_PRIORITY_RULE, CODEX_APPROVAL_GUIDANCE, CODEX_TOOL_EXAMPLES, linkedSettingsRule, systemGuidance } from './guidance.js';
+import { BROWSER_PRIORITY_RULE, CODEX_APPROVAL_GUIDANCE, CODEX_TOOL_EXAMPLES, OPENCODE_TOOL_EXAMPLES, linkedSettingsRule, systemGuidance } from './guidance.js';
 import { assignmentsBlock } from './plan-tasks.js';
 import { readParleyMd } from './parley-md.js';
 import { readProjectMemory } from './project-memory.js';
@@ -57,8 +57,11 @@ import { addSession, isCodexThreadBinding, removeSession, transitionSession, typ
 import { NEW_LABEL } from './names.js';
 import { CLAUDE_MCP_AUTO_BACKGROUND_MS, mcpConfigValue, writeMcpConfig, type AgentChannel } from './mcp-config.js';
 import { finishSession, linkProviderSession, type FinishOptions, type MetricsRoots } from './metrics.js';
-import { writeWorkSettings } from './settings-file.js';
+import { writeSessionSettings, writeWorkSettings } from './settings-file.js';
+import { ensureStateDir } from './state-dir.js';
 import { QWEN_SYSTEM_SETTINGS_ENV, writeQwenSettings } from './qwen-settings-file.js';
+import { OPENCODE_SERVER_URL_SLOT, opencodeServerEnv } from './opencode-config.js';
+import { opencodeRoleLaunch } from './opencode-role.js';
 import { CLAUDE_SKILL_BUDGET_ENV, CODEX_SKILL_CATALOG_OVERRIDE, claudeSkillReduction, codexSkillRoute } from './skill-reduction.js';
 import { isPointerText } from './delivery.js';
 import { createWork, deleteSessionFiles, readMap, SharedStateError, updateMap, workPaths } from './store.js';
@@ -161,6 +164,12 @@ export interface LaunchPlan {
    * discovery ends. Absent — nothing to type.
    */
   deferredPrompt?: string;
+  /**
+   * OpenCode 2.x (spec 2026-11-12, 4.2–4.3): the environment of the session's `opencode serve`, which the host starts
+   * before the TUI — the config documents and the update switch. `args` carry `OPENCODE_SERVER_URL_SLOT` where the
+   * host puts the server's address; the password is the host's own and never in the plan.
+   */
+  opencodeServer?: { env: Record<string, string> };
 }
 
 async function entryOf(provider: string): Promise<ProviderEntry> {
@@ -354,7 +363,8 @@ async function plan(
   const nativeClaudeRole = !workspace && (role.nativeAgent !== null || (isClaudeCode(entry) && options.layer?.nativeClaudeRole === true));
   // Сервер `parley`, а с ним `find_skill`, доходит до агента по виду маршрута: файл конфига и `-c` Codex — шаблоном с
   // `{mcpConfig}`, системный файл настроек Qwen Code — окружением процесса, без подстановки.
-  const mcpRoute = entry.runner.mcpConfig === 'qwen-system-settings'
+  const opencode = entry.runner.mcpConfig === 'opencode-server';
+  const mcpRoute = entry.runner.mcpConfig === 'qwen-system-settings' || opencode
     || (entry.runner.mcpConfig !== undefined && template.includes('{mcpConfig}'));
 
   // Доверие к папке — только Codex, только то, что выдал хост (`options.trust`), и только если шаблон несёт `{trust}`:
@@ -551,10 +561,13 @@ async function plan(
   }
   const hasSystemLayer = template.includes('{systemPrompt}');
   const hasDeveloperLayer = template.includes('{developerInstructions}');
+  // OpenCode has no prompt flag: the layer goes to a per-session file that the server config lists as `instructions`
+  // (spec 2026-11-12, §4.6 amendment; observed on 2.2.7: the file reaches the model's system prompt).
+  const hasInstructionsLayer = opencode;
   if (options.layer?.role?.trim()) {
     const deliverable = nativeClaudeRole
       ? role.nativeAgent !== null && template.includes('{agent}')
-      : hasSystemLayer || hasDeveloperLayer;
+      : hasSystemLayer || hasDeveloperLayer || hasInstructionsLayer;
     if (!deliverable) throw new Error('role-delivery-unavailable: this runner cannot deliver the required role.');
   }
   if (entry.id === 'codex' && !hasDeveloperLayer) {
@@ -573,7 +586,8 @@ async function plan(
   }
   // One current layer for launch/new/resume; only its provider channel differs.
   let blockBytes;
-  if (hasSystemLayer || hasDeveloperLayer) {
+  let instructionsFile: string | undefined;
+  if (hasSystemLayer || hasDeveloperLayer || hasInstructionsLayer) {
     const map = await readMap(projectPath, workId);
     const brief = quiet ? await writtenBrief(projectPath, workId, session.id) : null;
     const parley = await readParleyMd(projectPath);
@@ -618,7 +632,7 @@ async function plan(
       // забылось бы. Несут их лишь раннеры с `{systemPrompt}`/`{developerInstructions}`; у остальных блока нет
       // (известное ограничение), и задание доходит письмом и чтением `plan_tasks`.
       assignments: assignmentsBlock(map, session.id),
-      bridge: [entry.id === 'codex' && !workspace ? CODEX_APPROVAL_GUIDANCE : '', entry.id === 'codex' ? CODEX_TOOL_EXAMPLES : '', bridge].filter(Boolean).join('\n\n'),
+      bridge: [entry.id === 'codex' && !workspace ? CODEX_APPROVAL_GUIDANCE : '', entry.id === 'codex' ? CODEX_TOOL_EXAMPLES : '', opencode ? OPENCODE_TOOL_EXAMPLES : '', bridge].filter(Boolean).join('\n\n'),
       links,
       // Правило — только там, где у агента есть `browser_open`: канал выдан и сервер MCP доходит шаблоном с `{mcpConfig}`.
       ...(options.agent !== undefined && mcpRoute ? { browser: BROWSER_PRIORITY_RULE } : {}),
@@ -630,6 +644,11 @@ async function plan(
     diagnostics.push(...layer.warnings);
     if (hasSystemLayer) subs.systemPrompt = layer.text;
     if (hasDeveloperLayer) subs.developerInstructions = developerInstructions(layer.text);
+    if (hasInstructionsLayer) {
+      // Rewritten on every launch and resume: the layer is current, as with the other channels.
+      instructionsFile = path.join(paths.dir, 'settings', `${session.id}-opencode-instructions.md`);
+      await writeSessionSettings(await ensureStateDir(projectPath), paths.dir, instructionsFile, `${layer.text}\n`);
+    }
   }
 
   // Модель и усилие считает роль (`prepareSessionRole` выше): явный выбор запуска, иначе записанный в
@@ -670,13 +689,31 @@ async function plan(
     const first = [brief, handover, pointer].filter((part) => part !== '').join('\n\n');
     if (first !== '') subs.prompt = first;
     if (entry.linkBy === 'session-id') {
-      providerSessionId = session.providerSessionId ?? randomUUID();
+      // OpenCode takes only ids that start with `ses` (spike §6); `-s` creates the session or continues it.
+      providerSessionId = session.providerSessionId ?? (opencode ? `ses_${randomUUID()}` : randomUUID());
       subs.sessionUuid = providerSessionId;
     }
   }
+  // OpenCode: the TUI attaches to the host's server (the slot below) and names its session; writable roles start with
+  // `--auto` (spec 4.10), read-only ones rely on the deny rules of the server config (4.8). The config goes to the
+  // server, not to the TUI (spike §1).
+  let opencodeServer: LaunchPlan['opencodeServer'];
+  if (opencode) {
+    subs.serverUrl = OPENCODE_SERVER_URL_SLOT;
+    const id = resuming ? subs.providerSessionId : providerSessionId;
+    if (id !== undefined && id !== null) subs.sessionId = id;
+    const launch = opencodeRoleLaunch(role);
+    if (launch.autoFlag !== undefined) subs.autoFlag = launch.autoFlag;
+    opencodeServer = { env: opencodeServerEnv({
+      mcp: params,
+      readOnly: launch.readOnly,
+      ...(subs.model === undefined ? {} : { model: subs.model }),
+      ...(instructionsFile === undefined ? {} : { instructions: [instructionsFile] }),
+    }) };
+  }
 
   const { command, args } = resuming ? resumeCommand(entry, subs) : startCommand(entry, subs);
-  const deferredPrompt = entry.runner.mcpConfig === 'qwen-system-settings' && !resuming && subs.prompt !== undefined && !template.includes('{prompt}')
+  const deferredPrompt = (entry.runner.mcpConfig === 'qwen-system-settings' || opencode) && !resuming && subs.prompt !== undefined && !template.includes('{prompt}')
     ? subs.prompt : undefined;
   if (forkFrom !== undefined) {
     // Форк, а не продолжение копии (5.4.1, п. 1): у нового агента свой id, и один разговор не живёт в двух корнях.
@@ -717,6 +754,7 @@ async function plan(
     warnings,
     diagnostics,
     ...(deferredPrompt === undefined ? {} : { deferredPrompt }),
+    ...(opencodeServer === undefined ? {} : { opencodeServer }),
   };
 }
 

@@ -130,7 +130,7 @@ describe('providers.list: модели, усилие и версия CLI (диз
 
   it('без пробы версий нет: null у всех — это окно и тесты, где команды не запускаются', async () => {
     const providers = await list(await boot());
-    expect(providers.map((provider) => provider.version)).toEqual([null, null, null, null]);
+    expect(providers.map((provider) => provider.version)).toEqual([null, null, null, null, null]);
   });
 
   it('проба падает — версия null, список отвечает', async () => {
@@ -158,7 +158,7 @@ describe('providers.list: модели, усилие и версия CLI (диз
     await list(client);
     await list(client);
     await list(client);
-    expect(calls.sort()).toEqual(['claude', 'codex', 'qwen']);
+    expect(calls.sort()).toEqual(['claude', 'codex', 'opencode', 'qwen']);
   });
 
   it('первый providers.list дожидается пробы, а не отвечает пустой версией', async () => {
@@ -550,7 +550,7 @@ describe('providers.list: аккаунт подписки и состояние 
       custom: { kind: 'claude-account', link: false, signedIn: true, signingIn: false },
     });
     expect(row?.custom).toMatchObject({ folder: expect.stringContaining('custom-claude-2') });
-    expect(providers.map((provider) => provider.id)).toEqual(['claude', 'codex', 'glm', 'qwen', 'custom-claude-2']);
+    expect(providers.map((provider) => provider.id)).toEqual(['claude', 'codex', 'glm', 'qwen', 'opencode', 'custom-claude-2']);
     expect(asked).toEqual(['custom-claude-2']);
   });
 

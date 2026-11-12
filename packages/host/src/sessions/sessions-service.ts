@@ -109,7 +109,10 @@ import {
   sessionMention,
   sessionTag,
   settleAttempt,
+  setResult,
   startSession,
+  OPENCODE_PASSWORD_ENV,
+  OPENCODE_SERVER_URL_SLOT,
   swarmOfSession,
   SYSTEM,
   ENGINE,
@@ -137,6 +140,7 @@ import type { HostContext } from '../context.js';
 import { HostError } from '../errors.js';
 import { serialized } from '../methods/custom-providers.js';
 import type { HookServer } from '../hooks/hook-server.js';
+import type { OpencodeSupervisor } from '../opencode/server.js';
 import type { ProviderVersions } from '../providers/versions.js';
 import type { PtyHandle, PtyManager } from '../pty/pty-manager.js';
 import type { WorksService, WorksView } from '../works/works-service.js';
@@ -413,6 +417,12 @@ export interface SessionsFeedOptions {
   /** Замена агента сессии (спека 2026-10-30): службы застревания, будильника и лимитов. */
   takeover?: SessionsTakeoverOptions;
   /**
+   * OpenCode 2.x (spec 2026-11-12, 4.2): the per-session servers. A launch plan with `opencodeServer` starts its server
+   * here before the TUI; the TUI's exit stops it; a server that dies by itself fails the session and stops the TUI.
+   * Without it an OpenCode launch is refused.
+   */
+  opencode?: Pick<OpencodeSupervisor, 'start' | 'stop' | 'onExit'>;
+  /**
    * Потолок машины (спека ёмкости 2026-10-30, 4.2): `CapacityService` хоста. Тип структурный, как у `hooks` и `consents`:
    * сервис ёмкости сам зовёт `launch` сессий, и сессии его не импортируют. `admit` зовётся после бюджета работы и до
    * worktree; нет сервиса — допуска нет (изолированные тесты).
@@ -496,7 +506,7 @@ export function createSessionsService(
   activity: ActivityService,
   feed: SessionsFeedOptions = {},
 ): SessionsService {
-  const { hooks, providerVersions, capacity, endings } = feed;
+  const { hooks, providerVersions, capacity, endings, opencode } = feed;
   const spawnLimits = feed.spawnLimits ?? querySpawnLimits;
   const warned = new Set<string>();
   const creationWarnings = new Set<string>();
@@ -695,6 +705,10 @@ export function createSessionsService(
     feed.agent?.unregister(ref);
     const done = (starting.get(key) ?? Promise.resolve())
       .then(async () => {
+        // OpenCode: the server goes with its TUI (spec 4.2, Stop) — the last poll, then the group; never left behind.
+        await opencode?.stop(ref).catch((error: unknown) => {
+          host.log.error('opencode server did not stop with its session', { ref, error: String(error) });
+        });
         try {
           await finishExited(
             ref.projectPath,
@@ -731,6 +745,26 @@ export function createSessionsService(
         finalizing.delete(key);
       });
     finalizing.set(key, done);
+  });
+
+  // OpenCode: a server that dies while its TUI lives fails the session with a readable reason, and the TUI goes too
+  // (spec 2026-11-12, 4.2 "Server dies first"). The stop is quiet: the notice already tells the human why.
+  opencode?.onExit((ref, exit) => {
+    void (async () => {
+      const text = `${sessionTag(ref.sessionId)} failed: ${exit.reason}${exit.code === null ? '' : ` (exit code ${exit.code})`}. Resume it to start a new server.`;
+      try {
+        await updateMap(ref.projectPath, ref.workId, (map) => {
+          const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
+          if (session !== undefined && session.lifecycle !== 'closed') setResult(map, ref.sessionId, 'failed');
+        });
+      } catch (error) {
+        host.log.error('opencode session failure was not recorded', { ref, error: String(error) });
+      }
+      host.broadcast('host.notice', { kind: 'launch-failed', ref, text, at: new Date().toISOString() });
+      await stop(ref).catch((error: unknown) => {
+        host.log.error('opencode TUI did not stop after its server', { ref, error: String(error) });
+      });
+    })();
   });
 
   /**
@@ -1339,6 +1373,27 @@ export function createSessionsService(
           plan.env['PARLEY_AGENT_REVISION'],
         );
       }
+      // OpenCode (spec 4.2): the session's server first, then the TUI attached to it with the same password. The server
+      // gets the inherited launch environment plus its config documents; the address fills the plan's slot.
+      let args = plan.args;
+      if (plan.opencodeServer !== undefined) {
+        if (opencode === undefined) throw new HostError('bad_request', 'OpenCode sessions need the host server supervisor');
+        const serverEnv = plan.opencodeServer.env;
+        let server;
+        try {
+          server = await timer.step('opencode-server', () => opencode.start(ref, { binary: command, cwd: plan.cwd, env, serverEnv }));
+        } catch (error) {
+          if (hookUrl !== undefined) hooks?.unregister(ref);
+          host.broadcast('host.notice', {
+            kind: 'launch-failed', ref,
+            text: `session ${ref.sessionId} failed to launch: ${(error as Error).message}`,
+            at: new Date().toISOString(),
+          });
+          throw new HostError('bad_request', (error as Error).message);
+        }
+        args = plan.args.map((arg) => (arg === OPENCODE_SERVER_URL_SLOT ? server.url : arg));
+        env[OPENCODE_PASSWORD_ENV] = server.password;
+      }
       // `provider` — процессу не нужен, а хосту нужен: у codex состояние берётся из потока его терминала,
       // и ввод идёт своим порядком (спека комнат, 3.6).
       let handle: PtyHandle;
@@ -1346,12 +1401,12 @@ export function createSessionsService(
       try {
         // The hook token and inherited host environment are now final. No PTY starts on guard failure.
         handle = await timer.step('spawn', async () => {
-          validateSpawnBudget(command, plan.args, env, await spawnLimits());
+          validateSpawnBudget(command, args, env, await spawnLimits());
           gitWriteGrants.set(key, Boolean(session.provider === 'codex' && !session.workspace && session.worktree &&
             plan.args.some(arg => arg.startsWith('sandbox_workspace_write.writable_roots='))));
           const spawned = pty.start(ref, {
             command,
-            args: plan.args,
+            args,
             cwd: plan.cwd,
             env,
             provider: session.provider,
@@ -1369,6 +1424,8 @@ export function createSessionsService(
         if (previousGitGrant === undefined) gitWriteGrants.delete(key);
         else gitWriteGrants.set(key, previousGitGrant);
         if (hookUrl !== undefined) hooks?.unregister(ref);
+        // The TUI did not start: its server has no one to serve.
+        if (plan.opencodeServer !== undefined) await opencode?.stop(ref).catch(() => {});
         const safe = (error as NodeJS.ErrnoException).code === 'E2BIG'
           ? new SpawnBudgetError('spawn-budget-too-large') : error;
         if (safe instanceof SpawnBudgetError) {

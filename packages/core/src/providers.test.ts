@@ -102,7 +102,7 @@ describe('реестр провайдеров', () => {
       providersWithHistory()
         .map((p) => p.id)
         .sort(),
-    ).toEqual(['claude', 'codex', 'glm', 'qwen']);
+    ).toEqual(['claude', 'codex', 'glm', 'opencode', 'qwen']);
   });
 
   it('qwen: the spec 3.3 entry, the system-settings MCP route, no first prompt and no --yolo', () => {
@@ -876,7 +876,7 @@ describe('переопределения из PARLEY_HOME/providers.json', () =>
 
   it('файла нет — работает встроенный реестр', async () => {
     const registry = await loadProviders();
-    expect(Object.keys(registry).sort()).toEqual(['claude', 'codex', 'glm', 'qwen']);
+    expect(Object.keys(registry).sort()).toEqual(['claude', 'codex', 'glm', 'opencode', 'qwen']);
     expect(registry['claude']?.runner.command).toBe('claude');
   });
 
@@ -919,27 +919,27 @@ describe('переопределения из PARLEY_HOME/providers.json', () =>
 
   it('свой провайдер добавляется целиком', async () => {
     await write({
-      opencode: {
-        badge: 'OpenCode',
-        command: 'opencode',
+      crush: {
+        badge: 'Crush',
+        command: 'crush',
         args: ['{prompt}'],
       },
     });
     const registry = await loadProviders();
-    const opencode = registry['opencode'];
-    if (opencode === undefined) throw new Error('свой провайдер не попал в реестр');
+    const crush = registry['crush'];
+    if (crush === undefined) throw new Error('свой провайдер не попал в реестр');
 
-    expect(opencode).toEqual({
-      id: 'opencode',
-      label: 'OpenCode',
-      mark: 'Op',
+    expect(crush).toEqual({
+      id: 'crush',
+      label: 'Crush',
+      mark: 'Cr',
       hasHistory: false,
       linkBy: 'cwd+time',
-      runner: { command: 'opencode', args: ['{prompt}'] },
+      runner: { command: 'crush', args: ['{prompt}'] },
       argsOverridden: true,
     });
-    expect(startCommand(opencode, { prompt: 'бриф' })).toEqual({
-      command: 'opencode',
+    expect(startCommand(crush, { prompt: 'бриф' })).toEqual({
+      command: 'crush',
       args: ['бриф'],
     });
   });

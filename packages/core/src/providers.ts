@@ -19,9 +19,11 @@ import type { WorkProvider } from './work/types.js';
  * под файл конфига нет, MCP-серверы живут в `~/.codex/config.toml`).
  * `qwen-system-settings` — сервер лежит в системном файле настроек сессии (`QWEN_CODE_SYSTEM_SETTINGS_PATH`,
  * `work/qwen-settings-file.ts`): подстановки `{mcpConfig}` у Qwen Code нет, сервер доходит через окружение.
+ * `opencode-server` — OpenCode 2.x: сервер `parley` лежит в `OPENCODE_CONFIG_CONTENT` процесса `opencode serve`, которым
+ * владеет хост (`work/opencode-config.ts`, спека 2026-11-12, 4.2–4.3); TUI получает только адрес сервера и пароль.
  * `undefined` — провайдер MCP не принимает, координация ему недоступна.
  */
-export type McpConfigKind = 'json-file' | 'codex-override' | 'qwen-system-settings';
+export type McpConfigKind = 'json-file' | 'codex-override' | 'qwen-system-settings' | 'opencode-server';
 
 /**
  * Чем запись карты связывается с сессией в логах провайдера: id задан снаружи
@@ -510,6 +512,25 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
       mcpConfig: 'qwen-system-settings',
     },
   },
+  // OpenCode 2.x (spec 2026-11-12, 4.1–4.2): the TUI attaches to a per-session `opencode serve` owned by the host
+  // (`host/src/opencode/server.ts`). `{serverUrl}` is the slot the host fills once that server answers; Parley names the
+  // session itself (`-s ses_<uuid>`, which creates it or continues it). No `{prompt}`: the brief goes through the server
+  // API. No model flag: the model goes into the server's config document. `{autoFlag}` is `--auto` for writable roles.
+  opencode: {
+    id: 'opencode',
+    family: 'opencode',
+    label: 'OpenCode',
+    mark: 'Oc',
+    hasHistory: true,
+    linkBy: 'session-id',
+    runner: {
+      command: 'opencode',
+      minVersion: '2.0.0',
+      args: ['--server', '{serverUrl}', '-s', '{sessionId}', '{autoFlag}'],
+      resumeArgs: ['--server', '{serverUrl}', '-s', '{providerSessionId}', '{autoFlag}'],
+      mcpConfig: 'opencode-server',
+    },
+  },
 };
 
 /** Built-in Claude Code family, independent of provider label, command or allowed overrides. */
@@ -628,11 +649,17 @@ export interface RunnerSubstitutions {
   sandbox?: string;
   /** `--approval-mode` Qwen Code: стартовый `auto` у каждой сессии (решение DA1); `yolo` — никогда. */
   approvalMode?: string;
+  /** OpenCode: адрес сервера сессии — слот `OPENCODE_SERVER_URL_SLOT`, его заполняет хост, подняв сервер. */
+  serverUrl?: string;
+  /** OpenCode: `ses_<uuid>`, выданный Parley (`-s`). */
+  sessionId?: string;
+  /** OpenCode: `--auto` у пишущих ролей (спека 2026-11-12, 4.10); без значения — выпадает, своего флага перед ним нет. */
+  autoFlag?: string;
 }
 
 // `notify` остался в списке ради старых записей providers.json: значения нет, и пара `-c {notify}` выпадает.
 const PLACEHOLDER =
-  /^\{(sessionUuid|mcpConfig|settingsFile|systemPrompt|developerInstructions|prompt|providerSessionId|channel|agent|notify|skillCatalog|codexHooks|approvals|trust|model|effort|disallowedTools|sandbox|leanFlags|approvalMode)\}$/;
+  /^\{(sessionUuid|mcpConfig|settingsFile|systemPrompt|developerInstructions|prompt|providerSessionId|channel|agent|notify|skillCatalog|codexHooks|approvals|trust|model|effort|disallowedTools|sandbox|leanFlags|approvalMode|serverUrl|sessionId|autoFlag)\}$/;
 
 /**
  * Усилие можно подставить и внутрь строки шаблона (`model_reasoning_effort="{effort}"`):
@@ -709,8 +736,8 @@ export function substituteArgs(template: readonly string[], subs: RunnerSubstitu
       continue;
     }
     if (value === undefined) {
-      // У `{codexHooks}`, `{approvals}`, `{trust}` и `{leanFlags}` своего флага перед элементом нет — соседний флаг чужой.
-      if (!['codexHooks', 'approvals', 'trust', 'leanFlags'].includes(match[1]!)) dropWithFlag();
+      // У `{codexHooks}`, `{approvals}`, `{trust}`, `{leanFlags}` и `{autoFlag}` своего флага перед элементом нет — соседний флаг чужой.
+      if (!['codexHooks', 'approvals', 'trust', 'leanFlags', 'autoFlag'].includes(match[1]!)) dropWithFlag();
       continue;
     }
     args.push(value as string);

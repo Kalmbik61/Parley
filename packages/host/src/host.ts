@@ -142,6 +142,7 @@ import { createInlineMail, hookWithInlineMail } from './hooks/inline-mail.js';
 import { appendMailJournal } from './feed/mail-journal.js';
 import { createSilentEndings } from './endings/silent-endings.js';
 import { createSessionsService } from './sessions/sessions-service.js';
+import { createOpencodeSupervisor } from './opencode/server.js';
 import { providerLaunchEnv } from './sessions/provider-env.js';
 import { createReadyJournal } from './sessions/ready-journal.js';
 import { createQwenBinding } from './activity/qwen-binding.js';
@@ -731,6 +732,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     config: async () => (await loadConfig()).config,
   });
   handle.context.onShutdown(async () => capacityFeed.stop());
+  // OpenCode servers (spec 2026-11-12, 4.2): one per live OpenCode session, run file in the Parley home.
+  const opencodeSupervisor = createOpencodeSupervisor({ home: resolvedHome, log });
   sessionsService = createSessionsService(
     handle.context,
     worksService,
@@ -742,6 +745,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       consents: consentsService,
       projectMcp,
       hooks: hookServer,
+      opencode: opencodeSupervisor,
       // Qwen's brief is typed by the wake service once the process is ready (spec 2026-11-11, 3.4 amendment).
       deferFirst: (ref, pid, text) => wakeService.deferFirst(ref, pid, text),
       providerVersions,
@@ -774,6 +778,9 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   handle.context.onShutdown(async () => wakeService.stop());
   handle.context.onShutdown(async () => autoSleepService.stop());
   handle.context.onShutdown(() => sessionsService.stopAll());
+  // Sessions stop their servers on exit; this catches any left (a TUI that did not exit in time). The lifelines also
+  // kill their groups when the host's pipes close.
+  handle.context.onShutdown(() => opencodeSupervisor.stopAll());
   // Жизненный цикл роёв (спека роя v1, 3): сверка на каждом снимке работ и раз в 30 с; стартует после чтения работ.
   // Королеву завершённого роя усыпляет сервис сна: он создаётся ниже, замыкание читает его позже.
   const swarmsService = createSwarmsService(handle.context, worksService, sessionsService, {}, {
@@ -1368,6 +1375,12 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
 
   // 7. Таймер простоя: ни клиентов, ни занятых ключей — отсчёт стартует сразу.
   idleWatcher.notify(true);
+
+  // OpenCode backstop (spec 2026-11-12, 4.2 "Host dies first"): before any session can be resumed, the groups of
+  // lifelines a previous host left alive are killed. Only pids with the recorded start time; no environment is read.
+  await opencodeSupervisor.sweep().catch((error: unknown) => {
+    log.error('opencode run file was not swept', { error: String(error) });
+  });
 
   const startFailure = await worksService.start().then(
     () => null,
