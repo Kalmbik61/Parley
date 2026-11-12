@@ -55,6 +55,7 @@ export {
   settleCards,
 } from './reduce.js';
 export { mailFromInline, mailFromTool } from './mail.js';
+export type { MailJournalEntry } from './mail-seed.js';
 export { stashFeedImages } from './images.js';
 export { feedFromTranscript, interruptedAt, retryFromTranscript } from './from-transcript.js';
 export type { FeedFromTranscriptOptions } from './from-transcript.js';

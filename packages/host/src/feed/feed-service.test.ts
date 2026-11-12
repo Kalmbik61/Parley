@@ -3981,3 +3981,81 @@ describe('mail items: per-client gate (spec 2026-11-12 §3.5)', () => {
     expect(withoutMail(data)).toEqual({ ref: REF, revision: 7, upsert: [], removed: [], mode: null });
   });
 });
+
+describe('inline mail: live item and reseed (spec 2026-11-12, M4)', () => {
+  const POINTER = 'New messages (2) in r-90 "Demo room" and direct. Call check_inbox.';
+  const mailRaw = (name: string) => readFileSync(path.join(FIXTURES, 'mail', name), 'utf8');
+  const attachmentText = (): string => {
+    const line = mailRaw('claude-inline.transcript.jsonl').split('\n').map((l) => (l.trim() === '' ? null : (JSON.parse(l) as { attachment?: { hookEvent?: string; content?: string[] } }))).find((r) => r?.attachment?.hookEvent === 'UserPromptSubmit');
+    return line!.attachment!.content![0]!;
+  };
+  const JOURNAL_AT = '2030-01-05T10:00:00.040Z';
+  const mailsOf = (items: readonly FeedItem[]) => items.filter((item) => item.kind === 'mail');
+  const gate = () => fakeClient(undefined, { features: [FEED_MAIL_FEATURE] });
+
+  async function transcript(withAttachment: boolean): Promise<{ root: string; file: string }> {
+    const dir = await tempRoot();
+    const root = path.join(dir, 'projects');
+    const file = path.join(root, '-proj', 'sess.jsonl');
+    await mkdir(path.dirname(file), { recursive: true });
+    const lines = mailRaw('claude-inline.transcript.jsonl').split('\n').filter((l) => l.trim() !== '').filter((l) => withAttachment || !l.includes('"UserPromptSubmit"'));
+    await writeFile(file, `${lines.join('\n')}\n`);
+    return { root, file };
+  }
+
+  it('live: the pointer prompt, then mail:<first id>; a repeat of the notice leaves one item', async () => {
+    start();
+    send({ hook_event_name: 'UserPromptSubmit', session_id: SESSION, prompt: POINTER });
+    service.delivered(REF, attachmentText(), JOURNAL_AT);
+    service.delivered(REF, attachmentText(), JOURNAL_AT);
+    service.delivered(REF, 'not a delivery', JOURNAL_AT);
+    const items = (await service.snapshot(REF, undefined, undefined, gate())).items;
+    expect(items.map((item) => item.kind)).toEqual(['prompt', 'mail']);
+    expect(items[1]).toMatchObject({ id: 'mail:m-9001', via: 'pointer', toolUseId: null, at: JOURNAL_AT });
+  });
+
+  async function reseeded(withAttachment: boolean, journal: Array<{ at: string; text: string }>): Promise<FeedItem[]> {
+    const { root, file } = await transcript(withAttachment);
+    fakes.setSessions([{ ref: REF, provider: 'glm' }]);
+    fakes.setLogFile(file);
+    start({ roots: () => [root], readMailJournal: async () => journal });
+    return (await service.snapshot(REF, undefined, undefined, gate())).items;
+  }
+
+  it('reseed with the attachment gives the live item, at included, in the same place', async () => {
+    start();
+    send({ hook_event_name: 'UserPromptSubmit', session_id: SESSION, prompt: POINTER });
+    service.delivered(REF, attachmentText(), JOURNAL_AT);
+    const live = mailsOf((await service.snapshot(REF, undefined, undefined, gate())).items)[0];
+    await service.stop();
+    fakes = fakeFeedDeps();
+
+    const items = await reseeded(true, [{ at: JOURNAL_AT, text: attachmentText() }]);
+    // The seed closes the open turn with a `turn` mark; the mail stays right after the pointer prompt.
+    expect(items.map((item) => item.kind)).toEqual(['prompt', 'mail', 'turn']);
+    expect(mailsOf(items)[0]).toEqual(live);
+  });
+
+  it('reseed without the attachment, journal line present: the same item after the pointer prompt', async () => {
+    const items = await reseeded(false, [{ at: JOURNAL_AT, text: attachmentText() }]);
+    expect(items.map((item) => item.kind)).toEqual(['prompt', 'mail', 'turn']);
+    expect(mailsOf(items)[0]).toMatchObject({ id: 'mail:m-9001', at: JOURNAL_AT, via: 'pointer' });
+  });
+
+  it('reseed with the attachment and no journal line: the item is parsed from the attachment', async () => {
+    const items = await reseeded(true, []);
+    expect(items.map((item) => item.kind)).toEqual(['prompt', 'mail', 'turn']);
+    expect(mailsOf(items)[0]).toMatchObject({ id: 'mail:m-9001', at: '2030-01-05T10:00:00.050Z' });
+  });
+
+  it('a subagent snapshot reads no journal', async () => {
+    const { root, file } = await transcript(true);
+    await mkdir(path.join(root, '-proj', 'sess', 'subagents'), { recursive: true });
+    await copyFile(file, path.join(root, '-proj', 'sess', 'subagents', 'agent-abc.jsonl'));
+    fakes.setSessions([{ ref: REF, provider: 'glm' }]);
+    fakes.setLogFile(file);
+    start({ roots: () => [root], readMailJournal: async () => [{ at: JOURNAL_AT, text: attachmentText() }] });
+    const sub = await service.snapshot(REF, 'abc', undefined, gate());
+    expect(mailsOf(sub.items)).toEqual([]);
+  });
+});

@@ -138,6 +138,7 @@ import { dailyBudget } from './voice/budget.js';
 import { AGENT_BROWSER_PATH, createBrowserEndpoint } from './agent/browser-endpoint.js';
 import { createHookServer } from './hooks/hook-server.js';
 import { createInlineMail, hookWithInlineMail } from './hooks/inline-mail.js';
+import { appendMailJournal } from './feed/mail-journal.js';
 import { createSilentEndings } from './endings/silent-endings.js';
 import { createSessionsService } from './sessions/sessions-service.js';
 import { providerLaunchEnv } from './sessions/provider-env.js';
@@ -577,6 +578,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     log,
     provider: (ref) => worksService.entry(ref.projectPath, ref.workId)?.map.sessions.find((session) => session.id === ref.sessionId)?.provider,
     context: toolContextFor,
+    mailJournal: appendMailJournal,
+    delivered: (ref, text, at) => feedService.delivered(ref, text, at),
   });
   const qwenBinding = createQwenBinding({
     log,

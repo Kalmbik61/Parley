@@ -70,9 +70,9 @@ describe('mailFromInline', () => {
     expect(mailFromInline(text(), 'x')).toBeNull();
   });
 
-  it('is not fooled by the SessionStart attachment staying in the transcript feed', () => {
+  it('the transcript feed (M4) places only the UserPromptSubmit attachment, never the SessionStart one', () => {
     const state = feedFromTranscript(records);
-    expect(state.items.some((i) => i.kind === 'mail')).toBe(false);
+    expect(state.items.filter((i) => i.kind === 'mail').map((i) => i.id)).toEqual(['mail:m-9001']);
   });
 });
 

@@ -50,6 +50,8 @@ export interface WorkPaths {
   mcp: string;
   /** Журналы событий хуков: `events/<session-id>.jsonl`, пишет сам хук. */
   events: string;
+  /** Журналы почты, доставленной вместе с указателем: `mail/<session-id>.jsonl`, строки `{at, text}` (спека 2026-11-12, 3.2a). */
+  mail: string;
   /** Лимиты подписки от строки статуса Claude Code: `limits/<session-id>.json`, пишет её скрипт. */
   limits: string;
   /** Заполненность контекста сессий от строки статуса (спека 2026-10-15). */
@@ -68,6 +70,7 @@ export function workPaths(projectPath: string, workId: string): WorkPaths {
     artifacts: path.join(dir, 'artifacts'),
     mcp: path.join(dir, 'mcp'),
     events: path.join(dir, 'events'),
+    mail: path.join(dir, 'mail'),
     limits: path.join(dir, LIMITS_DIR),
     context: path.join(dir, CONTEXT_DIR),
     settings: path.join(dir, 'settings.json'),

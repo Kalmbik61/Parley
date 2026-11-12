@@ -43,6 +43,7 @@ import {
   FEED_IMAGE_SWEEP_MS,
   feedFromCodexRollout,
   feedFromTranscript,
+  mailFromInline,
   forEachJsonlRecord,
   interruptedAt,
   isCodexThreadBinding,
@@ -74,7 +75,9 @@ import type { FeedDecisions, ProgressResult, Result, SessionRef } from '@parley/
 import { projectProgress } from './progress.js';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { LogChange } from '../activity/log-index.js';
+import type { MailJournalEntry } from '@parley/core';
 import type { Client } from '../client.js';
+import { readMailJournal } from './mail-journal.js';
 import type { HostContext } from '../context.js';
 import { HostError } from '../errors.js';
 import { EMPTY_HOOK_RESPONSE, hookDecisionResponse } from '../hooks/decisions.js';
@@ -175,6 +178,8 @@ export interface FeedServiceOptions {
   roots?: () => readonly string[];
   /** Чтение записей журнала (последних `maxBytes` байт); тесты подставляют счётчик. */
   readRecords?: (file: string, maxBytes?: number) => Promise<RawRecord[]>;
+  /** Чтение журнала почты Parley при севе; тесты подставляют своё. */
+  readMailJournal?: (ref: SessionRef) => Promise<MailJournalEntry[]>;
   /** Первый хвост журнала Claude при севе; по умолчанию `SEED_TAIL_BYTES`. */
   seedTailBytes?: number;
   /** Каталог файлов картинок ленты; по умолчанию `<дом Parley>/feed-images`. */
@@ -196,6 +201,11 @@ export function withoutMail<D extends { upsert: FeedItem[]; removed: string[] }>
 }
 
 export interface FeedService {
+  /**
+   * Письма отданы хуку вместе с указателем (`inline-mail`): элемент `mail` встаёт в ленту после указателя-промпта.
+   * `text` — точный `additionalContext`, `at` — время ответа хоста (то же, что в журнале почты). Не письмо — ничего.
+   */
+  delivered(ref: SessionRef, text: string, at: string): void;
   /** Событие хука от приёмника: ответ — сразу или после решения человека. */
   onHook(request: HookRequest): void;
   /** Снимок ленты сессии или, с `agentId`, ленты субагента из его журнала. */
@@ -954,7 +964,8 @@ export function createFeedService(
       const release = await seedSlot(key, foreground);
       try {
         if (feed.live || !feedCurrent(feed)) return;
-        const grown = await readFeedTail(file);
+        const journal = await (options.readMailJournal ?? readMailJournal)(feed.ref);
+        const grown = await readFeedTail(file, 'root', journal);
         if (grown === null || feed.live || !feedCurrent(feed)) return;
         const seeded = closeBrokenTurn(grown);
         // Режим, который хост уже сверил по подвалу (`noteMode`), свежее записи журнала.
@@ -1309,12 +1320,12 @@ export function createFeedService(
    * дошла до `maxItems` либо `maxBytes`. В первых двух случаях результат равен чтению файла целиком, в третьем
    * могут отличаться только самые старые элементы у края хвоста. `null` — читать нельзя (см. `readTranscript`).
    */
-  async function readFeedTail(file: string, context: 'root' | 'child' = 'root'): Promise<FeedState | null> {
+  async function readFeedTail(file: string, context: 'root' | 'child' = 'root', mailJournal?: readonly MailJournalEntry[]): Promise<FeedState | null> {
     let bytes = seedTailBytes;
     for (;;) {
       const read = await readTranscript(file, bytes);
       if (read === null) return null;
-      const state = feedFromTranscript(stashClaude(read.records), { limit: maxItems, context });
+      const state = feedFromTranscript(stashClaude(read.records), { limit: maxItems, context, ...(mailJournal === undefined ? {} : { mailJournal }) });
       if (bytes >= read.size || read.records.length >= SEED_RECORD_WINDOW || state.items.length >= maxItems) return state;
       let total = 0;
       for (const item of state.items) {
@@ -1888,6 +1899,14 @@ export function createFeedService(
 
   return {
     onHook,
+    delivered(ref, text, at) {
+      if (stopped) return;
+      const mail = mailFromInline(text, at);
+      if (mail === null) return;
+      const feed = feedOf(ref);
+      if (feed.state.items.some((item) => item.id === mail.id)) return;
+      commit(feed, { state: { ...feed.state, items: [...feed.state.items, mail] }, changes: [mail] });
+    },
 
     async progress(ref, client) {
       const parsed = sessionRef.safeParse(ref);
