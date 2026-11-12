@@ -161,14 +161,13 @@ It also builds `OPENCODE_CLI_CONFIG_CONTENT` `{"highlights": false}`.
 - **Host supervisor** `host/src/opencode/server.ts`, per spec §4.2:
   - port with retry;
   - password;
-  - spawn of `opencode serve` in its own group with the config env;
+  - the lifeline script `host/src/opencode/lifeline.ts` (built to JS): the leader of a new process group; it holds a stdin pipe from the host; it spawns `opencode serve` in its group with the config env; it kills the group on pipe close or on a stop command;
   - `/api/info` wait;
   - TUI env;
-  - the per-run marker `PARLEY_OPENCODE_RUN` in the server env;
-  - the run file `<parley-home>/run/opencode-servers.json` (pid, pgid, marker, startedAt; no password, no port);
+  - the run file `<parley-home>/run/opencode-servers.json` (lifeline pid, pgid, `lstart`; no password, no port);
   - on stop: last poll, then SIGTERM, SIGKILL after 2 s, await, record removed;
   - crash → session failed;
-  - at host start, before any resume: sweep the run file. Kill every process whose environment carries a recorded marker, whatever its name or group; never kill a process without it.
+  - at host start, before any resume: the backstop sweep kills the group of each recorded lifeline still alive with the same `lstart`. It never reads a process environment.
 - Resume reuses the id with a new server.
 
 **Criteria.** Unit tests with the fake server:
@@ -179,9 +178,10 @@ It also builds `OPENCODE_CLI_CONFIG_CONTENT` `{"highlights": false}`.
 5. TUI exit (server group gone, checked by pid);
 6. resume (same id, new password);
 7. **host-first restart:**
-   - a fake server left running is killed by the sweep;
-   - a leader that died first, with a differently named child (for example a shell tool) still alive, gets the child killed;
-   - a process in a reused pgid without the marker is not touched;
+   - closing the lifeline's stdin, as on host death, kills the whole group, including a differently named child (for example a shell tool) of the fake server;
+   - a lifeline left alive is killed by the backstop sweep;
+   - a recorded pid now used by another program, with another `lstart`, is not touched;
+   - the sweep never runs `ps` with environment output (spy);
    - the resumed session has exactly one server;
 8. **exposure:**
    - the fake and the mock-lab server listen on 127.0.0.1 only;

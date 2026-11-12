@@ -1,6 +1,6 @@
 # OpenCode 2.x as a built-in provider: design
 
-Status: revision 4, waiting for the human's decision. No application code before the human accepts.
+Status: revision 5, waiting for the human's decision. No application code before the human accepts.
 - Revision 1 (e4c18e56) was critiqued by s-348 (Codex gpt-6-astra, "revise": 1 blocker, 2 major, 1 minor). This revision answers every finding; the mapping is in appendix A.
 - Part O of room r-28. Lead s-345, owner s-320 (2026-11-12).
 - Plan: `docs/plans/2026-11-12-opencode-provider-plan.md`.
@@ -125,22 +125,26 @@ Status: revision 4, waiting for the human's decision. No application code before
 - **Start.** For each launch or resume, the host:
   1. picks a free loopback port;
   2. makes a 32-byte random password;
-  3. starts `opencode serve --hostname 127.0.0.1 --port <p>` as a child it owns, in its own process group, with `OPENCODE_SERVER_PASSWORD`, `OPENCODE_CONFIG_CONTENT`, `OPENCODE_CLI_CONFIG_CONTENT` and `OPENCODE_DISABLE_AUTOUPDATE=1`;
+  3. starts a small Parley **lifeline** process (a Node script shipped with the host), detached as the leader of a new process group, with a stdin pipe from the host. The lifeline starts `opencode serve --hostname 127.0.0.1 --port <p>` inside its own group, with `OPENCODE_SERVER_PASSWORD`, `OPENCODE_CONFIG_CONTENT`, `OPENCODE_CLI_CONFIG_CONTENT` and `OPENCODE_DISABLE_AUTOUPDATE=1`;
   4. waits for `GET /api/info` with Basic auth, within 15 s;
   5. starts the TUI in the pty with `--server http://127.0.0.1:<p>` and the same password in its env.
-- **Run record and marker.**
-  - Each server is started with a per-run marker in its environment: `PARLEY_OPENCODE_RUN=<random 128-bit id>`. The marker is not a secret, and every process the server spawns inherits it.
-  - The host appends `{sessionRef, pid, pgid, marker, startedAt}` to `<parley-home>/run/opencode-servers.json`. The password and the port are never written.
+- **Lifeline.**
+  - The lifeline exists so the server group can never outlive the host.
+  - When its stdin pipe closes (the host exited or crashed) or the host tells it to stop, it sends SIGTERM to its whole process group, SIGKILL after 2 s, and exits.
+  - The group holds the server and everything the server spawned, whatever their command names.
+  - Only a descendant that leaves the group on purpose (`setsid`) escapes. That is the same limit as tool subprocesses of every other provider today.
+- **Run record.** The host appends `{sessionRef, pid, pgid, lstart}` of the lifeline to `<parley-home>/run/opencode-servers.json`. `lstart` is the process start time from `ps -o lstart= -p <pid>`. The password and the port are never written.
 - **Stop.**
   - When the TUI exits, or the session sleeps or closes, the host first makes one last transcript poll into the cache (§4.11).
   - Then the server group gets SIGTERM, SIGKILL after 2 s, and Parley awaits the exit and removes the run record.
 - **Server dies first.** A server that dies while the TUI lives marks the session failed with a readable reason. The TUI is then stopped too.
 - **Host dies first** (critique finding 1).
   - A host restart ends the TUI with its pty, as for every family (§2.14). The server would survive it, because it is in its own group.
-  - So at start, before resuming any session, the host reads the run file and lists the user's processes with their environment (`ps eww`).
-  - It kills (SIGTERM, then SIGKILL after 2 s) every process whose environment carries a recorded marker: the server and anything it spawned, whatever its command name or process group, and whether or not the leader is still alive.
-  - A process without the marker is never killed, so a reused pid or pgid is safe.
+  - The lifeline sees its pipe close and kills its whole group, the server and its descendants. In the normal case nothing is left.
+  - As a backstop, at start, before resuming any session, the host reads the run file. For each record whose pid is alive with the same `lstart` (checked with `ps -o lstart= -p <pid>` only), it kills that process group. A pid with another start time was reused and is left alone.
   - Then it clears the file.
+  - The sweep never reads any process environment, so no unrelated secrets are touched.
+  - Only a lifeline killed with SIGKILL from outside, together with the host, can leave its group behind. That case is listed under "Not verified".
   - The session then resumes as usual: a new server, a new password, and the same `ses_` id. There is never a second server for one session, and no credentials survive the host.
   - The history of the dead run is in OpenCode's own storage and is read by the new server.
   - The last poll of the dead run may be missing from the cache until the new server is polled. This window is at most one poll interval.
@@ -316,6 +320,6 @@ Recommended first.
 3. **Major, read-only and Parley tools.** This is stated as intended parity with Claude and Codex read-only roles, which keep Parley tools. The picker discloses `execute` `fetch`, and a test lists the allowed tools (§4.8, DO4).
 4. **Minor, unauthenticated endpoints.** The bound address and the bodies of `/health` and `/doc` are tested for identifiers and secrets, and documented as local exposure (§4.2, §5, §6.9).
 
-5. **Major (delta reviews), leader died first; children with other names.** Ownership is proven by a per-run environment marker that every descendant inherits. The sweep kills every process that carries it, whatever its name or group, and nothing else (§4.2, plan O5 criterion 7).
+5. **Major (delta reviews), leader died first; children with other names; no environment scans.** A Parley lifeline leads the server's process group and kills the whole group when the host's pipe closes. The startup backstop only checks a recorded pid and its start time, and never reads process environments (§4.2, plan O5 criterion 7).
 
 The spike report is now in the repository, so the critic can read it: `docs/research/2026-11-12-opencode-2x-spike.md`.
