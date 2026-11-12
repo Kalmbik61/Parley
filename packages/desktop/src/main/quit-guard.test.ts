@@ -1,4 +1,7 @@
 import { EventEmitter } from 'node:events';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import { guardAppQuit, quitQuestion } from './quit-guard.js';
 import type { QuitGuardDeps } from './quit-guard.js';
@@ -25,6 +28,12 @@ class FakeApp extends EventEmitter {
         prevented = true;
       },
     });
+    return prevented;
+  }
+  /** Как Electron: `will-quit`, и только если выход не отменён, — `quit`. Возвращает, отменён ли выход. */
+  exit(): boolean {
+    const prevented = this.willQuit();
+    if (!prevented) this.emit('quit');
     return prevented;
   }
 }
@@ -139,6 +148,109 @@ describe('guardAppQuit', () => {
     const { app, guard } = setup();
     guard.dispose();
     expect(app.willQuit()).toBe(false);
+  });
+});
+
+/**
+ * Отмена вопроса о выходе (⌘Q → Cancel) оставляет приложение и хост работать, поэтому всё, что рвёт связь окна с хостом,
+ * не может случиться, пока вопрос открыт: разбор идёт на `quit`, который Electron шлёт, только если ни один слушатель
+ * `will-quit` не отменил выход. Раньше разбор висел на `will-quit` — после «Cancel» окно оказывалось на закрытом
+ * соединении, а `liveSessions()` в самом вопросе получал null вместо числа сессий.
+ */
+describe('разбор соединения при выходе', () => {
+  function wire(over: Partial<QuitGuardDeps> = {}) {
+    const steps: string[] = [];
+    const app = new FakeApp(steps);
+    let closed = false;
+    // Как HostConnection: после close() сокета нет, и число сессий неизвестно.
+    const connection = {
+      close: vi.fn(() => {
+        closed = true;
+      }),
+    };
+    const worksBinding = { dispose: vi.fn() };
+    const liveSessions = vi.fn(async () => (closed ? null : 3));
+    const ask = vi.fn(async (): Promise<'stop' | 'cancel'> => 'stop');
+    const onCancel = vi.fn(() => {
+      steps.push('cancel');
+    });
+    guardAppQuit(app, {
+      liveSessions,
+      ask,
+      stopHost: async () => {
+        steps.push('stop-host');
+      },
+      onCancel,
+      keepHost: false,
+      log: vi.fn(),
+      ...over,
+    });
+    // Как в main/index.ts.
+    app.on('quit', () => {
+      worksBinding.dispose();
+      connection.close();
+    });
+    return { app, steps, connection, worksBinding, liveSessions, ask, onCancel };
+  }
+
+  it('«cancel» — связь с хостом и привязка works целы, вопрос получил число сессий', async () => {
+    const ask = vi.fn(async (): Promise<'stop' | 'cancel'> => 'cancel');
+    const { app, steps, connection, worksBinding, onCancel } = wire({ ask });
+    expect(app.exit()).toBe(true);
+    await vi.waitFor(() => expect(steps).toEqual(['cancel']));
+    expect(ask).toHaveBeenCalledWith(3);
+    expect(onCancel).toHaveBeenCalledTimes(1);
+    expect(connection.close).not.toHaveBeenCalled();
+    expect(worksBinding.dispose).not.toHaveBeenCalled();
+  });
+
+  it('«stop» — хост гасится, выход проходит, и только тогда разбираются привязка и соединение', async () => {
+    const { app, steps, connection, worksBinding, liveSessions, ask } = wire();
+    expect(app.exit()).toBe(true);
+    await vi.waitFor(() => expect(steps).toEqual(['stop-host', 'quit']));
+    // Вопрос задан по живому соединению, а выход ещё не состоялся.
+    expect(await liveSessions.mock.results[0]?.value).toBe(3);
+    expect(ask).toHaveBeenCalledWith(3);
+    expect(connection.close).not.toHaveBeenCalled();
+    expect(worksBinding.dispose).not.toHaveBeenCalled();
+
+    expect(app.exit()).toBe(false);
+    expect(worksBinding.dispose).toHaveBeenCalledTimes(1);
+    expect(connection.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('отмена, потом ещё выход: второй вопрос тоже получает число сессий', async () => {
+    const ask = vi.fn(async (): Promise<'stop' | 'cancel'> => 'cancel');
+    const { app, steps, connection, worksBinding } = wire({ ask });
+    expect(app.exit()).toBe(true);
+    await vi.waitFor(() => expect(steps).toEqual(['cancel']));
+
+    ask.mockResolvedValueOnce('stop');
+    expect(app.exit()).toBe(true);
+    await vi.waitFor(() => expect(steps).toEqual(['cancel', 'stop-host', 'quit']));
+    expect(ask.mock.calls).toEqual([[3], [3]]);
+    expect(connection.close).not.toHaveBeenCalled();
+    expect(worksBinding.dispose).not.toHaveBeenCalled();
+  });
+
+  it('тестовый режим (keepHost): вопроса нет, выход проходит и разбирает привязку и соединение', () => {
+    const { app, connection, worksBinding } = wire({ keepHost: true });
+    expect(app.exit()).toBe(false);
+    expect(worksBinding.dispose).toHaveBeenCalledTimes(1);
+    expect(connection.close).toHaveBeenCalledTimes(1);
+  });
+});
+
+/** Проводка в `main/index.ts`: сторож — единственный, кто держит выход; остальное гасится на `quit`. */
+describe('main/index.ts: что делается до ответа на вопрос о выходе', () => {
+  const index = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'index.ts'), 'utf8');
+
+  it('на will-quit и before-quit ничего не вешается: выход может быть отменён, вопрос ещё открыт', () => {
+    expect(index).not.toMatch(/app\.on\('(will-quit|before-quit)'/);
+  });
+
+  it('привязка works и соединение с хостом разбираются на quit', () => {
+    expect(index).toMatch(/app\.on\('quit', \(\) => \{[^}]*worksBinding\?\.dispose\(\)[^}]*connection\.close\(\)/);
   });
 });
 
