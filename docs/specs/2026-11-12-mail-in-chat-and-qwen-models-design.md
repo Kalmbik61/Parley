@@ -1,10 +1,13 @@
-# Delivered mail in Chat, and Qwen Code models: design
+# Delivered mail in Chat, Qwen approval mode, and Qwen Code models: design
 
-Status: revision 2, waiting for the human's decision. No application code before the human accepts.
-- Revision 1 (7fb04655) was critiqued by s-348 (Codex gpt-6-astra, verdict "revise": 1 blocker, 4 major, 2 minor). This revision answers every finding; the mapping is in appendix A.
+Status: revision 3.
+- **Part M is accepted** by the human as p-48 (r-28, m-7946), with the first option of every decision D1–D8 (§7). Implementation has started.
+- **Parts A and Q** are new in this revision and wait for critique and a second proposal. No code for them before the human accepts.
+- Revision 1 (7fb04655) was critiqued by s-348 (Codex gpt-6-astra, "revise"). Revision 2 (3e72171b) answered every finding (appendix A), and the delta review accepted it, with D8 left for the human.
+- **Part O** (OpenCode 2.x) gets its own documents and proposal.
 - Lead s-345, owner s-320, room r-28 (2026-11-12).
 - Plan: `docs/plans/2026-11-12-mail-in-chat-and-qwen-models-plan.md`.
-- Branch: `parley/w-0054/s-345`, fast-forwarded to `origin/master` f5c32ebb (0.34.0). Both parts land here. No push and no PR until the human says so.
+- Branch: `parley/w-0054/s-345`, fast-forwarded to `origin/master` f5c32ebb (0.34.0). All parts land here. No push and no PR until the human says so.
 
 ## 1. The request
 
@@ -21,11 +24,14 @@ family**, not only Claude Code. Acceptance is per family:
 Verification must show a real Codex session's Chat with a delivered letter, not only Claude's. A family that cannot be
 covered in the first version is an explicit open choice (§7), not a silent gap.
 
-**Part Q.** Qwen Code with a live account (s-320, m-7925):
-- **Q2** (the model catalog) starts now from what the installed CLI shows without a login;
-- **Q1** (live verification) waits for the human's `/auth`.
+**Part A.** The human, 2026-11-12, through s-320 (m-7950): Qwen Code must start in auto-accept, not manual. Today the human
+switches by hand (§9).
 
-The facts so far are in §8.
+**Part Q.** Qwen Code with a live account (s-320, m-7925, m-7950):
+- **Q1:** live verification of the "Not verified" list of the Qwen provider work.
+- **Q2:** a model catalog. Today there is only "Default" or a typed model id.
+
+The human signed in on 2026-11-12; the facts are in §8.
 
 **Out of scope.**
 - No mail client and no reply UI.
@@ -78,7 +84,7 @@ The facts so far are in §8.
     live `PostToolUse` hook.
   - The feed already turns them into `tool` items named `mcp__parley__check_inbox` / `mcp__parley__wait_for`, with
     `response.text` up to `FEED_RESULT_LIMIT` = 64 Ki chars.
-  - **[N]** The exact `response.text` shape for MCP results (raw JSON or a content-array wrapper) is not recorded yet; M1 records it.
+  - **[O, M1]** In the transcript both `tool_result.content` and `toolUseResult` are `[{type:'text', text:'<JSON indented by 2>'}]`. The feed joins the text parts into `response.text`. The live `PostToolUse` body is **[N]**.
 - **[O] Codex, tool route, including `exec`.** Codex runs Parley tools from `exec` scripts
   (`text(await tools.mcp__parley__wait_for({target:"inbox", …}))`). Its rollout still records one
   `event_msg/item_completed` `McpToolCall` item per MCP call made inside the script:
@@ -163,7 +169,7 @@ interface FeedMail {
   in the work's folder: `mail/<session>.jsonl`, a new directory beside `events/`.
   - `text` is the exact `additionalContext`, at most 9000 chars.
   - The `ParleyInlineMail` line in `events/` keeps its form; metrics are unchanged.
-  - A failed journal write is logged and does not block the answer, as today.
+  - A failed journal write is logged and does not block the answer, as today (D8).
   - The file is small, and the seed reads it whole. It is never mixed into the large `events/` journal.
 - **Live.** Claude's live feed does not read the transcript, so after answering, the host puts the item into the session's
   feed through the core parser `mailFromInline(text, at)`. It does so only after it answered the hook with the letters: not
@@ -248,13 +254,15 @@ member's delivery time.
 - The `ParleyInlineMail` line and the metrics that count it.
 - The pending-letters queue in Chat (gray "Not picked up yet" letters): it shows letters before delivery, and the new item shows them after.
 - Room feed, window mail, `mail.markRead`.
-- The existing cold/live race (§2.2), unless the human picks D7 (b).
+- The existing cold/live race (§2.2): D7 (a).
 
 ### 3.7 Risks
 
 - **A context the agent never saw.** The host answers the hook in time, but Claude Code drops or delays the context. The
   item then shows letters the model did not see. The letters were marked read either way, so the item tells the truth about
   Parley's side. It is listed under "Not verified".
+- **A failed journal write (D8, accepted).** A failed write of the mail journal (for example a full disk) is logged, and the
+  letters still reach the agent. Such a delivery survives a restart only if Claude Code wrote its attachment.
 - **Placement without an attachment.** A journal-only delivery is placed after the last pointer prompt at or before its
   time. Clocks are the same machine's. If the transcript record of the pointer is written after the host's answer, the item
   can land one prompt early. A fixture checks the normal order; the rest is **[N]**.
@@ -277,8 +285,7 @@ Per family, on the real app, built from this branch:
 3. **codex.** A real Codex session reads a letter through `check_inbox` in an `exec` script, and another letter through
    `wait_for("inbox")` in an `exec` script. Its Chat shows both mail blocks. A screenshot is required.
 4. **qwen.** A Qwen Code session reads one letter through `check_inbox` and one through `wait_for("inbox")`, and both mail
-   blocks show, also after reopen and restart. This needs a signed-in `qwen` **[D4]**. Without it, fixture tests cover both
-   tools and the reseed.
+   blocks show, also after reopen and restart. `qwen` is now signed in, so this is checked live.
 5. **Reopen and restart.**
    - After closing and reopening the Chat, the same mail blocks show in the same places, for 1–3.
    - After Restart Host, the same holds when the Chat is opened before the session's next hook (D7).
@@ -303,13 +310,21 @@ Unit tests also cover:
 
 ## 5. Impact (expected; measured at the end)
 
-- **Goal:** see in a session's Chat which letters it got and from whom.
-- **Behaviour:** a mail block after every delivery, for every provider family; the pointer stays.
-- **Numbers:** not measured yet. To measure: Chat bytes per delivery, mail journal bytes per inline delivery, and feed seed
-  time on a long transcript before and after.
-- **Screens:** Claude inline, Codex `exec`, Qwen (if signed in), reopen.
-- **Risk:** §3.7.
-- **Cost:** about 5 executor tasks and 1 review.
+- **Goal:**
+  - see in a session's Chat which letters it got and from whom;
+  - start Qwen in auto-accept;
+  - pick a Qwen model from the account's real list.
+- **Behaviour:**
+  - a mail block after every delivery, for every provider family; the pointer stays;
+  - Qwen sessions start in `auto`;
+  - the Qwen model picker lists the account's models.
+- **Numbers:** not measured yet. To measure:
+  - Chat bytes per delivery and mail journal bytes per inline delivery;
+  - feed seed time on a long transcript, before and after;
+  - Qwen catalog probe time.
+- **Screens:** Claude inline, Codex `exec`, Qwen mail, the Qwen mode at start, the Qwen model picker, reopen.
+- **Risk:** §3.7, §8.5, §9.3.
+- **Cost:** about 7 executor tasks and 1 review.
 
 ## 6. Decisions already taken
 
@@ -319,62 +334,147 @@ Unit tests also cover:
 - Mail appears in completion order (§3.2b).
 - One branch, no push.
 - Documents are written by the lead and copied into `docs/` by a junior executor (s-320, m-7927).
+- Part M accepted as p-48 with D1–D8 as in §7 (m-7946).
 
-## 7. Open choices for the human
+## 7. Part M decisions (accepted by the human, p-48)
 
-- **D1. Placement.** A separate always-visible block (recommended), or letters only inside the expanded tool row.
-- **D2. Phone.** Unchanged in this version (recommended: smaller; phone builds are verified separately), or render `mail` on the phone too (+1 task, phone build and screenshot).
-- **D3. Long text.** Fold to 6 lines with "Show more" (recommended), or always show in full.
-- **D4. Qwen verification.** If `qwen` is not signed in when Part M is verified, Qwen is covered by fixture tests and goes to "Not verified" (recommended: the route is the same tool path as Codex and Claude), or Part M waits for the login.
-- **D5. Which letters.** Show every delivered letter, including `system` (reports, invitations) and `parley` letters (recommended: that is what the agent saw), or only letters from sessions and the human.
-- **D6. Plan assignment details.** Drop `roomTask` and `assignment` from the block (recommended: keep it small), or show them as a one-line badge.
-- **D7. The existing restart race (§2.2, b-041).**
-  - (a) Out of this work, recommended. Letters are exactly as durable as the rest of the Chat. Restart is verified with the
-    Chat opened before the next hook, and the race stays in the backlog.
-  - (b) Fix it in this branch, as an extra senior-only task (concurrency in the feed service), before V1.
+- **D1.** The mail block is always visible, in a separate row.
+- **D2.** The phone is unchanged in this version.
+- **D3.** Long text is folded to 6 lines with "Show more".
+- **D4.** Qwen is covered by fixtures if it is not signed in. It now is, so it is also checked live.
+- **D5.** Every delivered letter is shown, including `system` and `parley` letters.
+- **D6.** No `roomTask` / `assignment` in the block.
+- **D7.** The existing restart race stays out of this work (b-041).
+- **D8.** A failed mail journal write is non-fatal; the letters still reach the agent.
 
 ## 8. Part Q — Qwen Code models
 
 ### 8.1 State on this machine (2026-11-12)
 
 - `qwen` 0.27.2 is installed by the human at `~/.local/bin/qwen` (standalone, `~/.local/lib/qwen-code`, darwin-arm64).
-- Not signed in: `~/.qwen` does not exist and `QWEN_HOME` is unset.
-- The probes below ran with a scratch `HOME` and `QWEN_HOME` in the lead's scratchpad: the human's home was neither created nor changed.
+- The human signed in on 2026-11-12 with "Qwen Account with Subscription".
 - Never read: `oauth_creds.json`, `subscription_credentials.json`, any key.
+- `settings.json` can hold secrets (§8.2), so only single named fields are read from it, by field extraction. It is never printed or copied.
 
-### 8.2 Facts without a login
+### 8.2 Facts without a login (from revision 2)
 
-**Two account routes.** `/auth` offers "Qwen Account with Subscription" (chat.qwen.ai Plus or Pro), QwenCloud, and Alibaba
-ModelStudio (Coding Plan, Token Plan, Standard API key). Inside the CLI the account routes are two auth types:
-- **[S] `qwen-oauth`, the legacy free route.** Its list is hard-coded: `QWEN_OAUTH_MODELS = [{id: "coder-model", …}]`. The bundled docs say it "cannot be overridden".
+- **[S] `qwen-oauth`, the legacy free route.** Its list is hard-coded: `QWEN_OAUTH_MODELS = [{id: "coder-model", …}]`.
 - **[S] `qwen-subscription`, Plus or Pro.**
-  - The default model is `QWEN_SUBSCRIPTION_MODEL = "qwen3.8-max"`, and the base URL is `https://api.qwen.ai/compatible-mode/v1`.
-  - The list is dynamic: the CLI calls `GET {base}/models` with the subscription bearer token. It keeps `id`, `input_modalities` and `context_window_tokens`.
-  - It caches the result as `models` / `modelMetadata` **inside `subscription_credentials.json`**, the secret file. Parley must not read it.
+  - The default is `qwen3.8-max`, and the base URL is `https://api.qwen.ai/compatible-mode/v1`.
+  - The CLI fetches `GET {base}/models` with the account token and caches the list **inside `subscription_credentials.json`**. Parley must not read it.
+- **[S] `model-registry.json`** is a models.dev metadata cache, not the account's list.
+- **[S] `modelProviders`** in `settings.json` lists API-key providers only.
+- **[S] `settings.json` can hold secrets.** The bundled docs say `env` there is plain text and name `security.auth.apiKey` (`auth.md:377`, `model-providers.md:192`).
+- **[S] `GET /v1/models`** needs the token, so it is out for Parley.
+- **[O] ACP `session/new` unsigned** fails with -32000 "Authentication required". With a dummy runtime model it returns
+  `models: {currentModelId, availableModels: [{modelId, name, description, _meta: {contextLimit, authType, baseModelId, isRuntime}}]}`.
 
-**Where each catalog source stands.**
-- **[S] `model-registry.json`** (`~/.qwen/model-registry.json`) is a models.dev metadata cache: capabilities and limits for many models, refreshed daily, with a bundled snapshot. It is not the list of models the account may use. At most it can enrich metadata such as the context window.
-- **[S] `modelProviders`** in `settings.json` lists API-key providers (`openai`, `anthropic`, `gemini`, `vertex-ai` or custom ids) as `ModelConfig[]` (`id`, `name`, `description`, `baseUrl`, `envKey`, `generationConfig`). It does not hold the subscription models: the docs say "use /model to choose from the models available with your subscription".
-- **[S] `settings.json` can hold secrets.** The bundled docs say `env` there is stored in plain text and name `security.auth.apiKey` (`auth.md:377`, `model-providers.md:192`). Parley and its sessions read only single named fields from it, with a field extraction. They never print, copy or attach the file (critique finding 7).
-- **[S] `GET /v1/models`** needs the account token, so it is out for Parley: reading the token means reading a secret file.
-- **[O] ACP `session/new`.**
-  - Unsigned, `qwen --acp` answers `initialize` (agentInfo `qwen-code` 0.27.2; `loadSession`; `sessionCapabilities.list` and `resume`). `session/new` then fails with -32000 "Authentication required: Use /auth to sign in or configure a model first."
-  - With a dummy OpenAI-compatible runtime model (fake key, unreachable base URL, no network call) `session/new` returns `models`: `{currentModelId: "$runtime|openai|probe-model(openai)", availableModels: [{modelId, name, description, _meta: {contextLimit, authType, baseModelId, isRuntime}}]}`. The result also carries `modes` and `configOptions`.
-  - The source builds `availableModels` from the CLI's own model registry (`acpAgent` `buildModelsData`), so it would include subscription models once signed in **[N]**.
+### 8.3 Facts signed in (2026-11-12, lead s-345)
 
-### 8.3 What needs the signed-in account (Q1 and the rest of Q2)
+1. **[O] Route.** `security.auth.selectedType` = `qwen-subscription`, `model.name` = `qwen3.8-max`. `settings.json` has the top-level keys `$version`, `model`, `permissions` (only `allow`), `security` and `ui`, and no `modelProviders`.
+2. **[O] ACP `session/new`.**
+   - `qwen --acp`, `initialize` and then `session/new {cwd: <empty scratch dir>, mcpServers: []}` answered within 1 s of the request (3.9 s after process start, including a fixed 3 s wait of the probe client).
+   - `models.currentModelId` = `qwen3.8-max(qwen-subscription)`.
+   - `availableModels`, in this order:
+     - `qwen4.0-max-preview(qwen-subscription)`;
+     - `qwen3.8-max(qwen-subscription)`;
+     - `qwen3.8-flash(qwen-subscription)`.
+   - Each model has `name` = the base id, `description: null`, and `_meta` = `{contextLimit: 1000000, authType: "qwen-subscription", baseModelId, modalities: {image: true, video: true}, baseUrl: "https://api.qwen.ai/compatible-mode/v1", isRuntime: false}`.
+3. **[O] `configOptions` of `session/new`:**
+   - `mode`: `plan`, `default`, `auto-edit`, `auto`, `yolo`; current `auto` in ACP;
+   - `model`: the same three;
+   - `workflow_mode`: off, and unavailable;
+   - `reasoning_effort` for the current model: `none`, `low`, `medium` and `xhigh`, default `medium`, category `thought_level`.
+4. **[O] No session left behind.** The ACP probe left no chat file under `~/.qwen/projects/`; only the prompt run in item 5 wrote one.
+5. **[O] The bare base id works for `-m`.**
+   - `qwen -p "Reply with exactly the word OK and nothing else." -m qwen3.8-flash --approval-mode plan --output-format json` gave `system/init` `model: "qwen3.8-flash"` and `result` "OK" in 3.3 s.
+   - Usage: 13,945 input tokens and 23 output tokens.
+   - The wall time was 13 s, including CLI start.
+6. **[O] Real transcript records (0.27.2).**
+   - The assistant record has `parts` `[thought, text]`, and `usageMetadata` has `promptTokenCount`, `candidatesTokenCount`, `thoughtsTokenCount`, `totalTokenCount` and `cachedContentTokenCount`.
+   - `system` records have the subtypes `attribution_snapshot`, `memory_catalog_snapshot` and `ui_telemetry`.
+   - This is the shape of the mock fixtures the Qwen feed parser was built on.
+7. **[O] `model-registry.json`** holds 294 models from many vendors (keys `source`, `fetchedAt`, `projection`, `models`, `etag`). This confirms it is not the account's list.
+8. **[S] Parley today.** The runner passes `-m {model}` on start and resume (`core/src/providers.ts:471-509`). The provider has `models: null` and `effort: false`. The CLI has no effort flag (`qwen --help`).
 
-1. Which route the human's subscription uses, read as the single field `security.auth.selectedType` of `settings.json`.
-2. ACP `session/new` `availableModels` signed in: the real `modelId` strings and their format (for example `qwen3.8-max(qwen-subscription)`), `name`, `_meta.contextLimit` and `modalities`, and `currentModelId`.
-3. Whether the id that `session/new` returns is what `qwen --model <id>` accepts in a pty session (Parley launches `qwen` in a pty, not through ACP).
-4. How long `session/new` takes signed in (it may call `GET /models`) and what it does offline (the cached list).
-5. s-322's "Not verified" list: real model records (thinking, usage), the OAuth flow end to end, `auth_success` with OAuth, a real quota error, resume of a real session, real model ids.
+### 8.4 Design (Q2): a model catalog from the CLI, like Codex
 
-### 8.4 Direction (to be designed after 8.3)
+- **Probe.** A host module `qwen-catalog.ts`, after `codex-catalog.ts`.
+  - It runs the human's `qwen` (PATH or `PARLEY_QWEN_BIN`) as `qwen --acp` under the human's own home.
+  - It sends `initialize`, then `session/new` with `cwd` = an empty Parley-owned temp directory and `mcpServers: []`.
+  - It reads `models.availableModels`, then kills the process. It never sends a prompt.
+  - Timeout 15 s; output cap 1 MiB.
+  - The probe does not load Parley's per-session system settings file.
+- **When.**
+  - At host start, if `qwen` is installed.
+  - In the background, when `providers.list` finds the catalog older than 6 h.
+  - Right after a Qwen sign-in from Settings ends (`providers.signInExit`).
+- **Store.** A successful probe whose list differs from the stored one rewrites `qwen-models.json` in the Parley home atomically and calls `onChange`. `loadProviders` reads it, so the window, the host and the agents' MCP server see one list.
+- **Failure keeps the old list.** A failed probe (not signed in, timeout, bad output) leaves the file alone. With no file, `models: null` stays (Default or a typed id), as today.
+- **Mapping.**
+  - Only entries with `_meta.isRuntime === false` are used.
+  - `ModelOption.id` = `_meta.baseModelId`, the bare id observed to work with `-m`, so no new flag form is needed. `label` = `name`.
+  - Order as in ACP.
+  - `efforts: null` in v1 (DQ2). "Default" stays the absence of `-m`, so the CLI uses `model.name` from its settings.
+- **Never.** The probe never reads `subscription_credentials.json`, `oauth_creds.json` or keys; the CLI does the account call itself, like `codex debug models`.
+- **Preview models** (`qwen4.0-max-preview`) are listed as the CLI lists them (DQ3).
 
-The likely catalog source is a short-lived `qwen --acp` probe that runs `initialize` and `session/new`, reads
-`models.availableModels`, and stops before any prompt. It runs in the same home as Parley's Qwen sessions and never touches
-credential files. `model-registry.json` may enrich the metadata. The design is written only once 8.3 items 1–4 are observed.
+### 8.5 Q1: live verification still owed (after the code lands)
+
+- One short real Qwen session from Parley: `qwen3.8-flash`, a tiny prompt. It checks:
+  - Chat thought and text;
+  - usage;
+  - resume after closing;
+  - mail (Part M, item 4);
+  - the mode at start (Part A);
+  - the picker (Part Q).
+- The quota error is never provoked; it is recorded only if it happens.
+- The OAuth flow inside Parley's Settings sign-in and the `auth_success` hook are checked only if the human signs in again from Settings. Otherwise they stay "Not verified".
+
+### 8.6 Risks (Part Q)
+
+- **ACP is a second surface of the CLI.** Its `session/new` shape may change between versions. The probe validates the shape and falls back to the stored list.
+- **The probe costs a CLI start, about 2–4 s,** at most every 6 h. No model tokens: ACP `session/new` sends no prompt (§8.3 items 2 and 4).
+- **A preview model may vanish.** A session started with a vanished id fails the way a typed wrong id fails today.
+
+## 9. Part A — Qwen Code starts in auto-accept
+
+### 9.1 Facts
+
+- **[S]** `core/src/work/launch.ts:538`: `subs.approvalMode = workspace ? 'auto' : 'default'`.
+  - `workspace` is `session.workspace`, the autonomous-room confinement.
+  - `launch.ts:303` refuses `workspace` for every provider but Codex and Claude.
+  - So an ordinary Qwen session always gets `--approval-mode default`, new and resumed: the `{approvalMode}` slot of `args` and `resumeArgs`, `providers.ts:487-505`.
+- **[O, s-320]** The human's live Qwen process ran with `--approval-mode default`, and its transcript records `approvalMode "default"`.
+- **[O]** Qwen 0.27.2 modes are `plan`, `default`, `auto-edit`, `auto` ("LLM classifier auto-approves safe actions, blocks risky ones") and `yolo` (`qwen --help`, ACP `configOptions`).
+- **Accepted decision D6 of the Qwen provider work** reads "auto in workspace sessions". It was meant as Parley's sessions, and was implemented as autonomous workspaces only. This is a defect against that decision.
+
+### 9.2 Design
+
+- **Ordinary sessions.** Ordinary Parley Qwen sessions start with `--approval-mode auto`, new and resumed (DA1).
+- **Never `yolo`.**
+- **Read-only roles** are still refused, as today.
+- **Autonomous workspaces** keep `auto`.
+- **The human's in-session switch.** A mode change made inside the TUI holds until the next launch or resume, which starts in `auto` again.
+
+### 9.3 Risks
+
+- **The classifier.** `auto` lets the CLI's own classifier approve actions it judges safe. That is the human's request; `default` stays reachable inside the TUI.
+- **Resume.** A resume also switches a session the human had kept in `default` back to `auto`. This is stated to the human in the proposal.
+
+### 9.4 Acceptance (Parts A and Q)
+
+1. A new and a resumed Qwen session launch with `--approval-mode auto`. There are unit tests on the launch arguments, and the TUI shows the auto mode at start (a screenshot).
+2. The New session dialog for Qwen lists the account's models in ACP order, plus "Default". A session started with `qwen3.8-flash` runs that model (transcript `model`).
+3. Signed out or probe failure: the stored list stays. With no stored list: "Default" or a typed id, as today. This is covered by unit tests with a fake ACP process.
+4. The probe never touches credential files (a unit test of the file paths it opens) and leaves no chat file.
+
+### 9.5 Open choices (Parts A and Q)
+
+- **DA1. Mode at start.** `auto`, the classifier approving safe actions (recommended, s-320's default), or `auto-edit`, approving edits only.
+- **DQ1. Catalog refresh.** At host start, every 6 h and after a sign-in (recommended), or only when the New session dialog opens.
+- **DQ2. Effort.** No effort choice for Qwen in v1 (recommended: the CLI has no effort flag; ACP shows `reasoning_effort` per model), or a follow-up through Qwen settings.
+- **DQ3. Preview models.** List them as the CLI does (recommended), or hide ids that contain `preview`.
 
 ## Appendix A. Critique of revision 1 (s-348) and answers
 
