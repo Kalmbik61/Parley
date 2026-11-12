@@ -1,11 +1,11 @@
 # Mail in Chat, Qwen approval mode and Qwen Code models: plan
 
-Spec: `docs/specs/2026-11-12-mail-in-chat-and-qwen-models-design.md` (revision 3).
+Spec: `docs/specs/2026-11-12-mail-in-chat-and-qwen-models-design.md` (revision 4).
 Branch: `parley/w-0054/s-345`. Lead: s-345. Owner: s-320. Room: r-28.
 
-Status: revision 3.
+Status: revision 4.
 - **Part M is accepted** as p-48 with D1–D8 (spec §7). M1 is done (3bafe473); M2 is in progress.
-- **Parts A and Q** (tasks A1, Q1, Q2) wait for critique and the human's acceptance of the second proposal. No code for them before that.
+- **Parts A and Q** (tasks A1, Q1, Q2) wait for the human's acceptance of the second proposal; their critique answers are in spec appendix B. No code for them before that.
 - **Part O** (OpenCode) has its own documents.
 
 ## Rules for every task
@@ -176,6 +176,7 @@ Then: V1 (M + A + Q, real app; includes Q1) → R1 (+ fixes and delta review)
 **Scope.**
 - In `core/src/work/launch.ts:538`, ordinary Qwen sessions get `subs.approvalMode = 'auto'` (or `auto-edit` if the human picks it in DA1), new and resumed. Autonomous workspaces keep `auto`.
 - `yolo` is never produced. Read-only roles are still refused, as today.
+- No mode is persisted by Parley: every launch and resume passes the start mode (spec §9.2).
 - Update the comment at `core/src/providers.ts:626` and the D6 comment at `:473`.
 
 **Criteria.**
@@ -194,12 +195,20 @@ Then: V1 (M + A + Q, real app; includes Q1) → R1 (+ fixes and delta review)
   - `loadProviders` reads it into the `qwen` entry's `models`, with the same validation and limits as the Codex file (`providers.ts:1150` onwards).
   - No file or an invalid file: `models: null`, as today.
 - **Host.** New `host/src/providers/qwen-catalog.ts`, after `codex-catalog.ts`, per spec §8.4:
-  - the probe spawns `qwen --acp` (PATH or `PARLEY_QWEN_BIN`) with an empty temp `cwd` it creates and removes;
-  - it sends `initialize` and `session/new {cwd, mcpServers: []}` as JSON-RPC lines, reads `result.models.availableModels`, then kills the process group;
-  - timeout 15 s, output cap 1 MiB;
-  - it keeps entries with `_meta.isRuntime === false`, maps `id` = `_meta.baseModelId` and `label` = `name`, keeps the ACP order, and sets `efforts: null`;
-  - it starts at host start when `qwen` is installed, refreshes in the background from `providers.list` when the catalog is older than 6 h, and refreshes after `providers.signInExit` for `qwen`;
-  - a list that differs from the stored one is written atomically and fires `onChange`; a failure leaves the file alone.
+  - **Spawn.** The probe spawns `qwen --acp` (PATH or `PARLEY_QWEN_BIN`) detached, as the leader of its own process group, with piped stdio and an empty temp `cwd` it creates.
+  - **Exchange.** It sends `initialize` and `session/new {cwd, mcpServers: []}` as JSON-RPC lines and reads `result.models.availableModels`.
+  - **Shutdown, always, in a `finally`:**
+    - end stdin;
+    - SIGTERM to the group;
+    - SIGKILL to the group after 2 s if any member is alive;
+    - await the exit and destroy the pipes;
+    - remove the temp `cwd`.
+  - **Limits.** Timeout 15 s; output cap 1 MiB.
+  - **Mapping.** It keeps entries with `_meta.isRuntime === false`, maps `id` = `_meta.baseModelId` and `label` = `name`, keeps the ACP order, and sets `efforts: null`.
+  - **Triggers.** At host start when `qwen` is installed; in the background from `providers.list` when the catalog is older than 6 h; after `providers.signInExit` for `qwen`.
+  - **One probe at a time.** One shared in-flight probe promise; a trigger during a probe joins it. `providers.list` never awaits a probe.
+  - **Store.** A list that differs from the stored one is written atomically and fires `onChange`; a failure leaves the file alone.
+  - **Secret boundary.** Parley's code opens no file but its temp `cwd` and `qwen-models.json`. It passes no credential path or key in arguments or environment. It does not pass Parley's per-session Qwen settings file.
 - **Wiring** in `host.ts` and `methods/providers.ts`, the way `codexCatalog` is wired.
 
 **Criteria.**
@@ -207,10 +216,12 @@ Then: V1 (M + A + Q, real app; includes Q1) → R1 (+ fixes and delta review)
    - the three-model answer (an invented shape copy of spec §8.3 item 2), giving three `ModelOption`s in order with bare ids;
    - an "Authentication required" error, a timeout, oversized output and malformed JSON: the stored file is untouched;
    - runtime entries, which are dropped.
-2. A test that the probe passes no Parley settings file and opens no file under the Qwen home (it spawns only the CLI).
-3. `providers.list` shows the stored list for `qwen`. With no file, `models` is `null`.
-4. Refresh after 6 h and after `signInExit` (fake clock).
-5. Tests, typecheck and lint pass.
+2. **Cleanup.** A fake CLI that forks a child holding stdout open makes the probe end within timeout + 2 s, with no group member left (checked by pid) and the temp `cwd` removed.
+3. **One probe at a time.** Three concurrent triggers spawn one process. `providers.list` returns at once during a probe: the stored list, or `null`.
+4. **Secret boundary.** A test checks the spawn arguments and environment (no credential path or key, no Parley settings file) and the files the probe code opens (only its temp `cwd` and `qwen-models.json`).
+5. `providers.list` shows the stored list for `qwen`. With no file, `models` is `null`.
+6. Refresh after 6 h and after `signInExit` (fake clock).
+7. Tests, typecheck and lint pass.
 
 ## Verification and review
 
@@ -221,12 +232,13 @@ Then: V1 (M + A + Q, real app; includes Q1) → R1 (+ fixes and delta review)
 - Use short sessions with tiny prompts, to save limits.
 - Save screenshots to the verifier's scratchpad.
 - **Part M.** Spec §4 items 1–9. For item 5, Restart Host with the sessions idle, and open each Chat before the session's next hook (D7).
-- **Parts A and Q.** Spec §9.4 items 1–4. Q1 (§8.5) with `qwen3.8-flash`:
+- **Parts A and Q.** Spec §9.4 items 1–6. Q1 (§8.5) with `qwen3.8-flash`:
   - Chat thought and text;
   - usage;
-  - resume;
+  - resume, including a mode switched in the TUI coming back as `auto`;
   - the TUI mode at start;
-  - the picker.
+  - the picker;
+  - one real probe: no process left (`ps`), no chat file, and its time.
 - Measure:
   - the `mail` item bytes per delivery;
   - the mail journal bytes per inline delivery;
