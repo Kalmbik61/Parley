@@ -1,6 +1,6 @@
 # OpenCode 2.x as a built-in provider: design
 
-Status: revision 2, waiting for the human's decision. No application code before the human accepts.
+Status: revision 3, waiting for the human's decision. No application code before the human accepts.
 - Revision 1 (e4c18e56) was critiqued by s-348 (Codex gpt-6-astra, "revise": 1 blocker, 2 major, 1 minor). This revision answers every finding; the mapping is in appendix A.
 - Part O of room r-28. Lead s-345, owner s-320 (2026-11-12).
 - Plan: `docs/plans/2026-11-12-opencode-provider-plan.md`.
@@ -135,7 +135,7 @@ Status: revision 2, waiting for the human's decision. No application code before
 - **Server dies first.** A server that dies while the TUI lives marks the session failed with a readable reason. The TUI is then stopped too.
 - **Host dies first** (critique finding 1).
   - A host restart ends the TUI with its pty, as for every family (§2.14). The server would survive it, because it is in its own group.
-  - So at start, before resuming any session, the host reads the run file. It kills every recorded group whose leader still runs the `opencode serve` command line (checked by `ps`, so no reused pid is killed), and clears the file.
+  - So at start, before resuming any session, the host reads the run file. For every recorded group it lists the live members of that process group (`ps -g <pgid>`), whether or not the leader is still alive. It kills the members whose command line is `opencode` (the server and anything it spawned). If the group's members run something else, the pgid was reused, and nothing is killed. Then it clears the file.
   - The session then resumes as usual: a new server, a new password, and the same `ses_` id. There is never a second server for one session, and no credentials survive the host.
   - The history of the dead run is in OpenCode's own storage and is read by the new server.
   - The last poll of the dead run may be missing from the cache until the new server is polled. This window is at most one poll interval.
@@ -310,5 +310,7 @@ Recommended first.
 2. **Major, duplicate delivery.** The pty fallback runs only on a definite rejection. Ambiguous outcomes check the session inbox and messages first, and a pointer is marked delivered once (§4.5, §6.10).
 3. **Major, read-only and Parley tools.** This is stated as intended parity with Claude and Codex read-only roles, which keep Parley tools. The picker discloses `execute` `fetch`, and a test lists the allowed tools (§4.8, DO4).
 4. **Minor, unauthenticated endpoints.** The bound address and the bodies of `/health` and `/doc` are tested for identifiers and secrets, and documented as local exposure (§4.2, §5, §6.9).
+
+5. **Major (delta review), leader died first.** The sweep lists the group's live members and kills those running `opencode`, not only a live leader; a reused pgid is left alone (§4.2, plan O5 criterion 7).
 
 The spike report is now in the repository, so the critic can read it: `docs/research/2026-11-12-opencode-2x-spike.md`.

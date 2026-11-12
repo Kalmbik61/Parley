@@ -167,7 +167,7 @@ It also builds `OPENCODE_CLI_CONFIG_CONTENT` `{"highlights": false}`.
   - the run file `<parley-home>/run/opencode-servers.json` (pid, pgid, startedAt; no password, no port);
   - on stop: last poll, then SIGTERM, SIGKILL after 2 s, await, record removed;
   - crash → session failed;
-  - at host start, before any resume: sweep the run file, killing only groups whose leader runs `opencode serve`.
+  - at host start, before any resume: sweep the run file. For each recorded pgid, kill the live group members whose command line is `opencode`, even when the leader is gone; leave a reused pgid alone.
 - Resume reuses the id with a new server.
 
 **Criteria.** Unit tests with the fake server:
@@ -177,7 +177,11 @@ It also builds `OPENCODE_CLI_CONFIG_CONTENT` `{"highlights": false}`.
 4. a server crash (session failed, TUI stopped);
 5. TUI exit (server group gone, checked by pid);
 6. resume (same id, new password);
-7. **host-first restart:** a fake server left running is killed by the sweep, a pid reused by another program is not, and the resumed session has exactly one server;
+7. **host-first restart:**
+   - a fake server left running is killed by the sweep;
+   - a leader that died first, with its child still alive, gets the child killed;
+   - a pgid reused by another program is not touched;
+   - the resumed session has exactly one server;
 8. **exposure:**
    - the fake and the mock-lab server listen on 127.0.0.1 only;
    - the recorded `/health` and `/doc` bodies contain no session id, password, working directory or user name;
