@@ -523,7 +523,8 @@ async function plan(
     });
   }
   // Qwen Code: сервер `parley` и хуки — в системном файле настроек сессии (спека 2026-11-11, 3.3). Режим одобрений —
-  // решение D6: `auto` там, где Claude получает `--permission-mode auto`, иначе `default`; `--yolo` — никогда.
+  // стартовый `auto` у каждой сессии, новой и продолженной (решение DA1, спека 2026-11-12, 9.2); `--yolo` — никогда. Режим,
+  // переключённый внутри TUI, Parley не запоминает: следующий запуск снова стартует с `auto`.
   let qwenSettingsFile: string | undefined;
   if (entry.runner.mcpConfig === 'qwen-system-settings') {
     const written = await writeQwenSettings(projectPath, workId, session.id, {
@@ -535,7 +536,7 @@ async function plan(
     if (written.kept.length > 0) {
       warnings.push(`The Qwen system settings file sets ${written.kept.join(', ')}; Parley keeps the administrator's value instead of its default.`);
     }
-    subs.approvalMode = workspace ? 'auto' : 'default';
+    subs.approvalMode = 'auto';
   }
   if (skillList === 'removed') subs.skillCatalog = CODEX_SKILL_CATALOG_OVERRIDE;
   // Хуки Codex — только в режиме `parley` настройки `codexWriteApprovals` (спека 2026-10-21, 5.2): без доверия в `/hooks`

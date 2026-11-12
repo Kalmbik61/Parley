@@ -470,7 +470,7 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
   },
   // Qwen Code (spec 2026-11-11, 3.3): the official CLI in a pty. The Parley MCP server and hooks come from the
   // per-session system settings file (`QWEN_CODE_SYSTEM_SETTINGS_PATH`, `work/qwen-settings-file.ts`); there is no
-  // `--settings` flag. `--yolo` is never used: the approval mode is `{approvalMode}` (D6). No `-i {prompt}` (spec 3.4
+  // `--settings` flag. `--yolo` is never used: the approval mode is `{approvalMode}`, always the start mode `auto` (DA1, spec 2026-11-12, 9.2). No `-i {prompt}` (spec 3.4
   // amendment): Qwen sends that turn before its MCP discovery ends, so the first turn has no Parley tools; the brief
   // goes out as `LaunchPlan.deferredPrompt`, typed once the session is ready. A positional prompt would be one-shot.
   // No model catalog and no effort in v1.
@@ -623,7 +623,7 @@ export interface RunnerSubstitutions {
   effort?: EffortLevel;
   disallowedTools?: string;
   sandbox?: string;
-  /** `--approval-mode` Qwen Code (решение D6): `auto` в сессиях workspace, иначе `default`; `yolo` — никогда. */
+  /** `--approval-mode` Qwen Code: стартовый `auto` у каждой сессии (решение DA1); `yolo` — никогда. */
   approvalMode?: string;
 }
 
