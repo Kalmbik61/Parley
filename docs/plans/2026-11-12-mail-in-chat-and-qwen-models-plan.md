@@ -1,8 +1,8 @@
 # Mail in Chat and Qwen Code models: plan
 
-Spec: `docs/specs/2026-11-12-mail-in-chat-and-qwen-models-design.md` (revision 1).
+Spec: `docs/specs/2026-11-12-mail-in-chat-and-qwen-models-design.md` (revision 2).
 Branch: `parley/w-0054/s-345`. Lead: s-345. Owner: s-320. Room: r-28.
-Status: draft. **No task starts before the human accepts the spec and decisions D1–D6.**
+Status: revision 2, after the critique of s-348 (spec appendix A). **No task starts before the human accepts the spec and decisions D1–D7.**
 
 ## Rules for every task
 
@@ -30,18 +30,24 @@ Status: draft. **No task starts before the human accepts the spec and decisions 
 
 **Seniority.**
 - Junior tasks: Claude Sonnet or Codex gpt-6.1-sol, chosen by the remaining weekly limit (2026-11-12: Claude 97 %, Codex 93 %).
-- One executor session takes M1–M4 in order: the same context, fewer sessions.
-- No task is senior-only. M3 touches the hook answer path; its criteria pin that the answer does not change, and the lead reviews that part line by line.
+- One executor session takes M1–M5 in order: the same context, fewer sessions.
+- No task is senior-only unless the human picks D7 (b): its race fix (M-R) is senior-only, because it is concurrency in the feed service.
+- M4 touches the hook answer path and the Claude seed. Its criteria pin that the answer does not change, and the lead reviews those parts line by line.
 
 ## Order and shared files
 
 ```
-Part M: M1 → M2 → M3 → M4 → V1 → R1 (+ fixes and delta review)
-Part Q: Q2a (done, spec §8) → [human signs in] → Q1/Q2b → Q2c (spec revision 2, critique, second proposal)
+Part M: M1 → M2 → M3 → M4 → M5 → V1 → R1 (+ fixes and delta review)
+        [D7 (b) only: M-R, senior-only, between M4 and M5]
+Part Q: Q2a (done, spec §8) → [human signs in] → Q1/Q2b → Q2c (spec revision 3, critique, second proposal)
 ```
 
 - Strictly sequential.
-- **Shared files:** `core/src/feed/types.ts` (M1, M2), `core/src/feed/reduce.ts` (M2), `host/src/feed/feed-service.ts` (M3), `desktop/src/renderer/chat/FeedList.tsx` (M1 stub, M4).
+- **Shared files:**
+  - `core/src/feed/types.ts` (M1, M2);
+  - `core/src/feed/reduce.ts` and `from-transcript.ts` (M2, M4);
+  - `host/src/feed/feed-service.ts` (M3, M4);
+  - `desktop/src/renderer/chat/FeedList.tsx` (M1 stub, M5).
 
 ## Part M
 
@@ -52,7 +58,7 @@ Part Q: Q2a (done, spec §8) → [human signs in] → Q1/Q2b → Q2c (spec revis
 - **Types.** In `packages/core/src/feed/types.ts`, add `FeedMail` and `FeedMailLetter` (spec §3.1), add `FeedMail` to `FeedItem`, add `FEED_MAIL_TEXT_LIMIT` = 16 Ki, and export them from the core index.
 - **New `packages/core/src/feed/mail.ts`.**
   - `mailFromInline(text, at)`: text that starts with `INLINE_MAIL_LINE` + `\n` + JSON. `via: 'pointer'`, `toolUseId: null`.
-  - `mailFromTool(tool)`: a top-level `tool` item that is `done`, under the rule of spec §3.2(b). It unwraps raw JSON, an MCP `{content:[{type:'text', text}]}` object, and an array of text parts.
+  - `mailFromTool(tool)`: a `tool` item that is `done`, under the rule of spec §3.2(b). It unwraps raw JSON, an MCP `{content:[{type:'text', text}]}` object, and an array of text parts.
   - Letters are validated field by field:
     - an invalid letter is skipped; no valid letter means `null`;
     - text longer than the limit is cut and gets `cut: true`;
@@ -62,13 +68,14 @@ Part Q: Q2a (done, spec §8) → [human signs in] → Q1/Q2b → Q2c (spec revis
 - **Stubs so typecheck stays green.**
   - Desktop `FeedList` `ItemView`: `case 'mail': return null`.
   - Mobile `FeedItemView`: `case 'mail': return null`.
-  - Any other exhaustive switch that typecheck flags gets the smallest neutral case. M4 replaces the desktop stub; the phone keeps its stub (D2).
+  - Any other exhaustive switch that typecheck flags gets the smallest neutral case. M5 replaces the desktop stub; the phone keeps its stub (D2).
 - **Fixtures** in `packages/core/src/feed/fixtures/mail/`:
   - Claude transcript `attachment` `hook_additional_context`, plus one SessionStart attachment as a negative;
   - Claude transcript `tool_use` + `tool_result` for `check_inbox` and for `wait_for {target:"inbox"}`;
   - Claude `PostToolUse` body for both;
   - Codex `event_msg/item_completed` `McpToolCall` for `check_inbox` and for `wait_for` (the `{state:"message", messages}` form);
-  - Qwen assistant `functionCall` + `tool_result` for `check_inbox`.
+  - Qwen assistant `functionCall` + `tool_result` for `check_inbox` and for `wait_for {target:"inbox"}`;
+  - one Claude transcript with two overlapping tools (`wait_for` inbox A and another tool B; A finishes after B starts).
 
 **Files.** `core/src/feed/types.ts`, `core/src/feed/mail.ts` (new), `core/src/index.ts`, fixtures, `core/src/feed/mail.test.ts` (new), the stubs.
 
@@ -82,30 +89,33 @@ Part Q: Q2a (done, spec §8) → [human signs in] → Q1/Q2b → Q2c (spec revis
    - a `failed` tool;
    - empty `messages`;
    - malformed JSON;
-   - a response with `truncated: true`;
-   - a tool item with `agentId`.
+   - a response with `truncated: true`.
 3. Long text is cut with `cut: true`, the hint marks its letter `cut`, and an invalid letter is skipped.
 4. Tests, typecheck and lint pass. The report states the recorded Claude MCP response shape.
 
-### M2. Feed reducers emit `mail` (core)
+### M2. Feed reducers emit `mail` from tool results (core)
 
-**Scope.** Call M1 where tools finish and where the inline attachment is read, and put the `mail` item right after its source:
-- `from-transcript.ts`:
-  - a new branch for `attachment` records whose `attachment.type` is `hook_additional_context`;
-  - the `tool_result` finish (line 159).
-- `reduce.ts`: the live hook finish (line 802), top-level only. The child path at line 795 makes no mail.
-- `codex/apply-codex.ts`: the `McpToolCall` finish (line 235), only when `agentId` is null.
-- `codex/apply-codex-hook.ts`: line 73.
-- `qwen/apply-qwen.ts`: line 108.
+**Scope.**
+- Call `mailFromTool` where top-level tools finish. Append the item when the tool finishes (completion order, spec §3.2b):
+  - `from-transcript.ts`: the `tool_result` finish (line 159);
+  - `reduce.ts`: the live hook finish (line 802). The child path at line 795 makes no mail;
+  - `codex/apply-codex.ts`: the `McpToolCall` finish (line 235), only when `agentId` is null;
+  - `codex/apply-codex-hook.ts`: line 73;
+  - `qwen/apply-qwen.ts`: line 108.
+- **Root/child context.**
+  - Add an explicit context option to `feedFromTranscript` and `feedFromCodexRollout`: root, the default, or child.
+  - Child turns mail off.
+  - In `host/src/feed/feed-service.ts`, `agentSnapshot` passes child for the Claude subagent transcript (`:1595-1596`) and the Codex child rollout (`:1582-1585`).
 
 **Criteria.**
-1. Built from each fixture, the feed shows the `tool` item followed by the `mail` item. For inline: the pointer `prompt`, then `mail`.
-2. Applying the same records twice leaves one `mail` item.
-3. For one Claude delivery, the live hook path and the transcript seed give equal `mail` items.
-4. A subagent's `check_inbox` gives no `mail`.
-5. Existing feed tests pass unmodified.
+1. Built from each tool fixture, the feed shows the `tool` item and then, at its finish, the `mail` item.
+2. The overlapping-tools fixture gives A, B, mail-A, both through live hooks and through the transcript.
+3. Applying the same records twice leaves one `mail` item.
+4. For one Claude delivery, the live hook path and the transcript seed give `mail` items equal in `id`, `via`, `toolUseId`, `letters` and `remaining`.
+5. A test through the real `agentSnapshot` entry points, for a Claude subagent transcript and a Codex child rollout that hold `check_inbox`, gives no `mail`.
+6. Existing feed tests pass unmodified.
 
-### M3. Protocol, host gate, live inline item (protocol + host)
+### M3. Protocol and per-client gate (protocol + host)
 
 **Scope.**
 - **Protocol** (`protocol/src/feed.ts`):
@@ -113,29 +123,60 @@ Part Q: Q2a (done, spec §8) → [human signs in] → Q1/Q2b → Q2c (spec revis
   - `FEED_SCHEMA_VERSION` = 4;
   - `FEED_MAIL_FEATURE = 'feed-mail'`, exported;
   - `feed.test.ts` parses the M1 fixture items.
-- **Host gate** (`host/src/feed/feed-service.ts`). For a client without `feed-mail`, drop:
-  - `mail` items from the `feed.snapshot` result;
-  - `mail` items from `feed.changed` `upsert`;
-  - `mail:` ids from `removed`.
-
-  The ring and revisions are not changed.
-- **Live inline.**
-  - The feed service gets a method that applies `mailFromInline` for a session ref and commits it as a normal update.
-  - `host/src/hooks/inline-mail.ts` gets an optional `delivered(ref, text, at)` dependency. It is called once, right after the hook is answered with the letters, and never on late, abandoned, empty, fenced or failed takes. A throw inside it is caught and logged and does not touch the answer.
-  - Wire it where `createInlineMail` and the feed service are created.
-- **Phone.** Check that the client `packages/remote` uses for feed subscriptions does not announce `feed-mail`, and say so in the report with a file and line.
+- **Snapshot gate.** `host/src/methods/feed.ts` passes `request.client` to `feed.snapshot`. For a client without `feed-mail`, the feed service drops `mail` items from the snapshot it returns.
+- **Delta gate.** `feed.changed` is filtered per subscriber: `mail` items leave `upsert`, and `mail:` ids leave `removed`. A delta that carried only mail is still sent with an empty `upsert`, with the same `revision`.
+- The ring and revisions are not changed.
+- **Phone.** Confirm that `packages/remote/src/host-link.ts:335` does not announce `feed-mail`, and test it.
 
 **Criteria.**
-1. Without the feature, the snapshot and deltas hold no `mail` and no `mail:` removals. With it, both hold them. Revisions are equal in both cases.
-2. `inline-mail` tests:
-   - `delivered` is called exactly once with the answered text;
-   - it is not called on late, abandoned, empty or failed takes;
-   - the hook response is the same as before the change (existing tests pass unmodified);
-   - a throwing `delivered` still answers the hook with the letters.
-3. A live inline delivery puts the pointer `prompt`, then `mail` with id `mail:<first id>`. A reseed from a transcript with the matching attachment gives the same item.
-4. Tests, typecheck and lint pass.
+1. A client without the feature gets no `mail` in:
+   - an unsubscribed snapshot;
+   - a subscribed snapshot;
+   - a delta.
 
-### M4. Desktop Chat (desktop)
+   A client with it gets all three.
+2. An old and a new client on one feed get their own views. Their revisions are equal.
+3. A mail-only delta reaches the old client as an empty delta with the next revision.
+4. A test asserts that the remote bridge's hello features lack `feed-mail`.
+5. Tests, typecheck and lint pass.
+
+### M4. Inline mail: journal, live item, seed reconciliation (core + host)
+
+**Scope.**
+- **Mail journal.** In `host/src/hooks/inline-mail.ts`, just before answering the hook with the letters, append `{at, text}` to `<work>/mail/<session>.jsonl`.
+  - Create the directory when it is missing.
+  - A failed write is logged and does not change the answer.
+  - The `ParleyInlineMail` line in `events/` stays as it is.
+  - Check that nothing that globs `events/` or the work folder takes the new directory for sessions or hooks, and name the checked files in the report.
+- **Live item.** An optional `delivered(ref, text, at)` dependency, with the same `at` as the journal line.
+  - It is called once, right after the hook is answered with the letters.
+  - It is never called on late, abandoned, empty, fenced or failed takes.
+  - A throw inside it is caught and logged and does not touch the answer.
+  - The feed service applies `mailFromInline` and commits a normal update.
+  - Wire it where `createInlineMail` and the feed service are created.
+- **Seed** (`seedClaude`, and the transcript reader for root feeds):
+  - an `attachment` record of an inline delivery places the item; its content and `at` come from the journal line with the same `mail:` id, or from the attachment when no line exists;
+  - every journal delivery that is missing after the transcript is inserted after the last pointer `prompt` whose `at` is not later than its own; with no such prompt, it goes in time order;
+  - child feeds read no journal.
+
+**Criteria.**
+1. `inline-mail` tests:
+   - the journal line and `delivered` both happen once with the answered text and the same `at`;
+   - neither happens on late, abandoned, empty or failed takes;
+   - a throwing journal or `delivered` still answers the hook with the letters;
+   - the existing tests pass unmodified.
+2. A live inline delivery puts the pointer `prompt`, then `mail` with id `mail:<first id>`.
+3. A reseed from a transcript **with** the attachment gives an item equal to the live one, `at` included, in the same place.
+4. A reseed from the same transcript **without** the attachment, with the journal line present, gives the same item after the pointer prompt.
+5. A reseed with an attachment and no journal line (a delivery from before this change) gives the item parsed from the attachment.
+6. The report gives the journal bytes per delivery and the seed time with and without the journal, on a fixture of 200 inline deliveries.
+7. Tests, typecheck and lint pass.
+
+### M-R. Restart race (only if the human picks D7 (b)). **Senior-only** (concurrency in the feed service)
+
+Seed cold history even when live hooks came first, and merge it with the live items by stable ids exactly once (backlog b-041). The task is specified in full only if D7 (b) is chosen.
+
+### M5. Desktop Chat (desktop)
 
 **Scope.**
 - The desktop announces `feed-mail` in `hello.features`, where it announces `feed-resync`.
@@ -168,10 +209,12 @@ Part Q: Q2a (done, spec §8) → [human signs in] → Q1/Q2b → Q2c (spec revis
 
 **Scope.**
 - Build and run the desktop app from the branch, in the same way as V1 of the Qwen provider work (Playwright Electron).
-- Run spec §4 items 1–8. Use short sessions with tiny prompts, to save limits.
+- Run spec §4 items 1–9. Use short sessions with tiny prompts, to save limits.
+- Restart Host for item 5 with the sessions idle, and open each Chat before the session's next hook (D7).
 - Save screenshots to the verifier's scratchpad.
 - Measure:
   - the `mail` item bytes per delivery;
+  - the mail journal bytes per inline delivery;
   - the feed seed time of a long Claude transcript, before and after (base f5c32ebb vs. HEAD).
 
 **Criteria.**
@@ -181,19 +224,24 @@ Part Q: Q2a (done, spec §8) → [human signs in] → Q1/Q2b → Q2c (spec revis
 
 ### R1. Independent review (senior, wrote none of the code)
 
-- **Reviewer.** The stage 1 critic (Codex gpt-6-astra) reviews the whole diff against the spec. If the Codex limit is hit, Claude Opus does it.
+- **Reviewer.** The stage 1 critic s-348 (Codex gpt-6-astra) reviews the whole diff against the spec. If the Codex limit is hit, Claude Opus does it.
 - **Fixes.** The M executor makes the fixes. Then a delta review.
 
 ## Part Q
 
 - **Q2a, done.** No code. Unsigned facts are in spec §8.2. The facts that need the account are in §8.3.
 - **Q1/Q2b.** Runs after s-320 says the human has signed in. The lead does it, read-only, with the human's real Qwen home:
-  - spec §8.3 items 1–4: `settings.json` `security.auth.selectedType`; the ACP `session/new` `availableModels` probe; whether `qwen --model <id>` accepts that id in a short pty session; the timings;
+  - spec §8.3 items 1–4:
+    - only the single field `security.auth.selectedType` of `settings.json`, read with a field extraction (never print or copy the file);
+    - the ACP `session/new` `availableModels` probe;
+    - whether `qwen --model <id>` accepts that id in a short pty session;
+    - the timings;
   - s-322's "Not verified" list: one short real turn for records, usage and resume. The quota error is recorded only if it happens; it is never provoked.
   - It never reads `oauth_creds.json`, `subscription_credentials.json` or any key. The facts go into spec §8 through the docs copier.
-- **Q2c.** The catalog design becomes spec revision 2. Then a critique, then a second `propose_decision`. Q implementation tasks are planned only after that acceptance.
+- **Q2c.** The catalog design becomes spec revision 3. Then a critique, then a second `propose_decision`. Q implementation tasks are planned only after that acceptance.
 
 ## Out of this plan
 
 - `mail` on the phone (D2, the second option).
 - A reply UI, and any change to delivery.
+- The restart race, unless D7 (b).
