@@ -854,6 +854,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       // Возврат после сброса лимита (спека застрявших 6.3): окно провайдера из службы лимитов, сроки — рычаги E2E.
       limits: limitsService,
       limitReturn: limitReturnFromEnv(process.env),
+      // OpenCode: the brief, the pointer and the limit-return text go through the session server's API (O7).
+      opencodeServer: (ref) => opencodeSupervisor.get(ref),
     },
   );
 

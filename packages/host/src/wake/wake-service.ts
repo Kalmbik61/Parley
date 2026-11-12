@@ -62,6 +62,8 @@ import { CODEX_SUBMIT_DELAY_MS } from '../pty/codex-input.js';
 import { choiceInProgress } from '../pty/effort-switch.js';
 import type { PtyHandle, PtyManager } from '../pty/pty-manager.js';
 import { typeAndSubmit } from '../pty/type-and-submit.js';
+import type { OpencodeAddress } from '../feed/opencode-source.js';
+import { sendOpencodePrompt } from './opencode-prompt.js';
 import { deliverRecipeToNewLeads } from '../rooms/rooms-service.js';
 import type { LimitsService } from '../limits/limits-service.js';
 import type { Attempt } from '../pty/type-and-submit.js';
@@ -100,6 +102,14 @@ export interface WakeServiceOptions {
   /** Окно тишины для несрочных писем и его потолок (мс); не заданы — `SETTLE_MS` и `SETTLE_MAX_MS` из core. Рычаги тестов. */
   settleMs?: number;
   settleMaxMs?: number;
+  /**
+   * OpenCode (spec 2026-11-12, 4.5): where the session's server answers now. With it the brief, the pointer and the limit-return
+   * text go through the server API; without it (or without a server) they are typed into the terminal.
+   */
+  opencodeServer?: (ref: SessionRef) => OpencodeAddress | undefined;
+  /** HTTP and per-request timeout of the OpenCode API delivery; tests substitute them. */
+  opencodeFetch?: typeof fetch;
+  opencodeTimeoutMs?: number;
 }
 
 export interface WakeService {
@@ -144,8 +154,8 @@ const inputModeOf = (provider: string | null): InputMode =>
     ? 'codex'
     : provider === null
       ? 'plain'
-      // OpenCode types like a plain terminal until its API delivery (O7).
-      : byFamily(provider, { claude: 'plain', codex: 'plain', qwen: 'qwen', opencode: 'plain', neutral: 'plain' });
+      // OpenCode takes the host's prompts through its server API (O7, `sendOpencodePrompt`).
+      : byFamily(provider, { claude: 'plain', codex: 'plain', qwen: 'qwen', opencode: 'opencode', neutral: 'plain' });
 
 const DEFAULT_ENTER_DELAY_MS = 500;
 /** Сколько будильник верит прочитанному реестру провайдеров. */
@@ -983,12 +993,12 @@ export function createWakeService(
     let withdrawn = false;
     // Qwen: a new turn started during the pause before Enter (a hook of input submitted just before the pointer).
     let turnStarted = false;
-    const typing = typeAndSubmit(
+    const typeNow = (text: string): Attempt => typeAndSubmit(
       { pty, enterDelayMs },
       ref,
       // Одна логическая строка (очистка в typeAndSubmit): свой указатель можно безопасно убрать Ctrl+U перед Enter.
       // Typed into Qwen, a Tab could accept a completion: it becomes spaces.
-      mode === 'qwen' ? action.text.replace(/\t/g, '  ') : action.text,
+      mode === 'qwen' ? text.replace(/\t/g, '  ') : text,
       true,
       {
         // Qwen: typed text, then `\r` after the pause (observed on qwen 0.27.2); a brief keeps its paragraphs.
@@ -1022,6 +1032,21 @@ export function createWakeService(
           : {}),
       },
     );
+    // OpenCode: through the server API; the terminal only when the API definitely did not take the prompt (O7).
+    const typing = mode === 'opencode'
+      ? sendOpencodePrompt(
+          {
+            server: (target) => options.opencodeServer?.(target),
+            sessionId: (target) => works.entry(target.projectPath, target.workId)?.map.sessions.find((candidate) => candidate.id === target.sessionId)?.providerSessionId ?? null,
+            log: host.log,
+            ...(options.opencodeFetch === undefined ? {} : { fetchImpl: options.opencodeFetch }),
+            ...(options.opencodeTimeoutMs === undefined ? {} : { timeoutMs: options.opencodeTimeoutMs }),
+          },
+          ref,
+          action.text,
+          typeNow,
+        )
+      : typeNow(action.text);
     state.typing = typing;
     for (const id of action.letterIds) state.pointed.add(id);
     // Сколько писем ждало в момент печати: если за ход их станет меньше, а остаток так и лежит указанным — это брошенное чтение страниц.

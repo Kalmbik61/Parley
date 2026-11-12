@@ -77,7 +77,7 @@ const SITES: Record<string, string[]> = {
   'host/src/stuck/stuck-service.ts': ['provider'],
   'host/src/stuck/limit-alternatives.ts': ['false'],
   'host/src/pty/send.ts': ['false'],
-  'host/src/wake/wake-service.ts': ["'plain'", 'false'],
+  'host/src/wake/wake-service.ts': ["'opencode'", 'false'],
   'host/src/hooks/inline-mail.ts': ['true'],
   'host/src/hooks/hook-server.ts': ['NO_EVENTS'],
   'host/src/sessions/sessions-service.ts': ['null', 'false', 'false', 'false', 'false', 'false'],
