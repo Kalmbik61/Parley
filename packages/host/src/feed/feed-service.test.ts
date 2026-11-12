@@ -26,13 +26,13 @@ import {
   parleyHome,
   readJsonlRecords,
 } from '@parley/core';
-import { FEED_RESYNC_FEATURE, FEED_SCHEMA_VERSION, progressResult } from '@parley/protocol';
+import { FEED_MAIL_FEATURE, FEED_RESYNC_FEATURE, FEED_SCHEMA_VERSION, progressResult } from '@parley/protocol';
 import type { EventData, SessionRef } from '@parley/protocol';
 import { fakeClient, fakeFeedDeps, hookRequest, REF } from '../../test/feed-fakes.js';
 import type { FakeFeedDeps } from '../../test/feed-fakes.js';
 import { makePng } from '../../test/png.js';
 import { HostError } from '../errors.js';
-import { createFeedService, FEED_CLIENT_DROP_BYTES, FEED_IDLE_EVICT_MS, FEED_MAX_ITEMS, FEED_SEED_CONCURRENCY, readRecordsTail, SEED_RECORD_WINDOW } from './feed-service.js';
+import { createFeedService, FEED_CLIENT_DROP_BYTES, FEED_IDLE_EVICT_MS, FEED_MAX_ITEMS, FEED_SEED_CONCURRENCY, readRecordsTail, SEED_RECORD_WINDOW, withoutMail } from './feed-service.js';
 import type { FeedService, FeedServiceOptions } from './feed-service.js';
 import * as progressModule from './progress.js';
 import * as codexSource from './codex-source.js';
@@ -1897,6 +1897,22 @@ describe('сев из журнала', () => {
     expect(reader.files).toHaveLength(2);
   });
 
+  it('mail: the Claude session transcript shows delivered letters, a subagent transcript does not', async () => {
+    const { root, session } = await history();
+    const mailLog = path.join(FIXTURES, 'mail', 'claude-tools.transcript.jsonl');
+    await copyFile(mailLog, session);
+    await copyFile(mailLog, path.join(root, '-proj', 'sess', 'subagents', 'agent-ad2fe21e96ffde3ba.jsonl'));
+    fakes.setSessions([{ ref: REF, provider: 'glm' }]);
+    fakes.setLogFile(session);
+    start({ roots: () => [root] });
+
+    const main = await service.snapshot(REF, undefined, undefined, fakeClient(undefined, { features: [FEED_MAIL_FEATURE] }));
+    expect(main.items.filter((item) => item.kind === 'mail').map((item) => item.id)).toEqual(['mail:m-9001', 'mail:m-9003', 'mail:m-9010']);
+    const agent = await service.snapshot(REF, 'ad2fe21e96ffde3ba');
+    expect(agent.items.some((item) => item.kind === 'tool' && item.toolUseId === 'toolu_mail_check')).toBe(true);
+    expect(agent.items.some((item) => item.kind === 'mail')).toBe(false);
+  });
+
   it('GLM transcript discovered after subscription seeds and sends a delta', async () => {
     const { root } = await history();
     fakes.setSessions([{ ref: REF, provider: 'glm' }]);
@@ -2786,6 +2802,30 @@ describe('лента Codex', () => {
     });
     const sub = await service.snapshot(REF, 'th-child');
     expect(sub.items.some((entry) => entry.kind === 'tool' && entry.toolUseId === 'cc1')).toBe(true);
+  });
+
+  const mailCall = (n: number, id: string, thread: string) =>
+    item(n, thread, {
+      type: 'McpToolCall',
+      id,
+      server: 'parley',
+      tool: 'check_inbox',
+      arguments: {},
+      status: 'completed',
+      result: { content: [{ type: 'text', text: JSON.stringify({ messages: [{ id: `m-${id}`, from: 's-9', fromLabel: null, at: '2030-01-05T10:00:00.000Z', text: 'hello', kind: 'note', room: null }] }) }] },
+    });
+
+  it('mail: the Codex root feed shows delivered letters, the child agent snapshot does not', async () => {
+    await writeRollout(file, [meta('th-main'), started(1), subagent(2, 'th-child', 'started'), mailCall(3, 'root-mail', 'th-main')]);
+    const childFile = path.join(dir, 'child.jsonl');
+    await writeRollout(childFile, [childMeta('th-child', 'th-main', 3), parentCopy(1), parentCopy(2), task(3, 'Read the mail'), mailCall(4, 'child-mail', 'th-child')]);
+    fakes.setChildLogFile('th-child', childFile);
+    start();
+    const root = await service.snapshot(REF, undefined, undefined, fakeClient(undefined, { features: [FEED_MAIL_FEATURE] }));
+    expect(root.items.filter((entry) => entry.kind === 'mail').map((entry) => entry.id)).toEqual(['mail:m-root-mail']);
+    const sub = await service.snapshot(REF, 'th-child');
+    expect(sub.items.some((entry) => entry.kind === 'tool' && entry.toolUseId === 'child-mail')).toBe(true);
+    expect(sub.items.some((entry) => entry.kind === 'mail')).toBe(false);
   });
 
   it('сессия Codex без providerSessionId, активная: журнал появился — сеется по изменению, задевшему её', async () => {
@@ -3862,5 +3902,161 @@ describe('выгрузка лент (решение 5)', () => {
     expect(before).toBeGreaterThan(0);
     await service.stop();
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe('mail items: per-client gate (spec 2026-11-12 §3.5)', () => {
+  const mailResponse = [{ type: 'text', text: JSON.stringify({ messages: [{ id: 'm-1', from: 's-9', fromLabel: null, at: '2030-01-05T10:00:00.000Z', text: 'hello', kind: 'note', room: null }] }) }];
+  const deliver = (): void => {
+    send(prompt('go'));
+    send(pre('t1', 'mcp__parley__check_inbox', {}));
+    send(post('t1', 'mcp__parley__check_inbox', {}, mailResponse));
+  };
+  const mailIn = (items: readonly FeedItem[]): FeedItem[] => items.filter((item) => item.kind === 'mail');
+
+  it('snapshot: only a client with feed-mail gets mail, subscribed or not, and a caller without a client does not', async () => {
+    start();
+    deliver();
+    const oldClient = fakeClient();
+    const newClient = fakeClient(undefined, { features: [FEED_MAIL_FEATURE] });
+
+    expect(mailIn((await service.snapshot(REF, undefined, undefined, newClient)).items).map((item) => item.id)).toEqual(['mail:m-1']);
+    expect(mailIn((await service.snapshot(REF, undefined, undefined, oldClient)).items)).toEqual([]);
+    expect(mailIn((await service.snapshot(REF)).items)).toEqual([]);
+    service.subscribe(REF, oldClient);
+    service.subscribe(REF, newClient);
+    expect(mailIn((await service.snapshot(REF, undefined, undefined, oldClient)).items)).toEqual([]);
+    expect(mailIn((await service.snapshot(REF, undefined, undefined, newClient)).items)).toHaveLength(1);
+    // The ring itself is unchanged by the gate.
+    expect(ofKind((await service.snapshot(REF, undefined, undefined, oldClient)).items, 'tool')).toHaveLength(1);
+  });
+
+  it('snapshots of an old and a new client carry the same revision', async () => {
+    start();
+    deliver();
+    const oldSnap = await service.snapshot(REF, undefined, undefined, fakeClient());
+    const newSnap = await service.snapshot(REF, undefined, undefined, fakeClient(undefined, { features: [FEED_MAIL_FEATURE] }));
+    expect(oldSnap.revision).toBe(newSnap.revision);
+    expect(newSnap.items.length).toBe(oldSnap.items.length + 1);
+  });
+
+  it('delta: an old and a new client on one feed get their own views with equal revisions', async () => {
+    start();
+    const oldClient = fakeClient();
+    const newClient = fakeClient(undefined, { features: [FEED_MAIL_FEATURE] });
+    service.subscribe(REF, oldClient);
+    service.subscribe(REF, newClient);
+    deliver();
+    await service.snapshot(REF);
+
+    const oldDeltas = feedChanged(oldClient);
+    const newDeltas = feedChanged(newClient);
+    expect(oldDeltas.length).toBeGreaterThan(0);
+    expect(oldDeltas.map((delta) => delta.revision)).toEqual(newDeltas.map((delta) => delta.revision));
+    expect(oldDeltas.flatMap((delta) => delta.upsert).some((item) => item.kind === 'mail')).toBe(false);
+    expect(newDeltas.flatMap((delta) => delta.upsert).filter((item) => item.kind === 'mail').map((item) => item.id)).toEqual(['mail:m-1']);
+    expect(oldDeltas.flatMap((delta) => delta.upsert).filter((item) => item.kind === 'tool')).toHaveLength(newDeltas.flatMap((delta) => delta.upsert).filter((item) => item.kind === 'tool').length);
+  });
+
+  it('delta: a mail item trimmed out of the ring leaves the old client\'s removed list', async () => {
+    start({ maxItems: 2 });
+    const oldClient = fakeClient();
+    const newClient = fakeClient(undefined, { features: [FEED_MAIL_FEATURE] });
+    service.subscribe(REF, oldClient);
+    service.subscribe(REF, newClient);
+    send(pre('t1', 'mcp__parley__check_inbox', {}));
+    send(post('t1', 'mcp__parley__check_inbox', {}, mailResponse));
+    await service.snapshot(REF);
+    send(pre('t2', 'Bash', { command: 'ls' }));
+    send(pre('t3', 'Bash', { command: 'pwd' }));
+    await service.snapshot(REF);
+
+    expect(feedChanged(newClient).flatMap((delta) => delta.removed)).toContain('mail:m-1');
+    expect(feedChanged(oldClient).flatMap((delta) => delta.removed).filter((id) => id.startsWith('mail:'))).toEqual([]);
+    expect(feedChanged(oldClient).map((delta) => delta.revision)).toEqual(feedChanged(newClient).map((delta) => delta.revision));
+  });
+
+  it('withoutMail: a mail-only delta stays as an empty delta with the same revision', () => {
+    const mail = { id: 'mail:m-1', at: 't', kind: 'mail', via: 'pointer', toolUseId: null, letters: [] } as FeedItem;
+    const data = { ref: REF, revision: 7, upsert: [mail], removed: ['mail:m-0'], mode: null };
+    expect(withoutMail(data)).toEqual({ ref: REF, revision: 7, upsert: [], removed: [], mode: null });
+  });
+});
+
+describe('inline mail: live item and reseed (spec 2026-11-12, M4)', () => {
+  const POINTER = 'New messages (2) in r-90 "Demo room" and direct. Call check_inbox.';
+  const mailRaw = (name: string) => readFileSync(path.join(FIXTURES, 'mail', name), 'utf8');
+  const attachmentText = (): string => {
+    const line = mailRaw('claude-inline.transcript.jsonl').split('\n').map((l) => (l.trim() === '' ? null : (JSON.parse(l) as { attachment?: { hookEvent?: string; content?: string[] } }))).find((r) => r?.attachment?.hookEvent === 'UserPromptSubmit');
+    return line!.attachment!.content![0]!;
+  };
+  const JOURNAL_AT = '2030-01-05T10:00:00.040Z';
+  const mailsOf = (items: readonly FeedItem[]) => items.filter((item) => item.kind === 'mail');
+  const gate = () => fakeClient(undefined, { features: [FEED_MAIL_FEATURE] });
+
+  async function transcript(withAttachment: boolean): Promise<{ root: string; file: string }> {
+    const dir = await tempRoot();
+    const root = path.join(dir, 'projects');
+    const file = path.join(root, '-proj', 'sess.jsonl');
+    await mkdir(path.dirname(file), { recursive: true });
+    const lines = mailRaw('claude-inline.transcript.jsonl').split('\n').filter((l) => l.trim() !== '').filter((l) => withAttachment || !l.includes('"UserPromptSubmit"'));
+    await writeFile(file, `${lines.join('\n')}\n`);
+    return { root, file };
+  }
+
+  it('live: the pointer prompt, then mail:<first id>; a repeat of the notice leaves one item', async () => {
+    start();
+    send({ hook_event_name: 'UserPromptSubmit', session_id: SESSION, prompt: POINTER });
+    service.delivered(REF, attachmentText(), JOURNAL_AT);
+    service.delivered(REF, attachmentText(), JOURNAL_AT);
+    service.delivered(REF, 'not a delivery', JOURNAL_AT);
+    const items = (await service.snapshot(REF, undefined, undefined, gate())).items;
+    expect(items.map((item) => item.kind)).toEqual(['prompt', 'mail']);
+    expect(items[1]).toMatchObject({ id: 'mail:m-9001', via: 'pointer', toolUseId: null, at: JOURNAL_AT });
+  });
+
+  async function reseeded(withAttachment: boolean, journal: Array<{ at: string; text: string }>): Promise<FeedItem[]> {
+    const { root, file } = await transcript(withAttachment);
+    fakes.setSessions([{ ref: REF, provider: 'glm' }]);
+    fakes.setLogFile(file);
+    start({ roots: () => [root], readMailJournal: async () => journal });
+    return (await service.snapshot(REF, undefined, undefined, gate())).items;
+  }
+
+  it('reseed with the attachment gives the live item, at included, in the same place', async () => {
+    start();
+    send({ hook_event_name: 'UserPromptSubmit', session_id: SESSION, prompt: POINTER });
+    service.delivered(REF, attachmentText(), JOURNAL_AT);
+    const live = mailsOf((await service.snapshot(REF, undefined, undefined, gate())).items)[0];
+    await service.stop();
+    fakes = fakeFeedDeps();
+
+    const items = await reseeded(true, [{ at: JOURNAL_AT, text: attachmentText() }]);
+    // The seed closes the open turn with a `turn` mark; the mail stays right after the pointer prompt.
+    expect(items.map((item) => item.kind)).toEqual(['prompt', 'mail', 'turn']);
+    expect(mailsOf(items)[0]).toEqual(live);
+  });
+
+  it('reseed without the attachment, journal line present: the same item after the pointer prompt', async () => {
+    const items = await reseeded(false, [{ at: JOURNAL_AT, text: attachmentText() }]);
+    expect(items.map((item) => item.kind)).toEqual(['prompt', 'mail', 'turn']);
+    expect(mailsOf(items)[0]).toMatchObject({ id: 'mail:m-9001', at: JOURNAL_AT, via: 'pointer' });
+  });
+
+  it('reseed with the attachment and no journal line: the item is parsed from the attachment', async () => {
+    const items = await reseeded(true, []);
+    expect(items.map((item) => item.kind)).toEqual(['prompt', 'mail', 'turn']);
+    expect(mailsOf(items)[0]).toMatchObject({ id: 'mail:m-9001', at: '2030-01-05T10:00:00.050Z' });
+  });
+
+  it('a subagent snapshot reads no journal', async () => {
+    const { root, file } = await transcript(true);
+    await mkdir(path.join(root, '-proj', 'sess', 'subagents'), { recursive: true });
+    await copyFile(file, path.join(root, '-proj', 'sess', 'subagents', 'agent-abc.jsonl'));
+    fakes.setSessions([{ ref: REF, provider: 'glm' }]);
+    fakes.setLogFile(file);
+    start({ roots: () => [root], readMailJournal: async () => [{ at: JOURNAL_AT, text: attachmentText() }] });
+    const sub = await service.snapshot(REF, 'abc', undefined, gate());
+    expect(mailsOf(sub.items)).toEqual([]);
   });
 });

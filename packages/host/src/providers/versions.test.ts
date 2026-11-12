@@ -142,12 +142,12 @@ describe('startProviderVersions: одна проба на старте, с кэ�
     }, silentLog());
     await versions.ready;
 
-    expect(calls.sort()).toEqual(['claude', 'codex', 'qwen']);
+    expect(calls.sort()).toEqual(['claude', 'codex', 'opencode', 'qwen']);
     expect(versions.get('claude')).toBe('2.1.276');
     expect(versions.get('codex')).toBe('0.44.0');
     expect(versions.get('glm')).toBeNull();
     expect(versions.get('claude')).toBe('2.1.276');
-    expect(calls).toHaveLength(3);
+    expect(calls).toHaveLength(4);
   });
 
   it('пробуются и провайдеры из providers.json, и одна команда — один раз', async () => {

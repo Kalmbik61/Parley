@@ -4,6 +4,8 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { agentDirs, assertAgent, listAgents, prepareSessionRole, roleForProvider, sessionRoleCatalog, assertRoleDelivery, projectSkillRunnerContext, roleProvider, roleModel } from './agents.js';
 import { PROVIDERS } from '../providers.js';
+import { modelForTier } from '../roles/builtin.js';
+import { OPENCODE_FAMILY_ENTRY } from '../../test/family-fixtures.js';
 import { buildRoleCatalog, resolveRoleChoice } from '../roles/catalog.js';
 let project = '', claudeHome = '';
 async function defineAgent(dir: string, filename: string, name = filename): Promise<void> {
@@ -314,5 +316,39 @@ describe('roleProvider и roleModel', () => {
     expect(roleModel(builtin, 'glm')).toBe('opus');
     expect(roleModel(codexRole, 'codex')).toBe('gpt-5.5');
     expect(roleModel(undefined, 'claude')).toBeNull();
+  });
+});
+
+describe('roles on opencode (spec 2026-11-12, 4.8, DO4)', () => {
+  const entry = OPENCODE_FAMILY_ENTRY;
+
+  it('read-only and writable builtin roles are accepted without a template role channel; the model is the session\'s', async () => {
+    for (const roleId of ['builtin:planner', 'builtin:executor', 'builtin:feature-lead']) {
+      const resolved = await prepareSessionRole(project, entry, { roleId, provider: 'opencode', mode: 'create' });
+      expect(resolved.model).toBeNull();
+      expect(resolved.nativeAgent).toBeNull();
+    }
+    expect((await prepareSessionRole(project, entry, { roleId: 'builtin:planner', provider: 'opencode', mode: 'create' })).readOnly).toBe(true);
+    expect((await prepareSessionRole(project, entry, { roleId: 'builtin:executor', provider: 'opencode', mode: 'create' })).readOnly).toBe(false);
+  });
+
+  it('the same read-only role is still refused where no channel exists: a Qwen entry and a template-less custom runner', async () => {
+    const qwenLike = { ...entry, family: 'qwen' as const, runner: { command: 'qwen', args: ['--session-id', '{sessionUuid}'] } };
+    await expect(prepareSessionRole(project, qwenLike, { roleId: 'builtin:planner', provider: 'qwen', mode: 'create' })).rejects.toThrow('role-permissions-unavailable');
+  });
+
+  it('a Claude native role does not carry over to opencode and is refused if forced', async () => {
+    const native = buildRoleCatalog({ roles: [{ id: 'claude:exact', source: 'claude', name: 'exact', description: 'x', provider: 'claude', model: null, effort: null, readOnly: false, prompt: 'p', nativeAgent: 'exact' }] as never, diagnostics: [], partial: false } as never);
+    expect(await roleForProvider(project, entry, { source: 'claude', name: 'exact' }, native)).toBeNull();
+    expect(await roleForProvider(project, entry, { source: 'builtin', name: 'planner' })).toEqual({ source: 'builtin', name: 'planner' });
+    const resolved = { ...(await prepareSessionRole(project, entry, { roleId: 'builtin:executor', provider: 'opencode', mode: 'create' })), nativeAgent: 'exact' };
+    expect(() => assertRoleDelivery(entry, resolved as never)).toThrow('role-permissions-unavailable');
+  });
+
+  it('modelForTier gives no model for opencode in any tier, and a builtin role keeps the session\'s model', () => {
+    for (const tier of ['strong', 'standard', 'light'] as const) expect(modelForTier('opencode', tier)).toBeNull();
+    expect(roleModel({ source: 'builtin', model: 'opus', models: { claude: 'opus', codex: 'gpt-6-astra' } }, 'opencode')).toBeNull();
+    const catalog = buildRoleCatalog();
+    expect(resolveRoleChoice(catalog, { roleId: 'builtin:planner', provider: 'opencode' }).model).toBeNull();
   });
 });

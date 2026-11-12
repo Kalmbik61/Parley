@@ -86,6 +86,7 @@ export function createContextService(deps: {
           claude: async () => deps.activity.setContext(ref, await read(workPaths(ref.projectPath, ref.workId).dir, ref.sessionId)),
           codex: () => tickCodex(ref),
           qwen: () => tickQwen(ref),
+          opencode: async () => undefined,
           neutral: async () => undefined,
         })();
       }),

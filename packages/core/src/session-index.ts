@@ -20,7 +20,7 @@ import {
 } from './work/usage-observations.js';
 import { isRecord, textOf } from './work/events.js';
 
-export type Provider = 'claude' | 'codex' | 'glm' | 'qwen';
+export type Provider = 'claude' | 'codex' | 'glm' | 'qwen' | 'opencode';
 
 /**
  * Откуда взят заголовок: заданный пользователем, сгенерированный моделью,

@@ -39,7 +39,7 @@ const radios = (): HTMLElement[] => screen.getAllByRole('radio');
 describe('ProvidersSettings: пилюли', () => {
   it('в порядке Tab стоит одна пилюля — выбранная', () => {
     render(<ProvidersSettings />);
-    expect(radios().map((radio) => radio.getAttribute('tabindex'))).toEqual(['0', '-1', '-1', '-1', '-1']);
+    expect(radios().map((radio) => radio.getAttribute('tabindex'))).toEqual(['0', '-1', '-1', '-1', '-1', '-1']);
   });
 
   it('стрелки переносят фокус и выбор на соседнюю пилюлю', () => {
@@ -114,10 +114,10 @@ describe('ProvidersSettings: аккаунты подписки (спека по�
     useProvidersStore.setState({ providers: [...providers, account(signingIn)] });
   };
 
-  it('аккаунт — пилюля после трёх основных, значок Claude, имя хоста', () => {
+  it('аккаунт — пилюля после основных, значок Claude, имя хоста', () => {
     withAccount();
     render(<ProvidersSettings />);
-    expect(radios().map((radio) => radio.getAttribute('data-provider-pill'))).toEqual(['claude', 'codex', 'glm', 'qwen', 'custom-claude-2', 'new']);
+    expect(radios().map((radio) => radio.getAttribute('data-provider-pill'))).toEqual(['claude', 'codex', 'glm', 'qwen', 'opencode', 'custom-claude-2', 'new']);
     const pill = screen.getByRole('radio', { name: 'Claude Code 2' });
     expect(pill.querySelector('img')?.getAttribute('src')).toMatch(/claude\.svg$/);
   });

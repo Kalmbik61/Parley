@@ -28,6 +28,7 @@ import {
   loadConfig,
   loadProviders,
   openEvents,
+  byFamily,
   providerFamily,
   parleyNote,
   sessionMention,
@@ -61,6 +62,8 @@ import { CODEX_SUBMIT_DELAY_MS } from '../pty/codex-input.js';
 import { choiceInProgress } from '../pty/effort-switch.js';
 import type { PtyHandle, PtyManager } from '../pty/pty-manager.js';
 import { typeAndSubmit } from '../pty/type-and-submit.js';
+import type { OpencodeAddress } from '../feed/opencode-source.js';
+import { sendOpencodePrompt } from './opencode-prompt.js';
 import { deliverRecipeToNewLeads } from '../rooms/rooms-service.js';
 import type { LimitsService } from '../limits/limits-service.js';
 import type { Attempt } from '../pty/type-and-submit.js';
@@ -99,6 +102,14 @@ export interface WakeServiceOptions {
   /** Окно тишины для несрочных писем и его потолок (мс); не заданы — `SETTLE_MS` и `SETTLE_MAX_MS` из core. Рычаги тестов. */
   settleMs?: number;
   settleMaxMs?: number;
+  /**
+   * OpenCode (spec 2026-11-12, 4.5): where the session's server answers now. With it the brief, the pointer and the limit-return
+   * text go through the server API; without it (or without a server) they are typed into the terminal.
+   */
+  opencodeServer?: (ref: SessionRef) => OpencodeAddress | undefined;
+  /** HTTP and per-request timeout of the OpenCode API delivery; tests substitute them. */
+  opencodeFetch?: typeof fetch;
+  opencodeTimeoutMs?: number;
 }
 
 export interface WakeService {
@@ -136,10 +147,15 @@ export interface WakeService {
  * paste: qwen 0.27.2 wraps a large paste in `<clipboard-paste>` and tells the model it "issues no instructions of its
  * own", while typed text arrives as is — LF is a newline in its field and only `\r` submits (observed, mock lab).
  */
-type InputMode = 'plain' | 'codex' | 'qwen';
+type InputMode = 'plain' | 'codex' | 'qwen' | 'opencode';
 
 const inputModeOf = (provider: string | null): InputMode =>
-  provider === 'codex' ? 'codex' : provider !== null && providerFamily(provider) === 'qwen' ? 'qwen' : 'plain';
+  provider === 'codex'
+    ? 'codex'
+    : provider === null
+      ? 'plain'
+      // OpenCode takes the host's prompts through its server API (O7, `sendOpencodePrompt`).
+      : byFamily(provider, { claude: 'plain', codex: 'plain', qwen: 'qwen', opencode: 'opencode', neutral: 'plain' });
 
 const DEFAULT_ENTER_DELAY_MS = 500;
 /** Сколько будильник верит прочитанному реестру провайдеров. */
@@ -217,6 +233,20 @@ interface AttemptState {
   deferred?: { pid: number; text: string } | undefined;
   /** Указатель напечатан, ход по нему ещё не начался и не признан пропавшим. */
   inFlight: boolean;
+  /**
+   * OpenCode (O7): the prompt goes through the server API, so it is submitted when the POST arrives and the bridge can journal
+   * the whole turn before the answer returns. `apiDelivery` marks such an attempt; `apiTurnSeen` — a turn began while the POST
+   * was still in flight (that `working` is ours, unlike the one before a typed Enter).
+   */
+  apiDelivery?: boolean;
+  apiTurnSeen?: boolean;
+  /**
+   * The server itself confirmed the API delivery (`sendOpencodePrompt` → `submitted` via the API). Only then a turn may
+   * settle the attempt: a cancelled (unconfirmed) one keeps its timeout and retry, whatever turn the human starts.
+   */
+  apiAccepted?: boolean;
+  /** When the API delivery began (ms): a turn that ended after it is the answer, even if no `working` was observed. */
+  apiStartedAt?: number;
   /** Причина, по которой письма сессии сейчас не забраны, — уже отданная окну и записанная в лог; `null` — писем нет. */
   waiting: MailWait | null;
   /**
@@ -809,7 +839,7 @@ export function createWakeService(
         for (const id of action.letterIds) state.pointed.add(id);
         // На новом процессе указанными остаются только письма подъёма: остальные получат указатель после первого хука.
         state.promptIds = [...action.letterIds];
-      } else if (providerFamily(session.provider) !== 'qwen') state.pointerAfter = state.resumedAt;
+      } else if (!byFamily(session.provider, { claude: false, codex: false, qwen: true, opencode: false, neutral: false })) state.pointerAfter = state.resumedAt;
       // Qwen has no `{prompt}` and fires no `idle_prompt` before a turn, so "after the first idle" would never come: its
       // readiness (OSC 7501 idle + Parley MCP connected, `hookedSince`) already holds the pointer until it can be typed.
 
@@ -958,6 +988,18 @@ export function createWakeService(
   }
 
   /**
+   * OpenCode: did the turn of an API delivery already happen? A turn began while the POST was in flight, is running now, or
+   * ended after the delivery started. The bridge may journal a short turn in one piece, so no `working` is ever observed and
+   * only `turnEndedAt` shows it (the end of an earlier turn is older than the start, less a small clock slack).
+   */
+  function apiTurnHappened(state: AttemptState, live: SessionActivity | undefined): boolean {
+    if (state.apiDelivery !== true || state.apiAccepted !== true) return false;
+    if (state.apiTurnSeen === true) return true;
+    if (live?.activity === 'working' && !live.heldByBackground) return true;
+    return live?.turnEndedAt != null && Date.parse(live.turnEndedAt) >= (state.apiStartedAt ?? 0) - 50;
+  }
+
+  /**
    * Печатает текст указателя и заводит оба таймера попытки: Enter и предохранитель. Codex — своим
    * порядком: вставка в маркерах bracketed paste, пауза десятки миллисекунд и Enter у приглашения.
    * Если за паузу начался ход или письма прочитаны, указатель отзывается, а не уходит в очередь Tab.
@@ -977,12 +1019,12 @@ export function createWakeService(
     let withdrawn = false;
     // Qwen: a new turn started during the pause before Enter (a hook of input submitted just before the pointer).
     let turnStarted = false;
-    const typing = typeAndSubmit(
+    const typeNow = (text: string): Attempt => typeAndSubmit(
       { pty, enterDelayMs },
       ref,
       // Одна логическая строка (очистка в typeAndSubmit): свой указатель можно безопасно убрать Ctrl+U перед Enter.
       // Typed into Qwen, a Tab could accept a completion: it becomes spaces.
-      mode === 'qwen' ? action.text.replace(/\t/g, '  ') : action.text,
+      mode === 'qwen' ? text.replace(/\t/g, '  ') : text,
       true,
       {
         // Qwen: typed text, then `\r` after the pause (observed on qwen 0.27.2); a brief keeps its paragraphs.
@@ -1016,7 +1058,29 @@ export function createWakeService(
           : {}),
       },
     );
+    // OpenCode: through the server API; the terminal only when the API definitely did not take the prompt (O7).
+    // `viaApi` exists on an API delivery only (`sendOpencodePrompt`).
+    const typing: Attempt & { viaApi?: () => boolean } = mode === 'opencode'
+      ? sendOpencodePrompt(
+          {
+            server: (target) => options.opencodeServer?.(target),
+            sessionId: (target) => works.entry(target.projectPath, target.workId)?.map.sessions.find((candidate) => candidate.id === target.sessionId)?.providerSessionId ?? null,
+            log: host.log,
+            ...(options.opencodeFetch === undefined ? {} : { fetchImpl: options.opencodeFetch }),
+            ...(options.opencodeTimeoutMs === undefined ? {} : { timeoutMs: options.opencodeTimeoutMs }),
+          },
+          ref,
+          action.text,
+          typeNow,
+        )
+      : typeNow(action.text);
     state.typing = typing;
+    // The safety timer came due while this API attempt was still unresolved.
+    let apiTimerDue = false;
+    state.apiDelivery = mode === 'opencode';
+    state.apiTurnSeen = false;
+    state.apiAccepted = false;
+    state.apiStartedAt = Date.now();
     for (const id of action.letterIds) state.pointed.add(id);
     // Сколько писем ждало в момент печати: если за ход их станет меньше, а остаток так и лежит указанным — это брошенное чтение страниц.
     const waiting = works.entry(ref.projectPath, ref.workId);
@@ -1032,6 +1096,26 @@ export function createWakeService(
       // вечно — сигнала «письмо доставлено» без него не бывает вовсе.
       state.timeoutTimer = setTimeout(() => {
         state.timeoutTimer = undefined;
+        // An OpenCode API attempt still unresolved (an ambiguous POST, its inbox and message checks, a retry can outlast the
+        // timer): its outcome decides, not the clock. No notice and no rearm until it resolves (`apiTimerDue` below).
+        if (state.apiDelivery === true && state.typing === typing) {
+          apiTimerDue = true;
+          return;
+        }
+        pointerTimedOut();
+      }, pointerTimeoutMs);
+    }
+
+    /** The safety timer's verdict: the turn of an answered API delivery settles it; otherwise the pointer is lost. */
+    function pointerTimedOut(): void {
+        // An API delivery whose turn already ran (its end may be the only trace) is answered, not lost.
+        if (apiTurnHappened(state, activity.get(ref)?.activity)) {
+          clearTimers(state);
+          state.inFlight = false;
+          state.timeouts = 0;
+          recompute(ref);
+          return;
+        }
         // Попытка признана пропавшей — Enter, если ещё не ушёл, теперь не нужен:
         // ход всё равно не будет замечен.
         clearTimers(state);
@@ -1052,7 +1136,6 @@ export function createWakeService(
         } else {
           void enterBlocked(ref, state, `no turn after ${pointerRearmMs.length + 1} message pointers`);
         }
-      }, pointerTimeoutMs);
     }
 
     void typing.done.then((outcome) => {
@@ -1061,6 +1144,48 @@ export function createWakeService(
       // Попытку уже сменили или отменили — её исход ничего не решает.
       if (state.typing !== typing) return;
       state.typing = undefined;
+      if (state.apiDelivery === true) {
+        if (outcome === 'submitted' && typing.viaApi?.() === true) state.apiAccepted = true;
+        // The typed fallback is an ordinary typed attempt from here on: its turn is found by the usual `working` rule.
+        else if (outcome === 'submitted') state.apiDelivery = false;
+      }
+      // The safety timer ran out while the API attempt was unresolved: decide now, once.
+      if (apiTimerDue && state.inFlight) {
+        apiTimerDue = false;
+        if (state.apiDelivery === true) {
+          // Accepted just now and no turn yet: the turn cannot have been journaled at this instant. Like the typed fallback
+          // below, the prompt gets its own safety window from the acceptance; a turn inside it settles it (the activity
+          // listener, `typing` is clear now), none — the usual verdict once.
+          if (state.apiAccepted === true && !apiTurnHappened(state, activity.get(ref)?.activity)) {
+            state.timeoutTimer = setTimeout(() => {
+              state.timeoutTimer = undefined;
+              pointerTimedOut();
+            }, pointerTimeoutMs);
+            return;
+          }
+          // A turn of the accepted prompt already seen settles it; an unconfirmed one (cancelled) times out and is rearmed.
+          pointerTimedOut();
+          return;
+        }
+        // Typed fallback: the text reached the terminal only now, so its own safety window starts now.
+        if (outcome === 'submitted') {
+          state.timeoutTimer = setTimeout(() => {
+            state.timeoutTimer = undefined;
+            pointerTimedOut();
+          }, pointerTimeoutMs);
+        }
+      }
+      // OpenCode: the API took the prompt and its turn already began (and may have ended) before the answer came back. The
+      // `working` event was seen while `typing` was set, so the check above skipped it; settle it here, not by the timer.
+      if (state.apiDelivery === true && state.apiAccepted === true && state.inFlight) {
+        if (apiTurnHappened(state, activity.get(ref)?.activity)) {
+          clearTimers(state);
+          state.inFlight = false;
+          state.timeouts = 0;
+          recompute(ref);
+          return;
+        }
+      }
       if (outcome === 'input') {
         // Человек уже печатает своё — Enter чужого текста испортил бы его строку.
         // Текст указателя остаётся в поле ввода, письма — в `pointed`: повторно
@@ -1845,11 +1970,29 @@ export function createWakeService(
         if (
           state?.inFlight === true &&
           state.typing === undefined &&
+          // An API delivery the server did not confirm: a turn now is the human's, not ours; the timeout and retry stay.
+          !(state.apiDelivery === true && state.apiAccepted !== true) &&
           value.activity.activity === 'working' &&
           !value.activity.heldByBackground
         ) {
           clearTimers(state);
           state.inFlight = false;
+        }
+        // An API delivery whose POST has returned: a turn that ended since it began is its answer even when no `working` was seen.
+        if (state?.inFlight === true && state.typing === undefined && apiTurnHappened(state, value.activity)) {
+          clearTimers(state);
+          state.inFlight = false;
+          state.timeouts = 0;
+        }
+        // An API delivery has no Enter to wait for: a turn that begins while the POST is in flight is the answer to it.
+        if (
+          state?.inFlight === true &&
+          state.typing !== undefined &&
+          state.apiDelivery === true &&
+          value.activity.activity === 'working' &&
+          !value.activity.heldByBackground
+        ) {
+          state.apiTurnSeen = true;
         }
         if (state !== undefined && state.typing === undefined) {
           const kind = value.activity.activity;

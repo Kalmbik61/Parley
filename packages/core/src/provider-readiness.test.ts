@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ACCOUNT_MIN_VERSION_CLAUDE, accountProviderEntry, customProviderEntry } from './custom-providers.js';
 import { PROVIDERS, providerReadiness, providerReadinessError, probeCliVersion } from './providers.js';
 import { clearSecret, writeSecret } from './secrets.js';
+import { OPENCODE_FAMILY_ENTRY } from '../test/family-fixtures.js';
 
 let home: string;
 let binary: string;
@@ -144,5 +145,37 @@ describe('providerReadiness аккаунта (спека подписок 5.5)',
       expect(await providerReadiness(PROVIDERS.glm, { env: env(), version: '2.1.287', keyPresent: true, signedIn })).toMatchObject({ needs: null });
       expect(await providerReadiness(PROVIDERS.claude, { env: env(), signedIn })).toMatchObject({ needs: null });
     }
+  });
+});
+
+describe('providerReadiness of OpenCode (spec 2026-11-12, 4.9, DO1)', () => {
+  const entry = { ...OPENCODE_FAMILY_ENTRY, runner: { ...OPENCODE_FAMILY_ENTRY.runner, minVersion: '2.0.0' } };
+  let stub: string;
+  beforeEach(async () => {
+    stub = path.join(home, 'opencode');
+    await writeFile(stub, '#!/bin/sh\necho "opencode v2.2.7"\n', { mode: 0o755 });
+  });
+  const opencodeEnv = () => ({ PATH: '', PARLEY_OPENCODE_BIN: stub });
+
+  it('2.x passes; 1.x is found but refused with the 1.x text and an install action', async () => {
+    expect(await providerReadiness(entry, { env: opencodeEnv(), version: '2.2.7' })).toMatchObject({ needs: null, version: '2.2.7' });
+    const legacy = await providerReadiness(entry, { env: opencodeEnv(), version: '1.19.5' });
+    expect(legacy).toMatchObject({ needs: 'cli', version: '1.19.5' });
+    expect(providerReadinessError(entry, legacy)).toBe('OpenCode 1.x found (1.19.5); Parley supports 2.x: install OpenCode 2 and check again');
+  });
+
+  it('a missing binary and an unreadable version keep the generic texts', async () => {
+    const missing = await providerReadiness(entry, { env: { PATH: '', PARLEY_OPENCODE_BIN: path.join(home, 'nope') }, version: null });
+    expect(missing).toMatchObject({ needs: 'cli', version: null });
+    expect(providerReadinessError(entry, missing)).toContain('requires');
+    expect(providerReadinessError(entry, missing)).not.toContain('1.x');
+    const unreadable = await providerReadiness(entry, { env: opencodeEnv(), version: null });
+    expect(unreadable).toMatchObject({ needs: 'cli', version: null });
+    expect(providerReadinessError(entry, unreadable)).not.toContain('1.x');
+  });
+
+  it('the real probe of a stub that prints `opencode v2.2.7` passes the gate', async () => {
+    expect(await probeCliVersion('opencode', 10_000, opencodeEnv())).toBe('2.2.7');
+    expect(await providerReadiness(entry, { env: opencodeEnv() })).toMatchObject({ needs: null, version: '2.2.7' });
   });
 });

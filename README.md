@@ -5,7 +5,7 @@
   </picture>
 </h1>
 
-Parley coordinates agent CLIs (Claude Code, Codex, Qwen Code, and GLM through Claude Code) in the
+Parley coordinates agent CLIs (Claude Code, Codex, Qwen Code, OpenCode, and GLM through Claude Code) in the
 `Parley.app` window — an Electron app on top of a local `parley-host` process. The window and
 the host are connected by a unix socket with its own handshake token; nothing is reachable
 from the network. Parley works locally: it is not a server and not a web app. The one optional
@@ -38,7 +38,7 @@ official CLIs: Parley itself adds no API keys and no extra bill.
   <img src="docs/media/room-decision-light.png" width="720" alt="A room: the feed of four agents and the lead's decision card with the Accept and Return for rework buttons">
 </picture>
 
-1. **Gather a team.** Press ⌘T and add two or more agents: Claude Code, Codex, Qwen Code or GLM, each
+1. **Gather a team.** Press ⌘T and add two or more agents: Claude Code, Codex, Qwen Code, OpenCode or GLM, each
    with its own model and, if you like, a role and its own git worktree. Star the lead and
    click "Create room". To make a room of sessions that already run, drag one onto another in
    the sidebar.
@@ -116,11 +116,11 @@ OpenAI speech API, using your own OpenAI key from Settings → Voice provider (A
 ## How it works
 
 ```
-Parley.app (window)  ◀── unix socket ──▶  parley-host  ◀── PTY + MCP ──▶  claude / codex / qwen
+Parley.app (window)  ◀── unix socket ──▶  parley-host  ◀── PTY + MCP ──▶  claude / codex / qwen / opencode
 ```
 
-- **Official CLIs, your login.** Parley starts the unmodified `claude`, `codex` and `qwen` from your
-  `PATH`, signed in as you (Qwen Code: inside `qwen`, with `/auth`). It installs or updates them only when you press Install or Update
+- **Official CLIs, your login.** Parley starts the unmodified `claude`, `codex`, `qwen` and `opencode` from your
+  `PATH`, signed in as you (Qwen Code: inside `qwen`, with `/auth`; OpenCode: inside `opencode`). It installs or updates them only when you press Install or Update
   in Settings → Providers. It never reads or stores their credentials and makes no requests
   to the Anthropic or OpenAI APIs for the agents (only the optional assistant voice calls OpenAI).
 - **Local only.** The host runs the agents' terminals and outlives the window. No server, no
@@ -154,6 +154,27 @@ Not in this version: several Qwen accounts, keys held by Parley, usage limits, a
 one-shot assistant, starting from the phone, and read-only roles. The custom provider preset that
 routes Alibaba keys through Claude Code is now called "Qwen models in Claude Code (Alibaba key)"; its id and
 your existing providers are unchanged.
+
+### OpenCode
+
+OpenCode (the 2.x line, `@opencode/cli`) is a built-in provider. Parley starts the official `opencode` CLI
+from your `PATH` in a terminal, attached to a private `opencode serve` that Parley runs for that session on
+127.0.0.1 with a random password, and stops it with the session. Parley's tools reach OpenCode through its
+`execute` tool (`tools.parley.<name>()`); Chat shows the history, and a sleeping session resumes the same
+conversation. OpenCode 1.x is never run: Settings → Providers → OpenCode says "OpenCode 1.x found" and
+offers Install… for 2.x.
+
+Sign in inside OpenCode (Connect provider, or `opencode auth login --standalone` in a terminal); Parley holds
+no OpenCode keys. The card shows only how many providers `opencode auth list` reports as connected. It is
+a hint, not a check, and the output is never stored or logged. The model list comes from `opencode models`.
+Read-only roles run with the edit, shell, webfetch, websearch and subagent tools denied; Parley's own tools
+and the network reads of `execute` stay available. Writable sessions start OpenCode with `--auto`.
+OpenCode asks for approvals in the terminal; Chat shows "Waiting for approval in the terminal".
+
+Local exposure: while a session runs, its OpenCode server answers on 127.0.0.1 only. Every API route needs
+the session's password, but the web UI page (`/health`) and the API description (`/doc`) are served without
+it, so any local process or local web page can read them. Parley's tests check that they hold no session id, password, working directory or user name. The
+password stays in the memory of Parley and the two processes' environment, and is never written to disk or the log.
 
 ### Codex: folder trust and approvals
 
@@ -312,13 +333,14 @@ actions the bridge handled. Turning the switch off stops the bridge.
 - macOS 13 (Ventura) or later, on Apple Silicon or Intel. The Intel build has not been tested
   on an Intel Mac yet.
 - At least one agent CLI, installed and signed in:
-  - Claude Code (`claude`), Codex (`codex`) and/or Qwen Code (`qwen`, 0.27.2 or newer). Parley finds
+  - Claude Code (`claude`), Codex (`codex`), Qwen Code (`qwen`, 0.27.2 or newer) and/or OpenCode (`opencode`, 2.0.0 or newer). Parley finds
     them on the `PATH` of your login shell;
   - GLM needs Claude Code 2.1.287 or newer, an active GLM Coding Plan and a Z.ai API key that
     you paste into its provider card. The key stays on this Mac.
 - git in `PATH`; 2.38 or newer to see merge conflicts before you merge.
-- Chat view (optional) needs Claude Code 2.1.286 or newer, Codex 0.160.0 or newer, or Qwen Code 0.27.2 or newer. Older
-  versions work in the terminal.
+- Chat view (optional) needs Claude Code 2.1.286 or newer, Codex 0.160.0 or newer, Qwen Code 0.27.2 or newer, or OpenCode 2.2.7 or newer. Older
+  versions work in the terminal. Messages delivered to an agent show there as mail cards (Claude Code, Codex and
+  Qwen Code) and are kept after a restart.
 - Auto-review of Codex approvals (the default) needs Codex 0.162.0 or newer; on an older Codex the
   sessions ask in the terminal.
 

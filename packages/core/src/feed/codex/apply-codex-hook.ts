@@ -13,6 +13,7 @@ import {
   finishTool,
   limitInput,
   newTool,
+  putMail,
   withChild,
   withResult,
 } from '../reduce.js';
@@ -70,7 +71,9 @@ export function applyCodexHookEvent(state: FeedState, body: Json, at: string): F
       if (toolUseId === null || agentId !== null) break;
       const tool = draft.get(`tool:${toolUseId}`);
       if (tool?.kind === 'tool' && tool.status === 'running') {
-        draft.put(finishTool(tool, 'done', body['tool_response'], at));
+        const finished = finishTool(tool, 'done', body['tool_response'], at);
+        draft.put(finished);
+        putMail(draft, finished);
       }
       break;
     }

@@ -5,6 +5,7 @@ import path from 'node:path';
 import { CLAUDE_MODELS, CODEX_MODELS, GLM_MODELS, LEGACY_EFFORTS, effortLabel, type EffortOption, type ModelOption } from './provider-models.js';
 import { accountProviderEntry, customProviderEntry, customProvidersFile, isAccountRecord, isCustomProviderId, isManagedProviderId, readCustomProviders, type CustomAccountRecord, type CustomEndpointRecord, type CustomProviderRecord } from './custom-providers.js';
 import { readSecret, type SecretId } from './secrets.js';
+import { isOpenCodeLegacy, parseOpenCodeVersion } from './cli-tools.js';
 import { parseVersion } from './work/channel.js';
 import type { Provider } from './session-index.js';
 import { expectedRunnerBinary, overrideValue, resolveRunnerBinary } from './work/find-binary.js';
@@ -18,9 +19,11 @@ import type { WorkProvider } from './work/types.js';
  * под файл конфига нет, MCP-серверы живут в `~/.codex/config.toml`).
  * `qwen-system-settings` — сервер лежит в системном файле настроек сессии (`QWEN_CODE_SYSTEM_SETTINGS_PATH`,
  * `work/qwen-settings-file.ts`): подстановки `{mcpConfig}` у Qwen Code нет, сервер доходит через окружение.
+ * `opencode-server` — OpenCode 2.x: сервер `parley` лежит в `OPENCODE_CONFIG_CONTENT` процесса `opencode serve`, которым
+ * владеет хост (`work/opencode-config.ts`, спека 2026-11-12, 4.2–4.3); TUI получает только адрес сервера и пароль.
  * `undefined` — провайдер MCP не принимает, координация ему недоступна.
  */
-export type McpConfigKind = 'json-file' | 'codex-override' | 'qwen-system-settings';
+export type McpConfigKind = 'json-file' | 'codex-override' | 'qwen-system-settings' | 'opencode-server';
 
 /**
  * Чем запись карты связывается с сессией в логах провайдера: id задан снаружи
@@ -29,7 +32,7 @@ export type McpConfigKind = 'json-file' | 'codex-override' | 'qwen-system-settin
  */
 export type SessionLink = 'session-id' | 'cwd+time';
 
-export type ProviderFamily = 'claude' | 'codex' | 'qwen';
+export type ProviderFamily = 'claude' | 'codex' | 'qwen' | 'opencode';
 
 export interface RunnerConfig {
   /** Trusted built-in nonsensitive process environment; never settings.env or a key. */
@@ -470,7 +473,7 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
   },
   // Qwen Code (spec 2026-11-11, 3.3): the official CLI in a pty. The Parley MCP server and hooks come from the
   // per-session system settings file (`QWEN_CODE_SYSTEM_SETTINGS_PATH`, `work/qwen-settings-file.ts`); there is no
-  // `--settings` flag. `--yolo` is never used: the approval mode is `{approvalMode}` (D6). No `-i {prompt}` (spec 3.4
+  // `--settings` flag. `--yolo` is never used: the approval mode is `{approvalMode}`, always the start mode `auto` (DA1, spec 2026-11-12, 9.2). No `-i {prompt}` (spec 3.4
   // amendment): Qwen sends that turn before its MCP discovery ends, so the first turn has no Parley tools; the brief
   // goes out as `LaunchPlan.deferredPrompt`, typed once the session is ready. A positional prompt would be one-shot.
   // No model catalog and no effort in v1.
@@ -509,6 +512,25 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
       mcpConfig: 'qwen-system-settings',
     },
   },
+  // OpenCode 2.x (spec 2026-11-12, 4.1–4.2): the TUI attaches to a per-session `opencode serve` owned by the host
+  // (`host/src/opencode/server.ts`). `{serverUrl}` is the slot the host fills once that server answers; Parley names the
+  // session itself (`-s ses_<uuid>`, which creates it or continues it). No `{prompt}`: the brief goes through the server
+  // API. No model flag: the model goes into the server's config document. `{autoFlag}` is `--auto` for writable roles.
+  opencode: {
+    id: 'opencode',
+    family: 'opencode',
+    label: 'OpenCode',
+    mark: 'Oc',
+    hasHistory: true,
+    linkBy: 'session-id',
+    runner: {
+      command: 'opencode',
+      minVersion: '2.0.0',
+      args: ['--server', '{serverUrl}', '-s', '{sessionId}', '{autoFlag}'],
+      resumeArgs: ['--server', '{serverUrl}', '-s', '{providerSessionId}', '{autoFlag}'],
+      mcpConfig: 'opencode-server',
+    },
+  },
 };
 
 /** Built-in Claude Code family, independent of provider label, command or allowed overrides. */
@@ -540,7 +562,7 @@ export function providerFamily(entry: ProviderEntry | WorkProvider): ProviderFam
  */
 export function byFamily<T>(
   entry: ProviderEntry | WorkProvider,
-  branches: { claude: T; codex: T; qwen: T; neutral: T },
+  branches: { claude: T; codex: T; qwen: T; opencode: T; neutral: T },
 ): T {
   const family = providerFamily(entry);
   switch (family) {
@@ -550,6 +572,8 @@ export function byFamily<T>(
       return branches.codex;
     case 'qwen':
       return branches.qwen;
+    case 'opencode':
+      return branches.opencode;
     case null:
       return branches.neutral;
     default: {
@@ -623,13 +647,19 @@ export interface RunnerSubstitutions {
   effort?: EffortLevel;
   disallowedTools?: string;
   sandbox?: string;
-  /** `--approval-mode` Qwen Code (решение D6): `auto` в сессиях workspace, иначе `default`; `yolo` — никогда. */
+  /** `--approval-mode` Qwen Code: стартовый `auto` у каждой сессии (решение DA1); `yolo` — никогда. */
   approvalMode?: string;
+  /** OpenCode: адрес сервера сессии — слот `OPENCODE_SERVER_URL_SLOT`, его заполняет хост, подняв сервер. */
+  serverUrl?: string;
+  /** OpenCode: `ses_<uuid>`, выданный Parley (`-s`). */
+  sessionId?: string;
+  /** OpenCode: `--auto` у пишущих ролей (спека 2026-11-12, 4.10); без значения — выпадает, своего флага перед ним нет. */
+  autoFlag?: string;
 }
 
 // `notify` остался в списке ради старых записей providers.json: значения нет, и пара `-c {notify}` выпадает.
 const PLACEHOLDER =
-  /^\{(sessionUuid|mcpConfig|settingsFile|systemPrompt|developerInstructions|prompt|providerSessionId|channel|agent|notify|skillCatalog|codexHooks|approvals|trust|model|effort|disallowedTools|sandbox|leanFlags|approvalMode)\}$/;
+  /^\{(sessionUuid|mcpConfig|settingsFile|systemPrompt|developerInstructions|prompt|providerSessionId|channel|agent|notify|skillCatalog|codexHooks|approvals|trust|model|effort|disallowedTools|sandbox|leanFlags|approvalMode|serverUrl|sessionId|autoFlag)\}$/;
 
 /**
  * Усилие можно подставить и внутрь строки шаблона (`model_reasoning_effort="{effort}"`):
@@ -706,8 +736,8 @@ export function substituteArgs(template: readonly string[], subs: RunnerSubstitu
       continue;
     }
     if (value === undefined) {
-      // У `{codexHooks}`, `{approvals}`, `{trust}` и `{leanFlags}` своего флага перед элементом нет — соседний флаг чужой.
-      if (!['codexHooks', 'approvals', 'trust', 'leanFlags'].includes(match[1]!)) dropWithFlag();
+      // У `{codexHooks}`, `{approvals}`, `{trust}`, `{leanFlags}` и `{autoFlag}` своего флага перед элементом нет — соседний флаг чужой.
+      if (!['codexHooks', 'approvals', 'trust', 'leanFlags', 'autoFlag'].includes(match[1]!)) dropWithFlag();
       continue;
     }
     args.push(value as string);
@@ -767,7 +797,9 @@ export function assistantCommand(
  * бы буквальный `--model={model}`.
  */
 export const supportsModel = (entry: ProviderEntry): boolean =>
-  (entry.runner.args ?? []).some((item) => item === '{model}');
+  // OpenCode's TUI has no model flag: the model goes into the server config document (`opencode-config.ts`, spec 2026-11-12, 4.3),
+  // so the route, not a template item, says the entry takes a model.
+  entry.runner.mcpConfig === 'opencode-server' || (entry.runner.args ?? []).some((item) => item === '{model}');
 
 /**
  * Принимает ли провайдер усилие при запуске — по тому же правилу, что и модель, но `{effort}`
@@ -871,6 +903,8 @@ export async function probeCliVersion(command: string, timeoutMs = 3000, env: No
     const child = execFile(binary, ['--version'], {
       env, timeout: timeoutMs, killSignal: 'SIGKILL', windowsHide: true,
     }, (error, stdout) => {
+      // OpenCode prints `opencode v2.2.7` (2.x) or a bare `1.19.5` (1.x): its own parser keeps unknown output out.
+      if (command === 'opencode') return resolve(error === null ? parseOpenCodeVersion(stdout) : null);
       const version = error === null ? parseVersion(stdout) : null;
       resolve(version === null ? null : version.join('.'));
     });
@@ -946,6 +980,10 @@ export function providerReadinessError(entry: ProviderEntry, readiness: Provider
   // The CLI the version belongs to: Qwen Code has its own; every other versioned entry runs Claude Code.
   const cli = entry.family === 'qwen' ? entry.runner.command : 'Claude Code';
   if (readiness.needs === 'sign-in') return `${name} is not signed in: open Settings → Providers and press Sign in`;
+  // DO1: a 1.x OpenCode is found but never run; the card says what to do instead of a generic "newer required".
+  if (readiness.needs === 'cli' && entry.family === 'opencode' && readiness.version !== null && isOpenCodeLegacy(readiness.version)) {
+    return `OpenCode 1.x found (${readiness.version}); Parley supports 2.x: install OpenCode 2 and check again`;
+  }
   if (readiness.needs === 'cli') return entry.runner.minVersion === undefined
     ? `command ${entry.runner.command} is not in PATH — provider ${entry.id} is unavailable`
     : `${name} requires ${cli} ${entry.runner.minVersion} or newer; install or update the CLI and check again`;
@@ -968,6 +1006,23 @@ export function providersFile(): string {
  */
 export function codexModelsFile(): string {
   return path.join(parleyHome(), 'codex-models.json');
+}
+
+/**
+ * Каталог моделей Qwen Code, снятый хостом через `qwen --acp` (спека 2026-11-12, 8.4): файл Parley в доме, форма та же, что у
+ * `codexModelsFile`. Пишет его только хост, атомарно, после удачной пробы; `loadProviders` кладёт его модели в запись `qwen`.
+ */
+export function qwenModelsFile(): string {
+  return path.join(parleyHome(), 'qwen-models.json');
+}
+
+/**
+ * OpenCode model catalog taken by the host from `opencode models --standalone` (spec 2026-11-12, 4.7): a Parley file in the home,
+ * the same shape as `qwenModelsFile`. Only the host writes it, atomically, after a good probe; `loadProviders` puts its models into the
+ * `opencode` entry.
+ */
+export function opencodeModelsFile(): string {
+  return path.join(parleyHome(), 'opencode-models.json');
 }
 
 /**
@@ -1301,8 +1356,10 @@ export async function loadProviders(
   file = providersFile(),
   codexFile = codexModelsFile(),
   customFile = customProvidersFile(),
+  qwenFile = qwenModelsFile(),
+  opencodeFile = opencodeModelsFile(),
 ): Promise<Record<WorkProvider, ProviderEntry>> {
-  const registry = await loadBaseProviders(file, codexFile);
+  const registry = await loadBaseProviders(file, codexFile, qwenFile, opencodeFile);
   // Свои провайдеры (спека 5.3) и аккаунты подписок (спека подписок 5.2) — после providers.json; занятый id
   // (встроенный или из файла) не перекрывают. Аккаунту нужна запись `claude` уже со всеми переопределениями.
   for (const record of await readCustomProviders(customFile)) {
@@ -1317,6 +1374,8 @@ export async function loadProviders(
 async function loadBaseProviders(
   file: string,
   codexFile: string,
+  qwenFile: string,
+  opencodeFile: string,
 ): Promise<Record<WorkProvider, ProviderEntry>> {
   const registry: Record<WorkProvider, ProviderEntry> = Object.fromEntries(
     Object.values(PROVIDERS).map((entry) => [
@@ -1335,6 +1394,14 @@ async function loadBaseProviders(
   const codex = registry['codex'];
   const live = await readCodexModels(codexFile);
   if (codex !== undefined && live !== null) registry['codex'] = { ...codex, models: live };
+  // Каталог Qwen Code с ACP — тоже раньше `providers.json`; нет файла или он негоден — `models: null`, как раньше.
+  const qwen = registry['qwen'];
+  const qwenLive = await readCodexModels(qwenFile);
+  if (qwen !== undefined && qwenLive !== null) registry['qwen'] = { ...qwen, models: qwenLive };
+  // The OpenCode catalog (`opencode models`) is read the same way, before `providers.json`.
+  const opencode = registry['opencode'];
+  const opencodeLive = await readCodexModels(opencodeFile);
+  if (opencode !== undefined && opencodeLive !== null) registry['opencode'] = { ...opencode, models: opencodeLive };
 
   let raw: string;
   try {

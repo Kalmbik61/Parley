@@ -14,7 +14,7 @@ import { z } from 'zod';
 import type { FeedCardState, FeedDecision, FeedItem } from '@parley/core';
 
 /** Версия схемы ленты: растёт с каждым добавленным полем элемента или решения. */
-export const FEED_SCHEMA_VERSION = 3;
+export const FEED_SCHEMA_VERSION = 4;
 
 /** = `FEED_RESULT_LIMIT` core: символов сводки результата инструмента. */
 export const FEED_RESULT_LIMIT = 64 * 1024;
@@ -26,6 +26,8 @@ export const FEED_PATCH_LINES = 2_000;
 export const FEED_AGENT_TEXT_LIMIT = 16 * 1024;
 /** = `FEED_TEXT_LIMIT` core: символов текста ответа модели. */
 export const FEED_TEXT_LIMIT = 256 * 1024;
+/** = `FEED_MAIL_TEXT_LIMIT` core: символов текста одного письма в элементе `mail`. */
+export const FEED_MAIL_TEXT_LIMIT = 16 * 1024;
 /** = `FEED_AGENT_CHILDREN` core: вложенных вызовов у карточки субагента. */
 export const FEED_AGENT_CHILDREN = 100;
 /** = `FEED_IMAGES_PER_CALL` core: ссылок на картинки в сводке результата одного вызова. */
@@ -47,11 +49,20 @@ export const FEED_CODEX_FEATURE = 'feed-codex';
 export const QWEN_FEED_MIN_VERSION = '0.27.2';
 /** `hello.features` of a host that builds the Qwen Code feed from its transcript. */
 export const FEED_QWEN_FEATURE = 'feed-qwen';
+/** The lowest OpenCode whose message list the Chat feed parses: the version of the spike and the mock lab (spec 2026-11-12, 4.11). */
+export const OPENCODE_FEED_MIN_VERSION = '2.2.7';
+/** `hello.features` of a host that builds the OpenCode feed from the messages API of the session's server. */
+export const FEED_OPENCODE_FEATURE = 'feed-opencode';
 /**
  * Признак `hello.features` клиента: он понимает событие `feed.resync` (хост снял его подписки на ленты из-за
  * затора и просит взять снимок заново). Клиенту без признака подписки не снимаются.
  */
 export const FEED_RESYNC_FEATURE = 'feed-resync';
+/**
+ * Признак `hello.features` клиента: он рисует элемент ленты `mail` (доставленные письма). Хост шлёт `mail` только
+ * клиентам с признаком (снимок и дельты); без него старое окно сложило бы незнакомый вид в «Retried requests».
+ */
+export const FEED_MAIL_FEATURE = 'feed-mail';
 /** Может ли окно отвечать на одобрения сессии (`window`) или только терминал (`terminal`); спека 5.7. */
 export const feedDecisions = z.enum(['window', 'terminal']);
 export type FeedDecisions = z.infer<typeof feedDecisions>;
@@ -264,6 +275,26 @@ const turn = z.strictObject({
   interrupted: z.literal(true).exactOptional(),
 });
 
+const mailLetter = z.strictObject({
+  id: z.string(),
+  from: z.string(),
+  fromLabel: z.string().nullable(),
+  kind: z.enum(['note', 'question', 'decision']),
+  room: z.strictObject({ id: z.string(), title: z.string() }).nullable(),
+  at: z.string(),
+  text: z.string().max(FEED_MAIL_TEXT_LIMIT),
+  cut: z.literal(true).exactOptional(),
+});
+
+const mail = z.strictObject({
+  ...base,
+  kind: z.literal('mail'),
+  via: z.enum(['pointer', 'check_inbox', 'wait_for']),
+  toolUseId: z.string().nullable(),
+  letters: z.array(mailLetter).min(1).max(50),
+  remaining: z.number().int().min(1).exactOptional(),
+});
+
 /** Элемент ленты (`FeedItem` core). */
 export const feedItem: z.ZodType<FeedItem> = z.discriminatedUnion('kind', [
   prompt,
@@ -276,6 +307,7 @@ export const feedItem: z.ZodType<FeedItem> = z.discriminatedUnion('kind', [
   notice,
   error,
   turn,
+  mail,
 ]);
 
 /** Решение человека из окна (`FeedDecision` core) — параметр `feed.decide`. */

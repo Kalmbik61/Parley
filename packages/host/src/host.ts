@@ -100,6 +100,9 @@ import type { CustomCheckOptions } from './providers/custom-check.js';
 import { createLimitsService } from './limits/limits-service.js';
 import type { LimitsServiceOptions } from './limits/limits-service.js';
 import { startCodexCatalog } from './providers/codex-catalog.js';
+import { startOpencodeAuthHint, type OpencodeAuthProbe } from './providers/opencode-auth-hint.js';
+import { startOpencodeCatalog, type OpencodeModelsProbe } from './providers/opencode-catalog.js';
+import { startQwenCatalog, type QwenModelsProbe } from './providers/qwen-catalog.js';
 import type { CatalogProbe } from './providers/codex-catalog.js';
 import { startProviderVersions } from './providers/versions.js';
 import { createCliUpdates, type CliUpdatesOptions } from './providers/updates.js';
@@ -136,10 +139,13 @@ import { createVoiceSessionService } from './voice/voice-session-service.js';
 import { createVoiceTelemetry, LIVE_USD_PER_MINUTE } from './voice/telemetry.js';
 import { dailyBudget } from './voice/budget.js';
 import { AGENT_BROWSER_PATH, createBrowserEndpoint } from './agent/browser-endpoint.js';
-import { createHookServer } from './hooks/hook-server.js';
+import { createHookServer, type HookRequest } from './hooks/hook-server.js';
 import { createInlineMail, hookWithInlineMail } from './hooks/inline-mail.js';
+import { appendMailJournal } from './feed/mail-journal.js';
 import { createSilentEndings } from './endings/silent-endings.js';
 import { createSessionsService } from './sessions/sessions-service.js';
+import { createOpencodeSupervisor } from './opencode/server.js';
+import { createOpencodeBridge } from './opencode/events.js';
 import { providerLaunchEnv } from './sessions/provider-env.js';
 import { createReadyJournal } from './sessions/ready-journal.js';
 import { createQwenBinding } from './activity/qwen-binding.js';
@@ -179,6 +185,21 @@ export interface HostOptions {
    * зовут `startHost` без пробы или с подменой.
    */
   probeCodexCatalog?: CatalogProbe;
+  /**
+   * Проба каталога моделей Qwen Code на старте (`qwen --acp`, спека 2026-11-12, 8.4). Без неё каталога нет и `models` у
+   * `qwen` остаётся как есть: подключает её только `main.ts`, тесты настоящий qwen не запускают.
+   */
+  probeQwenCatalog?: QwenModelsProbe;
+  /**
+   * Probe of the OpenCode model catalog at start (`opencode models --standalone`, spec 2026-11-12, 4.7). Without it there is no
+   * catalog and `models` of `opencode` stays as it is: only `main.ts` connects it, tests never run the real opencode.
+   */
+  probeOpencodeCatalog?: OpencodeModelsProbe;
+  /**
+   * Probe of the OpenCode sign-in count (`opencode auth list --format json --standalone`, spec 2026-11-12, 4.12) for the provider
+   * card. Without it the card shows no count: only `main.ts` connects it, tests never run the real opencode.
+   */
+  probeOpencodeAuth?: OpencodeAuthProbe;
   /**
    * Проверка новых версий CLI раз в сутки (`codex`, `claude`; спека 2026-11-02). Без неё ничего не спрашивается и в
    * `providers.list` нет поля `update`: сетевой `fetch` подключает только `main.ts`, тесты передают подмену.
@@ -415,7 +436,28 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
 
   // Вход в аккаунты подписки (спека подписок 5.5): состояние по команде самого CLI, вход в своём маленьком PTY. Создаётся
   // до сессий и службы «застрял»: обе берут у неё `status`. Проверка на старте (К5) идёт в фоне, старт хоста её не ждёт.
-  const authService = createAuthService(handle.context, options.auth);
+  // Каталог моделей Qwen Code (спека 2026-11-12, 8.4): проба на старте и раз в 6 часов в фоне, после входа в Qwen — заново.
+  // Новый список хост пишет в `qwen-models.json` (его читает `loadProviders`) и сообщает окну `providers.changed`. Заводится до
+  // службы входа: конец входа в Qwen просит у каталога свежую пробу.
+  const qwenCatalog = startQwenCatalog(options.probeQwenCatalog, log, () => {
+    handle.context.broadcast('providers.changed', { provider: 'qwen' });
+  });
+  // OpenCode model catalog (spec 2026-11-12, 4.7): a probe at start and every 6 hours in the background; a new list goes to
+  // `opencode-models.json` (read by `loadProviders`) and the window gets `providers.changed`.
+  const opencodeCatalog = startOpencodeCatalog(options.probeOpencodeCatalog, log, () => {
+    handle.context.broadcast('providers.changed', { provider: 'opencode' });
+  });
+  // The sign-in count of OpenCode for its card: asked when the card is listed, not at start; the window reloads when it changes.
+  const opencodeAuth = startOpencodeAuthHint(options.probeOpencodeAuth, () => {
+    handle.context.broadcast('providers.changed', { provider: 'opencode' });
+  });
+  const authService = createAuthService(handle.context, {
+    ...options.auth,
+    onSignInExit: (provider, signedIn) => {
+      options.auth?.onSignInExit?.(provider, signedIn);
+      if (provider === 'qwen') void qwenCatalog.refresh();
+    },
+  });
   handle.context.onShutdown(async () => authService.stop());
   // Вошёл ли аккаунт для запуска сессии и помощника: кэш службы входа, а пока он пуст (старт хоста, первая проверка ещё
   // идёт) — исход самой проверки, общей с фоновой. Иначе вошедший аккаунт отказывал бы первые секунды после старта (спека
@@ -457,7 +499,11 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     works: worksService,
     activity: activityService,
     pty: ptyManager,
-  }, options.codexHookGraceMs === undefined ? {} : { codexHookGraceMs: options.codexHookGraceMs });
+  }, {
+    ...(options.codexHookGraceMs === undefined ? {} : { codexHookGraceMs: options.codexHookGraceMs }),
+    // OpenCode Chat reads the messages of the session's own server (the supervisor is created further down; it is only called later).
+    opencodeServer: (ref) => opencodeSupervisor.get(ref),
+  });
   // Канал агента к браузеру окна (спека браузера 2026-10-07, 3.7): путь `/agent/browser` на сервере хуков и свой
   // реестр токенов — у всех провайдеров. Операцию исполняет окно с возможностью `browser-agent`.
   const browserEndpoint = createBrowserEndpoint({
@@ -577,6 +623,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     log,
     provider: (ref) => worksService.entry(ref.projectPath, ref.workId)?.map.sessions.find((session) => session.id === ref.sessionId)?.provider,
     context: toolContextFor,
+    mailJournal: appendMailJournal,
+    delivered: (ref, text, at) => feedService.delivered(ref, text, at),
   });
   const qwenBinding = createQwenBinding({
     log,
@@ -589,9 +637,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       }, { touch: false });
     },
   });
-  const hookServer = createHookServer({
-    log,
-    onHook: (request) => {
+  // One hook handler chain: the HTTP hook receiver and the OpenCode event bridge (spec 2026-11-12, 4.4) both feed it.
+  const dispatchHook = (request: HookRequest): void => {
       void qwenBinding.onHook(request);
       readyJournal.onHook(request.ref);
       try {
@@ -602,7 +649,10 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       // Указатель на письма с хуком `UserPromptSubmit`: хост отвечает сам (письма в `additionalContext`), а лента получает
       // событие с глухим `respond`: её `{}` второй ответ не перебьёт.
       hookWithInlineMail(inlineMail, (hook) => feedService.onHook(hook))(request);
-    },
+  };
+  const hookServer = createHookServer({
+    log,
+    onHook: dispatchHook,
     routes: { [AGENT_ATTEMPTS_PATH]: (req, res) => attemptsEndpoint.handle(req, res), [AGENT_SESSIONS_PATH]: (req, res) => sessionEndpoint.handle(req, res), [AGENT_SWITCH_PATH]: (req, res) => switchEndpoint.handle(req, res), [AGENT_SWARMS_PATH]: (req, res) => swarmEndpoint.handle(req, res), [AGENT_PROVIDERS_PATH]: (req, res) => providersEndpoint.handle(req, res), [AGENT_TOOLS_PATH]: (req, res) => toolsEndpoint.handle(req, res), [AGENT_BROWSER_PATH]: (req, res) => browserEndpoint.handle(req, res), ...assistantEndpoint.routes() },
   });
 
@@ -710,6 +760,21 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     config: async () => (await loadConfig()).config,
   });
   handle.context.onShutdown(async () => capacityFeed.stop());
+  // OpenCode servers (spec 2026-11-12, 4.2): one per live OpenCode session, run file in the Parley home.
+  const opencodeSupervisor = createOpencodeSupervisor({
+    home: resolvedHome,
+    log,
+    // The last message poll before a planned stop keeps the Chat of a closed session (spec 2026-11-12, 4.11).
+    beforeStop: (ref, server) => feedService.opencodeLastPoll(ref, server),
+  });
+  // OpenCode events (spec 2026-11-12, 4.4): the session's SSE stream into the journal and the hook chain.
+  const opencodeEvents = createOpencodeBridge({
+    log,
+    hook: dispatchHook,
+    // An event of the session makes the Chat feed poll its server now (spec 4.11).
+    onSessionEvent: (ref) => void feedService.opencodePoll(ref).catch(() => {}),
+  });
+  handle.context.onShutdown(async () => opencodeEvents.stopAll());
   sessionsService = createSessionsService(
     handle.context,
     worksService,
@@ -721,6 +786,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       consents: consentsService,
       projectMcp,
       hooks: hookServer,
+      opencode: opencodeSupervisor,
+      opencodeEvents,
       // Qwen's brief is typed by the wake service once the process is ready (spec 2026-11-11, 3.4 amendment).
       deferFirst: (ref, pid, text) => wakeService.deferFirst(ref, pid, text),
       providerVersions,
@@ -753,6 +820,9 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   handle.context.onShutdown(async () => wakeService.stop());
   handle.context.onShutdown(async () => autoSleepService.stop());
   handle.context.onShutdown(() => sessionsService.stopAll());
+  // Sessions stop their servers on exit; this catches any left (a TUI that did not exit in time). The lifelines also
+  // kill their groups when the host's pipes close.
+  handle.context.onShutdown(() => opencodeSupervisor.stopAll());
   // Жизненный цикл роёв (спека роя v1, 3): сверка на каждом снимке работ и раз в 30 с; стартует после чтения работ.
   // Королеву завершённого роя усыпляет сервис сна: он создаётся ниже, замыкание читает его позже.
   const swarmsService = createSwarmsService(handle.context, worksService, sessionsService, {}, {
@@ -784,6 +854,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       // Возврат после сброса лимита (спека застрявших 6.3): окно провайдера из службы лимитов, сроки — рычаги E2E.
       limits: limitsService,
       limitReturn: limitReturnFromEnv(process.env),
+      // OpenCode: the brief, the pointer and the limit-return text go through the session server's API (O7).
+      opencodeServer: (ref) => opencodeSupervisor.get(ref),
     },
   );
 
@@ -1153,6 +1225,9 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     ...(cliUpdateRunner === undefined ? {} : { cliUpdateRunner }),
     ...(cliInstaller === undefined ? {} : { cliInstaller }),
     codexCatalog,
+    qwenCatalog,
+    opencodeCatalog,
+    opencodeAuth,
     limits: limitsService,
     glmCheck,
     customCheck,
@@ -1346,6 +1421,12 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
 
   // 7. Таймер простоя: ни клиентов, ни занятых ключей — отсчёт стартует сразу.
   idleWatcher.notify(true);
+
+  // OpenCode backstop (spec 2026-11-12, 4.2 "Host dies first"): before any session can be resumed, the groups of
+  // lifelines a previous host left alive are killed. Only pids with the recorded start time; no environment is read.
+  await opencodeSupervisor.sweep().catch((error: unknown) => {
+    log.error('opencode run file was not swept', { error: String(error) });
+  });
 
   const startFailure = await worksService.start().then(
     () => null,

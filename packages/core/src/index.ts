@@ -77,6 +77,26 @@ export type { QwenIndexState } from './qwen/index-session.js';
 export { qwenBindingCandidate, qwenBindingHolds } from './qwen/binding.js';
 export type { QwenTranscriptBinding } from './qwen/binding.js';
 export type { QwenAuthDeps, QwenAuthHint, QwenAuthHints } from './qwen/auth-state.js';
+export {
+  OPENCODE_CLI_CONFIG_ENV,
+  OPENCODE_CONFIG_ENV,
+  OPENCODE_DISABLE_AUTOUPDATE_ENV,
+  OPENCODE_PASSWORD_ENV,
+  OPENCODE_READ_ONLY_DENY,
+  OPENCODE_SERVER_URL_SLOT,
+  buildOpencodeConfig,
+  opencodeCliConfigContent,
+  opencodeConfigContent,
+  opencodePermissions,
+  opencodeServerEnv,
+} from './work/opencode-config.js';
+export type { OpencodeConfig, OpencodeConfigParams, OpencodePermission } from './work/opencode-config.js';
+export { opencodeRoleLaunch, OPENCODE_AUTO_FLAG } from './work/opencode-role.js';
+export type { OpencodeRoleLaunch } from './work/opencode-role.js';
+export { emptyOpencodeBridgeState, mapOpencodeEvent } from './feed/opencode/events.js';
+export type { OpencodeBridgeState, OpencodeJournalRecord, OpencodeMapped, OpencodeUsageFact } from './feed/opencode/events.js';
+export { applyOpencodeMessages, emptyOpencodeCursor, feedFromOpencodeMessages, mailFromExecute } from './feed/opencode/apply-opencode.js';
+export type { OpencodeCursor, OpencodeUsage } from './feed/opencode/apply-opencode.js';
 export { buildCodexIndex, indexCodexSession } from './codex/index-session.js';
 export { CODEX_LIMITS_DAY_DIRS, createCodexLimitsReader, readCodexLimits } from './codex/limits.js';
 export type { CodexLimitsReader } from './codex/limits.js';
@@ -101,6 +121,8 @@ export {
   agentEnv,
   assistantCommand,
   codexModelsFile,
+  qwenModelsFile,
+  opencodeModelsFile,
   commandBinary,
   commandInPath,
   effortsFor,
@@ -949,7 +971,7 @@ export { JOB_CANCEL_SAFE_TOOLS, JOB_ONLY_TOOLS, JOB_TOKEN_PREFIX, JOB_TOOL_ALLOW
 export type { AgentPlanStatus, AgentPlanItem, AgentPlanState, AgentPlanSummary, AgentPlan, PlanCall } from './agent-plan.js';
 export { fetchLatestVersion, installMethod, isNewer } from './cli-updates.js';
 export type { CliUpdateProvider, InstallMethod, LatestVersionSource } from './cli-updates.js';
-export { CLI_TOOLS, LATEST_SOURCE_URLS } from './cli-tools.js';
+export { CLI_TOOLS, LATEST_SOURCE_URLS, isOpenCodeLegacy, parseOpenCodeVersion } from './cli-tools.js';
 export type {
   CliDescriptor,
   CliInstallMethod,

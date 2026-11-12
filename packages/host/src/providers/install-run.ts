@@ -33,6 +33,7 @@ const WINDOWS_COMMANDS: Readonly<Record<CliTool, string>> = {
   claude: 'irm https://claude.ai/install.ps1 | iex',
   codex: 'npm install -g @openai/codex',
   qwen: 'npm install -g @qwen-code/qwen-code@latest',
+  opencode: 'npm install -g @opencode/cli@latest',
 };
 
 export interface CliInstallOutcome {

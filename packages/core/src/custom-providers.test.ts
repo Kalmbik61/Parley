@@ -26,8 +26,8 @@ import {
   type CustomAccountRecord,
   type CustomEndpointRecord,
 } from './custom-providers.js';
-import { PROVIDERS, claudeConfigDirFor, isClaudeCode, isManagedEntry, loadProviders, managedRecord, ownsHookToken, providerFamily, byFamily } from './providers.js';
-import { QWEN_FAMILY_ENTRY, UNKNOWN_FAMILY_ENTRY } from '../test/family-fixtures.js';
+import { PROVIDERS, claudeConfigDirFor, isClaudeCode, isManagedEntry, loadProviders, managedRecord, ownsHookToken, providerFamily, byFamily, type ProviderFamily } from './providers.js';
+import { OPENCODE_FAMILY_ENTRY, QWEN_FAMILY_ENTRY, UNKNOWN_FAMILY_ENTRY } from '../test/family-fixtures.js';
 
 const kimi: CustomEndpointRecord = {
   kind: 'endpoint',
@@ -393,7 +393,7 @@ describe('запись аккаунта (спека подписок 5.1)', () =
       await writeCustomProviders([{ kind: 'codex-account', id: 'codex-2', label: '', link: true }, account], file);
       const registry = await loadProviders(none('p.json'), none('c.json'), file);
       expect(registry['codex-2']).toBeUndefined();
-      expect(Object.keys(registry).sort()).toEqual(['claude', 'codex', 'custom-claude-2', 'glm', 'qwen']);
+      expect(Object.keys(registry).sort()).toEqual(['claude', 'codex', 'custom-claude-2', 'glm', 'opencode', 'qwen']);
       // этап 3: запись читается (хост считает по ней номера), но в реестр не попадает
       expect((await readCustomProviders(file)).map((record) => record.id)).toEqual(['codex-2', 'custom-claude-2']);
       expect(warn).not.toHaveBeenCalled();
@@ -408,7 +408,7 @@ describe('запись аккаунта (спека подписок 5.1)', () =
     expect(registry['custom-kimi']?.custom).toEqual(kimi);
     expect(registry['custom-kimi']?.account).toBeUndefined();
     await writeCustomProviders([kimi], file);
-    expect(Object.keys(await loadProviders(none('p.json'), none('c.json'), file)).sort()).toEqual(['claude', 'codex', 'custom-kimi', 'glm', 'qwen']);
+    expect(Object.keys(await loadProviders(none('p.json'), none('c.json'), file)).sort()).toEqual(['claude', 'codex', 'custom-kimi', 'glm', 'opencode', 'qwen']);
   });
 });
 
@@ -430,6 +430,7 @@ describe('providerFamily', () => {
     expect(providerFamily(registry['mycli']!)).toBeNull();
     expect(providerFamily(accountProviderEntry({ kind: 'claude-account', id: 'custom-claude-2', label: '', link: true }, registry, home))).toBe('claude');
     expect(providerFamily(QWEN_FAMILY_ENTRY)).toBe('qwen');
+    expect(providerFamily(OPENCODE_FAMILY_ENTRY)).toBe('opencode');
     expect(providerFamily(UNKNOWN_FAMILY_ENTRY)).toBe('mystery');
   });
 
@@ -440,7 +441,7 @@ describe('providerFamily', () => {
 });
 
 describe('byFamily', () => {
-  const branches = { claude: 'c', codex: 'x', qwen: 'q', neutral: 'n' } as const;
+  const branches = { claude: 'c', codex: 'x', qwen: 'q', opencode: 'o', neutral: 'n' } as const;
   it('picks the family branch; a null or unrecognised family takes neutral', () => {
     expect(byFamily(PROVIDERS.claude, branches)).toBe('c');
     expect(byFamily(PROVIDERS.glm, branches)).toBe('c');
@@ -451,5 +452,14 @@ describe('byFamily', () => {
     expect(byFamily(UNKNOWN_FAMILY_ENTRY, branches)).toBe('n');
     expect(byFamily('qwen', branches)).toBe('q');
     expect(byFamily('mystery', branches)).toBe('n');
+  });
+
+  it('opencode has its own, required branch', () => {
+    expect(byFamily(OPENCODE_FAMILY_ENTRY, branches)).toBe('o');
+    expect(byFamily('opencode', branches)).toBe('o'); // the built-in entry (O5)
+    expect(byFamily('crush', branches)).toBe('n'); // an id without a registry entry has no family
+    // A table over every family keeps this test honest: a new `ProviderFamily` member fails the compile here.
+    const table: Record<ProviderFamily, string> = { claude: 'c', codex: 'x', qwen: 'q', opencode: 'o' };
+    expect(Object.keys(table).sort()).toEqual(['claude', 'codex', 'opencode', 'qwen']);
   });
 });

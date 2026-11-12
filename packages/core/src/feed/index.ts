@@ -13,6 +13,7 @@ export {
   FEED_IMAGE_TTL_MS,
   FEED_IMAGES_PER_CALL,
   FEED_INPUT_LIMIT,
+  FEED_MAIL_TEXT_LIMIT,
   FEED_PATCH_LINES,
   FEED_RESULT_LIMIT,
   FEED_TEXT_LIMIT,
@@ -26,6 +27,8 @@ export type {
   FeedError,
   FeedImageRef,
   FeedItem,
+  FeedMail,
+  FeedMailLetter,
   FeedNotice,
   FeedNoticeData,
   FeedPatchHunk,
@@ -51,6 +54,8 @@ export {
   emptyFeedState,
   settleCards,
 } from './reduce.js';
+export { mailFromInline, mailFromTool } from './mail.js';
+export type { MailJournalEntry } from './mail-seed.js';
 export { stashFeedImages } from './images.js';
 export { feedFromTranscript, interruptedAt, retryFromTranscript } from './from-transcript.js';
 export type { FeedFromTranscriptOptions } from './from-transcript.js';

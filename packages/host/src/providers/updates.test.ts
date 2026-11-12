@@ -13,6 +13,7 @@ const GITHUB = 'https://api.github.com/repos/openai/codex/releases/latest';
 const BREW = 'https://formulae.brew.sh/api/cask/codex.json';
 const NPM = 'https://registry.npmjs.org/-/package/@anthropic-ai/claude-code/dist-tags';
 const QWEN_NPM = 'https://registry.npmjs.org/-/package/@qwen-code/qwen-code/dist-tags';
+const OPENCODE_NPM = 'https://registry.npmjs.org/-/package/@opencode/cli/dist-tags';
 
 let root = '';
 let userHome = '';
@@ -53,6 +54,7 @@ function net(): Net {
     [BREW, { version: '0.165.0' }],
     [NPM, { latest: '2.1.320', stable: '2.1.300' }],
     [QWEN_NPM, { latest: '0.28.0' }],
+    [OPENCODE_NPM, { latest: '2.2.7' }],
   ]);
   const fetchImpl = (async (url: string | URL | Request) => {
     urls.push(String(url));
@@ -82,7 +84,7 @@ describe('проверка версий CLI', () => {
     const updates = service(n, () => Date.UTC(2026, 10, 2));
     await updates.checkAll();
     // Qwen не установлен, но последнюю версию для него тоже спрашиваем.
-    expect(n.urls.sort()).toEqual([GITHUB, NPM, QWEN_NPM].sort());
+    expect(n.urls.sort()).toEqual([GITHUB, NPM, QWEN_NPM, OPENCODE_NPM].sort());
     const file = JSON.parse(await readFile(cacheFile(), 'utf8')) as { version: number; providers: Record<string, unknown> };
     expect(file.version).toBe(1);
     expect(file.providers['codex']).toEqual({
@@ -101,13 +103,13 @@ describe('проверка версий CLI', () => {
     let at = Date.UTC(2026, 10, 2);
     const updates = service(n, () => at);
     await updates.checkAll();
-    expect(n.urls).toHaveLength(3);
+    expect(n.urls).toHaveLength(4);
     at += CLI_UPDATE_MIN_AGE_MS - HOUR;
     await updates.checkAll();
-    expect(n.urls).toHaveLength(3);
+    expect(n.urls).toHaveLength(4);
     at += 2 * HOUR;
     await updates.checkAll();
-    expect(n.urls).toHaveLength(6);
+    expect(n.urls).toHaveLength(8);
   });
 
   it('кэш переживает перезапуск: свежая запись не даёт новой проверки', async () => {
@@ -115,7 +117,7 @@ describe('проверка версий CLI', () => {
     const at = Date.UTC(2026, 10, 2);
     await service(n, () => at).checkAll();
     await service(n, () => at + HOUR).checkAll();
-    expect(n.urls).toHaveLength(3);
+    expect(n.urls).toHaveLength(4);
   });
 
   it('текущее обновление: новее установленной и не пропущено', async () => {
@@ -193,7 +195,7 @@ describe('проверка версий CLI', () => {
     await updates.checkAll();
     expect(await updates.current('codex', '0.162.0')).toBeNull();
     await updates.checkAll();
-    expect(n.urls).toHaveLength(3);
+    expect(n.urls).toHaveLength(4);
   });
 
   it('битый кэш — пустой кэш', async () => {
@@ -210,7 +212,7 @@ describe('проверка версий CLI', () => {
     await writeFile(cacheFile(), JSON.stringify({ version: 2, providers: { codex: { latest: '9.9.9', checkedAt: '2026-11-02T00:00:00.000Z', method: 'npm', skipped: null } } }));
     const n = net();
     await service(n, () => Date.UTC(2026, 10, 2)).checkAll();
-    expect(n.urls).toHaveLength(3);
+    expect(n.urls).toHaveLength(4);
   });
 
   it('PARLEY_CODEX_BIN: способ установки берётся из пути подмены, ссылки раскрываются', async () => {
@@ -233,7 +235,7 @@ describe('проверка версий CLI', () => {
     const n = net();
     const updates = service(n, () => Date.UTC(2026, 10, 2), { codex: path.join(root, 'нет-такого'), claude: path.join(root, 'тоже-нет') });
     await updates.checkAll();
-    expect(n.urls.sort()).toEqual([GITHUB, NPM, QWEN_NPM].sort());
+    expect(n.urls.sort()).toEqual([GITHUB, NPM, QWEN_NPM, OPENCODE_NPM].sort());
     expect(await updates.current('codex', null)).toBeNull();
     expect(await updates.status('codex', null)).toEqual({
       installed: null,
@@ -290,10 +292,10 @@ describe('проверка версий CLI', () => {
       onChange: (command) => changes.push(command),
     });
     await updates.checkAll();
-    expect(changes.sort()).toEqual(['claude', 'codex', 'qwen']);
+    expect(changes.sort()).toEqual(['claude', 'codex', 'opencode', 'qwen']);
     at += 25 * HOUR;
     await updates.checkAll();
-    expect(changes).toHaveLength(3);
+    expect(changes).toHaveLength(4);
   });
 
   it('start() ничего не ждёт: сеть спрашивается позже, в фоне; stop() гасит таймеры', async () => {
@@ -301,7 +303,7 @@ describe('проверка версий CLI', () => {
     const updates = service(n, () => Date.UTC(2026, 10, 2));
     updates.start();
     expect(n.urls).toEqual([]);
-    await vi.waitFor(() => expect(n.urls).toHaveLength(3));
+    await vi.waitFor(() => expect(n.urls).toHaveLength(4));
     updates.stop();
   });
 });

@@ -64,14 +64,31 @@ const valueOf = (args: string[], flag: string): string | undefined => {
 };
 
 describe('qwen launch', () => {
-  it('new session: session id, default approval mode, system layer; the brief is deferred, not -i; settings file in the env', async () => {
+  it('every launch variant starts in auto and never in yolo: planLaunch, planNew, planResume, with and without a model', async () => {
+    const { workId, session } = await qwenSession();
+    const resumable = { ...session, providerSessionId: '11111111-1111-4111-8111-111111111111' };
+    const plans = [
+      await planLaunch(project, workId, session),
+      await planNew(project, workId, session),
+      await planNew(project, workId, session, { model: 'qwen3.8-flash' }),
+      await planResume(project, workId, resumable),
+      await planResume(project, workId, resumable, { model: 'qwen3.8-flash' }),
+    ];
+    for (const plan of plans) {
+      expect(plan.args.filter((arg) => arg === '--approval-mode')).toHaveLength(1);
+      expect(valueOf(plan.args, '--approval-mode')).toBe('auto');
+      expect(plan.args.join(' ')).not.toMatch(/yolo/);
+    }
+  });
+
+  it('new session: session id, start approval mode auto, system layer; the brief is deferred, not -i; settings file in the env', async () => {
     const { workId, session } = await qwenSession();
     const plan = await planLaunch(project, workId, session);
     expect(plan.command).toBe('qwen');
     expect(plan.args[0]).toBe('--session-id');
     expect(plan.args[1]).toMatch(UUID);
     expect(plan.providerSessionId).toBe(plan.args[1]);
-    expect(valueOf(plan.args, '--approval-mode')).toBe('default');
+    expect(valueOf(plan.args, '--approval-mode')).toBe('auto');
     expect(valueOf(plan.args, '--append-system-prompt')).toContain('You are inside Parley');
     expect(plan.args).not.toContain('-i');
     expect(plan.deferredPrompt).toContain('run the e2e suite');
@@ -104,7 +121,7 @@ describe('qwen launch', () => {
     const { workId, session } = await qwenSession();
     const id = '11111111-1111-4111-8111-111111111111';
     const plan = await planResume(project, workId, { ...session, providerSessionId: id }, { prompt: 'You have new mail', model: 'qwen3-coder-plus' });
-    expect(plan.args.slice(0, 4)).toEqual(['--resume', id, '--approval-mode', 'default']);
+    expect(plan.args.slice(0, 4)).toEqual(['--resume', id, '--approval-mode', 'auto']);
     expect(plan.args).not.toContain('--session-id');
     expect(valueOf(plan.args, '--append-system-prompt')).toContain('You are inside Parley');
     expect(valueOf(plan.args, '-m')).toBe('qwen3-coder-plus');
@@ -119,7 +136,7 @@ describe('qwen launch', () => {
     const plan = await planNew(project, workId, session);
     expect(plan.args).not.toContain('-i');
     expect(plan).not.toHaveProperty('deferredPrompt');
-    expect(valueOf(plan.args, '--approval-mode')).toBe('default');
+    expect(valueOf(plan.args, '--approval-mode')).toBe('auto');
   });
 
   it('workspace (autonomous) sessions stay refused for qwen in v1', async () => {

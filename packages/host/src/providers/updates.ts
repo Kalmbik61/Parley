@@ -64,7 +64,7 @@ export interface CliUpdatesOptions {
 
 export type UpdateCommand = CliUpdateProvider;
 /** Команды реестра, у которых есть проверка; GLM и свои провайдеры показывают строку `claude`. */
-export const UPDATE_COMMANDS: readonly UpdateCommand[] = ['codex', 'claude', 'qwen'];
+export const UPDATE_COMMANDS: readonly UpdateCommand[] = ['codex', 'claude', 'qwen', 'opencode'];
 
 export const CLI_UPDATE_MIN_AGE_MS = 20 * 60 * 60 * 1000;
 export const CLI_UPDATE_PERIOD_MS = 24 * 60 * 60 * 1000;
@@ -179,7 +179,9 @@ export function createCliUpdates(options: CliUpdatesOptions): CliUpdates {
         ? { kind: 'claude-npm', channel: await claudeChannel(options.userHome, env) }
         : command === 'qwen'
           ? CLI_TOOLS.qwen.latest
-          : method === 'brew'
+          : command === 'opencode'
+            ? CLI_TOOLS.opencode.latest
+            : method === 'brew'
             ? { kind: 'codex-brew' }
             : { kind: 'codex-github' };
     // `fetchLatestVersion` отдаёт только `null`; причину запоминает обёртка над `fetch`.

@@ -11,7 +11,7 @@
 import { appendFile } from 'node:fs/promises';
 import path from 'node:path';
 import { byFamily, INLINE_MAIL_EVENT, isPointerText, takeInlineMail as coreTakeInlineMail, workPaths } from '@parley/core';
-import type { McpContext } from '@parley/core';
+import type { McpContext, MailJournalEntry } from '@parley/core';
 import type { SessionRef } from '@parley/protocol';
 import type { Log } from '../log.js';
 import { EMPTY_HOOK_RESPONSE } from './decisions.js';
@@ -30,6 +30,13 @@ export interface InlineMailDeps {
   context(ref: SessionRef, launch: { agentRevision?: string }): Promise<McpContext>;
   /** Журнал доставок; по умолчанию — строка в `events/<сессия>.jsonl` работы. */
   journal?(ref: SessionRef, letters: number): void;
+  /**
+   * Журнал почты Parley (`mail/<сессия>.jsonl`): строка пишется перед ответом хуку с теми же `text` и `at`, что у `delivered`.
+   * Сбой записи не меняет ответ (спека почты в ленте, D8). Нет зависимости — журнала нет.
+   */
+  mailJournal?(ref: SessionRef, entry: MailJournalEntry): void;
+  /** Лента: письма отданы хуку. Зовётся один раз, сразу после ответа с письмами; сбой не меняет ответ. */
+  delivered?(ref: SessionRef, text: string, at: string): void;
   /** Часы и забор писем подменяются тестами. */
   now?(): number;
   take?: typeof coreTakeInlineMail;
@@ -57,7 +64,7 @@ export function createInlineMail(deps: InlineMailDeps): InlineMail {
       const prompt = body['prompt'];
       if (typeof prompt !== 'string' || !isPointerText(prompt)) return false;
       const provider = deps.provider(ref);
-      if (provider === undefined || byFamily(provider, { claude: false, codex: true, qwen: true, neutral: true })) return false;
+      if (provider === undefined || byFamily(provider, { claude: false, codex: true, qwen: true, opencode: true, neutral: true })) return false;
 
       const startedAt = now();
       let late = false;
@@ -90,7 +97,18 @@ export function createInlineMail(deps: InlineMailDeps): InlineMail {
         } catch (error) {
           deps.log.warn('inline mail: journal line failed', { error: String(error) });
         }
+        const deliveredAt = new Date(now()).toISOString();
+        try {
+          deps.mailJournal?.(ref, { at: deliveredAt, text: taken.text });
+        } catch (error) {
+          deps.log.warn('inline mail: mail journal write failed', { error: String(error) });
+        }
         answer(taken.text);
+        try {
+          deps.delivered?.(ref, taken.text, deliveredAt);
+        } catch (error) {
+          deps.log.warn('inline mail: feed notice failed', { error: String(error) });
+        }
       })().catch((error: unknown) => {
         // Устаревший агент, занятая запись, сбой хранилища: ничего не помечено, указатель сработает как раньше.
         deps.log.warn('inline mail: take failed, pointer stays', { ref, error: String(error) });

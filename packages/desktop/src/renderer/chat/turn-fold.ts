@@ -115,7 +115,7 @@ function foldBody(body: readonly FeedItem[], mode: 'replies' | 'final', openKeys
   }
   const visible = (item: FeedItem, at: number): boolean => {
     if (item.kind === 'text') return mode === 'replies' || at === shownText;
-    return item.kind === 'permission' || item.kind === 'question' || item.kind === 'plan' || item.kind === 'notice';
+    return item.kind === 'permission' || item.kind === 'question' || item.kind === 'plan' || item.kind === 'notice' || item.kind === 'mail';
   };
 
   const rows: FoldRow[] = [];

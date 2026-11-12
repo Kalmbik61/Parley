@@ -368,6 +368,8 @@ export const S = {
     readOnly: 'Read only', unavailable: 'Role unavailable', providerLocked: 'Native roles use their own provider',
     /** New-session dialog: read-only roles on Qwen Code (spec 2026-11-11, 3.6). */
     readOnlyUnavailableOnQwen: 'Read-only roles are not available on Qwen Code yet',
+    /** New-session dialog: a read-only role on OpenCode (spec 2026-11-12, 4.8, DO4). */
+    opencodeReadOnlyNote: 'OpenCode read-only: no file edits, no shell. Parley tools stay allowed; execute can read the network.',
     option: (name: string, source: 'builtin' | 'claude' | 'codex'): string => `${name} · ${{ builtin: 'Builtin', claude: 'Claude', codex: 'Codex' }[source]}`,
     defaultEffort: (effort: string): string => `Default effort: ${effort}`,
   },
@@ -840,6 +842,16 @@ export const S = {
     notConnected: 'Not connected',
     copy: 'Copy',
     copyCommand: 'Copy command',
+    /** OpenCode card (spec 2026-11-12, 4.12): the count from `opencode auth list`, a hint and never a verdict. */
+    opencode: {
+      hint: {
+        connected: (count: number): string => (count === 1 ? '1 connected provider found' : `${count} connected providers found`),
+        none: 'No connected provider found. Sign in inside OpenCode: Connect provider, or `opencode auth login --standalone` in a terminal',
+      },
+      hintNote: 'This is a hint from `opencode auth list`, not a check that the sign-in works.',
+      /** A 1.x OpenCode is found (spec 2026-11-12, 4.9, DO1): never run, the card says what to do. */
+      legacy: (version: string): string => `OpenCode 1.x found (${version}); Parley supports 2.x. Install OpenCode 2 and check again.`,
+    },
     copied: 'Copied',
     installationGuide: 'Installation guide',
     /** Установка из Parley (спека 2026-11-11, §4.2, §4.4). */
@@ -2098,6 +2110,19 @@ export const S = {
       waiting: (reason: string | null): string => (reason === null ? 'Not picked up yet' : `Not picked up yet (${reason})`),
       compacting: 'compacting context',
     },
+    /** Доставленные письма (элемент ленты `mail`, спека 2026-11-12, 3.4). */
+    mail: {
+      you: 'you',
+      parley: 'Parley',
+      kind: { note: 'note', question: 'question', decision: 'decision' },
+      /** Комната письма: `r-28 · Mail in chat`. */
+      room: (id: string, title: string): string => `${id} · ${title}`,
+      showMore: 'Show more',
+      showLess: 'Show less',
+      /** Письмо урезано доставкой или пределом ленты. */
+      cut: 'cut',
+      remaining: (count: number): string => `${count} more unread`,
+    },
     /** Строка действий под сообщением (спека 2026-10-16, 3.1). */
     actions: { copy: 'Copy', copied: 'Copied', sendAgain: 'Send again', reply: 'Reply' },
     /** Плашка цитаты над полем ввода (Reply): подпись и крестик «убрать». */
@@ -2109,6 +2134,8 @@ export const S = {
       codexPlaceholder: 'Message Codex — Enter to send',
       qwenLabel: 'Message to Qwen Code',
       qwenPlaceholder: 'Message Qwen Code — Enter to send',
+      opencodeLabel: 'Message to OpenCode',
+      opencodePlaceholder: 'Message OpenCode — Enter to send',
       send: 'Send',
       queue: 'Queue',
       attach: 'Attach a file',
@@ -2159,6 +2186,8 @@ export const S = {
       text: 'Claude Code is waiting in the terminal',
       /** Qwen Code approvals are answered in the terminal in v1: the Chat view has no approval cards for it. */
       qwenApproval: 'Waiting for approval in the terminal',
+      /** OpenCode approvals are answered in the terminal in v1: the Chat view has no approval cards for it. */
+      opencodeApproval: 'Waiting for approval in the terminal',
       open: 'Open terminal',
     },
     /** Баннер замены агента над полем ввода (спека 2026-10-30, 5.7). */

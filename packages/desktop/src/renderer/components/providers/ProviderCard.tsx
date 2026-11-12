@@ -70,8 +70,12 @@ export function ProviderCard({
   const canInstall = installId !== null && methods.has('providers.install');
   // Qwen Code has no copy-paste command block here: its install is the host's `Install…` (spec 2026-11-11, §4.2).
   const qwenMissing = provider.id === 'qwen' && !provider.available;
-  const missingCli = (showInstall && !isGlm) || qwenMissing;
+  // OpenCode: not installed (no version), or a 1.x found (a version, but readiness refuses it): both offer the host's `Install…`.
+  const opencodeMissing = provider.id === 'opencode' && !provider.available && provider.version == null;
+  const opencodeLegacy = provider.id === 'opencode' && !provider.available && provider.version != null;
+  const missingCli = (showInstall && !isGlm) || qwenMissing || opencodeMissing || opencodeLegacy;
   const qwenAuth = provider.id === 'qwen' ? (provider.qwenAuth ?? null) : null;
+  const opencodeConnected = provider.id === 'opencode' ? (provider.opencodeAuth?.connected ?? null) : null;
   const latest = provider.cli?.latest ?? null;
 
   useEffect(() => {
@@ -319,6 +323,15 @@ export function ProviderCard({
           {latest === null ? '' : ` · ${S.providerCard.latestVersion(latest)}`}
         </p>
       ) : null}
+      {opencodeMissing ? (
+        <p data-not-installed className="text-xs text-muted-foreground">
+          {S.providerCard.notInstalled}
+          {latest === null ? '' : ` · ${S.providerCard.latestVersion(latest)}`}
+        </p>
+      ) : null}
+      {opencodeLegacy ? (
+        <p data-opencode-legacy="" className="text-xs text-muted-foreground">{S.providerCard.opencode.legacy(provider.version ?? '')}</p>
+      ) : null}
       {canInstall && installId !== null ? (
         // Вне блока с командой: ход и итог остаются на месте, когда CLI найден и блок исчезает.
         <ProviderInstall id={installId} name={name} missing={missingCli} disabled={busy} onReload={onReload} />
@@ -374,6 +387,15 @@ export function ProviderCard({
           <p className="text-xs text-muted-foreground">{S.providerCard.qwen.hintNote}</p>
           <p data-qwen-model="" className="text-xs text-muted-foreground">{S.providerCard.qwen.model(qwenAuth?.model ?? null)}</p>
           <p className="text-xs text-muted-foreground">{S.providerCard.qwen.modelHelp}</p>
+        </div>
+      ) : null}
+      {provider.id === 'opencode' && provider.available ? (
+        // OpenCode signs in inside its own TUI: the card shows how many integrations `opencode auth list` reports, never a verdict.
+        <div data-opencode-auth={opencodeConnected === null ? 'unknown' : opencodeConnected > 0 ? 'signed-in' : 'signed-out'} className="space-y-1">
+          <p className="text-xs text-muted-foreground">
+            {opencodeConnected !== null && opencodeConnected > 0 ? S.providerCard.opencode.hint.connected(opencodeConnected) : S.providerCard.opencode.hint.none}
+          </p>
+          <p className="text-xs text-muted-foreground">{S.providerCard.opencode.hintNote}</p>
         </div>
       ) : null}
       {!isGlm && install !== null ? (

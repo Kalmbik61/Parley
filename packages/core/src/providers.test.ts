@@ -12,6 +12,8 @@ import {
   codexModelsFile,
   commandInPath,
   probeCliVersion,
+  qwenModelsFile,
+  opencodeModelsFile,
   commandBinary,
   effortsFor,
   loadProviders,
@@ -101,7 +103,7 @@ describe('реестр провайдеров', () => {
       providersWithHistory()
         .map((p) => p.id)
         .sort(),
-    ).toEqual(['claude', 'codex', 'glm', 'qwen']);
+    ).toEqual(['claude', 'codex', 'glm', 'opencode', 'qwen']);
   });
 
   it('qwen: the spec 3.3 entry, the system-settings MCP route, no first prompt and no --yolo', () => {
@@ -822,6 +824,20 @@ describe('commandInPath', () => {
     expect(await commandInPath('qwen', { ...home, PARLEY_QWEN_BIN: path.join(dir, 'нет') })).toBe(false);
   });
 
+  it('opencode: probeCliVersion reads `opencode v2.2.7` and a bare 1.x version, and nothing from other output', async () => {
+    const bin = path.join(dir, 'oc');
+    await mkdir(bin, { recursive: true });
+    const script = path.join(bin, 'opencode');
+    const run = async (output: string): Promise<string | null> => {
+      await writeFile(script, `#!/bin/sh\necho '${output}'\n`, 'utf8');
+      await chmod(script, 0o755);
+      return probeCliVersion('opencode', 5000, { PARLEY_OPENCODE_BIN: script, PATH: '' });
+    };
+    expect(await run('opencode v2.2.7')).toBe('2.2.7');
+    expect(await run('1.19.5')).toBe('1.19.5');
+    expect(await run('opencode: warning 2.2.7 ignored')).toBeNull();
+  });
+
   it('неисполняемый файл и отсутствующая команда — нет в PATH', async () => {
     const file = path.join(dir, 'не-исполняемый');
     await writeFile(file, 'текст', 'utf8');
@@ -861,7 +877,7 @@ describe('переопределения из PARLEY_HOME/providers.json', () =>
 
   it('файла нет — работает встроенный реестр', async () => {
     const registry = await loadProviders();
-    expect(Object.keys(registry).sort()).toEqual(['claude', 'codex', 'glm', 'qwen']);
+    expect(Object.keys(registry).sort()).toEqual(['claude', 'codex', 'glm', 'opencode', 'qwen']);
     expect(registry['claude']?.runner.command).toBe('claude');
   });
 
@@ -904,27 +920,27 @@ describe('переопределения из PARLEY_HOME/providers.json', () =>
 
   it('свой провайдер добавляется целиком', async () => {
     await write({
-      opencode: {
-        badge: 'OpenCode',
-        command: 'opencode',
+      crush: {
+        badge: 'Crush',
+        command: 'crush',
         args: ['{prompt}'],
       },
     });
     const registry = await loadProviders();
-    const opencode = registry['opencode'];
-    if (opencode === undefined) throw new Error('свой провайдер не попал в реестр');
+    const crush = registry['crush'];
+    if (crush === undefined) throw new Error('свой провайдер не попал в реестр');
 
-    expect(opencode).toEqual({
-      id: 'opencode',
-      label: 'OpenCode',
-      mark: 'Op',
+    expect(crush).toEqual({
+      id: 'crush',
+      label: 'Crush',
+      mark: 'Cr',
       hasHistory: false,
       linkBy: 'cwd+time',
-      runner: { command: 'opencode', args: ['{prompt}'] },
+      runner: { command: 'crush', args: ['{prompt}'] },
       argsOverridden: true,
     });
-    expect(startCommand(opencode, { prompt: 'бриф' })).toEqual({
-      command: 'opencode',
+    expect(startCommand(crush, { prompt: 'бриф' })).toEqual({
+      command: 'crush',
       args: ['бриф'],
     });
   });
@@ -1150,6 +1166,91 @@ describe('переопределения из PARLEY_HOME/providers.json', () =>
         },
       });
       await expect(loadProviders()).rejects.toThrow(/codex.*unexpected entry shape/);
+    });
+  });
+
+  describe('Qwen Code model catalog from the host file (spec 2026-11-12, 8.4)', () => {
+    const LIVE: ModelOption[] = [
+      { id: 'qwen-demo-max', label: 'qwen-demo-max', efforts: null },
+      { id: 'qwen-demo-flash', label: 'qwen-demo-flash', efforts: null },
+      { id: 'qwen-demo-preview', label: 'qwen-demo-preview', efforts: null },
+    ];
+    const writeLive = (data: unknown): Promise<void> => writeFile(qwenModelsFile(), JSON.stringify(data), 'utf8');
+
+    it('the file lives in the Parley home; no file means models stay null', async () => {
+      expect(qwenModelsFile()).toBe(path.join(home, 'qwen-models.json'));
+      expect(selectableModels((await loadProviders())['qwen'] as ProviderEntry)).toBeNull();
+    });
+
+    it('a valid file gives the qwen entry its models in file order; other providers are untouched', async () => {
+      await writeLive({ fetchedAt: '2030-01-05T10:00:00.000Z', models: LIVE });
+      const registry = await loadProviders();
+      expect(selectableModels(registry['qwen'] as ProviderEntry)).toStrictEqual(LIVE);
+      expect(selectableModels(registry['claude'] as ProviderEntry)).toEqual(selectableModels(PROVIDERS.claude));
+      expect(selectableModels(registry['codex'] as ProviderEntry)).toEqual(selectableModels(PROVIDERS.codex));
+      expect(modelChoiceError(registry['qwen'] as ProviderEntry, 'qwen-demo-flash')).toBeNull();
+      expect(modelChoiceError(registry['qwen'] as ProviderEntry, 'not-listed')).toContain('not in the list');
+    });
+
+    it.each([
+      ['malformed JSON', '{not json'],
+      ['an empty list', JSON.stringify({ models: [] })],
+      ['a model of the wrong shape', JSON.stringify({ models: [{ id: 'ok', label: 'Ok' }, { id: 'bad id', label: 'Bad' }] })],
+    ])('%s: models stay null', async (_title, body) => {
+      await writeFile(qwenModelsFile(), body, 'utf8');
+      expect(selectableModels((await loadProviders())['qwen'] as ProviderEntry)).toBeNull();
+    });
+
+    it('models from providers.json win over the host file', async () => {
+      await writeLive({ models: LIVE });
+      await write({ qwen: { models: [{ id: 'mine', label: 'Mine' }] } });
+      expect(selectableModels((await loadProviders())['qwen'] as ProviderEntry)).toStrictEqual([{ id: 'mine', label: 'Mine' }]);
+    });
+  });
+
+  describe('OpenCode model catalog from the host file (spec 2026-11-12, 4.7)', () => {
+    const LIVE: ModelOption[] = [
+      { id: 'opencode/big-pickle', label: 'opencode/big-pickle', efforts: null },
+      { id: 'demo/nested/model-1', label: 'demo/nested/model-1', efforts: null },
+    ];
+    const writeLive = (data: unknown): Promise<void> => writeFile(opencodeModelsFile(), JSON.stringify(data), 'utf8');
+
+    it('the file lives in the Parley home; no file means models stay null', async () => {
+      expect(opencodeModelsFile()).toBe(path.join(home, 'opencode-models.json'));
+      expect(selectableModels((await loadProviders())['opencode'] as ProviderEntry)).toBeNull();
+    });
+
+    it('a valid file gives the opencode entry its models in file order; other providers are untouched', async () => {
+      await writeLive({ fetchedAt: '2030-01-05T10:00:00.000Z', models: LIVE });
+      const registry = await loadProviders();
+      expect(selectableModels(registry['opencode'] as ProviderEntry)).toStrictEqual(LIVE);
+      expect(selectableModels(registry['qwen'] as ProviderEntry)).toEqual(selectableModels(PROVIDERS.qwen));
+      expect(modelChoiceError(registry['opencode'] as ProviderEntry, 'opencode/big-pickle')).toBeNull();
+      expect(modelChoiceError(registry['opencode'] as ProviderEntry, 'not/listed')).toContain('not in the list');
+    });
+
+    it.each([
+      ['malformed JSON', '{not json'],
+      ['an empty list', JSON.stringify({ models: [] })],
+      ['a model of the wrong shape', JSON.stringify({ models: [{ id: 'ok/one', label: 'Ok' }, { id: 'bad id', label: 'Bad' }] })],
+    ])('%s: models stay null', async (_title, body) => {
+      await writeFile(opencodeModelsFile(), body, 'utf8');
+      expect(selectableModels((await loadProviders())['opencode'] as ProviderEntry)).toBeNull();
+    });
+
+    it('the entry takes a model although its args have no {model}: the choice survives resolveModelEffort', async () => {
+      await writeLive({ models: LIVE });
+      const entry = (await loadProviders())['opencode'] as ProviderEntry;
+      expect(supportsModel(entry)).toBe(true);
+      expect(resolveModelEffort(entry, { model: 'opencode/big-pickle' })).toStrictEqual({ choice: { model: 'opencode/big-pickle' } });
+      expect(resolveModelEffort(entry, { model: 'not/listed' })).toHaveProperty('error');
+      expect(supportsModel(PROVIDERS.claude)).toBe(true);
+    });
+
+    it('models from providers.json win over the host file', async () => {
+      await writeLive({ models: LIVE });
+      await write({ opencode: { models: [{ id: 'mine/one', label: 'Mine' }] } });
+      expect(selectableModels((await loadProviders())['opencode'] as ProviderEntry)).toStrictEqual([{ id: 'mine/one', label: 'Mine' }]);
     });
   });
 

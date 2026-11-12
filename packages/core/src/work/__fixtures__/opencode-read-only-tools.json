@@ -1,0 +1,24 @@
+{
+  "source": "OpenCode 2.2.7, tools/opencode-mock-lab (mock model request log, prompt MCPCALL), throwaway HOME/XDG, 2026-11-12",
+  "note": "The tool names of the model requests for each permissions list of OPENCODE_CONFIG_CONTENT. Parley MCP tools are not in the list (Code Mode); in every run the execute call of tools.parley.ping reached the MCP server once.",
+  "runs": [
+    {
+      "name": "read-only without write",
+      "permissions": ["deny:edit", "deny:shell", "deny:webfetch", "deny:websearch", "deny:subagent", "allow:parley_*"],
+      "tools": ["execute", "glob", "grep", "question", "read", "skill"],
+      "parleyCalls": 1
+    },
+    {
+      "name": "read-only with write",
+      "permissions": ["deny:edit", "deny:write", "deny:shell", "deny:webfetch", "deny:websearch", "deny:subagent", "allow:parley_*"],
+      "tools": ["execute", "glob", "grep", "question", "read", "skill"],
+      "parleyCalls": 1
+    },
+    {
+      "name": "writable",
+      "permissions": ["allow:parley_*"],
+      "tools": ["edit", "execute", "glob", "grep", "question", "read", "shell", "skill", "subagent", "webfetch", "websearch", "write"],
+      "parleyCalls": 1
+    }
+  ]
+}

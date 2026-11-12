@@ -329,7 +329,7 @@ export function createHookServer(options: HookServerOptions): HookServer {
         ref: { ...ref },
         token,
         providerSessionId,
-        events: byFamily(provider, { claude: FEED_EVENTS, codex: CODEX_EVENTS, qwen: QWEN_EVENTS, neutral: NO_EVENTS }),
+        events: byFamily(provider, { claude: FEED_EVENTS, codex: CODEX_EVENTS, qwen: QWEN_EVENTS, opencode: NO_EVENTS, neutral: NO_EVENTS }),
         ...(agentRevision === undefined ? {} : { agentRevision }),
       });
       tokenOfSession.set(key, token);

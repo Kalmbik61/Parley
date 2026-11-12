@@ -31,7 +31,9 @@ import {
   applyHookEvent,
   applyCodexHookEvent,
   applyCodexRecords,
+  applyOpencodeMessages,
   applyQwenRecords,
+  feedFromOpencodeMessages,
   feedFromQwenTranscript,
   claudeProjectRoots,
   closeFeedTurn,
@@ -43,6 +45,7 @@ import {
   FEED_IMAGE_SWEEP_MS,
   feedFromCodexRollout,
   feedFromTranscript,
+  mailFromInline,
   forEachJsonlRecord,
   interruptedAt,
   isCodexThreadBinding,
@@ -58,6 +61,7 @@ import {
 import type {
   CodexAgentMeta,
   CodexCursor,
+  OpencodeCursor,
   QwenCursor,
   FeedCard,
   FeedCardState,
@@ -69,12 +73,14 @@ import type {
   RolloutRecord,
   WorkSession,
 } from '@parley/core';
-import { FEED_SCHEMA_VERSION, FEED_PROGRESS_RETRY_AFTER_MAX_MS, FEED_RESYNC_FEATURE, refKey, sessionRef } from '@parley/protocol';
+import { FEED_MAIL_FEATURE, FEED_SCHEMA_VERSION, FEED_PROGRESS_RETRY_AFTER_MAX_MS, FEED_RESYNC_FEATURE, refKey, sessionRef } from '@parley/protocol';
 import type { FeedDecisions, ProgressResult, Result, SessionRef } from '@parley/protocol';
 import { projectProgress } from './progress.js';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { LogChange } from '../activity/log-index.js';
+import type { MailJournalEntry } from '@parley/core';
 import type { Client } from '../client.js';
+import { readMailJournal } from './mail-journal.js';
 import type { HostContext } from '../context.js';
 import { HostError } from '../errors.js';
 import { EMPTY_HOOK_RESPONSE, hookDecisionResponse } from '../hooks/decisions.js';
@@ -85,6 +91,7 @@ import type { PtyManager } from '../pty/pty-manager.js';
 import type { WorksService } from '../works/works-service.js';
 import { createRolloutTail } from './codex-source.js';
 import { createQwenTail } from './qwen-source.js';
+import { fetchOpencodeMessages, readOpencodeCache, writeOpencodeCache, type OpencodeAddress } from './opencode-source.js';
 import { createFeedImageStore } from './image-store.js';
 import { stashClaudeRecord, stashCodexRecord, stashHookBody } from './stash.js';
 
@@ -175,6 +182,12 @@ export interface FeedServiceOptions {
   roots?: () => readonly string[];
   /** Чтение записей журнала (последних `maxBytes` байт); тесты подставляют счётчик. */
   readRecords?: (file: string, maxBytes?: number) => Promise<RawRecord[]>;
+  /** OpenCode 2.x: where the session's server answers now (the supervisor's `get`); `undefined` — no server runs. */
+  opencodeServer?: (ref: SessionRef) => OpencodeAddress | undefined;
+  /** HTTP for the OpenCode message polls; tests substitute it. */
+  opencodeFetch?: typeof fetch;
+  /** Чтение журнала почты Parley при севе; тесты подставляют своё. */
+  readMailJournal?: (ref: SessionRef) => Promise<MailJournalEntry[]>;
   /** Первый хвост журнала Claude при севе; по умолчанию `SEED_TAIL_BYTES`. */
   seedTailBytes?: number;
   /** Каталог файлов картинок ленты; по умолчанию `<дом Parley>/feed-images`. */
@@ -183,15 +196,45 @@ export interface FeedServiceOptions {
 
 export type FeedSnapshot = Result<'feed.snapshot'>;
 
+const MAIL_ID_PREFIX = 'mail:';
+
+/** Элементы ленты для клиента: `mail` только с признаком `feed-mail` (спека почты 3.5). */
+function mailFor(client: Client | undefined, items: readonly FeedItem[]): FeedItem[] {
+  return client?.features.has(FEED_MAIL_FEATURE) === true ? [...items] : items.filter((item) => item.kind !== 'mail');
+}
+
+/** Дельта без `mail`: из `upsert` уходят элементы, из `removed` — id `mail:…`; `revision` и прочее то же, пустая пачка остаётся. */
+export function withoutMail<D extends { upsert: FeedItem[]; removed: string[] }>(data: D): D {
+  return { ...data, upsert: data.upsert.filter((item) => item.kind !== 'mail'), removed: data.removed.filter((id) => !id.startsWith(MAIL_ID_PREFIX)) };
+}
+
 export interface FeedService {
+  /**
+   * OpenCode: poll the session's messages now (called on its SSE events); joins the poll in flight. A session without a
+   * feed in memory, a server or a seeded feed does nothing.
+   */
+  opencodePoll(ref: SessionRef): Promise<void>;
+  /**
+   * OpenCode: the last poll before a planned server stop (the supervisor's `beforeStop`): reads the messages from `server`
+   * and stores them in the cache, with or without a feed in memory. Never throws.
+   */
+  opencodeLastPoll(ref: SessionRef, server: OpencodeAddress): Promise<void>;
+  /**
+   * Письма отданы хуку вместе с указателем (`inline-mail`): элемент `mail` встаёт в ленту после указателя-промпта.
+   * `text` — точный `additionalContext`, `at` — время ответа хоста (то же, что в журнале почты). Не письмо — ничего.
+   */
+  delivered(ref: SessionRef, text: string, at: string): void;
   /** Событие хука от приёмника: ответ — сразу или после решения человека. */
   onHook(request: HookRequest): void;
   /** Снимок ленты сессии или, с `agentId`, ленты субагента из его журнала. */
   /**
    * `scope: 'attention'` — в `items` только ждущие карточки и последний `text` после последнего `prompt`
    * (нет `prompt` — последний `text` вообще); с `agentId` игнорируется.
+   *
+   * `client` — кому снимок: элементы `mail` получает только клиент с `feed-mail` в `hello.features`. Без клиента (внутренние
+   * читатели: помощник, Telegram) `mail` не отдаётся, как и клиенту без признака.
    */
-  snapshot(ref: SessionRef, agentId?: string, scope?: 'attention'): Promise<FeedSnapshot>;
+  snapshot(ref: SessionRef, agentId?: string, scope?: 'attention', client?: Client): Promise<FeedSnapshot>;
   /**
    * Current pending cards after snapshot preparation; reads reducer state before batched flush. `[]` — the feed is not
    * in memory (a card exists only with a held hook, and such a feed is never evicted); `undefined` — the feed is in
@@ -240,6 +283,15 @@ interface QwenFeed {
   tail: ReturnType<typeof createQwenTail>;
   cursor: QwenCursor;
   /** Tails are read one at a time: the position is the tail's own. */
+  queue: Promise<void>;
+}
+
+/** OpenCode 2.x feed: messages read from the session's own server, or from Parley's cache when no server runs (spec 2026-11-12, 4.11). */
+interface OpencodeFeed {
+  cursor: OpencodeCursor;
+  /** Fingerprint of the last applied answer: an equal one changes nothing. */
+  digest: string | null;
+  /** Polls run one at a time. */
   queue: Promise<void>;
 }
 
@@ -325,6 +377,8 @@ interface SessionFeed {
   codex?: CodexFeed;
   /** Qwen Code: state of the feed read from the bound transcript. */
   qwen?: QwenFeed;
+  /** OpenCode 2.x: state of the feed read from the session's server or cache. */
+  opencode?: OpencodeFeed;
   /**
    * Qwen Code: when its last turn ended (Stop hook or the journal going idle). The transcript has no end-of-turn record, so
    * this closes the turn it leaves open; it survives reseeding and a reconnect.
@@ -430,6 +484,7 @@ export function createFeedService(
   const maxBytes = options.maxBytes ?? FEED_MAX_BYTES;
   const batchMs = options.batchMs ?? FEED_BATCH_MS;
   const now = options.now ?? Date.now;
+  const opencodeFetch = options.opencodeFetch ?? fetch;
   const interruptGraceMs = options.interruptGraceMs ?? INTERRUPT_GRACE_MS;
   const codexHookGraceMs = options.codexHookGraceMs ?? CODEX_HOOK_GRACE_MS;
   const codexHooks =
@@ -658,8 +713,10 @@ export function createFeedService(
       mode: feed.state.permissionMode,
       ...(feed.decisions === null ? {} : { decisions: feed.decisions }),
     };
+    // Клиенту без `feed-mail` — то же событие без `mail` в `upsert` и `mail:` в `removed`; `revision` тот же, пустая пачка идёт.
+    const plain = withoutMail(data);
     for (const client of Array.from(clients)) {
-      client.send({ event: 'feed.changed', data });
+      client.send({ event: 'feed.changed', data: client.features.has(FEED_MAIL_FEATURE) ? data : plain });
       // Подписку по буферу снимаем только у окна, которое умеет переподписаться: без `feed.resync` оно об отписке
       // не узнало бы и ждало дельт вечно (буфер обычно полон собственным большим ответом, снимком ленты на
       // мегабайты, а дельты мелкие и идут пачками раз в 50 мс), поэтому старому окну и мосту телефона остаётся
@@ -811,7 +868,7 @@ export function createFeedService(
     } catch {
       provider = undefined;
     }
-    const hookFamily = provider === undefined ? 'claude' : byFamily(provider, { claude: 'claude' as const, codex: 'codex' as const, qwen: null, neutral: null });
+    const hookFamily = provider === undefined ? 'claude' : byFamily(provider, { claude: 'claude' as const, codex: 'codex' as const, qwen: null, opencode: null, neutral: null });
     if (hookFamily === 'codex') {
       onCodexHook(request);
       return;
@@ -821,7 +878,7 @@ export function createFeedService(
     // and no permission cards (spec 2026-11-11, 3.5, Feed ownership); it only prompts the transcript to be read now.
     if (hookFamily === null) {
       request.respond(EMPTY_HOOK_RESPONSE);
-      if (provider !== undefined && byFamily(provider, { claude: false, codex: false, qwen: true, neutral: false })) {
+      if (provider !== undefined && byFamily(provider, { claude: false, codex: false, qwen: true, opencode: false, neutral: false })) {
         if (body['hook_event_name'] === 'Stop' || body['hook_event_name'] === 'StopFailure') {
           const stamp = textOf(body['timestamp']);
           feedOf(ref).qwenStoppedAt = stamp !== null && !Number.isNaN(Date.parse(stamp)) ? new Date(stamp).toISOString() : at();
@@ -887,6 +944,7 @@ export function createFeedService(
       claude: () => seedClaude(feed, provider, foreground),
       codex: () => seedCodex(feed, foreground),
       qwen: () => seedQwen(feed, foreground),
+      opencode: () => seedOpencode(feed, foreground),
       neutral: () => Promise.resolve(),
     })();
     if (feed.seeding === undefined) return run;
@@ -937,7 +995,8 @@ export function createFeedService(
       const release = await seedSlot(key, foreground);
       try {
         if (feed.live || !feedCurrent(feed)) return;
-        const grown = await readFeedTail(file);
+        const journal = await (options.readMailJournal ?? readMailJournal)(feed.ref);
+        const grown = await readFeedTail(file, 'root', journal);
         if (grown === null || feed.live || !feedCurrent(feed)) return;
         const seeded = closeBrokenTurn(grown);
         // Режим, который хост уже сверил по подвалу (`noteMode`), свежее записи журнала.
@@ -1238,6 +1297,79 @@ export function createFeedService(
     }
   }
 
+  /** The OpenCode session id Parley gave the session (`ses_<uuid>`); `null` before the first launch. */
+  function opencodeSessionId(ref: SessionRef): string | null {
+    const id = sessionOf(ref).providerSessionId;
+    return typeof id === 'string' && id !== '' ? id : null;
+  }
+
+  /**
+   * OpenCode seed: a running server first (its messages are the truth and refresh the cache), else Parley's cache, which
+   * keeps the Chat of a closed session or of a restarted host. With neither the feed is empty and the next poll fills it.
+   */
+  function seedOpencode(feed: SessionFeed, foreground = false): Promise<void> {
+    if (feed.seeding !== undefined) return feed.seeding;
+    feed.seeding = (async () => {
+      const release = await seedSlot(refKey(feed.ref), foreground);
+      try {
+        if (!feedCurrent(feed)) return;
+        const id = opencodeSessionId(feed.ref);
+        const address = options.opencodeServer?.(feed.ref);
+        const live = address !== undefined && id !== null ? await fetchOpencodeMessages(address, id, opencodeFetch) : null;
+        const messages = live?.messages ?? (await readOpencodeCache(feed.ref)) ?? [];
+        if (!feedCurrent(feed)) return;
+        const seeded = feedFromOpencodeMessages(messages, { limit: maxItems });
+        // Without a server nothing of the last turn is running any more: an open turn is a broken one.
+        const state = live === null ? closeBrokenTurn(seeded.state) : seeded.state;
+        feed.state = state;
+        feed.opencode = { cursor: seeded.cursor, digest: live?.digest ?? null, queue: Promise.resolve() };
+        feed.sizes = new Map();
+        feed.bytes = 0;
+        for (const item of state.items) {
+          const size = itemBytes(item);
+          feed.sizes.set(item.id, size);
+          feed.bytes += size;
+        }
+        trim(feed, false);
+        setDecisions(feed, 'terminal');
+        if (live !== null) await writeOpencodeCache(feed.ref, live.messages, now()).catch(cacheFailed(feed.ref));
+        if (seeded.cursor.skipped > 0) log.info('opencode feed: unknown messages skipped', { sessionId: feed.ref.sessionId, skipped: seeded.cursor.skipped });
+      } catch (error) {
+        log.warn('opencode feed: messages not read', { sessionId: feed.ref.sessionId, error: String(error) });
+      } finally {
+        release();
+        feed.seeded = true;
+        feed.seeding = undefined;
+      }
+    })();
+    return feed.seeding;
+  }
+
+  const cacheFailed = (ref: SessionRef) => (error: unknown): void => {
+    log.warn('opencode feed: cache not written', { sessionId: ref.sessionId, error: String(error) });
+  };
+
+  /** New messages of an OpenCode session go into the feed and the cache. One poll at a time; a poll in flight is joined. */
+  function pollOpencode(feed: SessionFeed): Promise<void> {
+    const opencode = feed.opencode;
+    if (opencode === undefined) return Promise.resolve();
+    const run = opencode.queue.then(async () => {
+      if (!feedCurrent(feed) || feed.opencode !== opencode) return;
+      const address = options.opencodeServer?.(feed.ref);
+      const id = opencodeSessionId(feed.ref);
+      if (address === undefined || id === null) return;
+      const fetched = await fetchOpencodeMessages(address, id, opencodeFetch);
+      if (fetched === null || !feedCurrent(feed) || feed.opencode !== opencode || fetched.digest === opencode.digest) return;
+      opencode.digest = fetched.digest;
+      const { update, cursor } = applyOpencodeMessages(feed.state, fetched.messages, opencode.cursor);
+      opencode.cursor = cursor;
+      commit(feed, update);
+      await writeOpencodeCache(feed.ref, fetched.messages, now()).catch(cacheFailed(feed.ref));
+    });
+    opencode.queue = run.catch(() => {});
+    return run;
+  }
+
   function startCodexPoll(feed: SessionFeed): void {
     if (feed.codexPoll !== undefined || stopped) return;
     const timer = setInterval(() => {
@@ -1292,12 +1424,12 @@ export function createFeedService(
    * дошла до `maxItems` либо `maxBytes`. В первых двух случаях результат равен чтению файла целиком, в третьем
    * могут отличаться только самые старые элементы у края хвоста. `null` — читать нельзя (см. `readTranscript`).
    */
-  async function readFeedTail(file: string): Promise<FeedState | null> {
+  async function readFeedTail(file: string, context: 'root' | 'child' = 'root', mailJournal?: readonly MailJournalEntry[]): Promise<FeedState | null> {
     let bytes = seedTailBytes;
     for (;;) {
       const read = await readTranscript(file, bytes);
       if (read === null) return null;
-      const state = feedFromTranscript(stashClaude(read.records), { limit: maxItems });
+      const state = feedFromTranscript(stashClaude(read.records), { limit: maxItems, context, ...(mailJournal === undefined ? {} : { mailJournal }) });
       if (bytes >= read.size || read.records.length >= SEED_RECORD_WINDOW || state.items.length >= maxItems) return state;
       let total = 0;
       for (const item of state.items) {
@@ -1511,11 +1643,18 @@ export function createFeedService(
         flush(known);
         return;
       }
-    } else if (provider !== undefined && byFamily(provider, { claude: false, codex: false, qwen: true, neutral: false })) {
+    } else if (provider !== undefined && byFamily(provider, { claude: false, codex: false, qwen: true, opencode: false, neutral: false })) {
       const known = feedOf(ref);
       if (known.qwen !== undefined) {
         await reseedQwenIfRebound(known);
         await pollQwen(known);
+        flush(known);
+        return;
+      }
+    } else if (provider !== undefined && byFamily(provider, { claude: false, codex: false, qwen: false, opencode: true, neutral: false })) {
+      const known = feedOf(ref);
+      if (known.opencode !== undefined) {
+        await pollOpencode(known);
         flush(known);
         return;
       }
@@ -1573,7 +1712,7 @@ export function createFeedService(
       new HostError('not_found', `no transcript for agent ${agentId}`);
     if (!SAFE_AGENT_ID.test(agentId)) throw notFound();
     // Qwen Code has no subagent transcripts in the feed: never fall through to the Claude layout.
-    if (byFamily(sessionOf(ref).provider, { claude: false, codex: false, qwen: true, neutral: false })) throw notFound();
+    if (byFamily(sessionOf(ref).provider, { claude: false, codex: false, qwen: true, opencode: true, neutral: false })) throw notFound();
     if (sessionOf(ref).provider === 'codex') {
       const file = deps.activity.childLogFile(ref, agentId);
       if (file === null) throw notFound();
@@ -1582,6 +1721,7 @@ export function createFeedService(
       const { state } = feedFromCodexRollout(stashCodex(records), {
         limit: maxItems,
         historyStart: meta.historyStart,
+        context: 'child',
       });
       return {
         items: tailByBytes(state.items, maxBytes),
@@ -1593,7 +1733,7 @@ export function createFeedService(
     const base = deps.activity.logFile(ref) ?? feeds.get(refKey(ref))?.transcriptPath ?? null;
     if (base === null) throw notFound();
     const file = path.join(base.replace(/\.jsonl$/, ''), 'subagents', `agent-${agentId}.jsonl`);
-    const state = await readFeedTail(file);
+    const state = await readFeedTail(file, 'child');
     if (state === null) throw notFound();
     return {
       items: tailByBytes(state.items, maxBytes),
@@ -1616,7 +1756,7 @@ export function createFeedService(
     try {
       if (sessionOf(feed.ref).provider === 'codex') return;
       // Qwen Code has no feed cards to settle (approvals are answered in the terminal). Its journal going idle ends the turn.
-      if (byFamily(sessionOf(feed.ref).provider, { claude: false, codex: false, qwen: true, neutral: false })) {
+      if (byFamily(sessionOf(feed.ref).provider, { claude: false, codex: false, qwen: true, opencode: false, neutral: false })) {
         if (turnActive(feed.state.items)) {
           feed.qwenStoppedAt = at();
           void seedAside(feed.ref);
@@ -1870,6 +2010,39 @@ export function createFeedService(
 
   return {
     onHook,
+    opencodePoll(ref) {
+      const feed = feeds.get(refKey(ref));
+      if (stopped || feed === undefined || feed.opencode === undefined) return Promise.resolve();
+      return pollOpencode(feed).then(() => flush(feed));
+    },
+    async opencodeLastPoll(ref, server) {
+      try {
+        const id = opencodeSessionId(ref);
+        if (id === null) return;
+        const feed = feeds.get(refKey(ref));
+        const fetched = await fetchOpencodeMessages(server, id, opencodeFetch);
+        if (fetched === null) return;
+        // A feed in memory takes the same answer; the cache is written either way (the Chat may be closed).
+        if (feed?.opencode !== undefined && feed.opencode.digest !== fetched.digest && feedCurrent(feed)) {
+          feed.opencode.digest = fetched.digest;
+          const { update, cursor } = applyOpencodeMessages(feed.state, fetched.messages, feed.opencode.cursor);
+          feed.opencode.cursor = cursor;
+          commit(feed, update);
+          flush(feed);
+        }
+        await writeOpencodeCache(ref, fetched.messages, now());
+      } catch (error) {
+        cacheFailed(ref)(error);
+      }
+    },
+    delivered(ref, text, at) {
+      if (stopped) return;
+      const mail = mailFromInline(text, at);
+      if (mail === null) return;
+      const feed = feedOf(ref);
+      if (feed.state.items.some((item) => item.id === mail.id)) return;
+      commit(feed, { state: { ...feed.state, items: [...feed.state.items, mail] }, changes: [mail] });
+    },
 
     async progress(ref, client) {
       const parsed = sessionRef.safeParse(ref);
@@ -1919,7 +2092,7 @@ export function createFeedService(
       }
     },
 
-    async snapshot(ref, agentId, scope) {
+    async snapshot(ref, agentId, scope, client) {
       const startedAt = performance.now();
       const session = sessionOf(ref);
       if (agentId !== undefined) {
@@ -1941,11 +2114,14 @@ export function createFeedService(
         const seedStartedAt = performance.now();
         await seed(feed, session.provider, scope === undefined);
         seedMs = Math.round(performance.now() - seedStartedAt);
+      } else if (feed.opencode !== undefined) {
+        // OpenCode has no hooks: a snapshot of a seeded feed first takes what the server has by now.
+        await pollOpencode(feed);
       }
       // Накопленная пачка уходит до снимка: следующая дельта подписчику — ровно `revision + 1`.
       flush(feed);
       const snapshot: FeedSnapshot = {
-        items: scope === 'attention' ? attentionItems(feed.state.items) : [...feed.state.items],
+        items: scope === 'attention' ? attentionItems(feed.state.items) : mailFor(client, feed.state.items),
         revision: feed.revision,
         schemaVersion: FEED_SCHEMA_VERSION,
         mode: feed.state.permissionMode,
@@ -1979,7 +2155,7 @@ export function createFeedService(
       }
       clients.add(client);
       const subscribed = sessionOf(ref).provider;
-      if (!stopped && (subscribed === 'codex' || byFamily(subscribed, { claude: false, codex: false, qwen: true, neutral: false }))) startCodexPoll(feedOf(ref));
+      if (!stopped && (subscribed === 'codex' || byFamily(subscribed, { claude: false, codex: false, qwen: true, opencode: true, neutral: false }))) startCodexPoll(feedOf(ref));
     },
 
     unsubscribe(ref, client) {
@@ -2055,7 +2231,7 @@ export function createFeedService(
       deps.pty.write(ref, ESC);
       // У Codex приглашения `❯` и возвращённого в поле промпта нет: ход закроет запись `turn_aborted`.
       // Qwen Code: no `❯` prompt check as Claude's; the next transcript record or hook settles the turn.
-      if (sessionOf(ref).provider === 'codex' || byFamily(sessionOf(ref).provider, { claude: false, codex: false, qwen: true, neutral: false })) return;
+      if (sessionOf(ref).provider === 'codex' || byFamily(sessionOf(ref).provider, { claude: false, codex: false, qwen: true, opencode: true, neutral: false })) return;
       const feed = feeds.get(refKey(ref));
       // Хода в ленте нет — присматривать не за чем: Esc ушёл, остальное за CLI.
       if (stopped || feed === undefined || feed.state.turnStartedAt === null) return;

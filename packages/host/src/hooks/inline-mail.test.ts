@@ -303,3 +303,106 @@ describe('проводка приёмника хуков', () => {
     }
   });
 });
+
+describe('mail journal and the feed notice (spec 2026-11-12, M4)', () => {
+  const withNotice = (over: Partial<Parameters<typeof createInlineMail>[0]> = {}) => {
+    const mailJournal = vi.fn();
+    const delivered = vi.fn();
+    const made = make({ mailJournal, delivered, ...over });
+    return { ...made, mailJournal, delivered };
+  };
+
+  it('order: journal line, then the answer, then the feed notice', async () => {
+    await say('первое');
+    const order: string[] = [];
+    const { inline } = withNotice({
+      mailJournal: vi.fn(() => { order.push('journal'); }),
+      delivered: vi.fn(() => { order.push('delivered'); }),
+    });
+    const probe = hook(POINTER(1));
+    probe.request.respond = (json) => { order.push('answer'); probe.replies.push(json); };
+    inline.handle(probe.request);
+    await vi.waitFor(() => expect(order).toEqual(['journal', 'answer', 'delivered']));
+  });
+
+  it('journal and notice receive the same text and at', async () => {
+    await say('первое');
+    const { inline, mailJournal, delivered } = withNotice();
+    const probe = hook(POINTER(1));
+    inline.handle(probe.request);
+    await vi.waitFor(() => expect(probe.replies).toHaveLength(1));
+    const text = contextOfOutput(probe.replies[0])!;
+    expect(mailJournal).toHaveBeenCalledTimes(1);
+    expect(delivered).toHaveBeenCalledTimes(1);
+    const entry = mailJournal.mock.calls[0]![1] as { at: string; text: string };
+    expect(entry.text).toBe(text);
+    expect(delivered).toHaveBeenCalledWith(ref, text, entry.at);
+    expect(Number.isNaN(Date.parse(entry.at))).toBe(false);
+  });
+
+  it('neither is called for a non-pointer, empty mail, a stale agent, a late answer and an abandoned hook', async () => {
+    const { inline, mailJournal, delivered } = withNotice();
+    inline.handle(hook('сделай задачу').request);
+    const empty = hook(POINTER(1));
+    inline.handle(empty.request);
+    await vi.waitFor(() => expect(empty.replies).toHaveLength(1));
+
+    await say('письмо');
+    await updateMap(project, ref.workId, (map) => { map.sessions.find((session) => session.id === 's-02')!.agentRevision = 'rev-new'; });
+    const stale = hook(POINTER(1), 'UserPromptSubmit', 'rev-old');
+    inline.handle(stale.request);
+    await vi.waitFor(() => expect(stale.replies).toHaveLength(1));
+
+    let release: (() => void) | undefined;
+    const slow = withNotice({
+      context: (_ref, launch) => new Promise<McpContext>((resolve) => { release = () => resolve(contextOf(launch.agentRevision)); }),
+    });
+    const abandoned = hook(POINTER(1));
+    slow.inline.handle(abandoned.request);
+    abandoned.abandoned();
+    release!();
+    await settle();
+    await settle();
+
+    expect(mailJournal).not.toHaveBeenCalled();
+    expect(delivered).not.toHaveBeenCalled();
+    expect(slow.mailJournal).not.toHaveBeenCalled();
+    expect(slow.delivered).not.toHaveBeenCalled();
+  });
+
+  it('late (budget timer): neither is called', async () => {
+    vi.useFakeTimers();
+    await say('письмо');
+    let release: (() => void) | undefined;
+    const { inline, mailJournal, delivered } = withNotice({
+      context: (_ref, launch) => new Promise<McpContext>((resolve) => { release = () => resolve(contextOf(launch.agentRevision)); }),
+    });
+    const probe = hook(POINTER(1));
+    inline.handle(probe.request);
+    await vi.advanceTimersByTimeAsync(INLINE_MAIL_BUDGET_MS);
+    release!();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(mailJournal).not.toHaveBeenCalled();
+    expect(delivered).not.toHaveBeenCalled();
+  });
+
+  it('a throwing journal or a throwing notice still answers the hook with the letters', async () => {
+    await say('первое');
+    const boom = (): never => { throw new Error('disk full'); };
+    const { inline, delivered } = withNotice({ mailJournal: boom });
+    const probe = hook(POINTER(1));
+    inline.handle(probe.request);
+    await vi.waitFor(() => expect(probe.replies).toHaveLength(1));
+    expect(contextOfOutput(probe.replies[0])).toContain('первое');
+    expect(delivered).toHaveBeenCalledTimes(1);
+    expect(unread()).toBe(0);
+
+    await say('второе');
+    const second = withNotice({ delivered: boom });
+    const again = hook(POINTER(1));
+    second.inline.handle(again.request);
+    await vi.waitFor(() => expect(again.replies).toHaveLength(1));
+    expect(contextOfOutput(again.replies[0])).toContain('второе');
+    expect(unread()).toBe(0);
+  });
+});

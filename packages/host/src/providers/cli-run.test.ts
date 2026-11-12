@@ -15,6 +15,17 @@ describe('общий раннер CLI', () => {
     expect(await cli.exclusive('qwen', async () => 'third')).toBe('third');
   });
 
+  it('opencode has its own busy flag: a second install or update of it is busy, other CLIs are free', async () => {
+    const cli = createCliRun();
+    let release!: () => void;
+    const first = cli.exclusive('opencode', () => new Promise<void>((resolve) => (release = resolve)));
+    expect(await cli.exclusive('opencode', async () => 'second')).toEqual({ state: 'busy' });
+    expect(await cli.exclusive('qwen', async () => 'qwen')).toBe('qwen');
+    release();
+    await first;
+    expect(await cli.exclusive('opencode', async () => 'again')).toBe('again');
+  });
+
   it('разные CLI друг друга не блокируют', async () => {
     const cli = createCliRun();
     let release!: () => void;

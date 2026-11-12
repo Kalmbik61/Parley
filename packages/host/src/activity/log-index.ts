@@ -120,8 +120,8 @@ export interface LogIndex {
  * Чьи логи читает сессия: Codex — свои, всё прочее (Claude и его надстройки вроде GLM) — Claude Code.
  * Один и тот же нативный id у двух семейств друг друга не вытесняет.
  */
-const logFamily = (provider: string): 'codex' | 'claude' | 'qwen' | 'other' =>
-  byFamily(provider, { claude: 'claude' as const, codex: 'codex' as const, qwen: 'qwen' as const, neutral: 'other' as const });
+const logFamily = (provider: string): 'codex' | 'claude' | 'qwen' | 'opencode' | 'other' =>
+  byFamily(provider, { claude: 'claude' as const, codex: 'codex' as const, qwen: 'qwen' as const, opencode: 'opencode' as const, neutral: 'other' as const });
 const logKey = (provider: string, id: string): string => `${logFamily(provider)}\u0000${id}`;
 
 /**

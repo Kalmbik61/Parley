@@ -577,7 +577,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
         </ImagePreviewHost>
         {showCard ? <NotRunningCard sessionRef={sessionRef} onResume={() => resumeSession(bridge, sessionRef)} /> : null}
         {switchKind !== null && session !== undefined ? <SwitchBanner session={session} kind={switchKind} sessionRef={sessionRef} label={providerLabel} /> : null}
-        {showBanner ? <WaitingBanner workKey={workKey} tabId={tab.id} {...(providerInfo?.family === 'qwen' ? { text: S.chat.waitingBanner.qwenApproval } : {})} /> : null}
+        {showBanner ? <WaitingBanner workKey={workKey} tabId={tab.id} {...(providerInfo?.family === 'qwen' ? { text: S.chat.waitingBanner.qwenApproval } : providerInfo?.family === 'opencode' ? { text: S.chat.waitingBanner.opencodeApproval } : {})} /> : null}
         {trustCard === undefined ? null : <WaitingForTrust cardId={trustCard.id} testId="chat-waiting-for-trust" className="mx-3 mb-2" />}
         {showHooksHint ? (
           <div data-testid="codex-hooks-hint" className="mx-3 mb-2 flex min-w-0 items-center gap-2 rounded-lg bg-foreground/5 px-3 py-2 text-xs">
@@ -597,6 +597,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
           slashCommands={!codex}
           codex={codex}
           qwen={providerInfo?.family === 'qwen'}
+          opencode={providerInfo?.family === 'opencode'}
           onPickFiles={pickFiles}
           onPasteImage={pasteImage}
           dictationId={`chat:${sessionKey}`}

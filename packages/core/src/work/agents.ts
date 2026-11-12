@@ -129,15 +129,17 @@ export async function sessionRoleCatalog(cwd: string, options: SessionRoleCatalo
  * Qwen Code has its own (spec 2026-11-11, 3.6): `--session-id`, `--resume`, `--approval-mode`, `--append-system-prompt`
  * and `-m`, each with a value; no first-prompt flag (3.4 amendment). Anything else fails closed.
  */
-type RoleGrammar = 'claude' | 'codex' | 'qwen';
+type RoleGrammar = 'claude' | 'codex' | 'qwen' | 'opencode';
 const ROLE_VALUE_FLAGS: Readonly<Record<RoleGrammar, ReadonlySet<string>>> = {
   codex: new Set(['-c', '--config', '--model', '-a']),
   claude: new Set(['--session-id', '--resume', '--mcp-config', '--settings', '--append-system-prompt',
     '--dangerously-load-development-channels', '--model', '--effort', '--agent', '--disallowedTools']),
   qwen: new Set(['--session-id', '--resume', '--approval-mode', '--append-system-prompt', '-m']),
+  // OpenCode takes no role flags: its roles arrive through the session config (spec 2026-11-12), so any flag fails closed.
+  opencode: new Set(),
 };
 const roleGrammarOf = (entry: ProviderEntry): RoleGrammar =>
-  entry.id === 'codex' ? 'codex' : providerFamily(entry) === 'qwen' ? 'qwen' : 'claude';
+  entry.id === 'codex' ? 'codex' : providerFamily(entry) === 'qwen' ? 'qwen' : providerFamily(entry) === 'opencode' ? 'opencode' : 'claude';
 
 function nativeRolePairs(template: readonly string[], grammar: RoleGrammar): Map<string, string[]> | null {
   const codex = grammar === 'codex';
@@ -177,6 +179,14 @@ export function assertRoleDelivery(entry: ProviderEntry, choice: ResolvedRoleCho
   // отказ (спека 2026-10-21, 5.1). У других провайдеров песочница — всегда требование и по-прежнему отказывает.
   const sandboxRequired = choice.sandboxMode !== null
     && !(entry.id === 'codex' && choice.sandboxMode === 'workspace-write' && !choice.readOnly && choice.role?.source !== 'codex');
+  // OpenCode (spec 2026-11-12, 4.8, DO4): no native roles and no role flags. A read-only role is enforced by the deny rules
+  // of the per-session config (`opencodeRoleLaunch`), the role text travels with the session guidance, and the start mode
+  // is decided by `opencodeRoleLaunch` too, so the template carries no role channel to prove. A Claude or Codex native role
+  // does not carry over.
+  if (providerFamily(entry) === 'opencode') {
+    if (choice.nativeAgent !== null) throw new RoleChoiceError('role-permissions-unavailable');
+    return;
+  }
   for (const template of templates) {
     if (entry.id === 'codex' && (choice.readOnly || sandboxRequired)) {
       // Native flags can supersede sandbox_mode=-c. Refuse ambiguous custom delivery.
@@ -234,7 +244,7 @@ export async function roleForProvider(cwd: string, entry: ProviderEntry, role: S
     }
   };
   // Qwen Code has no native roles: a Claude or Codex role does not carry over (spec 2026-11-11, 3.6, D10).
-  const source = byFamily(entry, { claude: 'claude' as const, codex: 'codex' as const, qwen: null, neutral: null });
+  const source = byFamily(entry, { claude: 'claude' as const, codex: 'codex' as const, qwen: null, opencode: null, neutral: null });
   if (source === role.source) return await accepts(role, 'existing') ? role : null;
   if (source === null) return null;
   const sameName: SessionRole = { source, name: role.name };

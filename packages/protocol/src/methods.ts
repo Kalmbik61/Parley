@@ -475,7 +475,7 @@ export interface Results extends AssistantMethodResults, VoiceMethodResults, Car
        * Trusted built-in CLI family; older hosts omit this field, and an entry without a family (providers.json) is
        * `null`. A reader that meets a value it does not know treats it as neutral.
        */
-      family?: 'claude' | 'codex' | 'qwen' | null;
+      family?: 'claude' | 'codex' | 'qwen' | 'opencode' | null;
       // Три поля ниже необязательны, как `hello.methods`: хост переживает окно, а `PROTOCOL_VERSION`
       // остаётся 1, поэтому новое окно с хостом, оставшимся с живыми сессиями, получит элементы без
       // них. Нынешний хост отдаёт их всегда; нет поля — окно читает «контрола нет» и «версии нет».
@@ -523,6 +523,11 @@ export interface Results extends AssistantMethodResults, VoiceMethodResults, Car
        * settings file; the credential file and the env key are reported as presence only. A host before this field omits it.
        */
       qwenAuth?: QwenAuthHints | null;
+      /**
+       * OpenCode only (spec 2026-11-12, 4.12): how many integrations `opencode auth list` reports as connected. A count and
+       * nothing else; never stored, never a verdict. `null` — not known yet or the probe failed. A host before this field omits it.
+       */
+      opencodeAuth?: { connected: number } | null;
     }>;
   };
   'providers.setKey': { keyHint: string };

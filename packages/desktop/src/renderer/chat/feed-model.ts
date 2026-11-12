@@ -76,6 +76,15 @@ export function imagesExtraPx(item: FeedItem): number {
   return Math.ceil(count / THUMBS_PER_LINE) * THUMB_LINE_PX;
 }
 
+/** Оценка высоты доставки писем сверх обычной строки, px: на письмо — шапка и до шести строк, на остаток — строка. */
+const MAIL_LETTER_PX = 72;
+const MAIL_REMAINING_PX = 20;
+
+export function mailExtraPx(item: FeedItem): number {
+  if (item.kind !== 'mail') return 0;
+  return Math.max(0, item.letters.length - 1) * MAIL_LETTER_PX + (item.remaining === undefined ? 0 : MAIL_REMAINING_PX);
+}
+
 /** Первая непустая строка текста — сводка плана в карточке. */
 export function firstLine(text: string): string | null {
   const line = text.split('\n').find((candidate) => candidate.trim() !== '');

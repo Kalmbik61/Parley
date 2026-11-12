@@ -12,7 +12,7 @@
  * Applying a record twice changes nothing: every item id comes from the record uuid or the call id.
  */
 
-import { closeTurn, emptyFeedState, FeedDraft, finishTool, newText, newTool, limitText } from '../reduce.js';
+import { closeTurn, emptyFeedState, FeedDraft, finishTool, newText, newTool, limitText, putMail } from '../reduce.js';
 import { FEED_TEXT_LIMIT, type FeedPrompt, type FeedState, type FeedUpdate } from '../types.js';
 import { isQwenObject, type QwenRecord } from './transcript-record.js';
 
@@ -105,7 +105,9 @@ function onToolResult(draft: FeedDraft, record: QwenRecord): void {
     const item = draft.get(`tool:${id}`);
     if (item === undefined || item.kind !== 'tool') continue;
     const status = str(record.toolCallResult, 'status') === 'success' ? 'done' : 'failed';
-    draft.put(finishTool(item, status, responseOf(reply['response']), record.at));
+    const finished = finishTool(item, status, responseOf(reply['response']), record.at);
+    draft.put(finished);
+    putMail(draft, finished);
   }
 }
 

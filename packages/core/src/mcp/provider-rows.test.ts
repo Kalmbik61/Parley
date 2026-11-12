@@ -53,14 +53,15 @@ describe('fetchProviderRows (спека подписок 5.8, К7)', () => {
     ]);
   });
 
-  it('family: codex and qwen pass through; an unknown family is null (neutral)', async () => {
+  it('family: codex, qwen and opencode pass through; an unknown family is null (neutral)', async () => {
     const { agent } = await fakeHost(() => ok([
       { id: 'codex', label: 'Codex', family: 'codex', available: true },
       { id: 'qwen', label: 'Qwen', family: 'qwen', available: true },
+      { id: 'opencode', label: 'OpenCode', family: 'opencode', available: true },
       { id: 'x', label: 'X', family: 'mystery', available: true },
     ]));
     const rows = await fetchProviderRows(agent, new AbortController().signal);
-    expect(rows?.map((row) => row.family)).toEqual(['codex', 'qwen', null]);
+    expect(rows?.map((row) => row.family)).toEqual(['codex', 'qwen', 'opencode', null]);
   });
 
   it('null, когда порт закрыт', async () => {

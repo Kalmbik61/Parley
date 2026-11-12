@@ -75,6 +75,16 @@ describe('рукопожатие', () => {
     client.close();
   });
 
+  it('hello.features contains feed-opencode (the OpenCode Chat gate)', async () => {
+    const { home, token } = await boot();
+    const client = connectRaw(hostPaths(home).socket);
+    await waitConnected(client.socket);
+
+    const response = await hello(client, token);
+    expect((response.result as { features: string[] }).features).toContain('feed-opencode');
+    client.close();
+  });
+
   it('hello.features содержит rooms-mail', async () => {
     const { home, token } = await boot();
     const client = connectRaw(hostPaths(home).socket);

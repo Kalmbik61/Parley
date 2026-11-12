@@ -67,6 +67,9 @@ describe('openEvents', () => {
     const [claude] = (await openEvents(dir, 'claude').read(SESSION)) ?? [];
     expect(claude?.at).not.toBe(old);
     expect(claude?.atFromPayload).toBeUndefined();
+    // The OpenCode bridge writes the event's own time the same way (O6).
+    const [opencode] = (await openEvents(dir, 'opencode').read(SESSION)) ?? [];
+    expect(opencode).toMatchObject({ at: old, atFromPayload: true });
   });
 
   // Пункт 7.

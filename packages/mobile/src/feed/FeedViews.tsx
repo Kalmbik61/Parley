@@ -254,6 +254,9 @@ export const FeedItemView = memo(function FeedItemView({ item, msg }: { item: Fe
     case 'question':
     case 'plan':
       return item.state === 'pending' ? null : <Centered text={CARD_STATE_TEXT[item.state] ?? item.state} icon={item.state === 'denied' ? 'xmark.circle' : 'checkmark.circle'} />;
+    case 'mail':
+      // The phone does not announce `feed-mail`: no mail items reach it.
+      return null;
     case 'notice':
       return <Centered text={noticeText(item)} />;
     case 'error':

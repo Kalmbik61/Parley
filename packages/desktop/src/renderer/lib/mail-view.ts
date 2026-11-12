@@ -63,7 +63,7 @@ export function isUnreadFor(message: Message, sessionId: string, map: WindowWork
 }
 
 /** `ЧЧ:ММ`; битая дата — тире, как `formatClock` из `tui/src/format.ts`. */
-function formatClock(timestamp: string): string {
+export function formatClock(timestamp: string): string {
   const at = new Date(timestamp);
   return Number.isNaN(at.getTime()) ? '—' : at.toTimeString().slice(0, 5);
 }

@@ -19,11 +19,17 @@ import {
   FEED_IMAGE_PATH_LIMIT,
   FEED_IMAGES_PER_CALL,
   FEED_INPUT_LIMIT,
+  FEED_MAIL_FEATURE,
+  FEED_MAIL_TEXT_LIMIT,
   FEED_MIN_VERSION,
+  FEED_OPENCODE_FEATURE,
   FEED_PATCH_LINES,
   FEED_RESULT_LIMIT,
   FEED_SCHEMA_VERSION,
   FEED_TEXT_LIMIT,
+  OPENCODE_FEED_MIN_VERSION,
+  QWEN_FEED_MIN_VERSION,
+  FEED_QWEN_FEATURE,
   feedCardState,
   feedDecision,
   feedItem,
@@ -333,7 +339,15 @@ describe('пределы и версия', () => {
     expect(FEED_MIN_VERSION).toBe(core.FEED_MIN_VERSION);
     expect(CODEX_FEED_MIN_VERSION).toBe(core.CODEX_FEED_MIN_VERSION);
     expect(FEED_CODEX_FEATURE).toBe('feed-codex');
-    expect(FEED_SCHEMA_VERSION).toBe(3);
+    expect(FEED_QWEN_FEATURE).toBe('feed-qwen');
+    expect(QWEN_FEED_MIN_VERSION).toBe(core.PROVIDERS['qwen']?.runner.minVersion);
+    // OpenCode: the Chat feed needs the version the parsers were recorded on, not the lowest the launcher accepts.
+    expect(FEED_OPENCODE_FEATURE).toBe('feed-opencode');
+    expect(OPENCODE_FEED_MIN_VERSION).toBe('2.2.7');
+    expect(core.PROVIDERS['opencode']?.runner.minVersion).toBeDefined();
+    expect(FEED_SCHEMA_VERSION).toBe(4);
+    expect(FEED_MAIL_FEATURE).toBe('feed-mail');
+    expect(FEED_MAIL_TEXT_LIMIT).toBe(core.FEED_MAIL_TEXT_LIMIT);
   });
 
   it('карточка агента: вложенных вызовов не больше FEED_AGENT_CHILDREN', () => {
@@ -464,5 +478,65 @@ describe('feedItem: картинки результата инструмента
 
     expect(item?.kind === 'tool' && item.response?.images).toEqual([ref1]);
     expect(failures(update.changes)).toEqual([]);
+  });
+});
+
+describe('feedItem: mail (spec 2026-11-12)', () => {
+  const MAIL_FIXTURES = path.join(FIXTURES, 'mail');
+  const records = (file: string): Record<string, unknown>[] =>
+    readFileSync(path.join(MAIL_FIXTURES, file), 'utf8')
+      .split('\n')
+      .filter((line) => line.trim() !== '')
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+  const mailsOf = (items: readonly FeedItem[]): FeedItem[] => items.filter((item) => item.kind === 'mail');
+
+  const fromClaude = mailsOf(core.feedFromTranscript(records('claude-tools.transcript.jsonl') as never).items);
+  const fromCodex = mailsOf(
+    core.feedFromCodexRollout(
+      readFileSync(path.join(MAIL_FIXTURES, 'codex-mail.rollout.jsonl'), 'utf8')
+        .split('\n')
+        .map(core.parseRolloutLine)
+        .filter((record): record is NonNullable<typeof record> => record !== null),
+    ).state.items,
+  );
+  const fromQwen = mailsOf(
+    core.feedFromQwenTranscript(
+      readFileSync(path.join(MAIL_FIXTURES, 'qwen-mail.transcript.jsonl'), 'utf8')
+        .split('\n')
+        .map(core.parseQwenLine)
+        .filter((record): record is NonNullable<typeof record> => record !== null),
+    ).state.items,
+  );
+  const attachment = records('claude-inline.transcript.jsonl').find(
+    (record) => (record['attachment'] as { hookEvent?: string } | undefined)?.hookEvent === 'UserPromptSubmit',
+  );
+  const inline = core.mailFromInline(
+    (attachment?.['attachment'] as { content: string[] }).content[0]!,
+    '2030-01-05T10:00:00.050Z',
+  );
+
+  it('parses the mail items built from the Claude, Codex and Qwen fixtures and from an inline delivery', () => {
+    expect(fromClaude.length).toBe(3);
+    expect(fromCodex.length).toBe(2);
+    expect(fromQwen.length).toBe(2);
+    expect(inline).not.toBeNull();
+    for (const item of [...fromClaude, ...fromCodex, ...fromQwen, inline]) {
+      expect(feedItem.safeParse(item).success).toBe(true);
+    }
+  });
+
+  it('is strict: an extra field, an empty or oversized page, a bad kind or via and a long text are refused', () => {
+    const good = fromClaude[0] as Extract<FeedItem, { kind: 'mail' }>;
+    const letter = good.letters[0]!;
+    const refused = (patch: Record<string, unknown>) => feedItem.safeParse({ ...good, ...patch }).success;
+    expect(refused({ extra: 1 })).toBe(false);
+    expect(refused({ letters: [] })).toBe(false);
+    expect(refused({ letters: Array.from({ length: 51 }, () => letter) })).toBe(false);
+    expect(refused({ letters: [{ ...letter, kind: 'shout' }] })).toBe(false);
+    expect(refused({ letters: [{ ...letter, extra: 1 }] })).toBe(false);
+    expect(refused({ letters: [{ ...letter, text: 'x'.repeat(FEED_MAIL_TEXT_LIMIT + 1) }] })).toBe(false);
+    expect(refused({ via: 'read_room' })).toBe(false);
+    expect(refused({ remaining: 0 })).toBe(false);
+    expect(refused({})).toBe(true);
   });
 });

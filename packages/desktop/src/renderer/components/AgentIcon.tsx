@@ -22,6 +22,7 @@ import deepseekUrl from '../assets/providers/deepseek.svg';
 import kimiLightUrl from '../assets/providers/kimi-light.svg';
 import kimiUrl from '../assets/providers/kimi.svg';
 import minimaxUrl from '../assets/providers/minimax.svg';
+import opencodeUrl from '../assets/providers/opencode.svg';
 import openrouterLightUrl from '../assets/providers/openrouter-light.svg';
 import openrouterUrl from '../assets/providers/openrouter.svg';
 import parleyUrl from '../assets/providers/parley.svg';
@@ -85,6 +86,8 @@ function brandIcon(provider: string, dark: boolean, brand: 'claude' | 'codex' | 
       return claudeUrl;
     case 'codex':
       return dark ? codexLightUrl : codexUrl;
+    case 'opencode':
+      return opencodeUrl;
     default:
       // Плитки пресетов в диалоге своего провайдера передают id пресета.
       return isVendor(id) ? VENDOR_ICONS[id][dark ? 1 : 0] : null;

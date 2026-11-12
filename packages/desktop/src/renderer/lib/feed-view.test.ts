@@ -30,6 +30,20 @@ describe('feedAvailable by family', () => {
     expect(feedUnavailableReason({ hostMethods: FEED, provider: 'codex', family: 'codex', version: null, features: new Set() })).toBe('host-unsupported');
   });
 
+  it('the gate opens for family opencode with the host feature and a CLI at the OpenCode minimum; other features do not open it', () => {
+    const oc = new Set(['feed-opencode']);
+    expect(feedUnavailableReason({ hostMethods: FEED, features: oc, provider: 'opencode', family: 'opencode', version: '2.2.7' })).toBeNull();
+    expect(feedUnavailableReason({ hostMethods: FEED, features: oc, provider: 'opencode', family: 'opencode', version: '2.3.0' })).toBeNull();
+    expect(feedUnavailableReason({ hostMethods: FEED, features: oc, provider: 'opencode', family: 'opencode', version: '2.2.6' })).toBe('old-version');
+    expect(feedUnavailableReason({ hostMethods: FEED, features: oc, provider: 'opencode', family: 'opencode', version: null })).toBe('unknown-version');
+    expect(feedUnavailableReason({ hostMethods: FEED, features: new Set(['feed-qwen', 'feed-codex']), provider: 'opencode', family: 'opencode', version: '2.2.7' })).toBe('host-unsupported');
+    expect(feedUnavailableReason({ hostMethods: FEED, provider: 'opencode', family: 'opencode', version: '2.2.7' })).toBe('host-unsupported');
+  });
+
+  it('an opencode tab waits for the first providers snapshot instead of flashing the terminal', () => {
+    expect(feedAvailability({ hostMethods: FEED, features: new Set(['feed-opencode']), provider: 'opencode', family: 'opencode', version: null, loaded: false })).toBeNull();
+  });
+
   it('a qwen tab waits for the first providers snapshot instead of flashing the terminal', () => {
     expect(feedAvailability({ hostMethods: FEED, features: new Set(['feed-qwen']), provider: 'qwen', family: 'qwen', version: null, loaded: false })).toBeNull();
   });

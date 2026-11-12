@@ -907,6 +907,15 @@ describe('у codex нет хуков — предупреждений о них 
     await settle(300);
     expect(notices('hooks-missing')).toHaveLength(0);
   }, 20_000);
+
+  it('OpenCode has no Claude Code hooks: before its bridge writes the journal (no events/ yet) there is no hooks-missing', async () => {
+    await codexSession({ provider: 'opencode' });
+    const w = await works();
+    const a = activity(w);
+    await a.start();
+    await settle(300);
+    expect(notices('hooks-missing')).toHaveLength(0);
+  }, 20_000);
 });
 
 describe('startupWaitFromEnv — рычаг E2E', () => {

@@ -109,7 +109,10 @@ import {
   sessionMention,
   sessionTag,
   settleAttempt,
+  setResult,
   startSession,
+  OPENCODE_PASSWORD_ENV,
+  OPENCODE_SERVER_URL_SLOT,
   swarmOfSession,
   SYSTEM,
   ENGINE,
@@ -137,6 +140,9 @@ import type { HostContext } from '../context.js';
 import { HostError } from '../errors.js';
 import { serialized } from '../methods/custom-providers.js';
 import type { HookServer } from '../hooks/hook-server.js';
+import type { OpencodeBridge } from '../opencode/events.js';
+import type { OpencodeSupervisor } from '../opencode/server.js';
+import { createOpencodeSession } from '../opencode/create-session.js';
 import type { ProviderVersions } from '../providers/versions.js';
 import type { PtyHandle, PtyManager } from '../pty/pty-manager.js';
 import type { WorksService, WorksView } from '../works/works-service.js';
@@ -413,6 +419,14 @@ export interface SessionsFeedOptions {
   /** Замена агента сессии (спека 2026-10-30): службы застревания, будильника и лимитов. */
   takeover?: SessionsTakeoverOptions;
   /**
+   * OpenCode 2.x (spec 2026-11-12, 4.2): the per-session servers. A launch plan with `opencodeServer` starts its server
+   * here before the TUI; the TUI's exit stops it; a server that dies by itself fails the session and stops the TUI.
+   * Without it an OpenCode launch is refused.
+   */
+  opencode?: Pick<OpencodeSupervisor, 'start' | 'stop' | 'onExit'>;
+  /** OpenCode event bridge (spec 4.4, O6): attached once the TUI runs, detached before its server stops. */
+  opencodeEvents?: Pick<OpencodeBridge, 'attach' | 'detach'>;
+  /**
    * Потолок машины (спека ёмкости 2026-10-30, 4.2): `CapacityService` хоста. Тип структурный, как у `hooks` и `consents`:
    * сервис ёмкости сам зовёт `launch` сессий, и сессии его не импортируют. `admit` зовётся после бюджета работы и до
    * worktree; нет сервиса — допуска нет (изолированные тесты).
@@ -496,7 +510,7 @@ export function createSessionsService(
   activity: ActivityService,
   feed: SessionsFeedOptions = {},
 ): SessionsService {
-  const { hooks, providerVersions, capacity, endings } = feed;
+  const { hooks, providerVersions, capacity, endings, opencode, opencodeEvents } = feed;
   const spawnLimits = feed.spawnLimits ?? querySpawnLimits;
   const warned = new Set<string>();
   const creationWarnings = new Set<string>();
@@ -695,6 +709,11 @@ export function createSessionsService(
     feed.agent?.unregister(ref);
     const done = (starting.get(key) ?? Promise.resolve())
       .then(async () => {
+        // OpenCode: the server goes with its TUI (spec 4.2, Stop) — the last poll, then the group; never left behind.
+        opencodeEvents?.detach(ref);
+        await opencode?.stop(ref).catch((error: unknown) => {
+          host.log.error('opencode server did not stop with its session', { ref, error: String(error) });
+        });
         try {
           await finishExited(
             ref.projectPath,
@@ -733,6 +752,27 @@ export function createSessionsService(
     finalizing.set(key, done);
   });
 
+  // OpenCode: a server that dies while its TUI lives fails the session with a readable reason, and the TUI goes too
+  // (spec 2026-11-12, 4.2 "Server dies first"). The stop is quiet: the notice already tells the human why.
+  opencode?.onExit((ref, exit) => {
+    void (async () => {
+      const text = `${sessionTag(ref.sessionId)} failed: ${exit.reason}${exit.code === null ? '' : ` (exit code ${exit.code})`}. Resume it to start a new server.`;
+      try {
+        await updateMap(ref.projectPath, ref.workId, (map) => {
+          const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
+          if (session !== undefined && session.lifecycle !== 'closed') setResult(map, ref.sessionId, 'failed');
+        });
+      } catch (error) {
+        host.log.error('opencode session failure was not recorded', { ref, error: String(error) });
+      }
+      host.broadcast('host.notice', { kind: 'launch-failed', ref, text, at: new Date().toISOString() });
+      opencodeEvents?.detach(ref);
+      await stop(ref).catch((error: unknown) => {
+        host.log.error('opencode TUI did not stop after its server', { ref, error: String(error) });
+      });
+    })();
+  });
+
   /**
    * Адрес приёмника хуков для запуска — `claude` не ниже `FEED_MIN_VERSION` и `codex` не ниже
    * `CODEX_FEED_MIN_VERSION`, у Codex ещё и в режиме `parley` настройки `codexWriteApprovals` (хукам нужно доверие
@@ -740,7 +780,7 @@ export function createSessionsService(
    * (короткая, ждём её); нет версии, старый CLI и прочие провайдеры — без хуков, окно покажет терминал.
    */
   async function feedHookUrl(provider: string): Promise<string | undefined> {
-    const hooked = byFamily(provider, { claude: 'claude' as const, codex: 'codex' as const, qwen: 'qwen' as const, neutral: null });
+    const hooked = byFamily(provider, { claude: 'claude' as const, codex: 'codex' as const, qwen: 'qwen' as const, opencode: null, neutral: null });
     if (hooked === null || hooks === undefined || providerVersions === undefined) return undefined;
     const codex = hooked === 'codex';
     const url = hooks.url();
@@ -976,7 +1016,7 @@ export function createSessionsService(
       // Нет согласия — карточка и `held`; есть — ключи доверия считаются ниже, уже после создания worktree.
       let trusted = false;
       // Qwen Code has folder trust off by default (Q10): no consent screen to replace.
-      if (byFamily(session.provider, { claude: false, codex: true, qwen: false, neutral: false })) {
+      if (byFamily(session.provider, { claude: false, codex: true, qwen: false, opencode: false, neutral: false })) {
         trusted = await timer.step('trust', () => isTrusted(ref.projectPath));
         if (!trusted && feed.consents !== undefined) {
           const by = options.by ?? 'human';
@@ -1199,7 +1239,7 @@ export function createSessionsService(
 
       const { hookUrl, codexHookCommand } = await timer.step('hooks', async () => {
         const url = await feedHookUrl(session.provider);
-        const codexCommand = url !== undefined && byFamily(session.provider, { claude: false, codex: true, qwen: false, neutral: false })
+        const codexCommand = url !== undefined && byFamily(session.provider, { claude: false, codex: true, qwen: false, opencode: false, neutral: false })
           ? await feed.codexHookCommand?.() : undefined;
         return { hookUrl: url, codexHookCommand: codexCommand };
       });
@@ -1216,7 +1256,7 @@ export function createSessionsService(
       let projectMcp: { enabled: string[]; disabled: string[] } | undefined;
       // `.mcp.json` decisions go into Claude's `--settings` file; Qwen Code reads project MCP servers itself (its own
       // one-time approval, Q4), and Codex has no such file.
-      if (byFamily(entry, { claude: entry.runner.command === 'claude', codex: false, qwen: false, neutral: false }) && feed.projectMcp !== undefined) {
+      if (byFamily(entry, { claude: entry.runner.command === 'claude', codex: false, qwen: false, opencode: false, neutral: false }) && feed.projectMcp !== undefined) {
         const found = await timer.step('projectMcpFinal', () => feed.projectMcp!.inspect(session.workspace?.path ?? session.worktree?.path ?? ref.projectPath, { configDir: claudeConfigDirFor(entry, process.env) }));
         if (found.undecided.length > 0) {
           host.log.warn('project MCP: servers without a decision are disabled for this launch', { ref, servers: found.undecided.map((server) => server.name) });
@@ -1235,7 +1275,7 @@ export function createSessionsService(
             cwd: await trustKey(session.workspace?.path ?? session.worktree?.path ?? ref.projectPath),
           }
         : undefined;
-      const codexApprovals = byFamily(session.provider, { claude: false, codex: true, qwen: false, neutral: false })
+      const codexApprovals = byFamily(session.provider, { claude: false, codex: true, qwen: false, opencode: false, neutral: false })
         ? await timer.step('approvals', () => codexApprovalsFor(ref, session.provider))
         : undefined;
       const plan = await timer.step('plan', () => planFn(ref.projectPath, ref.workId, session, {
@@ -1331,13 +1371,40 @@ export function createSessionsService(
         const name = ownsHookToken(entry) ? 'PARLEY_HOOK_CAPABILITY' : 'PARLEY_HOOK_TOKEN';
         // Мост хука Codex (`codex-hook-bin`) читает адрес и токен из окружения процесса — у Claude они в файле настроек.
         // Qwen reads both from its system settings file, like Claude.
-        if (byFamily(session.provider, { claude: false, codex: true, qwen: false, neutral: false })) env['PARLEY_HOOK_URL'] = hookUrl;
+        if (byFamily(session.provider, { claude: false, codex: true, qwen: false, opencode: false, neutral: false })) env['PARLEY_HOOK_URL'] = hookUrl;
         env[name] = hooks.register(
           ref,
           plan.providerSessionId ?? session.providerSessionId,
           session.provider,
           plan.env['PARLEY_AGENT_REVISION'],
         );
+      }
+      // OpenCode (spec 4.2): the session's server first, then the TUI attached to it with the same password. The server
+      // gets the inherited launch environment plus its config documents; the address fills the plan's slot.
+      let args = plan.args;
+      let server: { url: string; password: string } | undefined;
+      if (plan.opencodeServer !== undefined) {
+        if (opencode === undefined) throw new HostError('bad_request', 'OpenCode sessions need the host server supervisor');
+        const serverEnv = plan.opencodeServer.env;
+        try {
+          server = await timer.step('opencode-server', () => opencode.start(ref, { binary: command, cwd: plan.cwd, env, serverEnv }));
+        } catch (error) {
+          if (hookUrl !== undefined) hooks?.unregister(ref);
+          host.broadcast('host.notice', {
+            kind: 'launch-failed', ref,
+            text: `session ${ref.sessionId} failed to launch: ${(error as Error).message}`,
+            at: new Date().toISOString(),
+          });
+          throw new HostError('bad_request', (error as Error).message);
+        }
+        // A NEW session is created on the server first: the TUI makes it only on its first prompt, and until then the brief
+        // would get 404 (spec 4.5). A resume finds its session already there.
+        if (mode !== 'resume' && plan.providerSessionId !== null && plan.providerSessionId !== undefined) {
+          await timer.step('opencode-session', () => createOpencodeSession(server!, plan.providerSessionId!, ref, host.log));
+        }
+        const url = server.url;
+        args = plan.args.map((arg) => (arg === OPENCODE_SERVER_URL_SLOT ? url : arg));
+        env[OPENCODE_PASSWORD_ENV] = server.password;
       }
       // `provider` — процессу не нужен, а хосту нужен: у codex состояние берётся из потока его терминала,
       // и ввод идёт своим порядком (спека комнат, 3.6).
@@ -1346,12 +1413,12 @@ export function createSessionsService(
       try {
         // The hook token and inherited host environment are now final. No PTY starts on guard failure.
         handle = await timer.step('spawn', async () => {
-          validateSpawnBudget(command, plan.args, env, await spawnLimits());
+          validateSpawnBudget(command, args, env, await spawnLimits());
           gitWriteGrants.set(key, Boolean(session.provider === 'codex' && !session.workspace && session.worktree &&
             plan.args.some(arg => arg.startsWith('sandbox_workspace_write.writable_roots='))));
           const spawned = pty.start(ref, {
             command,
-            args: plan.args,
+            args,
             cwd: plan.cwd,
             env,
             provider: session.provider,
@@ -1369,6 +1436,8 @@ export function createSessionsService(
         if (previousGitGrant === undefined) gitWriteGrants.delete(key);
         else gitWriteGrants.set(key, previousGitGrant);
         if (hookUrl !== undefined) hooks?.unregister(ref);
+        // The TUI did not start: its server has no one to serve.
+        if (plan.opencodeServer !== undefined) await opencode?.stop(ref).catch(() => {});
         const safe = (error as NodeJS.ErrnoException).code === 'E2BIG'
           ? new SpawnBudgetError('spawn-budget-too-large') : error;
         if (safe instanceof SpawnBudgetError) {
@@ -1376,6 +1445,18 @@ export function createSessionsService(
           throw new HostError('bad_request', safe.message, { code: safe.code, ...safe.details });
         }
         throw safe;
+      }
+      // OpenCode: the event bridge follows the server while this TUI lives (readiness needs the TUI alive).
+      const opencodeSession = plan.providerSessionId ?? session.providerSessionId;
+      if (server !== undefined && opencodeEvents !== undefined && opencodeSession !== null) {
+        const tui = handle;
+        opencodeEvents.attach(ref, {
+          url: server.url,
+          password: server.password,
+          sessionId: opencodeSession,
+          tuiAlive: () => pty.get(ref)?.pid === tui.pid,
+          source: mode === 'resume' && plan.providerSessionId === null ? 'resume' : 'startup',
+        });
       }
       const started = (async () => {
         try {

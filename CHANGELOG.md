@@ -4,6 +4,18 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
+## Unreleased
+
+### Added
+
+- **Delivered mail in the Chat view.** When Parley delivers messages to an agent, the recipient's Chat shows them as a mail card with the sender, kind, room and text, for Claude Code (both the delivery that arrives with the next prompt and the `check_inbox` / `wait_for` results), Codex (including calls made inside `exec`) and Qwen Code. The cards survive closing and reopening a session and restarting Parley, because Parley keeps a journal of delivered mail per session. They need a window and a host that both know the `feed-mail` feature, so the phone and older windows look the same as before.
+
+- **Qwen Code sessions start in `auto`.** Every new or resumed Qwen Code session starts with the approval mode `auto`; a mode you switch inside Qwen Code is not remembered, and `--yolo` is never used.
+
+- **Qwen Code model list from the CLI.** The model picker for Qwen Code is read from `qwen --acp` (at start, every six hours and after you sign in to Qwen Code) instead of a typed id only; it falls back to the typed id when the list is not available.
+
+- **OpenCode 2.x as a built-in provider.** Parley starts the official `opencode` CLI (2.0.0 or newer) in a terminal session attached to a private server that Parley runs for that session on 127.0.0.1, with Parley's tools, and shows it in the Chat view with its history (OpenCode 2.2.7 or newer). A sleeping session resumes the same conversation. OpenCode 1.x is never run: the card says "OpenCode 1.x found" and offers Install… for 2.x. Models come from `opencode models` (pick one when you start a session, or keep the default); read-only roles run with edit, shell, web and subagent tools denied. Settings → Providers → OpenCode shows how many providers `opencode auth list` reports as connected (sign in inside OpenCode with Connect provider, or run `opencode auth login --standalone`; the count is a hint and is never stored). Parley's tools are called from OpenCode's `execute` tool as `tools.parley.<name>()`. While a session runs, the unauthenticated `/health` and `/doc` pages of its local server answer on 127.0.0.1 (the web UI and the API description, no session data); every other route needs the session's password. OpenCode was verified against 2.2.7 with a mock model, not yet with a live model account.
+
 ## 0.34.0
 
 Qwen Code is now a built-in provider that runs the official `qwen` CLI, and the CLIs can be installed and updated from Settings → Providers. Qwen Code was verified against qwen 0.27.2 with a mock model, not yet with a live Qwen account.

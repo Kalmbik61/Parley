@@ -1,0 +1,1 @@
+{"data":{"id":"ses_labfull0001","projectID":"747b3e105a47bda604c9ab849640d988c4dd2f75","cost":0,"tokens":{"input":44,"output":28,"reasoning":0,"cache":{"read":0,"write":0}},"outcome":"succeeded","time":{"created":1794484501564,"updated":1794484501913,"busy":1794484501571,"idle":1794484501914},"location":{"directory":"/lab/work/proj"}}}

@@ -81,7 +81,7 @@ function wholeInside(bounds: { startedAt: string | null; endedAt: string | null 
 
 /** Ключ разговора для `sumUsage`: семейство логов и id у провайдера (эпоха не входит). */
 const conversationKey = (session: WorkSession): string =>
-  `${byFamily(session.provider, { claude: 'claude', codex: 'codex', qwen: 'qwen', neutral: 'other' })}\u0000${session.providerSessionId ?? session.id}`;
+  `${byFamily(session.provider, { claude: 'claude', codex: 'codex', qwen: 'qwen', opencode: 'other', neutral: 'other' })}\u0000${session.providerSessionId ?? session.id}`;
 
 /** Итог группы: никого не посчитали и никто не пропал — ноль; кто-то пропал — итог не полнее нижней границы. */
 function settle(total: UsageTotal, missing: boolean): UsageTotal {

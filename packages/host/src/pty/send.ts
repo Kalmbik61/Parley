@@ -6,7 +6,7 @@
  */
 
 import { performance } from 'node:perf_hooks';
-import { cleanMultiline, hookedSince, providerFamily } from '@parley/core';
+import { byFamily, cleanMultiline, hookedSince } from '@parley/core';
 import { refKey } from '@parley/protocol';
 import type { SendResult, SessionRef } from '@parley/protocol';
 import type { ActivityService } from '../activity/activity-service.js';
@@ -117,7 +117,8 @@ export function createSender(deps: {
     // сообщение раньше времени. Режима вставки нет — TUI ещё не поднялся, и писать в него нечего.
     // Qwen Code — always typed: LF is a newline in its field and only `\r` submits, while a large bracketed paste is
     // framed to its model as material that "issues no instructions of its own" (qwen 0.27.2, mock lab).
-    const qwen = handle.provider !== null && providerFamily(handle.provider) === 'qwen';
+    // OpenCode is not typed like Qwen: until its API delivery (O7) it keeps the plain/paste path.
+    const qwen = handle.provider !== null && byFamily(handle.provider, { claude: false, codex: false, qwen: true, opencode: false, neutral: false });
     if (codex ? !paste : clean.includes('\n') && !paste && !qwen) return refuse('no-paste-mode');
 
     // Черновик считается до вставки: человека или хоста от прошлой вставки без Enter.

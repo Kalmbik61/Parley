@@ -3,7 +3,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { LineDecoder } from '@parley/protocol';
+import { FEED_MAIL_FEATURE, LineDecoder } from '@parley/protocol';
 import { createHostLink, refKey } from './host-link.js';
 import type { HostLink } from './host-link.js';
 import { createLog } from './log.js';
@@ -139,6 +139,8 @@ describe('HostLink', () => {
       client: 'remote',
       features: ['compact-works', 'rooms-mail'],
     });
+    // The phone does not draw `mail` items (spec 2026-11-12 D2): the bridge must not announce `feed-mail`.
+    expect(stub.hellos[0]?.['features']).not.toContain(FEED_MAIL_FEATURE);
     const epoch1 = link.epoch;
     expect(link.activity.size).toBe(1);
 

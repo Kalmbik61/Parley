@@ -14,7 +14,7 @@
 
 import { useMemo } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import { CODEX_FEED_MIN_VERSION, FEED_CODEX_FEATURE, FEED_MIN_VERSION, FEED_QWEN_FEATURE, QWEN_FEED_MIN_VERSION, isCustomProviderId, refKey, type SessionRef } from '@parley/protocol';
+import { CODEX_FEED_MIN_VERSION, FEED_CODEX_FEATURE, FEED_MIN_VERSION, FEED_OPENCODE_FEATURE, FEED_QWEN_FEATURE, OPENCODE_FEED_MIN_VERSION, QWEN_FEED_MIN_VERSION, isCustomProviderId, refKey, type SessionRef } from '@parley/protocol';
 import type { TabSpec, TerminalView } from '../../shared/layout-types.js';
 import { useActivityStore, type ActivityEntry } from '../store/activity.js';
 import { useHostStore } from '../store/host.js';
@@ -28,7 +28,7 @@ export interface FeedAvailabilityInput {
   /** `WorkSession.provider`: встроенный или свой провайдер. */
   provider: string;
   /** Семейство текущей записи; нет поля у старого хоста — Claude только по id. */
-  family?: 'claude' | 'codex' | 'qwen' | null | undefined;
+  family?: 'claude' | 'codex' | 'qwen' | 'opencode' | null | undefined;
   /** Версия CLI провайдера из `providers.list`; `null` — неизвестна. */
   version: string | null;
 }
@@ -51,9 +51,12 @@ export function feedUnavailableReason({ hostMethods: methods, features, provider
   } else if (family === 'qwen') {
     // Qwen Code: the feed is built from its transcript; a host without the feature has no qwen branch.
     if (!features?.has(FEED_QWEN_FEATURE)) return 'host-unsupported';
+  } else if (family === 'opencode') {
+    // OpenCode: the feed is built from the messages API of the session's server; a host without the feature has no opencode branch.
+    if (!features?.has(FEED_OPENCODE_FEATURE)) return 'host-unsupported';
   } else if (family !== 'claude' && !(family === undefined && provider === 'claude')) return 'provider-unsupported';
   if (version === null || semver(version) === null) return 'unknown-version';
-  const min = provider === 'codex' ? CODEX_FEED_MIN_VERSION : family === 'qwen' ? QWEN_FEED_MIN_VERSION : FEED_MIN_VERSION;
+  const min = provider === 'codex' ? CODEX_FEED_MIN_VERSION : family === 'qwen' ? QWEN_FEED_MIN_VERSION : family === 'opencode' ? OPENCODE_FEED_MIN_VERSION : FEED_MIN_VERSION;
   return atLeast(version, min) ? null : 'old-version';
 }
 
@@ -82,7 +85,8 @@ export function feedAvailability(
       input.provider === 'codex' ||
       isCustomProviderId(input.provider) ||
       input.family === 'claude' ||
-      input.family === 'qwen')
+      input.family === 'qwen' ||
+      input.family === 'opencode')
   )
     return null;
   if (!input.loaded) return false;

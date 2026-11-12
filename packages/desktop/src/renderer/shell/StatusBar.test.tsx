@@ -241,6 +241,21 @@ describe('StatusBar — метка «↑» новой версии CLI (спек
     expect(el.getAttribute('title')).toBe('0.28.0 available');
   });
 
+  it('у OpenCode с update метка «↑» тоже есть, и сегмент стоит после Qwen Code', () => {
+    useProvidersStore.setState({
+      providers: [
+        provider({ id: 'opencode', label: 'OpenCode', version: '2.2.7', update: { ...update, latest: '2.3.0' } }),
+        provider({ id: 'qwen', label: 'Qwen Code', version: '0.27.2' }),
+      ],
+    });
+    const { container } = renderPlain();
+    const el = mark(container, 'opencode')!;
+    expect(el.textContent).toBe('↑');
+    expect(el.getAttribute('title')).toBe('2.3.0 available');
+    const ids = [...container.querySelectorAll('[data-provider-segment]')].map((node) => node.getAttribute('data-provider-segment'));
+    expect(ids).toEqual(['qwen', 'opencode']);
+  });
+
   it('без update, с update: null, у GLM и у недоступного провайдера метки нет', () => {
     useProvidersStore.setState({
       providers: [
