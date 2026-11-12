@@ -1008,7 +1008,7 @@ export function createSessionsService(
           const text = `${cause} Continue ${sessionMention(ref.sessionId)} ${back} again to keep the role; from there you can continue it on ${target} without the role.`;
           // Окно показывает текст хоста только у `role-missing` (у `launch-failed` — общий): тот же текст и туда.
           host.broadcast('host.notice', { kind: 'role-missing', ref, text, at: new Date().toISOString() });
-          throw new HostError('conflict', text);
+          throw new HostError('conflict', text, { reason: HOST_ERROR_REASONS.roleChange });
         }
         if (change !== null) {
           const after = roleAfter(change);

@@ -16,7 +16,7 @@
 import type { NeedKind } from '@parley/core';
 import { STATE_WORDS } from '@parley/core/session-state';
 import { providerLabel } from '@parley/core/stuck';
-import { CODEX_FEED_MIN_VERSION, FEED_MIN_VERSION, type FolderTrustCard, type HostNotice, type MailWait, type NoticeKind, type ProviderCheckReason } from '@parley/protocol';
+import { CODEX_FEED_MIN_VERSION, FEED_MIN_VERSION, HOST_ERROR_REASONS, type FolderTrustCard, type HostNotice, type MailWait, type NoticeKind, type ProviderCheckReason } from '@parley/protocol';
 import type { ContextKind } from './context-markdown.js';
 import type { IpcErrorInfo } from './ipc-error.js';
 
@@ -3334,6 +3334,8 @@ function budgetSettingName(reason: string, scope: string): string | null {
  */
 export function startErrorText(failure: IpcErrorInfo, action: string): string {
   const data = failure.data;
+  // Отказ из-за роли после замены агента (спека 2026-11-12, 2.6): текст хоста сам называет выход — показываем его.
+  if (failure.code === 'conflict' && data?.['reason'] === HOST_ERROR_REASONS.roleChange && failure.message !== '') return failure.message;
   if (data?.['code'] !== 'resource-budget') return errorText(failure.code, action);
   const B = S.errors.budget;
   const reason = typeof data['reason'] === 'string' ? data['reason'] : '';

@@ -1176,7 +1176,8 @@ describe('switchAgent: смена роли с подтверждением (сп
     notices.length = 0;
 
     const refusal = `Architect is a read-only role and does not run on Qwen Code. Continue ${sessionMention(ref.sessionId)} on Codex again to keep the role; from there you can continue it on Qwen Code without the role.`;
-    await expect(r.sessions.launch(ref, 'resume')).rejects.toThrow(refusal);
+    // F5: машинная метка — окно показывает текст хоста в тосте Resume.
+    await expect(r.sessions.launch(ref, 'resume')).rejects.toMatchObject({ code: 'conflict', message: refusal, data: { reason: 'role-change' } });
 
     expect(await mapFile()).toBe(before);
     expect(launches).toHaveLength(0);

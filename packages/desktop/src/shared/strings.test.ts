@@ -247,6 +247,13 @@ describe('errorText', () => {
 });
 
 describe('startErrorText — отказ запуска называет причину и что делать', () => {
+  it('отказ роли после замены агента (спека 2026-11-12, 2.6): текст хоста как есть; без метки — общий текст', () => {
+    const message = 'Architect is a read-only role and does not run on Qwen Code. Continue @s01 on Codex again to keep the role; from there you can continue it on Qwen Code without the role.';
+    expect(startErrorText({ code: 'conflict', message, data: { reason: 'role-change' } }, 'resume session')).toBe(message);
+    expect(startErrorText({ code: 'conflict', message }, 'resume session')).toBe("Couldn't resume session: conflicting state.");
+    expect(startErrorText({ code: 'conflict', message, data: { reason: 'busy' } }, 'resume session')).toBe("Couldn't resume session: conflicting state.");
+  });
+
   const refused = (data: Record<string, unknown>) => ({
     code: 'conflict',
     message: 'session limit reached: raw technical host text',
