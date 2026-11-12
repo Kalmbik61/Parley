@@ -823,6 +823,20 @@ describe('commandInPath', () => {
     expect(await commandInPath('qwen', { ...home, PARLEY_QWEN_BIN: path.join(dir, 'нет') })).toBe(false);
   });
 
+  it('opencode: probeCliVersion reads `opencode v2.2.7` and a bare 1.x version, and nothing from other output', async () => {
+    const bin = path.join(dir, 'oc');
+    await mkdir(bin, { recursive: true });
+    const script = path.join(bin, 'opencode');
+    const run = async (output: string): Promise<string | null> => {
+      await writeFile(script, `#!/bin/sh\necho '${output}'\n`, 'utf8');
+      await chmod(script, 0o755);
+      return probeCliVersion('opencode', 5000, { PARLEY_OPENCODE_BIN: script, PATH: '' });
+    };
+    expect(await run('opencode v2.2.7')).toBe('2.2.7');
+    expect(await run('1.19.5')).toBe('1.19.5');
+    expect(await run('opencode: warning 2.2.7 ignored')).toBeNull();
+  });
+
   it('неисполняемый файл и отсутствующая команда — нет в PATH', async () => {
     const file = path.join(dir, 'не-исполняемый');
     await writeFile(file, 'текст', 'utf8');

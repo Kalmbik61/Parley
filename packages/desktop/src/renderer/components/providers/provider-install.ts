@@ -41,16 +41,23 @@ export const INSTALL_CONFIRM = {
     // D3: установщик Qwen по умолчанию правит профиль оболочки.
     profile: true,
   },
+  opencode: {
+    command: 'curl -fsSL https://opencode.ai/v2/install | bash',
+    source: 'https://opencode.ai/v2/install',
+    // Not run during the spike: whether the installer edits the shell profile is unknown, so the confirmation says it may.
+    profile: true,
+  },
 } as const;
 
 export type InstallableId = keyof typeof INSTALL_CONFIRM;
 
 export function installableId(id: string): InstallableId | null {
-  return id === 'claude' || id === 'codex' || id === 'qwen' ? id : null;
+  return id === 'claude' || id === 'codex' || id === 'qwen' || id === 'opencode' ? id : null;
 }
 
 /** Обновление руками там, где хост ничего не запускает (спека §4.1): способ установки → команда. */
 export function manualUpdateCommand(id: string, method: string | null): string | null {
+  if (id === 'opencode') return method === 'brew' || method === 'unknown' ? 'npm install -g @opencode/cli@latest' : null;
   if (id !== 'qwen') return null;
   if (method === 'brew') return 'brew upgrade qwen-code';
   if (method === 'unknown') return 'npm install -g @qwen-code/qwen-code@latest';

@@ -49,7 +49,7 @@ beforeAll(async () => {
   );
   await writeFile(
     path.join(pki, 'leaf.cnf'),
-    'basicConstraints=CA:FALSE\nkeyUsage=digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\nsubjectAltName=DNS:claude.ai,DNS:downloads.claude.ai,DNS:evil.example,DNS:chatgpt.com,DNS:releases.openai.com,DNS:qwen-code-assets.oss-cn-hangzhou.aliyuncs.com\n',
+    'basicConstraints=CA:FALSE\nkeyUsage=digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\nsubjectAltName=DNS:claude.ai,DNS:downloads.claude.ai,DNS:evil.example,DNS:chatgpt.com,DNS:releases.openai.com,DNS:qwen-code-assets.oss-cn-hangzhou.aliyuncs.com,DNS:opencode.ai\n',
   );
   run('req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'ca.key', '-out', 'ca.pem', '-days', '2', '-config', 'ca.cnf');
   run('req', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'leaf.key', '-out', 'leaf.csr', '-subj', '/CN=parley-test-stub');
@@ -193,6 +193,30 @@ describe('установка CLI: успех', () => {
     const argv = (await readFile(path.join(home, 'installer-argv'), 'utf8')).trimEnd().split('\n');
     expect(argv.slice(1)).toEqual(['--method', 'standalone']);
     expect(path.basename(argv[0] as string)).toBe('install.sh');
+  });
+
+  it('opencode: константный argv без аргументов, бинарь в ~/.opencode/bin, версия `opencode vX.Y.Z`; реальный установщик не запускается', async () => {
+    // A stub installer in place of https://opencode.ai/v2/install: it writes ~/.opencode/bin/opencode and prints nothing else.
+    const body = `#!/bin/sh
+printf '%s\\n' "$0" "$@" > "$HOME/installer-argv"
+mkdir -p "$HOME/.opencode/bin"
+cat > "$HOME/.opencode/bin/opencode" <<'STUB'
+#!/bin/sh
+echo "$@" > "$HOME/smoke-args"
+echo "opencode v2.2.7"
+STUB
+chmod +x "$HOME/.opencode/bin/opencode"
+echo "installed opencode"
+`;
+    routes.set('opencode.ai/v2/install', { body });
+    const { instance, exec } = installer({ version: '2.2.7' });
+    expect(await instance.install('opencode', 'w')).toMatchObject({ ok: true, version: '2.2.7' });
+    const argv = (await readFile(path.join(home, 'installer-argv'), 'utf8')).trimEnd().split('\n');
+    expect(argv.slice(1)).toEqual([]);
+    expect(path.basename(argv[0] as string)).toBe('install.sh');
+    expect((await readFile(path.join(home, 'smoke-args'), 'utf8')).trim()).toBe('--version');
+    // Only the installer and the smoke probe ran: never `upgrade`.
+    expect(exec.mock.calls.map((call) => call[1])).not.toContainEqual(expect.arrayContaining(['upgrade']));
   });
 
   it('qwen: после установки status() уже знает способ (перепроверка дожидается до ответа)', async () => {
@@ -456,13 +480,14 @@ describe('установка CLI: занятость и платформа', () 
       manualCommand: 'irm https://claude.ai/install.ps1 | iex',
     });
     expect(await instance.install('qwen', 'w')).toMatchObject({ manualCommand: 'npm install -g @qwen-code/qwen-code@latest' });
+    expect(await instance.install('opencode', 'w')).toMatchObject({ manualCommand: 'npm install -g @opencode/cli@latest' });
     expect(requests).toEqual([]);
     expect(exec).not.toHaveBeenCalled();
   });
 
   it('команда не из таблицы — отказ без запуска', async () => {
     const { instance, exec } = installer();
-    await expect(instance.install('opencode' as 'qwen', 'w')).rejects.toThrow('unsupported');
+    await expect(instance.install('mystery' as 'qwen', 'w')).rejects.toThrow('unsupported');
     expect(exec).not.toHaveBeenCalled();
   });
 });

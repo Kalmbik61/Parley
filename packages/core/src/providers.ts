@@ -5,6 +5,7 @@ import path from 'node:path';
 import { CLAUDE_MODELS, CODEX_MODELS, GLM_MODELS, LEGACY_EFFORTS, effortLabel, type EffortOption, type ModelOption } from './provider-models.js';
 import { accountProviderEntry, customProviderEntry, customProvidersFile, isAccountRecord, isCustomProviderId, isManagedProviderId, readCustomProviders, type CustomAccountRecord, type CustomEndpointRecord, type CustomProviderRecord } from './custom-providers.js';
 import { readSecret, type SecretId } from './secrets.js';
+import { isOpenCodeLegacy, parseOpenCodeVersion } from './cli-tools.js';
 import { parseVersion } from './work/channel.js';
 import type { Provider } from './session-index.js';
 import { expectedRunnerBinary, overrideValue, resolveRunnerBinary } from './work/find-binary.js';
@@ -873,6 +874,8 @@ export async function probeCliVersion(command: string, timeoutMs = 3000, env: No
     const child = execFile(binary, ['--version'], {
       env, timeout: timeoutMs, killSignal: 'SIGKILL', windowsHide: true,
     }, (error, stdout) => {
+      // OpenCode prints `opencode v2.2.7` (2.x) or a bare `1.19.5` (1.x): its own parser keeps unknown output out.
+      if (command === 'opencode') return resolve(error === null ? parseOpenCodeVersion(stdout) : null);
       const version = error === null ? parseVersion(stdout) : null;
       resolve(version === null ? null : version.join('.'));
     });
@@ -948,6 +951,10 @@ export function providerReadinessError(entry: ProviderEntry, readiness: Provider
   // The CLI the version belongs to: Qwen Code has its own; every other versioned entry runs Claude Code.
   const cli = entry.family === 'qwen' ? entry.runner.command : 'Claude Code';
   if (readiness.needs === 'sign-in') return `${name} is not signed in: open Settings → Providers and press Sign in`;
+  // DO1: a 1.x OpenCode is found but never run; the card says what to do instead of a generic "newer required".
+  if (readiness.needs === 'cli' && entry.family === 'opencode' && readiness.version !== null && isOpenCodeLegacy(readiness.version)) {
+    return `OpenCode 1.x found (${readiness.version}); Parley supports 2.x: install OpenCode 2 and check again`;
+  }
   if (readiness.needs === 'cli') return entry.runner.minVersion === undefined
     ? `command ${entry.runner.command} is not in PATH — provider ${entry.id} is unavailable`
     : `${name} requires ${cli} ${entry.runner.minVersion} or newer; install or update the CLI and check again`;

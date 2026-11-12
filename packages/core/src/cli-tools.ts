@@ -3,7 +3,7 @@
  * установки, план обновления, план установки, разрешённые хосты редиректа, ожидаемый бинарь и проба. Только данные
  * и чистые функции: ни сети, ни файловой системы (наличие пути приходит параметром `exists`).
  */
-export type CliTool = 'claude' | 'codex' | 'qwen';
+export type CliTool = 'claude' | 'codex' | 'qwen' | 'opencode';
 export type CliInstallMethod = 'standalone' | 'npm' | 'brew' | 'native' | 'unknown';
 export type CliPlatform = 'posix' | 'win32';
 
@@ -13,7 +13,8 @@ export type CliLatestSource =
   | { kind: 'codex-brew' }
   /** `channel` — ключ в `dist-tags` (`latest` по умолчанию). */
   | { kind: 'claude-npm'; channel?: string }
-  | { kind: 'qwen-npm'; channel?: string };
+  | { kind: 'qwen-npm'; channel?: string }
+  | { kind: 'opencode-npm'; channel?: string };
 
 export type CliUpdatePlan =
   /** `<бинарь> <args…>`. */
@@ -52,6 +53,8 @@ export const LATEST_SOURCE_URLS = {
   'codex-brew': 'https://formulae.brew.sh/api/cask/codex.json',
   'claude-npm': 'https://registry.npmjs.org/-/package/@anthropic-ai/claude-code/dist-tags',
   'qwen-npm': 'https://registry.npmjs.org/-/package/@qwen-code/qwen-code/dist-tags',
+  // `latest` = 2.2.7 on 2026-11-12 (the 2.x line; `opencode-ai` is the 1.x package).
+  'opencode-npm': 'https://registry.npmjs.org/-/package/@opencode/cli/dist-tags',
 } as const;
 
 function norm(value: string): string {
@@ -144,4 +147,50 @@ const qwen: CliDescriptor = {
   },
 };
 
-export const CLI_TOOLS: Readonly<Record<CliTool, CliDescriptor>> = { claude, codex, qwen };
+const OPENCODE_NPM_COMMAND = 'npm install -g @opencode/cli@latest';
+
+/**
+ * Версия из вывода `opencode --version` (спека OpenCode, 4.9): 2.x печатает `opencode v2.2.7`, 1.x — голое `1.19.5`.
+ * Любая другая форма — `null`: неизвестный вывод версией не считается.
+ */
+export function parseOpenCodeVersion(output: string): string | null {
+  const match = /^\s*(?:opencode\s+v)?(\d+\.\d+\.\d+)\s*$/.exec(output);
+  return match === null ? null : (match[1] as string);
+}
+
+/** Строка 1.x: Parley поддерживает только 2.x (решение DO1), 1.x не запускается никогда. */
+export function isOpenCodeLegacy(version: string): boolean {
+  const major = Number(/^(\d+)\./.exec(version)?.[1]);
+  return Number.isFinite(major) && major < 2;
+}
+
+const opencode: CliDescriptor = {
+  tool: 'opencode',
+  latest: { kind: 'opencode-npm' },
+  expectedBinary: '.opencode/bin/opencode',
+  smokeArgs: ['--version'],
+  install: {
+    url: 'https://opencode.ai/v2/install',
+    interpreter: ['/bin/bash', '--noprofile', '--norc'],
+    args: [],
+    // Наблюдалось 2026-11-12 (`curl -sI`): 200 без редиректа.
+    redirectHosts: [],
+  },
+  installMethod(realBinary, home, exists) {
+    const path = norm(realBinary);
+    const root = homeRoot(home);
+    // Пакет npm кладёт настоящий бинарь в `@opencode/cli/bin/opencode.exe` или в платформенный пакет рядом.
+    if (path.includes('/node_modules/@opencode/')) return 'npm';
+    if (path.startsWith(`${root}/.opencode/bin/`)) return 'standalone';
+    if (path === `${root}/.opencode/bin/opencode` && exists(`${root}/.opencode`)) return 'standalone';
+    if (path.includes('/Cellar/opencode') || path.startsWith('/opt/homebrew/') || path.startsWith('/home/linuxbrew/.linuxbrew/')) return 'brew';
+    return 'unknown';
+  },
+  updatePlan(method) {
+    if (method === 'standalone') return { kind: 'run', args: ['upgrade', '--method', 'curl'] };
+    if (method === 'npm') return { kind: 'npm-bound', packageSpec: '@opencode/cli@latest', manualCommand: OPENCODE_NPM_COMMAND };
+    return { kind: 'manual', manualCommand: OPENCODE_NPM_COMMAND };
+  },
+};
+
+export const CLI_TOOLS: Readonly<Record<CliTool, CliDescriptor>> = { claude, codex, qwen, opencode };
