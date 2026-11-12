@@ -43,8 +43,11 @@ import {
   limitsFromConfig,
   prepareSessionRole,
   roleId,
-  roleForProvider,
+  roleChangeOnSwitch,
+  roleFromId,
   sessionRole,
+  sessionRoleCatalog,
+  type RoleChange,
   type SessionRole,
   type WorkSession,
   type RoleCatalog,
@@ -331,6 +334,11 @@ export interface SessionsService {
   /** Куда можно перевести сессию и что останется при ней (спека замены агента, 5.2, 6.10). */
   switchOptions(ref: SessionRef): Promise<Result<'sessions.switchOptions'>>;
   /**
+   * Как сменится роль сессии, если она продолжит на `provider` (спека 2026-11-12, 2.2): `null` — не сменится. Для
+   * карточки согласия на замену; неизвестный провайдер — `null`.
+   */
+  roleChangeFor(ref: SessionRef, provider: string): Promise<RoleChange | null>;
+  /**
    * Замена агента на месте (спека замены агента, 5.3): id, комнаты, дети, почта и worktree остаются, меняется
    * провайдер процесса. Повтор того же `requestId` — тот же ответ (6.13).
    */
@@ -352,6 +360,8 @@ export interface SwitchRequest {
   carry?: 'handover' | 'transcript';
   force?: boolean;
   by?: string;
+  /** Смена роли, которую видел человек (спека 2026-11-12, 2.3); обязательна, только когда теряется read-only. */
+  roleChange?: { from: string; to: string | null };
 }
 
 /**
@@ -983,15 +993,24 @@ export function createSessionsService(
       // Первым: отказ готовности провайдера не оставляет следа в карте, в том числе резерва бюджета.
       const entry = await timer.step('provider', () => readyProvider(session.provider, true));
 
-      // Первый запуск после замены: роль могла остаться чужой для провайдера (карта 0.32.0) или каталог ролей сменился
-      // между заменой и запуском. Та же проверка, что в `runSwitch`; роль чинится в карте до плана запуска.
+      // Первый запуск после замены: роль могла остаться чужой для провайдера (карта 0.32.0, замена 0.35.0) или каталог
+      // ролей сменился между заменой и запуском. Та же проверка, что в `runSwitch`; роль чинится в карте до плана запуска.
+      // Потерю read-only молча не чинит (спека 2026-11-12, 2.6–2.7): отказ называет выход, карта не тронута.
       if (awaitingAgent(session)) {
-        const roleCwd = session.workspace?.path ?? session.worktree?.path ?? ref.projectPath;
         const before = sessionRole(session);
-        const after = await timer.step('roleFit', async () =>
-          roleForProvider(roleCwd, entry, before, feed.roleCatalog ? await feed.roleCatalog(roleCwd) : undefined),
-        );
-        if (roleId(after) !== roleId(before)) {
+        const { change, catalog } = await timer.step('roleFit', () => roleChangeAt(roleCwd(ref, session), entry, before));
+        if (change?.readOnlyLost === true) {
+          const name = catalog?.roles.find((role) => role.id === change.from)?.name ?? change.from;
+          const last = session.previousAgents?.at(-1);
+          const back = last === undefined ? 'on another provider' : `on ${labelOf(await loadProviders(), last.provider)}`;
+          const target = providerLabel(entry);
+          throw new HostError(
+            'conflict',
+            `${name} is a read-only role and does not run on ${target}. Continue ${sessionMention(ref.sessionId)} ${back} again to keep the role; from there you can continue it on ${target} without the role.`,
+          );
+        }
+        if (change !== null) {
+          const after = roleAfter(change);
           await updateMap(ref.projectPath, ref.workId, (current) => {
             const record = current.sessions.find((candidate) => candidate.id === ref.sessionId);
             if (record === undefined) return;
@@ -1916,6 +1935,40 @@ export function createSessionsService(
   const awaitingAgent = (session: WorkSession): boolean =>
     (session.previousAgents?.length ?? 0) > 0 && session.providerSessionId === null;
 
+  /** Папка, по которой решается роль сессии: та же, что у плана запуска. */
+  const roleCwd = (ref: SessionRef, session: WorkSession): string => session.workspace?.path ?? session.worktree?.path ?? ref.projectPath;
+
+  /**
+   * Смена роли сессии на провайдере `entry` (спека 2026-11-12, 2.2) и каталог, по которому она решена: из него имя роли
+   * для уведомления. Каталог читается один раз, тот же, что у запуска.
+   */
+  async function roleChangeAt(
+    cwd: string,
+    entry: ProviderEntry,
+    role: SessionRole | null,
+  ): Promise<{ change: RoleChange | null; catalog: RoleCatalog | null }> {
+    if (role === null) return { change: null, catalog: null };
+    const catalog = feed.roleCatalog
+      ? await feed.roleCatalog(cwd)
+      : await sessionRoleCatalog(cwd, { codex: role.source === 'codex' || entry.id === 'codex', provider: entry });
+    return { change: await roleChangeOnSwitch(cwd, entry, providerLabel(entry), role, catalog), catalog };
+  }
+
+  const roleAfter = (change: RoleChange): SessionRole | null => (change.to === null ? null : roleFromId(change.to));
+
+  /** Одно уведомление о роли после замены (спека 2026-11-12, 2.5) — с любого клиента. */
+  function roleChangeNotice(ref: SessionRef, change: RoleChange, catalog: RoleCatalog | null, targetLabel: string): void {
+    const name = catalog?.roles.find((role) => role.id === change.from)?.name ?? change.from;
+    const next = roleAfter(change);
+    const after = next === null ? 'without a role' : `as ${next.name} (${next.source})`;
+    host.broadcast('host.notice', {
+      kind: 'role-missing',
+      ref,
+      text: `${sessionMention(ref.sessionId)} continues on ${targetLabel} ${after}: ${name} no longer applies${change.readOnlyLost ? ', and the read-only restriction is lifted' : ''}.`,
+      at: new Date().toISOString(),
+    });
+  }
+
   /** Агент продолжал разговор форком, а файла форка в папке его аккаунта нет: форк вышел до первой записи. */
   async function forkWithoutFile(session: WorkSession): Promise<boolean> {
     const last = session.previousAgents?.at(-1);
@@ -2162,15 +2215,21 @@ export function createSessionsService(
     }
     // Роль решается до любых изменений: роль прежнего семейства на цели не запускается (`--agent` или `-c agents` у
     // чужого CLI), и сессия осталась бы без старта. Отказ роли поглощается (`roleForProvider` ловит только его),
-    // любая другая ошибка обрывает замену, пока карта не тронута.
+    // любая другая ошибка обрывает замену, пока карта не тронута. Смена роли сверяется с тем, что видел человек
+    // (спека 2026-11-12, 2.3): потеря read-only без подтверждения и устаревшее подтверждение — отказ до записи `switching`.
     const previousRole = sessionRole(session);
-    const switchRole = await roleForProvider(
-      session.workspace?.path ?? session.worktree?.path ?? ref.projectPath,
-      entry,
-      previousRole,
-      feed.roleCatalog ? await feed.roleCatalog(session.workspace?.path ?? session.worktree?.path ?? ref.projectPath) : undefined,
-    );
-    const roleChanged = roleId(switchRole) !== roleId(previousRole);
+    const { change: roleChange, catalog: roleCatalog } = await roleChangeAt(roleCwd(ref, session), entry, previousRole);
+    if (roleChange !== null) {
+      const ack = request.roleChange;
+      if (ack !== undefined && (ack.from !== roleChange.from || ack.to !== roleChange.to)) {
+        throw new HostError('conflict', `The role change has changed since it was shown: ${roleChange.text} Open the dialog again.`);
+      }
+      if (ack === undefined && roleChange.readOnlyLost) {
+        throw new HostError('conflict', `${roleChange.text} Confirm the role change in the Parley window to continue.`);
+      }
+    }
+    const roleChanged = roleChange !== null;
+    const switchRole = roleChange === null ? previousRole : roleAfter(roleChange);
     // Свежая запись перед проверками занятости: за пробу версии CLI лимит мог сброситься, и будильник вернул агента
     // к работе — по старому снимку его погасили бы посреди хода без `force`.
     const current = (await readMap(ref.projectPath, ref.workId)).sessions.find((candidate) => candidate.id === ref.sessionId);
@@ -2272,6 +2331,7 @@ export function createSessionsService(
       });
       applied = true;
       pendingHandovers.set(key, handover);
+      if (roleChange !== null) roleChangeNotice(ref, roleChange, roleCatalog, targetLabel);
 
       const by = request.by ?? 'human';
       // Форка не будет: копия в папке цели убирается, привязка помечается пакетом передачи (5.4.1).
@@ -2361,6 +2421,15 @@ export function createSessionsService(
   const headroom = (limits: ProviderLimits | null): number =>
     limits === null ? -1 : 100 - Math.max(limits.fiveHour?.usedPercent ?? 0, limits.week?.usedPercent ?? 0);
 
+  async function roleChangeFor(ref: SessionRef, provider: string): Promise<RoleChange | null> {
+    const session = (await readMap(ref.projectPath, ref.workId)).sessions.find((candidate) => candidate.id === ref.sessionId);
+    if (session === undefined) return null;
+    const registry = await loadProviders();
+    const entry = Object.hasOwn(registry, provider) ? registry[provider] : undefined;
+    if (entry === undefined) return null;
+    return (await roleChangeAt(roleCwd(ref, session), entry, sessionRole(session))).change;
+  }
+
   async function switchOptions(ref: SessionRef): Promise<Result<'sessions.switchOptions'>> {
     const map = await readMap(ref.projectPath, ref.workId);
     const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
@@ -2387,6 +2456,24 @@ export function createSessionsService(
       }
     };
     const limitsOf = (id: string): ProviderLimits | null => feed.takeover?.limits?.(id) ?? null;
+    // Смена роли на каждой цели (спека 2026-11-12, 2.4): каталог читается один раз на вызов; цель, чью запись не
+    // прочитать, — `null`.
+    const role = sessionRole(session);
+    const cwd = roleCwd(ref, session);
+    let catalog: RoleCatalog | undefined;
+    try {
+      catalog = role !== null && feed.roleCatalog ? await feed.roleCatalog(cwd) : undefined;
+    } catch (error) {
+      host.log.warn('каталог ролей для замены агента не прочитался', { ref, error: String(error) });
+    }
+    const roleChangeOf = async (entry: ProviderEntry): Promise<RoleChange | null> => {
+      if (role === null) return null;
+      try {
+        return await roleChangeOnSwitch(cwd, entry, providerLabel(entry), role, catalog);
+      } catch {
+        return null;
+      }
+    };
 
     const targets: Result<'sessions.switchOptions'>['targets'] = [];
     for (const entry of Object.values(registry)) {
@@ -2400,6 +2487,7 @@ export function createSessionsService(
         needs,
         limits: limitsOf(entry.id),
         transcript: isClaudeAccount(session.provider, currentEntry) && isClaudeAccount(entry.id, entry),
+        roleChange: await roleChangeOf(entry),
       });
     }
 
@@ -2582,6 +2670,7 @@ export function createSessionsService(
     exclusive,
     setModel,
     switchOptions,
+    roleChangeFor,
     switchAgent,
     clearStaleSwitches,
     live: (ref) => pty.get(ref) !== undefined,

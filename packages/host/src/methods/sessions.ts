@@ -211,7 +211,7 @@ export function createSessionHandlers(deps: SessionMethodDeps): SessionHandlers 
 
     // Замена агента на месте (спека 2026-10-30, 5.2–5.3): правила, порядок и восстановление — в сервисе.
     sessionsSwitchOptions: async ({ ref }) => deps.sessions.switchOptions(ref),
-    sessionsSwitchAgent: async ({ ref, requestId, provider, model, effort, carry, force }) =>
+    sessionsSwitchAgent: async ({ ref, requestId, provider, model, effort, carry, force, roleChange }) =>
       deps.sessions.switchAgent(ref, {
         requestId,
         provider,
@@ -219,6 +219,7 @@ export function createSessionHandlers(deps: SessionMethodDeps): SessionHandlers 
         ...(model === undefined ? {} : { model }),
         ...(effort === undefined ? {} : { effort }),
         ...(force === undefined ? {} : { force }),
+        ...(roleChange === undefined ? {} : { roleChange }),
       }),
 
     sessionsResumeInterrupted: async (params) => {
