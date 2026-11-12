@@ -1,14 +1,18 @@
-# Mail in Chat and Qwen Code models: plan
+# Mail in Chat, Qwen approval mode and Qwen Code models: plan
 
-Spec: `docs/specs/2026-11-12-mail-in-chat-and-qwen-models-design.md` (revision 2).
+Spec: `docs/specs/2026-11-12-mail-in-chat-and-qwen-models-design.md` (revision 3).
 Branch: `parley/w-0054/s-345`. Lead: s-345. Owner: s-320. Room: r-28.
-Status: revision 2, after the critique of s-348 (spec appendix A). **No task starts before the human accepts the spec and decisions D1–D7.**
+
+Status: revision 3.
+- **Part M is accepted** as p-48 with D1–D8 (spec §7). M1 is done (3bafe473); M2 is in progress.
+- **Parts A and Q** (tasks A1, Q1, Q2) wait for critique and the human's acceptance of the second proposal. No code for them before that.
+- **Part O** (OpenCode) has its own documents.
 
 ## Rules for every task
 
 **Where.**
 - Work only in `/Users/kalmbik61/parley/worktrees/my_harnas-00f205/w-0054-s-345`. Never touch the main checkout `/Users/kalmbik61/Desktop/MY/my_harnas`.
-- One executor in the worktree at a time. No stash.
+- One executor in the worktree at a time. The docs copier commits with `git commit --only <path>`. No stash.
 
 **Scope.**
 - One task per executor at a time. Do not widen it.
@@ -22,76 +26,40 @@ Status: revision 2, after the critique of s-348 (spec appendix A). **No task sta
 - `pnpm typecheck`;
 - `pnpm lint`.
 
+Name every failing test. The known failures before this work are frame-check, launch.test (`CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS`) and usage-timeline (flaky). A new failure is the task's to fix.
+
 **Tests.**
 - Every behaviour change has a test.
-- Fixtures copy the *shape* of real records (spec §2.2) with invented content. No letter text, labels or paths from the human's real transcripts or rollouts go into the repository.
+- Fixtures copy the *shape* of real records (spec §2.2, §8.3) with invented content. No letter text, labels or paths from the human's real transcripts, rollouts or Qwen files go into the repository.
 
 **Review.** The lead reviews each task against its criteria before the next starts. The final review (R1) is by a senior model that wrote none of the code.
 
 **Seniority.**
-- Junior tasks: Claude Sonnet or Codex gpt-6.1-sol, chosen by the remaining weekly limit (2026-11-12: Claude 97 %, Codex 93 %).
-- One executor session takes M1–M5 in order: the same context, fewer sessions.
-- No task is senior-only unless the human picks D7 (b): its race fix (M-R) is senior-only, because it is concurrency in the feed service.
-- M4 touches the hook answer path and the Claude seed. Its criteria pin that the answer does not change, and the lead reviews those parts line by line.
+- Junior tasks: Claude Sonnet. Codex executors cannot write this worktree: their `workspace-write` sandbox covers only their own cwd.
+- One executor session (s-349) takes the tasks in order.
+- No task is senior-only. M4 and Q2 touch the hook answer path, the Claude seed and a child process; their criteria pin the behaviour, and the lead reviews those parts line by line.
 
 ## Order and shared files
 
 ```
-Part M: M1 → M2 → M3 → M4 → M5 → V1 → R1 (+ fixes and delta review)
-        [D7 (b) only: M-R, senior-only, between M4 and M5]
-Part Q: Q2a (done, spec §8) → [human signs in] → Q1/Q2b → Q2c (spec revision 3, critique, second proposal)
+Part M (accepted): M1 ✓ → M2 → M3 → M4 → M5
+Parts A, Q (after the second acceptance): A1 → Q2
+Then: V1 (M + A + Q, real app; includes Q1) → R1 (+ fixes and delta review)
 ```
 
-- Strictly sequential.
+- Strictly sequential. If the second proposal is not accepted when M5 ends, V1 runs for Part M alone, and V1-AQ runs later.
 - **Shared files:**
   - `core/src/feed/types.ts` (M1, M2);
   - `core/src/feed/reduce.ts` and `from-transcript.ts` (M2, M4);
   - `host/src/feed/feed-service.ts` (M3, M4);
-  - `desktop/src/renderer/chat/FeedList.tsx` (M1 stub, M5).
+  - `desktop/src/renderer/chat/FeedList.tsx` (M1 stub, M5);
+  - `core/src/providers.ts` (Q2);
+  - `core/src/work/launch.ts` (A1);
+  - `host/src/methods/providers.ts` (Q2).
 
-## Part M
+## Part M (accepted)
 
-### M1. Mail parser, types and fixtures (core)
-
-**Scope.**
-- **Record the shape first.** Record the real `response.text` that the feed holds for a Claude MCP tool result (`mcp__parley__check_inbox`), from the transcript and from a `PostToolUse` hook body (spec §2.2, [N]). Put the shape in the report.
-- **Types.** In `packages/core/src/feed/types.ts`, add `FeedMail` and `FeedMailLetter` (spec §3.1), add `FeedMail` to `FeedItem`, add `FEED_MAIL_TEXT_LIMIT` = 16 Ki, and export them from the core index.
-- **New `packages/core/src/feed/mail.ts`.**
-  - `mailFromInline(text, at)`: text that starts with `INLINE_MAIL_LINE` + `\n` + JSON. `via: 'pointer'`, `toolUseId: null`.
-  - `mailFromTool(tool)`: a `tool` item that is `done`, under the rule of spec §3.2(b). It unwraps raw JSON, an MCP `{content:[{type:'text', text}]}` object, and an array of text parts.
-  - Letters are validated field by field:
-    - an invalid letter is skipped; no valid letter means `null`;
-    - text longer than the limit is cut and gets `cut: true`;
-    - the letter named by the hint "Message <id> is cut" gets `cut: true`;
-    - `remaining` is copied;
-    - `id` is `mail:<first letter id>`.
-- **Stubs so typecheck stays green.**
-  - Desktop `FeedList` `ItemView`: `case 'mail': return null`.
-  - Mobile `FeedItemView`: `case 'mail': return null`.
-  - Any other exhaustive switch that typecheck flags gets the smallest neutral case. M5 replaces the desktop stub; the phone keeps its stub (D2).
-- **Fixtures** in `packages/core/src/feed/fixtures/mail/`:
-  - Claude transcript `attachment` `hook_additional_context`, plus one SessionStart attachment as a negative;
-  - Claude transcript `tool_use` + `tool_result` for `check_inbox` and for `wait_for {target:"inbox"}`;
-  - Claude `PostToolUse` body for both;
-  - Codex `event_msg/item_completed` `McpToolCall` for `check_inbox` and for `wait_for` (the `{state:"message", messages}` form);
-  - Qwen assistant `functionCall` + `tool_result` for `check_inbox` and for `wait_for {target:"inbox"}`;
-  - one Claude transcript with two overlapping tools (`wait_for` inbox A and another tool B; A finishes after B starts).
-
-**Files.** `core/src/feed/types.ts`, `core/src/feed/mail.ts` (new), `core/src/index.ts`, fixtures, `core/src/feed/mail.test.ts` (new), the stubs.
-
-**Criteria.**
-1. Every positive fixture gives the expected item. The test checks every field, including `via` and `toolUseId`.
-2. These give `null`:
-   - SessionStart context;
-   - text without `INLINE_MAIL_LINE`;
-   - `wait_for` with a session id target;
-   - `read_room`, `get_map` and any other tool;
-   - a `failed` tool;
-   - empty `messages`;
-   - malformed JSON;
-   - a response with `truncated: true`.
-3. Long text is cut with `cut: true`, the hint marks its letter `cut`, and an invalid letter is skipped.
-4. Tests, typecheck and lint pass. The report states the recorded Claude MCP response shape.
+### M1. Mail parser, types and fixtures (core) — done, 3bafe473
 
 ### M2. Feed reducers emit `mail` from tool results (core)
 
@@ -145,7 +113,7 @@ Part Q: Q2a (done, spec §8) → [human signs in] → Q1/Q2b → Q2c (spec revis
 **Scope.**
 - **Mail journal.** In `host/src/hooks/inline-mail.ts`, just before answering the hook with the letters, append `{at, text}` to `<work>/mail/<session>.jsonl`.
   - Create the directory when it is missing.
-  - A failed write is logged and does not change the answer.
+  - A failed write is logged and does not change the answer (D8).
   - The `ParleyInlineMail` line in `events/` stays as it is.
   - Check that nothing that globs `events/` or the work folder takes the new directory for sessions or hooks, and name the checked files in the report.
 - **Live item.** An optional `delivered(ref, text, at)` dependency, with the same `at` as the journal line.
@@ -171,10 +139,6 @@ Part Q: Q2a (done, spec §8) → [human signs in] → Q1/Q2b → Q2c (spec revis
 5. A reseed with an attachment and no journal line (a delivery from before this change) gives the item parsed from the attachment.
 6. The report gives the journal bytes per delivery and the seed time with and without the journal, on a fixture of 200 inline deliveries.
 7. Tests, typecheck and lint pass.
-
-### M-R. Restart race (only if the human picks D7 (b)). **Senior-only** (concurrency in the feed service)
-
-Seed cold history even when live hooks came first, and merge it with the live items by stable ids exactly once (backlog b-041). The task is specified in full only if D7 (b) is chosen.
 
 ### M5. Desktop Chat (desktop)
 
@@ -205,43 +169,83 @@ Seed cold history even when live hooks came first, and merge it with the live it
 4. The hello test includes `feed-mail`.
 5. Tests, typecheck and lint pass.
 
-### V1. Verification on the real app (builtin:verifier, junior, with the lead)
+## Part A (after the second acceptance)
+
+### A1. Qwen starts in `auto` (core)
+
+**Scope.**
+- In `core/src/work/launch.ts:538`, ordinary Qwen sessions get `subs.approvalMode = 'auto'` (or `auto-edit` if the human picks it in DA1), new and resumed. Autonomous workspaces keep `auto`.
+- `yolo` is never produced. Read-only roles are still refused, as today.
+- Update the comment at `core/src/providers.ts:626` and the D6 comment at `:473`.
+
+**Criteria.**
+1. Launch-argument tests: a new Qwen session and a resumed one both carry `--approval-mode auto`.
+2. No path produces `yolo` (a test over the launch variants).
+3. The read-only role refusal test is unchanged and passes.
+4. Tests, typecheck and lint pass.
+
+## Part Q (after the second acceptance)
+
+### Q2. Qwen model catalog from ACP (core + host)
+
+**Scope.**
+- **Core.**
+  - `qwenModelsFile()` beside `codexModelsFile()`.
+  - `loadProviders` reads it into the `qwen` entry's `models`, with the same validation and limits as the Codex file (`providers.ts:1150` onwards).
+  - No file or an invalid file: `models: null`, as today.
+- **Host.** New `host/src/providers/qwen-catalog.ts`, after `codex-catalog.ts`, per spec §8.4:
+  - the probe spawns `qwen --acp` (PATH or `PARLEY_QWEN_BIN`) with an empty temp `cwd` it creates and removes;
+  - it sends `initialize` and `session/new {cwd, mcpServers: []}` as JSON-RPC lines, reads `result.models.availableModels`, then kills the process group;
+  - timeout 15 s, output cap 1 MiB;
+  - it keeps entries with `_meta.isRuntime === false`, maps `id` = `_meta.baseModelId` and `label` = `name`, keeps the ACP order, and sets `efforts: null`;
+  - it starts at host start when `qwen` is installed, refreshes in the background from `providers.list` when the catalog is older than 6 h, and refreshes after `providers.signInExit` for `qwen`;
+  - a list that differs from the stored one is written atomically and fires `onChange`; a failure leaves the file alone.
+- **Wiring** in `host.ts` and `methods/providers.ts`, the way `codexCatalog` is wired.
+
+**Criteria.**
+1. Unit tests with a fake `qwen --acp` script (no real CLI and no network) cover:
+   - the three-model answer (an invented shape copy of spec §8.3 item 2), giving three `ModelOption`s in order with bare ids;
+   - an "Authentication required" error, a timeout, oversized output and malformed JSON: the stored file is untouched;
+   - runtime entries, which are dropped.
+2. A test that the probe passes no Parley settings file and opens no file under the Qwen home (it spawns only the CLI).
+3. `providers.list` shows the stored list for `qwen`. With no file, `models` is `null`.
+4. Refresh after 6 h and after `signInExit` (fake clock).
+5. Tests, typecheck and lint pass.
+
+## Verification and review
+
+### V1. Verification on the real app (builtin:verifier, Claude Sonnet, with the lead)
 
 **Scope.**
 - Build and run the desktop app from the branch, in the same way as V1 of the Qwen provider work (Playwright Electron).
-- Run spec §4 items 1–9. Use short sessions with tiny prompts, to save limits.
-- Restart Host for item 5 with the sessions idle, and open each Chat before the session's next hook (D7).
+- Use short sessions with tiny prompts, to save limits.
 - Save screenshots to the verifier's scratchpad.
+- **Part M.** Spec §4 items 1–9. For item 5, Restart Host with the sessions idle, and open each Chat before the session's next hook (D7).
+- **Parts A and Q.** Spec §9.4 items 1–4. Q1 (§8.5) with `qwen3.8-flash`:
+  - Chat thought and text;
+  - usage;
+  - resume;
+  - the TUI mode at start;
+  - the picker.
 - Measure:
   - the `mail` item bytes per delivery;
   - the mail journal bytes per inline delivery;
-  - the feed seed time of a long Claude transcript, before and after (base f5c32ebb vs. HEAD).
+  - the feed seed time of a long Claude transcript, before and after (base f5c32ebb vs. HEAD);
+  - the Qwen catalog probe time.
 
 **Criteria.**
-- Each §4 item is pass, fail or not verified, with a screenshot path or test name.
-- The Codex `exec` item (3) has a screenshot.
-- The Qwen item (4) follows D4.
+- Each item is pass, fail or not verified, with a screenshot path or test name.
+- The Codex `exec` item and the Qwen mail item have screenshots.
 
 ### R1. Independent review (senior, wrote none of the code)
 
-- **Reviewer.** The stage 1 critic s-348 (Codex gpt-6-astra) reviews the whole diff against the spec. If the Codex limit is hit, Claude Opus does it.
-- **Fixes.** The M executor makes the fixes. Then a delta review.
-
-## Part Q
-
-- **Q2a, done.** No code. Unsigned facts are in spec §8.2. The facts that need the account are in §8.3.
-- **Q1/Q2b.** Runs after s-320 says the human has signed in. The lead does it, read-only, with the human's real Qwen home:
-  - spec §8.3 items 1–4:
-    - only the single field `security.auth.selectedType` of `settings.json`, read with a field extraction (never print or copy the file);
-    - the ACP `session/new` `availableModels` probe;
-    - whether `qwen --model <id>` accepts that id in a short pty session;
-    - the timings;
-  - s-322's "Not verified" list: one short real turn for records, usage and resume. The quota error is recorded only if it happens; it is never provoked.
-  - It never reads `oauth_creds.json`, `subscription_credentials.json` or any key. The facts go into spec §8 through the docs copier.
-- **Q2c.** The catalog design becomes spec revision 3. Then a critique, then a second `propose_decision`. Q implementation tasks are planned only after that acceptance.
+- **Reviewer.** The critic s-348 (Codex gpt-6-astra) reviews the whole diff against the spec. If the Codex limit is hit, Claude Opus does it.
+- **Fixes.** The executor makes the fixes. Then a delta review.
 
 ## Out of this plan
 
-- `mail` on the phone (D2, the second option).
+- `mail` on the phone (D2).
 - A reply UI, and any change to delivery.
-- The restart race, unless D7 (b).
+- The restart race (D7, b-041).
+- Qwen effort (DQ2), unless the human picks the follow-up.
+- Part O (OpenCode): separate documents.
