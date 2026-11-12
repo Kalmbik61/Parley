@@ -3366,7 +3366,8 @@ export function startErrorText(failure: IpcErrorInfo, action: string): string {
  * вызывающей стороны (`store/notices.ts`), а человеку — текст по виду
  * уведомления. Слова — как у хоста, гида и README: письма — «messages»,
  * строка, которую хост набирает в терминал агента, — «pointer».
- * Исключение — тело macOS-уведомления `limit-return-blocked`: причину («…could not continue: a menu is open in its
+ * Исключение — `role-missing`: `noticeText` берёт английский текст хоста (смена роли при замене агента, спека 2026-11-12, 2.5);
+ * пустой текст — фраза ниже. Исключение — тело macOS-уведомления `limit-return-blocked`: причину («…could not continue: a menu is open in its
  * terminal», спека застрявших 7.4) знает только хост, и `attention/notify.ts` берёт его английский текст; фраза ниже —
  * запасная (строка статуса, пустой текст).
  */
@@ -3429,6 +3430,14 @@ function unmovedWorkDetail(text: string): string {
  * без него или с тем, что есть); без ярлыка — просто фраза с большой буквы.
  */
 export function noticeText(notice: HostNotice, label?: string): string {
+  // `role-missing`: the host's own sentence names the session, the provider and what changed (spec 2026-11-12, 2.5); it
+  // already carries the session mention, so the label is not added. An empty text falls back to the generic phrase below.
+  // Text with Cyrillic (an old host) is not shown: the window speaks English only.
+  const own = notice.kind === 'role-missing' ? notice.text.trim() : '';
+  if (own !== '' && !/[А-Яа-яЁё]/.test(own)) {
+    const text = own;
+    return /[.!?]$/.test(text) ? text : `${text}.`;
+  }
   const detail = notice.kind === 'map-migration-failed' ? unmovedWorkDetail(notice.text) : NOTICE_DETAIL[notice.kind];
   if (label === undefined) return `${detail.charAt(0).toUpperCase()}${detail.slice(1)}.`;
   return `${label}: ${detail}.`;

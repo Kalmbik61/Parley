@@ -340,6 +340,15 @@ describe('noticeText', () => {
     );
   });
 
+  it('role-missing shows the host text (the role change of a switch), the generic phrase when it is empty or not English', () => {
+    const ref = { projectPath: '/tmp/p', workId: 'w-01', sessionId: 's-02' };
+    const text = '@s02 continues on Qwen Code without a role: Architect no longer applies, and the read-only restriction is lifted.';
+    expect(noticeText({ ...hostNotice('role-missing', ref), text }, 'S02 architect')).toBe(text);
+    expect(noticeText({ ...hostNotice('role-missing', ref), text: '@s02 role claude:x does not run on Codex: it starts without a role' })).toBe('@s02 role claude:x does not run on Codex: it starts without a role.');
+    expect(noticeText({ ...hostNotice('role-missing', ref), text: '  ' })).toBe('Saved role is unavailable — this session starts without role defaults.');
+    expect(noticeText(hostNotice('role-missing', ref), 'S02')).toBe('S02: saved role is unavailable — this session starts without role defaults.');
+  });
+
   it('limit-return-blocked — лимит сброшен, а сессию вернуть не вышло (спека застрявших 7.1)', () => {
     expect(S.notifications.limitReturnBlocked).toBe('limit has reset');
     expect(noticeText(hostNotice('limit-return-blocked'))).toBe(
