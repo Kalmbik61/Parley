@@ -596,8 +596,8 @@ if (!gotLock) {
           readKey: () => readSecret('voice:openai'),
           log: (line) => console.warn('[parley]', line),
         });
-    // Выход приложения: отмена речи.
-    app.on('before-quit', () => tts.stop());
+    // Выход приложения: отмена речи. На `quit`, а не `before-quit`: отменённый вопрос о выходе не должен обрывать речь.
+    app.on('quit', () => tts.stop());
     // Настройки помощника — хосту для ответов из Telegram: при каждом подключении и сохранении ui.json.
     const mirrorModels = createModelStore({ dir: voiceModelsDir(), fetch: (url, init) => net.fetch(url, init), freeBytes });
     let hostMethods: readonly string[] | null = null;
@@ -786,7 +786,9 @@ if (!gotLock) {
     };
     // Start the legacy registry eagerly only for the existing legacy path.
     if (!worksBinding?.supported) activeRoots();
-    app.on('will-quit', () => { syncRoots?.dispose(); worksBinding?.dispose(); connection.close(); });
+    // `quit`, not `will-quit`: the quit guard answers its question on `will-quit` and a cancelled question keeps the app
+    // running, so the window must still be bound to the host then. `preventDefault` there does not stop other listeners.
+    app.on('quit', () => { syncRoots?.dispose(); worksBinding?.dispose(); connection.close(); });
 
     // E2E (`PARLEY_SHELL=log`): «открыть в приложении», «показать в Finder» и внешний адрес —
     // в журнал main, а не на экран человека (настоящие открыли бы приложение, Finder и браузер);
@@ -1001,7 +1003,8 @@ if (!gotLock) {
     // not touch a run in progress (the server-side commands outlive the app anyway, spec 7.3).
     app.on('quit', () => relaySetup.dispose());
     void remoteService.init();
-    app.on('before-quit', () => remoteService.dispose());
+    // Same reason: disposing on `before-quit` would leave a window that survives a cancelled exit without remote updates.
+    app.on('quit', () => remoteService.dispose());
     registerIpc({
       ipcMain,
       connection,
@@ -1183,7 +1186,8 @@ if (!gotLock) {
   });
 
   // Идущее распознавание не должно пережить приложение: `whisper-cli` — дочерний процесс окна, не хоста.
-  app.on('before-quit', killRunningEngines);
-  // Глобальное сочетание помощника не должно пережить приложение.
-  app.on('will-quit', () => globalShortcut.unregisterAll());
+  // Глобальное сочетание помощника не должно пережить приложение. Оба — на `quit`: вопрос о выходе (`guardAppQuit`) может
+  // быть отменён, и приложение продолжит работать с живым распознаванием и рабочим сочетанием.
+  app.on('quit', killRunningEngines);
+  app.on('quit', () => globalShortcut.unregisterAll());
 }
