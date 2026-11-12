@@ -368,6 +368,8 @@ export const S = {
     readOnly: 'Read only', unavailable: 'Role unavailable', providerLocked: 'Native roles use their own provider',
     /** New-session dialog: read-only roles on Qwen Code (spec 2026-11-11, 3.6). */
     readOnlyUnavailableOnQwen: 'Read-only roles are not available on Qwen Code yet',
+    /** New-session dialog: a read-only role on OpenCode (spec 2026-11-12, 4.8, DO4). */
+    opencodeReadOnlyNote: 'OpenCode read-only: no file edits, no shell. Parley tools stay allowed; execute can read the network.',
     option: (name: string, source: 'builtin' | 'claude' | 'codex'): string => `${name} · ${{ builtin: 'Builtin', claude: 'Claude', codex: 'Codex' }[source]}`,
     defaultEffort: (effort: string): string => `Default effort: ${effort}`,
   },
