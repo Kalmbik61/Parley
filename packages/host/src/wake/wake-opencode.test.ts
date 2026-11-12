@@ -44,7 +44,9 @@ let apiUp = true;
 let apiStatus = 202;
 /** `normal`: the turn is journaled after the answer (300 ms); `fast`: the whole turn is journaled BEFORE the answer returns; `batch`: the answer returns at once and the whole turn lands in the journal in ONE write 150 ms later (the fold sees no
  * `working`, only the end); `none`: no turn. */
-let apiTurn: 'normal' | 'fast' | 'batch' | 'none' = 'normal';
+let apiTurn: 'normal' | 'fast' | 'batch' | 'none' | 'late-queue' = 'normal';
+/** `late-queue`: inbox reads so far (the first finds nothing, the second finds the prompt queued). */
+let inboxReads = 0;
 let apiPosts: string[] = [];
 let apiUrl = '';
 const serverAddress = (): { url: string; password: string } | undefined => (apiUp ? { url: apiUrl, password: PASSWORD } : undefined);
@@ -75,14 +77,28 @@ beforeEach(async () => {
   apiStatus = 202;
   apiTurn = 'normal';
   apiPosts = [];
+  inboxReads = 0;
   const events = (): string => path.join(workPaths(project, currentWorkId()).events, `${currentSessionId()}.jsonl`);
   apiServer = createServer((req, res) => {
     let body = '';
     req.on('data', (chunk: Buffer) => (body += chunk.toString()));
     req.on('end', () => {
-      if (req.method !== 'POST') return void res.writeHead(404).end();
+      if (req.method !== 'POST') {
+        // `late-queue`: the server did queue the prompt, but the host learns it only from its second inbox read.
+        if (apiTurn === 'late-queue' && req.url?.endsWith('/inbox') === true) {
+          inboxReads += 1;
+          const found = inboxReads >= 2;
+          setTimeout(() => res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({
+            data: found ? [{ id: 'msg_late', type: 'user', time: { created: Date.now() }, payload: { text: apiPosts[0] }, delivery: 'steer' }] : [],
+          })), found ? 300 : 0);
+          return;
+        }
+        return void res.writeHead(404).end();
+      }
       const text = (JSON.parse(body) as { text: string }).text;
       apiPosts.push(text);
+      // `late-queue`: the POST never answers (the host times out: an ambiguous outcome).
+      if (apiTurn === 'late-queue') return;
       if (apiStatus < 300 && apiTurn === 'fast') {
         // The bridge is quicker than the answer: the turn starts and ends while the host still waits for the POST.
         void appendFile(events(), journalLine('UserPromptSubmit', { prompt: text }))
@@ -140,7 +156,7 @@ interface Rig {
   ready: () => void;
 }
 
-async function rig(env: NodeJS.ProcessEnv = {}, enterDelayMs = 300, extra: { pointerRearmMs?: readonly number[] } = {}): Promise<Rig> {
+async function rig(env: NodeJS.ProcessEnv = {}, enterDelayMs = 300, extra: { pointerRearmMs?: readonly number[]; pointerTimeoutMs?: number } = {}): Promise<Rig> {
   const map = await createWork(project, { title: 'Work' });
   let sessionId = '';
   await updateMap(project, map.work.id, (current) => {
@@ -291,6 +307,22 @@ describe('wake and opencode: delivery through the API', () => {
     // That turn is not the pointer's answer: the safety timer still fires, and the letter is pointed again after the rearm.
     await waitFor(() => timeouts() === 1, 8000);
     await waitFor(() => posts() >= 3, 8000);
+    expect(r.stream()).not.toContain('field:');
+  }, 30_000);
+
+  it('a queued prompt confirmed only after the safety timer: no pointer-timeout and no second POST of the pointer', async () => {
+    // Two POSTs that time out (400 ms each) and two inbox reads: the confirmation comes after the 800 ms safety timer.
+    apiTurn = 'late-queue';
+    const r = await rig({}, 300, { pointerTimeoutMs: 800, pointerRearmMs: [300] });
+    await r.letter();
+    const posts = (): number => apiPosts.filter((text) => text === POINTER).length;
+    await waitFor(() => inboxReads >= 2, 8000);
+    await waitFor(() => !r.wake.inFlight(r.ref), 8000);
+    // Well past the timer and the short rearm a false timeout would have scheduled.
+    await settle(1500);
+    expect(timeouts()).toBe(0);
+    // The original POST and sendOpencodePrompt's own single retry; no re-send of the pointer by the wake service.
+    expect(posts()).toBe(2);
     expect(r.stream()).not.toContain('field:');
   }, 30_000);
 });

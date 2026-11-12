@@ -1075,6 +1075,8 @@ export function createWakeService(
         )
       : typeNow(action.text);
     state.typing = typing;
+    // The safety timer came due while this API attempt was still unresolved.
+    let apiTimerDue = false;
     state.apiDelivery = mode === 'opencode';
     state.apiTurnSeen = false;
     state.apiAccepted = false;
@@ -1094,6 +1096,18 @@ export function createWakeService(
       // вечно — сигнала «письмо доставлено» без него не бывает вовсе.
       state.timeoutTimer = setTimeout(() => {
         state.timeoutTimer = undefined;
+        // An OpenCode API attempt still unresolved (an ambiguous POST, its inbox and message checks, a retry can outlast the
+        // timer): its outcome decides, not the clock. No notice and no rearm until it resolves (`apiTimerDue` below).
+        if (state.apiDelivery === true && state.typing === typing) {
+          apiTimerDue = true;
+          return;
+        }
+        pointerTimedOut();
+      }, pointerTimeoutMs);
+    }
+
+    /** The safety timer's verdict: the turn of an answered API delivery settles it; otherwise the pointer is lost. */
+    function pointerTimedOut(): void {
         // An API delivery whose turn already ran (its end may be the only trace) is answered, not lost.
         if (apiTurnHappened(state, activity.get(ref)?.activity)) {
           clearTimers(state);
@@ -1122,7 +1136,6 @@ export function createWakeService(
         } else {
           void enterBlocked(ref, state, `no turn after ${pointerRearmMs.length + 1} message pointers`);
         }
-      }, pointerTimeoutMs);
     }
 
     void typing.done.then((outcome) => {
@@ -1135,6 +1148,30 @@ export function createWakeService(
         if (outcome === 'submitted' && typing.viaApi?.() === true) state.apiAccepted = true;
         // The typed fallback is an ordinary typed attempt from here on: its turn is found by the usual `working` rule.
         else if (outcome === 'submitted') state.apiDelivery = false;
+      }
+      // The safety timer ran out while the API attempt was unresolved: decide now, once.
+      if (apiTimerDue && state.inFlight) {
+        apiTimerDue = false;
+        if (state.apiDelivery === true && state.apiAccepted === true) {
+          // The server has the prompt (found queued after an ambiguous answer): delivered, not lost; nothing to re-send.
+          clearTimers(state);
+          state.inFlight = false;
+          state.timeouts = 0;
+          recompute(ref);
+          return;
+        }
+        if (state.apiDelivery === true) {
+          // Not confirmed (cancelled): the usual timeout and rearm.
+          pointerTimedOut();
+          return;
+        }
+        // Typed fallback: the text reached the terminal only now, so its own safety window starts now.
+        if (outcome === 'submitted') {
+          state.timeoutTimer = setTimeout(() => {
+            state.timeoutTimer = undefined;
+            pointerTimedOut();
+          }, pointerTimeoutMs);
+        }
       }
       // OpenCode: the API took the prompt and its turn already began (and may have ended) before the answer came back. The
       // `working` event was seen while `typing` was set, so the check above skipped it; settle it here, not by the timer.
