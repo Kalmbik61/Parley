@@ -788,3 +788,54 @@ describe('ProviderCard: Qwen Code (spec 2026-11-11, 3.6)', () => {
     expect(document.querySelector('[data-qwen-auth]')).toBeNull();
   });
 });
+
+describe('ProviderCard: OpenCode (spec 2026-11-12, 4.9, 4.12)', () => {
+  const oc = (patch: Partial<Provider> = {}): Provider => ({
+    id: 'opencode', label: 'OpenCode', available: true, family: 'opencode', needs: null, version: '2.2.7', ...patch,
+  });
+  const show = (provider: Provider) => render(<ProviderCard provider={provider} onReload={async () => {}} onRestartHost={() => {}} />);
+  const hint = (): string => document.querySelector('[data-opencode-auth]')!.textContent ?? '';
+  const withInstall = (): void => {
+    useHostStore.setState({ status: { state: 'connected', hostVersion: '0.4.0', methods: [...REQUIRED_METHODS, 'providers.install'] } });
+  };
+
+  it('not installed: says so with the latest version, offers Install… and Check again, shows no sign-in hint', () => {
+    withInstall();
+    show(oc({ available: false, needs: 'cli', version: null, cli: { installed: false, latest: '2.2.7' } as never }));
+    expect(document.querySelector('[data-not-installed]')!.textContent).toBe('Not installed · latest 2.2.7');
+    expect(screen.getByRole('button', { name: 'Install…' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: S.providerCard.checkAgain })).toBeTruthy();
+    expect(document.querySelector('[data-opencode-auth]')).toBeNull();
+    expect(document.querySelector('[data-opencode-legacy]')).toBeNull();
+  });
+
+  it('1.x found: the legacy message with the version, Install… offered, no sign-in hint', () => {
+    withInstall();
+    show(oc({ available: false, needs: 'cli', version: '1.19.5' }));
+    expect(document.querySelector('[data-opencode-legacy]')!.textContent).toBe('OpenCode 1.x found (1.19.5); Parley supports 2.x. Install OpenCode 2 and check again.');
+    expect(document.querySelector('[data-not-installed]')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Install…' })).toBeTruthy();
+    expect(document.querySelector('[data-opencode-auth]')).toBeNull();
+  });
+
+  it.each([
+    ['signed out (0)', { connected: 0 }, 'signed-out', 'No connected provider found. Sign in inside OpenCode: Connect provider, or `opencode auth login --standalone` in a terminal'],
+    ['signed in (1)', { connected: 1 }, 'signed-in', '1 connected provider found'],
+    ['signed in (3)', { connected: 3 }, 'signed-in', '3 connected providers found'],
+    ['unknown (null)', null, 'unknown', 'No connected provider found. Sign in inside OpenCode'],
+  ])('installed 2.x, %s: the hint is shown with the note that it is not a verdict', (_name, opencodeAuth, state, expected) => {
+    show(oc({ opencodeAuth }));
+    expect(hint()).toContain(expected);
+    expect(hint()).toContain(S.providerCard.opencode.hintNote);
+    expect(document.querySelector('[data-opencode-auth]')!.getAttribute('data-opencode-auth')).toBe(state);
+    expect(document.querySelector('[data-not-installed]')).toBeNull();
+  });
+
+  it('a host without the field shows the unknown hint, never a claim; other providers show no OpenCode hint', () => {
+    show(oc());
+    expect(document.querySelector('[data-opencode-auth]')!.getAttribute('data-opencode-auth')).toBe('unknown');
+    cleanup();
+    show(glm());
+    expect(document.querySelector('[data-opencode-auth]')).toBeNull();
+  });
+});

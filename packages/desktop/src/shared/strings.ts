@@ -849,6 +849,8 @@ export const S = {
         none: 'No connected provider found. Sign in inside OpenCode: Connect provider, or `opencode auth login --standalone` in a terminal',
       },
       hintNote: 'This is a hint from `opencode auth list`, not a check that the sign-in works.',
+      /** A 1.x OpenCode is found (spec 2026-11-12, 4.9, DO1): never run, the card says what to do. */
+      legacy: (version: string): string => `OpenCode 1.x found (${version}); Parley supports 2.x. Install OpenCode 2 and check again.`,
     },
     copied: 'Copied',
     installationGuide: 'Installation guide',

@@ -32,6 +32,14 @@ describe('AgentIcon — брендовые значки (решение 6)', () 
     expect(imageOf(container)?.getAttribute('src')).toMatch(/codex-light\.svg$/);
   });
 
+  it('opencode — opencode.svg (нейтральная монограмма «Oc») в обеих темах, без буквы', () => {
+    const { container } = render(<AgentIcon provider="opencode" />);
+    expect(imageOf(container)?.getAttribute('src')).toMatch(/opencode\.svg$/);
+    expect(container.textContent).toBe('');
+    act(() => useUiStore.setState({ dark: true }));
+    expect(imageOf(container)?.getAttribute('src')).toMatch(/opencode\.svg$/);
+  });
+
   it('claude одинаков в обеих темах', () => {
     useUiStore.setState({ dark: true });
     const { container } = render(<AgentIcon provider="claude" />);
