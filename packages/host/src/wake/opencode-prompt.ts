@@ -43,8 +43,9 @@ export const OPENCODE_PROMPT_TIMEOUT_MS = 5000;
 export const OPENCODE_NOT_YET_MS = 5000;
 export const OPENCODE_NOT_YET_PAUSE_MS = 400;
 /**
- * A frozen server: each look can take two request timeouts (10 s). Two looks 2 s apart after the 5 s POST keep the
- * worst case of an attempt that never learns anything at about 27 s (the old POST, look, POST, look took 30 s).
+ * A frozen server: each look can take two request timeouts (10 s). A server that never answers: the 5 s POST and two looks
+ * 2 s apart, about 27 s (the old POST, look, POST, look took 30 s). The longest path: POST 5 s, an unanswered look 10 s,
+ * pause 2 s, a look that finds the text absent 10 s, the retry POST 5 s, then two looks again 22 s: about 54 s.
  */
 export const OPENCODE_LOOKS = 2;
 export const OPENCODE_LOOK_PAUSE_MS = 2000;
@@ -53,7 +54,10 @@ const SLACK_MS = 2000;
 const LATEST_MESSAGES = 20;
 
 type PostResult = 'accepted' | 'rejected' | 'refused' | 'ambiguous' | 'not-yet';
-/** `absent` — both lists answered and the text is in neither; `unknown` — a list gave no answer and the other lacks it. */
+/**
+ * `absent` — both lists answered (with any status) and neither has the text; `unknown` — a list got no answer at all (a
+ * timeout, a network error other than refused) and the other lacks it; `gone` — the connection was refused.
+ */
 type LookResult = 'present' | 'absent' | 'gone' | 'unknown';
 
 const isObject = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -110,17 +114,20 @@ export function sendOpencodePrompt(deps: OpencodePromptDeps, ref: SessionRef, te
     }
   }
 
-  async function getJson(address: OpencodeAddress, url: string): Promise<unknown | 'gone' | null> {
+  /** The body; `null` — the server answered, but not with a readable 200; `'silent'` — no answer at all; `'gone'` — refused. */
+  async function getJson(address: OpencodeAddress, url: string): Promise<unknown | 'gone' | 'silent' | null> {
+    let response: Response;
     try {
-      const response = await fetchImpl(url, { headers: headers(address), signal: AbortSignal.timeout(timeoutMs) });
-      if (response.status !== 200) return null;
-      return await response.json();
+      response = await fetchImpl(url, { headers: headers(address), signal: AbortSignal.timeout(timeoutMs) });
     } catch (error) {
-      return errorCode(error) === 'ECONNREFUSED' ? 'gone' : null;
+      return errorCode(error) === 'ECONNREFUSED' ? 'gone' : 'silent';
     }
+    if (response.status !== 200) return null;
+    // A body that is not JSON was still an answer; a body that stopped coming (the timeout) was not.
+    return response.json().catch((error: unknown) => (error instanceof SyntaxError ? null : 'silent'));
   }
 
-  /** Is our text queued in the inbox or already among the latest messages? `'gone'` — the server does not answer at all. */
+  /** Is our text queued in the inbox or already among the latest messages? See `LookResult`. */
   async function present(address: OpencodeAddress, id: string): Promise<LookResult> {
     const since = startedAt - SLACK_MS;
     const fresh = (item: Record<string, unknown>): boolean => {
@@ -130,23 +137,21 @@ export function sendOpencodePrompt(deps: OpencodePromptDeps, ref: SessionRef, te
     let known = true;
     const inbox = await getJson(address, `${base(address, id)}/inbox`);
     if (inbox === 'gone') return 'gone';
-    if (isObject(inbox) && Array.isArray(inbox['data'])) {
+    if (inbox === 'silent') known = false;
+    else if (isObject(inbox) && Array.isArray(inbox['data'])) {
       for (const item of inbox['data']) {
         if (isObject(item) && fresh(item) && isObject(item['payload']) && item['payload']['text'] === clean) return 'present';
       }
-    } else {
-      known = false;
     }
     // Cancelled during the inbox read: no further request.
     if (cancelled) return 'unknown';
-    const latest =await getJson(address, `${base(address, id)}/message?limit=${LATEST_MESSAGES}`);
+    const latest = await getJson(address, `${base(address, id)}/message?limit=${LATEST_MESSAGES}`);
     if (latest === 'gone') return 'gone';
-    if (isObject(latest) && Array.isArray(latest['data'])) {
+    if (latest === 'silent') known = false;
+    else if (isObject(latest) && Array.isArray(latest['data'])) {
       for (const item of latest['data']) {
         if (isObject(item) && item['type'] === 'user' && fresh(item) && item['text'] === clean) return 'present';
       }
-    } else {
-      known = false;
     }
     return known ? 'absent' : 'unknown';
   }

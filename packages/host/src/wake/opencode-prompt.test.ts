@@ -31,6 +31,8 @@ interface Fake {
   requests: Array<{ method: string; url: string; auth: string | undefined }>;
   /** How many of the next GETs (inbox and message reads) get no answer at all, like a frozen server: the client times out. */
   hangGets: number;
+  /** When set, every answered GET gets this status and no list (a running server that answers the reads with an error). */
+  getStatus?: number;
 }
 
 async function listen(behaviours: Behaviour[]): Promise<Fake> {
@@ -44,6 +46,7 @@ async function listen(behaviours: Behaviour[]): Promise<Fake> {
       fake.hangGets -= 1;
       return;
     }
+    if (req.method === 'GET' && fake.getStatus !== undefined) return void res.writeHead(fake.getStatus).end();
     if (req.method === 'GET' && url.pathname.endsWith('/inbox')) {
       res.setHeader('content-type', 'application/json');
       return void res.end(JSON.stringify({ data: fake.inbox.map((item) => ({ id: 'msg_i', time: { created: item.created }, type: 'user', payload: { text: item.text }, delivery: 'steer' })) }));
@@ -221,6 +224,26 @@ describe('sendOpencodePrompt', () => {
     expect(attempt.viaApi()).toBe(false);
   });
 
+  it('a 500 POST and looks the running server answers with 500: they count as answered without the text, so the one retry goes', async () => {
+    const fake = await listen(['error-unqueued', 'accept']);
+    fake.getStatus = 500;
+    const { fallback } = typing();
+    expect(await sendOpencodePrompt(deps(fake, { lookPauseMs: 20 }), REF, POINTER, fallback).done).toBe('submitted');
+    expect(fake.posts).toEqual([POINTER, POINTER]);
+    expect(fallback).not.toHaveBeenCalled();
+  });
+
+  it('a timed-out POST, looks answered 404 and a retry answered 404: typed once as session-not-found', async () => {
+    const fake = await listen(['hang', 'not-found']);
+    fake.getStatus = 404;
+    const info = vi.fn();
+    const { fallback } = typing();
+    await sendOpencodePrompt(deps(fake, { timeoutMs: 150, lookPauseMs: 20, log: { info, warn: () => {} } }), REF, POINTER, fallback).done;
+    expect(fake.posts).toEqual([POINTER, POINTER]);
+    expect(fallback).toHaveBeenCalledTimes(1);
+    expect(info).toHaveBeenCalledWith('opencode prompt: typed into the terminal', { ref: REF, reason: 'session-not-found' });
+  });
+
   it('cancel while waiting between looks: it ends at once and sends no further request', async () => {
     const fake = await listen(['hang']);
     fake.hangGets = Number.POSITIVE_INFINITY;
@@ -242,7 +265,9 @@ describe('sendOpencodePrompt', () => {
     const fake = await listen(['hang']);
     fake.hangGets = Number.POSITIVE_INFINITY;
     const { fallback } = typing();
-    const attempt = sendOpencodePrompt(deps(fake, { timeoutMs: 150, lookPauseMs: 20 }), REF, POINTER, fallback);
+    // 600 ms per request: the inbox read stays in flight long after it is seen, so `cancel()` lands well before the
+    // message read would go out.
+    const attempt = sendOpencodePrompt(deps(fake, { timeoutMs: 600, lookPauseMs: 20 }), REF, POINTER, fallback);
     // The POST timed out; the inbox read is in flight.
     await vi.waitFor(() => expect(fake.requests).toHaveLength(2), { timeout: 3000, interval: 5 });
     attempt.cancel();
