@@ -86,6 +86,7 @@ async function putLimits(
   fiveHour: number | null,
   week: number | null = null,
   resets: { fiveHour?: number; week?: number } = {},
+  changedAt?: number,
 ): Promise<void> {
   const rateLimits: Record<string, unknown> = {};
   if (fiveHour !== null) {
@@ -101,7 +102,11 @@ async function putLimits(
   await mkdir(dir, { recursive: true });
   // Как скрипт строки статуса: во временный файл и `rename` — хост узнаёт о записи по mtime каталога.
   const tmp = path.join(dir, `${sessionId}.json.tmp`);
-  await writeFile(tmp, JSON.stringify({ at: new Date(at).toISOString(), rateLimits }));
+  await writeFile(tmp, JSON.stringify({
+      at: new Date(at).toISOString(),
+      ...(changedAt === undefined ? {} : { changedAt: new Date(changedAt).toISOString() }),
+      rateLimits,
+    }));
   await rename(tmp, path.join(dir, `${sessionId}.json`));
   dirStamp += 10;
   await utimes(dir, 1_700_000_000 + dirStamp, 1_700_000_000 + dirStamp);
@@ -287,8 +292,9 @@ describe('Claude: файлы строки статуса', () => {
     const a = await work(projectA, ['claude', 'claude']);
     // Claude Code зовёт скрипт и по другим поводам (смена режима, /compact): `at` свежий,
     // числа прежние.
-    await putLimits(projectA, a.map, a.ids[0]!, T0 - 1000, 58, 41);
-    await putLimits(projectA, a.map, a.ids[1]!, T0 - 600_000, 61, 43);
+    // `changedAt` у неё старый: скрипт строки статуса не трогает его, пока числа те же.
+    await putLimits(projectA, a.map, a.ids[0]!, T0 - 1000, 58, 41, {}, T0 - 3_600_000);
+    await putLimits(projectA, a.map, a.ids[1]!, T0 - 600_000, 61, 43, {}, T0 - 600_000);
     const { limits } = service([{ project: projectA, map: a.map }]);
 
     await limits.start();
@@ -297,7 +303,19 @@ describe('Claude: файлы строки статуса', () => {
       fiveHour: { usedPercent: 61, resetsAt: new Date((sec(T0) + 3600) * 1000).toISOString() },
       week: { usedPercent: 43, resetsAt: new Date((sec(T0) + 86_400) * 1000).toISOString() },
       at: new Date(T0 - 1000).toISOString(),
+      changedAt: new Date(T0 - 600_000).toISOString(),
     });
+  });
+
+  it('сброс вендором посреди окна: файл без changedAt с 96 % и свежий с 10 % при равном сбросе → 10', async () => {
+    const a = await work(projectA, ['claude', 'claude']);
+    await putLimits(projectA, a.map, a.ids[0]!, T0 - 3_600_000, 30, 96);
+    await putLimits(projectA, a.map, a.ids[1]!, T0 - 60_000, null, 10);
+    const { limits } = service([{ project: projectA, map: a.map }]);
+
+    await limits.start();
+
+    expect(limits.get('claude')?.week?.usedPercent).toBe(10);
   });
 
   it('окно началось заново: побеждает окно с более поздним сбросом, а не сессия со свежим at', async () => {
@@ -328,16 +346,16 @@ describe('Claude: файлы строки статуса', () => {
     await putLimits(projectA, a.map, a.ids[0]!, T0 - 1000, 3, 40, {
       fiveHour: sec(T0) + 18_000,
       week: sec(T0) + 86_400,
-    });
+    }, T0 - 3_600_000);
     await putLimits(projectA, a.map, a.ids[1]!, T0 - 600_000, 70, 45, {
       fiveHour: sec(T0) + 1800,
       week: sec(T0) + 86_400,
-    });
+    }, T0 - 600_000);
     const { limits } = service([{ project: projectA, map: a.map }]);
 
     await limits.start();
 
-    // Пятичасовое — новое окно первой сессии; недельное — то же окно, где расход больше у второй.
+    // Пятичасовое — новое окно первой сессии; недельное — то же окно, числа которого менялись позже (у второй).
     expect(limits.get('claude')?.fiveHour?.usedPercent).toBe(3);
     expect(limits.get('claude')?.week?.usedPercent).toBe(45);
   });

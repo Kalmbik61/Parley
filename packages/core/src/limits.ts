@@ -25,6 +25,12 @@ export interface ProviderLimits {
   week: LimitWindow | null;
   /** Когда CLI отдал эти числа, ISO 8601: по нему хост выбирает самые свежие. */
   at: string;
+  /**
+   * Когда числа сессии в последний раз действительно изменились, ISO 8601 (пишет скрипт строки
+   * статуса). Простаивающая сессия обновляет `at`, но не `changedAt`; нет поля (старые файлы,
+   * Codex, Z.ai) — для сравнения берётся `at`.
+   */
+  changedAt?: string;
   /** Подтверждённая квота Z.ai, а не лимиты claude.ai из общей строки статуса. */
   source?: 'zai';
 }
@@ -67,7 +73,11 @@ export function limitWindow(usedPercent: unknown, resetsAtSec: unknown): LimitWi
  * `used_percentage` и `resets_at`. Окна приходят по отдельности; `spend_limit` шлюза —
  * не подписка, и его здесь нет. Ни одного окна — `null`.
  */
-export function claudeLimits(rateLimits: unknown, at: string): ProviderLimits | null {
+export function claudeLimits(
+  rateLimits: unknown,
+  at: string,
+  changedAt?: string,
+): ProviderLimits | null {
   if (!isRecord(rateLimits)) return null;
   const window = (key: string): LimitWindow | null => {
     const raw = rateLimits[key];
@@ -75,11 +85,13 @@ export function claudeLimits(rateLimits: unknown, at: string): ProviderLimits | 
   };
   const fiveHour = window('five_hour');
   const week = window('seven_day');
-  return fiveHour === null && week === null ? null : { fiveHour, week, at };
+  return fiveHour === null && week === null
+    ? null
+    : { fiveHour, week, at, ...(changedAt === undefined ? {} : { changedAt }) };
 }
 
 /**
- * Файл сессии `{ at, rateLimits }`, как его пишет скрипт строки статуса: `rateLimits` — сырое
+ * Файл сессии `{ at, changedAt?, rateLimits }`, как его пишет скрипт строки статуса: `rateLimits` — сырое
  * `rate_limits` из входа Claude Code. Файл пишет процесс агента, поэтому ему не доверяем:
  * битое — `null`, а не ошибка.
  */
@@ -93,7 +105,10 @@ export function parseLimitsFile(text: string): ProviderLimits | null {
   if (!isRecord(data) || typeof data['at'] !== 'string') return null;
   const at = new Date(data['at']);
   if (Number.isNaN(at.getTime())) return null;
-  return claudeLimits(data['rateLimits'], at.toISOString());
+  // Битый `changedAt` — как отсутствующий: сравнение откатится на `at`.
+  const changed = typeof data['changedAt'] === 'string' ? new Date(data['changedAt']) : null;
+  const changedAt = changed === null || Number.isNaN(changed.getTime()) ? undefined : changed.toISOString();
+  return claudeLimits(data['rateLimits'], at.toISOString(), changedAt);
 }
 
 /**
@@ -124,40 +139,66 @@ export async function readWorkLimits(workDir: string): Promise<Map<string, Provi
   return found;
 }
 
+/** Окно вместе с тем, откуда оно: когда сессия наблюдала эти числа и когда CLI их отдал. */
+interface Observed {
+  window: LimitWindow | null;
+  /** `changedAt ?? at` записи: когда числа последний раз действительно менялись. */
+  changed: string;
+  at: string;
+}
+
 /**
- * Одно окно из двух записей. Один и тот же сброс (`resetsAt` равен) — это одно окно, а расход в
- * окне не убывает, поэтому берётся большее `usedPercent`. Разный сброс — окно сменилось, берётся
- * то, что кончается позже.
+ * Одно окно из двух наблюдений. Разный сброс — окно сменилось, берётся то, что кончается позже.
+ * Один и тот же сброс — одно окно, и берётся то, чьи числа менялись позже: расход внутри окна
+ * обычно не убывает, но вендор может сбросить его посреди окна, оставив `resets_at`, и тогда
+ * большее `usedPercent` — устаревшее. Одинаковое время изменения — большее `usedPercent`.
+ * Неизвестный сброс упорядочить нельзя: берётся последнее наблюдение по `at`.
  */
-function laterWindow(a: LimitWindow | null, b: LimitWindow | null, preferB: boolean): LimitWindow | null {
-  if (a === null || b === null) return a ?? b;
-  // Неизвестный сброс нельзя упорядочить как дату: последнее наблюдение выбирает mergeLimits.
-  if (a.resetsAt === null || b.resetsAt === null) return preferB ? b : a;
-  const byReset = Date.parse(a.resetsAt) - Date.parse(b.resetsAt);
+function laterWindow(a: Observed, b: Observed): Observed {
+  if (a.window === null) return b.window === null ? a : b;
+  if (b.window === null) return a;
+  if (a.window.resetsAt === null || b.window.resetsAt === null) return b.at >= a.at ? b : a;
+  const byReset = Date.parse(a.window.resetsAt) - Date.parse(b.window.resetsAt);
   if (byReset !== 0) return byReset > 0 ? a : b;
-  return b.usedPercent > a.usedPercent ? b : a;
+  // ISO с миллисекундами в UTC: строки сравниваются как времена.
+  if (a.changed !== b.changed) return b.changed > a.changed ? b : a;
+  return b.window.usedPercent > a.window.usedPercent ? b : a;
 }
 
 /**
  * Сводит лимиты нескольких сессий одного провайдера в одно значение. «Самое свежее по `at`» не
  * годится: простаивающую сессию Claude Code зовёт по другим поводам (смена режима, `/compact`) с
- * прежними числами, и её свежий `at` перебил бы числа той, что действительно работала. Поэтому
- * каждое окно сводится отдельно (`laterWindow`), а `at` сводного значения — самое позднее из всех.
- * Пусто — `null`.
+ * прежними числами, и её свежий `at` перебил бы числа той, что действительно работала. «Большее
+ * `usedPercent`» тоже не годится: сброс лимита вендором посреди окна оставляет `resetsAt` и
+ * снижает расход. Поэтому каждое окно сводится отдельно (`laterWindow`) по `changedAt`, а `at`
+ * сводного значения — самое позднее из всех, `changedAt` — тоже. Пусто — `null`.
  */
 export function mergeLimits(all: readonly ProviderLimits[]): ProviderLimits | null {
   const [first, ...rest] = all;
   if (first === undefined) return null;
-  return rest.reduce<ProviderLimits>(
-    (merged, next) => ({
-      fiveHour: laterWindow(merged.fiveHour, next.fiveHour, next.at >= merged.at),
-      week: laterWindow(merged.week, next.week, next.at >= merged.at),
-      // `at` — ISO с миллисекундами в UTC: строки сравниваются как времена.
-      at: next.at > merged.at ? next.at : merged.at,
-      ...(merged.source === 'zai' && next.source === 'zai' ? { source: 'zai' as const } : {}),
-    }),
-    first,
-  );
+  const observe = (limits: ProviderLimits, key: 'fiveHour' | 'week'): Observed => ({
+    window: limits[key],
+    changed: limits.changedAt ?? limits.at,
+    at: limits.at,
+  });
+  const fold = (key: 'fiveHour' | 'week'): LimitWindow | null =>
+    rest.reduce(
+      (merged, next) => laterWindow(merged, observe(next, key)),
+      observe(first, key),
+    ).window;
+  const at = all.reduce((latest, item) => (item.at > latest ? item.at : latest), first.at);
+  const changedAt = all.reduce<string | undefined>((latest, item) => {
+    const changed = item.changedAt ?? item.at;
+    return latest === undefined || changed > latest ? changed : latest;
+  }, undefined);
+  const hasChanged = all.some((item) => item.changedAt !== undefined);
+  return {
+    fiveHour: fold('fiveHour'),
+    week: fold('week'),
+    at,
+    ...(hasChanged && changedAt !== undefined ? { changedAt } : {}),
+    ...(all.every((item) => item.source === 'zai') ? { source: 'zai' as const } : {}),
+  };
 }
 
 /**
