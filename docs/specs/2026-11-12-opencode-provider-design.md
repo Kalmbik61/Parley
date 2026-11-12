@@ -1,13 +1,14 @@
 # OpenCode 2.x as a built-in provider: design
 
-Status: revision 1, draft for critique. No application code before the human accepts.
+Status: revision 2, waiting for the human's decision. No application code before the human accepts.
+- Revision 1 (e4c18e56) was critiqued by s-348 (Codex gpt-6-astra, "revise": 1 blocker, 2 major, 1 minor). This revision answers every finding; the mapping is in appendix A.
 - Part O of room r-28. Lead s-345, owner s-320 (2026-11-12).
 - Plan: `docs/plans/2026-11-12-opencode-provider-plan.md`.
 - Branch: `parley/w-0054/s-345`, the same branch as Parts M, A and Q. Order in the branch: M, A, Q, then O. No push and no PR until the human says so.
 - Sources:
-  - the brief of s-320 (`part-o-opencode-brief.md`);
-  - the hands-on spike of s-350, on OpenCode 2.2.7 with a throwaway HOME, a mock model and a mock MCP server (`opencode-2x-spike.md`, 2026-11-12);
-  - the integration map of the Qwen provider work (docs/plans/2026-11-11-qwen-code-provider-and-cli-install-plan.md, appendix 1).
+  - the brief of s-320;
+  - the hands-on spike of s-350, on OpenCode 2.2.7 with a throwaway HOME, a mock model and a mock MCP server (`docs/research/2026-11-12-opencode-2x-spike.md`);
+  - the integration map of the Qwen provider work (`docs/plans/2026-11-11-qwen-code-provider-and-cli-install-plan.md`, appendix 1).
 
 ## 1. The request
 
@@ -56,7 +57,7 @@ Status: revision 1, draft for critique. No application code before the human acc
      - HTTP Basic, user `opencode`. A wrong or missing password gives 401, or a clear exit of the client.
      - `/health` and `/doc` are unauthenticated.
      - The password is passed only through env, so it is visible to the same user's `ps eww`.
-   - **API.** It has 139 operations (`/openapi.json`). `GET /api/info` gives the version, pid and URLs.
+   - **API.** It has 139 operations. `GET /api/info` gives the version, pid and URLs. The session inbox can be listed and cancelled (`/inbox`).
 6. **Lifecycle events [O].** SSE `GET /api/event`, one global stream per server. Every `session.*` event carries `sessionID`. For one turn:
    - `session.created`;
    - `session.inbox.enqueued` (prompt submitted);
@@ -91,6 +92,7 @@ Status: revision 1, draft for critique. No application code before the human acc
     - `auth list` signed out prints "No authenticated integrations". `--format json` prints `[]`.
     - `models` lists `provider/model` lines: 12 free `opencode/*` models, plus configured providers. It works offline.
 13. **Update [S].** `opencode upgrade [target] --method curl|npm|pnpm|bun|yarn|vp|brew|winget`. It was not run: it can call a global `npm install -g`.
+14. **[S] Parley today.** A host restart ends every session's pty: s-349 went to `sleeping` with exit code 129 at the 0.34.0 update (r-28 map, 2026-11-12). Sessions are later resumed by Parley.
 
 ## 3. Contract gaps and how Parley closes them
 
@@ -123,13 +125,26 @@ Status: revision 1, draft for critique. No application code before the human acc
 - **Start.** For each launch or resume, the host:
   1. picks a free loopback port;
   2. makes a 32-byte random password;
-  3. starts `opencode serve --hostname 127.0.0.1 --port <p>` as a child it owns, detached in its own process group, with `OPENCODE_SERVER_PASSWORD`, `OPENCODE_CONFIG_CONTENT`, `OPENCODE_CLI_CONFIG_CONTENT` and `OPENCODE_DISABLE_AUTOUPDATE=1`;
+  3. starts `opencode serve --hostname 127.0.0.1 --port <p>` as a child it owns, in its own process group, with `OPENCODE_SERVER_PASSWORD`, `OPENCODE_CONFIG_CONTENT`, `OPENCODE_CLI_CONFIG_CONTENT` and `OPENCODE_DISABLE_AUTOUPDATE=1`;
   4. waits for `GET /api/info` with Basic auth, within 15 s;
   5. starts the TUI in the pty with `--server http://127.0.0.1:<p>` and the same password in its env.
-- **Stop.** When the TUI exits, or the session sleeps or closes, the server group gets SIGTERM, then SIGKILL after 2 s, and Parley awaits the exit.
+- **Run record.** The host appends `{sessionRef, pid, pgid, startedAt}` of the server to `<parley-home>/run/opencode-servers.json`. The password and the port are never written.
+- **Stop.**
+  - When the TUI exits, or the session sleeps or closes, the host first makes one last transcript poll into the cache (§4.11).
+  - Then the server group gets SIGTERM, SIGKILL after 2 s, and Parley awaits the exit and removes the run record.
 - **Server dies first.** A server that dies while the TUI lives marks the session failed with a readable reason. The TUI is then stopped too.
-- **Never stored.** The password and port live only in host memory and in the two processes' env. They are never written to the map or the journal.
+- **Host dies first** (critique finding 1).
+  - A host restart ends the TUI with its pty, as for every family (§2.14). The server would survive it, because it is in its own group.
+  - So at start, before resuming any session, the host reads the run file. It kills every recorded group whose leader still runs the `opencode serve` command line (checked by `ps`, so no reused pid is killed), and clears the file.
+  - The session then resumes as usual: a new server, a new password, and the same `ses_` id. There is never a second server for one session, and no credentials survive the host.
+  - The history of the dead run is in OpenCode's own storage and is read by the new server.
+  - The last poll of the dead run may be missing from the cache until the new server is polled. This window is at most one poll interval.
+- **Never stored.** The password and port live only in host memory and in the two processes' env. They are never written to the map, the journal, the run file or logs.
 - **Port race.** Choosing a port by binding 0 and releasing it races with other processes. On "address in use" the host retries up to 3 times with a new port. Whether `serve --port 0` works and reports its port is **[N]**; if it does, the plan uses it instead.
+- **Exposure** (critique finding 4).
+  - The server binds 127.0.0.1 only. A test checks the bound address.
+  - The unauthenticated `/health` and `/doc` are fetched in a test. Their bodies must not contain the session id, the password, the working directory or the user name; a failure blocks release.
+  - What they return (version, API description, web UI) is listed in the docs as local exposure while a session runs.
 
 ### 4.3 Per-session config (`OPENCODE_CONFIG_CONTENT`)
 
@@ -151,15 +166,23 @@ Status: revision 1, draft for critique. No application code before the human acc
   - `permission.asked` → Notification (permission);
   - `session.execution.succeeded` / `.interrupted` → Stop;
   - `session.usage.updated` → context-fill facts.
-- **Own session only.** Events of other session ids on the same server are ignored. There is one server per Parley session, so there should be none.
+- **Own session only.** Events of other session ids on the same server are ignored.
 - **Readiness.** The session is ready when `/api/info` answers, `mcp.status.changed` reports `parley` connected, and the TUI process is alive. Then the deferred brief is sent (§4.5).
 - **Activity.** busy, idle and blocked follow from the mapped events, as for Qwen.
 
 ### 4.5 Brief, pointer and mail delivery
 
-- **Through the API.** The deferred brief, the mail pointer and the limit-return text are sent with `POST /api/session/{id}/prompt {text}`, not typed into the pty **[DO5]**.
-  - This needs no screen parsing and works while the TUI is busy: the server queues the prompt (`session.inbox.enqueued`).
-  - Fallback: if the API answers non-2xx, the host types into the pty, as for Qwen.
+- **Through the API.** The deferred brief, the mail pointer and the limit-return text are sent with `POST /api/session/{id}/prompt {text}`, not typed into the pty **[DO5]**. This needs no screen parsing and works while the TUI is busy: the server queues the prompt (`session.inbox.enqueued`).
+- **Fallback without duplicates** (critique finding 2). The host types into the pty only when the API **definitely** did not take the prompt:
+  - the connection was refused before the request was sent; or
+  - a 4xx answer named a rejection.
+
+  On an ambiguous outcome (timeout, reset after sending, 5xx), the host lists the session inbox (`/inbox`) and the latest messages:
+  - if the text is queued or present, nothing more is sent;
+  - otherwise it retries the API once;
+  - only if the server is gone does it type into the pty.
+
+  A delivery is marked done for the mail pointer only once, so a pointer is never delivered twice.
 - **No inline route.** There is no hook to answer, so mail arrives the Codex/Qwen way: the pointer, then `check_inbox` / `wait_for` in Code Mode.
 
 ### 4.6 Tool guidance (Code Mode)
@@ -180,9 +203,14 @@ Status: revision 1, draft for critique. No application code before the human acc
 
 ### 4.8 Roles
 
-- **Read-only roles [DO4].** Read-only roles are enforced with `permissions` deny rules for `edit`, `shell`, `webfetch`, `websearch` and `subagent` (spike §15). Denied tools disappear from the model's list.
+- **Read-only roles [DO4].**
+  - Read-only roles are enforced with `permissions` deny rules for `edit`, `shell`, `webfetch`, `websearch` and `subagent` (spike §15). Denied tools disappear from the model's list.
   - Code Mode `execute` keeps `fetch` but no filesystem access.
-  - So read-only means no file writes and no commands; network reads through `execute` remain possible. This is stated in the role picker.
+- **What read-only means** (critique finding 3).
+  - As for Claude and Codex, read-only means no file writes and no commands in the project.
+  - Parley's own tools stay allowed in every role: `send_message`, `report` and the rest. Read-only critics and reviewers need them; their Claude and Codex counterparts have them today.
+  - Network reads through `execute` `fetch` remain possible. The role picker says so for OpenCode.
+  - A test lists the tools in the model request of a read-only session: no `edit`, `write` or `shell`; `execute` present; Parley tools reachable.
 - **Writable roles** use the start mode (§4.10).
 - **No native roles.** `modelForTier` gives null.
 
@@ -212,7 +240,12 @@ Status: revision 1, draft for critique. No application code before the human acc
   - `idle` → turn close.
 - **Mail (Part M parity).** An `execute` tool whose code calls `tools.parley.check_inbox` or `tools.parley.wait_for({target:"inbox"})` and whose output parses as an inbox page gets a `mail` item, through the same core parser. The tool shape is **[N]**: the plan records a fixture first.
 - **Live.** The host polls `GET /api/session/{id}/message` every 2 s while the Chat is subscribed and the server lives. SSE events trigger an early poll.
-- **Durable.** Each poll that changes the list stores the messages in Parley's own cache `<work>/opencode/<session>.json`, capped at 8 MiB. A reopened Chat or a restarted host seeds from that cache when no server runs. A closed session's Chat therefore keeps its history without starting OpenCode. `session export` without a server is **[N]**; if it works, it may replace the cache later.
+- **Durable cache.**
+  - Each poll that changes the list stores the messages in Parley's own cache `<work>/opencode/<session>.json`, capped at 8 MiB.
+  - A last poll runs before every planned server stop (§4.2).
+  - A reopened Chat or a restarted host seeds from that cache when no server runs. A closed session's Chat therefore keeps its history without starting OpenCode.
+  - After a host crash, at most one poll interval of the last run can be missing until the session's next server is polled.
+  - `session export` without a server is **[N]**; if it works, it may replace the cache later.
 - **Gating.** Chat is gated by host feature `feed-opencode` and `minVersion`, like Qwen.
 
 ### 4.12 Sign-in [DO2]
@@ -228,7 +261,7 @@ Status: revision 1, draft for critique. No application code before the human acc
 
 - **Size.** This is a provider of the Qwen work's size (A0–A11, B1–B6 there). Two parts here are senior-only, plus a verification.
 - **The server password** is visible to the same user through `ps eww`. That is the same trust boundary as the user's own files.
-- **`/health` and `/doc`** are unauthenticated on a loopback port.
+- **`/health` and `/doc`** are unauthenticated on 127.0.0.1 while a session runs. Their contents are tested (§4.2), and any local process or local web page can read them.
 - **Code Mode dependence.** A model that does not follow the Code Mode protocol cannot call Parley tools.
 - **2.x is young.** The API and event names may change between minor versions. `minVersion` is pinned to the verified version, and the fixtures record the shapes.
 - **The cache** duplicates the transcript in Parley's work folder, up to 8 MiB per session.
@@ -246,10 +279,17 @@ Checked on the real app with OpenCode 2.x and a mock OpenAI-compatible model (th
 3. **Tools and mail.** The agent calls `get_map`, `send_message` and `check_inbox` through Code Mode. A letter sent to it shows as a pointer and then a mail block in Chat.
 4. **Activity.** busy and idle follow the turns. A permission ask shows as blocked.
 5. **Resume.** Close and resume keeps the session id and history.
-6. **Restart.** Restart Host and reopening Chat show the history from the cache.
-7. **Roles.** A read-only role has no `edit` or `shell` in the model request (mock log). A writable role starts with `--auto`.
+6. **Restart.**
+   - Restart Host with a live OpenCode session: no `opencode serve` of the old run is left (`ps`).
+   - The session resumes with one new server and its history.
+   - Reopening Chat shows the history.
+7. **Roles.** A read-only role has no `edit` or `shell` in the model request (mock log), and still reaches Parley tools. A writable role starts with `--auto`.
 8. **Models.** A model chosen from the catalog is the one used (message `model`).
-9. **Cleanup.** After close, no `opencode` process from that session is left (`ps`). No password appears in the map, the journal or logs.
+9. **Cleanup and exposure.**
+   - After close, no `opencode` process from that session is left (`ps`).
+   - No password appears in the map, the journal, the run file or logs.
+   - The server listens on 127.0.0.1 only.
+10. **No duplicates.** A pointer sent while the API times out after accepting is delivered once (fake-server test, plus one real check).
 
 ## 7. Open choices for the human
 
@@ -258,8 +298,17 @@ Recommended first.
 - **DO1. 1.x on PATH.** Show "Parley supports 2.x" with Install (recommended), or also use the `opencode2` command when it exists.
 - **DO2. Sign-in.** No keys in Parley: the human signs in inside OpenCode, and the card shows only whether an account is connected (recommended). Or: Parley manages provider keys.
 - **DO3. Start mode.** `--auto` (recommended, as asked for Qwen), or edits allowed and commands asked.
-- **DO4. Read-only roles.** Enforced with deny rules, with the noted `execute` `fetch` caveat (recommended), or refused as for Qwen.
-- **DO5. Delivery.** Through the server API (recommended), or typed into the terminal as for Qwen.
+- **DO4. Read-only roles.** Enforced with deny rules (recommended). Parley tools stay allowed, as for Claude and Codex, and `execute` `fetch` remains. Or: refused, as for Qwen.
+- **DO5. Delivery.** Through the server API with the no-duplicate fallback (recommended), or typed into the terminal as for Qwen.
 - **DO6. Chat history of closed sessions.** Parley's own cache (recommended), or Chat only while the session's server runs.
 - **DO7. Models.** A catalog from `opencode models` with the model written into the session config (recommended), or only "Default".
 - **DO8. Scope.** All of the plan in this branch after Parts M, A and Q (recommended by the order s-320 set), or a first slice without the catalog and roles (DO4 and DO7 later).
+
+## Appendix A. Critique of revision 1 (s-348) and answers
+
+1. **Blocker, host-first death.** The TUI dies with its pty. The server is swept at the next host start from a run file with pids only, checked against the command line. Resume starts exactly one new server (§4.2, §6.6).
+2. **Major, duplicate delivery.** The pty fallback runs only on a definite rejection. Ambiguous outcomes check the session inbox and messages first, and a pointer is marked delivered once (§4.5, §6.10).
+3. **Major, read-only and Parley tools.** This is stated as intended parity with Claude and Codex read-only roles, which keep Parley tools. The picker discloses `execute` `fetch`, and a test lists the allowed tools (§4.8, DO4).
+4. **Minor, unauthenticated endpoints.** The bound address and the bodies of `/health` and `/doc` are tested for identifiers and secrets, and documented as local exposure (§4.2, §5, §6.9).
+
+The spike report is now in the repository, so the critic can read it: `docs/research/2026-11-12-opencode-2x-spike.md`.
