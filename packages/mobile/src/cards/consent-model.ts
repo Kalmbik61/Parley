@@ -99,6 +99,11 @@ export async function runConsent(
   /** `project-mcp` + `allow`: the pairs of the servers switched on. */
   enabled?: ReadonlyArray<{ name: string; fingerprint: string }>,
 ): Promise<ConsentUi> {
+  if (card.kind === 'agent-switch' && decision === 'allow' && card.roleChange !== undefined) {
+    // The card's role change is what the human saw; the host refuses a read-only loss without it.
+    const roleChange = { from: card.roleChange.from, to: card.roleChange.to };
+    return uiOf(card, decision, await client.decideConsent(card.id, decision, { roleChange }), 0);
+  }
   if (card.kind !== 'project-mcp') return uiOf(card, decision, await client.decideConsent(card.id, decision), 0);
   // The card's `revision` goes with both answers; the host refuses a stale one with `bad_request`.
   const pairs = decision === 'allow' ? (enabled ?? []) : undefined;
