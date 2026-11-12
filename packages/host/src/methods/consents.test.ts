@@ -73,6 +73,13 @@ it('consents.decide: enabled и revision (карточка project-mcp) дохо
   expect(consents.decide).toHaveBeenLastCalledWith('c-01', 'deny', 'window', undefined, 3);
 });
 
+it('consents.decide: смена роли карточки замены доходит до сервиса', async () => {
+  const { consents, handlers } = build();
+  const roleChange = { from: 'builtin:architect', to: null };
+  await handlers['consents.decide']?.({ id: 'c-02', decision: 'allow', roleChange }, request);
+  expect(consents.decide).toHaveBeenCalledWith('c-02', 'allow', 'window', undefined, undefined, roleChange);
+});
+
 it('trust.grant → trust.list → trust.revoke: запись в trust.json выбранного дома', async () => {
   const { handlers } = build();
   const folder = await mkdtemp(path.join(tmpdir(), 'parley-consent-folder-'));

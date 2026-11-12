@@ -552,8 +552,10 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       const entry = (await loadProviders())[provider];
       return entry === undefined ? null : providerLabel(entry);
     },
-    request: (input) => {
-      consentsService.requestSwitch(input);
+    // Смена роли на цели — на карточке (спека 2026-11-12, 2.4): человек видит её до Allow.
+    request: async (input) => {
+      const roleChange = await sessionsService.roleChangeFor(input.ref, input.provider);
+      consentsService.requestSwitch(roleChange === null ? input : { ...input, roleChange });
     },
   });
   const swarmEndpoint = createSwarmEndpoint({
@@ -1066,7 +1068,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     // `by: 'telegram'` называет канал решения в trust.json: кто выдал доверие папке.
     consents: {
       list: () => consentsService.list(),
-      decide: (id, decision) => consentsService.decide(id, decision, 'telegram'),
+      decide: (id, decision, roleChange) => consentsService.decide(id, decision, 'telegram', undefined, undefined, roleChange),
       onChange: (listener) => consentsService.onChange(listener),
     },
     sendLetter: (input) => sendHumanLetter(input, { via: 'telegram' }),

@@ -98,7 +98,13 @@ export function consentCardMessage(input: { card: Exclude<ConsentCard, { kind: '
   const { card } = input;
   const lines =
     card.kind === 'agent-switch'
-      ? [`<b>${escapeHtml(T.switchTitle)}</b>`, escapeHtml(T.switchAsks(card)), escapeHtml(T.consentRequestedBy(input.requestedByLabel, input.projectName))]
+      ? [
+          `<b>${escapeHtml(T.switchTitle)}</b>`,
+          escapeHtml(T.switchAsks(card)),
+          // Смена роли — своей строкой (спека 2026-11-12, 2.4).
+          ...(card.roleChange === undefined ? [] : [escapeHtml(card.roleChange.text)]),
+          escapeHtml(T.consentRequestedBy(input.requestedByLabel, input.projectName)),
+        ]
       : [`<b>${escapeHtml(T.consentTitle)}</b>`, escapeHtml(card.folder), escapeHtml(T.consentRequestedBy(input.requestedByLabel, input.projectName))];
   return {
     text: lines.join('\n'),

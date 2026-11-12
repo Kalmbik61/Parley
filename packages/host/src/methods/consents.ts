@@ -23,6 +23,10 @@ export function createConsentHandlers(deps: { consents: ConsentsService; home: s
     // Telegram зовёт сервис напрямую с `telegram`.
     'consents.decide': async (params, request) => {
       const by = request.client.role === 'remote' ? 'phone' : 'window';
+      // Смена роли, которую человек видел на карточке замены (спека 2026-11-12, 2.4), — шестым аргументом.
+      if (params.roleChange !== undefined) {
+        return deps.consents.decide(params.id, params.decision, by, params.enabled, params.revision, params.roleChange);
+      }
       return params.enabled === undefined && params.revision === undefined
         ? deps.consents.decide(params.id, params.decision, by)
         : deps.consents.decide(params.id, params.decision, by, params.enabled, params.revision);

@@ -95,7 +95,7 @@ export interface TelegramServiceDeps {
   /** Карточки согласия на папку (`ConsentsService` хоста): структурно, без импорта модуля согласий. */
   consents?: {
     list(): ConsentCard[];
-    decide(id: string, decision: 'allow' | 'deny'): Promise<{ applied: boolean; state: ConsentCard['state'] }>;
+    decide(id: string, decision: 'allow' | 'deny', roleChange?: { from: string; to: string | null }): Promise<{ applied: boolean; state: ConsentCard['state'] }>;
     onChange(listener: (change: { upsert: ConsentCard[]; removed: string[] }) => void): () => void;
   };
   /** `sendHumanLetter(input, { via: 'telegram' })`. */
@@ -1042,9 +1042,14 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
     const decision = code === CALLBACK_CODES.allow ? 'allow' : 'deny';
     deciding.add(record.consentId);
     let result: { applied: boolean; state: ConsentCard['state'] };
-    const isSwitch = deps.consents.list().some((card) => card.id === record.consentId && card.kind === 'agent-switch');
+    const card = deps.consents.list().find((candidate) => candidate.id === record.consentId);
+    const isSwitch = card?.kind === 'agent-switch';
+    // Смена роли была строкой карточки в чате (спека 2026-11-12, 2.4): Allow её подтверждает.
+    const ack = decision === 'allow' && card?.kind === 'agent-switch' && card.roleChange !== undefined
+      ? { from: card.roleChange.from, to: card.roleChange.to }
+      : undefined;
     try {
-      result = await deps.consents.decide(record.consentId, decision);
+      result = ack === undefined ? await deps.consents.decide(record.consentId, decision) : await deps.consents.decide(record.consentId, decision, ack);
     } finally {
       deciding.delete(record.consentId);
     }

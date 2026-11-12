@@ -36,6 +36,7 @@ import type { PtyLaunch } from '../pty/pty-process.js';
 import type { WorksService } from '../works/works-service.js';
 import { createPtyManager } from '../pty/pty-manager.js';
 import { fileURLToPath } from 'node:url';
+import { createConsentsService } from '../consents/consents-service.js';
 import { createHeldLaunchActions } from '../consents/held-launches.js';
 import { createSessionsService, switchLetter, switchLine, transcriptNote } from './sessions-service.js';
 import type { SessionsFeedOptions } from './sessions-service.js';
@@ -1064,6 +1065,37 @@ describe('switchAgent: смена роли с подтверждением (сп
     expect(await r.sessions.roleChangeFor(ref, 'qwen')).toMatchObject({ readOnlyLost: true });
     expect(await r.sessions.roleChangeFor(ref, 'claude')).toBeNull();
     expect(await r.sessions.roleChangeFor(ref, 'no-such-provider')).toBeNull();
+  });
+
+  it('T3: карточка agent-switch несёт смену роли; allow без подтверждения отказан, с подтверждением — роль null в карте', async () => {
+    const r = rig({ roleCatalog: async () => buildRoleCatalog() });
+    const ref = await codexArchitect(r);
+    const consents = createConsentsService({
+      home,
+      host: { broadcast: () => {}, log: { info() {}, warn() {}, error() {} } },
+      trust: { grant: async () => undefined },
+      continueLaunch: async () => {},
+      refuseLaunch: async () => {},
+      isLive: async () => false,
+      switchAgent: (target, switchRequest) => r.sessions.switchAgent(target, switchRequest),
+      tellRequester: async () => {},
+      noticeFailure: () => {},
+    });
+    const roleChange = await r.sessions.roleChangeFor(ref, 'qwen');
+    const card = consents.requestSwitch({
+      ref, provider: 'qwen', providerLabel: 'Qwen Code', model: null, reason: 'limit', requestedBy: { sessionId: 's-99', label: 'lead' },
+      ...(roleChange === null ? {} : { roleChange }),
+    });
+    expect(card).toMatchObject({ roleChange: { from: 'builtin:architect', to: null, readOnlyLost: true } });
+
+    await expect(consents.decide(card.id, 'allow')).rejects.toMatchObject({ code: 'bad_request' });
+    expect(consents.list()).toHaveLength(1);
+    expect((await sessionOf(ref)).provider).toBe('codex');
+
+    await consents.decide(card.id, 'allow', 'window', undefined, undefined, { from: 'builtin:architect', to: null });
+    await vi.waitFor(async () => expect(await sessionOf(ref)).toMatchObject({ provider: 'qwen', role: null }));
+    expect(roleNotices()).toHaveLength(1);
+    consents.stop();
   });
 
   it('2.6–2.7: застрявшая сессия (Qwen, architect, ждёт агента) — отказ запуска называет Codex, карта та же', async () => {
