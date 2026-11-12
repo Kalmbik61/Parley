@@ -270,11 +270,15 @@ export async function roleChangeOnSwitch(cwd: string, entry: ProviderEntry, targ
   const to = roleId(next);
   if (from === to) return null;
   const readOnly = (id: string | null): boolean => id !== null && (current.roles.find(item => item.id === id)?.readOnly ?? false);
-  const readOnlyLost = readOnly(from) && !readOnly(to);
+  // Fail closed: a native Codex role can be read-only (`sandbox_mode = "read-only"`); when its settings could not be read
+  // (role missing from the catalog or any Codex diagnostic), it counts as read-only and the switch needs the ack.
+  const unverified = role.source === 'codex' && (!current.roles.some(item => item.id === from) || current.diagnostics.some(item => item.source === 'codex'));
+  const readOnlyLost = (readOnly(from) || unverified) && !readOnly(to);
   const fromName = current.roles.find(item => item.id === from)?.name ?? from;
   const after = next === null ? 'without a role' : `as ${next.name} (${next.source})`;
+  const kind = readOnly(from) ? 'is a read-only role' : 'may be a read-only role (its Codex settings could not be read)';
   const text = readOnlyLost
-    ? `${fromName} is a read-only role and does not run on ${targetLabel}. The session will continue ${after}, and can edit files and run commands.`
+    ? `${fromName} ${kind} and does not run on ${targetLabel}. The session will continue ${after}, and can edit files and run commands.`
     : `Role ${fromName} does not run on ${targetLabel}. The session will continue ${after}.`;
   return { from, to, readOnlyLost, text };
 }

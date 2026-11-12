@@ -1098,6 +1098,29 @@ describe('switchAgent: смена роли с подтверждением (сп
     consents.stop();
   });
 
+  it('F2: роль Codex с непрочитанными настройками — подтверждение обязательно (fail closed)', async () => {
+    const codexReviewer = { id: 'codex:reviewer', source: 'codex', provider: 'codex', name: 'reviewer', description: '', path: '/fixture.toml', prompt: 'Review.', model: null, effort: null, sandboxMode: null, readOnly: false } as const;
+    const claudeReviewer = { id: 'claude:reviewer', source: 'claude', provider: 'claude', name: 'reviewer', nativeAgent: 'reviewer', description: '', path: '/fixture.md', readOnly: false } as const;
+    const catalog = buildRoleCatalog({ roles: [codexReviewer, claudeReviewer], diagnostics: [{ source: 'codex', code: 'context-unverified' }], partial: false });
+    const r = rig({ roleCatalog: async () => catalog });
+    const ref = await r.sessions.create({ projectPath: project, workId, provider: 'codex', label: 'rev', task: '', parent: null });
+    await updateMap(project, workId, (map) => {
+      map.sessions.find((candidate) => candidate.id === ref.sessionId)!.role = { source: 'codex', name: 'reviewer' };
+    });
+    const before = await mapFile();
+
+    await expect(r.sessions.switchAgent(ref, request('claude'))).rejects.toMatchObject({
+      code: 'conflict',
+      message: 'reviewer may be a read-only role (its Codex settings could not be read) and does not run on Claude Code. The session will continue as reviewer (claude), and can edit files and run commands. Confirm the role change in the Parley window to continue.',
+    });
+    expect(await mapFile()).toBe(before);
+
+    expect(await r.sessions.switchAgent(ref, { ...request('claude'), requestId: '00000000-0000-4000-8000-000000000003', roleChange: { from: 'codex:reviewer', to: 'claude:reviewer' } })).toMatchObject({
+      outcome: 'started', role: { from: 'codex:reviewer', to: 'claude:reviewer' },
+    });
+    expect((await sessionOf(ref)).role).toEqual({ source: 'claude', name: 'reviewer' });
+  });
+
   it('2.6–2.7: застрявшая сессия (Qwen, architect, ждёт агента) — отказ запуска называет Codex, карта та же', async () => {
     const r = rig({ roleCatalog: async () => buildRoleCatalog() });
     const ref = await codexArchitect(r);

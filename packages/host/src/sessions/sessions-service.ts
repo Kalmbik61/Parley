@@ -998,15 +998,16 @@ export function createSessionsService(
       // Потерю read-only молча не чинит (спека 2026-11-12, 2.6–2.7): отказ называет выход, карта не тронута.
       if (awaitingAgent(session)) {
         const before = sessionRole(session);
-        const { change, catalog } = await timer.step('roleFit', () => roleChangeAt(roleCwd(ref, session), entry, before));
+        const { change } = await timer.step('roleFit', () => roleChangeAt(roleCwd(ref, session), entry, before));
         if (change?.readOnlyLost === true) {
-          const name = catalog?.roles.find((role) => role.id === change.from)?.name ?? change.from;
           const last = session.previousAgents?.at(-1);
           const back = last === undefined ? 'on another provider' : `on ${labelOf(await loadProviders(), last.provider)}`;
           const target = providerLabel(entry);
+          // Первая фраза — та же, что в тексте смены (`<Name> is|may be a read-only role and does not run on <Target>.`).
+          const cause = change.text.slice(0, change.text.indexOf(' The session will continue'));
           throw new HostError(
             'conflict',
-            `${name} is a read-only role and does not run on ${target}. Continue ${sessionMention(ref.sessionId)} ${back} again to keep the role; from there you can continue it on ${target} without the role.`,
+            `${cause} Continue ${sessionMention(ref.sessionId)} ${back} again to keep the role; from there you can continue it on ${target} without the role.`,
           );
         }
         if (change !== null) {

@@ -372,6 +372,29 @@ describe('roleChangeOnSwitch', () => {
     ? { id: `claude:${name}`, source: 'claude', provider: 'claude', name, nativeAgent: name, description: '', path: '/f.md', readOnly } as const
     : { id: `codex:${name}`, source: 'codex', provider: 'codex', name, description: '', path: '/f.toml', prompt: 'P.', model: null, effort: null, sandboxMode: null, readOnly } as const;
   const cat = (...roles: Array<ReturnType<typeof mk>>) => buildRoleCatalog({ roles, diagnostics: [], partial: false });
+  const unverifiedCodex = (...roles: Array<ReturnType<typeof mk>>) =>
+    buildRoleCatalog({ roles, diagnostics: [{ source: 'codex', code: 'context-unverified' }], partial: false });
+  const codexReviewer = { source: 'codex', name: 'reviewer' } as const;
+
+  it('fail closed: a Codex role with unreadable settings counts as read-only', async () => {
+    expect(await roleChangeOnSwitch(project, PROVIDERS.claude, 'Claude Code', codexReviewer, unverifiedCodex(mk('codex', 'reviewer', false), mk('claude', 'reviewer', false)))).toEqual({
+      from: 'codex:reviewer', to: 'claude:reviewer', readOnlyLost: true,
+      text: 'reviewer may be a read-only role (its Codex settings could not be read) and does not run on Claude Code. The session will continue as reviewer (claude), and can edit files and run commands.',
+    });
+    expect(await roleChangeOnSwitch(project, PROVIDERS.claude, 'Claude Code', codexReviewer, cat(mk('claude', 'reviewer', false)))).toEqual({
+      from: 'codex:reviewer', to: 'claude:reviewer', readOnlyLost: true,
+      text: 'codex:reviewer may be a read-only role (its Codex settings could not be read) and does not run on Claude Code. The session will continue as reviewer (claude), and can edit files and run commands.',
+    });
+  });
+  it('a readable non-read-only Codex role, and built-in and Claude roles next to a Codex diagnostic: unchanged', async () => {
+    expect(await roleChangeOnSwitch(project, PROVIDERS.claude, 'Claude Code', codexReviewer, cat(mk('codex', 'reviewer', false), mk('claude', 'reviewer', false)))).toMatchObject({
+      readOnlyLost: false, text: 'Role reviewer does not run on Claude Code. The session will continue as reviewer (claude).',
+    });
+    expect(await roleChangeOnSwitch(project, PROVIDERS.codex, 'Codex', { source: 'claude', name: 'reviewer' }, unverifiedCodex(mk('claude', 'reviewer', false)))).toMatchObject({
+      to: null, readOnlyLost: false, text: 'Role reviewer does not run on Codex. The session will continue without a role.',
+    });
+    expect(await roleChangeOnSwitch(project, PROVIDERS.qwen, 'Qwen Code', { source: 'builtin', name: 'executor' }, unverifiedCodex())).toBeNull();
+  });
 
   it('read-only lost, no role after', async () => {
     const change = await roleChangeOnSwitch(project, PROVIDERS.qwen, 'Qwen Code', { source: 'builtin', name: 'architect' }, buildRoleCatalog());
