@@ -1,0 +1,16 @@
+{"data":[
+{"id":"msg_u1","type":"user","time":{"created":1794478144774},"text":"MCPCALL please"},
+{"id":"msg_a1","type":"assistant","time":{"created":1794478144800,"completed":1794478164000},"agent":"build","model":{"id":"mock-1","providerID":"mock"},"finish":"stop","cost":0.5,"tokens":{"input":11,"output":7,"reasoning":2,"cache":{"read":3,"write":4}},"content":[
+ {"type":"reasoning","text":"secret thoughts","time":{"created":1794478144801}},
+ {"type":"text","text":"Calling ping."},
+ {"type":"tool","id":"call_1","name":"execute","executed":false,"time":{"created":1794478163645,"completed":1794478163662},"state":{"status":"completed","input":{"code":"return await tools.parley.ping({msg:\"hi\"})"},"content":[{"type":"text","text":"pong:{\"msg\":\"hi\"}"}],"metadata":{"toolCalls":[{"tool":"parley.ping","status":"completed"}]}}},
+ {"type":"tool","id":"call_3","name":"write","time":{"created":1794478290000,"completed":1794478297459},"state":{"status":"error","input":{"content":"x"},"error":{"type":"tool.execution","message":"Invalid arguments for tool write"}}},
+ {"type":"text","text":"Done."}]},
+{"id":"msg_i1","type":"idle","time":{"created":1794478164200},"outcome":"succeeded"},
+{"id":"msg_s1","type":"system","time":{"created":1794478164300},"text":"ignored"},
+{"id":"msg_u2","type":"user","time":{"created":1794478200000},"text":"second turn"},
+{"id":"msg_a2","type":"assistant","time":{"created":1794478200100},"agent":"build","model":{"id":"mock-1","providerID":"mock"},"content":[
+ {"type":"text","text":"Working on"},
+ {"type":"tool","id":"call_4","name":"shell","time":{"created":1794478200200},"state":{"status":"running","input":{"command":"ls"},"metadata":{}}}]},
+{"id":"msg_x1","type":"future-thing","time":{"created":1794478200300}}
+],"cursor":{"previous":null,"next":null}}

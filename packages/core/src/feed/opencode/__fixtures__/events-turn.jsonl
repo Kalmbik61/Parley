@@ -1,0 +1,12 @@
+{"id":"evt_demo01","created":1794478119052,"type":"session.created","data":{"sessionID":"ses_demo00000001","slug":"crisp-forest","version":"2.2.7"}}
+{"id":"evt_demo02","created":1794478119100,"type":"mcp.status.changed","data":{"server":"parley"}}
+{"id":"evt_demo03","created":1794478144774,"type":"session.inbox.enqueued","data":{"inboxID":"msg_demo01","sessionID":"ses_demo00000001","item":{"type":"user","payload":{"text":"MCPCALL please"},"delivery":"steer"}}}
+{"id":"evt_demo04","created":1794478144777,"type":"session.execution.started","data":{"sessionID":"ses_demo00000001"}}
+{"id":"evt_demo05","created":1794478144800,"type":"session.reasoning.delta","data":{"sessionID":"ses_demo00000001","assistantMessageID":"msg_demo02","delta":"thinking"}}
+{"id":"evt_demo06","created":1794478163642,"type":"session.tool.input.started","data":{"sessionID":"ses_demo00000001","assistantMessageID":"msg_demo02","id":"call_1","name":"execute"}}
+{"id":"evt_demo07","created":1794478163645,"type":"session.tool.called","data":{"sessionID":"ses_demo00000001","assistantMessageID":"msg_demo02","id":"call_1","input":{"code":"return await tools.parley.ping({msg:\"hi\"})"},"executed":false}}
+{"id":"evt_demo08","created":1794478163654,"type":"session.tool.progress","data":{"sessionID":"ses_demo00000001","assistantMessageID":"msg_demo02","id":"call_1","metadata":{"toolCalls":[{"tool":"parley.ping","status":"running"}]}}}
+{"id":"evt_demo09","created":1794478163662,"type":"session.tool.success","data":{"sessionID":"ses_demo00000001","assistantMessageID":"msg_demo02","id":"call_1","content":[{"type":"text","text":"pong:{}"}],"executed":false}}
+{"id":"evt_demo10","created":1794478164000,"type":"session.step.ended","data":{"sessionID":"ses_demo00000001","assistantMessageID":"msg_demo02","finish":"stop"}}
+{"id":"evt_demo11","created":1794478164100,"type":"session.usage.updated","data":{"sessionID":"ses_demo00000001","cost":0.5,"tokens":{"input":11,"output":7,"reasoning":2,"cache":{"read":3,"write":4}}}}
+{"id":"evt_demo12","created":1794478164200,"type":"session.execution.succeeded","data":{"sessionID":"ses_demo00000001"}}
