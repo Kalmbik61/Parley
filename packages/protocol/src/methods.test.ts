@@ -3,6 +3,7 @@ import { EFFORT_TOKEN_RE, PROTOCOL_VERSION } from './index.js';
 import type { EffortOption } from './index.js';
 import { METHODS, NOTIFICATIONS } from './methods.js';
 import type { Params, PermissionModeChoice, Result } from './methods.js';
+import type { RoleChange } from './consents.js';
 import type { CustomAccountInfo, CustomProviderInfo } from './custom-providers.js';
 import type { EventData } from './events.js';
 import type { FeedDecisions } from './feed.js';
@@ -1009,6 +1010,12 @@ describe('sessions.switchOptions / sessions.switchAgent', () => {
     expect(r.success && r.data.carry).toBe('handover');
     const full = parse({ ref, requestId, provider: 'claude', model: null, effort: 'high', carry: 'transcript', force: true });
     expect(full.success && full.data.carry).toBe('transcript');
+  });
+  it('roleChange is optional; bad shape is refused; switchOptions targets may carry a role change', () => {
+    expect(parse({ ref, requestId, provider: 'qwen', roleChange: { from: 'builtin:architect', to: null } }).success).toBe(true);
+    expect(parse({ ref, requestId, provider: 'qwen', roleChange: { from: '' , to: null } }).success).toBe(false);
+    expect(parse({ ref, requestId, provider: 'qwen', roleChange: { to: null } }).success).toBe(false);
+    expectTypeOf<Result<'sessions.switchOptions'>['targets'][number]['roleChange']>().toEqualTypeOf<RoleChange | null | undefined>();
   });
   it('кривой requestId, провайдер, carry и effort отклоняются', () => {
     expect(parse({ ref, requestId: 'nope', provider: 'codex' }).success).toBe(false);

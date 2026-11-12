@@ -19,6 +19,14 @@ describe('согласия и доверие к папке: методы окн�
     expect(schema.safeParse({ id: '', decision: 'allow' }).success).toBe(false);
   });
 
+  it('consents.decide: roleChange is optional, old payloads parse, bad shape is refused', () => {
+    const schema = METHODS['consents.decide'];
+    expect(schema.safeParse({ id: 'c-01', decision: 'allow', roleChange: { from: 'builtin:architect', to: null } }).success).toBe(true);
+    expect(schema.safeParse({ id: 'c-01', decision: 'allow', roleChange: { from: 'a', to: 'b' } }).success).toBe(true);
+    expect(schema.safeParse({ id: 'c-01', decision: 'allow', roleChange: { from: '', to: null } }).success).toBe(false);
+    expect(schema.safeParse({ id: 'c-01', decision: 'allow', roleChange: { from: 'a' } }).success).toBe(false);
+  });
+
   it('trust.grant требует папку и источник из закрытого списка; trust.revoke — папку', () => {
     expect(METHODS['trust.grant'].safeParse({ folder: '/p', by: 'telegram' }).success).toBe(true);
     expect(METHODS['trust.grant'].safeParse({ folder: '/p', by: 'agent' }).success).toBe(false);

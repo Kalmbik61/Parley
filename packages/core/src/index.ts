@@ -778,8 +778,8 @@ export type { RoleChoice, RequiredRolePermissions, ResolvedRoleChoice } from './
 export type { RoleCatalog, RoleDefinition, RoleDiagnostic } from './roles/types.js';
 export { readCodexRoleContext, projectCodexRoleContext, readCodexNativeContext } from './roles/context.js';
 export type { CodexRoleContext, CodexContextOptions, CodexNativeContext } from './roles/context.js';
-export { sessionRole, roleId, roleFromId, sessionRoleCatalog, prepareSessionRole, roleForProvider, assertRoleDelivery, roleSummaries, roleProvider, roleModel } from './work/agents.js';
-export type { SessionRoleCatalogOptions, RoleSummary, RoleList } from './work/agents.js';
+export { sessionRole, roleId, roleFromId, sessionRoleCatalog, prepareSessionRole, roleForProvider, roleChangeOnSwitch, assertRoleDelivery, roleSummaries, roleProvider, roleModel } from './work/agents.js';
+export type { SessionRoleCatalogOptions, RoleChange, RoleSummary, RoleList } from './work/agents.js';
 export type { SessionRole } from './work/types.js';
 
 // Shared project domain. Runtime workPaths continue to use their original local project path.

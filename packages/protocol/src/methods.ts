@@ -35,8 +35,8 @@ import { telegramMethodSchemas } from './telegram.js';
 import { voiceProviderMethodSchemas } from './voice-provider.js';
 import type { VoiceProviderMethodResults } from './voice-provider.js';
 import type { TelegramMethodResults } from './telegram.js';
-import { consentMethodSchemas } from './consents.js';
-import type { ConsentMethodResults } from './consents.js';
+import { consentMethodSchemas, roleChangeAck } from './consents.js';
+import type { ConsentMethodResults, RoleChange } from './consents.js';
 import { journalMethodSchemas } from './journal.js';
 import type { JournalMethodResults } from './journal.js';
 import { memoryMethodSchemas } from './memory.js';
@@ -238,6 +238,8 @@ export const METHODS = {
     effort: z.string().regex(EFFORT_TOKEN_RE).nullable().optional(),
     carry: z.enum(['handover', 'transcript']).default('handover'),
     force: z.boolean().optional(),
+    /** The role change the human saw (spec 2026-11-12, 2.3); required by the host only when read-only is lost. */
+    roleChange: roleChangeAck.optional(),
   }),
   // Подсказки поля ввода вида «Chat» (живая проверка 2026-10-02): команды, скиллы и субагенты CLI
   // провайдера у человека и в проекте — хост только читает их папки.
@@ -582,6 +584,8 @@ export interface Results extends AssistantMethodResults, VoiceMethodResults, Car
       needs: string | null;
       limits: ProviderLimits | null;
       transcript: boolean;
+      /** The role change when the session continues on this target; `null` — none. Older hosts omit it. */
+      roleChange?: RoleChange | null;
     }>;
     suggested: string | null;
     keeps: { rooms: number; leads: string[]; owns: string[]; children: number; unread: number; worktree: string | null };
