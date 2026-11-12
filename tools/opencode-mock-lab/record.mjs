@@ -1,8 +1,13 @@
 // Drives a running `opencode serve` (started by run.sh with permissions ask for everything but parley_*)
 // and writes raw API recordings. Usage: node record.mjs <work-dir> <port> <out-dir>. Sanitising is done by record.sh.
 import fs from 'node:fs';
+import { Buffer } from 'node:buffer';
+import { setTimeout } from 'node:timers';
 
-const [, , W, port, OUT] = process.argv;
+// `fetch` and `AbortController` are Node globals the repo's lint globals list does not name.
+const { fetch, AbortController } = globalThis;
+// The work dir (argv[2]) is only used by run.sh; this script needs the port and the output dir.
+const [, , , port, OUT] = process.argv;
 const B = `http://127.0.0.1:${port}`;
 const auth = 'Basic ' + Buffer.from('opencode:' + (process.env.PW || 'lab-secret')).toString('base64');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

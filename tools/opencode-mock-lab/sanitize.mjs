@@ -11,7 +11,7 @@ const rules = [
   [new RegExp(esc(os.homedir()), 'g'), '/home/lab'], [new RegExp(esc(os.hostname()), 'g'), 'lab-host'],
   [/\/private\/var\/folders\/[^"\s]*/g, '/tmp/opencode'], [/\/var\/folders\/[^"\s]*/g, '/tmp/opencode'],
   [/"pid":\d+/g, '"pid":1234'], [/127\.0\.0\.1:\d+/g, '127.0.0.1:4096'], [/localhost:\d+/g, 'localhost:4096'],
-  [/sk-ant-FAKE[A-Za-z0-9-]*/g, 'sk-FAKE'], [/\x1b\[[0-9;?]*[a-zA-Z]/g, ''],
+  [/sk-ant-FAKE[A-Za-z0-9-]*/g, 'sk-FAKE'], [new RegExp(String.raw`\x1b\[[0-9;?]*[a-zA-Z]`, 'g'), ''],
   [/Date: .*/g, 'Date: <date>'],
 ];
 for (const name of fs.readdirSync(RAW)) {

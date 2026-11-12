@@ -8,6 +8,7 @@
 //   LLM400    HTTP 400 from the model (not retried)       default   reasoning + text
 import http from 'node:http';
 import fs from 'node:fs';
+import { setTimeout } from 'node:timers';
 
 const LOG = process.argv[2] || process.env.MOCK_LOG || 'mock.log';
 const log = (o) => fs.appendFileSync(LOG, JSON.stringify(o) + '\n');
