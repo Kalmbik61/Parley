@@ -6,6 +6,9 @@ import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { opencodeModelsFile } from '@parley/core';
+import type { RequestInfo } from '../methods/context.js';
+import { createProvidersList } from '../methods/providers.js';
 import type { Log } from '../log.js';
 import {
   OPENCODE_CATALOG_MAX_AGE_MS,
@@ -214,5 +217,45 @@ describe('startOpencodeCatalog', () => {
     await catalog.refresh();
     expect(catalog.current()).toBeNull();
     await expect(readFile(file)).rejects.toThrow();
+  });
+});
+
+describe('OpenCode catalog in providers.list (spec 2026-11-12, 4.7)', () => {
+  let saved: string | undefined;
+  beforeEach(() => {
+    saved = process.env['PARLEY_HOME'];
+    process.env['PARLEY_HOME'] = path.join(dir, 'home');
+  });
+  afterEach(() => {
+    if (saved === undefined) delete process.env['PARLEY_HOME'];
+    else process.env['PARLEY_HOME'] = saved;
+  });
+
+  it('writes opencode-models.json in the Parley home by default and tells the window once', async () => {
+    const onChange = vi.fn();
+    const catalog = startOpencodeCatalog(async () => 'demo/alpha-free\ndemo/beta\n', quiet(), onChange);
+    await catalog.ready;
+    expect(opencodeModelsFile()).toBe(path.join(dir, 'home', 'opencode-models.json'));
+    expect((JSON.parse(await readFile(opencodeModelsFile(), 'utf8')) as { models: Array<{ id: string }> }).models.map((m) => m.id)).toEqual(['demo/alpha-free', 'demo/beta']);
+    expect(onChange).toHaveBeenCalledTimes(1);
+  });
+
+  it('answers at once during a probe: no stored list means opencode models are null; the stored list once there is one; the stale check asks the catalog', async () => {
+    let release: (value: string) => void = () => {};
+    const catalog = startOpencodeCatalog(() => new Promise<string>((resolve) => { release = resolve; }), quiet(), vi.fn());
+    const refreshIfStale = vi.spyOn(catalog, 'refreshIfStale');
+    const list = createProvidersList(undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, catalog);
+    const opencodeModels = async () => {
+      const { providers } = await list({}, {} as RequestInfo);
+      return providers.find((entry) => entry.id === 'opencode')?.models;
+    };
+    const started = Date.now();
+    expect(await opencodeModels()).toBeNull();
+    expect(Date.now() - started).toBeLessThan(1000);
+    expect(refreshIfStale).toHaveBeenCalled();
+
+    release('demo/alpha-free\ndemo/beta\n');
+    await catalog.ready;
+    expect((await opencodeModels())?.map((model) => model.id)).toEqual(['demo/alpha-free', 'demo/beta']);
   });
 });

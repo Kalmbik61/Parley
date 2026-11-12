@@ -209,9 +209,9 @@ describe('providers.list: модели, усилие и версия CLI (диз
         providersJson: {
           codex: { models: [{ id: 'my-new-model', label: 'Моя новая' }] },
           // Свой провайдер без {model} в шаблоне: список окну не нужен — модель до команды не доедет.
-          opencode: {
-            badge: 'OpenCode',
-            command: 'opencode',
+          plain: {
+            badge: 'Plain',
+            command: 'plain',
             args: ['{prompt}'],
             models: [{ id: 'a', label: 'А' }],
           },
@@ -229,7 +229,7 @@ describe('providers.list: модели, усилие и версия CLI (диз
     );
 
     expect(byId(providers, 'codex').models).toEqual([{ id: 'my-new-model', label: 'Моя новая' }]);
-    expect(byId(providers, 'opencode')).toMatchObject({ models: null, effort: false });
+    expect(byId(providers, 'plain')).toMatchObject({ models: null, effort: false });
     expect(byId(providers, 'smart')).toMatchObject({ models: [{ id: 'fast', label: 'Быстрая' }], effort: true });
     expect(byId(providers, 'claude').models).toBeNull();
   });

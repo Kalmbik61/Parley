@@ -100,6 +100,7 @@ import type { CustomCheckOptions } from './providers/custom-check.js';
 import { createLimitsService } from './limits/limits-service.js';
 import type { LimitsServiceOptions } from './limits/limits-service.js';
 import { startCodexCatalog } from './providers/codex-catalog.js';
+import { startOpencodeCatalog, type OpencodeModelsProbe } from './providers/opencode-catalog.js';
 import { startQwenCatalog, type QwenModelsProbe } from './providers/qwen-catalog.js';
 import type { CatalogProbe } from './providers/codex-catalog.js';
 import { startProviderVersions } from './providers/versions.js';
@@ -188,6 +189,11 @@ export interface HostOptions {
    */
   probeQwenCatalog?: QwenModelsProbe;
   /**
+  /**
+   * Probe of the OpenCode model catalog at start (`opencode models --standalone`, spec 2026-11-12, 4.7). Without it there is no
+   * catalog and `models` of `opencode` stays as it is: only `main.ts` connects it, tests never run the real opencode.
+   */
+  probeOpencodeCatalog?: OpencodeModelsProbe;
    * Проверка новых версий CLI раз в сутки (`codex`, `claude`; спека 2026-11-02). Без неё ничего не спрашивается и в
    * `providers.list` нет поля `update`: сетевой `fetch` подключает только `main.ts`, тесты передают подмену.
    */
@@ -430,6 +436,11 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     handle.context.broadcast('providers.changed', { provider: 'qwen' });
   });
   const authService = createAuthService(handle.context, {
+  // OpenCode model catalog (spec 2026-11-12, 4.7): a probe at start and every 6 hours in the background; a new list goes to
+  // `opencode-models.json` (read by `loadProviders`) and the window gets `providers.changed`.
+  const opencodeCatalog = startOpencodeCatalog(options.probeOpencodeCatalog, log, () => {
+    handle.context.broadcast('providers.changed', { provider: 'opencode' });
+  });
     ...options.auth,
     onSignInExit: (provider, signedIn) => {
       options.auth?.onSignInExit?.(provider, signedIn);
@@ -1198,6 +1209,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     worktrees: worktreesService,
     holds: worktreeHolds,
     sweeper: worktreeSweeper,
+    opencodeCatalog,
     feed: feedService,
     processMonitor,
     browserAgent: browserEndpoint,

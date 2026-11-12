@@ -797,7 +797,9 @@ export function assistantCommand(
  * бы буквальный `--model={model}`.
  */
 export const supportsModel = (entry: ProviderEntry): boolean =>
-  (entry.runner.args ?? []).some((item) => item === '{model}');
+  // OpenCode's TUI has no model flag: the model goes into the server config document (`opencode-config.ts`, spec 2026-11-12, 4.3),
+  // so the route, not a template item, says the entry takes a model.
+  entry.runner.mcpConfig === 'opencode-server' || (entry.runner.args ?? []).some((item) => item === '{model}');
 
 /**
  * Принимает ли провайдер усилие при запуске — по тому же правилу, что и модель, но `{effort}`
@@ -1012,6 +1014,15 @@ export function codexModelsFile(): string {
  */
 export function qwenModelsFile(): string {
   return path.join(parleyHome(), 'qwen-models.json');
+}
+
+/**
+ * OpenCode model catalog taken by the host from `opencode models --standalone` (spec 2026-11-12, 4.7): a Parley file in the home,
+ * the same shape as `qwenModelsFile`. Only the host writes it, atomically, after a good probe; `loadProviders` puts its models into the
+ * `opencode` entry.
+ */
+export function opencodeModelsFile(): string {
+  return path.join(parleyHome(), 'opencode-models.json');
 }
 
 /**
@@ -1346,8 +1357,9 @@ export async function loadProviders(
   codexFile = codexModelsFile(),
   customFile = customProvidersFile(),
   qwenFile = qwenModelsFile(),
+  opencodeFile = opencodeModelsFile(),
 ): Promise<Record<WorkProvider, ProviderEntry>> {
-  const registry = await loadBaseProviders(file, codexFile, qwenFile);
+  const registry = await loadBaseProviders(file, codexFile, qwenFile, opencodeFile);
   // Свои провайдеры (спека 5.3) и аккаунты подписок (спека подписок 5.2) — после providers.json; занятый id
   // (встроенный или из файла) не перекрывают. Аккаунту нужна запись `claude` уже со всеми переопределениями.
   for (const record of await readCustomProviders(customFile)) {
@@ -1363,6 +1375,7 @@ async function loadBaseProviders(
   file: string,
   codexFile: string,
   qwenFile: string,
+  opencodeFile: string,
 ): Promise<Record<WorkProvider, ProviderEntry>> {
   const registry: Record<WorkProvider, ProviderEntry> = Object.fromEntries(
     Object.values(PROVIDERS).map((entry) => [
@@ -1385,6 +1398,10 @@ async function loadBaseProviders(
   const qwen = registry['qwen'];
   const qwenLive = await readCodexModels(qwenFile);
   if (qwen !== undefined && qwenLive !== null) registry['qwen'] = { ...qwen, models: qwenLive };
+  // The OpenCode catalog (`opencode models`) is read the same way, before `providers.json`.
+  const opencode = registry['opencode'];
+  const opencodeLive = await readCodexModels(opencodeFile);
+  if (opencode !== undefined && opencodeLive !== null) registry['opencode'] = { ...opencode, models: opencodeLive };
 
   let raw: string;
   try {

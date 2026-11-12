@@ -122,6 +122,7 @@ export {
   assistantCommand,
   codexModelsFile,
   qwenModelsFile,
+  opencodeModelsFile,
   commandBinary,
   commandInPath,
   effortsFor,

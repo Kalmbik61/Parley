@@ -13,6 +13,7 @@ import {
   commandInPath,
   probeCliVersion,
   qwenModelsFile,
+  opencodeModelsFile,
   commandBinary,
   effortsFor,
   loadProviders,
@@ -1204,6 +1205,52 @@ describe('переопределения из PARLEY_HOME/providers.json', () =>
       await writeLive({ models: LIVE });
       await write({ qwen: { models: [{ id: 'mine', label: 'Mine' }] } });
       expect(selectableModels((await loadProviders())['qwen'] as ProviderEntry)).toStrictEqual([{ id: 'mine', label: 'Mine' }]);
+    });
+  });
+
+  describe('OpenCode model catalog from the host file (spec 2026-11-12, 4.7)', () => {
+    const LIVE: ModelOption[] = [
+      { id: 'opencode/big-pickle', label: 'opencode/big-pickle', efforts: null },
+      { id: 'demo/nested/model-1', label: 'demo/nested/model-1', efforts: null },
+    ];
+    const writeLive = (data: unknown): Promise<void> => writeFile(opencodeModelsFile(), JSON.stringify(data), 'utf8');
+
+    it('the file lives in the Parley home; no file means models stay null', async () => {
+      expect(opencodeModelsFile()).toBe(path.join(home, 'opencode-models.json'));
+      expect(selectableModels((await loadProviders())['opencode'] as ProviderEntry)).toBeNull();
+    });
+
+    it('a valid file gives the opencode entry its models in file order; other providers are untouched', async () => {
+      await writeLive({ fetchedAt: '2030-01-05T10:00:00.000Z', models: LIVE });
+      const registry = await loadProviders();
+      expect(selectableModels(registry['opencode'] as ProviderEntry)).toStrictEqual(LIVE);
+      expect(selectableModels(registry['qwen'] as ProviderEntry)).toEqual(selectableModels(PROVIDERS.qwen));
+      expect(modelChoiceError(registry['opencode'] as ProviderEntry, 'opencode/big-pickle')).toBeNull();
+      expect(modelChoiceError(registry['opencode'] as ProviderEntry, 'not/listed')).toContain('not in the list');
+    });
+
+    it.each([
+      ['malformed JSON', '{not json'],
+      ['an empty list', JSON.stringify({ models: [] })],
+      ['a model of the wrong shape', JSON.stringify({ models: [{ id: 'ok/one', label: 'Ok' }, { id: 'bad id', label: 'Bad' }] })],
+    ])('%s: models stay null', async (_title, body) => {
+      await writeFile(opencodeModelsFile(), body, 'utf8');
+      expect(selectableModels((await loadProviders())['opencode'] as ProviderEntry)).toBeNull();
+    });
+
+    it('the entry takes a model although its args have no {model}: the choice survives resolveModelEffort', async () => {
+      await writeLive({ models: LIVE });
+      const entry = (await loadProviders())['opencode'] as ProviderEntry;
+      expect(supportsModel(entry)).toBe(true);
+      expect(resolveModelEffort(entry, { model: 'opencode/big-pickle' })).toStrictEqual({ choice: { model: 'opencode/big-pickle' } });
+      expect(resolveModelEffort(entry, { model: 'not/listed' })).toHaveProperty('error');
+      expect(supportsModel(PROVIDERS.claude)).toBe(true);
+    });
+
+    it('models from providers.json win over the host file', async () => {
+      await writeLive({ models: LIVE });
+      await write({ opencode: { models: [{ id: 'mine/one', label: 'Mine' }] } });
+      expect(selectableModels((await loadProviders())['opencode'] as ProviderEntry)).toStrictEqual([{ id: 'mine/one', label: 'Mine' }]);
     });
   });
 

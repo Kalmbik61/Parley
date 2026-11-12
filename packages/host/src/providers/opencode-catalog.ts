@@ -2,8 +2,7 @@
  * OpenCode model catalog from the CLI itself (spec 2026-11-12 §4.7, task O11): `opencode models` prints one
  * `provider/model` per line, works offline and needs no sign-in (spike §12). The probe runs at host start, in the
  * background, when `providers.list` finds the catalog older than six hours, and after sign-in. A new list atomically
- * rewrites Parley's file `opencode-models.json` (its path is passed in by the caller: the core helper comes with the
- * provider entry) and calls `onChange`; a failed probe leaves the file alone. One probe at a time, and nothing waits on it.
+ * rewrites Parley's file `opencode-models.json` (`opencodeModelsFile` in core; `loadProviders` reads it) and calls `onChange`; a failed probe leaves the file alone. One probe at a time, and nothing waits on it.
  *
  * Secrets: Parley opens no file except its own temporary `cwd` and the catalog file, and passes the CLI no key, no
  * auth path and no server password. The CLI reads its own state as in any session a human starts. What runs is what is on
@@ -20,7 +19,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { commandBinary, MODEL_LABEL_MAX, type ModelOption } from '@parley/core';
+import { commandBinary, MODEL_LABEL_MAX, opencodeModelsFile, type ModelOption } from '@parley/core';
 import type { Log } from '../log.js';
 
 /** One probe: the stdout of `opencode models`; `null` is any failure. */
@@ -96,11 +95,12 @@ export function startOpencodeCatalog(
   probe: OpencodeModelsProbe | undefined,
   log: Log,
   onChange: () => void,
-  options: { file: string; command?: string; maxAgeMs?: number; now?: () => number },
+  options: { file?: string; command?: string; maxAgeMs?: number; now?: () => number } = {},
 ): OpencodeCatalog {
   const maxAgeMs = options.maxAgeMs ?? OPENCODE_CATALOG_MAX_AGE_MS;
   const now = options.now ?? Date.now;
-  const { file } = options;
+  // The home is known at host start: the file does not move even if the environment changes later.
+  const file = options.file ?? opencodeModelsFile();
   let models: ModelOption[] | null = null;
   let written: string | undefined;
   let probedAt = 0;
