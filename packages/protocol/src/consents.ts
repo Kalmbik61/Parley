@@ -33,16 +33,16 @@ export interface FolderTrustCard extends ConsentCardBase {
   requestedBy: { source: 'agent' | 'resume' | 'launch'; sessionId?: string; workId?: string; label?: string };
 }
 
-/**
- * Агент просит продолжить сессию на другом провайдере (`request_agent_switch`): замену выполняет только `allow`
- * человека. `id` карточки служит `requestId` замены. Окно, остров и Telegram, не знающие вида, его пропускают.
- */
 /** The change of a session role on an agent switch (spec 2026-11-12, 2.2); `text` is the same sentence on every surface. */
 export interface RoleChange { from: string; to: string | null; readOnlyLost: boolean; text: string }
 /** What the human saw and confirmed: the role before and after. */
 export interface RoleChangeAck { from: string; to: string | null }
 export const roleChangeAck = z.object({ from: z.string().min(1).max(200), to: z.string().max(200).nullable() });
 
+/**
+ * Агент просит продолжить сессию на другом провайдере (`request_agent_switch`): замену выполняет только `allow`
+ * человека. `id` карточки служит `requestId` замены. Окно, остров и Telegram, не знающие вида, его пропускают.
+ */
 export interface AgentSwitchCard extends ConsentCardBase {
   kind: 'agent-switch';
   /** Сессия, которую продолжают. */

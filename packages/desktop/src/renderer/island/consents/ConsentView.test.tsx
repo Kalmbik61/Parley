@@ -144,6 +144,20 @@ describe('карточка согласия острова', () => {
   });
 });
 
+describe('island agent-switch card with a role change', () => {
+  it('shows the role text on its own line', () => {
+    const card = {
+      id: 'c-07', kind: 'agent-switch', projectPath: '/p', ref: { projectPath: '/p', workId: 'w-1', sessionId: 's-03' },
+      provider: 'qwen', providerLabel: 'Qwen Code', model: null, reason: 'limit', requestedBy: { sessionId: 's-11', label: 'Greta' },
+      at: '2026-10-30T10:00:00.000Z', state: 'pending', roleChange: { from: 'builtin:architect', to: null, readOnlyLost: true, text: 'Architect is a read-only role and does not run on Qwen Code. The session will continue without a role, and can edit files and run commands.' },
+    } as ConsentCard;
+    render(<ConsentView {...props({ card })} />);
+    const text = screen.getByTestId('island-consent-switch').textContent ?? '';
+    expect(text.split('\n')).toHaveLength(2);
+    expect(text.split('\n')[1]).toBe('Architect is a read-only role and does not run on Qwen Code. The session will continue without a role, and can edit files and run commands.');
+  });
+});
+
 describe('карточка серверов MCP на острове (спека 2026-11-02, 7)', () => {
   const MCP: ConsentCard = {
     id: 'c-09', kind: 'project-mcp', version: 1, revision: 4, repo: '/Users/me/work/my_harnas', projectPath: '/Users/me/work/my_harnas',

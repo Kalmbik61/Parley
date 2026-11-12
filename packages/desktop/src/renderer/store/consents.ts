@@ -35,7 +35,7 @@ export interface ConsentsState {
 /** Мост текущего подключения: `decide` без него звать некому. */
 let current: ConsentBridge | null = null;
 
-export const useConsentsStore = create<ConsentsState>((set) => ({
+export const useConsentsStore = create<ConsentsState>((set, get) => ({
   cards: [],
   asking: null,
   init: (bridge) => {
@@ -80,7 +80,10 @@ export const useConsentsStore = create<ConsentsState>((set) => ({
   },
   decide: async (id, decision, enabled, revision) => {
     if (current === null) throw new Error('consents: not connected');
-    const { applied } = await current.call('consents.decide', { id, decision, ...(enabled === undefined ? {} : { enabled }), ...(revision === undefined ? {} : { revision }) });
+    const card = get().cards.find((item) => item.id === id);
+    // `allow` on a card that changes the role carries the change the human saw (spec 2026-11-12, 2.4).
+    const roleChange = decision === 'allow' && card?.kind === 'agent-switch' && card.roleChange !== undefined ? { from: card.roleChange.from, to: card.roleChange.to } : undefined;
+    const { applied } = await current.call('consents.decide', { id, decision, ...(enabled === undefined ? {} : { enabled }), ...(revision === undefined ? {} : { revision }), ...(roleChange === undefined ? {} : { roleChange }) });
     return { applied };
   },
   ask: (id) => set({ asking: id }),
@@ -125,5 +128,7 @@ const mention = (sessionId: string): string => `@${sessionId.replace('-', '')}`;
 /** Просьба агента одной строкой: «@s11 asks to continue @s03 on Codex (gpt-6-astra): the Claude limit is near». */
 export function switchRequestText(card: AgentSwitchCard): string {
   const model = card.model === null ? '' : ` (${card.model})`;
-  return S.dialogs.agentSwitch.asks(mention(card.requestedBy.sessionId), mention(card.ref.sessionId), `${card.providerLabel}${model}`, card.reason);
+  const asks = S.dialogs.agentSwitch.asks(mention(card.requestedBy.sessionId), mention(card.ref.sessionId), `${card.providerLabel}${model}`, card.reason);
+  // The role change is its own line (spec 2026-11-12, 2.4); renderers keep the line break (`whitespace-pre-line`).
+  return card.roleChange === undefined ? asks : `${asks}\n${card.roleChange.text}`;
 }

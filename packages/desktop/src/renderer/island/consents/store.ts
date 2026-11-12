@@ -94,7 +94,10 @@ export function createConsentsStore(): UseBoundStore<StoreApi<ConsentsState>> {
         held.add(id);
         set({ deciding: id, note: null });
         try {
-          const result = await current.call('consents.decide', { id, decision, ...(enabled === undefined ? {} : { enabled }), ...(revision === undefined ? {} : { revision }) });
+          const card = get().items.find((item) => item.id === id);
+          // `allow` on a card that changes the role carries the change the human saw (spec 2026-11-12, 2.4).
+          const roleChange = decision === 'allow' && card?.kind === 'agent-switch' && card.roleChange !== undefined ? { from: card.roleChange.from, to: card.roleChange.to } : undefined;
+          const result = await current.call('consents.decide', { id, decision, ...(enabled === undefined ? {} : { enabled }), ...(revision === undefined ? {} : { revision }), ...(roleChange === undefined ? {} : { roleChange }) });
           settle(id, result.applied ? 'done' : 'elsewhere', result.applied ? ANSWER_HOLD_MS : ELSEWHERE_MS);
         } catch (error) {
           held.delete(id);
