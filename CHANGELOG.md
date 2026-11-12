@@ -4,17 +4,23 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
+## 0.34.0
+
+Qwen Code is now a built-in provider that runs the official `qwen` CLI, and the CLIs can be installed and updated from Settings → Providers. Qwen Code was verified against qwen 0.27.2 with a mock model, not yet with a live Qwen account.
+
+### Added
+
+- **Qwen Code as a built-in provider.** Parley starts the official `qwen` CLI (0.27.2 or newer) in a terminal session with Parley's tools, and shows it in the Chat view with its history. A sleeping session resumes the same conversation. Settings → Providers → Qwen Code shows a sign-in hint (sign in inside `qwen` with `/auth`; the hint is not a check) and has Install… and Update. Built-in roles run on Qwen Code except the read-only ones. Not in this version: several accounts, keys held by Parley, usage limits, autonomous rooms, the assistant, and starting from the phone. The custom preset for Alibaba keys is renamed "Qwen models in Claude Code (Alibaba key)"; its id and existing providers do not change.
+
+- **Install and update CLIs from Settings → Providers.** Claude Code, Codex and Qwen Code can be installed with Install… (macOS and Linux; a confirmation shows the exact command, the source and what is trusted), the CLI version is always shown with Check now or Up to date, and Update now also works for Qwen Code. Parley downloads and runs only the vendor's installer, only when you confirm.
+
 ## 0.33.0
 
 The first three waves of a full review of 0.32.0: agents reliably hear each other, silent endings and stuck plans are reported, and the host stays responsive with many sessions. Agents also spend fewer model responses on mail, and new session worktrees get their dependencies.
 
 ### Added
 
-- **Qwen Code as a built-in provider.** Parley starts the official `qwen` CLI (0.27.2 or newer) in a terminal session with Parley's tools, and shows it in the Chat view with its history. A sleeping session resumes the same conversation. Settings → Providers → Qwen Code shows a sign-in hint (sign in inside `qwen` with `/auth`; the hint is not a check) and has Install… and Update. Built-in roles run on Qwen Code except the read-only ones. Not in this version: several accounts, keys held by Parley, usage limits, autonomous rooms, the assistant, and starting from the phone. The custom preset for Alibaba keys is renamed "Qwen models in Claude Code (Alibaba key)"; its id and existing providers do not change.
-
 - New session worktrees get their dependencies without an install: Parley clones the ignored folders listed in the project's `.worktreeinclude` (for example `node_modules`) from the main checkout — copy-on-write on APFS, so it takes seconds and almost no disk — and the brief tells the agent whether the lock files match.
-
-- **Install and update CLIs from Settings → Providers.** Claude Code, Codex and Qwen Code can be installed with Install… (macOS and Linux; a confirmation shows the exact command, the source and what is trusted), the CLI version is always shown with Check now or Up to date, and Update now also works for Qwen Code. Parley downloads and runs only the vendor's installer, only when you confirm.
 
 ### Fixed
 
