@@ -12,12 +12,13 @@
 
 import type { FeedItem, FeedTool } from '@parley/core';
 import { toolHeadline } from './feed-model.js';
+import { mailSender } from './items/MailItem.js';
 
 /** Больше стольких совпадений счётчик не считает: «1000+», как в поиске терминала. */
 export const FIND_LIMIT = 1000;
 
 /** Где в элементе совпадение; `nth` — номер вхождения внутри части одного элемента. */
-export type FindPart = 'text' | 'prompt' | 'tool-name' | 'tool-input' | 'tool-output' | 'agent' | 'card' | 'error';
+export type FindPart = 'text' | 'prompt' | 'tool-name' | 'tool-input' | 'tool-output' | 'agent' | 'card' | 'error' | 'mail';
 
 export interface FindMatch {
   itemId: string;
@@ -87,7 +88,8 @@ function fields(item: FeedItem): Array<[FindPart, string]> {
       return [['card', item.plan]];
     case 'error':
       return [['error', item.error], ['error', item.message ?? '']];
-    case 'mail': // M5 adds letter text and sender.
+    case 'mail':
+      return item.letters.flatMap((letter): Array<[FindPart, string]> => [['mail', mailSender(letter)], ['mail', letter.text]]);
     case 'notice':
     case 'turn':
       return [];

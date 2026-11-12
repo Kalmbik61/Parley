@@ -2098,6 +2098,19 @@ export const S = {
       waiting: (reason: string | null): string => (reason === null ? 'Not picked up yet' : `Not picked up yet (${reason})`),
       compacting: 'compacting context',
     },
+    /** Доставленные письма (элемент ленты `mail`, спека 2026-11-12, 3.4). */
+    mail: {
+      you: 'you',
+      parley: 'Parley',
+      kind: { note: 'note', question: 'question', decision: 'decision' },
+      /** Комната письма: `r-28 · Mail in chat`. */
+      room: (id: string, title: string): string => `${id} · ${title}`,
+      showMore: 'Show more',
+      showLess: 'Show less',
+      /** Письмо урезано доставкой или пределом ленты. */
+      cut: 'cut',
+      remaining: (count: number): string => `${count} more unread`,
+    },
     /** Строка действий под сообщением (спека 2026-10-16, 3.1). */
     actions: { copy: 'Copy', copied: 'Copied', sendAgain: 'Send again', reply: 'Reply' },
     /** Плашка цитаты над полем ввода (Reply): подпись и крестик «убрать». */

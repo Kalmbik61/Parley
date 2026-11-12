@@ -40,12 +40,13 @@ import { cn } from '../lib/cn.js';
 import { formatDuration } from '../lib/metrics-line.js';
 import { useNow } from '../lib/use-now.js';
 import type { FindView } from './ChatFindBar.js';
-import { imagesExtraPx, type SwitchDivider } from './feed-model.js';
+import { imagesExtraPx, mailExtraPx, type SwitchDivider } from './feed-model.js';
 import { applyFindHighlights, clearFindHighlights } from './highlight.js';
 import { AgentItem, type Transcript, type TranscriptUpdate } from './items/AgentItem.js';
 import { CardItem } from './items/CardItem.js';
 import { ErrorItem } from './items/ErrorItem.js';
 import { LetterItem } from './items/LetterItem.js';
+import { MailItem } from './items/MailItem.js';
 import { NoticeItem } from './items/NoticeItem.js';
 import { PromptItem } from './items/PromptItem.js';
 import { TextItem } from './items/TextItem.js';
@@ -188,8 +189,7 @@ const ItemView = memo(function ItemView({ item, expanded, transcript, onToggle, 
         />
       );
     case 'mail':
-      // M5 draws the delivered-mail block.
-      return <></>;
+      return <MailItem item={item} />;
     case 'notice':
       return <NoticeItem item={item} />;
     case 'error':
@@ -300,7 +300,7 @@ export function FeedList({ items, queued, outbox = NO_OUTBOX, onRetryOutbox, onS
     getScrollElement: () => scroller,
     estimateSize: (index) => {
       const row = allRows[index];
-      return ESTIMATE_PX + (row !== undefined && 'item' in row ? imagesExtraPx(row.item) : 0);
+      return ESTIMATE_PX + (row !== undefined && 'item' in row ? imagesExtraPx(row.item) + mailExtraPx(row.item) : 0);
     },
     getItemKey: (index) => allRows[index]?.key ?? index,
     initialRect: INITIAL_RECT,

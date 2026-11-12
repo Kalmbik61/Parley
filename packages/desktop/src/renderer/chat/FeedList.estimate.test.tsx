@@ -103,4 +103,20 @@ describe('FeedList — оценка высоты строк до замера', 
       ROW,
     ]);
   });
+
+  it('доставка писем выше строки на каждое письмо сверх первого и на строку остатка', () => {
+    const letter = { id: 'm-1', from: 'human', fromLabel: null, kind: 'note' as const, room: null, at: AT, text: 'hi' };
+    const mail = (id: string, count: number, remaining?: number): FeedItem => ({
+      id, at: AT, kind: 'mail', via: 'pointer', toolUseId: null,
+      letters: Array.from({ length: count }, (_, at) => ({ ...letter, id: `${id}-${at}` })),
+      ...(remaining === undefined ? {} : { remaining }),
+    });
+    render(
+      <ChatEnvContext.Provider value={{ bridge: createFakeBridge(), sessionRef: REF }}>
+        <FeedList items={[mail('one', 1), mail('three', 3), mail('more', 1, 4)]} queued={[]} note={null} />
+      </ChatEnvContext.Provider>,
+    );
+    const estimate = seen.estimateSize;
+    expect([0, 1, 2].map((index) => estimate?.(index))).toEqual([ROW, ROW + 2 * 72, ROW + 20]);
+  });
 });

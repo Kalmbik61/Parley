@@ -3,7 +3,7 @@ import { createServer, type Server, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { HostPaths } from '@parley/host';
-import { ASSISTANT_ACTIONS_FEATURE, BROWSER_AGENT_FEATURE, BROWSER_AGENT_OP_FEATURE, BROWSER_AGENT_OPS, COMPACT_WORKS_FEATURE, encodeLine, LineDecoder, PROTOCOL_VERSION, ROOMS_MAIL_FEATURE, WORKTREE_HOLDS_FEATURE, FEED_RESYNC_FEATURE } from '@parley/protocol';
+import { ASSISTANT_ACTIONS_FEATURE, BROWSER_AGENT_FEATURE, BROWSER_AGENT_OP_FEATURE, BROWSER_AGENT_OPS, COMPACT_WORKS_FEATURE, encodeLine, LineDecoder, PROTOCOL_VERSION, ROOMS_MAIL_FEATURE, WORKTREE_HOLDS_FEATURE, FEED_RESYNC_FEATURE, FEED_MAIL_FEATURE } from '@parley/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { S } from '../shared/strings.js';
 import { answerBrowserAgentOps, HostConnection, realProcesses } from './host-connection.js';
@@ -670,7 +670,7 @@ describe('операции агента над браузером (этап B2, 
     const connection = new HostConnection({ paths, env: process.env, spawn: vi.fn(), connectTimeoutMs: 1000 });
     await connection.connect();
     const hello = received.find((message) => (message as { method?: string }).method === 'hello') as { params: { features: string[] } };
-    expect(hello.params.features).toEqual([COMPACT_WORKS_FEATURE, ROOMS_MAIL_FEATURE, BROWSER_AGENT_FEATURE, ...BROWSER_AGENT_OPS.map(BROWSER_AGENT_OP_FEATURE), ASSISTANT_ACTIONS_FEATURE, WORKTREE_HOLDS_FEATURE, FEED_RESYNC_FEATURE]);
+    expect(hello.params.features).toEqual([COMPACT_WORKS_FEATURE, ROOMS_MAIL_FEATURE, BROWSER_AGENT_FEATURE, ...BROWSER_AGENT_OPS.map(BROWSER_AGENT_OP_FEATURE), ASSISTANT_ACTIONS_FEATURE, WORKTREE_HOLDS_FEATURE, FEED_RESYNC_FEATURE, FEED_MAIL_FEATURE]);
     connection.close();
     server.close();
   });

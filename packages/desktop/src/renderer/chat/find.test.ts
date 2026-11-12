@@ -109,3 +109,15 @@ describe('searchFeed', () => {
     expect(searchFeed([text('a '.repeat(FIND_LIMIT))], 'a').capped).toBe(false);
   });
 });
+
+describe('searchFeed: mail', () => {
+  const letter = { id: 'm-1', from: 's-03', fromLabel: 'Reviewer', kind: 'note' as const, room: null, at: '2026-11-01T00:00:00Z', text: 'Please check the NEEDLE' };
+  const mail = (): FeedItem => ({ ...base(), kind: 'mail', via: 'check_inbox', toolUseId: 't', letters: [letter] });
+
+  it('finds the letter text and the sender', () => {
+    expect(searchFeed([mail()], 'needle').matches.map((match) => match.part)).toEqual(['mail']);
+    expect(searchFeed([mail()], 'reviewer').matches.map((match) => match.part)).toEqual(['mail']);
+    expect(searchFeed([mail()], 's03').matches).toHaveLength(1);
+    expect(searchFeed([mail()], 'absent').matches).toEqual([]);
+  });
+});
