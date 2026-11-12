@@ -1225,6 +1225,9 @@ export function createActivityService(
     if (session.launchedBy !== 'host' || session.lifecycle !== 'active') return;
     // Хуков Codex харнесс не включает: их отсутствие у него — норма, состояние ведёт терминал.
     if (terminals.has(key) || !hooksExpected(session)) return;
+    // OpenCode has no hooks either: its journal comes from the host's event bridge, whose first write (the readiness
+    // `SessionStart`) also creates `events/`, so a missing journal before readiness is normal.
+    if (byFamily(session.provider, { claude: false, codex: false, qwen: false, opencode: true, neutral: false })) return;
     if (events !== null || hooksMissingNotified.has(key)) return;
     hooksMissingNotified.add(key);
     host.broadcast('host.notice', {
