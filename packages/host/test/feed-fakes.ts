@@ -26,7 +26,7 @@ type ActivityListener = (
 ) => void;
 type ExitListener = (ref: SessionRef) => void;
 /** `lifecycle` — жизненный цикл сессии в карте; `archived` — работа сессии в архиве (`work.status`). */
-type FakeSession = { ref: SessionRef; provider?: string; lifecycle?: string; archived?: boolean };
+type FakeSession = { ref: SessionRef; provider?: string; lifecycle?: string; archived?: boolean; providerSessionId?: string };
 /** Что индекс логов сообщает слушателям: какие сессии задела запись. */
 export type FakeLogChange = { affects(session: { id: string }): boolean };
 type WorksListener = (snapshot: unknown, previous: unknown) => void;
@@ -74,7 +74,7 @@ function worksSnapshotOf(sessions: FakeSession[]): { entries: FakeEntry[] } {
       };
       entries.set(key, entry);
     }
-    entry.map.sessions.push({ id: session.ref.sessionId, provider: session.provider ?? 'claude' });
+    entry.map.sessions.push({ id: session.ref.sessionId, provider: session.provider ?? 'claude', ...(session.providerSessionId === undefined ? {} : { providerSessionId: session.providerSessionId }) });
   }
   return { entries: Array.from(entries.values()) };
 }
@@ -109,6 +109,7 @@ export function fakeFeedDeps(initial: FakeSession[] = [{ ref: REF }]): FakeFeedD
               id: session.ref.sessionId,
               provider: session.provider ?? 'claude',
               ...(session.lifecycle === undefined ? {} : { lifecycle: session.lifecycle }),
+              ...(session.providerSessionId === undefined ? {} : { providerSessionId: session.providerSessionId }),
             })),
           },
         };

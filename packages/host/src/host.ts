@@ -488,7 +488,11 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     works: worksService,
     activity: activityService,
     pty: ptyManager,
-  }, options.codexHookGraceMs === undefined ? {} : { codexHookGraceMs: options.codexHookGraceMs });
+  }, {
+    ...(options.codexHookGraceMs === undefined ? {} : { codexHookGraceMs: options.codexHookGraceMs }),
+    // OpenCode Chat reads the messages of the session's own server (the supervisor is created further down; it is only called later).
+    opencodeServer: (ref) => opencodeSupervisor.get(ref),
+  });
   // Канал агента к браузеру окна (спека браузера 2026-10-07, 3.7): путь `/agent/browser` на сервере хуков и свой
   // реестр токенов — у всех провайдеров. Операцию исполняет окно с возможностью `browser-agent`.
   const browserEndpoint = createBrowserEndpoint({
@@ -744,7 +748,15 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   });
   handle.context.onShutdown(async () => capacityFeed.stop());
   // OpenCode servers (spec 2026-11-12, 4.2): one per live OpenCode session, run file in the Parley home.
-  const opencodeSupervisor = createOpencodeSupervisor({ home: resolvedHome, log });
+  const opencodeSupervisor = createOpencodeSupervisor({
+    home: resolvedHome,
+    log,
+    // The last message poll before a planned stop keeps the Chat of a closed session (spec 2026-11-12, 4.11).
+    beforeStop: (ref, server) => feedService.opencodeLastPoll(ref, server),
+  });
+  // OpenCode events (spec 2026-11-12, 4.4): the session's SSE stream into the journal and the hook chain.
+  const opencodeEvents = createOpencodeBridge({ log, hook: dispatchHook });
+  handle.context.onShutdown(async () => opencodeEvents.stopAll());
   sessionsService = createSessionsService(
     handle.context,
     worksService,

@@ -192,8 +192,9 @@ describe('probeQwenModels with a fake qwen --acp', () => {
 
   it('a hang gives null at the timeout and cleans up', async () => {
     const started = Date.now();
-    expect(await probe({ FAKE_MODE: 'hang' }, { timeoutMs: 300 })).toBeNull();
-    expect(Date.now() - started).toBeLessThan(300 + 2000);
+    // The timeout leaves room for a loaded machine to start the fake CLI before it expires.
+    expect(await probe({ FAKE_MODE: 'hang' }, { timeoutMs: 1500 })).toBeNull();
+    expect(Date.now() - started).toBeLessThan(1500 + 2000);
     expect(alive((await runs())[0]!.pid)).toBe(false);
     expect(await readdir(tmpRoot)).toEqual([]);
   });

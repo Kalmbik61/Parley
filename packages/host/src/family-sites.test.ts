@@ -61,8 +61,8 @@ function opencodeBranches(file: string): Array<string | null> {
 }
 
 /**
- * The chosen branch per call site. Until the OpenCode launch tasks (O5–O10) every site is neutral for OpenCode: no Claude hooks,
- * no inline mail, no transcript seeding, no `/compact`, typed like a plain terminal. `log-index` gives it its own key so its
+ * The chosen branch per call site. OpenCode is neutral at most sites (no Claude hooks, no inline mail, no `/compact`, typed like a
+ * plain terminal); the feed polls its own server (O8), so the feed sites that serve Qwen's polled feed name `true` for it. `log-index` gives it its own key so its
  * native id never evicts another family's.
  */
 const SITES: Record<string, string[]> = {
@@ -81,7 +81,7 @@ const SITES: Record<string, string[]> = {
   'host/src/hooks/inline-mail.ts': ['true'],
   'host/src/hooks/hook-server.ts': ['NO_EVENTS'],
   'host/src/sessions/sessions-service.ts': ['null', 'false', 'false', 'false', 'false', 'false'],
-  'host/src/feed/feed-service.ts': ["null", 'false', '() => Promise.resolve()', 'false', 'false', 'false', 'false', 'false'],
+  'host/src/feed/feed-service.ts': ['null', 'false', '() => seedOpencode(feed, foreground)', 'false', 'true', 'true', 'false', 'true', 'true'],
 };
 
 describe('byFamily call sites name their opencode branch', () => {
