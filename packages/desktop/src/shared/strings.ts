@@ -2122,6 +2122,8 @@ export const S = {
       codexPlaceholder: 'Message Codex — Enter to send',
       qwenLabel: 'Message to Qwen Code',
       qwenPlaceholder: 'Message Qwen Code — Enter to send',
+      opencodeLabel: 'Message to OpenCode',
+      opencodePlaceholder: 'Message OpenCode — Enter to send',
       send: 'Send',
       queue: 'Queue',
       attach: 'Attach a file',
@@ -2172,6 +2174,8 @@ export const S = {
       text: 'Claude Code is waiting in the terminal',
       /** Qwen Code approvals are answered in the terminal in v1: the Chat view has no approval cards for it. */
       qwenApproval: 'Waiting for approval in the terminal',
+      /** OpenCode approvals are answered in the terminal in v1: the Chat view has no approval cards for it. */
+      opencodeApproval: 'Waiting for approval in the terminal',
       open: 'Open terminal',
     },
     /** Баннер замены агента над полем ввода (спека 2026-10-30, 5.7). */

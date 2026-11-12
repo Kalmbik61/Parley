@@ -22,10 +22,14 @@ import {
   FEED_MAIL_FEATURE,
   FEED_MAIL_TEXT_LIMIT,
   FEED_MIN_VERSION,
+  FEED_OPENCODE_FEATURE,
   FEED_PATCH_LINES,
   FEED_RESULT_LIMIT,
   FEED_SCHEMA_VERSION,
   FEED_TEXT_LIMIT,
+  OPENCODE_FEED_MIN_VERSION,
+  QWEN_FEED_MIN_VERSION,
+  FEED_QWEN_FEATURE,
   feedCardState,
   feedDecision,
   feedItem,
@@ -335,6 +339,12 @@ describe('пределы и версия', () => {
     expect(FEED_MIN_VERSION).toBe(core.FEED_MIN_VERSION);
     expect(CODEX_FEED_MIN_VERSION).toBe(core.CODEX_FEED_MIN_VERSION);
     expect(FEED_CODEX_FEATURE).toBe('feed-codex');
+    expect(FEED_QWEN_FEATURE).toBe('feed-qwen');
+    expect(QWEN_FEED_MIN_VERSION).toBe(core.PROVIDERS['qwen']?.runner.minVersion);
+    // OpenCode: the Chat feed needs the version the parsers were recorded on, not the lowest the launcher accepts.
+    expect(FEED_OPENCODE_FEATURE).toBe('feed-opencode');
+    expect(OPENCODE_FEED_MIN_VERSION).toBe('2.2.7');
+    expect(core.PROVIDERS['opencode']?.runner.minVersion).toBeDefined();
     expect(FEED_SCHEMA_VERSION).toBe(4);
     expect(FEED_MAIL_FEATURE).toBe('feed-mail');
     expect(FEED_MAIL_TEXT_LIMIT).toBe(core.FEED_MAIL_TEXT_LIMIT);

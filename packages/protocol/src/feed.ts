@@ -49,6 +49,10 @@ export const FEED_CODEX_FEATURE = 'feed-codex';
 export const QWEN_FEED_MIN_VERSION = '0.27.2';
 /** `hello.features` of a host that builds the Qwen Code feed from its transcript. */
 export const FEED_QWEN_FEATURE = 'feed-qwen';
+/** The lowest OpenCode whose message list the Chat feed parses: the version of the spike and the mock lab (spec 2026-11-12, 4.11). */
+export const OPENCODE_FEED_MIN_VERSION = '2.2.7';
+/** `hello.features` of a host that builds the OpenCode feed from the messages API of the session's server. */
+export const FEED_OPENCODE_FEATURE = 'feed-opencode';
 /**
  * Признак `hello.features` клиента: он понимает событие `feed.resync` (хост снял его подписки на ленты из-за
  * затора и просит взять снимок заново). Клиенту без признака подписки не снимаются.
