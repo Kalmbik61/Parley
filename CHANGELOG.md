@@ -4,6 +4,16 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
+## Unreleased
+
+### Changed
+
+- **Continuing a session on a provider where its role cannot run no longer leaves it stuck.** A switch used to write the new provider into the session and then every launch failed with `role-permissions-unavailable` (for example a read-only Architect moved to Qwen Code). Now a built-in role the target does not accept becomes "no role", and Parley says so before it switches: the "Continue on another provider" dialog shows one sentence about the role change above the button, and an agent's `request_agent_switch` card shows the same sentence in the window, the island and Telegram (the phone shows it too). When the change lifts a read-only restriction, the switch needs that confirmation: a request without it is refused with the same sentence and nothing is changed. After a confirmed switch with a role change you get one notice instead of the dialog's own toast. A session already stuck by an earlier version is refused at launch with a message that names the provider to continue it on again. Not in this version: the phone's "Continue on another provider" sheet does not show the role change (a read-only loss is refused there with the sentence), and switching back does not restore the earlier role.
+
+### Fixed
+
+- **The Claude limit follows a reset inside a window.** After the vendor reset the Claude limits in the middle of a window, Parley kept showing the old, higher percentage until the window ended: in the status bar, on the provider card, in the number agents read and in the suggested switch target. It now follows the sessions that saw the new usage, and existing limit files need no cleanup.
+
 ## 0.35.0
 
 ### Added

@@ -16,7 +16,7 @@
 import type { NeedKind } from '@parley/core';
 import { STATE_WORDS } from '@parley/core/session-state';
 import { providerLabel } from '@parley/core/stuck';
-import { CODEX_FEED_MIN_VERSION, FEED_MIN_VERSION, type FolderTrustCard, type HostNotice, type MailWait, type NoticeKind, type ProviderCheckReason } from '@parley/protocol';
+import { CODEX_FEED_MIN_VERSION, FEED_MIN_VERSION, HOST_ERROR_REASONS, type FolderTrustCard, type HostNotice, type MailWait, type NoticeKind, type ProviderCheckReason } from '@parley/protocol';
 import type { ContextKind } from './context-markdown.js';
 import type { IpcErrorInfo } from './ipc-error.js';
 
@@ -1179,9 +1179,6 @@ export const S = {
       continue: 'Continue',
       stopAndContinue: 'Stop and continue',
       held: 'Waiting for folder trust',
-      /** Роль прежнего агента не запускается у нового: `to` — одноимённая роль цели или `null` (без роли). */
-      roleChanged: (from: string, to: string | null): string =>
-        to === null ? `Role ${from} doesn't run on this provider — continuing without a role` : `Role ${from} doesn't run on this provider — continuing as ${to}`,
       failed: 'Could not continue the session',
       limitsFive: (percent: number): string => `5h ${Math.round(percent)}%`,
       limitsWeek: (percent: number): string => `week ${Math.round(percent)}%`,
@@ -3337,6 +3334,8 @@ function budgetSettingName(reason: string, scope: string): string | null {
  */
 export function startErrorText(failure: IpcErrorInfo, action: string): string {
   const data = failure.data;
+  // Отказ из-за роли после замены агента (спека 2026-11-12, 2.6): текст хоста сам называет выход — показываем его.
+  if (failure.code === 'conflict' && data?.['reason'] === HOST_ERROR_REASONS.roleChange && failure.message !== '') return failure.message;
   if (data?.['code'] !== 'resource-budget') return errorText(failure.code, action);
   const B = S.errors.budget;
   const reason = typeof data['reason'] === 'string' ? data['reason'] : '';
@@ -3369,7 +3368,8 @@ export function startErrorText(failure: IpcErrorInfo, action: string): string {
  * вызывающей стороны (`store/notices.ts`), а человеку — текст по виду
  * уведомления. Слова — как у хоста, гида и README: письма — «messages»,
  * строка, которую хост набирает в терминал агента, — «pointer».
- * Исключение — тело macOS-уведомления `limit-return-blocked`: причину («…could not continue: a menu is open in its
+ * Исключение — `role-missing`: `noticeText` берёт английский текст хоста (смена роли при замене агента, спека 2026-11-12, 2.5);
+ * пустой текст — фраза ниже. Исключение — тело macOS-уведомления `limit-return-blocked`: причину («…could not continue: a menu is open in its
  * terminal», спека застрявших 7.4) знает только хост, и `attention/notify.ts` берёт его английский текст; фраза ниже —
  * запасная (строка статуса, пустой текст).
  */
@@ -3432,6 +3432,15 @@ function unmovedWorkDetail(text: string): string {
  * без него или с тем, что есть); без ярлыка — просто фраза с большой буквы.
  */
 export function noticeText(notice: HostNotice, label?: string): string {
+  // `role-missing`: the host's own sentence names the provider and what changed (spec 2026-11-12, 2.5). A text that starts
+  // with the session (`@s02 …`, `S02 …`) is shown as is; other texts (the launch warning "The saved role is no longer
+  // available…") get the label in front. An empty text falls back to the generic phrase below.
+  // Text with Cyrillic (an old host) is not shown: the window speaks English only.
+  const own = notice.kind === 'role-missing' ? notice.text.trim() : '';
+  if (own !== '' && !/[А-Яа-яЁё]/.test(own)) {
+    const sentence = /[.!?]$/.test(own) ? own : `${own}.`;
+    return label === undefined || /^(@s|S)\d+\b/.test(own) ? sentence : `${label}: ${sentence}`;
+  }
   const detail = notice.kind === 'map-migration-failed' ? unmovedWorkDetail(notice.text) : NOTICE_DETAIL[notice.kind];
   if (label === undefined) return `${detail.charAt(0).toUpperCase()}${detail.slice(1)}.`;
   return `${label}: ${detail}.`;

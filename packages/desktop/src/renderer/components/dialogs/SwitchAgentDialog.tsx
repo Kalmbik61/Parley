@@ -127,13 +127,14 @@ export function SwitchAgentDialog({ bridge, sessionRef, onClose }: SwitchAgentDi
         ...(sentEffort === null ? {} : { effort: sentEffort }),
         carry: effectiveCarry,
         ...(force ? { force: true } : {}),
+        // What the human saw above the button; the host refuses a read-only loss without it.
+        ...(target.roleChange == null ? {} : { roleChange: { from: target.roleChange.from, to: target.roleChange.to } }),
       });
       if (result.outcome === 'held') {
         // Согласие на папку ждёт человека в отдельной карточке: диалог закрывается с пояснением.
         toast(text.held);
       }
-      // Поле есть только у нового хоста: старый его не шлёт.
-      if (result.role !== undefined) toast(text.roleChanged(result.role.from, result.role.to));
+      // The role change is announced by the host's one `role-missing` notice, not here.
       onClose();
     } catch (err) {
       console.warn('[parley] sessions.switchAgent', err);
@@ -230,6 +231,15 @@ export function SwitchAgentDialog({ bridge, sessionRef, onClose }: SwitchAgentDi
             <p data-switch-keeps className="text-xs text-neutral-700">
               {text.keeps}: {keepsParts(options.keeps, sessionRef.sessionId).join(' · ')}
             </p>
+            {target?.roleChange == null ? null : (
+              <p
+                data-switch-role-change
+                data-read-only-lost={target.roleChange.readOnlyLost ? '' : undefined}
+                className={cn('text-sm', target.roleChange.readOnlyLost ? 'font-medium text-destructive' : 'text-neutral-700')}
+              >
+                {target.roleChange.text}
+              </p>
+            )}
             {options.blockers.length > 0 ? (
               <div role="alert" className="text-sm text-destructive">
                 <p className="font-medium">{text.blockers}</p>

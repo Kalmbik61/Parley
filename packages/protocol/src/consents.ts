@@ -33,6 +33,12 @@ export interface FolderTrustCard extends ConsentCardBase {
   requestedBy: { source: 'agent' | 'resume' | 'launch'; sessionId?: string; workId?: string; label?: string };
 }
 
+/** The change of a session role on an agent switch (spec 2026-11-12, 2.2); `text` is the same sentence on every surface. */
+export interface RoleChange { from: string; to: string | null; readOnlyLost: boolean; text: string }
+/** What the human saw and confirmed: the role before and after. */
+export interface RoleChangeAck { from: string; to: string | null }
+export const roleChangeAck = z.object({ from: z.string().min(1).max(200), to: z.string().max(200).nullable() });
+
 /**
  * Агент просит продолжить сессию на другом провайдере (`request_agent_switch`): замену выполняет только `allow`
  * человека. `id` карточки служит `requestId` замены. Окно, остров и Telegram, не знающие вида, его пропускают.
@@ -47,6 +53,8 @@ export interface AgentSwitchCard extends ConsentCardBase {
   model: string | null;
   reason: string;
   requestedBy: { sessionId: string; label: string };
+  /** Set when the session's role changes on the target; absent on cards of older hosts. */
+  roleChange?: RoleChange;
 }
 
 /** Сервер MCP из `.mcp.json` проекта, о котором у человека ещё нет решения. */
@@ -96,6 +104,8 @@ export const consentMethodSchemas = {
     decision: z.enum(['allow', 'deny']),
     enabled: z.array(z.object({ name: z.string().min(1).max(200), fingerprint: z.string().min(1).max(200) })).max(200).optional(),
     revision: z.number().int().min(1).optional(),
+    /** The role change the human saw on an `agent-switch` card; required by the host when the card loses read-only. */
+    roleChange: roleChangeAck.optional(),
   }),
   'trust.list': z.object({}),
   /** Доверена ли папка: хост сам берёт realpath, окно путь не сверяет (`/tmp` и `/private/tmp` — одна папка). */

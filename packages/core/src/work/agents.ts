@@ -230,10 +230,11 @@ export async function prepareSessionRole(cwd: string, entry: ProviderEntry, choi
  * Роль, с которой сессию можно запустить на `entry`: прежняя, если она того же семейства, что цель, и принимается;
  * иначе одноимённая роль семейства цели; иначе `null` (умолчания провайдера). Семейство решает первым и без каталога:
  * в режиме `existing` отсутствующая в каталоге роль не отказ, и ответ зависел бы от того, что в каталоге есть.
+ * Встроенная роль проверяется так же (`existing`): без одноимённого варианта цель либо принимает её, либо `null`.
  * Ловит только `RoleChoiceError`, остальные ошибки идут наружу.
  */
 export async function roleForProvider(cwd: string, entry: ProviderEntry, role: SessionRole | null, catalog?: RoleCatalog): Promise<SessionRole | null> {
-  if (role === null || role.source === 'builtin') return role;
+  if (role === null) return role;
   const accepts = async (candidate: SessionRole, mode: 'existing' | 'create'): Promise<boolean> => {
     try {
       await prepareSessionRole(cwd, entry, { roleId: roleId(candidate), provider: entry.id, mode }, catalog);
@@ -243,12 +244,43 @@ export async function roleForProvider(cwd: string, entry: ProviderEntry, role: S
       throw error;
     }
   };
+  // A built-in role has no per-family variant: the target accepts it or the session continues without a role
+  // (spec 2026-11-12, 2.1). Read-only built-ins are refused by Qwen Code and `neutral` runners.
+  if (role.source === 'builtin') return await accepts(role, 'existing') ? role : null;
   // Qwen Code has no native roles: a Claude or Codex role does not carry over (spec 2026-11-11, 3.6, D10).
   const source = byFamily(entry, { claude: 'claude' as const, codex: 'codex' as const, qwen: null, opencode: null, neutral: null });
   if (source === role.source) return await accepts(role, 'existing') ? role : null;
   if (source === null) return null;
   const sameName: SessionRole = { source, name: role.name };
   return await accepts(sameName, 'create') ? sameName : null;
+}
+
+export interface RoleChange { from: string; to: string | null; readOnlyLost: boolean; text: string }
+
+/**
+ * The change of a session role when it continues on `entry` (spec 2026-11-12, 2.2): `null` when the role stays the same
+ * or the session has none. `readOnlyLost` compares the catalog's resolved `readOnly` of both roles. `text` is one English
+ * sentence for people, the same on every surface.
+ */
+export async function roleChangeOnSwitch(cwd: string, entry: ProviderEntry, targetLabel: string, role: SessionRole | null, catalog?: RoleCatalog): Promise<RoleChange | null> {
+  if (role === null) return null;
+  const current = catalog ?? await sessionRoleCatalog(cwd, { codex: role.source === 'codex' || entry.id === 'codex', provider: entry });
+  const next = await roleForProvider(cwd, entry, role, current);
+  const from = roleId(role)!;
+  const to = roleId(next);
+  if (from === to) return null;
+  const readOnly = (id: string | null): boolean => id !== null && (current.roles.find(item => item.id === id)?.readOnly ?? false);
+  // Fail closed: a native Codex role can be read-only (`sandbox_mode = "read-only"`); when its settings could not be read
+  // (role missing from the catalog or any Codex diagnostic), it counts as read-only and the switch needs the ack.
+  const unverified = role.source === 'codex' && (!current.roles.some(item => item.id === from) || current.diagnostics.some(item => item.source === 'codex'));
+  const readOnlyLost = (readOnly(from) || unverified) && !readOnly(to);
+  const fromName = current.roles.find(item => item.id === from)?.name ?? from;
+  const after = next === null ? 'without a role' : `as ${next.name} (${next.source})`;
+  const kind = readOnly(from) ? 'is a read-only role' : 'may be a read-only role (its Codex settings could not be verified)';
+  const text = readOnlyLost
+    ? `${fromName} ${kind} and does not run on ${targetLabel}. The session will continue ${after}, and can edit files and run commands.`
+    : `Role ${fromName} does not run on ${targetLabel}. The session will continue ${after}.`;
+  return { from, to, readOnlyLost, text };
 }
 
 export interface RoleSummary {

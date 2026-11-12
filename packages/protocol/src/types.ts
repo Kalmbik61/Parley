@@ -358,6 +358,8 @@ export type ErrorCode =
  *   обновите окно (P35);
  * - `snapshot-too-large` (`internal`) — даже компактный снимок работ не влезает в кадр (тысячи сессий или комнат):
  *   хост его не шлёт, окну остаётся сказать об этом человеку (P35).
+ * - `role-change` (`conflict`) — первый запуск после замены агента отказан: роль read-only на новом провайдере не
+ *   работает (спека 2026-11-12, 2.6); `message` — английский текст хоста с выходом, окно показывает его как есть.
  * - `busy` (`conflict`) — смену модели или effort идущей сессии хост сейчас не делает: агент работает или ждёт
  *   человека, держат фоновые задачи, в поле ввода терминала черновик, ползунок `/effort` уже открыт или идёт
  *   другая смена той же сессии (нормалайзер модели и effort, 5.7–5.8).
@@ -375,6 +377,7 @@ export const HOST_ERROR_REASONS = {
   clientUpgradeRequired: 'client-upgrade-required',
   snapshotTooLarge: 'snapshot-too-large',
   busy: 'busy',
+  roleChange: 'role-change',
   notQueen: 'not-queen',
   swarmClosed: 'swarm-closed',
   swarmMember: 'swarm-member',

@@ -247,6 +247,13 @@ describe('errorText', () => {
 });
 
 describe('startErrorText — отказ запуска называет причину и что делать', () => {
+  it('отказ роли после замены агента (спека 2026-11-12, 2.6): текст хоста как есть; без метки — общий текст', () => {
+    const message = 'Architect is a read-only role and does not run on Qwen Code. Continue @s01 on Codex again to keep the role; from there you can continue it on Qwen Code without the role.';
+    expect(startErrorText({ code: 'conflict', message, data: { reason: 'role-change' } }, 'resume session')).toBe(message);
+    expect(startErrorText({ code: 'conflict', message }, 'resume session')).toBe("Couldn't resume session: conflicting state.");
+    expect(startErrorText({ code: 'conflict', message, data: { reason: 'busy' } }, 'resume session')).toBe("Couldn't resume session: conflicting state.");
+  });
+
   const refused = (data: Record<string, unknown>) => ({
     code: 'conflict',
     message: 'session limit reached: raw technical host text',
@@ -338,6 +345,20 @@ describe('noticeText', () => {
     expect(noticeText(hostNotice('startup-wait', ref), 'S03 codex')).toBe(
       'S03 codex: waiting at startup — Codex may need sign-in or folder trust in its terminal.',
     );
+  });
+
+  it('role-missing shows the host text (the role change of a switch), the generic phrase when it is empty or not English', () => {
+    const ref = { projectPath: '/tmp/p', workId: 'w-01', sessionId: 's-02' };
+    const text = '@s02 continues on Qwen Code without a role: Architect no longer applies, and the read-only restriction is lifted.';
+    expect(noticeText({ ...hostNotice('role-missing', ref), text }, 'S02 architect')).toBe(text);
+    expect(noticeText({ ...hostNotice('role-missing', ref), text: '@s02 role claude:x does not run on Codex: it starts without a role' })).toBe('@s02 role claude:x does not run on Codex: it starts without a role.');
+    expect(noticeText({ ...hostNotice('role-missing', ref), text: '  ' })).toBe('Saved role is unavailable — this session starts without role defaults.');
+    expect(noticeText(hostNotice('role-missing', ref), 'S02')).toBe('S02: saved role is unavailable — this session starts without role defaults.');
+    // F6: a host text that does not start with the session gets the label in front; one that does is left as is.
+    const warning = 'The saved role is no longer available. Parley kept the explicit session choices and started without role defaults.';
+    expect(noticeText({ ...hostNotice('role-missing', ref), text: warning }, 'S02 Bruno')).toBe(`S02 Bruno: ${warning}`);
+    expect(noticeText({ ...hostNotice('role-missing', ref), text: warning })).toBe(warning);
+    expect(noticeText({ ...hostNotice('role-missing', ref), text: 'S02 role codex:x does not run on Claude Code: it starts without a role' }, 'S02 Bruno')).toBe('S02 role codex:x does not run on Claude Code: it starts without a role.');
   });
 
   it('limit-return-blocked — лимит сброшен, а сессию вернуть не вышло (спека застрявших 7.1)', () => {

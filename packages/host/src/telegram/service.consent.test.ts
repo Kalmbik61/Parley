@@ -392,4 +392,35 @@ describe('telegram: карточка agent-switch', () => {
     expect(consents.decide).toHaveBeenCalledWith('c-05', 'allow');
     expect(edits()[0]!.params.text).toBe(`${message.params.text}\n\nAllowed ✓`);
   });
+
+  const ROLE: ConsentCard = {
+    ...SWITCH,
+    id: 'c-06',
+    provider: 'qwen',
+    providerLabel: 'Qwen Code',
+    model: null,
+    roleChange: {
+      from: 'builtin:architect',
+      to: null,
+      readOnlyLost: true,
+      text: 'Architect is a read-only role and does not run on Qwen Code. The session will continue without a role, and can edit files and run commands.',
+    },
+  } as ConsentCard;
+
+  it('смена роли — своей строкой карточки (спека 2026-11-12, 2.4)', async () => {
+    await bootLinked();
+    const message = await sendCard(ROLE);
+    expect(message.params.text).toBe(
+      '<b>Continue on another provider?</b>\n@s11 asks to continue @s03 on Qwen Code: the Claude limit is near. Allow stops @s03 now and continues it there.\nArchitect is a read-only role and does not run on Qwen Code. The session will continue without a role, and can edit files and run commands.\nRequested by Greta · my_harnas',
+    );
+  });
+
+  it('Allow карточки со сменой роли передаёт её подтверждение', async () => {
+    pending = [ROLE];
+    await bootLinked();
+    const message = await sendCard(ROLE);
+    push([tap(messageIdOf(shortIdOf(message)), `pc1:${shortIdOf(message)}:a`)]);
+    await settle();
+    expect(consents.decide).toHaveBeenCalledWith('c-06', 'allow', { from: 'builtin:architect', to: null });
+  });
 });

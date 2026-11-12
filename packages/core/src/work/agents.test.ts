@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { agentDirs, assertAgent, listAgents, prepareSessionRole, roleForProvider, sessionRoleCatalog, assertRoleDelivery, projectSkillRunnerContext, roleProvider, roleModel } from './agents.js';
+import { agentDirs, assertAgent, listAgents, prepareSessionRole, roleForProvider, roleChangeOnSwitch, sessionRoleCatalog, assertRoleDelivery, projectSkillRunnerContext, roleProvider, roleModel } from './agents.js';
 import { PROVIDERS } from '../providers.js';
 import { modelForTier } from '../roles/builtin.js';
 import { OPENCODE_FAMILY_ENTRY } from '../../test/family-fixtures.js';
@@ -350,5 +350,73 @@ describe('roles on opencode (spec 2026-11-12, 4.8, DO4)', () => {
     expect(roleModel({ source: 'builtin', model: 'opus', models: { claude: 'opus', codex: 'gpt-6-astra' } }, 'opencode')).toBeNull();
     const catalog = buildRoleCatalog();
     expect(resolveRoleChoice(catalog, { roleId: 'builtin:planner', provider: 'opencode' }).model).toBeNull();
+  });
+});
+
+describe('built-in roles on a target that refuses them (spec 2026-11-12, 2.1)', () => {
+  const neutral = { ...PROVIDERS.glm, id: 'custom-neutral', family: undefined, runner: { ...PROVIDERS.glm.runner, args: ['{prompt}'], resumeArgs: ['{prompt}'] } } as unknown as typeof PROVIDERS.glm;
+  it('read-only architect: kept on codex and claude, null on qwen and on a neutral runner', async () => {
+    const architect = { source: 'builtin', name: 'architect' } as const;
+    expect(await roleForProvider(project, PROVIDERS.codex, architect)).toEqual(architect);
+    expect(await roleForProvider(project, PROVIDERS.claude, architect)).toEqual(architect);
+    expect(await roleForProvider(project, PROVIDERS.qwen, architect)).toBeNull();
+    expect(await roleForProvider(project, neutral, architect)).toBeNull();
+  });
+  it('non-read-only executor stays on qwen', async () => {
+    expect(await roleForProvider(project, PROVIDERS.qwen, { source: 'builtin', name: 'executor' })).toEqual({ source: 'builtin', name: 'executor' });
+  });
+});
+
+describe('roleChangeOnSwitch', () => {
+  const mk = (id: 'claude' | 'codex', name: string, readOnly: boolean) => id === 'claude'
+    ? { id: `claude:${name}`, source: 'claude', provider: 'claude', name, nativeAgent: name, description: '', path: '/f.md', readOnly } as const
+    : { id: `codex:${name}`, source: 'codex', provider: 'codex', name, description: '', path: '/f.toml', prompt: 'P.', model: null, effort: null, sandboxMode: null, readOnly } as const;
+  const cat = (...roles: Array<ReturnType<typeof mk>>) => buildRoleCatalog({ roles, diagnostics: [], partial: false });
+  const unverifiedCodex = (...roles: Array<ReturnType<typeof mk>>) =>
+    buildRoleCatalog({ roles, diagnostics: [{ source: 'codex', code: 'context-unverified' }], partial: false });
+  const codexReviewer = { source: 'codex', name: 'reviewer' } as const;
+
+  it('fail closed: a Codex role with unreadable settings counts as read-only', async () => {
+    expect(await roleChangeOnSwitch(project, PROVIDERS.claude, 'Claude Code', codexReviewer, unverifiedCodex(mk('codex', 'reviewer', false), mk('claude', 'reviewer', false)))).toEqual({
+      from: 'codex:reviewer', to: 'claude:reviewer', readOnlyLost: true,
+      text: 'reviewer may be a read-only role (its Codex settings could not be verified) and does not run on Claude Code. The session will continue as reviewer (claude), and can edit files and run commands.',
+    });
+    expect(await roleChangeOnSwitch(project, PROVIDERS.claude, 'Claude Code', codexReviewer, cat(mk('claude', 'reviewer', false)))).toEqual({
+      from: 'codex:reviewer', to: 'claude:reviewer', readOnlyLost: true,
+      text: 'codex:reviewer may be a read-only role (its Codex settings could not be verified) and does not run on Claude Code. The session will continue as reviewer (claude), and can edit files and run commands.',
+    });
+  });
+  it('a readable non-read-only Codex role, and built-in and Claude roles next to a Codex diagnostic: unchanged', async () => {
+    expect(await roleChangeOnSwitch(project, PROVIDERS.claude, 'Claude Code', codexReviewer, cat(mk('codex', 'reviewer', false), mk('claude', 'reviewer', false)))).toMatchObject({
+      readOnlyLost: false, text: 'Role reviewer does not run on Claude Code. The session will continue as reviewer (claude).',
+    });
+    expect(await roleChangeOnSwitch(project, PROVIDERS.codex, 'Codex', { source: 'claude', name: 'reviewer' }, unverifiedCodex(mk('claude', 'reviewer', false)))).toMatchObject({
+      to: null, readOnlyLost: false, text: 'Role reviewer does not run on Codex. The session will continue without a role.',
+    });
+    expect(await roleChangeOnSwitch(project, PROVIDERS.qwen, 'Qwen Code', { source: 'builtin', name: 'executor' }, unverifiedCodex())).toBeNull();
+  });
+
+  it('read-only lost, no role after', async () => {
+    const change = await roleChangeOnSwitch(project, PROVIDERS.qwen, 'Qwen Code', { source: 'builtin', name: 'architect' }, buildRoleCatalog());
+    expect(change).toEqual({ from: 'builtin:architect', to: null, readOnlyLost: true,
+      text: 'Architect is a read-only role and does not run on Qwen Code. The session will continue without a role, and can edit files and run commands.' });
+  });
+  it('read-only lost, another role after', async () => {
+    const catalog = cat(mk('claude', 'reviewer', true), mk('codex', 'reviewer', false));
+    const change = await roleChangeOnSwitch(project, PROVIDERS.codex, 'Codex', { source: 'claude', name: 'reviewer' }, catalog);
+    expect(change).toEqual({ from: 'claude:reviewer', to: 'codex:reviewer', readOnlyLost: true,
+      text: 'reviewer is a read-only role and does not run on Codex. The session will continue as reviewer (codex), and can edit files and run commands.' });
+  });
+  it('plain change, with and without a role after', async () => {
+    const catalog = cat(mk('claude', 'reviewer', false), mk('codex', 'reviewer', false));
+    expect(await roleChangeOnSwitch(project, PROVIDERS.codex, 'Codex', { source: 'claude', name: 'reviewer' }, catalog)).toEqual({ from: 'claude:reviewer', to: 'codex:reviewer', readOnlyLost: false,
+      text: 'Role reviewer does not run on Codex. The session will continue as reviewer (codex).' });
+    expect(await roleChangeOnSwitch(project, PROVIDERS.codex, 'Codex', { source: 'claude', name: 'reviewer' }, cat(mk('claude', 'reviewer', false)))).toMatchObject({ to: null, readOnlyLost: false,
+      text: 'Role reviewer does not run on Codex. The session will continue without a role.' });
+  });
+  it('no change: no role, or a role the target keeps', async () => {
+    expect(await roleChangeOnSwitch(project, PROVIDERS.qwen, 'Qwen Code', null, buildRoleCatalog())).toBeNull();
+    expect(await roleChangeOnSwitch(project, PROVIDERS.codex, 'Codex', { source: 'builtin', name: 'architect' }, buildRoleCatalog())).toBeNull();
+    expect(await roleChangeOnSwitch(project, PROVIDERS.claude, 'Claude', { source: 'builtin', name: 'architect' }, buildRoleCatalog())).toBeNull();
   });
 });

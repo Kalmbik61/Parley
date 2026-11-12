@@ -552,6 +552,8 @@ export type DecideConsentOutcome =
 export interface ConsentExtra {
   enabled?: ReadonlyArray<{ name: string; fingerprint: string }>;
   revision?: number;
+  /** `agent-switch` card that changes the role: the card's `{from, to}`, sent with `allow` only (spec 2026-11-12, 2.4). */
+  roleChange?: { from: string; to: string | null };
 }
 
 export async function decideConsent(
@@ -574,7 +576,7 @@ export async function decideConsent(
     }
   };
   try {
-    const res = (await rpc.call('consents.decide', { id, decision, ...(decision === 'allow' && extra?.enabled !== undefined ? { enabled: extra.enabled } : {}), ...(extra?.revision !== undefined ? { revision: extra.revision } : {}) })) as { applied?: boolean } | null;
+    const res = (await rpc.call('consents.decide', { id, decision, ...(decision === 'allow' && extra?.enabled !== undefined ? { enabled: extra.enabled } : {}), ...(extra?.revision !== undefined ? { revision: extra.revision } : {}), ...(decision === 'allow' && extra?.roleChange !== undefined ? { roleChange: extra.roleChange } : {}) })) as { applied?: boolean } | null;
     store.dispatch({ t: 'consents.resolved', id });
     if (store.getState().epoch === epoch) return { outcome: res?.applied === true ? 'applied' : 'stale' };
   } catch (error) {

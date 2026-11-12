@@ -262,7 +262,7 @@ const EFFORT_TOKEN = /^[a-z][a-z0-9_-]{0,31}$/;
 export const REMOTE_PROVIDER_MAX = 64;
 const MODEL_MAX = 200;
 const CLIENT_MSG_ID = /^[A-Za-z0-9_-]{8,64}$/;
-const CONSENT_DECIDE_KEYS: ReadonlySet<string> = new Set(['id', 'decision', 'enabled', 'revision']);
+const CONSENT_DECIDE_KEYS: ReadonlySet<string> = new Set(['id', 'decision', 'enabled', 'revision', 'roleChange']);
 /** Пара сервера MCP из карточки `project-mcp` (спека 2026-11-02, 7.2): строго имя и отпечаток. */
 const MCP_PAIR_KEYS: ReadonlySet<string> = new Set(['name', 'fingerprint']);
 /** Отпечаток сервера MCP — sha256 в hex, как его считает хост. */
@@ -272,6 +272,13 @@ export const REMOTE_MCP_ENABLED_MAX = 200;
 const MCP_NAME_MAX = 200;
 /** Номер карточки согласия хоста: `c-NN`. */
 const CONSENT_ID = /^c-\d+$/;
+const ROLE_CHANGE_KEYS: ReadonlySet<string> = new Set(['from', 'to']);
+const ROLE_ID_MAX = 200;
+/** Role change acknowledgement of an `agent-switch` card (spec 2026-11-12, 2.4): `{from, to}` only, `to` may be null. */
+function roleChangeAck(value: unknown): boolean {
+  const r = record(value);
+  return r !== null && onlyKeys(r, ROLE_CHANGE_KEYS) && charsBetween(r.from, 1, ROLE_ID_MAX) && (r.to === null || (typeof r.to === 'string' && r.to.length <= ROLE_ID_MAX));
+}
 const ROOM_CREATE_KEYS: ReadonlySet<string> = new Set([
   'projectPath',
   'workId',
@@ -405,7 +412,8 @@ export const REMOTE_PARAM_RULES: Readonly<Record<string, RemoteParamRule>> = {
       (p.decision === 'allow' || p.decision === 'deny') &&
       (p.enabled === undefined || (p.decision === 'allow' && mcpPairs(p.enabled))) &&
       // Ревизия карточки `project-mcp` (ревью s-209): целое от 1, с `allow` и с `deny`; нужна ли она, решает хост.
-      (p.revision === undefined || (Number.isSafeInteger(p.revision) && (p.revision as number) >= 1))
+      (p.revision === undefined || (Number.isSafeInteger(p.revision) && (p.revision as number) >= 1)) &&
+      (p.roleChange === undefined || (p.decision === 'allow' && roleChangeAck(p.roleChange)))
     );
   },
   // Лента сессии — да, лента субагента (`agentId`) — нет: для телефона она не решена (спека 4.2, критик s-199 m5).

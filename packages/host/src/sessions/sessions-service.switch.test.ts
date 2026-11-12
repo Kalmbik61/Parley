@@ -20,6 +20,7 @@ import {
   grantTrust,
   readLetters,
   readMap,
+  sessionMention,
   updateMap,
   writeCustomProviders,
   type CustomProviderRecord,
@@ -35,6 +36,7 @@ import type { PtyLaunch } from '../pty/pty-process.js';
 import type { WorksService } from '../works/works-service.js';
 import { createPtyManager } from '../pty/pty-manager.js';
 import { fileURLToPath } from 'node:url';
+import { createConsentsService } from '../consents/consents-service.js';
 import { createHeldLaunchActions } from '../consents/held-launches.js';
 import { createSessionsService, switchLetter, switchLine, transcriptNote } from './sessions-service.js';
 import type { SessionsFeedOptions } from './sessions-service.js';
@@ -928,6 +930,10 @@ describe('switchAgent: роль сессии при замене (случай 2
     expect(after.role).toEqual({ source: 'codex', name: 'architect' });
     expect(after.previousAgents?.[0]?.role).toEqual(architect);
     expect(launches).toHaveLength(1);
+    // Одно уведомление о роли (спека 2026-11-12, 2.5): первый запуск той же смены второго не шлёт.
+    expect(notices.filter((notice) => notice.kind === 'role-missing')).toEqual([
+      expect.objectContaining({ text: `${sessionMention(ref.sessionId)} continues on Codex as architect (codex): architect no longer applies.` }),
+    ]);
   });
 
   it('одноимённой роли нет — без роли, запуск идёт', async () => {
@@ -940,6 +946,7 @@ describe('switchAgent: роль сессии при замене (случай 2
     expect(answer).toMatchObject({ outcome: 'started', role: { from: 'claude:architect', to: null } });
     expect((await sessionOf(ref)).role).toBeNull();
     expect(launches).toHaveLength(1);
+    expect(notices.filter((notice) => notice.kind === 'role-missing')).toHaveLength(1);
   });
 
   it('карта 0.32.0: Resume снимает чужую роль на первом запуске', async () => {
@@ -968,5 +975,214 @@ describe('switchAgent: роль сессии при замене (случай 2
     expect((await sessionOf(ref)).role).toEqual({ source: 'claude', name: 'architect' });
     expect(launches).toHaveLength(1);
     expect(notices.filter((notice) => notice.kind === 'role-missing')).toHaveLength(1);
+  });
+});
+
+describe('switchAgent: смена роли с подтверждением (спека 2026-11-12, 2.3–2.7)', () => {
+  const architect = { source: 'builtin', name: 'architect' } as const;
+  const ack = { from: 'builtin:architect', to: null };
+  const roleNotices = () => notices.filter((notice) => notice.kind === 'role-missing');
+  const mapFile = async () => JSON.stringify(await readMap(project, workId));
+
+  async function codexArchitect(r: Rig): Promise<SessionRef> {
+    process.env.PARLEY_QWEN_BIN = path.join(home, 'agent');
+    const ref = await r.sessions.create({ projectPath: project, workId, provider: 'codex', label: 'arch', task: 'design', parent: null, role: architect });
+    launches.length = 0;
+    events.length = 0;
+    notices.length = 0;
+    return ref;
+  }
+
+  it('критерий 5: встроенный architect Codex → Qwen без подтверждения — conflict, карта та же, switching нет', async () => {
+    const r = rig({ roleCatalog: async () => buildRoleCatalog() });
+    const ref = await codexArchitect(r);
+    const before = await mapFile();
+
+    await expect(r.sessions.switchAgent(ref, request('qwen'))).rejects.toMatchObject({
+      code: 'conflict',
+      message: 'Architect is a read-only role and does not run on Qwen Code. The session will continue without a role, and can edit files and run commands. Confirm the role change in the Parley window to continue.',
+    });
+
+    expect(await mapFile()).toBe(before);
+    expect((await sessionOf(ref)).switching ?? null).toBeNull();
+    expect(events).toEqual([]);
+    expect(launches).toHaveLength(0);
+    expect(roleNotices()).toHaveLength(0);
+  });
+
+  it('критерий 5: с совпадающим подтверждением — замена, роль null в карте, architect в привязке, запуск идёт, одно уведомление', async () => {
+    const r = rig({ roleCatalog: async () => buildRoleCatalog() });
+    const ref = await codexArchitect(r);
+
+    const answer = await r.sessions.switchAgent(ref, request('qwen', { roleChange: ack }));
+
+    expect(answer).toEqual({ outcome: 'started', carried: 'handover', role: { from: 'builtin:architect', to: null } });
+    const after = await sessionOf(ref);
+    expect(after).toMatchObject({ provider: 'qwen', role: null, switching: null });
+    expect(after.previousAgents?.at(-1)?.role).toEqual(architect);
+    expect(launches).toHaveLength(1);
+    expect(launches[0]?.launch.provider).toBe('qwen');
+    expect(roleNotices()).toEqual([
+      expect.objectContaining({
+        text: `${sessionMention(ref.sessionId)} continues on Qwen Code without a role: Architect no longer applies, and the read-only restriction is lifted.`,
+      }),
+    ]);
+  });
+
+  it('подтверждение другой смены — отказ «has changed», карта та же', async () => {
+    const r = rig({ roleCatalog: async () => buildRoleCatalog() });
+    const ref = await codexArchitect(r);
+    const before = await mapFile();
+
+    await expect(r.sessions.switchAgent(ref, request('qwen', { roleChange: { from: 'builtin:architect', to: 'builtin:executor' } }))).rejects.toMatchObject({
+      code: 'conflict',
+      message: 'The role change has changed since it was shown: Architect is a read-only role and does not run on Qwen Code. The session will continue without a role, and can edit files and run commands. Open the dialog again.',
+    });
+    expect(await mapFile()).toBe(before);
+    expect(launches).toHaveLength(0);
+  });
+
+  it('контроль: architect Codex → Claude и сессия без роли — роль та же, подтверждение не нужно, уведомления о роли нет', async () => {
+    const r = rig({ roleCatalog: async () => buildRoleCatalog() });
+    const ref = await codexArchitect(r);
+    expect(await r.sessions.switchAgent(ref, request('claude'))).toEqual({ outcome: 'started', carried: 'handover' });
+    expect((await sessionOf(ref)).role).toEqual(architect);
+
+    const plain = await r.sessions.create({ projectPath: project, workId, provider: 'codex', label: 'plain', task: '', parent: null });
+    expect(await r.sessions.switchAgent(plain, { ...request('qwen'), requestId: '00000000-0000-4000-8000-000000000002' })).toEqual({ outcome: 'started', carried: 'handover' });
+    expect((await sessionOf(plain)).role ?? null).toBeNull();
+    expect(roleNotices()).toHaveLength(0);
+  });
+
+  it('switchOptions и roleChangeFor: смена роли у каждой цели', async () => {
+    const r = rig({ roleCatalog: async () => buildRoleCatalog() });
+    const ref = await codexArchitect(r);
+
+    const { targets } = await r.sessions.switchOptions(ref);
+
+    expect(targets.find((target) => target.id === 'qwen')?.roleChange).toMatchObject({ from: 'builtin:architect', to: null, readOnlyLost: true });
+    expect(targets.find((target) => target.id === 'claude')?.roleChange).toBeNull();
+    expect(await r.sessions.roleChangeFor(ref, 'qwen')).toMatchObject({ readOnlyLost: true });
+    expect(await r.sessions.roleChangeFor(ref, 'claude')).toBeNull();
+    expect(await r.sessions.roleChangeFor(ref, 'no-such-provider')).toBeNull();
+  });
+
+  it('T3: карточка agent-switch несёт смену роли; allow без подтверждения отказан, с подтверждением — роль null в карте', async () => {
+    const r = rig({ roleCatalog: async () => buildRoleCatalog() });
+    const ref = await codexArchitect(r);
+    const consents = createConsentsService({
+      home,
+      host: { broadcast: () => {}, log: { info() {}, warn() {}, error() {} } },
+      trust: { grant: async () => undefined },
+      continueLaunch: async () => {},
+      refuseLaunch: async () => {},
+      isLive: async () => false,
+      switchAgent: (target, switchRequest) => r.sessions.switchAgent(target, switchRequest),
+      tellRequester: async () => {},
+      noticeFailure: () => {},
+    });
+    const roleChange = await r.sessions.roleChangeFor(ref, 'qwen');
+    const card = consents.requestSwitch({
+      ref, provider: 'qwen', providerLabel: 'Qwen Code', model: null, reason: 'limit', requestedBy: { sessionId: 's-99', label: 'lead' },
+      ...(roleChange === null ? {} : { roleChange }),
+    });
+    expect(card).toMatchObject({ roleChange: { from: 'builtin:architect', to: null, readOnlyLost: true } });
+
+    await expect(consents.decide(card.id, 'allow')).rejects.toMatchObject({ code: 'bad_request' });
+    expect(consents.list()).toHaveLength(1);
+    expect((await sessionOf(ref)).provider).toBe('codex');
+
+    await consents.decide(card.id, 'allow', 'window', undefined, undefined, { from: 'builtin:architect', to: null });
+    await vi.waitFor(async () => expect(await sessionOf(ref)).toMatchObject({ provider: 'qwen', role: null }));
+    expect(roleNotices()).toHaveLength(1);
+    consents.stop();
+  });
+
+  it('F2: роль Codex с непрочитанными настройками — подтверждение обязательно (fail closed)', async () => {
+    const codexReviewer = { id: 'codex:reviewer', source: 'codex', provider: 'codex', name: 'reviewer', description: '', path: '/fixture.toml', prompt: 'Review.', model: null, effort: null, sandboxMode: null, readOnly: false } as const;
+    const claudeReviewer = { id: 'claude:reviewer', source: 'claude', provider: 'claude', name: 'reviewer', nativeAgent: 'reviewer', description: '', path: '/fixture.md', readOnly: false } as const;
+    const catalog = buildRoleCatalog({ roles: [codexReviewer, claudeReviewer], diagnostics: [{ source: 'codex', code: 'context-unverified' }], partial: false });
+    const r = rig({ roleCatalog: async () => catalog });
+    const ref = await r.sessions.create({ projectPath: project, workId, provider: 'codex', label: 'rev', task: '', parent: null });
+    await updateMap(project, workId, (map) => {
+      map.sessions.find((candidate) => candidate.id === ref.sessionId)!.role = { source: 'codex', name: 'reviewer' };
+    });
+    const before = await mapFile();
+
+    await expect(r.sessions.switchAgent(ref, request('claude'))).rejects.toMatchObject({
+      code: 'conflict',
+      message: 'reviewer may be a read-only role (its Codex settings could not be verified) and does not run on Claude Code. The session will continue as reviewer (claude), and can edit files and run commands. Confirm the role change in the Parley window to continue.',
+    });
+    expect(await mapFile()).toBe(before);
+
+    expect(await r.sessions.switchAgent(ref, { ...request('claude'), requestId: '00000000-0000-4000-8000-000000000003', roleChange: { from: 'codex:reviewer', to: 'claude:reviewer' } })).toMatchObject({
+      outcome: 'started', role: { from: 'codex:reviewer', to: 'claude:reviewer' },
+    });
+    expect((await sessionOf(ref)).role).toEqual({ source: 'claude', name: 'reviewer' });
+  });
+
+  it('F2/F4: застрявшая сессия с непрочитанной ролью Codex — отказ «may be», одно уведомление, карта та же', async () => {
+    const codexReviewer = { id: 'codex:reviewer', source: 'codex', provider: 'codex', name: 'reviewer', description: '', path: '/fixture.toml', prompt: 'Review.', model: null, effort: null, sandboxMode: null, readOnly: false } as const;
+    const catalog = buildRoleCatalog({ roles: [codexReviewer], diagnostics: [{ source: 'codex', code: 'context-unverified' }], partial: false });
+    const r = rig({ roleCatalog: async () => catalog });
+    const ref = await r.sessions.create({ projectPath: project, workId, provider: 'codex', label: 'rev', task: '', parent: null });
+    await r.sessions.stop(ref);
+    await updateMap(project, workId, (map) => {
+      const session = map.sessions.find((candidate) => candidate.id === ref.sessionId)!;
+      session.provider = 'claude';
+      session.role = { source: 'codex', name: 'reviewer' };
+      session.providerSessionId = null;
+      session.lifecycle = 'sleeping';
+      session.previousAgents = [
+        {
+          provider: 'codex', model: null, effort: null, providerSessionId: 'old-thread',
+          startedAt: session.startedAt, endedAt: '2026-11-12T10:00:00.000Z', reason: 'manual', requestedBy: 'human',
+          carried: 'handover', costUsd: null,
+        },
+      ];
+    });
+    const before = await mapFile();
+    launches.length = 0;
+    notices.length = 0;
+    const refusal = `reviewer may be a read-only role (its Codex settings could not be verified) and does not run on Claude Code. Continue ${sessionMention(ref.sessionId)} on Codex again to keep the role; from there you can continue it on Claude Code without the role.`;
+
+    await expect(r.sessions.launch(ref, 'resume')).rejects.toThrow(refusal);
+
+    expect(await mapFile()).toBe(before);
+    expect(launches).toHaveLength(0);
+    expect(notices).toEqual([expect.objectContaining({ kind: 'role-missing', text: refusal })]);
+  });
+
+  it('2.6–2.7: застрявшая сессия (Qwen, architect, ждёт агента) — отказ запуска называет Codex, карта та же', async () => {
+    const r = rig({ roleCatalog: async () => buildRoleCatalog() });
+    const ref = await codexArchitect(r);
+    await r.sessions.stop(ref);
+    // Как замена 0.35.0: карта уже на Qwen с ролью architect, разговора у нового агента нет.
+    await updateMap(project, workId, (map) => {
+      const session = map.sessions.find((candidate) => candidate.id === ref.sessionId)!;
+      session.provider = 'qwen';
+      session.providerSessionId = null;
+      session.lifecycle = 'sleeping';
+      session.previousAgents = [
+        {
+          provider: 'codex', model: null, effort: null, providerSessionId: 'old-thread',
+          startedAt: session.startedAt, endedAt: '2026-11-12T10:00:00.000Z', reason: 'manual', requestedBy: 'human',
+          carried: 'handover', costUsd: null,
+        },
+      ];
+    });
+    const before = await mapFile();
+    launches.length = 0;
+    notices.length = 0;
+
+    const refusal = `Architect is a read-only role and does not run on Qwen Code. Continue ${sessionMention(ref.sessionId)} on Codex again to keep the role; from there you can continue it on Qwen Code without the role.`;
+    // F5: машинная метка — окно показывает текст хоста в тосте Resume.
+    await expect(r.sessions.launch(ref, 'resume')).rejects.toMatchObject({ code: 'conflict', message: refusal, data: { reason: 'role-change' } });
+
+    expect(await mapFile()).toBe(before);
+    expect(launches).toHaveLength(0);
+    // F4: окно показывает текст хоста у `role-missing` — ровно одно уведомление с текстом отказа.
+    // F6: общий `launch-failed` не прячет его в строке статуса — отказ роли идёт только как `role-missing`.
+    expect(notices).toEqual([expect.objectContaining({ kind: 'role-missing', text: refusal })]);
   });
 });

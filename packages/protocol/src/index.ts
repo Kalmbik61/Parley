@@ -256,7 +256,7 @@ export type { TelegramMethodResults, TelegramPolling, TelegramStatus } from './t
 export { voiceProviderMethodSchemas } from './voice-provider.js';
 export type { VoiceProviderCheck, VoiceProviderCheckCode, VoiceProviderMethodResults, VoiceProviderState } from './voice-provider.js';
 export { consentMethodSchemas } from './consents.js';
-export type { AgentSwitchCard, ConsentCard, ConsentMethodResults, FolderTrustCard, ProjectMcpCard, ProjectMcpServer, TrustRecord } from './consents.js';
+export type { AgentSwitchCard, ConsentCard, ConsentMethodResults, FolderTrustCard, ProjectMcpCard, ProjectMcpServer, RoleChange, RoleChangeAck, TrustRecord } from './consents.js';
 export { CODEX_ACCOUNT_PREFIX, CUSTOM_PROVIDER_PREFIX, customProviderMethodSchemas, isCodexAccountId, isCustomProviderId, isManagedProviderId } from './custom-providers.js';
 export type { QwenAuthHints } from './qwen-auth.js';
 export type { CustomAccountInfo, CustomEndpointInfo, CustomProviderAuth, CustomProviderInfo, CustomProviderKind, CustomProviderMethodResults, CustomProviderSaveParams, CustomProviderModels } from './custom-providers.js';

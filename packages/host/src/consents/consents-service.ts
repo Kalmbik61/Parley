@@ -13,7 +13,7 @@ import { randomUUID } from 'node:crypto';
 import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { refKey } from '@parley/protocol';
-import type { AgentSwitchCard, ConsentCard, FolderTrustCard, ProjectMcpCard, SessionRef, TrustRecord } from '@parley/protocol';
+import type { AgentSwitchCard, ConsentCard, FolderTrustCard, ProjectMcpCard, RoleChange, RoleChangeAck, SessionRef, TrustRecord } from '@parley/protocol';
 import type { HostContext } from '../context.js';
 import { HostError } from '../errors.js';
 import type { McpConsentStore } from './project-mcp.js';
@@ -58,7 +58,8 @@ export interface ConsentsService {
    * `by` — откуда пришло решение (запись в `trust.json`); окно и остров — `window`. Второе решение по той же
    * карточке — `applied: false`. Продолжение или отказ удержанных запусков идут в фоне: ответ не ждёт запуска
    * процессов. `enabled` — только для `project-mcp`: пары имя и отпечаток ровно из нынешней карточки; несовпавшая пара —
-   * `bad_request`, до всякого изменения.
+   * `bad_request`, до всякого изменения. `roleChange` — смена роли, которую человек видел на карточке `agent-switch`
+   * (спека 2026-11-12, 2.4): `allow` карточки, теряющей read-only, без совпадающей смены — `bad_request`, карточка ждёт.
    */
   decide(
     id: string,
@@ -66,6 +67,7 @@ export interface ConsentsService {
     by?: TrustRecord['by'],
     enabled?: ReadonlyArray<{ name: string; fingerprint: string }>,
     revision?: number,
+    roleChange?: RoleChangeAck,
   ): Promise<{ applied: boolean; state: ConsentCard['state'] }>;
   onChange(listener: (change: ConsentChange) => void): () => void;
   stop(): void;
@@ -82,7 +84,7 @@ export interface ConsentsDeps {
   /** Замена агента от имени человека: `allow` карточки `agent-switch` (`requestId` — id карточки). */
   switchAgent(
     ref: SessionRef,
-    request: { requestId: string; provider: string; model?: string; force?: boolean; by: string },
+    request: { requestId: string; provider: string; model?: string; force?: boolean; by: string; roleChange?: RoleChangeAck },
   ): Promise<unknown>;
   /** Письмо `parley` просившему агенту: отказ человека или ошибка замены. */
   tellRequester(ref: SessionRef, to: string, text: string): Promise<void>;
@@ -124,6 +126,16 @@ function validHold(value: unknown): value is HeldLaunch {
   );
 }
 
+function validRoleChange(value: unknown): value is RoleChange {
+  return (
+    isRecord(value) &&
+    typeof value['from'] === 'string' &&
+    (value['to'] === null || typeof value['to'] === 'string') &&
+    typeof value['readOnlyLost'] === 'boolean' &&
+    typeof value['text'] === 'string'
+  );
+}
+
 function validCard(value: unknown): value is ConsentCard {
   return (
     isRecord(value) &&
@@ -138,7 +150,8 @@ function validCard(value: unknown): value is ConsentCard {
         typeof value['providerLabel'] === 'string' &&
         (value['model'] === null || typeof value['model'] === 'string') &&
         typeof value['reason'] === 'string' &&
-        typeof value['requestedBy']['sessionId'] === 'string'
+        typeof value['requestedBy']['sessionId'] === 'string' &&
+        (value['roleChange'] === undefined || validRoleChange(value['roleChange']))
       : value['kind'] === 'project-mcp'
         ? value['version'] === 1 &&
           Number.isInteger(value['revision']) &&
@@ -298,6 +311,8 @@ export function createConsentsService(deps: ConsentsDeps): ConsentsService {
         ...(card.model === null ? {} : { model: card.model }),
         force: true,
         by: requestedBy.sessionId,
+        // Смена роли, которую человек разрешил (2.4): хост сверит её с нынешней, иное — отказ замены с текстом.
+        ...(card.roleChange === undefined ? {} : { roleChange: { from: card.roleChange.from, to: card.roleChange.to } }),
       });
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
@@ -407,11 +422,20 @@ export function createConsentsService(deps: ConsentsDeps): ConsentsService {
       return { ...card };
     },
 
-    async decide(id, decision, by = 'window', enabled, revision) {
+    async decide(id, decision, by = 'window', enabled, revision, roleChange) {
       const card = state.cards.find((candidate) => candidate.id === id);
       // Незнакомая карточка — уже закрытая (решена давно и забыта): «уже решено», а не ошибка.
       if (card === undefined) return { applied: false, state: 'denied' };
       if (card.state !== 'pending') return { applied: false, state: card.state };
+      // Потеря read-only разрешается только тем, кто её видел (спека 2026-11-12, 2.4): до всякого изменения, карточка ждёт.
+      if (
+        card.kind === 'agent-switch' &&
+        decision === 'allow' &&
+        card.roleChange?.readOnlyLost === true &&
+        (roleChange?.from !== card.roleChange.from || roleChange?.to !== card.roleChange.to)
+      ) {
+        throw new HostError('bad_request', `${card.roleChange.text} Allow it in an updated Parley window.`);
+      }
       if (card.kind === 'project-mcp') {
         // Включается только то, что человек назвал и что есть в карточке; отказ и ответ без списка — всё выключено.
         // Чужое имя отвергается до любого изменения: карточка остаётся ждать.

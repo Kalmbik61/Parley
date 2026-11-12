@@ -145,6 +145,18 @@ describe('стор: карточка серверов MCP (спека 2026-11-02
     requestedBy: { source: 'agent', sessionId: 's-03', workId: 'w-1', label: 'S03' }, at: '2026-11-02T10:00:00.000Z', state: 'pending',
   });
 
+  it('allow on an agent-switch card sends its role change as the ack; deny does not', async () => {
+    const { store, call } = setup();
+    const switchCard = { id: 'c-01', kind: 'agent-switch', projectPath: '/p', ref: { projectPath: '/p', workId: 'w-1', sessionId: 's-03' }, provider: 'qwen', providerLabel: 'Qwen Code', model: null, reason: 'x',
+      requestedBy: { sessionId: 's-11', label: 'G' }, at: '2026-10-30T10:00:00.000Z', state: 'pending',
+      roleChange: { from: 'builtin:architect', to: null, readOnlyLost: true, text: 't' } } as never;
+    store.getState().replace([switchCard, { ...(switchCard as object), id: 'c-02' } as never]);
+    await store.getState().decide('c-01', 'allow');
+    expect(call).toHaveBeenLastCalledWith('consents.decide', { id: 'c-01', decision: 'allow', roleChange: { from: 'builtin:architect', to: null } });
+    await store.getState().decide('c-02', 'deny');
+    expect(call).toHaveBeenLastCalledWith('consents.decide', { id: 'c-02', decision: 'deny' });
+  });
+
   it('decide с enabled отправляет пары в consents.decide; без enabled поля в вызове нет', async () => {
     const { store, call } = setup();
     store.getState().replace([mcp('c-01')]);

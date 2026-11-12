@@ -19,6 +19,19 @@ describe('consent cards', () => {
     expect(c2.decideConsent).toHaveBeenCalledWith('c-2', 'deny');
   });
 
+  it('Allow on a switch card with a role change sends the card\'s {from, to}; Deny and a card without one do not', async () => {
+    const withRole: ConsentCard = { ...swit, roleChange: { from: 'builtin:architect', to: null, readOnlyLost: true, text: 'Architect is a read-only role.' } } as ConsentCard;
+    const c = client();
+    await runConsent(as(c), withRole, 'allow');
+    expect(c.decideConsent).toHaveBeenCalledWith('c-2', 'allow', { roleChange: { from: 'builtin:architect', to: null } });
+    const d = client();
+    await runConsent(as(d), withRole, 'deny');
+    expect(d.decideConsent).toHaveBeenCalledWith('c-2', 'deny');
+    const e = client();
+    await runConsent(as(e), swit, 'allow');
+    expect(e.decideConsent).toHaveBeenCalledWith('c-2', 'allow');
+  });
+
   it('outcomes: stale, lost (gone / still pending), rejected', async () => {
     expect(await runConsent(as(client({ outcome: 'stale' })), trust, 'deny')).toEqual({ kind: 'already-answered' });
     expect(await runConsent(as(client({ outcome: 'lost', stillPending: false })), trust, 'deny')).toEqual({ kind: 'no-longer-pending' });
