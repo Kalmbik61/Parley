@@ -26,13 +26,13 @@ import {
   parleyHome,
   readJsonlRecords,
 } from '@parley/core';
-import { FEED_RESYNC_FEATURE, FEED_SCHEMA_VERSION, progressResult } from '@parley/protocol';
+import { FEED_MAIL_FEATURE, FEED_RESYNC_FEATURE, FEED_SCHEMA_VERSION, progressResult } from '@parley/protocol';
 import type { EventData, SessionRef } from '@parley/protocol';
 import { fakeClient, fakeFeedDeps, hookRequest, REF } from '../../test/feed-fakes.js';
 import type { FakeFeedDeps } from '../../test/feed-fakes.js';
 import { makePng } from '../../test/png.js';
 import { HostError } from '../errors.js';
-import { createFeedService, FEED_CLIENT_DROP_BYTES, FEED_IDLE_EVICT_MS, FEED_MAX_ITEMS, FEED_SEED_CONCURRENCY, readRecordsTail, SEED_RECORD_WINDOW } from './feed-service.js';
+import { createFeedService, FEED_CLIENT_DROP_BYTES, FEED_IDLE_EVICT_MS, FEED_MAX_ITEMS, FEED_SEED_CONCURRENCY, readRecordsTail, SEED_RECORD_WINDOW, withoutMail } from './feed-service.js';
 import type { FeedService, FeedServiceOptions } from './feed-service.js';
 import * as progressModule from './progress.js';
 import * as codexSource from './codex-source.js';
@@ -1906,7 +1906,7 @@ describe('сев из журнала', () => {
     fakes.setLogFile(session);
     start({ roots: () => [root] });
 
-    const main = await service.snapshot(REF);
+    const main = await service.snapshot(REF, undefined, undefined, fakeClient(undefined, { features: [FEED_MAIL_FEATURE] }));
     expect(main.items.filter((item) => item.kind === 'mail').map((item) => item.id)).toEqual(['mail:m-9001', 'mail:m-9003', 'mail:m-9010']);
     const agent = await service.snapshot(REF, 'ad2fe21e96ffde3ba');
     expect(agent.items.some((item) => item.kind === 'tool' && item.toolUseId === 'toolu_mail_check')).toBe(true);
@@ -2821,7 +2821,7 @@ describe('лента Codex', () => {
     await writeRollout(childFile, [childMeta('th-child', 'th-main', 3), parentCopy(1), parentCopy(2), task(3, 'Read the mail'), mailCall(4, 'child-mail', 'th-child')]);
     fakes.setChildLogFile('th-child', childFile);
     start();
-    const root = await service.snapshot(REF);
+    const root = await service.snapshot(REF, undefined, undefined, fakeClient(undefined, { features: [FEED_MAIL_FEATURE] }));
     expect(root.items.filter((entry) => entry.kind === 'mail').map((entry) => entry.id)).toEqual(['mail:m-root-mail']);
     const sub = await service.snapshot(REF, 'th-child');
     expect(sub.items.some((entry) => entry.kind === 'tool' && entry.toolUseId === 'child-mail')).toBe(true);
@@ -3901,5 +3901,83 @@ describe('выгрузка лент (решение 5)', () => {
     expect(before).toBeGreaterThan(0);
     await service.stop();
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe('mail items: per-client gate (spec 2026-11-12 §3.5)', () => {
+  const mailResponse = [{ type: 'text', text: JSON.stringify({ messages: [{ id: 'm-1', from: 's-9', fromLabel: null, at: '2030-01-05T10:00:00.000Z', text: 'hello', kind: 'note', room: null }] }) }];
+  const deliver = (): void => {
+    send(prompt('go'));
+    send(pre('t1', 'mcp__parley__check_inbox', {}));
+    send(post('t1', 'mcp__parley__check_inbox', {}, mailResponse));
+  };
+  const mailIn = (items: readonly FeedItem[]): FeedItem[] => items.filter((item) => item.kind === 'mail');
+
+  it('snapshot: only a client with feed-mail gets mail, subscribed or not, and a caller without a client does not', async () => {
+    start();
+    deliver();
+    const oldClient = fakeClient();
+    const newClient = fakeClient(undefined, { features: [FEED_MAIL_FEATURE] });
+
+    expect(mailIn((await service.snapshot(REF, undefined, undefined, newClient)).items).map((item) => item.id)).toEqual(['mail:m-1']);
+    expect(mailIn((await service.snapshot(REF, undefined, undefined, oldClient)).items)).toEqual([]);
+    expect(mailIn((await service.snapshot(REF)).items)).toEqual([]);
+    service.subscribe(REF, oldClient);
+    service.subscribe(REF, newClient);
+    expect(mailIn((await service.snapshot(REF, undefined, undefined, oldClient)).items)).toEqual([]);
+    expect(mailIn((await service.snapshot(REF, undefined, undefined, newClient)).items)).toHaveLength(1);
+    // The ring itself is unchanged by the gate.
+    expect(ofKind((await service.snapshot(REF, undefined, undefined, oldClient)).items, 'tool')).toHaveLength(1);
+  });
+
+  it('snapshots of an old and a new client carry the same revision', async () => {
+    start();
+    deliver();
+    const oldSnap = await service.snapshot(REF, undefined, undefined, fakeClient());
+    const newSnap = await service.snapshot(REF, undefined, undefined, fakeClient(undefined, { features: [FEED_MAIL_FEATURE] }));
+    expect(oldSnap.revision).toBe(newSnap.revision);
+    expect(newSnap.items.length).toBe(oldSnap.items.length + 1);
+  });
+
+  it('delta: an old and a new client on one feed get their own views with equal revisions', async () => {
+    start();
+    const oldClient = fakeClient();
+    const newClient = fakeClient(undefined, { features: [FEED_MAIL_FEATURE] });
+    service.subscribe(REF, oldClient);
+    service.subscribe(REF, newClient);
+    deliver();
+    await service.snapshot(REF);
+
+    const oldDeltas = feedChanged(oldClient);
+    const newDeltas = feedChanged(newClient);
+    expect(oldDeltas.length).toBeGreaterThan(0);
+    expect(oldDeltas.map((delta) => delta.revision)).toEqual(newDeltas.map((delta) => delta.revision));
+    expect(oldDeltas.flatMap((delta) => delta.upsert).some((item) => item.kind === 'mail')).toBe(false);
+    expect(newDeltas.flatMap((delta) => delta.upsert).filter((item) => item.kind === 'mail').map((item) => item.id)).toEqual(['mail:m-1']);
+    expect(oldDeltas.flatMap((delta) => delta.upsert).filter((item) => item.kind === 'tool')).toHaveLength(newDeltas.flatMap((delta) => delta.upsert).filter((item) => item.kind === 'tool').length);
+  });
+
+  it('delta: a mail item trimmed out of the ring leaves the old client\'s removed list', async () => {
+    start({ maxItems: 2 });
+    const oldClient = fakeClient();
+    const newClient = fakeClient(undefined, { features: [FEED_MAIL_FEATURE] });
+    service.subscribe(REF, oldClient);
+    service.subscribe(REF, newClient);
+    send(pre('t1', 'mcp__parley__check_inbox', {}));
+    send(post('t1', 'mcp__parley__check_inbox', {}, mailResponse));
+    await service.snapshot(REF);
+    send(pre('t2', 'Bash', { command: 'ls' }));
+    send(pre('t3', 'Bash', { command: 'pwd' }));
+    await service.snapshot(REF);
+
+    expect(feedChanged(newClient).flatMap((delta) => delta.removed)).toContain('mail:m-1');
+    expect(feedChanged(oldClient).flatMap((delta) => delta.removed).filter((id) => id.startsWith('mail:'))).toEqual([]);
+    expect(feedChanged(oldClient).map((delta) => delta.revision)).toEqual(feedChanged(newClient).map((delta) => delta.revision));
+  });
+
+  it('withoutMail: a mail-only delta stays as an empty delta with the same revision', () => {
+    const mail = { id: 'mail:m-1', at: 't', kind: 'mail', via: 'pointer', toolUseId: null, letters: [] } as FeedItem;
+    const data = { ref: REF, revision: 7, upsert: [mail], removed: ['mail:m-0'], mode: null };
+    expect(withoutMail(data)).toEqual({ ref: REF, revision: 7, upsert: [], removed: [], mode: null });
   });
 });

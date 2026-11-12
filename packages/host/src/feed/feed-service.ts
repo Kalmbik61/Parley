@@ -69,7 +69,7 @@ import type {
   RolloutRecord,
   WorkSession,
 } from '@parley/core';
-import { FEED_SCHEMA_VERSION, FEED_PROGRESS_RETRY_AFTER_MAX_MS, FEED_RESYNC_FEATURE, refKey, sessionRef } from '@parley/protocol';
+import { FEED_MAIL_FEATURE, FEED_SCHEMA_VERSION, FEED_PROGRESS_RETRY_AFTER_MAX_MS, FEED_RESYNC_FEATURE, refKey, sessionRef } from '@parley/protocol';
 import type { FeedDecisions, ProgressResult, Result, SessionRef } from '@parley/protocol';
 import { projectProgress } from './progress.js';
 import type { ActivityService } from '../activity/activity-service.js';
@@ -183,6 +183,18 @@ export interface FeedServiceOptions {
 
 export type FeedSnapshot = Result<'feed.snapshot'>;
 
+const MAIL_ID_PREFIX = 'mail:';
+
+/** Элементы ленты для клиента: `mail` только с признаком `feed-mail` (спека почты 3.5). */
+function mailFor(client: Client | undefined, items: readonly FeedItem[]): FeedItem[] {
+  return client?.features.has(FEED_MAIL_FEATURE) === true ? [...items] : items.filter((item) => item.kind !== 'mail');
+}
+
+/** Дельта без `mail`: из `upsert` уходят элементы, из `removed` — id `mail:…`; `revision` и прочее то же, пустая пачка остаётся. */
+export function withoutMail<D extends { upsert: FeedItem[]; removed: string[] }>(data: D): D {
+  return { ...data, upsert: data.upsert.filter((item) => item.kind !== 'mail'), removed: data.removed.filter((id) => !id.startsWith(MAIL_ID_PREFIX)) };
+}
+
 export interface FeedService {
   /** Событие хука от приёмника: ответ — сразу или после решения человека. */
   onHook(request: HookRequest): void;
@@ -190,8 +202,11 @@ export interface FeedService {
   /**
    * `scope: 'attention'` — в `items` только ждущие карточки и последний `text` после последнего `prompt`
    * (нет `prompt` — последний `text` вообще); с `agentId` игнорируется.
+   *
+   * `client` — кому снимок: элементы `mail` получает только клиент с `feed-mail` в `hello.features`. Без клиента (внутренние
+   * читатели: помощник, Telegram) `mail` не отдаётся, как и клиенту без признака.
    */
-  snapshot(ref: SessionRef, agentId?: string, scope?: 'attention'): Promise<FeedSnapshot>;
+  snapshot(ref: SessionRef, agentId?: string, scope?: 'attention', client?: Client): Promise<FeedSnapshot>;
   /**
    * Current pending cards after snapshot preparation; reads reducer state before batched flush. `[]` — the feed is not
    * in memory (a card exists only with a held hook, and such a feed is never evicted); `undefined` — the feed is in
@@ -658,8 +673,10 @@ export function createFeedService(
       mode: feed.state.permissionMode,
       ...(feed.decisions === null ? {} : { decisions: feed.decisions }),
     };
+    // Клиенту без `feed-mail` — то же событие без `mail` в `upsert` и `mail:` в `removed`; `revision` тот же, пустая пачка идёт.
+    const plain = withoutMail(data);
     for (const client of Array.from(clients)) {
-      client.send({ event: 'feed.changed', data });
+      client.send({ event: 'feed.changed', data: client.features.has(FEED_MAIL_FEATURE) ? data : plain });
       // Подписку по буферу снимаем только у окна, которое умеет переподписаться: без `feed.resync` оно об отписке
       // не узнало бы и ждало дельт вечно (буфер обычно полон собственным большим ответом, снимком ленты на
       // мегабайты, а дельты мелкие и идут пачками раз в 50 мс), поэтому старому окну и мосту телефона остаётся
@@ -1920,7 +1937,7 @@ export function createFeedService(
       }
     },
 
-    async snapshot(ref, agentId, scope) {
+    async snapshot(ref, agentId, scope, client) {
       const startedAt = performance.now();
       const session = sessionOf(ref);
       if (agentId !== undefined) {
@@ -1946,7 +1963,7 @@ export function createFeedService(
       // Накопленная пачка уходит до снимка: следующая дельта подписчику — ровно `revision + 1`.
       flush(feed);
       const snapshot: FeedSnapshot = {
-        items: scope === 'attention' ? attentionItems(feed.state.items) : [...feed.state.items],
+        items: scope === 'attention' ? attentionItems(feed.state.items) : mailFor(client, feed.state.items),
         revision: feed.revision,
         schemaVersion: FEED_SCHEMA_VERSION,
         mode: feed.state.permissionMode,

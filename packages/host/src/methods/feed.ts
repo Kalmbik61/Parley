@@ -23,7 +23,7 @@ export interface FeedHandlers {
 
 export function createFeedHandlers(deps: FeedMethodDeps): FeedHandlers {
   return {
-    feedSnapshot: (params) => deps.feed.snapshot(params.ref, params.agentId, params.scope),
+    feedSnapshot: (params, request) => deps.feed.snapshot(params.ref, params.agentId, params.scope, request.client),
     feedProgress: async (params, request) => {
       const candidate = await deps.feed.progress(params.ref, request.client);
       const result = progressResult.safeParse(candidate);
