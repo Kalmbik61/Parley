@@ -123,7 +123,7 @@ async function pids(role?: string): Promise<number[]> {
     .filter(([name]) => role === undefined || name === role).map(([, pid]) => Number(pid));
 }
 
-interface Tui { argv: string[]; server: string; session: string; passwordSet: boolean; passwordDigest: string; configSet: boolean; infoStatus: number }
+interface Tui { sessionsAtStart: string[]; argv: string[]; server: string; session: string; passwordSet: boolean; passwordDigest: string; configSet: boolean; infoStatus: number }
 async function tui(): Promise<Tui> {
   const file = path.join(scratch, 'tui.json');
   await vi.waitFor(async () => expect(existsSync(file)).toBe(true), { timeout: 10_000 });
@@ -170,6 +170,38 @@ describe('OpenCode sessions with the host server (O5)', () => {
     expect(pty.get(ref)).toBeUndefined();
     expect(alive(serve!)).toBe(false);
     expect(JSON.parse(await readFile(path.join(parleyHome(), 'run', 'opencode-servers.json'), 'utf8'))).toEqual([]);
+  });
+
+  it('a NEW session is created on the server with the given id before the TUI starts; a resume does not create it again', async () => {
+    setEnv('STUB_OPENCODE_SESSIONS_FILE', path.join(scratch, 'sessions'));
+    const { service, ref } = await setup();
+    const first = await tui();
+    // The server knew the session when the TUI started.
+    expect(first.sessionsAtStart).toEqual([first.session]);
+    expect(first.session).toMatch(/^ses_[0-9a-f-]{36}$/);
+    await service.stop(ref);
+    await rm(path.join(scratch, 'tui.json'));
+    await service.launch(ref, 'resume', { by: 'human' });
+    const second = await tui();
+    expect(second.session).toBe(first.session);
+    // The second server is a new process with an empty sessions file of its own: nothing was created for the resume.
+    expect(second.sessionsAtStart).toEqual([first.session]);
+    expect((await readFile(path.join(scratch, 'sessions'), 'utf8')).split('\n').filter(Boolean)).toEqual([first.session]);
+    await service.stop(ref);
+  });
+
+  it('a failed creation is logged without the address or the password and the launch goes on', async () => {
+    setEnv('STUB_OPENCODE_SESSIONS_FILE', path.join(scratch, 'sessions'));
+    setEnv('STUB_OPENCODE_CREATE_STATUS', '500');
+    const { service, ref } = await setup();
+    const started = await tui();
+    expect(started.sessionsAtStart).toEqual([]);
+    expect(logLines.some((line) => line.includes('opencode session was not created before the TUI'))).toBe(true);
+    for (const line of logLines) {
+      for (const password of passwords) expect(line).not.toContain(password);
+      expect(line).not.toContain(started.server);
+    }
+    await service.stop(ref);
   });
 
   it('5. the TUI exits by itself: the server group goes too (checked by pid)', async () => {

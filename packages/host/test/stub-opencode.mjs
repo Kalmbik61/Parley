@@ -26,6 +26,7 @@
 //                                     pending (empty list); variable unset = connected
 //   STUB_OPENCODE_ACTIVE_FILE=<path>  `GET /api/session/active`: a session id per line is running; no file = none
 //   STUB_OPENCODE_PERMISSIONS_FILE=<path>  `GET /api/session/<id>/permission`: JSON list of pending requests; no file = []
+//   STUB_OPENCODE_SESSIONS_FILE=<path>     `POST /api/session {id}`: the id is appended; STUB_OPENCODE_CREATE_STATUS (default 200) is the answer
 // Environment (TUI):
 //   STUB_OPENCODE_ARGS_FILE=<path>    write JSON { argv, cwd, server, session, passwordSet, passwordDigest, configSet,
 //                                     infoStatus }
@@ -96,6 +97,20 @@ function serve() {
     if (req.headers.authorization !== expected || !password) {
       res.writeHead(401, { 'content-type': 'application/json' });
       res.end('{"_tag":"UnauthorizedError","message":"Authentication required"}');
+      return;
+    }
+    if (req.method === 'POST' && url.pathname === '/api/session') {
+      let body = '';
+      req.on('data', (chunk) => (body += chunk));
+      req.on('end', () => {
+        const status = Number(process.env.STUB_OPENCODE_CREATE_STATUS ?? '200');
+        if (status < 300) {
+          const id = JSON.parse(body || '{}').id;
+          if (process.env.STUB_OPENCODE_SESSIONS_FILE && typeof id === 'string') appendFileSync(process.env.STUB_OPENCODE_SESSIONS_FILE, `${id}\n`);
+        }
+        res.writeHead(status, { 'content-type': 'application/json' });
+        res.end('{}');
+      });
       return;
     }
     if (url.pathname === '/api/info') {
@@ -188,6 +203,10 @@ async function tui() {
       passwordDigest: password ? createHash('sha256').update(password).digest('hex').slice(0, 16) : null,
       configSet: process.env.OPENCODE_CONFIG_CONTENT !== undefined,
       infoStatus,
+      // The sessions the server knew when this TUI started (STUB_OPENCODE_SESSIONS_FILE).
+      sessionsAtStart: process.env.STUB_OPENCODE_SESSIONS_FILE && existsSync(process.env.STUB_OPENCODE_SESSIONS_FILE)
+        ? readFileSync(process.env.STUB_OPENCODE_SESSIONS_FILE, 'utf8').split('\n').filter(Boolean)
+        : [],
     }));
   }
   record('tui', process.pid);

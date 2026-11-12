@@ -21,7 +21,7 @@ afterEach(async () => {
 });
 
 /** What the fake server does with each POST of the prompt route, in order; the last behaviour repeats. */
-type Behaviour = 'accept' | 'busy-accept' | 'reject' | 'error' | 'queue-then-error' | 'queue-then-drop' | 'queue-then-hang' | 'error-unqueued' | 'drop';
+type Behaviour = 'not-found' | 'accept' | 'busy-accept' | 'reject' | 'error' | 'queue-then-error' | 'queue-then-drop' | 'queue-then-hang' | 'error-unqueued' | 'drop';
 
 interface Fake {
   address: { url: string; password: string };
@@ -59,6 +59,8 @@ async function listen(behaviours: Behaviour[]): Promise<Fake> {
         case 'busy-accept':
           queue();
           return void res.writeHead(202).end('{}');
+        case 'not-found':
+          return void res.writeHead(404).end('{"_tag":"SessionNotFoundError"}');
         case 'reject':
           return void res.writeHead(400).end('{"error":"bad"}');
         case 'error':
@@ -182,6 +184,32 @@ describe('sendOpencodePrompt', () => {
     expect(await sendOpencodePrompt(deps(fake), REF, POINTER, fallback).done).toBe('submitted');
     expect(fallback).toHaveBeenCalledTimes(1);
     expect(fallback).toHaveBeenCalledWith(POINTER);
+  });
+
+  it('404 SessionNotFound is "not yet", not a rejection: a race with the session being created ends in the API, not in typing', async () => {
+    const fake = await listen(['not-found', 'not-found', 'accept']);
+    const { fallback } = typing();
+    expect(await sendOpencodePrompt(deps(fake, { notYetPauseMs: 20 }), REF, POINTER, fallback).done).toBe('submitted');
+    expect(fake.posts).toHaveLength(3);
+    expect(fallback).not.toHaveBeenCalled();
+  });
+
+  it('a session that never appears (404 for the whole wait) is typed after the wait, once', async () => {
+    const fake = await listen(['not-found']);
+    const { fallback } = typing();
+    await sendOpencodePrompt(deps(fake, { notYetMs: 150, notYetPauseMs: 30 }), REF, POINTER, fallback).done;
+    expect(fake.posts.length).toBeGreaterThan(1);
+    expect(fallback).toHaveBeenCalledTimes(1);
+  });
+
+  it('cancel during the 404 wait stops it without typing', async () => {
+    const fake = await listen(['not-found']);
+    const { fallback } = typing();
+    const attempt = sendOpencodePrompt(deps(fake, { notYetMs: 5000, notYetPauseMs: 30 }), REF, POINTER, fallback);
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    attempt.cancel();
+    expect(await attempt.done).toBe('cancelled');
+    expect(fallback).not.toHaveBeenCalled();
   });
 
   it('a 4xx answer is a definite rejection: the text is typed after exactly one POST', async () => {

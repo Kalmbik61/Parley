@@ -142,6 +142,7 @@ import { serialized } from '../methods/custom-providers.js';
 import type { HookServer } from '../hooks/hook-server.js';
 import type { OpencodeBridge } from '../opencode/events.js';
 import type { OpencodeSupervisor } from '../opencode/server.js';
+import { createOpencodeSession } from '../opencode/create-session.js';
 import type { ProviderVersions } from '../providers/versions.js';
 import type { PtyHandle, PtyManager } from '../pty/pty-manager.js';
 import type { WorksService, WorksView } from '../works/works-service.js';
@@ -1395,6 +1396,11 @@ export function createSessionsService(
             at: new Date().toISOString(),
           });
           throw new HostError('bad_request', (error as Error).message);
+        }
+        // A NEW session is created on the server first: the TUI makes it only on its first prompt, and until then the brief
+        // would get 404 (spec 4.5). A resume finds its session already there.
+        if (mode !== 'resume' && plan.providerSessionId !== null && plan.providerSessionId !== undefined) {
+          await timer.step('opencode-session', () => createOpencodeSession(server!, plan.providerSessionId!, ref, host.log));
         }
         const url = server.url;
         args = plan.args.map((arg) => (arg === OPENCODE_SERVER_URL_SLOT ? url : arg));

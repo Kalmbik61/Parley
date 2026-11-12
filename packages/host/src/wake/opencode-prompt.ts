@@ -27,15 +27,21 @@ export interface OpencodePromptDeps {
   fetchImpl?: typeof fetch;
   /** Per request; a slower answer is ambiguous. */
   timeoutMs?: number;
+  /** How long a 404 (the TUI has not made the session yet) is waited out before the text is typed; and the pause between tries. */
+  notYetMs?: number;
+  notYetPauseMs?: number;
   now?: () => number;
 }
 
 export const OPENCODE_PROMPT_TIMEOUT_MS = 5000;
+/** A 404 means the session is not on the server yet (a new TUI makes it on its first prompt): wait this long for it. */
+export const OPENCODE_NOT_YET_MS = 5000;
+export const OPENCODE_NOT_YET_PAUSE_MS = 400;
 /** Messages younger than the attempt (less this slack for clock differences) count as "ours" when the outcome is checked. */
 const SLACK_MS = 2000;
 const LATEST_MESSAGES = 20;
 
-type PostResult = 'accepted' | 'rejected' | 'refused' | 'ambiguous';
+type PostResult = 'accepted' | 'rejected' | 'refused' | 'ambiguous' | 'not-yet';
 
 const isObject = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 
@@ -74,6 +80,7 @@ export function sendOpencodePrompt(deps: OpencodePromptDeps, ref: SessionRef, te
         signal: AbortSignal.timeout(timeoutMs),
       });
       if (response.status >= 200 && response.status < 300) return 'accepted';
+      if (response.status === 404) return 'not-yet';
       if (response.status >= 400 && response.status < 500) return 'rejected';
       return 'ambiguous';
     } catch (error) {
@@ -130,6 +137,19 @@ export function sendOpencodePrompt(deps: OpencodePromptDeps, ref: SessionRef, te
     if (first === undefined || id === null) return type('no-server');
 
     let result = await post(first, id);
+    // 404: the server does not know the session yet. Nothing was accepted, so asking again cannot double it; a race with
+    // the TUI creating the session must not end in typing. After the wait the text is typed as for any rejection.
+    if (result === 'not-yet') {
+      const until = now() + (deps.notYetMs ?? OPENCODE_NOT_YET_MS);
+      while (result === 'not-yet' && now() < until) {
+        await new Promise((resolve) => setTimeout(resolve, deps.notYetPauseMs ?? OPENCODE_NOT_YET_PAUSE_MS));
+        if (cancelled) return 'cancelled';
+        const again = deps.server(ref);
+        if (again === undefined) return type('server-gone');
+        result = await post(again, id);
+      }
+      if (result === 'not-yet') return type('session-not-found');
+    }
     if (cancelled) return 'cancelled';
     if (result === 'accepted') return 'submitted';
     if (result === 'rejected' || result === 'refused') return type(result);
@@ -144,6 +164,7 @@ export function sendOpencodePrompt(deps: OpencodePromptDeps, ref: SessionRef, te
 
     // Not queued: one retry.
     result = await post(address, id);
+    if (result === 'not-yet') return type('session-not-found');
     if (cancelled) return 'cancelled';
     if (result === 'accepted') return 'submitted';
     if (result === 'rejected' || result === 'refused') return type(result);
