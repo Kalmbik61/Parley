@@ -13,6 +13,7 @@ Never run it with the real `HOME`; every script below sets a throwaway one.
 | `run.sh` | Starts the mock and `opencode serve --port 0` (config injected with `OPENCODE_CONFIG_CONTENT`; `EXTRA_CONFIG` merges more). `run.sh <dir> tui` runs the TUI with `--server` (needs `PORT=<serve port>` and a terminal). |
 | `record.mjs`, `sanitize.mjs`, `record.sh` | Drive the server, the CLI items and an orphaned `serve`, then write `recorded/`. |
 | `ptyrun.py` | Types lines into a pty (the API key prompt of `auth login`). |
+| `record-tools.mjs` | Prints the model's tool list for one `permissions` list (the read-only check, `packages/core/src/work/__fixtures__/opencode-read-only-tools.json`). |
 | `FINDINGS.md` | The answers to the open items of the design, with commands and excerpts. |
 
 ## Reproduce the fixtures

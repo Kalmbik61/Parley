@@ -25,8 +25,12 @@ export const OPENCODE_PASSWORD_ENV = 'OPENCODE_SERVER_PASSWORD';
  */
 export const OPENCODE_SERVER_URL_SLOT = 'parley:opencode-server-url';
 
-/** What a read-only role may not do (spec §4.8, spike §15): file edits, commands, network tools, subagents. */
-export const OPENCODE_READ_ONLY_DENY = ['edit', 'shell', 'webfetch', 'websearch', 'subagent'] as const;
+/**
+ * What a read-only role may not do (spec §4.8, spike §15): file edits, commands, network tools, subagents. On 2.2.7 the
+ * `edit` deny alone already removes `write` from the model's tools (`write` asks as `edit`); the explicit `write` deny
+ * keeps the contract visible and is accepted without error (`__fixtures__/opencode-read-only-tools.json`).
+ */
+export const OPENCODE_READ_ONLY_DENY = ['edit', 'write', 'shell', 'webfetch', 'websearch', 'subagent'] as const;
 
 export interface OpencodePermission {
   action: string;

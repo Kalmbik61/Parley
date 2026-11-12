@@ -117,7 +117,7 @@ describe('opencode launch plan (O5)', () => {
     const readOnly = await planLaunch(project, critic.workId, critic.session);
     expect(readOnly.args).not.toContain('--auto');
     const rules = (JSON.parse(readOnly.opencodeServer!.env['OPENCODE_CONFIG_CONTENT']!) as { permissions: Array<{ action: string; effect: string }> }).permissions;
-    expect(rules.filter((rule) => rule.effect === 'deny').map((rule) => rule.action)).toEqual(['edit', 'shell', 'webfetch', 'websearch', 'subagent']);
+    expect(rules.filter((rule) => rule.effect === 'deny').map((rule) => rule.action)).toEqual(['edit', 'write', 'shell', 'webfetch', 'websearch', 'subagent']);
     expect(rules.at(-1)).toEqual({ action: 'parley_*', resource: '*', effect: 'allow' });
   });
 });

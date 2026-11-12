@@ -8,7 +8,7 @@ describe('opencodeRoleLaunch', () => {
   it('a read-only role launches with the deny rules and without --auto', () => {
     const launch = opencodeRoleLaunch({ readOnly: true });
     expect(launch.autoFlag).toBeUndefined();
-    expect(launch.permissions.filter((rule) => rule.effect === 'deny').map((rule) => rule.action)).toEqual(['edit', 'shell', 'webfetch', 'websearch', 'subagent']);
+    expect(launch.permissions.filter((rule) => rule.effect === 'deny').map((rule) => rule.action)).toEqual(['edit', 'write', 'shell', 'webfetch', 'websearch', 'subagent']);
     // Parley tools are allowed last, so no deny rule can shadow them.
     expect(launch.permissions.at(-1)).toEqual({ action: 'parley_*', resource: '*', effect: 'allow' });
   });

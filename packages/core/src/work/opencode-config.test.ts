@@ -1,4 +1,6 @@
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { MCP_SERVER_ENTRY } from './mcp-config.js';
 import {
@@ -45,7 +47,7 @@ describe('buildOpencodeConfig', () => {
     const config = buildOpencodeConfig({ mcp, readOnly: true, model: 'opencode/big-pickle#high' });
     expect(config.model).toBe('opencode/big-pickle#high');
     expect(config.permissions.map((p) => `${p.effect}:${p.action}`)).toEqual([
-      'deny:edit', 'deny:shell', 'deny:webfetch', 'deny:websearch', 'deny:subagent', 'allow:parley_*',
+      'deny:edit', 'deny:write', 'deny:shell', 'deny:webfetch', 'deny:websearch', 'deny:subagent', 'allow:parley_*',
     ]);
     expect(config.permissions.at(-1)).toEqual({ action: 'parley_*', resource: '*', effect: 'allow' });
   });
@@ -83,5 +85,22 @@ describe('env documents', () => {
   });
   it('OPENCODE_CLI_CONFIG_CONTENT switches the release highlights off', () => {
     expect(JSON.parse(opencodeCliConfigContent())).toEqual({ highlights: false });
+  });
+
+  it('read-only rules against the 2.2.7 lab record: no edit, write or shell for the model; execute stays; Parley reachable', () => {
+    const recorded = JSON.parse(readFileSync(fileURLToPath(new URL('./__fixtures__/opencode-read-only-tools.json', import.meta.url)), 'utf8')) as {
+      runs: Array<{ name: string; permissions: string[]; tools: string[]; parleyCalls: number }>;
+    };
+    const rules = buildOpencodeConfig({ mcp, readOnly: true }).permissions.map((rule) => `${rule.effect}:${rule.action}`);
+    const run = recorded.runs.find((item) => JSON.stringify(item.permissions) === JSON.stringify(rules));
+    // The rules Parley builds today are the ones recorded on 2.2.7.
+    expect(run?.name).toBe('read-only with write');
+    for (const tool of ['edit', 'write', 'shell', 'webfetch', 'websearch', 'subagent']) expect(run?.tools).not.toContain(tool);
+    expect(run?.tools).toContain('execute');
+    expect(run?.parleyCalls).toBe(1);
+    // A writable session keeps them all.
+    const writable = recorded.runs.find((item) => item.name === 'writable');
+    expect(writable?.permissions).toEqual(buildOpencodeConfig({ mcp }).permissions.map((rule) => `${rule.effect}:${rule.action}`));
+    expect(writable?.tools).toEqual(expect.arrayContaining(['edit', 'write', 'shell']));
   });
 });
