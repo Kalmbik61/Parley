@@ -1121,6 +1121,38 @@ describe('switchAgent: смена роли с подтверждением (сп
     expect((await sessionOf(ref)).role).toEqual({ source: 'claude', name: 'reviewer' });
   });
 
+  it('F2/F4: застрявшая сессия с непрочитанной ролью Codex — отказ «may be», одно уведомление, карта та же', async () => {
+    const codexReviewer = { id: 'codex:reviewer', source: 'codex', provider: 'codex', name: 'reviewer', description: '', path: '/fixture.toml', prompt: 'Review.', model: null, effort: null, sandboxMode: null, readOnly: false } as const;
+    const catalog = buildRoleCatalog({ roles: [codexReviewer], diagnostics: [{ source: 'codex', code: 'context-unverified' }], partial: false });
+    const r = rig({ roleCatalog: async () => catalog });
+    const ref = await r.sessions.create({ projectPath: project, workId, provider: 'codex', label: 'rev', task: '', parent: null });
+    await r.sessions.stop(ref);
+    await updateMap(project, workId, (map) => {
+      const session = map.sessions.find((candidate) => candidate.id === ref.sessionId)!;
+      session.provider = 'claude';
+      session.role = { source: 'codex', name: 'reviewer' };
+      session.providerSessionId = null;
+      session.lifecycle = 'sleeping';
+      session.previousAgents = [
+        {
+          provider: 'codex', model: null, effort: null, providerSessionId: 'old-thread',
+          startedAt: session.startedAt, endedAt: '2026-11-12T10:00:00.000Z', reason: 'manual', requestedBy: 'human',
+          carried: 'handover', costUsd: null,
+        },
+      ];
+    });
+    const before = await mapFile();
+    launches.length = 0;
+    notices.length = 0;
+    const refusal = `reviewer may be a read-only role (its Codex settings could not be read) and does not run on Claude Code. Continue ${sessionMention(ref.sessionId)} on Codex again to keep the role; from there you can continue it on Claude Code without the role.`;
+
+    await expect(r.sessions.launch(ref, 'resume')).rejects.toThrow(refusal);
+
+    expect(await mapFile()).toBe(before);
+    expect(launches).toHaveLength(0);
+    expect(notices.filter((notice) => notice.kind === 'role-missing')).toEqual([expect.objectContaining({ text: refusal })]);
+  });
+
   it('2.6–2.7: застрявшая сессия (Qwen, architect, ждёт агента) — отказ запуска называет Codex, карта та же', async () => {
     const r = rig({ roleCatalog: async () => buildRoleCatalog() });
     const ref = await codexArchitect(r);
@@ -1143,13 +1175,13 @@ describe('switchAgent: смена роли с подтверждением (сп
     launches.length = 0;
     notices.length = 0;
 
-    await expect(r.sessions.launch(ref, 'resume')).rejects.toThrow(
-      `Architect is a read-only role and does not run on Qwen Code. Continue ${sessionMention(ref.sessionId)} on Codex again to keep the role; from there you can continue it on Qwen Code without the role.`,
-    );
+    const refusal = `Architect is a read-only role and does not run on Qwen Code. Continue ${sessionMention(ref.sessionId)} on Codex again to keep the role; from there you can continue it on Qwen Code without the role.`;
+    await expect(r.sessions.launch(ref, 'resume')).rejects.toThrow(refusal);
 
     expect(await mapFile()).toBe(before);
     expect(launches).toHaveLength(0);
-    expect(roleNotices()).toHaveLength(0);
-    expect(notices).toEqual([expect.objectContaining({ kind: 'launch-failed', text: expect.stringContaining('Continue') as unknown })]);
+    // F4: окно показывает текст хоста у `role-missing` — ровно одно уведомление с текстом отказа.
+    expect(roleNotices()).toEqual([expect.objectContaining({ kind: 'role-missing', text: refusal })]);
+    expect(notices.filter((notice) => notice.kind === 'launch-failed')).toEqual([expect.objectContaining({ text: expect.stringContaining('Continue') as unknown })]);
   });
 });

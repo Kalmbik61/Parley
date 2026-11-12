@@ -1005,10 +1005,10 @@ export function createSessionsService(
           const target = providerLabel(entry);
           // Первая фраза — та же, что в тексте смены (`<Name> is|may be a read-only role and does not run on <Target>.`).
           const cause = change.text.slice(0, change.text.indexOf(' The session will continue'));
-          throw new HostError(
-            'conflict',
-            `${cause} Continue ${sessionMention(ref.sessionId)} ${back} again to keep the role; from there you can continue it on ${target} without the role.`,
-          );
+          const text = `${cause} Continue ${sessionMention(ref.sessionId)} ${back} again to keep the role; from there you can continue it on ${target} without the role.`;
+          // Окно показывает текст хоста только у `role-missing` (у `launch-failed` — общий): тот же текст и туда.
+          host.broadcast('host.notice', { kind: 'role-missing', ref, text, at: new Date().toISOString() });
+          throw new HostError('conflict', text);
         }
         if (change !== null) {
           const after = roleAfter(change);
