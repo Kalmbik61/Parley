@@ -379,11 +379,11 @@ describe('roleChangeOnSwitch', () => {
   it('fail closed: a Codex role with unreadable settings counts as read-only', async () => {
     expect(await roleChangeOnSwitch(project, PROVIDERS.claude, 'Claude Code', codexReviewer, unverifiedCodex(mk('codex', 'reviewer', false), mk('claude', 'reviewer', false)))).toEqual({
       from: 'codex:reviewer', to: 'claude:reviewer', readOnlyLost: true,
-      text: 'reviewer may be a read-only role (its Codex settings could not be read) and does not run on Claude Code. The session will continue as reviewer (claude), and can edit files and run commands.',
+      text: 'reviewer may be a read-only role (its Codex settings could not be verified) and does not run on Claude Code. The session will continue as reviewer (claude), and can edit files and run commands.',
     });
     expect(await roleChangeOnSwitch(project, PROVIDERS.claude, 'Claude Code', codexReviewer, cat(mk('claude', 'reviewer', false)))).toEqual({
       from: 'codex:reviewer', to: 'claude:reviewer', readOnlyLost: true,
-      text: 'codex:reviewer may be a read-only role (its Codex settings could not be read) and does not run on Claude Code. The session will continue as reviewer (claude), and can edit files and run commands.',
+      text: 'codex:reviewer may be a read-only role (its Codex settings could not be verified) and does not run on Claude Code. The session will continue as reviewer (claude), and can edit files and run commands.',
     });
   });
   it('a readable non-read-only Codex role, and built-in and Claude roles next to a Codex diagnostic: unchanged', async () => {

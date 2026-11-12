@@ -354,6 +354,11 @@ describe('noticeText', () => {
     expect(noticeText({ ...hostNotice('role-missing', ref), text: '@s02 role claude:x does not run on Codex: it starts without a role' })).toBe('@s02 role claude:x does not run on Codex: it starts without a role.');
     expect(noticeText({ ...hostNotice('role-missing', ref), text: '  ' })).toBe('Saved role is unavailable — this session starts without role defaults.');
     expect(noticeText(hostNotice('role-missing', ref), 'S02')).toBe('S02: saved role is unavailable — this session starts without role defaults.');
+    // F6: a host text that does not start with the session gets the label in front; one that does is left as is.
+    const warning = 'The saved role is no longer available. Parley kept the explicit session choices and started without role defaults.';
+    expect(noticeText({ ...hostNotice('role-missing', ref), text: warning }, 'S02 Bruno')).toBe(`S02 Bruno: ${warning}`);
+    expect(noticeText({ ...hostNotice('role-missing', ref), text: warning })).toBe(warning);
+    expect(noticeText({ ...hostNotice('role-missing', ref), text: 'S02 role codex:x does not run on Claude Code: it starts without a role' }, 'S02 Bruno')).toBe('S02 role codex:x does not run on Claude Code: it starts without a role.');
   });
 
   it('limit-return-blocked — лимит сброшен, а сессию вернуть не вышло (спека застрявших 7.1)', () => {

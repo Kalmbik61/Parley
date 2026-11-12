@@ -3432,13 +3432,14 @@ function unmovedWorkDetail(text: string): string {
  * без него или с тем, что есть); без ярлыка — просто фраза с большой буквы.
  */
 export function noticeText(notice: HostNotice, label?: string): string {
-  // `role-missing`: the host's own sentence names the session, the provider and what changed (spec 2026-11-12, 2.5); it
-  // already carries the session mention, so the label is not added. An empty text falls back to the generic phrase below.
+  // `role-missing`: the host's own sentence names the provider and what changed (spec 2026-11-12, 2.5). A text that starts
+  // with the session (`@s02 …`, `S02 …`) is shown as is; other texts (the launch warning "The saved role is no longer
+  // available…") get the label in front. An empty text falls back to the generic phrase below.
   // Text with Cyrillic (an old host) is not shown: the window speaks English only.
   const own = notice.kind === 'role-missing' ? notice.text.trim() : '';
   if (own !== '' && !/[А-Яа-яЁё]/.test(own)) {
-    const text = own;
-    return /[.!?]$/.test(text) ? text : `${text}.`;
+    const sentence = /[.!?]$/.test(own) ? own : `${own}.`;
+    return label === undefined || /^(@s|S)\d+\b/.test(own) ? sentence : `${label}: ${sentence}`;
   }
   const detail = notice.kind === 'map-migration-failed' ? unmovedWorkDetail(notice.text) : NOTICE_DETAIL[notice.kind];
   if (label === undefined) return `${detail.charAt(0).toUpperCase()}${detail.slice(1)}.`;

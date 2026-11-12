@@ -276,7 +276,7 @@ export async function roleChangeOnSwitch(cwd: string, entry: ProviderEntry, targ
   const readOnlyLost = (readOnly(from) || unverified) && !readOnly(to);
   const fromName = current.roles.find(item => item.id === from)?.name ?? from;
   const after = next === null ? 'without a role' : `as ${next.name} (${next.source})`;
-  const kind = readOnly(from) ? 'is a read-only role' : 'may be a read-only role (its Codex settings could not be read)';
+  const kind = readOnly(from) ? 'is a read-only role' : 'may be a read-only role (its Codex settings could not be verified)';
   const text = readOnlyLost
     ? `${fromName} ${kind} and does not run on ${targetLabel}. The session will continue ${after}, and can edit files and run commands.`
     : `Role ${fromName} does not run on ${targetLabel}. The session will continue ${after}.`;

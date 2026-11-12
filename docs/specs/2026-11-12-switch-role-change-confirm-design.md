@@ -31,7 +31,7 @@ interface RoleChange {
 }
 ```
 
-`null` when the role does not change (same roleId, or the session has no role). `readOnlyLost` uses the catalog's resolved `readOnly` of each role (`resolveRoleChoice`). Fail closed: a native Codex role whose settings could not be read (missing from the catalog, or the catalog has a Codex diagnostic) counts as read-only, with the text `<Name> may be a read-only role (its Codex settings could not be read) and does not run on <Target>. The session will continue <after>, and can edit files and run commands.` Display name: the catalog role's `name` (built-in: "Architect"); a role missing from the catalog → its roleId. The target role is written as `<Name> (<source>)` when it is a native role.
+`null` when the role does not change (same roleId, or the session has no role). `readOnlyLost` uses the catalog's resolved `readOnly` of each role (`resolveRoleChoice`). Fail closed: a native Codex role whose settings could not be read (missing from the catalog, or the catalog has a Codex diagnostic) counts as read-only, with the text `<Name> may be a read-only role (its Codex settings could not be verified) and does not run on <Target>. The session will continue <after>, and can edit files and run commands.` Display name: the catalog role's `name` (built-in: "Architect"); a role missing from the catalog → its roleId. The target role is written as `<Name> (<source>)` when it is a native role.
 
 Text (exact form, English):
 - read-only lost, no role after: `Architect is a read-only role and does not run on Qwen Code. The session will continue without a role, and can edit files and run commands.`

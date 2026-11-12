@@ -1111,7 +1111,7 @@ describe('switchAgent: смена роли с подтверждением (сп
 
     await expect(r.sessions.switchAgent(ref, request('claude'))).rejects.toMatchObject({
       code: 'conflict',
-      message: 'reviewer may be a read-only role (its Codex settings could not be read) and does not run on Claude Code. The session will continue as reviewer (claude), and can edit files and run commands. Confirm the role change in the Parley window to continue.',
+      message: 'reviewer may be a read-only role (its Codex settings could not be verified) and does not run on Claude Code. The session will continue as reviewer (claude), and can edit files and run commands. Confirm the role change in the Parley window to continue.',
     });
     expect(await mapFile()).toBe(before);
 
@@ -1144,13 +1144,13 @@ describe('switchAgent: смена роли с подтверждением (сп
     const before = await mapFile();
     launches.length = 0;
     notices.length = 0;
-    const refusal = `reviewer may be a read-only role (its Codex settings could not be read) and does not run on Claude Code. Continue ${sessionMention(ref.sessionId)} on Codex again to keep the role; from there you can continue it on Claude Code without the role.`;
+    const refusal = `reviewer may be a read-only role (its Codex settings could not be verified) and does not run on Claude Code. Continue ${sessionMention(ref.sessionId)} on Codex again to keep the role; from there you can continue it on Claude Code without the role.`;
 
     await expect(r.sessions.launch(ref, 'resume')).rejects.toThrow(refusal);
 
     expect(await mapFile()).toBe(before);
     expect(launches).toHaveLength(0);
-    expect(notices.filter((notice) => notice.kind === 'role-missing')).toEqual([expect.objectContaining({ text: refusal })]);
+    expect(notices).toEqual([expect.objectContaining({ kind: 'role-missing', text: refusal })]);
   });
 
   it('2.6–2.7: застрявшая сессия (Qwen, architect, ждёт агента) — отказ запуска называет Codex, карта та же', async () => {
@@ -1182,7 +1182,7 @@ describe('switchAgent: смена роли с подтверждением (сп
     expect(await mapFile()).toBe(before);
     expect(launches).toHaveLength(0);
     // F4: окно показывает текст хоста у `role-missing` — ровно одно уведомление с текстом отказа.
-    expect(roleNotices()).toEqual([expect.objectContaining({ kind: 'role-missing', text: refusal })]);
-    expect(notices.filter((notice) => notice.kind === 'launch-failed')).toEqual([expect.objectContaining({ text: expect.stringContaining('Continue') as unknown })]);
+    // F6: общий `launch-failed` не прячет его в строке статуса — отказ роли идёт только как `role-missing`.
+    expect(notices).toEqual([expect.objectContaining({ kind: 'role-missing', text: refusal })]);
   });
 });

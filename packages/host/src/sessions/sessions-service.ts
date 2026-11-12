@@ -1537,7 +1537,9 @@ export function createSessionsService(
       if (session.switching !== null && session.switching !== undefined) await finishSwitch(ref);
       return 'started';
     } catch (error) {
-      if (notify && error instanceof HostError) host.broadcast('host.notice', {
+      // Отказ роли (спека 2026-11-12, 2.6) уже ушёл уведомлением `role-missing` со своим текстом: общий `launch-failed`
+      // встал бы первым в строке статуса и спрятал его.
+      if (notify && error instanceof HostError && error.data?.['reason'] !== HOST_ERROR_REASONS.roleChange) host.broadcast('host.notice', {
         kind: 'launch-failed', ref,
         text: `session ${ref.sessionId} failed to launch: ${error.message}`,
         at: new Date().toISOString(),
