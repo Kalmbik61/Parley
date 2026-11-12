@@ -70,7 +70,7 @@ const SITES: Record<string, string[]> = {
   'core/src/work/room-usage.ts': ["'other'"],
   'host/src/context/context-service.ts': ['async () => undefined'],
   'host/src/pty/process-monitor.ts': ['shell'],
-  'host/src/activity/activity-service.ts': ['0', 'false', 'false', 'false'],
+  'host/src/activity/activity-service.ts': ['0', 'true', 'false', 'false'],
   'host/src/activity/qwen-binding.ts': ['false'],
   'host/src/activity/log-index.ts': ["'opencode' as const"],
   'host/src/compaction/compaction-service.ts': ['false', 'false', 'false'],

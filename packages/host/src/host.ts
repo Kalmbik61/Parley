@@ -139,12 +139,13 @@ import { createVoiceSessionService } from './voice/voice-session-service.js';
 import { createVoiceTelemetry, LIVE_USD_PER_MINUTE } from './voice/telemetry.js';
 import { dailyBudget } from './voice/budget.js';
 import { AGENT_BROWSER_PATH, createBrowserEndpoint } from './agent/browser-endpoint.js';
-import { createHookServer } from './hooks/hook-server.js';
+import { createHookServer, type HookRequest } from './hooks/hook-server.js';
 import { createInlineMail, hookWithInlineMail } from './hooks/inline-mail.js';
 import { appendMailJournal } from './feed/mail-journal.js';
 import { createSilentEndings } from './endings/silent-endings.js';
 import { createSessionsService } from './sessions/sessions-service.js';
 import { createOpencodeSupervisor } from './opencode/server.js';
+import { createOpencodeBridge } from './opencode/events.js';
 import { providerLaunchEnv } from './sessions/provider-env.js';
 import { createReadyJournal } from './sessions/ready-journal.js';
 import { createQwenBinding } from './activity/qwen-binding.js';
@@ -194,13 +195,13 @@ export interface HostOptions {
    * catalog and `models` of `opencode` stays as it is: only `main.ts` connects it, tests never run the real opencode.
    */
   probeOpencodeCatalog?: OpencodeModelsProbe;
-   * Проверка новых версий CLI раз в сутки (`codex`, `claude`; спека 2026-11-02). Без неё ничего не спрашивается и в
   /**
    * Probe of the OpenCode sign-in count (`opencode auth list --format json --standalone`, spec 2026-11-12, 4.12) for the provider
    * card. Without it the card shows no count: only `main.ts` connects it, tests never run the real opencode.
    */
   probeOpencodeAuth?: OpencodeAuthProbe;
   /**
+   * Проверка новых версий CLI раз в сутки (`codex`, `claude`; спека 2026-11-02). Без неё ничего не спрашивается и в
    * `providers.list` нет поля `update`: сетевой `fetch` подключает только `main.ts`, тесты передают подмену.
    */
   cliUpdates?: Pick<CliUpdatesOptions, 'fetchImpl' | 'home' | 'userHome' | 'env' | 'now'>;
@@ -446,12 +447,12 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   const opencodeCatalog = startOpencodeCatalog(options.probeOpencodeCatalog, log, () => {
     handle.context.broadcast('providers.changed', { provider: 'opencode' });
   });
-    ...options.auth,
   // The sign-in count of OpenCode for its card: asked when the card is listed, not at start; the window reloads when it changes.
   const opencodeAuth = startOpencodeAuthHint(options.probeOpencodeAuth, () => {
     handle.context.broadcast('providers.changed', { provider: 'opencode' });
   });
   const authService = createAuthService(handle.context, {
+    ...options.auth,
     onSignInExit: (provider, signedIn) => {
       options.auth?.onSignInExit?.(provider, signedIn);
       if (provider === 'qwen') void qwenCatalog.refresh();
@@ -636,9 +637,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       }, { touch: false });
     },
   });
-  const hookServer = createHookServer({
-    log,
-    onHook: (request) => {
+  // One hook handler chain: the HTTP hook receiver and the OpenCode event bridge (spec 2026-11-12, 4.4) both feed it.
+  const dispatchHook = (request: HookRequest): void => {
       void qwenBinding.onHook(request);
       readyJournal.onHook(request.ref);
       try {
@@ -649,7 +649,10 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       // Указатель на письма с хуком `UserPromptSubmit`: хост отвечает сам (письма в `additionalContext`), а лента получает
       // событие с глухим `respond`: её `{}` второй ответ не перебьёт.
       hookWithInlineMail(inlineMail, (hook) => feedService.onHook(hook))(request);
-    },
+  };
+  const hookServer = createHookServer({
+    log,
+    onHook: dispatchHook,
     routes: { [AGENT_ATTEMPTS_PATH]: (req, res) => attemptsEndpoint.handle(req, res), [AGENT_SESSIONS_PATH]: (req, res) => sessionEndpoint.handle(req, res), [AGENT_SWITCH_PATH]: (req, res) => switchEndpoint.handle(req, res), [AGENT_SWARMS_PATH]: (req, res) => swarmEndpoint.handle(req, res), [AGENT_PROVIDERS_PATH]: (req, res) => providersEndpoint.handle(req, res), [AGENT_TOOLS_PATH]: (req, res) => toolsEndpoint.handle(req, res), [AGENT_BROWSER_PATH]: (req, res) => browserEndpoint.handle(req, res), ...assistantEndpoint.routes() },
   });
 
@@ -765,7 +768,12 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     beforeStop: (ref, server) => feedService.opencodeLastPoll(ref, server),
   });
   // OpenCode events (spec 2026-11-12, 4.4): the session's SSE stream into the journal and the hook chain.
-  const opencodeEvents = createOpencodeBridge({ log, hook: dispatchHook });
+  const opencodeEvents = createOpencodeBridge({
+    log,
+    hook: dispatchHook,
+    // An event of the session makes the Chat feed poll its server now (spec 4.11).
+    onSessionEvent: (ref) => void feedService.opencodePoll(ref).catch(() => {}),
+  });
   handle.context.onShutdown(async () => opencodeEvents.stopAll());
   sessionsService = createSessionsService(
     handle.context,
@@ -779,6 +787,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       projectMcp,
       hooks: hookServer,
       opencode: opencodeSupervisor,
+      opencodeEvents,
       // Qwen's brief is typed by the wake service once the process is ready (spec 2026-11-11, 3.4 amendment).
       deferFirst: (ref, pid, text) => wakeService.deferFirst(ref, pid, text),
       providerVersions,

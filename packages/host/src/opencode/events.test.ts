@@ -22,12 +22,14 @@ let bridge: OpencodeBridge | undefined;
 let records: OpencodeJournalRecord[];
 let hooks: Array<Record<string, unknown>>;
 let tuiAlive: boolean;
+let polls: number;
 
 beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), 'parley-opencode-events-'));
   records = [];
   hooks = [];
   tuiAlive = true;
+  polls = 0;
 });
 
 afterEach(async () => {
@@ -64,6 +66,7 @@ function attach(url: string, source: 'startup' | 'resume' = 'startup'): Opencode
     log: silent,
     hook: (request: HookRequest) => hooks.push(request.body),
     journal: async (_ref, record) => { records.push(record); },
+    onSessionEvent: () => { polls += 1; },
     backoffInitialMs: 50,
     backoffMaxMs: 200,
     mcpPollMs: 50,
@@ -105,6 +108,8 @@ describe('OpenCode event bridge (O6)', () => {
     expect(records.map((record) => record.hook_event_name)).toEqual(['SessionStart', 'SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop']);
     expect(records[3]).toMatchObject({ tool_name: 'execute', detail: 'parley.ping' });
     expect(hooks).toEqual(records);
+    // Every event of the session (11 of the 12 fixture lines; `mcp.status.changed` has no session) polls the feed early.
+    expect(polls).toBe(11);
 
     const now = Date.parse(records.at(-1)!.timestamp) + 1000;
     const qwen = [

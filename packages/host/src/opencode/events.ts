@@ -49,6 +49,8 @@ export interface OpencodeBridgeOptions {
   journal?: (ref: SessionRef, record: OpencodeJournalRecord) => Promise<void>;
   onUsage?: (ref: SessionRef, usage: OpencodeUsageFact) => void;
   onReady?: (ref: SessionRef) => void;
+  /** Any event of the session's own id: the Chat feed polls early (spec §4.11, `FeedService.opencodePoll`). */
+  onSessionEvent?: (ref: SessionRef) => void;
   fetchImpl?: typeof fetch;
   backoffInitialMs?: number;
   backoffMaxMs?: number;
@@ -201,6 +203,13 @@ export function createOpencodeBridge(options: OpencodeBridgeOptions): OpencodeBr
     }
     if (raw['type'] === 'mcp.status.changed' && isRecord(raw['data']) && raw['data']['server'] === 'parley') {
       void checkReady(bridge);
+    }
+    if (isRecord(raw['data']) && raw['data']['sessionID'] === bridge.attach.sessionId) {
+      try {
+        options.onSessionEvent?.(bridge.ref);
+      } catch (error) {
+        options.log.warn('opencode early poll failed', { ref: bridge.ref, error: String(error) });
+      }
     }
     const mapped = mapOpencodeEvent(raw, bridge.attach.sessionId, bridge.state);
     bridge.state = mapped.state;

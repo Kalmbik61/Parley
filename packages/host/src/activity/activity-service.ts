@@ -697,11 +697,12 @@ export function createActivityService(
   }
 
   /**
-   * Sessions whose state comes from the hook journal: the Claude Code family and Qwen Code (its per-session system
-   * settings file journals the same way). Codex and a null or unknown family do not.
+   * Sessions whose state comes from the hook journal: the Claude Code family, Qwen Code (its per-session system
+   * settings file journals the same way) and OpenCode (the host's event bridge writes the journal, `opencode/events.ts`;
+   * its first line of a process is the readiness `SessionStart`). Codex and a null or unknown family do not.
    */
   function hooksExpected(session: WorkSession): boolean {
-    return byFamily(session.provider, { claude: true, codex: false, qwen: true, opencode: false, neutral: false });
+    return byFamily(session.provider, { claude: true, codex: false, qwen: true, opencode: true, neutral: false });
   }
 
   const isQwen = (session: WorkSession): boolean =>
