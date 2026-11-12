@@ -44,6 +44,24 @@ export const CODEX_TOOL_EXAMPLES = [
 ].join('\n');
 
 /**
+ * Примеры вызовов инструментов `parley` из Code Mode OpenCode 2.x (спека OpenCode 2026-11-12, 4.6): MCP-инструменты
+ * не в списке модели, их зовут из `execute` как `tools.parley.<имя>(…)` (спайк, 2). Отдельный блок слоя, как
+ * `CODEX_TOOL_EXAMPLES`: идёт только запуску OpenCode (`bridge`). Почтовый вызов — один на `execute`, чтобы результатом
+ * была страница входящих. Имена аргументов сверяет с `inputSchema` тест. Форма `execute` с `tools.parley.*`
+ * записана на 2.2.7 только для `ping`; остальное перепроверить на живом 2.x.
+ */
+export const OPENCODE_TOOL_EXAMPLES = [
+  'Parley tools in OpenCode are not in your tool list. Call them inside the execute tool as tools.parley.<name>(args):',
+  '  return await tools.parley.get_map({});',
+  '  return await tools.parley.send_message({ to: "s-02", text: "Which branch?" });',
+  '  return await tools.parley.check_inbox({}); // per pointer',
+  '  return await tools.parley.wait_for({ target: "inbox", timeoutSec: 1500 }); // returns and marks messages read; on running repeat once',
+  'Use one mail tool (check_inbox or wait_for) per execute call and return its result, so the result is the inbox page. Do not wait in the same script as other work.',
+  '  return await tools.parley.report({ status: "done", summary: "Done, found, left." });',
+  'Call report at the end (failed if not done): it notifies your room lead, room owner or task giver, so send no "done" message. Then end the turn; do not poll get_map or check_inbox or start unrelated work. New messages reach you as the pointer after your turn.',
+].join('\n');
+
+/**
  * Заголовок и цель работы пишет человек — там бывают переносы строк, а счёт
  * строк вставки от них поехал бы.
  */
