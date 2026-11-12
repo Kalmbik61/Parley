@@ -67,3 +67,43 @@ describe('opencode events: robustness', () => {
     expect(state.toolNames).toEqual({});
   });
 });
+
+describe('opencode events: recording of the mock lab', () => {
+  const recorded = readFileSync(join(dir, 'lab-events.sse.txt'), 'utf8')
+    .split('\n')
+    .filter((l) => l.startsWith('data: '))
+    .map((l) => JSON.parse(l.slice(6)) as unknown);
+  const runFor = (id: string): ReturnType<typeof run> => {
+    let state = emptyOpencodeBridgeState();
+    const records: OpencodeJournalRecord[] = [];
+    const usage: OpencodeUsageFact[] = [];
+    for (const event of recorded) {
+      const mapped = mapOpencodeEvent(event, id, state);
+      state = mapped.state;
+      records.push(...mapped.records);
+      if (mapped.usage !== null) usage.push(mapped.usage);
+    }
+    return { records, usage, state };
+  };
+
+  it('maps the full turn: start, prompt, tools with names, permission, stop; usage as facts', () => {
+    const { records, usage, state } = runFor('ses_labfull0001');
+    const names = records.map((r) => r.hook_event_name);
+    expect(names[0]).toBe('SessionStart');
+    expect(names[1]).toBe('UserPromptSubmit');
+    expect(names.at(-1)).toBe('Stop');
+    expect(names).toContain('Notification');
+    expect(records.filter((r) => r.hook_event_name === 'PreToolUse').map((r) => r.tool_name)).toEqual(['shell', 'execute']);
+    expect(records.filter((r) => r.hook_event_name === 'PostToolUse').every((r) => r.tool_name !== undefined && r.tool_name !== 'tool')).toBe(true);
+    expect(usage.length).toBeGreaterThan(0);
+    expect(state.toolNames).toEqual({});
+  });
+
+  it('maps the failed path to StopFailure', () => {
+    const failed = recorded.flatMap((e) => (e as { data?: { sessionID?: string } }).data?.sessionID ?? []).filter((id, i, all) => all.indexOf(id) === i && id.startsWith('ses_labfail'));
+    const all = failed.flatMap((id) => runFor(id).records);
+    expect(all.filter((r) => r.hook_event_name === 'StopFailure')).toEqual([
+      expect.objectContaining({ error: 'provider.invalid-request', error_details: 'mock model failure' }),
+    ]);
+  });
+});
