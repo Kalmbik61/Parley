@@ -1,8 +1,15 @@
 # OpenCode 2.x provider: plan
 
-Spec: `docs/specs/2026-11-12-opencode-provider-design.md` (revision 1).
+Spec: `docs/specs/2026-11-12-opencode-provider-design.md` (revision 2).
+Spike: `docs/research/2026-11-12-opencode-2x-spike.md`.
 Branch: `parley/w-0054/s-345`. Lead: s-345. Owner: s-320. Room: r-28.
-Status: draft. **No task starts before the human accepts the spec and DO1–DO8, and before Parts M, A and Q are done** (the order s-320 set).
+
+Status: revision 2.
+- **No task starts before the human accepts the spec and DO1–DO8**, and before Parts M, A and Q are done (the order s-320 set).
+- Changes after the critique of s-348 (spec appendix A):
+  - O5: host-first death, exposure tests, the last poll;
+  - O7: delivery without duplicates;
+  - O10: the list of allowed tools.
 
 ## Rules for every task
 
@@ -23,7 +30,7 @@ Two additions:
 
 **Seniority.**
 - **Senior-only (Claude Opus or Codex gpt-6-astra):**
-  - O5, the server supervision: a process lifecycle across launch, resume, sleep, close and crash;
+  - O5, the server supervision: a process lifecycle across launch, resume, sleep, close, crash and host restart;
   - O6, the event bridge: a reconnecting stream that drives activity state.
 - **Junior (Claude Sonnet):** all other tasks. Codex executors cannot write this worktree.
 
@@ -33,7 +40,7 @@ Two additions:
 O0 → O1a → O1b → O2 → O3 → O4 → O5(senior) → O6(senior) → O7 → O8 → O9 → O10 → O11 → O12 → V-O → R-O
 ```
 
-Strictly sequential. O0–O4 touch no shared runtime path and could start early. They wait anyway, so as not to delay Parts M, A and Q.
+Strictly sequential, after Parts M, A and Q.
 
 ## Tasks
 
@@ -49,6 +56,8 @@ Strictly sequential. O0–O4 touch no shared runtime path and could start early.
   - `/api/session/{id}/message` for a turn with reasoning, text, a `shell` tool and an `execute` that calls `tools.parley.check_inbox`;
   - the SSE events of that turn, including `permission.asked` / `.replied` and `mcp.status.changed`;
   - `/api/info`;
+  - the session `/inbox` list with one queued prompt;
+  - the bodies of `/health` and `/doc`;
   - `auth list --format json` signed out;
   - `models` output.
 - **Answer the [N] items of the spec with observations:**
@@ -58,7 +67,8 @@ Strictly sequential. O0–O4 touch no shared runtime path and could start early.
   - `auth list --format json` with one configured provider (fake key), and whether it prints secrets;
   - `models --verbose` variants;
   - the `execute` tool part shape;
-  - the failed-execution event name.
+  - the failed-execution event name;
+  - whether `serve` survives the death of the process that started it.
 
 **Files.** `tools/opencode-mock-lab/*`, `packages/core/src/feed/opencode/__fixtures__/*`, `host/test/stub-opencode-*.mjs`.
 
@@ -154,9 +164,10 @@ It also builds `OPENCODE_CLI_CONFIG_CONTENT` `{"highlights": false}`.
   - spawn of `opencode serve` in its own group with the config env;
   - `/api/info` wait;
   - TUI env;
-  - stop on TUI exit, sleep and close;
+  - the run file `<parley-home>/run/opencode-servers.json` (pid, pgid, startedAt; no password, no port);
+  - on stop: last poll, then SIGTERM, SIGKILL after 2 s, await, record removed;
   - crash → session failed;
-  - never persisting the password or port.
+  - at host start, before any resume: sweep the run file, killing only groups whose leader runs `opencode serve`.
 - Resume reuses the id with a new server.
 
 **Criteria.** Unit tests with the fake server:
@@ -166,7 +177,11 @@ It also builds `OPENCODE_CLI_CONFIG_CONTENT` `{"highlights": false}`.
 4. a server crash (session failed, TUI stopped);
 5. TUI exit (server group gone, checked by pid);
 6. resume (same id, new password);
-7. a grep test that the map, journal and logs never contain the password.
+7. **host-first restart:** a fake server left running is killed by the sweep, a pid reused by another program is not, and the resumed session has exactly one server;
+8. **exposure:**
+   - the fake and the mock-lab server listen on 127.0.0.1 only;
+   - the recorded `/health` and `/doc` bodies contain no session id, password, working directory or user name;
+9. a grep test that the map, journal, run file and logs never contain the password.
 
 ### O6. Event bridge, readiness, activity (host). **Senior-only** (reconnecting stream, activity state)
 
@@ -182,30 +197,38 @@ It also builds `OPENCODE_CLI_CONFIG_CONTENT` `{"highlights": false}`.
 3. A dropped stream reconnects without duplicate events.
 4. Readiness waits for the MCP connection.
 
-### O7. Delivery through the API (host)
+### O7. Delivery through the API, without duplicates (host)
 
-**Scope.**
-- The deferred brief, the mail pointer and the limit-return text go through `POST /api/session/{id}/prompt` (spec §4.5).
-- Typing into the pty is the fallback on a non-2xx answer.
+**Scope** (spec §4.5).
+- The deferred brief, the mail pointer and the limit-return text go through `POST /api/session/{id}/prompt`.
+- **Pty fallback** only on a definite rejection: the connection was refused before sending, or an explicit 4xx.
+- **Ambiguous outcome** (timeout, reset after sending, 5xx):
+  - check `/inbox` and the latest messages for the text;
+  - if absent, retry the API once;
+  - type only if the server is gone.
+- A pointer is marked delivered once.
 - The inline-mail exclusion is kept.
 
-**Criteria.**
+**Criteria.** Fake-server tests:
 1. The brief is sent once after readiness.
-2. A pointer is sent while busy; the server queues it.
-3. The fallback is used on 500.
-4. No typing happens on success (spy).
+2. A pointer sent while busy is queued.
+3. A 202 with a lost response (the server queued it) gives no second delivery.
+4. A refused connection falls back to typing.
+5. A 500 with the text in `/inbox` gives no typing.
+6. No typing on success (spy).
 
 ### O8. Chat feed source (host + protocol + desktop)
 
 **Scope.**
-- Host polls messages every 2 s while subscribed, early on SSE, with the cache `<work>/opencode/<session>.json` (8 MiB cap). It seeds from the cache when no server runs.
+- Host polls messages every 2 s while subscribed, early on SSE, with the cache `<work>/opencode/<session>.json` (8 MiB cap). There is a last poll before a planned stop (called by O5). It seeds from the cache when no server runs.
 - `FEED_OPENCODE_FEATURE`, `OPENCODE_FEED_MIN_VERSION`; desktop Chat gating, `feed-view.ts`, waiting banner and composer strings.
 
 **Criteria.**
 1. Live poll gives the O4 items.
 2. A reseed from the cache after a fake restart gives the same items.
-3. The cap is enforced.
-4. Chat is gated off for an old host or a version below the minimum.
+3. The last poll runs before stop.
+4. The cap is enforced.
+5. Chat is gated off for an old host or a version below the minimum.
 
 ### O9. Tool guidance (core)
 
@@ -221,12 +244,13 @@ It also builds `OPENCODE_CLI_CONFIG_CONTENT` `{"highlights": false}`.
 - The role grammar for `opencode` (`agents.ts`).
 - Read-only roles allowed through the O3 deny rules (DO4).
 - `modelForTier` null.
-- The role-picker note about `execute` network reads.
+- The role-picker note: Parley tools stay allowed, and `execute` can read the network.
 
 **Criteria.**
 1. A read-only role launch produces the deny rules.
 2. A writable one produces `--auto`.
-3. The picker shows the note.
+3. With the mock lab, the model request of a read-only session lists no `edit`, `write` or `shell`, lists `execute`, and a Parley tool call succeeds.
+4. The picker shows the note.
 
 ### O11. Model catalog (core + host)
 
@@ -244,7 +268,7 @@ It also builds `OPENCODE_CLI_CONFIG_CONTENT` `{"highlights": false}`.
 - Provider card and status bar.
 - Icon `assets/providers/opencode.svg`: the official mark, if its license allows; otherwise a neutral `Oc` mark.
 - Sign-in hint: the count from `auth list --format json`, never stored (DO2).
-- New-session dialog, strings, README and CHANGELOG.
+- New-session dialog, strings, README and CHANGELOG. The docs list the local exposure of `/health` and `/doc`.
 
 **Criteria.**
 1. Card tests for not installed, 1.x, signed out and signed in.
@@ -252,9 +276,9 @@ It also builds `OPENCODE_CLI_CONFIG_CONTENT` `{"highlights": false}`.
 
 ### V-O. Verification on the real app (builtin:verifier, junior, with the lead)
 
-- Spec §6 items 1–9, with the mock lab model.
+- Spec §6 items 1–10, with the mock lab model.
 - One real account, only if the human gives one, with sign-in done by the human inside OpenCode.
-- Screenshots: install, start, Chat with mail, read-only role, model choice, cleanup `ps`.
+- Screenshots: install, start, Chat with mail, read-only role, model choice, cleanup `ps` after close and after Restart Host.
 
 ### R-O. Independent review
 
