@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createWork, parleyHome, readMap } from '@parley/core';
+import { createWork, parleyHome, readMap, workPaths } from '@parley/core';
 import type { EventData, EventName, SessionRef } from '@parley/protocol';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { HostContext } from '../context.js';
@@ -13,6 +13,7 @@ import type { ProviderVersions } from '../providers/versions.js';
 import { createPtyManager } from '../pty/pty-manager.js';
 import { createSessionsService } from '../sessions/sessions-service.js';
 import type { WorksService } from '../works/works-service.js';
+import { createOpencodeBridge } from './events.js';
 import { createOpencodeSupervisor, type OpencodeSupervisor } from './server.js';
 
 const STUB = fileURLToPath(new URL('../../test/stub-opencode.mjs', import.meta.url));
@@ -234,5 +235,24 @@ describe('OpenCode sessions with the host server (O5)', () => {
     for (const password of passwords) {
       for (const text of haystacks) expect(text.includes(password)).toBe(false);
     }
+  });
+
+  it('O6: the event bridge follows the session: the readiness SessionStart in its journal and the hook chain; detached on exit', async () => {
+    const hooked: Array<Record<string, unknown>> = [];
+    const bridge = createOpencodeBridge({ log, hook: (request) => hooked.push(request.body), mcpPollMs: 50 });
+    const pty = createPtyManager(fakeHost());
+    const service = createSessionsService(fakeHost(), fakeWorks(), pty, fakeActivity(), { providerVersions: versions, opencode: supervisor, opencodeEvents: bridge });
+    const work = await createWork(project, { title: 'Work', goal: '' });
+    const ref = await service.create({ projectPath: project, workId: work.work.id, provider: 'opencode', label: 'oc', task: '', parent: null });
+    const started = await tui();
+    const journal = path.join(workPaths(ref.projectPath, ref.workId).events, `${ref.sessionId}.jsonl`);
+    await vi.waitFor(async () => expect(existsSync(journal)).toBe(true), { timeout: 5000 });
+    const first = JSON.parse((await readFile(journal, 'utf8')).split('\n')[0]!) as Record<string, unknown>;
+    expect(first).toMatchObject({ hook_event_name: 'SessionStart', source: 'startup', session_id: started.session });
+    expect(hooked[0]).toEqual(first);
+    expect(bridge.ready(ref)).toBe(true);
+    await service.stop(ref);
+    expect(bridge.ready(ref)).toBe(false);
+    expect(bridge.connections(ref)).toBe(0);
   });
 });

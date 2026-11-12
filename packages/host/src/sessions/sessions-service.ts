@@ -140,6 +140,7 @@ import type { HostContext } from '../context.js';
 import { HostError } from '../errors.js';
 import { serialized } from '../methods/custom-providers.js';
 import type { HookServer } from '../hooks/hook-server.js';
+import type { OpencodeBridge } from '../opencode/events.js';
 import type { OpencodeSupervisor } from '../opencode/server.js';
 import type { ProviderVersions } from '../providers/versions.js';
 import type { PtyHandle, PtyManager } from '../pty/pty-manager.js';
@@ -422,6 +423,8 @@ export interface SessionsFeedOptions {
    * Without it an OpenCode launch is refused.
    */
   opencode?: Pick<OpencodeSupervisor, 'start' | 'stop' | 'onExit'>;
+  /** OpenCode event bridge (spec 4.4, O6): attached once the TUI runs, detached before its server stops. */
+  opencodeEvents?: Pick<OpencodeBridge, 'attach' | 'detach'>;
   /**
    * Потолок машины (спека ёмкости 2026-10-30, 4.2): `CapacityService` хоста. Тип структурный, как у `hooks` и `consents`:
    * сервис ёмкости сам зовёт `launch` сессий, и сессии его не импортируют. `admit` зовётся после бюджета работы и до
@@ -506,7 +509,7 @@ export function createSessionsService(
   activity: ActivityService,
   feed: SessionsFeedOptions = {},
 ): SessionsService {
-  const { hooks, providerVersions, capacity, endings, opencode } = feed;
+  const { hooks, providerVersions, capacity, endings, opencode, opencodeEvents } = feed;
   const spawnLimits = feed.spawnLimits ?? querySpawnLimits;
   const warned = new Set<string>();
   const creationWarnings = new Set<string>();
@@ -706,6 +709,7 @@ export function createSessionsService(
     const done = (starting.get(key) ?? Promise.resolve())
       .then(async () => {
         // OpenCode: the server goes with its TUI (spec 4.2, Stop) — the last poll, then the group; never left behind.
+        opencodeEvents?.detach(ref);
         await opencode?.stop(ref).catch((error: unknown) => {
           host.log.error('opencode server did not stop with its session', { ref, error: String(error) });
         });
@@ -761,6 +765,7 @@ export function createSessionsService(
         host.log.error('opencode session failure was not recorded', { ref, error: String(error) });
       }
       host.broadcast('host.notice', { kind: 'launch-failed', ref, text, at: new Date().toISOString() });
+      opencodeEvents?.detach(ref);
       await stop(ref).catch((error: unknown) => {
         host.log.error('opencode TUI did not stop after its server', { ref, error: String(error) });
       });
@@ -1376,10 +1381,10 @@ export function createSessionsService(
       // OpenCode (spec 4.2): the session's server first, then the TUI attached to it with the same password. The server
       // gets the inherited launch environment plus its config documents; the address fills the plan's slot.
       let args = plan.args;
+      let server: { url: string; password: string } | undefined;
       if (plan.opencodeServer !== undefined) {
         if (opencode === undefined) throw new HostError('bad_request', 'OpenCode sessions need the host server supervisor');
         const serverEnv = plan.opencodeServer.env;
-        let server;
         try {
           server = await timer.step('opencode-server', () => opencode.start(ref, { binary: command, cwd: plan.cwd, env, serverEnv }));
         } catch (error) {
@@ -1391,7 +1396,8 @@ export function createSessionsService(
           });
           throw new HostError('bad_request', (error as Error).message);
         }
-        args = plan.args.map((arg) => (arg === OPENCODE_SERVER_URL_SLOT ? server.url : arg));
+        const url = server.url;
+        args = plan.args.map((arg) => (arg === OPENCODE_SERVER_URL_SLOT ? url : arg));
         env[OPENCODE_PASSWORD_ENV] = server.password;
       }
       // `provider` — процессу не нужен, а хосту нужен: у codex состояние берётся из потока его терминала,
@@ -1433,6 +1439,18 @@ export function createSessionsService(
           throw new HostError('bad_request', safe.message, { code: safe.code, ...safe.details });
         }
         throw safe;
+      }
+      // OpenCode: the event bridge follows the server while this TUI lives (readiness needs the TUI alive).
+      const opencodeSession = plan.providerSessionId ?? session.providerSessionId;
+      if (server !== undefined && opencodeEvents !== undefined && opencodeSession !== null) {
+        const tui = handle;
+        opencodeEvents.attach(ref, {
+          url: server.url,
+          password: server.password,
+          sessionId: opencodeSession,
+          tuiAlive: () => pty.get(ref)?.pid === tui.pid,
+          source: mode === 'resume' && plan.providerSessionId === null ? 'resume' : 'startup',
+        });
       }
       const started = (async () => {
         try {

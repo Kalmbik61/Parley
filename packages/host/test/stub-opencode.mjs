@@ -19,6 +19,11 @@
 //   STUB_OPENCODE_CHILD=1             spawn a differently named child (/bin/sleep 600) in the server's group, like a tool
 //   STUB_OPENCODE_IGNORE_TERM=1       ignore SIGTERM (only SIGKILL ends it)
 //   STUB_OPENCODE_ENV_FILE=<path>     write the names of the env vars the server got, and whether the password is set
+//   STUB_OPENCODE_EVENTS_FILE=<path>  SSE events, one JSON per line, sent as appended; the line {"stub":"drop"} closes every
+//                                     open stream instead (a dropped connection)
+//   STUB_OPENCODE_SSE_REPLAY=1        a new subscriber first gets every event sent so far (a server that replays)
+//   STUB_OPENCODE_MCP_FILE=<path>     `GET /api/mcp` status of `parley`: the file's text (connected, failed); no file =
+//                                     pending (empty list); variable unset = connected
 // Environment (TUI):
 //   STUB_OPENCODE_ARGS_FILE=<path>    write JSON { argv, cwd, server, session, passwordSet, passwordDigest, configSet,
 //                                     infoStatus }
@@ -76,6 +81,8 @@ function serve() {
   const port = Number(flag('--port') ?? '4096');
   const expected = `Basic ${Buffer.from(`opencode:${password ?? ''}`).toString('base64')}`;
   const subscribers = new Set();
+  /** Events sent so far (for the replay mode). */
+  const history = [];
   const page = '<!doctype html><html lang="en"><head><title>OpenCode</title></head><body><div id="root"></div></body></html>';
   const server = createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://stub');
@@ -98,9 +105,17 @@ function serve() {
     }
     if (url.pathname === '/api/event') {
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
-      res.write(': connected\n\n');
+      res.write(`data: ${JSON.stringify({ id: `evt_conn${Date.now()}${Math.random()}`, type: 'server.connected', data: {} })}\n\n`);
+      if (process.env.STUB_OPENCODE_SSE_REPLAY === '1') for (const line of history) res.write(`data: ${line}\n\n`);
       subscribers.add(res);
       req.on('close', () => subscribers.delete(res));
+      return;
+    }
+    if (url.pathname === '/api/mcp') {
+      const file = process.env.STUB_OPENCODE_MCP_FILE;
+      const status = file === undefined ? 'connected' : existsSync(file) ? readFileSync(file, 'utf8').trim() : null;
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ location: { directory: '/stub' }, data: status === null ? [] : [{ name: 'parley', status: { status } }] }));
       return;
     }
     res.writeHead(404, { 'content-type': 'application/json' });
@@ -123,6 +138,12 @@ function serve() {
       if (!existsSync(eventsFile)) return;
       const lines = readFileSync(eventsFile, 'utf8').split('\n').filter((line) => line.trim() !== '');
       for (; sent < lines.length; sent += 1) {
+        if (lines[sent].includes('"stub":"drop"')) {
+          for (const res of subscribers) res.destroy();
+          subscribers.clear();
+          continue;
+        }
+        history.push(lines[sent]);
         for (const res of subscribers) res.write(`data: ${lines[sent]}\n\n`);
       }
     }, 20);

@@ -99,7 +99,7 @@ export interface EventRecord {
   /** Qwen family only: `context_limit` of `Stop`, tokens. */
   contextLimit?: number;
   /**
-   * Qwen family only: `at` is the hook payload's own `timestamp`, not the journal mtime. A record read late (after a
+   * Qwen and OpenCode families only: `at` is the hook payload's own `timestamp`, not the journal mtime. A record read late (after a
    * relaunch) keeps the time it was written, so it cannot pass for a line of a newer process (spec 2026-11-11, 3.4).
    */
   atFromPayload?: true;
@@ -240,9 +240,9 @@ function parseEvent(line: string, at: string, family?: ProviderFamily | null): E
   } catch {
     return null;
   }
-  // Qwen sends its own `timestamp`: the journal mtime is the time of the last append and would make every older line of
-  // the batch look as fresh as the newest one.
-  const stamped = family === 'qwen' ? payloadTime(data) : null;
+  // Qwen sends its own `timestamp`, and the OpenCode bridge writes the event's own time: the journal mtime is the time of
+  // the last append and would make every older line of the batch look as fresh as the newest one.
+  const stamped = family === 'qwen' || family === 'opencode' ? payloadTime(data) : null;
   const record = eventRecordOf(data, stamped ?? at, family);
   return record !== null && stamped !== null ? { ...record, atFromPayload: true } : record;
 }
