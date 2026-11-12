@@ -339,7 +339,8 @@ actions the bridge handled. Turning the switch off stops the bridge.
     you paste into its provider card. The key stays on this Mac.
 - git in `PATH`; 2.38 or newer to see merge conflicts before you merge.
 - Chat view (optional) needs Claude Code 2.1.286 or newer, Codex 0.160.0 or newer, Qwen Code 0.27.2 or newer, or OpenCode 2.2.7 or newer. Older
-  versions work in the terminal.
+  versions work in the terminal. Messages delivered to an agent show there as mail cards (Claude Code, Codex and
+  Qwen Code) and are kept after a restart.
 - Auto-review of Codex approvals (the default) needs Codex 0.162.0 or newer; on an older Codex the
   sessions ask in the terminal.
 
