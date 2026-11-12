@@ -44,7 +44,7 @@ let apiUp = true;
 let apiStatus = 202;
 /** `normal`: the turn is journaled after the answer (300 ms); `fast`: the whole turn is journaled BEFORE the answer returns; `batch`: the answer returns at once and the whole turn lands in the journal in ONE write 150 ms later (the fold sees no
  * `working`, only the end); `none`: no turn. */
-let apiTurn: 'normal' | 'fast' | 'batch' | 'none' | 'late-queue' | 'late-queue-turn' | 'late-queue-then-turn' | 'never-queue' = 'normal';
+let apiTurn: 'normal' | 'fast' | 'batch' | 'none' | 'late-queue' | 'late-queue-turn' | 'late-queue-then-turn' | 'never-queue' | 'frozen' = 'normal';
 /** `late-queue*` modes: the second inbox read found the prompt (the answer goes out 300 ms later). */
 let inboxFoundAt = 0;
 /** When each POST arrived (ms). */
@@ -91,6 +91,21 @@ beforeEach(async () => {
     req.on('end', () => {
       if (req.method !== 'POST') {
         // `late-queue`: the server did queue the prompt, but the host learns it only from its second inbox read.
+        // `frozen`: the server is stopped (SIGSTOP): the POST and the first look get no answer; after it resumes the prompt is
+        // queued and its turn runs.
+        if (apiTurn === 'frozen') {
+          inboxReads += 1;
+          if (inboxReads <= 2) return;
+          const inbox = req.url?.endsWith('/inbox') === true;
+          if (inbox && inboxFoundAt === 0) {
+            inboxFoundAt = Date.now();
+            setTimeout(() => void appendFile(events(), journalLine('UserPromptSubmit', { prompt: apiPosts[0] })).then(() =>
+              setTimeout(() => void appendFile(events(), journalLine('Stop') + journalLine('Notification', { notification_type: 'idle_prompt' })), 300)), 200);
+          }
+          return void res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({
+            data: inbox ? [{ id: 'msg_late', type: 'user', time: { created: Date.now() }, payload: { text: apiPosts[0] }, delivery: 'steer' }] : [],
+          }));
+        }
         // `never-queue`: the server never shows the prompt: the attempt ends unconfirmed (cancelled).
         if (apiTurn === 'never-queue' && req.url?.endsWith('/inbox') === true) {
           inboxReads += 1;
@@ -117,13 +132,17 @@ beforeEach(async () => {
           }, found ? 300 : 0);
           return;
         }
+        // Both lists answer and the prompt is in neither: a definite "not queued" (a 404 would be a look without an answer).
+        if (req.url?.endsWith('/inbox') === true || req.url?.includes('/message') === true) {
+          return void res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ data: [] }));
+        }
         return void res.writeHead(404).end();
       }
       const text = (JSON.parse(body) as { text: string }).text;
       apiPosts.push(text);
       apiPostTimes.push(Date.now());
       // `late-queue`: the POST never answers (the host times out: an ambiguous outcome).
-      if (apiTurn === 'late-queue' || apiTurn === 'late-queue-turn' || apiTurn === 'late-queue-then-turn' || apiTurn === 'never-queue') return;
+      if (apiTurn === 'late-queue' || apiTurn === 'late-queue-turn' || apiTurn === 'late-queue-then-turn' || apiTurn === 'never-queue' || apiTurn === 'frozen') return;
       if (apiStatus < 300 && apiTurn === 'fast') {
         // The bridge is quicker than the answer: the turn starts and ends while the host still waits for the POST.
         void appendFile(events(), journalLine('UserPromptSubmit', { prompt: text }))
@@ -354,7 +373,8 @@ describe('wake and opencode: delivery through the API', () => {
   it('a queued prompt confirmed only after the safety timer, whose turn starts only after that: no pointer-timeout, no rearm, no re-send', async () => {
     // Observed on the real app: the server was frozen past the timer; the confirmation and the notice came in the same millisecond.
     apiTurn = 'late-queue-then-turn';
-    const r = await rig({}, 300, { pointerTimeoutMs: 800, pointerRearmMs: [300] });
+    // The 1000 ms request timeout leaves a wide margin over the fake's 300 ms delay of the confirming inbox answer.
+    const r = await rig({}, 300, { pointerTimeoutMs: 800, pointerRearmMs: [300], opencodeTimeoutMs: 1000 });
     await r.letter();
     const posts = (): number => apiPosts.filter((text) => text === POINTER).length;
     await waitFor(() => inboxReads >= 2, 8000);
@@ -363,6 +383,20 @@ describe('wake and opencode: delivery through the API', () => {
     await settle(1500);
     expect(timeouts()).toBe(0);
     expect(posts()).toBe(2);
+    expect(r.stream()).not.toContain('field:');
+  }, 30_000);
+
+  it('a frozen server: a timed-out POST and a look with no answer are not followed by a second POST; the prompt found later and its turn settle it', async () => {
+    apiTurn = 'frozen';
+    const r = await rig({}, 300, { pointerTimeoutMs: 800, pointerRearmMs: [300] });
+    await r.letter();
+    const posts = (): number => apiPosts.filter((text) => text === POINTER).length;
+    // POST (400 ms), a look with no answer (2 × 400 ms), the 2 s pause, then the look that finds the prompt.
+    await waitFor(() => inboxFoundAt > 0, 10_000);
+    await waitFor(() => !r.wake.inFlight(r.ref), 8000);
+    await settle(1500);
+    expect(posts()).toBe(1);
+    expect(timeouts()).toBe(0);
     expect(r.stream()).not.toContain('field:');
   }, 30_000);
 
@@ -383,7 +417,7 @@ describe('wake and opencode: delivery through the API', () => {
 
   it('a queued prompt confirmed only after the safety timer, but no turn ever starts: one pointer-timeout and the normal rearm', async () => {
     apiTurn = 'late-queue';
-    const r = await rig({}, 300, { pointerTimeoutMs: 800, pointerRearmMs: [300] });
+    const r = await rig({}, 300, { pointerTimeoutMs: 800, pointerRearmMs: [300], opencodeTimeoutMs: 1000 });
     await r.letter();
     const posts = (): number => apiPosts.filter((text) => text === POINTER).length;
     await waitFor(() => inboxReads >= 2, 8000);

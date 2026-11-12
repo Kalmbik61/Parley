@@ -21,7 +21,7 @@ afterEach(async () => {
 });
 
 /** What the fake server does with each POST of the prompt route, in order; the last behaviour repeats. */
-type Behaviour = 'not-found' | 'accept' | 'busy-accept' | 'reject' | 'error' | 'queue-then-error' | 'queue-then-drop' | 'queue-then-hang' | 'error-unqueued' | 'drop';
+type Behaviour = 'not-found' | 'accept' | 'busy-accept' | 'reject' | 'error' | 'queue-then-error' | 'queue-then-drop' | 'queue-then-hang' | 'error-unqueued' | 'drop' | 'hang';
 
 interface Fake {
   address: { url: string; password: string };
@@ -29,15 +29,21 @@ interface Fake {
   inbox: Array<{ text: string; created: number }>;
   messages: Array<{ text: string; created: number }>;
   requests: Array<{ method: string; url: string; auth: string | undefined }>;
+  /** How many of the next GETs (inbox and message reads) get no answer at all, like a frozen server: the client times out. */
+  hangGets: number;
 }
 
 async function listen(behaviours: Behaviour[]): Promise<Fake> {
-  const fake: Fake = { address: { url: '', password: PASSWORD }, posts: [], inbox: [], messages: [], requests: [] };
+  const fake: Fake = { address: { url: '', password: PASSWORD }, posts: [], inbox: [], messages: [], requests: [], hangGets: 0 };
   let posted = 0;
   server = createServer((req: IncomingMessage, res: ServerResponse) => {
     fake.requests.push({ method: req.method ?? '', url: req.url ?? '', auth: req.headers.authorization });
     if (req.headers.authorization !== AUTH) return void res.writeHead(401).end();
     const url = new URL(req.url ?? '', 'http://x');
+    if (req.method === 'GET' && fake.hangGets > 0) {
+      fake.hangGets -= 1;
+      return;
+    }
     if (req.method === 'GET' && url.pathname.endsWith('/inbox')) {
       res.setHeader('content-type', 'application/json');
       return void res.end(JSON.stringify({ data: fake.inbox.map((item) => ({ id: 'msg_i', time: { created: item.created }, type: 'user', payload: { text: item.text }, delivery: 'steer' })) }));
@@ -75,6 +81,8 @@ async function listen(behaviours: Behaviour[]): Promise<Fake> {
         case 'queue-then-hang':
           queue();
           return; // never answers: the client times out
+        case 'hang':
+          return; // never answers and queues nothing (yet)
         case 'drop':
           return void req.socket.destroy();
       }
@@ -173,6 +181,74 @@ describe('sendOpencodePrompt', () => {
     const { fallback } = typing();
     expect(await sendOpencodePrompt(deps(fake), REF, POINTER, fallback).done).toBe('cancelled');
     expect(fake.posts).toHaveLength(2);
+    expect(fallback).not.toHaveBeenCalled();
+  });
+
+  it('a timed-out POST and looks that get no answer, then the server answers with the text queued: one POST, submitted', async () => {
+    // A frozen server: the POST and the first look time out; the prompt was queued all along.
+    const fake = await listen(['queue-then-hang']);
+    fake.hangGets = 2;
+    const { fallback } = typing();
+    const attempt = sendOpencodePrompt(deps(fake, { timeoutMs: 150, lookPauseMs: 20 }), REF, POINTER, fallback);
+    expect(await attempt.done).toBe('submitted');
+    expect(attempt.viaApi()).toBe(true);
+    expect(fake.posts).toEqual([POINTER]);
+    expect(fallback).not.toHaveBeenCalled();
+  });
+
+  it('a timed-out POST, looks that get no answer, then the text definitely absent: the one retry POST, only after that', async () => {
+    const fake = await listen(['hang', 'accept']);
+    fake.hangGets = 2;
+    const { fallback } = typing();
+    expect(await sendOpencodePrompt(deps(fake, { timeoutMs: 150, lookPauseMs: 20 }), REF, POINTER, fallback).done).toBe('submitted');
+    expect(fake.posts).toEqual([POINTER, POINTER]);
+    // The retry follows a look whose both lists answered, not the look that got no answer.
+    const kinds = fake.requests.map((request) => `${request.method} ${request.url.split('/').pop()?.split('?')[0]}`);
+    expect(kinds).toEqual(['POST prompt', 'GET inbox', 'GET message', 'GET inbox', 'GET message', 'POST prompt']);
+    expect(fallback).not.toHaveBeenCalled();
+  });
+
+  it('a server that never answers: one POST, nothing re-sent, nothing typed, a warning and cancelled', async () => {
+    const fake = await listen(['hang']);
+    fake.hangGets = Number.POSITIVE_INFINITY;
+    const warn = vi.fn();
+    const { fallback } = typing();
+    const attempt = sendOpencodePrompt(deps(fake, { timeoutMs: 150, lookPauseMs: 20, log: { info: () => {}, warn } }), REF, POINTER, fallback);
+    expect(await attempt.done).toBe('cancelled');
+    expect(fake.posts).toEqual([POINTER]);
+    expect(fallback).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith('opencode prompt: the server did not confirm the prompt; nothing was typed', { ref: REF });
+    expect(attempt.viaApi()).toBe(false);
+  });
+
+  it('cancel while waiting between looks: it ends at once and sends no further request', async () => {
+    const fake = await listen(['hang']);
+    fake.hangGets = Number.POSITIVE_INFINITY;
+    const { fallback } = typing();
+    const attempt = sendOpencodePrompt(deps(fake, { timeoutMs: 150, lookPauseMs: 5000 }), REF, POINTER, fallback);
+    // The POST and the first look (inbox, message) went out and timed out; the attempt now waits before the next look.
+    await vi.waitFor(() => expect(fake.requests).toHaveLength(3), { timeout: 3000, interval: 10 });
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const cancelledAt = Date.now();
+    attempt.cancel();
+    expect(await attempt.done).toBe('cancelled');
+    expect(Date.now() - cancelledAt).toBeLessThan(1000);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(fake.requests).toHaveLength(3);
+    expect(fallback).not.toHaveBeenCalled();
+  });
+
+  it('cancel during a look that gets no answer: the rest of the look is not requested', async () => {
+    const fake = await listen(['hang']);
+    fake.hangGets = Number.POSITIVE_INFINITY;
+    const { fallback } = typing();
+    const attempt = sendOpencodePrompt(deps(fake, { timeoutMs: 150, lookPauseMs: 20 }), REF, POINTER, fallback);
+    // The POST timed out; the inbox read is in flight.
+    await vi.waitFor(() => expect(fake.requests).toHaveLength(2), { timeout: 3000, interval: 5 });
+    attempt.cancel();
+    expect(await attempt.done).toBe('cancelled');
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(fake.requests).toHaveLength(2);
     expect(fallback).not.toHaveBeenCalled();
   });
 
