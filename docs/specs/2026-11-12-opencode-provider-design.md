@@ -1,6 +1,6 @@
 # OpenCode 2.x as a built-in provider: design
 
-Status: revision 5, waiting for the human's decision. No application code before the human accepts.
+Status: revision 6. Accepted by the human as p-50 (DO1–DO8 as recommended); implemented, see appendix B. No application code before the human accepts.
 - Revision 1 (e4c18e56) was critiqued by s-348 (Codex gpt-6-astra, "revise": 1 blocker, 2 major, 1 minor). This revision answers every finding; the mapping is in appendix A.
 - Part O of room r-28. Lead s-345, owner s-320 (2026-11-12).
 - Plan: `docs/plans/2026-11-12-opencode-provider-plan.md`.
@@ -323,3 +323,29 @@ Recommended first.
 5. **Major (delta reviews), leader died first; children with other names; no environment scans.** A Parley lifeline leads the server's process group and kills the whole group when the host's pipe closes. The startup backstop only checks a recorded pid and its start time, and never reads process environments (§4.2, plan O5 criterion 7).
 
 The spike report is now in the repository, so the critic can read it: `docs/research/2026-11-12-opencode-2x-spike.md`.
+
+## Appendix B. As built (2026-11-12), and what the lab changed
+
+Implemented in O0–O12 and O6b. The final sha is in the room. These points amend the sections above.
+
+1. **The session layer (§4.6).**
+   - The TUI has no system-prompt flag. Guidance, `OPENCODE_TOOL_EXAMPLES`, the role text, memory and PARLEY.md go to a per-session file, `<work>/settings/<session>-opencode-instructions.md`.
+   - The file is rewritten on every launch and resume and listed in the config `instructions`. It is the role channel.
+   - **[O]** 2.2.7 accepts `instructions` and puts the file into the system prompt (lab request log).
+2. **`--standalone` on every CLI read.** `models`, `auth list`, `debug config` and `session export` always pass `--standalone`.
+   - **[O]** Without it, every command starts a detached background service and writes its password in clear to `XDG_CONFIG_HOME/opencode/service.json`.
+   - `--version` does not start one.
+   - `auth export` prints secrets and is never run.
+3. **The port (§4.2).** `serve --port 0` prints `server listening on http://127.0.0.1:<port>`. The supervisor reads that line instead of choosing a port. The 3-attempt retry remains for a server that exits before ready.
+4. **Readiness (§4.4).** `/api/info` with the password, `parley` connected in `GET /api/mcp`, and a live TUI. The bridge then writes the readiness `SessionStart`, and only then is the brief sent.
+5. **Events (§4.4).**
+   - **Ids.** The stream has no `id:` lines and no replay contract. Event ids are remembered to drop repeats.
+   - **Catch-up after a reconnect.** The bridge reads `GET /api/session/active` and `/permission` once. It writes a `Stop` or a permission `Notification` marked `reconnect-catch-up` when the journal is behind.
+   - **A throwing `execute`** is `session.tool.success` with `metadata.error`. It maps to PostToolUseFailure and gives no mail.
+   - **The failed path** is `session.step.failed` → `session.execution.failed` (StopFailure), then `idle outcome:"failed"`.
+6. **Transcript (§4.11).** The messages API is newest-first and paged. The host reads all pages; the reducer sorts by creation time. `session export <id> --standalone` works without a server and is left as a later fallback; the cache stays (DO6).
+7. **Models (§4.7).**
+   - `opencode models` takes no flags. Variants exist only through `GET /api/model`, so efforts are off in v1.
+   - A typed model must be `provider/model`. Otherwise launch refuses with a readable message.
+8. **Sign-in hint (§4.12).** The provider card shows `auth list --format json --standalone` as a count only, probed at most every 30 s from `providers.list`.
+
