@@ -91,6 +91,7 @@ function fakeActivity(): ActivityService {
   return {
     get: () => ({ activity: { activity: activityState, tasks }, metrics: null }),
     markSeen() {},
+    logFile: () => null,
     watchClaudeRoot() {},
     usageResolver: () => ({
       whole: () => null,

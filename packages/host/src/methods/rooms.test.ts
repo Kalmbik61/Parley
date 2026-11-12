@@ -1287,6 +1287,7 @@ describe('rooms.archive: живые процессы (стаб вместо clau
     start: async () => {},
     get: () => undefined,
     markSeen: () => {},
+    logFile: () => null,
     onChange: () => () => {},
     stop: async () => {},
   });

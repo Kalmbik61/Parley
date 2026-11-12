@@ -98,9 +98,11 @@ describe('extendUsageTimeline', () => {
     const first = await extendUsageTimeline(null, '/f.jsonl', 'claude', mem.reader);
     expect(first.observations).toHaveLength(1);
     expect(first.offset).toBe(Buffer.byteLength(jsonl([A])));
+    // Второй вызов обновляет прежнюю шкалу на месте и возвращает её же: смещение запоминается до него.
+    const offsetAfterFirst = first.offset;
     mem.set(jsonl([A, B]));
     const second = await extendUsageTimeline(first, '/f.jsonl', 'claude', mem.reader);
-    expect(mem.opens[1]).toBe(first.offset);
+    expect(mem.opens[1]).toBe(offsetAfterFirst);
     expect(second.observations).toHaveLength(2);
     expect(second.lineNo).toBe(2);
   });
