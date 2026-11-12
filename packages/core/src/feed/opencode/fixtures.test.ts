@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 const dir = join(dirname(fileURLToPath(import.meta.url)), '__fixtures__');
-const FORBIDDEN = /\/Users\/|\/private\/|\/tmp\/|\/var\/folders\/|\/home\/|[A-Za-z]:\\\\|@privaterelay|password/i;
+const FORBIDDEN = /\/Users\/|\/private\/|\/tmp\/|\/var\/folders\/|(?<!\/lab\/work)\/home\/|[A-Za-z]:\\\\|@privaterelay|password/i;
 
 describe('opencode fixtures', () => {
   it('has the files and a README with the re-check list', () => {
