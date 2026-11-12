@@ -319,6 +319,9 @@ export function AgentRowsEditor({
                 </button>
                 </div>
               </div>
+              {info?.family === 'opencode' && role?.readOnly === true ? (
+                <p data-role-note className="min-w-0 break-words text-xs text-muted-foreground">{S.roles.opencodeReadOnlyNote}</p>
+              ) : null}
               {row.roleMissing === null ? null : (
                 <p role="status" data-role-missing className="min-w-0 break-words text-xs text-destructive">{S.recipes.roleMissing(row.roleMissing)}</p>
               )}

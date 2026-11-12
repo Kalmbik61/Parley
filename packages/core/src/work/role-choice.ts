@@ -22,7 +22,8 @@ export function roleModel(role: Pick<RoleSummary, 'source' | 'model' | 'models'>
   if (role === undefined) return null;
   // Qwen Code has no model tiers (`modelForTier` → null): its built-in roles run on the session's model, never Claude's.
   // The module stays import-free, so the built-in id is matched here.
-  if (provider === 'qwen' && role.source === 'builtin') return null;
+  // OpenCode likewise: no model tiers, its roles run on the session's model (spec 2026-11-12, 4.8).
+  if ((provider === 'qwen' || provider === 'opencode') && role.source === 'builtin') return null;
   if (role.source === 'builtin') return (provider === 'codex' ? role.models?.codex : role.models?.claude) ?? null;
   return role.model ?? null;
 }

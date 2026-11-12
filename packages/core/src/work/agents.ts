@@ -179,6 +179,14 @@ export function assertRoleDelivery(entry: ProviderEntry, choice: ResolvedRoleCho
   // отказ (спека 2026-10-21, 5.1). У других провайдеров песочница — всегда требование и по-прежнему отказывает.
   const sandboxRequired = choice.sandboxMode !== null
     && !(entry.id === 'codex' && choice.sandboxMode === 'workspace-write' && !choice.readOnly && choice.role?.source !== 'codex');
+  // OpenCode (spec 2026-11-12, 4.8, DO4): no native roles and no role flags. A read-only role is enforced by the deny rules
+  // of the per-session config (`opencodeRoleLaunch`), the role text travels with the session guidance, and the start mode
+  // is decided by `opencodeRoleLaunch` too, so the template carries no role channel to prove. A Claude or Codex native role
+  // does not carry over.
+  if (providerFamily(entry) === 'opencode') {
+    if (choice.nativeAgent !== null) throw new RoleChoiceError('role-permissions-unavailable');
+    return;
+  }
   for (const template of templates) {
     if (entry.id === 'codex' && (choice.readOnly || sandboxRequired)) {
       // Native flags can supersede sandbox_mode=-c. Refuse ambiguous custom delivery.
