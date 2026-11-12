@@ -7,6 +7,9 @@
  * - **Reconnect.** The stream reconnects with a doubling backoff while the session is attached (the server lives).
  * - **No duplicates.** The stream has no `id:` lines and no replay contract, so every event id is remembered (bounded)
  *   and an event seen before a reconnect is not written again.
+ * - **Catch-up after a reconnect** (O6b). Events of the gap are lost, so after each reconnect the bridge asks the server
+ *   once: a turn the journal still shows open while `GET /api/session/active` no longer lists the session gets one `Stop`
+ *   (`source: "reconnect-catch-up"`), and a pending `GET /api/session/{id}/permission` request gets its `Notification`.
  * - **Readiness.** `/api/info` answered (the supervisor's start), the `parley` MCP server is `connected`
  *   (`GET /api/mcp`, read again on each `mcp.status.changed`) and the TUI is alive. Only then the bridge writes the
  *   session's `SessionStart`: before it the session shows no hook of this process, so nothing is typed into it.
@@ -80,6 +83,8 @@ interface Bridge {
   abort: AbortController;
   detached: boolean;
   connections: number;
+  /** The last journal record written: whether the journal shows a turn open or a permission wait. */
+  last: OpencodeJournalRecord | null;
   /** Journal writes of this session, in order. */
   writes: Promise<void>;
   pollTimer: NodeJS.Timeout | undefined;
@@ -124,6 +129,7 @@ export function createOpencodeBridge(options: OpencodeBridgeOptions): OpencodeBr
 
   /** Journal line, then the hook chain, in event order. */
   function emit(bridge: Bridge, record: OpencodeJournalRecord): void {
+    bridge.last = record;
     bridge.writes = bridge.writes.then(async () => {
       if (bridge.detached) return;
       try {
@@ -193,6 +199,55 @@ export function createOpencodeBridge(options: OpencodeBridgeOptions): OpencodeBr
     }
   }
 
+  /** Records that leave the journal inside a turn (the fold shows the session busy or waiting). */
+  const OPEN_TURN = new Set(['UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'Notification']);
+
+  async function getJson(bridge: Bridge, route: string): Promise<unknown> {
+    const response = await fetchImpl(`${bridge.attach.url}${route}`, {
+      headers: { authorization: bridge.auth },
+      signal: AbortSignal.any([bridge.abort.signal, AbortSignal.timeout(5000)]),
+    });
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => {});
+      throw new Error(`HTTP ${response.status}`);
+    }
+    return response.json();
+  }
+
+  /**
+   * After a reconnect: the state the lost events would have written. `active` = `{data: {<id>: {type: "running"}}}`
+   * while a turn runs, `{data: {}}` otherwise; `permission` = `{data: [{id, action, …}]}` (both observed on 2.2.7).
+   */
+  async function catchUp(bridge: Bridge): Promise<void> {
+    if (!bridge.ready || bridge.detached) return;
+    const id = bridge.attach.sessionId;
+    try {
+      const [active, permissions] = await Promise.all([
+        getJson(bridge, '/api/session/active'),
+        getJson(bridge, `/api/session/${encodeURIComponent(id)}/permission`),
+      ]);
+      if (bridge.detached) return;
+      const running = isRecord(active) && isRecord(active['data']) && active['data'][id] !== undefined;
+      const pending = isRecord(permissions) && Array.isArray(permissions['data'])
+        ? permissions['data'].filter((item): item is Record<string, unknown> => isRecord(item) && item['sessionID'] === id)
+        : [];
+      const last = bridge.last;
+      const timestamp = new Date().toISOString();
+      const base = { session_id: id, timestamp, source: 'reconnect-catch-up' };
+      const waiting = last?.hook_event_name === 'Notification' && last.notification_type === 'permission_prompt';
+      if (pending.length > 0) {
+        if (!waiting) {
+          const action = typeof pending[0]!['action'] === 'string' ? pending[0]!['action'] : 'permission';
+          emit(bridge, { ...base, hook_event_name: 'Notification', notification_type: 'permission_prompt', message: action, tool_name: action });
+        }
+      } else if (!running && last !== null && OPEN_TURN.has(last.hook_event_name)) {
+        emit(bridge, { ...base, hook_event_name: 'Stop' });
+      }
+    } catch (error) {
+      options.log.warn('opencode catch-up after reconnect failed', { ref: bridge.ref, error: String(error) });
+    }
+  }
+
   function onEvent(bridge: Bridge, raw: unknown): void {
     if (!isRecord(raw)) return;
     const id = typeof raw['id'] === 'string' ? raw['id'] : null;
@@ -232,6 +287,7 @@ export function createOpencodeBridge(options: OpencodeBridgeOptions): OpencodeBr
       return false;
     }
     bridge.connections += 1;
+    if (bridge.connections > 1) void catchUp(bridge);
     // A reconnect may have missed a `mcp.status.changed`: read the status again.
     void checkReady(bridge);
     const decoder = new TextDecoder();
@@ -295,6 +351,7 @@ export function createOpencodeBridge(options: OpencodeBridgeOptions): OpencodeBr
         abort: new AbortController(),
         detached: false,
         connections: 0,
+        last: null,
         writes: Promise.resolve(),
         pollTimer: undefined,
         polling: false,

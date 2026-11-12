@@ -24,6 +24,8 @@
 //   STUB_OPENCODE_SSE_REPLAY=1        a new subscriber first gets every event sent so far (a server that replays)
 //   STUB_OPENCODE_MCP_FILE=<path>     `GET /api/mcp` status of `parley`: the file's text (connected, failed); no file =
 //                                     pending (empty list); variable unset = connected
+//   STUB_OPENCODE_ACTIVE_FILE=<path>  `GET /api/session/active`: a session id per line is running; no file = none
+//   STUB_OPENCODE_PERMISSIONS_FILE=<path>  `GET /api/session/<id>/permission`: JSON list of pending requests; no file = []
 // Environment (TUI):
 //   STUB_OPENCODE_ARGS_FILE=<path>    write JSON { argv, cwd, server, session, passwordSet, passwordDigest, configSet,
 //                                     infoStatus }
@@ -109,6 +111,21 @@ function serve() {
       if (process.env.STUB_OPENCODE_SSE_REPLAY === '1') for (const line of history) res.write(`data: ${line}\n\n`);
       subscribers.add(res);
       req.on('close', () => subscribers.delete(res));
+      return;
+    }
+    if (url.pathname === '/api/session/active') {
+      const file = process.env.STUB_OPENCODE_ACTIVE_FILE;
+      const ids = file !== undefined && existsSync(file) ? readFileSync(file, 'utf8').split('\n').filter(Boolean) : [];
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ data: Object.fromEntries(ids.map((id) => [id, { type: 'running' }])) }));
+      return;
+    }
+    const permission = /^\/api\/session\/([^/]+)\/permission$/.exec(url.pathname);
+    if (permission !== null) {
+      const file = process.env.STUB_OPENCODE_PERMISSIONS_FILE;
+      const list = file !== undefined && existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : [];
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ data: list.filter((item) => item.sessionID === decodeURIComponent(permission[1])) }));
       return;
     }
     if (url.pathname === '/api/mcp') {

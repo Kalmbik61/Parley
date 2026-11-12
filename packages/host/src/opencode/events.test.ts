@@ -142,7 +142,10 @@ describe('OpenCode event bridge (O6)', () => {
   });
 
   it('3. a dropped stream reconnects and a server that replays gives no duplicate records', async () => {
-    const url = await startServer({ STUB_OPENCODE_SSE_REPLAY: '1' });
+    // The turn is still running on the server, so the reconnect catch-up writes nothing.
+    const active = path.join(dir, 'active.txt');
+    await writeFile(active, `${SES}\n`);
+    const url = await startServer({ STUB_OPENCODE_SSE_REPLAY: '1', STUB_OPENCODE_ACTIVE_FILE: active });
     attach(url);
     await vi.waitFor(() => expect(bridge!.ready(ref)).toBe(true));
     const turn = await lines('events-turn.jsonl');
@@ -219,5 +222,53 @@ describe('OpenCode event bridge (O6)', () => {
     await new Promise((resolve) => setTimeout(resolve, 400));
     expect(bridge!.ready(ref)).toBe(false);
     expect(records).toEqual([]);
+  });
+
+  it('O6b. a dropped stream that lost the turn end: after the reconnect the session ends idle (catch-up Stop)', async () => {
+    const active = path.join(dir, 'active.txt');
+    await writeFile(active, `${SES}\n`);
+    const url = await startServer({ STUB_OPENCODE_ACTIVE_FILE: active });
+    attach(url);
+    await vi.waitFor(() => expect(bridge!.ready(ref)).toBe(true));
+    const turn = await lines('events-turn.jsonl');
+    await push(turn.slice(0, 7));
+    await vi.waitFor(() => expect(records.at(-1)?.hook_event_name).toBe('PreToolUse'));
+    // The turn ends while the stream is down: its events are lost, the server is idle again.
+    await writeFile(active, '');
+    await push(['{"stub":"drop"}']);
+    await vi.waitFor(() => expect(records.at(-1)?.hook_event_name).toBe('Stop'), { timeout: 5000 });
+    expect(records.at(-1)).toMatchObject({ hook_event_name: 'Stop', source: 'reconnect-catch-up', session_id: SES });
+    const now = Date.parse(records.at(-1)!.timestamp) + 1000;
+    expect(activityOf({ events: opencodeRecords(), now, seen: true }).activity).toBe('idle');
+    expect(hooks.at(-1)).toEqual(records.at(-1));
+  });
+
+  it('O6b. a reconnect while the turn still runs writes nothing; a pending permission request becomes the blocked Notification', async () => {
+    const active = path.join(dir, 'active.txt');
+    const permissions = path.join(dir, 'permissions.json');
+    await writeFile(active, `${SES}\n`);
+    const url = await startServer({ STUB_OPENCODE_ACTIVE_FILE: active, STUB_OPENCODE_PERMISSIONS_FILE: permissions });
+    attach(url);
+    await vi.waitFor(() => expect(bridge!.ready(ref)).toBe(true));
+    const turn = await lines('events-turn.jsonl');
+    await push(turn.slice(0, 7));
+    await vi.waitFor(() => expect(records.at(-1)?.hook_event_name).toBe('PreToolUse'));
+    const count = records.length;
+    await push(['{"stub":"drop"}']);
+    await vi.waitFor(() => expect(bridge!.connections(ref)).toBe(2), { timeout: 5000 });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(records).toHaveLength(count);
+    await writeFile(permissions, JSON.stringify([{ id: 'per_demo1', sessionID: SES, action: 'shell', resources: ['echo hi'] }]));
+    await push(['{"stub":"drop"}']);
+    await vi.waitFor(() => expect(records.at(-1)?.hook_event_name).toBe('Notification'), { timeout: 5000 });
+    expect(records.at(-1)).toMatchObject({ notification_type: 'permission_prompt', tool_name: 'shell', source: 'reconnect-catch-up' });
+    const now = Date.parse(records.at(-1)!.timestamp) + 1000;
+    expect(activityOf({ events: opencodeRecords(), now })).toMatchObject({ activity: 'blocked', need: { kind: 'approval' } });
+    // Still waiting at the next reconnect: no second Notification.
+    const waiting = records.length;
+    await push(['{"stub":"drop"}']);
+    await vi.waitFor(() => expect(bridge!.connections(ref)).toBe(4), { timeout: 5000 });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(records).toHaveLength(waiting);
   });
 });
