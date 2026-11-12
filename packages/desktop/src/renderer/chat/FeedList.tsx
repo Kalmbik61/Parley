@@ -187,6 +187,9 @@ const ItemView = memo(function ItemView({ item, expanded, transcript, onToggle, 
           onTranscript={(update) => onTranscript(item.id, update)}
         />
       );
+    case 'mail':
+      // M5 draws the delivered-mail block.
+      return <></>;
     case 'notice':
       return <NoticeItem item={item} />;
     case 'error':

@@ -87,6 +87,7 @@ function fields(item: FeedItem): Array<[FindPart, string]> {
       return [['card', item.plan]];
     case 'error':
       return [['error', item.error], ['error', item.message ?? '']];
+    case 'mail': // M5 adds letter text and sender.
     case 'notice':
     case 'turn':
       return [];

@@ -18,6 +18,9 @@ export const FEED_PATCH_LINES = 2_000;
 /** Предел задания и итога субагента (`FeedAgent.prompt`, `result`); дальше — `truncated`. */
 export const FEED_AGENT_TEXT_LIMIT = 16 * 1024;
 
+/** Предел текста одного письма в `FeedMailLetter.text`; дальше — `cut`. */
+export const FEED_MAIL_TEXT_LIMIT = 16 * 1024;
+
 /** Предел текста ответа модели (`FeedText.text`); дальше — `truncated`. */
 export const FEED_TEXT_LIMIT = 256 * 1024;
 
@@ -278,7 +281,39 @@ export interface FeedTurn extends FeedItemBase {
   interrupted?: true;
 }
 
+/** Одно доставленное письмо (поля, которые читает человек; `replyTo`, `via`, `roomTask` и `assignment` отброшены). */
+export interface FeedMailLetter {
+  /** `m-…` */
+  id: string;
+  /** Id сессии, `human`, `system` или `parley`. */
+  from: string;
+  /** Подпись отправителя на момент доставки, как её увидел агент. */
+  fromLabel: string | null;
+  kind: 'note' | 'question' | 'decision';
+  room: { id: string; title: string } | null;
+  /** Когда письмо отправлено. */
+  at: string;
+  /** До `FEED_MAIL_TEXT_LIMIT` символов. */
+  text: string;
+  /** Урезано доставкой (подсказка страницы) или пределом ленты. */
+  cut?: true;
+}
+
+/** Одна доставка: страница писем, выданная сессии за один раз (`takeInbox`). */
+export interface FeedMail extends FeedItemBase {
+  /** `mail:<id первого письма>` */
+  kind: 'mail';
+  via: 'pointer' | 'check_inbox' | 'wait_for';
+  /** Вызов, из которого письма пришли; `null` у `pointer`. */
+  toolUseId: string | null;
+  /** 1..50 писем. */
+  letters: FeedMailLetter[];
+  /** Сколько непрочитанных осталось после этой страницы. */
+  remaining?: number;
+}
+
 export type FeedItem =
+  | FeedMail
   | FeedPrompt
   | FeedText
   | FeedTool
