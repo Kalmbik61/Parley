@@ -240,6 +240,11 @@ interface AttemptState {
    */
   apiDelivery?: boolean;
   apiTurnSeen?: boolean;
+  /**
+   * The server itself confirmed the API delivery (`sendOpencodePrompt` → `submitted` via the API). Only then a turn may
+   * settle the attempt: a cancelled (unconfirmed) one keeps its timeout and retry, whatever turn the human starts.
+   */
+  apiAccepted?: boolean;
   /** When the API delivery began (ms): a turn that ended after it is the answer, even if no `working` was observed. */
   apiStartedAt?: number;
   /** Причина, по которой письма сессии сейчас не забраны, — уже отданная окну и записанная в лог; `null` — писем нет. */
@@ -988,7 +993,7 @@ export function createWakeService(
    * only `turnEndedAt` shows it (the end of an earlier turn is older than the start, less a small clock slack).
    */
   function apiTurnHappened(state: AttemptState, live: SessionActivity | undefined): boolean {
-    if (state.apiDelivery !== true) return false;
+    if (state.apiDelivery !== true || state.apiAccepted !== true) return false;
     if (state.apiTurnSeen === true) return true;
     if (live?.activity === 'working' && !live.heldByBackground) return true;
     return live?.turnEndedAt != null && Date.parse(live.turnEndedAt) >= (state.apiStartedAt ?? 0) - 50;
@@ -1054,7 +1059,8 @@ export function createWakeService(
       },
     );
     // OpenCode: through the server API; the terminal only when the API definitely did not take the prompt (O7).
-    const typing = mode === 'opencode'
+    // `viaApi` exists on an API delivery only (`sendOpencodePrompt`).
+    const typing: Attempt & { viaApi?: () => boolean } = mode === 'opencode'
       ? sendOpencodePrompt(
           {
             server: (target) => options.opencodeServer?.(target),
@@ -1071,6 +1077,7 @@ export function createWakeService(
     state.typing = typing;
     state.apiDelivery = mode === 'opencode';
     state.apiTurnSeen = false;
+    state.apiAccepted = false;
     state.apiStartedAt = Date.now();
     for (const id of action.letterIds) state.pointed.add(id);
     // Сколько писем ждало в момент печати: если за ход их станет меньше, а остаток так и лежит указанным — это брошенное чтение страниц.
@@ -1124,9 +1131,14 @@ export function createWakeService(
       // Попытку уже сменили или отменили — её исход ничего не решает.
       if (state.typing !== typing) return;
       state.typing = undefined;
+      if (state.apiDelivery === true) {
+        if (outcome === 'submitted' && typing.viaApi?.() === true) state.apiAccepted = true;
+        // The typed fallback is an ordinary typed attempt from here on: its turn is found by the usual `working` rule.
+        else if (outcome === 'submitted') state.apiDelivery = false;
+      }
       // OpenCode: the API took the prompt and its turn already began (and may have ended) before the answer came back. The
       // `working` event was seen while `typing` was set, so the check above skipped it; settle it here, not by the timer.
-      if (state.apiDelivery === true && outcome === 'submitted' && state.inFlight) {
+      if (state.apiDelivery === true && state.apiAccepted === true && state.inFlight) {
         if (apiTurnHappened(state, activity.get(ref)?.activity)) {
           clearTimers(state);
           state.inFlight = false;
@@ -1919,6 +1931,8 @@ export function createWakeService(
         if (
           state?.inFlight === true &&
           state.typing === undefined &&
+          // An API delivery the server did not confirm: a turn now is the human's, not ours; the timeout and retry stay.
+          !(state.apiDelivery === true && state.apiAccepted !== true) &&
           value.activity.activity === 'working' &&
           !value.activity.heldByBackground
         ) {

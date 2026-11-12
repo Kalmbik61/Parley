@@ -56,7 +56,12 @@ function errorCode(error: unknown): string | null {
  * Sends `text` to the session's server. `fallback` types the text into the pty (the host's usual typing); it is called
  * at most once, only when the API definitely did not take the prompt or the server is gone.
  */
-export function sendOpencodePrompt(deps: OpencodePromptDeps, ref: SessionRef, text: string, fallback: (text: string) => Attempt): Attempt {
+/** An API delivery: `viaApi()` is true once the server itself took the prompt (not the typed fallback, not a cancel). */
+export interface OpencodeAttempt extends Attempt {
+  viaApi(): boolean;
+}
+
+export function sendOpencodePrompt(deps: OpencodePromptDeps, ref: SessionRef, text: string, fallback: (text: string) => Attempt): OpencodeAttempt {
   const clean = cleanMultiline(text);
   const fetchImpl = deps.fetchImpl ?? fetch;
   const timeoutMs = deps.timeoutMs ?? OPENCODE_PROMPT_TIMEOUT_MS;
@@ -64,6 +69,7 @@ export function sendOpencodePrompt(deps: OpencodePromptDeps, ref: SessionRef, te
   const startedAt = now();
   let cancelled = false;
   let typing: Attempt | null = null;
+  let accepted = false;
 
   const headers = (address: OpencodeAddress): Record<string, string> => ({
     authorization: `Basic ${Buffer.from(`opencode:${address.password}`).toString('base64')}`,
@@ -130,6 +136,12 @@ export function sendOpencodePrompt(deps: OpencodePromptDeps, ref: SessionRef, te
     return typing.done;
   };
 
+  /** The server took the prompt (accepted, or found queued after an ambiguous answer). */
+  const acceptedNow = (): AttemptOutcome => {
+    accepted = true;
+    return 'submitted';
+  };
+
   async function run(): Promise<AttemptOutcome> {
     const id = deps.sessionId(ref);
     const first = deps.server(ref);
@@ -151,7 +163,7 @@ export function sendOpencodePrompt(deps: OpencodePromptDeps, ref: SessionRef, te
       if (result === 'not-yet') return type('session-not-found');
     }
     if (cancelled) return 'cancelled';
-    if (result === 'accepted') return 'submitted';
+    if (result === 'accepted') return acceptedNow();
     if (result === 'rejected' || result === 'refused') return type(result);
 
     // Ambiguous: did the server queue it anyway?
@@ -159,20 +171,20 @@ export function sendOpencodePrompt(deps: OpencodePromptDeps, ref: SessionRef, te
     if (address === undefined) return type('server-gone');
     const seen = await present(address, id);
     if (cancelled) return 'cancelled';
-    if (seen === true) return 'submitted';
+    if (seen === true) return acceptedNow();
     if (seen === 'gone') return type('server-gone');
 
     // Not queued: one retry.
     result = await post(address, id);
     if (result === 'not-yet') return type('session-not-found');
     if (cancelled) return 'cancelled';
-    if (result === 'accepted') return 'submitted';
+    if (result === 'accepted') return acceptedNow();
     if (result === 'rejected' || result === 'refused') return type(result);
 
     // Ambiguous again: look once more. Still nothing and the server answers: leave it, typing could double it.
     const again = await present(address, id);
     if (cancelled) return 'cancelled';
-    if (again === true) return 'submitted';
+    if (again === true) return acceptedNow();
     if (again === 'gone') return type('server-gone');
     deps.log?.warn('opencode prompt: the server did not confirm the prompt; nothing was typed', { ref });
     return 'cancelled';
@@ -183,6 +195,7 @@ export function sendOpencodePrompt(deps: OpencodePromptDeps, ref: SessionRef, te
       cancelled = true;
       typing?.cancel();
     },
+    viaApi: () => accepted,
     done: run(),
   };
 }

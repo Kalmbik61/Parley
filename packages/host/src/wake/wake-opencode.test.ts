@@ -140,7 +140,7 @@ interface Rig {
   ready: () => void;
 }
 
-async function rig(env: NodeJS.ProcessEnv = {}, enterDelayMs = 300): Promise<Rig> {
+async function rig(env: NodeJS.ProcessEnv = {}, enterDelayMs = 300, extra: { pointerRearmMs?: readonly number[] } = {}): Promise<Rig> {
   const map = await createWork(project, { title: 'Work' });
   let sessionId = '';
   await updateMap(project, map.work.id, (current) => {
@@ -159,7 +159,7 @@ async function rig(env: NodeJS.ProcessEnv = {}, enterDelayMs = 300): Promise<Rig
   const activity = createActivityService(host, works, { silenceThresholdMs: 30_000, trustWaitMs: 60_000, claudeRoot, codexRoot });
   const pty = createPtyManager(host);
   const unlink = linkTerminalActivity(pty, activity);
-  const wake = createWakeService(host, works, activity, pty, { launch: async () => {} }, { enterDelayMs, pointerTimeoutMs: 3000, opencodeServer: () => serverAddress(), opencodeTimeoutMs: 400 });
+  const wake = createWakeService(host, works, activity, pty, { launch: async () => {} }, { enterDelayMs, pointerTimeoutMs: 3000, opencodeServer: () => serverAddress(), opencodeTimeoutMs: 400, ...extra });
   await works.start();
   await activity.start();
   wake.start();
@@ -274,5 +274,23 @@ describe('wake and opencode: delivery through the API', () => {
     await waitFor(() => apiPosts.includes(POINTER));
     await waitFor(() => timeouts() > 0, 8000);
     expect(timeouts()).toBe(1);
+  }, 30_000);
+
+  it('an API delivery the server never confirmed (cancelled), then an unrelated turn: the timeout and the retry remain', async () => {
+    // 500 to every POST and nothing queued: sendOpencodePrompt ends `cancelled` and types nothing (it could double the text).
+    apiStatus = 500;
+    const r = await rig({}, 300, { pointerRearmMs: [500] });
+    await r.letter();
+    const posts = (): number => apiPosts.filter((text) => text === POINTER).length;
+    await waitFor(() => posts() >= 2);
+    // The human starts and ends a turn of their own while the pointer is still in flight.
+    const journal = path.join(workPaths(project, r.ref.workId).events, `${r.ref.sessionId}.jsonl`);
+    await appendFile(journal, journalLine('UserPromptSubmit', { prompt: 'a question of the human' }));
+    await settle(300);
+    await appendFile(journal, journalLine('Stop') + journalLine('Notification', { notification_type: 'idle_prompt' }));
+    // That turn is not the pointer's answer: the safety timer still fires, and the letter is pointed again after the rearm.
+    await waitFor(() => timeouts() === 1, 8000);
+    await waitFor(() => posts() >= 3, 8000);
+    expect(r.stream()).not.toContain('field:');
   }, 30_000);
 });

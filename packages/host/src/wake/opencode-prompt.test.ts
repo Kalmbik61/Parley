@@ -259,4 +259,20 @@ describe('sendOpencodePrompt', () => {
     await sendOpencodePrompt(deps(fake), REF, brief, typing().fallback).done;
     expect(fake.posts).toEqual([brief]);
   });
+
+  it('viaApi: true only when the server itself took the prompt; false for the typed fallback and for an unconfirmed (cancelled) one', async () => {
+    const accepted = sendOpencodePrompt(deps(await listen(['accept'])), REF, POINTER, typing().fallback);
+    expect(accepted.viaApi()).toBe(false);
+    expect(await accepted.done).toBe('submitted');
+    expect(accepted.viaApi()).toBe(true);
+    const found = sendOpencodePrompt(deps(await listen(['queue-then-error'])), REF, POINTER, typing().fallback);
+    expect(await found.done).toBe('submitted');
+    expect(found.viaApi()).toBe(true);
+    const typed = sendOpencodePrompt(deps(await listen(['reject'])), REF, POINTER, typing().fallback);
+    await typed.done;
+    expect(typed.viaApi()).toBe(false);
+    const unconfirmed = sendOpencodePrompt(deps(await listen(['error-unqueued'])), REF, POINTER, typing().fallback);
+    expect(await unconfirmed.done).toBe('cancelled');
+    expect(unconfirmed.viaApi()).toBe(false);
+  });
 });
