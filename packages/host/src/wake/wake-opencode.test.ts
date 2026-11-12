@@ -42,6 +42,8 @@ let stoppers: Array<() => Promise<void> | void> = [];
 let apiServer: Server | undefined;
 let apiUp = true;
 let apiStatus = 202;
+/** `normal`: the turn is journaled after the answer (300 ms); `fast`: the whole turn is journaled BEFORE the answer returns; `none`: no turn. */
+let apiTurn: 'normal' | 'fast' | 'none' = 'normal';
 let apiPosts: string[] = [];
 let apiUrl = '';
 const serverAddress = (): { url: string; password: string } | undefined => (apiUp ? { url: apiUrl, password: PASSWORD } : undefined);
@@ -70,6 +72,7 @@ beforeEach(async () => {
   broadcasts = [];
   apiUp = true;
   apiStatus = 202;
+  apiTurn = 'normal';
   apiPosts = [];
   const events = (): string => path.join(workPaths(project, currentWorkId()).events, `${currentSessionId()}.jsonl`);
   apiServer = createServer((req, res) => {
@@ -79,7 +82,14 @@ beforeEach(async () => {
       if (req.method !== 'POST') return void res.writeHead(404).end();
       const text = (JSON.parse(body) as { text: string }).text;
       apiPosts.push(text);
-      if (apiStatus < 300) {
+      if (apiStatus < 300 && apiTurn === 'fast') {
+        // The bridge is quicker than the answer: the turn starts and ends while the host still waits for the POST.
+        void appendFile(events(), journalLine('UserPromptSubmit', { prompt: text }))
+          .then(() => setTimeout(() => void appendFile(events(), journalLine('Stop') + journalLine('Notification', { notification_type: 'idle_prompt' })), 60));
+        setTimeout(() => res.writeHead(apiStatus).end('{}'), 250);
+        return;
+      }
+      if (apiStatus < 300 && apiTurn === 'normal') {
         // What the event bridge journals when the server runs the queued prompt: a turn that starts and ends.
         void appendFile(events(), journalLine('UserPromptSubmit', { prompt: text })).then(() => setTimeout(() => void appendFile(events(), journalLine('Stop') + journalLine('Notification', { notification_type: 'idle_prompt' })), 300));
       }
@@ -217,5 +227,27 @@ describe('wake and opencode: delivery through the API', () => {
     await r.letter();
     await waitFor(() => r.stream().includes(`turn: ${POINTER}`));
     expect(apiPosts).toEqual([]);
+  }, 30_000);
+
+  const timeouts = (): number => broadcasts.filter((item) => item.event === 'host.notice' && (item.data as { kind?: string }).kind === 'pointer-timeout').length;
+
+  it('a quick turn that starts and ends before the POST returns still counts as the answer: no pointer-timeout', async () => {
+    apiTurn = 'fast';
+    const r = await rig(); // pointerTimeoutMs is 3000
+    await r.letter();
+    await waitFor(() => apiPosts.includes(POINTER));
+    // Past the safety timer of the pointer.
+    await settle(3800);
+    expect(timeouts()).toBe(0);
+    expect(r.wake.inFlight(r.ref)).toBe(false);
+  }, 30_000);
+
+  it('a delivery after which no turn happens at all still times out', async () => {
+    apiTurn = 'none';
+    const r = await rig();
+    await r.letter();
+    await waitFor(() => apiPosts.includes(POINTER));
+    await waitFor(() => timeouts() > 0, 8000);
+    expect(timeouts()).toBe(1);
   }, 30_000);
 });

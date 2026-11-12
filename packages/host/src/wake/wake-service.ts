@@ -233,6 +233,15 @@ interface AttemptState {
   deferred?: { pid: number; text: string } | undefined;
   /** Указатель напечатан, ход по нему ещё не начался и не признан пропавшим. */
   inFlight: boolean;
+  /**
+   * OpenCode (O7): the prompt goes through the server API, so it is submitted when the POST arrives and the bridge can journal
+   * the whole turn before the answer returns. `apiDelivery` marks such an attempt; `apiTurnSeen` — a turn began while the POST
+   * was still in flight (that `working` is ours, unlike the one before a typed Enter).
+   */
+  apiDelivery?: boolean;
+  apiTurnSeen?: boolean;
+  /** When the API delivery began (ms): a turn that ended after it is the answer, even if no `working` was observed. */
+  apiStartedAt?: number;
   /** Причина, по которой письма сессии сейчас не забраны, — уже отданная окну и записанная в лог; `null` — писем нет. */
   waiting: MailWait | null;
   /**
@@ -1048,6 +1057,9 @@ export function createWakeService(
         )
       : typeNow(action.text);
     state.typing = typing;
+    state.apiDelivery = mode === 'opencode';
+    state.apiTurnSeen = false;
+    state.apiStartedAt = Date.now();
     for (const id of action.letterIds) state.pointed.add(id);
     // Сколько писем ждало в момент печати: если за ход их станет меньше, а остаток так и лежит указанным — это брошенное чтение страниц.
     const waiting = works.entry(ref.projectPath, ref.workId);
@@ -1092,6 +1104,21 @@ export function createWakeService(
       // Попытку уже сменили или отменили — её исход ничего не решает.
       if (state.typing !== typing) return;
       state.typing = undefined;
+      // OpenCode: the API took the prompt and its turn already began (and may have ended) before the answer came back. The
+      // `working` event was seen while `typing` was set, so the check above skipped it; settle it here, not by the timer.
+      if (state.apiDelivery === true && outcome === 'submitted' && state.inFlight) {
+        const live = activity.get(ref)?.activity;
+        // A whole turn can begin and end between two reads of the journal: no `working` is ever observed, but `turnEndedAt` is
+        // later than the start of the delivery.
+        const endedSince = live?.turnEndedAt != null && Date.parse(live.turnEndedAt) >= (state.apiStartedAt ?? 0) - 50;
+        if (state.apiTurnSeen === true || endedSince || (live?.activity === 'working' && !live.heldByBackground)) {
+          clearTimers(state);
+          state.inFlight = false;
+          state.timeouts = 0;
+          recompute(ref);
+          return;
+        }
+      }
       if (outcome === 'input') {
         // Человек уже печатает своё — Enter чужого текста испортил бы его строку.
         // Текст указателя остаётся в поле ввода, письма — в `pointed`: повторно
@@ -1881,6 +1908,16 @@ export function createWakeService(
         ) {
           clearTimers(state);
           state.inFlight = false;
+        }
+        // An API delivery has no Enter to wait for: a turn that begins while the POST is in flight is the answer to it.
+        if (
+          state?.inFlight === true &&
+          state.typing !== undefined &&
+          state.apiDelivery === true &&
+          value.activity.activity === 'working' &&
+          !value.activity.heldByBackground
+        ) {
+          state.apiTurnSeen = true;
         }
         if (state !== undefined && state.typing === undefined) {
           const kind = value.activity.activity;
