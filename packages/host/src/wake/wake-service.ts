@@ -1153,9 +1153,17 @@ export function createWakeService(
       if (apiTimerDue && state.inFlight) {
         apiTimerDue = false;
         if (state.apiDelivery === true) {
-          // Confirmed or not, the timer's usual verdict now: a turn of an accepted prompt settles it (`apiTurnHappened`
-          // requires the acceptance recorded above); a queued prompt that started no turn, or an unconfirmed one, times out
-          // and is rearmed as usual.
+          // Accepted just now and no turn yet: the turn cannot have been journaled at this instant. Like the typed fallback
+          // below, the prompt gets its own safety window from the acceptance; a turn inside it settles it (the activity
+          // listener, `typing` is clear now), none — the usual verdict once.
+          if (state.apiAccepted === true && !apiTurnHappened(state, activity.get(ref)?.activity)) {
+            state.timeoutTimer = setTimeout(() => {
+              state.timeoutTimer = undefined;
+              pointerTimedOut();
+            }, pointerTimeoutMs);
+            return;
+          }
+          // A turn of the accepted prompt already seen settles it; an unconfirmed one (cancelled) times out and is rearmed.
           pointerTimedOut();
           return;
         }

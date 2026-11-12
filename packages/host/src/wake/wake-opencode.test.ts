@@ -44,7 +44,11 @@ let apiUp = true;
 let apiStatus = 202;
 /** `normal`: the turn is journaled after the answer (300 ms); `fast`: the whole turn is journaled BEFORE the answer returns; `batch`: the answer returns at once and the whole turn lands in the journal in ONE write 150 ms later (the fold sees no
  * `working`, only the end); `none`: no turn. */
-let apiTurn: 'normal' | 'fast' | 'batch' | 'none' | 'late-queue' | 'late-queue-turn' = 'normal';
+let apiTurn: 'normal' | 'fast' | 'batch' | 'none' | 'late-queue' | 'late-queue-turn' | 'late-queue-then-turn' | 'never-queue' = 'normal';
+/** `late-queue*` modes: the second inbox read found the prompt (the answer goes out 300 ms later). */
+let inboxFoundAt = 0;
+/** When each POST arrived (ms). */
+let apiPostTimes: number[] = [];
 /** `late-queue`: inbox reads so far (the first finds nothing, the second finds the prompt queued). */
 let inboxReads = 0;
 let apiPosts: string[] = [];
@@ -77,7 +81,9 @@ beforeEach(async () => {
   apiStatus = 202;
   apiTurn = 'normal';
   apiPosts = [];
+  apiPostTimes = [];
   inboxReads = 0;
+  inboxFoundAt = 0;
   const events = (): string => path.join(workPaths(project, currentWorkId()).events, `${currentSessionId()}.jsonl`);
   apiServer = createServer((req, res) => {
     let body = '';
@@ -85,24 +91,39 @@ beforeEach(async () => {
     req.on('end', () => {
       if (req.method !== 'POST') {
         // `late-queue`: the server did queue the prompt, but the host learns it only from its second inbox read.
-        if ((apiTurn === 'late-queue' || apiTurn === 'late-queue-turn') && req.url?.endsWith('/inbox') === true) {
+        // `never-queue`: the server never shows the prompt: the attempt ends unconfirmed (cancelled).
+        if (apiTurn === 'never-queue' && req.url?.endsWith('/inbox') === true) {
+          inboxReads += 1;
+          return void res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ data: [] }));
+        }
+        if ((apiTurn === 'late-queue' || apiTurn === 'late-queue-turn' || apiTurn === 'late-queue-then-turn') && req.url?.endsWith('/inbox') === true) {
           inboxReads += 1;
           const found = inboxReads >= 2;
+          if (found) inboxFoundAt = Date.now();
           // `late-queue-turn`: the queued prompt also ran: its turn is journaled before the host learns it was queued.
           if (found && apiTurn === 'late-queue-turn') {
             void appendFile(events(), journalLine('UserPromptSubmit', { prompt: apiPosts[0] }) + journalLine('Stop') + journalLine('Notification', { notification_type: 'idle_prompt' }));
           }
-          setTimeout(() => res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({
-            data: found ? [{ id: 'msg_late', type: 'user', time: { created: Date.now() }, payload: { text: apiPosts[0] }, delivery: 'steer' }] : [],
-          })), found ? 300 : 0);
+          setTimeout(() => {
+            res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({
+              data: found ? [{ id: 'msg_late', type: 'user', time: { created: Date.now() }, payload: { text: apiPosts[0] }, delivery: 'steer' }] : [],
+            }));
+            // `late-queue-then-turn`: the queued prompt's turn starts only after the host learned it was queued (the real
+            // server frozen past the safety timer, then resumed), and ends a little later.
+            if (found && apiTurn === 'late-queue-then-turn') {
+              setTimeout(() => void appendFile(events(), journalLine('UserPromptSubmit', { prompt: apiPosts[0] })).then(() =>
+                setTimeout(() => void appendFile(events(), journalLine('Stop') + journalLine('Notification', { notification_type: 'idle_prompt' })), 300)), 200);
+            }
+          }, found ? 300 : 0);
           return;
         }
         return void res.writeHead(404).end();
       }
       const text = (JSON.parse(body) as { text: string }).text;
       apiPosts.push(text);
+      apiPostTimes.push(Date.now());
       // `late-queue`: the POST never answers (the host times out: an ambiguous outcome).
-      if (apiTurn === 'late-queue' || apiTurn === 'late-queue-turn') return;
+      if (apiTurn === 'late-queue' || apiTurn === 'late-queue-turn' || apiTurn === 'late-queue-then-turn' || apiTurn === 'never-queue') return;
       if (apiStatus < 300 && apiTurn === 'fast') {
         // The bridge is quicker than the answer: the turn starts and ends while the host still waits for the POST.
         void appendFile(events(), journalLine('UserPromptSubmit', { prompt: text }))
@@ -160,7 +181,7 @@ interface Rig {
   ready: () => void;
 }
 
-async function rig(env: NodeJS.ProcessEnv = {}, enterDelayMs = 300, extra: { pointerRearmMs?: readonly number[]; pointerTimeoutMs?: number } = {}): Promise<Rig> {
+async function rig(env: NodeJS.ProcessEnv = {}, enterDelayMs = 300, extra: { pointerRearmMs?: readonly number[]; pointerTimeoutMs?: number; opencodeTimeoutMs?: number } = {}): Promise<Rig> {
   const map = await createWork(project, { title: 'Work' });
   let sessionId = '';
   await updateMap(project, map.work.id, (current) => {
@@ -330,14 +351,48 @@ describe('wake and opencode: delivery through the API', () => {
     expect(r.stream()).not.toContain('field:');
   }, 30_000);
 
+  it('a queued prompt confirmed only after the safety timer, whose turn starts only after that: no pointer-timeout, no rearm, no re-send', async () => {
+    // Observed on the real app: the server was frozen past the timer; the confirmation and the notice came in the same millisecond.
+    apiTurn = 'late-queue-then-turn';
+    const r = await rig({}, 300, { pointerTimeoutMs: 800, pointerRearmMs: [300] });
+    await r.letter();
+    const posts = (): number => apiPosts.filter((text) => text === POINTER).length;
+    await waitFor(() => inboxReads >= 2, 8000);
+    await waitFor(() => !r.wake.inFlight(r.ref), 8000);
+    // Past the turn, a fresh safety window and the short rearm a false timeout would have scheduled.
+    await settle(1500);
+    expect(timeouts()).toBe(0);
+    expect(posts()).toBe(2);
+    expect(r.stream()).not.toContain('field:');
+  }, 30_000);
+
+  it('an API attempt that ends unconfirmed (cancelled) only after the safety timer: the timeout comes at once and the rearm follows', async () => {
+    apiTurn = 'never-queue';
+    // Two POSTs of 700 ms each: the attempt resolves `cancelled` well after the 1000 ms timer.
+    const r = await rig({}, 300, { pointerTimeoutMs: 1000, pointerRearmMs: [300], opencodeTimeoutMs: 700 });
+    await r.letter();
+    const posts = (): number => apiPosts.filter((text) => text === POINTER).length;
+    await waitFor(() => posts() >= 2, 8000);
+    const secondPost = apiPostTimes[1]!;
+    await waitFor(() => timeouts() === 1, 8000);
+    // Decided on the resolution (~700 ms after the second POST), not after a fresh 1000 ms window.
+    expect(Date.now() - secondPost).toBeLessThan(1500);
+    await waitFor(() => posts() >= 3, 8000);
+    expect(r.stream()).not.toContain('field:');
+  }, 30_000);
+
   it('a queued prompt confirmed only after the safety timer, but no turn ever starts: one pointer-timeout and the normal rearm', async () => {
     apiTurn = 'late-queue';
     const r = await rig({}, 300, { pointerTimeoutMs: 800, pointerRearmMs: [300] });
     await r.letter();
     const posts = (): number => apiPosts.filter((text) => text === POINTER).length;
     await waitFor(() => inboxReads >= 2, 8000);
+    // The confirmation goes out 300 ms after that read; the accepted prompt then gets a fresh 800 ms window for its turn.
+    await settle(300 + 400);
+    expect(timeouts()).toBe(0);
     await waitFor(() => timeouts() === 1, 8000);
-    // No notice before the attempt resolved: the timeout came from the resolution, once.
+    // One notice, after the fresh window, and no re-send before it.
+    expect(Date.now() - inboxFoundAt).toBeGreaterThanOrEqual(300 + 800);
     expect(posts()).toBe(2);
     // The rearm points the letter again: a new API attempt.
     await waitFor(() => posts() >= 3, 8000);
