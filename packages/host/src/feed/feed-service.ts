@@ -838,7 +838,7 @@ export function createFeedService(
     } catch {
       provider = undefined;
     }
-    const hookFamily = provider === undefined ? 'claude' : byFamily(provider, { claude: 'claude' as const, codex: 'codex' as const, qwen: null, neutral: null });
+    const hookFamily = provider === undefined ? 'claude' : byFamily(provider, { claude: 'claude' as const, codex: 'codex' as const, qwen: null, opencode: null, neutral: null });
     if (hookFamily === 'codex') {
       onCodexHook(request);
       return;
@@ -848,7 +848,7 @@ export function createFeedService(
     // and no permission cards (spec 2026-11-11, 3.5, Feed ownership); it only prompts the transcript to be read now.
     if (hookFamily === null) {
       request.respond(EMPTY_HOOK_RESPONSE);
-      if (provider !== undefined && byFamily(provider, { claude: false, codex: false, qwen: true, neutral: false })) {
+      if (provider !== undefined && byFamily(provider, { claude: false, codex: false, qwen: true, opencode: false, neutral: false })) {
         if (body['hook_event_name'] === 'Stop' || body['hook_event_name'] === 'StopFailure') {
           const stamp = textOf(body['timestamp']);
           feedOf(ref).qwenStoppedAt = stamp !== null && !Number.isNaN(Date.parse(stamp)) ? new Date(stamp).toISOString() : at();
@@ -914,6 +914,7 @@ export function createFeedService(
       claude: () => seedClaude(feed, provider, foreground),
       codex: () => seedCodex(feed, foreground),
       qwen: () => seedQwen(feed, foreground),
+      opencode: () => Promise.resolve(),
       neutral: () => Promise.resolve(),
     })();
     if (feed.seeding === undefined) return run;
@@ -1539,7 +1540,7 @@ export function createFeedService(
         flush(known);
         return;
       }
-    } else if (provider !== undefined && byFamily(provider, { claude: false, codex: false, qwen: true, neutral: false })) {
+    } else if (provider !== undefined && byFamily(provider, { claude: false, codex: false, qwen: true, opencode: false, neutral: false })) {
       const known = feedOf(ref);
       if (known.qwen !== undefined) {
         await reseedQwenIfRebound(known);
@@ -1601,7 +1602,7 @@ export function createFeedService(
       new HostError('not_found', `no transcript for agent ${agentId}`);
     if (!SAFE_AGENT_ID.test(agentId)) throw notFound();
     // Qwen Code has no subagent transcripts in the feed: never fall through to the Claude layout.
-    if (byFamily(sessionOf(ref).provider, { claude: false, codex: false, qwen: true, neutral: false })) throw notFound();
+    if (byFamily(sessionOf(ref).provider, { claude: false, codex: false, qwen: true, opencode: false, neutral: false })) throw notFound();
     if (sessionOf(ref).provider === 'codex') {
       const file = deps.activity.childLogFile(ref, agentId);
       if (file === null) throw notFound();
@@ -1645,7 +1646,7 @@ export function createFeedService(
     try {
       if (sessionOf(feed.ref).provider === 'codex') return;
       // Qwen Code has no feed cards to settle (approvals are answered in the terminal). Its journal going idle ends the turn.
-      if (byFamily(sessionOf(feed.ref).provider, { claude: false, codex: false, qwen: true, neutral: false })) {
+      if (byFamily(sessionOf(feed.ref).provider, { claude: false, codex: false, qwen: true, opencode: false, neutral: false })) {
         if (turnActive(feed.state.items)) {
           feed.qwenStoppedAt = at();
           void seedAside(feed.ref);
@@ -2016,7 +2017,7 @@ export function createFeedService(
       }
       clients.add(client);
       const subscribed = sessionOf(ref).provider;
-      if (!stopped && (subscribed === 'codex' || byFamily(subscribed, { claude: false, codex: false, qwen: true, neutral: false }))) startCodexPoll(feedOf(ref));
+      if (!stopped && (subscribed === 'codex' || byFamily(subscribed, { claude: false, codex: false, qwen: true, opencode: false, neutral: false }))) startCodexPoll(feedOf(ref));
     },
 
     unsubscribe(ref, client) {
@@ -2092,7 +2093,7 @@ export function createFeedService(
       deps.pty.write(ref, ESC);
       // У Codex приглашения `❯` и возвращённого в поле промпта нет: ход закроет запись `turn_aborted`.
       // Qwen Code: no `❯` prompt check as Claude's; the next transcript record or hook settles the turn.
-      if (sessionOf(ref).provider === 'codex' || byFamily(sessionOf(ref).provider, { claude: false, codex: false, qwen: true, neutral: false })) return;
+      if (sessionOf(ref).provider === 'codex' || byFamily(sessionOf(ref).provider, { claude: false, codex: false, qwen: true, opencode: false, neutral: false })) return;
       const feed = feeds.get(refKey(ref));
       // Хода в ленте нет — присматривать не за чем: Esc ушёл, остальное за CLI.
       if (stopped || feed === undefined || feed.state.turnStartedAt === null) return;

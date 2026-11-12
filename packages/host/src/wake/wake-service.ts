@@ -28,6 +28,7 @@ import {
   loadConfig,
   loadProviders,
   openEvents,
+  byFamily,
   providerFamily,
   parleyNote,
   sessionMention,
@@ -139,7 +140,12 @@ export interface WakeService {
 type InputMode = 'plain' | 'codex' | 'qwen' | 'opencode';
 
 const inputModeOf = (provider: string | null): InputMode =>
-  provider === 'codex' ? 'codex' : provider !== null && providerFamily(provider) === 'qwen' ? 'qwen' : 'plain';
+  provider === 'codex'
+    ? 'codex'
+    : provider === null
+      ? 'plain'
+      // OpenCode types like a plain terminal until its API delivery (O7).
+      : byFamily(provider, { claude: 'plain', codex: 'plain', qwen: 'qwen', opencode: 'plain', neutral: 'plain' });
 
 const DEFAULT_ENTER_DELAY_MS = 500;
 /** Сколько будильник верит прочитанному реестру провайдеров. */
@@ -809,7 +815,7 @@ export function createWakeService(
         for (const id of action.letterIds) state.pointed.add(id);
         // На новом процессе указанными остаются только письма подъёма: остальные получат указатель после первого хука.
         state.promptIds = [...action.letterIds];
-      } else if (providerFamily(session.provider) !== 'qwen') state.pointerAfter = state.resumedAt;
+      } else if (!byFamily(session.provider, { claude: false, codex: false, qwen: true, opencode: false, neutral: false })) state.pointerAfter = state.resumedAt;
       // Qwen has no `{prompt}` and fires no `idle_prompt` before a turn, so "after the first idle" would never come: its
       // readiness (OSC 7501 idle + Parley MCP connected, `hookedSince`) already holds the pointer until it can be typed.
 

@@ -740,7 +740,7 @@ export function createSessionsService(
    * (короткая, ждём её); нет версии, старый CLI и прочие провайдеры — без хуков, окно покажет терминал.
    */
   async function feedHookUrl(provider: string): Promise<string | undefined> {
-    const hooked = byFamily(provider, { claude: 'claude' as const, codex: 'codex' as const, qwen: 'qwen' as const, neutral: null });
+    const hooked = byFamily(provider, { claude: 'claude' as const, codex: 'codex' as const, qwen: 'qwen' as const, opencode: null, neutral: null });
     if (hooked === null || hooks === undefined || providerVersions === undefined) return undefined;
     const codex = hooked === 'codex';
     const url = hooks.url();
@@ -976,7 +976,7 @@ export function createSessionsService(
       // Нет согласия — карточка и `held`; есть — ключи доверия считаются ниже, уже после создания worktree.
       let trusted = false;
       // Qwen Code has folder trust off by default (Q10): no consent screen to replace.
-      if (byFamily(session.provider, { claude: false, codex: true, qwen: false, neutral: false })) {
+      if (byFamily(session.provider, { claude: false, codex: true, qwen: false, opencode: false, neutral: false })) {
         trusted = await timer.step('trust', () => isTrusted(ref.projectPath));
         if (!trusted && feed.consents !== undefined) {
           const by = options.by ?? 'human';
@@ -1199,7 +1199,7 @@ export function createSessionsService(
 
       const { hookUrl, codexHookCommand } = await timer.step('hooks', async () => {
         const url = await feedHookUrl(session.provider);
-        const codexCommand = url !== undefined && byFamily(session.provider, { claude: false, codex: true, qwen: false, neutral: false })
+        const codexCommand = url !== undefined && byFamily(session.provider, { claude: false, codex: true, qwen: false, opencode: false, neutral: false })
           ? await feed.codexHookCommand?.() : undefined;
         return { hookUrl: url, codexHookCommand: codexCommand };
       });
@@ -1216,7 +1216,7 @@ export function createSessionsService(
       let projectMcp: { enabled: string[]; disabled: string[] } | undefined;
       // `.mcp.json` decisions go into Claude's `--settings` file; Qwen Code reads project MCP servers itself (its own
       // one-time approval, Q4), and Codex has no such file.
-      if (byFamily(entry, { claude: entry.runner.command === 'claude', codex: false, qwen: false, neutral: false }) && feed.projectMcp !== undefined) {
+      if (byFamily(entry, { claude: entry.runner.command === 'claude', codex: false, qwen: false, opencode: false, neutral: false }) && feed.projectMcp !== undefined) {
         const found = await timer.step('projectMcpFinal', () => feed.projectMcp!.inspect(session.workspace?.path ?? session.worktree?.path ?? ref.projectPath, { configDir: claudeConfigDirFor(entry, process.env) }));
         if (found.undecided.length > 0) {
           host.log.warn('project MCP: servers without a decision are disabled for this launch', { ref, servers: found.undecided.map((server) => server.name) });
@@ -1235,7 +1235,7 @@ export function createSessionsService(
             cwd: await trustKey(session.workspace?.path ?? session.worktree?.path ?? ref.projectPath),
           }
         : undefined;
-      const codexApprovals = byFamily(session.provider, { claude: false, codex: true, qwen: false, neutral: false })
+      const codexApprovals = byFamily(session.provider, { claude: false, codex: true, qwen: false, opencode: false, neutral: false })
         ? await timer.step('approvals', () => codexApprovalsFor(ref, session.provider))
         : undefined;
       const plan = await timer.step('plan', () => planFn(ref.projectPath, ref.workId, session, {
@@ -1331,7 +1331,7 @@ export function createSessionsService(
         const name = ownsHookToken(entry) ? 'PARLEY_HOOK_CAPABILITY' : 'PARLEY_HOOK_TOKEN';
         // Мост хука Codex (`codex-hook-bin`) читает адрес и токен из окружения процесса — у Claude они в файле настроек.
         // Qwen reads both from its system settings file, like Claude.
-        if (byFamily(session.provider, { claude: false, codex: true, qwen: false, neutral: false })) env['PARLEY_HOOK_URL'] = hookUrl;
+        if (byFamily(session.provider, { claude: false, codex: true, qwen: false, opencode: false, neutral: false })) env['PARLEY_HOOK_URL'] = hookUrl;
         env[name] = hooks.register(
           ref,
           plan.providerSessionId ?? session.providerSessionId,

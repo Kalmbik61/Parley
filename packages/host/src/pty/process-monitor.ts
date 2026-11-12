@@ -48,6 +48,7 @@ function isCommandProcess(name: string, provider: string | null): boolean {
     claude: shell,
     codex: lower !== 'node' && lower !== 'node_repl' && !lower.startsWith('codex'),
     qwen: shell,
+    opencode: shell,
     neutral: shell,
   });
 }

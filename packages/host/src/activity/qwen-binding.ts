@@ -32,7 +32,7 @@ export function createQwenBinding(deps: QwenBindingDeps): { onHook(request: { re
       if (body['hook_event_name'] !== 'SessionStart') return;
       const session = deps.session(ref);
       if (session === undefined || session.providerSessionId === null) return;
-      if (!byFamily(session.provider, { claude: false, codex: false, qwen: true, neutral: false })) return;
+      if (!byFamily(session.provider, { claude: false, codex: false, qwen: true, opencode: false, neutral: false })) return;
       const candidate = qwenBindingCandidate(body, session.providerSessionId, deps.qwenRoot);
       if (candidate === null) return;
       const folder = session.workspace?.path ?? session.worktree?.path ?? ref.projectPath;

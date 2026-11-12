@@ -539,7 +539,7 @@ export function wholeSessionUsage(selected: UsageSummary, hasLog: boolean, provi
     output: 0,
     cacheRead: 0,
     // Cache writes are not observed for Codex or Qwen Code: unknown, not zero.
-    cacheWrite: byFamily(provider, { claude: 0, codex: null, qwen: null, neutral: 0 }),
+    cacheWrite: byFamily(provider, { claude: 0, codex: null, qwen: null, opencode: 0, neutral: 0 }),
     totalInput: 0,
     source: 'native-index',
     observedAt: null,
@@ -701,11 +701,11 @@ export function createActivityService(
    * settings file journals the same way). Codex and a null or unknown family do not.
    */
   function hooksExpected(session: WorkSession): boolean {
-    return byFamily(session.provider, { claude: true, codex: false, qwen: true, neutral: false });
+    return byFamily(session.provider, { claude: true, codex: false, qwen: true, opencode: false, neutral: false });
   }
 
   const isQwen = (session: WorkSession): boolean =>
-    byFamily(session.provider, { claude: false, codex: false, qwen: true, neutral: false });
+    byFamily(session.provider, { claude: false, codex: false, qwen: true, opencode: false, neutral: false });
 
   /**
    * Qwen readiness (spec 2026-11-11, 3.4 and its amendment): `SessionStart` is not ready, because Qwen fires it under its
@@ -1657,7 +1657,7 @@ export function createActivityService(
         if (watch !== undefined) void readJournal(entry.projectPath, entry.map.work.id, watch.journal, session.id);
         // The log index serves the Claude family and Qwen; Codex has `codex-log-poll.ts`.
         // A Qwen session not yet indexed (created after the watcher attached, event missed) is probed through its binding.
-        const file = byFamily(session.provider, { claude: true, codex: false, qwen: true, neutral: false })
+        const file = byFamily(session.provider, { claude: true, codex: false, qwen: true, opencode: false, neutral: false })
           ? (logIndex.index(session)?.file ?? session.qwenTranscript?.path)
           : undefined;
         if (file !== undefined) logs.push(file);

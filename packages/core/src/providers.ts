@@ -540,8 +540,7 @@ export function providerFamily(entry: ProviderEntry | WorkProvider): ProviderFam
  */
 export function byFamily<T>(
   entry: ProviderEntry | WorkProvider,
-  // `opencode` is optional until O1b gives every caller its own branch; a caller without one takes `neutral`.
-  branches: { claude: T; codex: T; qwen: T; opencode?: T; neutral: T },
+  branches: { claude: T; codex: T; qwen: T; opencode: T; neutral: T },
 ): T {
   const family = providerFamily(entry);
   switch (family) {
@@ -552,7 +551,7 @@ export function byFamily<T>(
     case 'qwen':
       return branches.qwen;
     case 'opencode':
-      return 'opencode' in branches ? (branches.opencode as T) : branches.neutral;
+      return branches.opencode;
     case null:
       return branches.neutral;
     default: {

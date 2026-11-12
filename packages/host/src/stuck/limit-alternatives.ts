@@ -6,6 +6,7 @@
 
 import {
   loadProviders,
+  byFamily,
   providerFamily,
   providerLabel,
   providerReadiness,
@@ -43,7 +44,7 @@ export async function limitAlternatives(provider: string, deps: LimitAlternative
   const registry = await loadProviders();
   const current = registry[provider];
   // Only the Claude family has interchangeable accounts; codex, qwen, null and unknown families offer none.
-  if (current === undefined || providerFamily(current) !== 'claude') return [];
+  if (current === undefined || !byFamily(current, { claude: true, codex: false, qwen: false, opencode: false, neutral: false })) return [];
   const family = providerFamily(current);
   const readiness = deps.readiness ?? ((entry: ProviderEntry) => providerReadiness(entry, { signedIn: true }));
   const result: LimitAlternative[] = [];

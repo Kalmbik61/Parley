@@ -64,7 +64,7 @@ export function createInlineMail(deps: InlineMailDeps): InlineMail {
       const prompt = body['prompt'];
       if (typeof prompt !== 'string' || !isPointerText(prompt)) return false;
       const provider = deps.provider(ref);
-      if (provider === undefined || byFamily(provider, { claude: false, codex: true, qwen: true, neutral: true })) return false;
+      if (provider === undefined || byFamily(provider, { claude: false, codex: true, qwen: true, opencode: true, neutral: true })) return false;
 
       const startedAt = now();
       let late = false;

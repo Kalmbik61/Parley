@@ -159,6 +159,7 @@ export function createStuckService(
       claude: providerLabel(PROVIDERS.claude),
       codex: providerLabel(PROVIDERS.codex),
       qwen: provider,
+      opencode: provider,
       neutral: provider,
     });
   }

@@ -236,7 +236,7 @@ export async function roleForProvider(cwd: string, entry: ProviderEntry, role: S
     }
   };
   // Qwen Code has no native roles: a Claude or Codex role does not carry over (spec 2026-11-11, 3.6, D10).
-  const source = byFamily(entry, { claude: 'claude' as const, codex: 'codex' as const, qwen: null, neutral: null });
+  const source = byFamily(entry, { claude: 'claude' as const, codex: 'codex' as const, qwen: null, opencode: null, neutral: null });
   if (source === role.source) return await accepts(role, 'existing') ? role : null;
   if (source === null) return null;
   const sameName: SessionRole = { source, name: role.name };

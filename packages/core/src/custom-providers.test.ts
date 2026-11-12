@@ -441,7 +441,7 @@ describe('providerFamily', () => {
 });
 
 describe('byFamily', () => {
-  const branches = { claude: 'c', codex: 'x', qwen: 'q', neutral: 'n' } as const;
+  const branches = { claude: 'c', codex: 'x', qwen: 'q', opencode: 'o', neutral: 'n' } as const;
   it('picks the family branch; a null or unrecognised family takes neutral', () => {
     expect(byFamily(PROVIDERS.claude, branches)).toBe('c');
     expect(byFamily(PROVIDERS.glm, branches)).toBe('c');
@@ -454,9 +454,9 @@ describe('byFamily', () => {
     expect(byFamily('mystery', branches)).toBe('n');
   });
 
-  it('opencode: its own branch when a caller gives one, neutral until then (O1b makes the branch required)', () => {
-    expect(byFamily(OPENCODE_FAMILY_ENTRY, { ...branches, opencode: 'o' })).toBe('o');
-    expect(byFamily(OPENCODE_FAMILY_ENTRY, branches)).toBe('n');
+  it('opencode has its own, required branch', () => {
+    expect(byFamily(OPENCODE_FAMILY_ENTRY, branches)).toBe('o');
+    expect(byFamily('opencode', branches)).toBe('n'); // an id without a registry entry has no family
     // A table over every family keeps this test honest: a new `ProviderFamily` member fails the compile here.
     const table: Record<ProviderFamily, string> = { claude: 'c', codex: 'x', qwen: 'q', opencode: 'o' };
     expect(Object.keys(table).sort()).toEqual(['claude', 'codex', 'opencode', 'qwen']);
