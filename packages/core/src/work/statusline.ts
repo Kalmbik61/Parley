@@ -109,6 +109,9 @@ async function saveLimits(
   const rateLimits = input?.['rate_limits'];
   // Окон подписки во входе нет (шлюз, API-ключ, первый ход) — хранить нечего.
   if (claudeLimits(rateLimits, at) === null) return;
+  // `changedAt` — момент работы скрипта, а не ответа API: две работающие сессии могут поменяться местами на
+  // секунды до следующего изменения, а только что достигнутые 100 % ненадолго скрыться — тогда stuck.ts
+  // берёт время из текста ошибки.
   const changedAt = await previousChangedAt(env, rateLimits, at);
   await writeSessionFile(env, LIMITS_DIR, limitsFile, { at, changedAt, rateLimits });
 }
