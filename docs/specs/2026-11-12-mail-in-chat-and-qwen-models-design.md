@@ -1,9 +1,12 @@
 # Delivered mail in Chat, Qwen approval mode, and Qwen Code models: design
 
-Status: revision 3.
+Status: revision 4.
 - **Part M is accepted** by the human as p-48 (r-28, m-7946), with the first option of every decision D1–D8 (§7). Implementation has started.
-- **Parts A and Q** are new in this revision and wait for critique and a second proposal. No code for them before the human accepts.
-- Revision 1 (7fb04655) was critiqued by s-348 (Codex gpt-6-astra, "revise"). Revision 2 (3e72171b) answered every finding (appendix A), and the delta review accepted it, with D8 left for the human.
+- **Parts A and Q** wait for the second proposal. No code for them before the human accepts.
+- Critique history:
+  - revision 1 (7fb04655) was critiqued by s-348 (Codex gpt-6-astra, "revise");
+  - revision 2 (3e72171b) answered every finding (appendix A), and the delta review accepted it, with D8 left for the human;
+  - revision 3 (2a9460a3) added Parts A and Q; s-348 asked to revise them (2 major, 2 minor), and revision 4 answers every finding (appendix B).
 - **Part O** (OpenCode 2.x) gets its own documents and proposal.
 - Lead s-345, owner s-320, room r-28 (2026-11-12).
 - Plan: `docs/plans/2026-11-12-mail-in-chat-and-qwen-models-plan.md`.
@@ -323,7 +326,7 @@ Unit tests also cover:
   - feed seed time on a long transcript, before and after;
   - Qwen catalog probe time.
 - **Screens:** Claude inline, Codex `exec`, Qwen mail, the Qwen mode at start, the Qwen model picker, reopen.
-- **Risk:** §3.7, §8.5, §9.3.
+- **Risk:** §3.7, §8.6, §9.3.
 - **Cost:** about 7 executor tasks and 1 review.
 
 ## 6. Decisions already taken
@@ -402,13 +405,25 @@ Unit tests also cover:
 - **Probe.** A host module `qwen-catalog.ts`, after `codex-catalog.ts`.
   - It runs the human's `qwen` (PATH or `PARLEY_QWEN_BIN`) as `qwen --acp` under the human's own home.
   - It sends `initialize`, then `session/new` with `cwd` = an empty Parley-owned temp directory and `mcpServers: []`.
-  - It reads `models.availableModels`, then kills the process. It never sends a prompt.
+  - It reads `models.availableModels`. It never sends a prompt.
   - Timeout 15 s; output cap 1 MiB.
   - The probe does not load Parley's per-session system settings file.
-- **When.**
-  - At host start, if `qwen` is installed.
-  - In the background, when `providers.list` finds the catalog older than 6 h.
-  - Right after a Qwen sign-in from Settings ends (`providers.signInExit`).
+- **Process lifetime** (critique B1).
+  - The CLI is spawned detached, as the leader of its own process group, with piped stdio.
+  - After the answer, a timeout, an error or the output cap, Parley ends stdin, sends SIGTERM to the whole group, and then SIGKILL to the group after 2 s if any member is alive.
+  - Parley awaits the exit and destroys the pipes in a `finally`.
+  - The temp `cwd` is removed afterwards. A child that inherits stdout cannot keep the probe waiting past the timeout.
+- **Secret boundary** (critique B2).
+  - Parley's code never opens, reads, copies or passes any Qwen credential file or key: not as an argument, not in the environment.
+  - The CLI reads its own auth state, as it does in every Qwen session the human starts. That read is the CLI's and is expected.
+  - The guarantee covers Parley's side only, and its tests check Parley's own file operations and spawn arguments.
+- **When, and only one at a time** (critique B3).
+  - **Triggers:**
+    - at host start, if `qwen` is installed;
+    - in the background, when `providers.list` finds the catalog older than 6 h;
+    - right after a Qwen sign-in from Settings ends (`providers.signInExit`).
+  - **One probe at a time.** At most one probe runs, held as a shared in-flight promise; a trigger during a probe joins it.
+  - **No waiting.** `providers.list` and the New session dialog never wait for a probe. They answer at once with the stored list, or `models: null` when there is none.
 - **Store.** A successful probe whose list differs from the stored one rewrites `qwen-models.json` in the Parley home atomically and calls `onChange`. `loadProviders` reads it, so the window, the host and the agents' MCP server see one list.
 - **Failure keeps the old list.** A failed probe (not signed in, timeout, bad output) leaves the file alone. With no file, `models: null` stays (Default or a typed id), as today.
 - **Mapping.**
@@ -416,7 +431,6 @@ Unit tests also cover:
   - `ModelOption.id` = `_meta.baseModelId`, the bare id observed to work with `-m`, so no new flag form is needed. `label` = `name`.
   - Order as in ACP.
   - `efforts: null` in v1 (DQ2). "Default" stays the absence of `-m`, so the CLI uses `model.name` from its settings.
-- **Never.** The probe never reads `subscription_credentials.json`, `oauth_creds.json` or keys; the CLI does the account call itself, like `codex debug models`.
 - **Preview models** (`qwen4.0-max-preview`) are listed as the CLI lists them (DQ3).
 
 ### 8.5 Q1: live verification still owed (after the code lands)
@@ -428,6 +442,7 @@ Unit tests also cover:
   - mail (Part M, item 4);
   - the mode at start (Part A);
   - the picker (Part Q).
+- The probe is also run once for real: no process left (`ps`), no chat file left, and its time recorded.
 - The quota error is never provoked; it is recorded only if it happens.
 - The OAuth flow inside Parley's Settings sign-in and the `auth_success` hook are checked only if the human signs in again from Settings. Otherwise they stay "Not verified".
 
@@ -455,7 +470,7 @@ Unit tests also cover:
 - **Never `yolo`.**
 - **Read-only roles** are still refused, as today.
 - **Autonomous workspaces** keep `auto`.
-- **The human's in-session switch.** A mode change made inside the TUI holds until the next launch or resume, which starts in `auto` again.
+- **No persisted mode** (critique B4). Parley does not store a mode chosen inside the TUI. Such a choice lasts for that TUI run only. Every launch and every resume starts in `auto` by design.
 
 ### 9.3 Risks
 
@@ -464,10 +479,12 @@ Unit tests also cover:
 
 ### 9.4 Acceptance (Parts A and Q)
 
-1. A new and a resumed Qwen session launch with `--approval-mode auto`. There are unit tests on the launch arguments, and the TUI shows the auto mode at start (a screenshot).
+1. A new and a resumed Qwen session launch with `--approval-mode auto`. There are unit tests on the launch arguments, and the TUI shows the auto mode at start (a screenshot). A mode switched inside the TUI is back to `auto` after a resume.
 2. The New session dialog for Qwen lists the account's models in ACP order, plus "Default". A session started with `qwen3.8-flash` runs that model (transcript `model`).
 3. Signed out or probe failure: the stored list stays. With no stored list: "Default" or a typed id, as today. This is covered by unit tests with a fake ACP process.
-4. The probe never touches credential files (a unit test of the file paths it opens) and leaves no chat file.
+4. **Process cleanup.** A unit test uses a fake CLI that forks a child holding stdout open. The probe still ends within its timeout plus 2 s, and no member of the group is left.
+5. **One probe at a time.** Concurrent triggers start one probe, and `providers.list` answers at once during a probe (unit tests).
+6. **Secret boundary.** Unit tests check that Parley's probe code opens no file except its own temp directory and `qwen-models.json`, and that it passes no credential path or key in arguments or environment. The real probe in V1 leaves no process and no chat file.
 
 ### 9.5 Open choices (Parts A and Q)
 
@@ -490,3 +507,14 @@ Unit tests also cover:
    with mail off. Tested through the real `agentSnapshot` entry points (§3.2b).
 6. **Minor, Qwen coverage.** Both tools, reopen and restart are required. Fixtures cover both tools and the reseed (§4.4).
 7. **Minor, `settings.json`.** It is marked as possibly holding secrets; only named single fields are read (§8.2, §8.3).
+
+## Appendix B. Critique of revision 3, Parts A and Q (s-348) and answers
+
+1. **Major, probe shutdown.** A detached owned process group; stdin ended; SIGTERM, then SIGKILL to the group after 2 s;
+   exit awaited and pipes destroyed in `finally`. Tested with a fake CLI whose child holds stdout open (§8.4, §9.4.4).
+2. **Major, secret boundary.** The guarantee is restated as Parley's side only. The CLI's own auth reads are expected. Tests
+   check Parley's file operations, arguments and environment (§8.4, §9.4.6).
+3. **Minor, concurrent refresh.** One shared in-flight probe; `providers.list` never waits and returns the stored list or
+   `null` (§8.4, §9.4.5).
+4. **Minor, mode persistence.** No persisted mode: a TUI choice lasts for that run, and every launch and resume starts in
+   `auto` by design (§9.2, §9.4.1).
