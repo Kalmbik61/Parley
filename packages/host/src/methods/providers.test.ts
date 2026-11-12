@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -320,8 +320,11 @@ describe('providers.list: лимиты подписок и событие provid
     ageMs = 0,
   ): Promise<void> {
     await mkdir(path.join(workDir, 'limits'), { recursive: true });
+    const file = path.join(workDir, 'limits', `${session}.json`);
+    // Как скрипт строки статуса: во временный файл и `rename`. Хост перечитывает каталог лимитов, только когда сменился
+    // его mtime, а запись на месте mtime каталога не меняет.
     await writeFile(
-      path.join(workDir, 'limits', `${session}.json`),
+      `${file}.tmp`,
       JSON.stringify({
         at: new Date(Date.now() - ageMs).toISOString(),
         rateLimits: {
@@ -330,6 +333,7 @@ describe('providers.list: лимиты подписок и событие provid
         },
       }),
     );
+    await rename(`${file}.tmp`, file);
   }
 
   /** Ближайшее событие `name`; не пришло за пять секунд — ошибка. Ожидание одно, брошенных нет. */

@@ -3700,8 +3700,9 @@ describe('картинки результатов инструментов (пл
       }) as typeof setInterval);
       try {
         start({ imagesDir });
-        expect(created.map((entry) => entry.ms)).toEqual([FEED_IMAGE_SWEEP_MS]);
-        expect(created[0]?.timer.hasRef()).toBe(false);
+        // Таймеров два: уборка картинок (шесть часов) и обход простаивающих лент (раз в минуту); ни один не держит процесс.
+        expect(created.map((entry) => entry.ms)).toEqual([FEED_IMAGE_SWEEP_MS, 60_000]);
+        expect(created.every((entry) => !entry.timer.hasRef())).toBe(true);
       } finally {
         spy.mockRestore();
       }
