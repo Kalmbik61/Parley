@@ -6,6 +6,7 @@ import { HostAlreadyRunning, SocketPathTooLong, startHost } from './host.js';
 import { glmCheckOptionsFromEnv } from './limits/glm-check.js';
 import { limitsOptionsFromEnv } from './limits/limits-service.js';
 import { probeCodexCatalog } from './providers/codex-catalog.js';
+import { probeOpencodeAuthCount } from './providers/opencode-auth-hint.js';
 import { probeOpencodeModels } from './providers/opencode-catalog.js';
 import { probeQwenModels } from './providers/qwen-catalog.js';
 import { probeCliVersion } from './providers/versions.js';
@@ -28,7 +29,7 @@ async function main(): Promise<number> {
   const codexHookGraceMs = Number.isInteger(hookGraceRaw) && hookGraceRaw >= 100 && hookGraceRaw <= 600_000 ? hookGraceRaw : undefined;
   const options = {
     ...(envIdleMs ? { idleMs: Number(envIdleMs) } : {}),
-    ...(probeVersions ? { probeVersion: probeCliVersion, probeCodexCatalog, probeQwenCatalog: probeQwenModels, probeOpencodeCatalog: probeOpencodeModels, cliUpdates: { fetchImpl: fetch, userHome: homedir() } } : {}),
+    ...(probeVersions ? { probeVersion: probeCliVersion, probeCodexCatalog, probeQwenCatalog: probeQwenModels, probeOpencodeCatalog: probeOpencodeModels, probeOpencodeAuth: probeOpencodeAuthCount, cliUpdates: { fetchImpl: fetch, userHome: homedir() } } : {}),
     ...(limits === undefined ? {} : { limits }),
     ...(glmCheck === undefined ? {} : { glmCheck }),
     ...(startupWaitMs === undefined ? {} : { startupWaitMs }),

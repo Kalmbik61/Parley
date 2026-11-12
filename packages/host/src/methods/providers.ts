@@ -23,6 +23,7 @@ import type { AuthService } from '../providers/auth-service.js';
 import type { CustomCheckService } from '../providers/custom-check.js';
 import { serialized } from './custom-providers.js';
 import type { CodexCatalog } from '../providers/codex-catalog.js';
+import type { OpencodeAuthHint } from '../providers/opencode-auth-hint.js';
 import type { OpencodeCatalog } from '../providers/opencode-catalog.js';
 import type { QwenCatalog } from '../providers/qwen-catalog.js';
 import type { ProviderVersions } from '../providers/versions.js';
@@ -105,6 +106,7 @@ export function createProvidersList(
   updates?: Pick<CliUpdates, 'current'> & Partial<Pick<CliUpdates, 'status'>>,
   qwenCatalog?: Pick<QwenCatalog, 'refreshIfStale'>,
   opencodeCatalog?: Pick<OpencodeCatalog, 'refreshIfStale'>,
+  opencodeAuth?: Pick<OpencodeAuthHint, 'current' | 'refreshIfStale'>,
 ): Handler<'providers.list'> {
   return async () => {
     catalog?.refreshIfStale();
@@ -163,6 +165,10 @@ export function createProvidersList(
           ...(custom === undefined ? {} : { custom }),
           // Hints only, from `qwenAuthHints`: presence and two non-secret strings (spec 2026-11-11, 3.6).
           ...(entry.family === 'qwen' && entry.custom === undefined ? { qwenAuth: await qwenAuthHints() } : {}),
+          // A count from `opencode auth list` (spec 2026-11-12, 4.12), asked for an installed 2.x only; the answer never waits for the probe.
+          ...(entry.family === 'opencode' && entry.custom === undefined && opencodeAuth !== undefined
+            ? { opencodeAuth: readiness.needs === null && readiness.error === null ? await openAuth(opencodeAuth) : null }
+            : {}),
         };
       }),
     );
@@ -450,4 +456,11 @@ export function createProvidersRefreshLimits(
     }
     return { ok: true };
   };
+}
+
+/** The OpenCode sign-in count, or `null`; asks for a fresh one in the background. */
+async function openAuth(hint: Pick<OpencodeAuthHint, 'current' | 'refreshIfStale'>): Promise<{ connected: number } | null> {
+  hint.refreshIfStale();
+  const connected = hint.current();
+  return connected === null ? null : { connected };
 }

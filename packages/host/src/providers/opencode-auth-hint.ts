@@ -29,3 +29,64 @@ export function parseOpencodeAuthCount(output: unknown): number | null {
 export async function probeOpencodeAuthCount(command: string, options: ProbeOptions = {}): Promise<number | null> {
   return parseOpencodeAuthCount(await runOpencodeCli(command, ['auth', 'list', '--format', 'json', '--standalone'], options));
 }
+
+/** One probe: the number of connected integrations; `null` is any failure. */
+export type OpencodeAuthProbe = (command: string) => Promise<number | null>;
+
+export interface OpencodeAuthHint {
+  /** The last good count; `null` until there is one or after a failed probe. */
+  current(): number | null;
+  /** The count is older than the age and no probe runs: a new probe in the background. `providers.list` does not wait for it. */
+  refreshIfStale(): void;
+  /** Probe now (one at a time). Never rejects. */
+  refresh(): Promise<void>;
+}
+
+export const OPENCODE_AUTH_MAX_AGE_MS = 30_000;
+
+/**
+ * The hint behind the OpenCode card. Only the count is kept, in memory; `onChange` fires when it changes, so the window
+ * reloads the card after the person signs in inside OpenCode. No probe at start: the card asks (`refreshIfStale`) when it is
+ * shown for an installed OpenCode 2.x.
+ */
+export function startOpencodeAuthHint(
+  probe: OpencodeAuthProbe | undefined,
+  onChange: () => void,
+  options: { command?: string; maxAgeMs?: number; now?: () => number } = {},
+): OpencodeAuthHint {
+  const maxAgeMs = options.maxAgeMs ?? OPENCODE_AUTH_MAX_AGE_MS;
+  const now = options.now ?? Date.now;
+  let count: number | null = null;
+  let probedAt = 0;
+  let asked = false;
+  let inflight: Promise<void> | null = null;
+
+  const refresh = (): Promise<void> => {
+    if (probe === undefined) return Promise.resolve();
+    if (inflight === null) {
+      probedAt = now();
+      asked = true;
+      const current: Promise<void> = probe(options.command ?? 'opencode')
+        .catch(() => null)
+        .then((next) => {
+          if (next === count) return;
+          count = next;
+          onChange();
+        })
+        .finally(() => {
+          if (inflight === current) inflight = null;
+        });
+      inflight = current;
+    }
+    return inflight;
+  };
+
+  return {
+    current: () => count,
+    refreshIfStale() {
+      if (probe === undefined || inflight !== null || (asked && now() - probedAt < maxAgeMs)) return;
+      void refresh();
+    },
+    refresh,
+  };
+}

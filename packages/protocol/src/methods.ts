@@ -523,6 +523,11 @@ export interface Results extends AssistantMethodResults, VoiceMethodResults, Car
        * settings file; the credential file and the env key are reported as presence only. A host before this field omits it.
        */
       qwenAuth?: QwenAuthHints | null;
+      /**
+       * OpenCode only (spec 2026-11-12, 4.12): how many integrations `opencode auth list` reports as connected. A count and
+       * nothing else; never stored, never a verdict. `null` — not known yet or the probe failed. A host before this field omits it.
+       */
+      opencodeAuth?: { connected: number } | null;
     }>;
   };
   'providers.setKey': { keyHint: string };

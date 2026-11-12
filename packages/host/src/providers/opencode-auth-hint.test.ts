@@ -5,8 +5,10 @@
 import { chmod, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { parseOpencodeAuthCount, probeOpencodeAuthCount } from './opencode-auth-hint.js';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { RequestInfo } from '../methods/context.js';
+import { createProvidersList } from '../methods/providers.js';
+import { OPENCODE_AUTH_MAX_AGE_MS, parseOpencodeAuthCount, probeOpencodeAuthCount, startOpencodeAuthHint } from './opencode-auth-hint.js';
 
 const COMMAND = 'parley-fake-opencode-auth';
 const OVERRIDE = 'PARLEY_PARLEY_FAKE_OPENCODE_AUTH_BIN';
@@ -78,5 +80,97 @@ describe('probeOpencodeAuthCount', () => {
   it('gives null for text output and for a missing command', async () => {
     expect(await probeOpencodeAuthCount(COMMAND, { env: env({ FAKE_OUTPUT: 'No authenticated integrations\n' }), tmpRoot })).toBeNull();
     expect(await probeOpencodeAuthCount('parley-no-such-opencode', { env: { PATH: '' }, tmpRoot })).toBeNull();
+  });
+});
+
+describe('startOpencodeAuthHint', () => {
+  it('does not probe at start; the first refreshIfStale probes, and a changed count tells the window once', async () => {
+    const probe = vi.fn(async () => 2);
+    const onChange = vi.fn();
+    const hint = startOpencodeAuthHint(probe, onChange, { command: COMMAND });
+    expect(probe).not.toHaveBeenCalled();
+    expect(hint.current()).toBeNull();
+    hint.refreshIfStale();
+    hint.refreshIfStale();
+    expect(probe).toHaveBeenCalledTimes(1);
+    expect(probe).toHaveBeenCalledWith(COMMAND);
+    await hint.refresh();
+    expect(hint.current()).toBe(2);
+    expect(onChange).toHaveBeenCalledTimes(1);
+    await hint.refresh();
+    expect(onChange).toHaveBeenCalledTimes(1);
+  });
+
+  it('probes again only after the age; a failed probe clears the count and tells the window', async () => {
+    let now = 1_000_000;
+    let answer: number | null = 1;
+    const probe = vi.fn(async () => answer);
+    const onChange = vi.fn();
+    const hint = startOpencodeAuthHint(probe, onChange, { now: () => now });
+    await hint.refresh();
+    now += OPENCODE_AUTH_MAX_AGE_MS - 1;
+    hint.refreshIfStale();
+    expect(probe).toHaveBeenCalledTimes(1);
+    now += 1;
+    answer = null;
+    hint.refreshIfStale();
+    await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(hint.current()).toBeNull());
+    expect(onChange).toHaveBeenCalledTimes(2);
+  });
+
+  it('a throwing probe is a null count; no probe means nothing happens', async () => {
+    const hint = startOpencodeAuthHint(async () => { throw new Error('boom'); }, vi.fn());
+    await hint.refresh();
+    expect(hint.current()).toBeNull();
+    const none = startOpencodeAuthHint(undefined, vi.fn());
+    none.refreshIfStale();
+    await none.refresh();
+    expect(none.current()).toBeNull();
+  });
+});
+
+describe('providers.list: opencodeAuth', () => {
+  const versions = (version: string | null) => ({ ready: Promise.resolve(), get: () => version, fresh: async () => version });
+  const saved: Record<string, string | undefined> = {};
+  beforeEach(() => {
+    for (const name of [OVERRIDE, 'PARLEY_HOME']) saved[name] = process.env[name];
+    process.env[OVERRIDE] = path.join(dir, 'fake.mjs');
+    process.env['PARLEY_HOME'] = path.join(dir, 'home');
+  });
+  afterEach(() => {
+    for (const [name, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  });
+  const rowOf = async (list: ReturnType<typeof createProvidersList>) => (await list({}, {} as RequestInfo)).providers.find((p) => p.id === 'opencode');
+
+  it('is a count for an installed 2.x once the probe has answered; null before, and the answer never waits', async () => {
+    // The entry is available only when its command is found: the override points at a stub script and the version at 2.2.7.
+    process.env['PARLEY_OPENCODE_BIN'] = path.join(dir, 'fake.mjs');
+    try {
+      let release: (n: number) => void = () => {};
+      const hint = startOpencodeAuthHint(() => new Promise<number | null>((resolve) => { release = resolve; }), vi.fn());
+      const list = createProvidersList(versions('2.2.7') as never, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, hint);
+      const first = await rowOf(list);
+      expect(first?.available).toBe(true);
+      expect(first?.opencodeAuth).toBeNull();
+      release(3);
+      await hint.refresh();
+      expect((await rowOf(list))?.opencodeAuth).toEqual({ connected: 3 });
+    } finally {
+      delete process.env['PARLEY_OPENCODE_BIN'];
+    }
+  });
+
+  it('is null and never probed for a missing or 1.x OpenCode; other providers carry no field', async () => {
+    const probe = vi.fn(async () => 1);
+    const hint = startOpencodeAuthHint(probe, vi.fn());
+    const list = createProvidersList(versions('1.19.5') as never, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, hint);
+    const rows = (await list({}, {} as RequestInfo)).providers;
+    expect(rows.find((p) => p.id === 'opencode')?.opencodeAuth).toBeNull();
+    expect(rows.filter((p) => p.id !== 'opencode').every((p) => !('opencodeAuth' in p))).toBe(true);
+    expect(probe).not.toHaveBeenCalled();
   });
 });

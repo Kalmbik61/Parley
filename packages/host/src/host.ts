@@ -100,6 +100,7 @@ import type { CustomCheckOptions } from './providers/custom-check.js';
 import { createLimitsService } from './limits/limits-service.js';
 import type { LimitsServiceOptions } from './limits/limits-service.js';
 import { startCodexCatalog } from './providers/codex-catalog.js';
+import { startOpencodeAuthHint, type OpencodeAuthProbe } from './providers/opencode-auth-hint.js';
 import { startOpencodeCatalog, type OpencodeModelsProbe } from './providers/opencode-catalog.js';
 import { startQwenCatalog, type QwenModelsProbe } from './providers/qwen-catalog.js';
 import type { CatalogProbe } from './providers/codex-catalog.js';
@@ -189,12 +190,17 @@ export interface HostOptions {
    */
   probeQwenCatalog?: QwenModelsProbe;
   /**
-  /**
    * Probe of the OpenCode model catalog at start (`opencode models --standalone`, spec 2026-11-12, 4.7). Without it there is no
    * catalog and `models` of `opencode` stays as it is: only `main.ts` connects it, tests never run the real opencode.
    */
   probeOpencodeCatalog?: OpencodeModelsProbe;
    * Проверка новых версий CLI раз в сутки (`codex`, `claude`; спека 2026-11-02). Без неё ничего не спрашивается и в
+  /**
+   * Probe of the OpenCode sign-in count (`opencode auth list --format json --standalone`, spec 2026-11-12, 4.12) for the provider
+   * card. Without it the card shows no count: only `main.ts` connects it, tests never run the real opencode.
+   */
+  probeOpencodeAuth?: OpencodeAuthProbe;
+  /**
    * `providers.list` нет поля `update`: сетевой `fetch` подключает только `main.ts`, тесты передают подмену.
    */
   cliUpdates?: Pick<CliUpdatesOptions, 'fetchImpl' | 'home' | 'userHome' | 'env' | 'now'>;
@@ -435,13 +441,17 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   const qwenCatalog = startQwenCatalog(options.probeQwenCatalog, log, () => {
     handle.context.broadcast('providers.changed', { provider: 'qwen' });
   });
-  const authService = createAuthService(handle.context, {
   // OpenCode model catalog (spec 2026-11-12, 4.7): a probe at start and every 6 hours in the background; a new list goes to
   // `opencode-models.json` (read by `loadProviders`) and the window gets `providers.changed`.
   const opencodeCatalog = startOpencodeCatalog(options.probeOpencodeCatalog, log, () => {
     handle.context.broadcast('providers.changed', { provider: 'opencode' });
   });
     ...options.auth,
+  // The sign-in count of OpenCode for its card: asked when the card is listed, not at start; the window reloads when it changes.
+  const opencodeAuth = startOpencodeAuthHint(options.probeOpencodeAuth, () => {
+    handle.context.broadcast('providers.changed', { provider: 'opencode' });
+  });
+  const authService = createAuthService(handle.context, {
     onSignInExit: (provider, signedIn) => {
       options.auth?.onSignInExit?.(provider, signedIn);
       if (provider === 'qwen') void qwenCatalog.refresh();
@@ -1216,12 +1226,13 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     swarms: swarmsService,
     wake: wakeService,
     consents: consentsService,
+    opencodeCatalog,
+    opencodeAuth,
     capacityFeed,
     compaction: compactionService,
     worktrees: worktreesService,
     holds: worktreeHolds,
     sweeper: worktreeSweeper,
-    opencodeCatalog,
     feed: feedService,
     processMonitor,
     browserAgent: browserEndpoint,
