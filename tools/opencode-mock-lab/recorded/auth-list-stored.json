@@ -1,0 +1,14 @@
+[
+  {
+    "id": "anthropic",
+    "name": "Anthropic",
+    "connections": [
+      {
+        "type": "credential",
+        "id": "cred_1cf9cca70001S3hX0N0BU0HeLZ",
+        "label": "Anthropic",
+        "method": "key"
+      }
+    ]
+  }
+]

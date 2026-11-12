@@ -1,0 +1,16 @@
+{
+ "id": "per_1cf9c7c65001djboEDgkBux4D8",
+ "sessionID": "ses_labfull0001",
+ "action": "shell",
+ "resources": [
+  "echo hello-from-shell"
+ ],
+ "save": [
+  "echo *"
+ ],
+ "source": {
+  "type": "tool",
+  "messageID": "msg_1cf9c7c52001xgy7UI6ho0XHl7",
+  "id": "call_1794484501593"
+ }
+}
