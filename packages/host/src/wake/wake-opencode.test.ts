@@ -42,8 +42,9 @@ let stoppers: Array<() => Promise<void> | void> = [];
 let apiServer: Server | undefined;
 let apiUp = true;
 let apiStatus = 202;
-/** `normal`: the turn is journaled after the answer (300 ms); `fast`: the whole turn is journaled BEFORE the answer returns; `none`: no turn. */
-let apiTurn: 'normal' | 'fast' | 'none' = 'normal';
+/** `normal`: the turn is journaled after the answer (300 ms); `fast`: the whole turn is journaled BEFORE the answer returns; `batch`: the answer returns at once and the whole turn lands in the journal in ONE write 150 ms later (the fold sees no
+ * `working`, only the end); `none`: no turn. */
+let apiTurn: 'normal' | 'fast' | 'batch' | 'none' = 'normal';
 let apiPosts: string[] = [];
 let apiUrl = '';
 const serverAddress = (): { url: string; password: string } | undefined => (apiUp ? { url: apiUrl, password: PASSWORD } : undefined);
@@ -87,6 +88,11 @@ beforeEach(async () => {
         void appendFile(events(), journalLine('UserPromptSubmit', { prompt: text }))
           .then(() => setTimeout(() => void appendFile(events(), journalLine('Stop') + journalLine('Notification', { notification_type: 'idle_prompt' })), 60));
         setTimeout(() => res.writeHead(apiStatus).end('{}'), 250);
+        return;
+      }
+      if (apiStatus < 300 && apiTurn === 'batch') {
+        setTimeout(() => void appendFile(events(), journalLine('UserPromptSubmit', { prompt: text }) + journalLine('Stop') + journalLine('Notification', { notification_type: 'idle_prompt' })), 150);
+        res.writeHead(apiStatus).end('{}');
         return;
       }
       if (apiStatus < 300 && apiTurn === 'normal') {
@@ -240,6 +246,25 @@ describe('wake and opencode: delivery through the API', () => {
     await settle(3800);
     expect(timeouts()).toBe(0);
     expect(r.wake.inFlight(r.ref)).toBe(false);
+  }, 30_000);
+
+  it('a turn that lands in the journal as ONE batch after the answer (no working ever seen) still counts: no pointer-timeout', async () => {
+    apiTurn = 'batch';
+    const r = await rig();
+    await r.letter();
+    await waitFor(() => apiPosts.includes(POINTER));
+    await settle(3800);
+    expect(timeouts()).toBe(0);
+    expect(r.wake.inFlight(r.ref)).toBe(false);
+  }, 30_000);
+
+  it('the deferred brief takes the same path: its quick turn leaves no pointer-timeout either', async () => {
+    apiTurn = 'batch';
+    const r = await rig();
+    r.wake.deferFirst(r.ref, r.handle.pid, BRIEF);
+    await waitFor(() => apiPosts.includes(BRIEF));
+    await settle(3800);
+    expect(timeouts()).toBe(0);
   }, 30_000);
 
   it('a delivery after which no turn happens at all still times out', async () => {

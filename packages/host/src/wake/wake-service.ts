@@ -983,6 +983,18 @@ export function createWakeService(
   }
 
   /**
+   * OpenCode: did the turn of an API delivery already happen? A turn began while the POST was in flight, is running now, or
+   * ended after the delivery started. The bridge may journal a short turn in one piece, so no `working` is ever observed and
+   * only `turnEndedAt` shows it (the end of an earlier turn is older than the start, less a small clock slack).
+   */
+  function apiTurnHappened(state: AttemptState, live: SessionActivity | undefined): boolean {
+    if (state.apiDelivery !== true) return false;
+    if (state.apiTurnSeen === true) return true;
+    if (live?.activity === 'working' && !live.heldByBackground) return true;
+    return live?.turnEndedAt != null && Date.parse(live.turnEndedAt) >= (state.apiStartedAt ?? 0) - 50;
+  }
+
+  /**
    * Печатает текст указателя и заводит оба таймера попытки: Enter и предохранитель. Codex — своим
    * порядком: вставка в маркерах bracketed paste, пауза десятки миллисекунд и Enter у приглашения.
    * Если за паузу начался ход или письма прочитаны, указатель отзывается, а не уходит в очередь Tab.
@@ -1075,6 +1087,14 @@ export function createWakeService(
       // вечно — сигнала «письмо доставлено» без него не бывает вовсе.
       state.timeoutTimer = setTimeout(() => {
         state.timeoutTimer = undefined;
+        // An API delivery whose turn already ran (its end may be the only trace) is answered, not lost.
+        if (apiTurnHappened(state, activity.get(ref)?.activity)) {
+          clearTimers(state);
+          state.inFlight = false;
+          state.timeouts = 0;
+          recompute(ref);
+          return;
+        }
         // Попытка признана пропавшей — Enter, если ещё не ушёл, теперь не нужен:
         // ход всё равно не будет замечен.
         clearTimers(state);
@@ -1107,11 +1127,7 @@ export function createWakeService(
       // OpenCode: the API took the prompt and its turn already began (and may have ended) before the answer came back. The
       // `working` event was seen while `typing` was set, so the check above skipped it; settle it here, not by the timer.
       if (state.apiDelivery === true && outcome === 'submitted' && state.inFlight) {
-        const live = activity.get(ref)?.activity;
-        // A whole turn can begin and end between two reads of the journal: no `working` is ever observed, but `turnEndedAt` is
-        // later than the start of the delivery.
-        const endedSince = live?.turnEndedAt != null && Date.parse(live.turnEndedAt) >= (state.apiStartedAt ?? 0) - 50;
-        if (state.apiTurnSeen === true || endedSince || (live?.activity === 'working' && !live.heldByBackground)) {
+        if (apiTurnHappened(state, activity.get(ref)?.activity)) {
           clearTimers(state);
           state.inFlight = false;
           state.timeouts = 0;
@@ -1908,6 +1924,12 @@ export function createWakeService(
         ) {
           clearTimers(state);
           state.inFlight = false;
+        }
+        // An API delivery whose POST has returned: a turn that ended since it began is its answer even when no `working` was seen.
+        if (state?.inFlight === true && state.typing === undefined && apiTurnHappened(state, value.activity)) {
+          clearTimers(state);
+          state.inFlight = false;
+          state.timeouts = 0;
         }
         // An API delivery has no Enter to wait for: a turn that begins while the POST is in flight is the answer to it.
         if (
