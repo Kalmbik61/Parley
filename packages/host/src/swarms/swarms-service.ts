@@ -380,15 +380,21 @@ export function createSwarmsService(
       again = true;
       return running;
     }
-    running = (async () => {
-      do {
-        again = false;
-        await pass();
-      } while (again && !stopped);
-    })().finally(() => {
-      running = null;
-    });
-    return running;
+    // `running` сбрасывается в том же шаге, где цикл решил выйти: сброс в `.finally` оставлял окно в несколько микрозадач,
+    // и вызов из него ставил `again` уже после проверки, а получал обещание, которое никакого прохода больше не сделает.
+    // `await pass()` всегда уступает ход, поэтому `finally` не сработает раньше присваивания ниже.
+    const current = (async () => {
+      try {
+        do {
+          again = false;
+          await pass();
+        } while (again && !stopped);
+      } finally {
+        running = null;
+      }
+    })();
+    running = current;
+    return current;
   }
 
   const trigger = (): void => {
