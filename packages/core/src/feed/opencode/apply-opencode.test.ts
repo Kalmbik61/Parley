@@ -11,6 +11,10 @@ const dir = join(dirname(fileURLToPath(import.meta.url)), '__fixtures__');
 const messages = (name: string): unknown[] => (JSON.parse(readFileSync(join(dir, name), 'utf8')) as { data: unknown[] }).data;
 const main = messages('messages-main.json');
 const mail = messages('messages-mail.json');
+// Recordings of the mock lab (tools/opencode-mock-lab/recorded): newest first, as the API lists them.
+const labTurn = messages('lab-turn.json');
+const labExecuteError = messages('lab-execute-error.json');
+const labModelError = messages('lab-model-error.json');
 
 describe('opencode messages: main fixture', () => {
   const { state, cursor } = feedFromOpencodeMessages(main);
@@ -54,7 +58,7 @@ describe('opencode messages: main fixture', () => {
 });
 
 describe('opencode messages: idempotence', () => {
-  it.each([['main', main], ['mail', mail]])('applying the %s list twice changes nothing', (_n, list) => {
+  it.each([['main', main], ['mail', mail], ['lab turn', labTurn], ['lab execute error', labExecuteError], ['lab model error', labModelError]])('applying the %s list twice changes nothing', (_n, list) => {
     const first = applyOpencodeMessages(emptyFeedState(), list, emptyOpencodeCursor());
     const second = applyOpencodeMessages(first.update.state, list, first.cursor);
     expect(second.update.state).toEqual(first.update.state);
@@ -113,5 +117,31 @@ describe('opencode messages: mail from Code Mode', () => {
     expect(mailFromExecute({ ...check, status: 'failed' }, 'return await tools.parley.check_inbox({})')).toBeNull();
     expect(mailFromExecute(check, 'return await tools.parley.get_map({})')).toBeNull();
     expect(mailFromExecute({ ...check, name: 'shell' }, 'tools.parley.check_inbox()')).toBeNull();
+  });
+});
+
+describe('opencode messages: recordings of the mock lab', () => {
+  it('builds the turn oldest first from a newest-first list: prompt, shell, execute with mail, text, turn', () => {
+    const { state } = feedFromOpencodeMessages(labTurn);
+    expect(state.items.map((i) => i.kind)).toEqual(['prompt', 'tool', 'tool', 'mail', 'text', 'turn']);
+    const tools = state.items.filter((i): i is FeedTool => i.kind === 'tool');
+    expect(tools.map((t) => [t.name, t.status])).toEqual([['shell', 'done'], ['execute', 'done']]);
+    const mailItem = state.items.find((i): i is FeedMail => i.kind === 'mail')!;
+    expect(mailItem).toMatchObject({ id: 'mail:m-1', via: 'check_inbox', letters: [{ id: 'm-1', from: 's-1', kind: 'note' }] });
+    expect(mailItem).toEqual(mailFromTool({ ...tools[1]!, name: 'mcp__parley__check_inbox', input: {} }));
+    expect(state.turnStartedAt).toBeNull();
+  });
+
+  it('a throwing execute (completed with metadata.error) is a failed tool and gives no mail', () => {
+    const { state } = feedFromOpencodeMessages(labExecuteError);
+    const tool = state.items.find((i): i is FeedTool => i.kind === 'tool')!;
+    expect(tool).toMatchObject({ status: 'failed' });
+    expect(tool.response?.text).toBe('Error: boom from execute');
+    expect(state.items.some((i) => i.kind === 'mail')).toBe(false);
+  });
+
+  it('a failed model turn closes with the prompt and no assistant text', () => {
+    const { state } = feedFromOpencodeMessages(labModelError);
+    expect(state.items.map((i) => i.kind)).toEqual(['prompt', 'turn']);
   });
 });

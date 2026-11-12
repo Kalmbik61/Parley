@@ -8,7 +8,7 @@ const FORBIDDEN = /\/Users\/|\/private\/|\/tmp\/|\/var\/folders\/|\/home\/|[A-Za
 
 describe('opencode fixtures', () => {
   it('has the files and a README with the re-check list', () => {
-    expect(readdirSync(dir).sort()).toEqual(['README.md', 'events-more.jsonl', 'events-turn.jsonl', 'messages-mail.json', 'messages-main.json']);
+    expect(readdirSync(dir).sort()).toEqual(['README.md', 'events-more.jsonl', 'events-turn.jsonl', 'lab-execute-error.json', 'lab-model-error.json', 'lab-turn.json', 'messages-mail.json', 'messages-main.json']);
     expect(readFileSync(join(dir, 'README.md'), 'utf8')).toContain('To re-check against a runnable 2.2.7');
   });
   for (const file of readdirSync(dir).filter((f) => f !== 'README.md')) {

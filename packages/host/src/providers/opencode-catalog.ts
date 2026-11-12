@@ -10,7 +10,9 @@
  * PATH (or the override `PARLEY_OPENCODE_BIN`).
  *
  * The probe process leads its own process group; in `finally` the group gets SIGTERM and, after `killGraceMs`, SIGKILL.
- * Effort is `null` for every model: the variants (`#high`) are not listed by `models` (spike §12, open item in O0).
+ * `--standalone` is always passed: without it OpenCode starts a detached background service that writes its password to
+ * `XDG_CONFIG_HOME/opencode/service.json` (mock lab FINDINGS 1). `models` takes no other flags.
+ * Effort is `null` for every model: the variants (`#high`) come only from `GET /api/model` (FINDINGS 4).
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -241,7 +243,7 @@ export async function probeOpencodeModels(command: string, options: ProbeOptions
   }
   let child: ChildProcess | undefined;
   try {
-    child = spawn(commandBinary(command, env), ['models'], {
+    child = spawn(commandBinary(command, env), ['models', '--standalone'], {
       cwd,
       env,
       detached: true,

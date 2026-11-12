@@ -7,7 +7,7 @@
  * | --- | --- |
  * | `session.created` | `SessionStart` (`source: startup`) |
  * | `session.inbox.enqueued` (user item) | `UserPromptSubmit` |
- * | `session.tool.called` / `.success` / `.failed` | `PreToolUse` / `PostToolUse` / `PostToolUseFailure` |
+ * | `session.tool.called` / `.success` / `.failed` | `PreToolUse` / `PostToolUse` / `PostToolUseFailure` (also a `.success` with `metadata.error`) |
  * | `permission.asked` | `Notification` (`permission_prompt`) |
  * | `session.execution.succeeded` / `.interrupted` | `Stop` (`.interrupted` carries `interrupted: true`, `reason`) |
  * | `session.execution.failed` | `StopFailure` (`error`, `error_details`) |
@@ -120,8 +120,12 @@ export function mapOpencodeEvent(raw: unknown, sessionId: string, state: Opencod
       if (callId === null) return none;
       const name = state.toolNames[callId] ?? 'tool';
       const input = isOpencodeObject(data['input']) ? data['input'] : null;
-      const hook = type === 'session.tool.called' ? 'PreToolUse' : type === 'session.tool.success' ? 'PostToolUse' : 'PostToolUseFailure';
-      const error = isOpencodeObject(data['error']) ? str(data['error'], 'message') : null;
+      // A throwing `execute` reports `session.tool.success` with `metadata.error: true` (mock lab, FINDINGS 6).
+      const metadata = isOpencodeObject(data['metadata']) ? data['metadata'] : {};
+      const threw = type === 'session.tool.success' && metadata['error'] === true;
+      const hook = type === 'session.tool.called' ? 'PreToolUse' : type === 'session.tool.success' && !threw ? 'PostToolUse' : 'PostToolUseFailure';
+      const content = Array.isArray(data['content']) && isOpencodeObject(data['content'][0]) ? str(data['content'][0], 'text') : null;
+      const error = threw ? content : isOpencodeObject(data['error']) ? str(data['error'], 'message') : null;
       const mapped = one({
         hook_event_name: hook,
         tool_name: name,

@@ -46,12 +46,13 @@ describe('opencode events: turn fixture', () => {
 describe('opencode events: more fixture', () => {
   const { records } = run(lines('events-more.jsonl'));
 
-  it('maps permission, failure and stops; ignores other sessions and non-user inbox items', () => {
-    expect(records.map((r) => r.hook_event_name)).toEqual(['Notification', 'PostToolUseFailure', 'Stop', 'StopFailure']);
+  it('maps permission, failure (also a throwing execute that reports success) and stops; ignores other sessions and non-user inbox items', () => {
+    expect(records.map((r) => r.hook_event_name)).toEqual(['Notification', 'PostToolUseFailure', 'PostToolUseFailure', 'Stop', 'StopFailure']);
     expect(records[0]).toMatchObject({ notification_type: 'permission_prompt', message: 'shell' });
     expect(records[1]).toMatchObject({ tool_name: 'write', error: 'Invalid arguments for tool write' });
-    expect(records[2]).toMatchObject({ interrupted: true, reason: 'shutdown' });
-    expect(records[3]).toMatchObject({ error: 'rate_limit', error_details: '429 Too Many Requests' });
+    expect(records[2]).toMatchObject({ tool_name: 'execute', tool_use_id: 'call_5', error: 'Error: boom from execute' });
+    expect(records[3]).toMatchObject({ interrupted: true, reason: 'shutdown' });
+    expect(records[4]).toMatchObject({ error: 'provider.invalid-request', error_details: 'mock model failure' });
   });
 });
 

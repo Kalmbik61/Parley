@@ -105,11 +105,11 @@ describe('parseOpencodeModels', () => {
 });
 
 describe('probeOpencodeModels', () => {
-  it('runs `models` in an empty temporary cwd and removes it', async () => {
+  it('runs `models --standalone` in an empty temporary cwd and removes it', async () => {
     const out = await probeOpencodeModels(COMMAND, { env: probeEnv(), tmpRoot });
     expect(out).toBe(OUTPUT);
     const [run] = await runs();
-    expect(run?.argv).toEqual(['models']);
+    expect(run?.argv).toEqual(['models', '--standalone']);
     expect(run?.cwd.startsWith(await (await import('node:fs/promises')).realpath(tmpRoot))).toBe(true);
     expect(await readdir(tmpRoot)).toEqual([]);
   });

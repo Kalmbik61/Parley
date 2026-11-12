@@ -11,6 +11,7 @@
  * - `finish`/`tokens` of the latest assistant message go to `cursor.usage` (the feed has no usage item);
  * - other known types are ignored; unknown types are counted in `cursor`, never thrown on.
  *
+ * The list may come in any order (the API gives newest first): messages are sorted by `time.created` and id.
  * Applying a message list twice changes nothing: item ids come from message and part ids, and a closed `idle` is
  * remembered in `cursor.closed`.
  */
@@ -120,7 +121,9 @@ function onToolPart(draft: FeedDraft, message: OpencodeMessage, part: Record<str
   const error = isOpencodeObject(state['error']) && typeof state['error']['message'] === 'string' ? state['error']['message'] : null;
   const output = opencodeContentText(state['content']) ?? error ?? '';
   const endedAt = opencodeIso(time['completed']) ?? message.completedAt ?? at;
-  const finished = finishTool(running as FeedTool, status === 'completed' ? 'done' : 'failed', output, endedAt);
+  // A throwing `execute` is still `completed`, with `metadata.error: true` (mock lab, FINDINGS 6).
+  const threw = isOpencodeObject(state['metadata']) && state['metadata']['error'] === true;
+  const finished = finishTool(running as FeedTool, status === 'completed' && !threw ? 'done' : 'failed', output, endedAt);
   draft.put(finished);
   const code = typeof input['code'] === 'string' ? input['code'] : null;
   if (code === null) return;
@@ -156,9 +159,12 @@ export function applyOpencodeMessages(
 ): { update: FeedUpdate; cursor: OpencodeCursor } {
   const draft = new FeedDraft(state);
   const next: OpencodeCursor = { ...cursor, closed: cursor.closed.slice(), unknownIds: cursor.unknownIds.slice(), unknownTypes: { ...cursor.unknownTypes } };
-  for (const raw of messages) {
-    const message = opencodeMessageOf(raw);
-    if (message === null) continue;
+  // The API lists newest first (`cursor.order: desc`); the feed is built oldest first.
+  const ordered = messages
+    .map(opencodeMessageOf)
+    .filter((message): message is OpencodeMessage => message !== null)
+    .sort((a, b) => Date.parse(a.at) - Date.parse(b.at) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  for (const message of ordered) {
     if (IGNORED.has(message.type)) continue;
     if (!KNOWN.has(message.type)) {
       if (next.unknownIds.includes(message.id)) continue;
