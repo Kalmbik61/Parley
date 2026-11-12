@@ -1,6 +1,6 @@
 # Plan: role change on agent switch
 
-Spec: `docs/specs/2026-11-12-switch-role-change-confirm-design.md`. Branch `parley/w-0054/s-363` from 2c69adc1. One executor (builtin:executor, Claude sonnet), tasks in order, each reviewed by the lead before the next. Review: builtin:reviewer on Claude opus over the whole diff. Verification: builtin:verifier on Claude sonnet in the real app. Lead decision: T2/T3 touch the write boundary of the switch but the change is a few guarded lines before the first map write, fully specified in spec 2.3; they go to the sonnet executor and get a focused senior review instead of senior implementation (the week limits of Claude and Codex are at 95–96 %).
+Spec: `docs/specs/2026-11-12-switch-role-change-confirm-design.md`. Branch `parley/w-0054/s-363` from 2c69adc1. One executor (builtin:executor, Claude sonnet), tasks in order, each reviewed by the lead before the next. Review: builtin:reviewer on Claude opus over the whole diff. Verification: builtin:verifier on Claude sonnet in the real app. Lead decision: T2 and T3 are senior-only (they touch the write boundary of the switch: the order of checks before the first map write, and the consent acknowledgement) and go to a Claude opus executor; the sonnet executor does T0, T1, T4 and T5.
 
 ## T0 — documents
 Commit the spec and this plan unchanged.
@@ -47,6 +47,6 @@ Reviewer (opus) reads the whole diff against 2c69adc1 with the spec; executor fi
 Fresh throwaway PARLEY_HOME and project, real CLIs on the cheapest models (Codex gpt-6-luna, Qwen qwen3.8-flash, Claude haiku): architect on Codex → Qwen from the window (dialog text, screenshot; starts; one notice; map role null, binding role architect); same through `request_agent_switch` (card in window and island, screenshots; Allow starts it); a direct `sessions.switchAgent` without ack → refused, map untouched; a stuck session built on 2c69adc1 behaviour → refusal text names Codex, Continue on Codex works; control Codex → Claude with architect: no role text, role kept. Telegram and phone: not run unless available — say so.
 
 ## Risks
-- Claude/Codex week limits at 95–96 %: sessions may stall; the lead reports a blocker to s-320.
+- Codex week limit at 95 %: Codex is not used.
 - Old window or phone builds against the new host: they cannot show the text; for read-only loss they get the readable refusal (by design).
 - `switchOptions` now reads the role catalog per call: one read, measured by the existing timer if slow.
