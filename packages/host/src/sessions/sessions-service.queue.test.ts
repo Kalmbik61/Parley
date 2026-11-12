@@ -76,6 +76,7 @@ function fakeActivity(): ActivityService {
     start: async () => {},
     get: () => undefined,
     markSeen: () => {},
+    logFile: () => null,
     onChange: () => () => {},
     stop: async () => {},
   };

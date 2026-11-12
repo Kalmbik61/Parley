@@ -36,7 +36,7 @@ const fakeWorks = (): WorksService => ({
   firstReadDone: () => false, onChange: () => () => {}, stop: async () => {},
 });
 const fakeActivity = (): ActivityService => ({
-  start: async () => {}, get: () => undefined, markSeen: () => {}, onChange: () => () => {}, stop: async () => {},
+  start: async () => {}, get: () => undefined, markSeen: () => {}, logFile: () => null, onChange: () => () => {}, stop: async () => {},
 });
 
 let project = '';
