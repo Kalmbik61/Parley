@@ -118,6 +118,11 @@ export interface ParleyConfig extends ResourceLimits {
    * методов нет в `hello.methods` моста, вызов получает `unknown_method`. Окно и прочие клиенты не затронуты.
    */
   remoteCreate: boolean;
+  /**
+   * Переключатель автономного режима помощника (спека 2026-11-15-assistant-autonomous-mode-design). Выключен по
+   * умолчанию; пока его никто не читает.
+   */
+  assistantAutonomy: boolean;
   /** Дневной лимит платного голоса в минутах: 1…600. */
   voiceDailyMinutes: number;
   /** Шрифт панели терминала в окне (кусок 1.10 плана окна). */
@@ -151,6 +156,7 @@ export const DEFAULT_CONFIG: Readonly<ParleyConfig> = {
   telegramCards: true,
   leanAgents: true,
   remoteCreate: true,
+  assistantAutonomy: false,
   voiceDailyMinutes: 30,
   // Терминал окна (кусок 1.3 плана окна, спека 4.3).
   fontFamily: "'SF Mono', Menlo, monospace",
@@ -181,6 +187,7 @@ export const ENV_NAMES: Readonly<Record<keyof ParleyConfig, string>> = {
   telegramCards: 'TELEGRAM_CARDS',
   leanAgents: 'LEAN_AGENTS',
   remoteCreate: 'REMOTE_CREATE',
+  assistantAutonomy: 'ASSISTANT_AUTONOMY',
   voiceDailyMinutes: 'VOICE_DAILY_MINUTES',
   fontFamily: 'FONT_FAMILY',
   fontSize: 'FONT_SIZE',
@@ -354,6 +361,7 @@ function fromFile(data: Record<string, unknown>, complain: Complain): ConfigPatc
   take('telegramCards', (value) => typeof value === 'boolean', 'true or false');
   take('leanAgents', (value) => typeof value === 'boolean', 'true or false');
   take('remoteCreate', (value) => typeof value === 'boolean', 'true or false');
+  take('assistantAutonomy', (value) => typeof value === 'boolean', 'true or false');
   take('voiceDailyMinutes', isVoiceDailyMinutes, VOICE_DAILY_MINUTES_EXPECTED);
   take('fontFamily', isFontFamily, 'a non-empty string');
   take('fontSize', isFontSize, FONT_SIZE_EXPECTED);
@@ -378,7 +386,7 @@ function fromEnv(env: NodeJS.ProcessEnv, complain: Complain): ConfigPatch {
   const nameOf = (key: keyof ParleyConfig): string => envName(env, ENV_NAMES[key]) ?? ENV_NAMES[key];
 
   const flag = (
-    key: 'channelPush' | 'agentSkills' | 'skillNavigator' | 'leanAgents' | 'remoteCreate'
+    key: 'channelPush' | 'agentSkills' | 'skillNavigator' | 'leanAgents' | 'remoteCreate' | 'assistantAutonomy'
     | 'telegramEnabled' | 'telegramNeedsYou' | 'telegramFinished' | 'telegramMail' | 'telegramCards',
   ): void => {
     const value = text(key);
@@ -451,6 +459,7 @@ function fromEnv(env: NodeJS.ProcessEnv, complain: Complain): ConfigPatch {
   flag('telegramCards');
   flag('leanAgents');
   flag('remoteCreate');
+  flag('assistantAutonomy');
   const voiceDailyMinutes = text('voiceDailyMinutes');
   if (voiceDailyMinutes !== undefined) {
     const parsed = Number(voiceDailyMinutes);
@@ -538,6 +547,7 @@ const BOOLEAN_KEYS: ReadonlySet<keyof ParleyConfig> = new Set([
   'skillNavigator',
   'leanAgents',
   'remoteCreate',
+  'assistantAutonomy',
   'telegramEnabled',
   'telegramNeedsYou',
   'telegramFinished',

@@ -53,6 +53,7 @@ describe('loadConfig', () => {
       telegramCards: true,
       leanAgents: true,
       remoteCreate: true,
+      assistantAutonomy: false,
       voiceDailyMinutes: 30,
       fontFamily: "'SF Mono', Menlo, monospace",
       fontSize: 14,
@@ -99,6 +100,7 @@ describe('loadConfig', () => {
       telegramCards: true,
       leanAgents: true,
       remoteCreate: true,
+      assistantAutonomy: false,
       voiceDailyMinutes: 30,
       fontFamily: "'SF Mono', Menlo, monospace",
       fontSize: 14,
@@ -130,6 +132,7 @@ describe('loadConfig', () => {
       telegramCards: true,
       leanAgents: true,
       remoteCreate: true,
+      assistantAutonomy: false,
       voiceDailyMinutes: 30,
       fontFamily: "'SF Mono', Menlo, monospace",
       fontSize: 14,
@@ -394,6 +397,7 @@ describe('переменные окружения: PARLEY_* и прежние HA
     ['telegramCards', 'TELEGRAM_CARDS', 'off', false],
     ['leanAgents', 'LEAN_AGENTS', 'off', false],
     ['remoteCreate', 'REMOTE_CREATE', 'off', false],
+    ['assistantAutonomy', 'ASSISTANT_AUTONOMY', 'on', true],
     ['voiceDailyMinutes', 'VOICE_DAILY_MINUTES', '45', 45],
     ['fontFamily', 'FONT_FAMILY', 'Menlo', 'Menlo'],
     ['fontSize', 'FONT_SIZE', '18', 18],
@@ -658,6 +662,26 @@ describe('remoteCreate setting (mobile spec 4.2, decision 5)', () => {
     expect(parseSetting('remoteCreate', '0')).toEqual({ value: false });
     expect(parseSetting('remoteCreate', 'on')).toEqual({ value: true });
     expect(parseSetting('remoteCreate', 'maybe')).toEqual({ error: 'remoteCreate: expected 0 or 1' });
+  });
+});
+
+describe('assistantAutonomy setting', () => {
+  it('выключен по умолчанию; parseSetting принимает булево и отвергает остальное', () => {
+    expect(DEFAULT_CONFIG.assistantAutonomy).toBe(false);
+    expect(parseSetting('assistantAutonomy', 'true')).toEqual({ value: true });
+    expect(parseSetting('assistantAutonomy', 'maybe')).toEqual({ error: 'assistantAutonomy: expected 0 or 1' });
+  });
+  it('окружение включает и запирает ключ; файл читается; неверное значение — предупреждение', async () => {
+    expect((await loadConfig(file(), {})).config.assistantAutonomy).toBe(false);
+    const fromEnv = await loadConfig(file(), { PARLEY_ASSISTANT_AUTONOMY: '1' });
+    expect(fromEnv.config.assistantAutonomy).toBe(true);
+    expect(fromEnv.fromEnv).toContain('assistantAutonomy');
+    await write({ assistantAutonomy: true });
+    expect((await loadConfig(file(), {})).config.assistantAutonomy).toBe(true);
+    await write({ assistantAutonomy: 'yes please' });
+    const bad = await loadConfig(file(), {});
+    expect(bad.config.assistantAutonomy).toBe(false);
+    expect(bad.warning).toContain('assistantAutonomy');
   });
 });
 
