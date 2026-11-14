@@ -214,7 +214,7 @@ describe('RoomRow — свёрнутая (1.2)', () => {
     }
   });
 
-  it('счётчик — число ВСЕХ агентов провайдера в комнате, не только запущенных (решение 7); тултип — «N Claude Code agents»', () => {
+  it('счётчик — агенты провайдера, что стоят строками развёрнутой комнаты: не только запущенные (решение 7), закрытые — лишь при showClosed; тултип — «N Claude Code agents»', () => {
     const mixed = fourAgents(
       { members: ['s-01', 's-02', 's-03', 's-04'] },
       {
@@ -226,14 +226,29 @@ describe('RoomRow — свёрнутая (1.2)', () => {
         ],
       },
     );
+    const counts = (): number => badges().reduce((sum, badge) => sum + Number(badge.querySelector('[data-provider-count]')?.textContent), 0);
     renderRow(mixed);
     const [claude, codex] = badges();
     expect(claude?.getAttribute('data-provider-badge')).toBe('claude');
-    expect(claude?.querySelector('[data-provider-count]')?.textContent).toBe('3');
-    expect(claude?.getAttribute('title')).toBe('3 Claude Code agents');
+    expect(claude?.querySelector('[data-provider-count]')?.textContent).toBe('2');
+    expect(claude?.getAttribute('title')).toBe('2 Claude Code agents');
     expect(codex?.getAttribute('data-provider-badge')).toBe('codex');
     expect(codex?.querySelector('[data-provider-count]')?.textContent).toBe('1');
     expect(codex?.getAttribute('title')).toBe('1 Codex agent');
+    const collapsedTotal = counts();
+    cleanup();
+    useUiStore.getState().setRoomExpanded(roomKey(KEY, 'r-01'), true);
+    renderRow(mixed);
+    expect(memberRows()).toHaveLength(collapsedTotal);
+    cleanup();
+    useUiStore.setState({ roomExpanded: {} });
+    renderRow(mixed, { showClosed: true });
+    expect(badges()[0]?.querySelector('[data-provider-count]')?.textContent).toBe('3');
+    const closedTotal = counts();
+    cleanup();
+    useUiStore.getState().setRoomExpanded(roomKey(KEY, 'r-01'), true);
+    renderRow(mixed, { showClosed: true });
+    expect(memberRows()).toHaveLength(closedTotal);
   });
 
   it('значок провайдера без слова рядом называет себя для скринридера (alt = тултип); провайдеры — по алфавиту, порядок записи не важен', () => {
