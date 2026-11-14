@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { openMemoryDb } from '@parley/core';
-import { createJobs, type Job, type JobEnd, type JobResult, type JobRun, type JobsDeps } from './jobs.js';
+import { createJobs, SERVICE_TTL_MS, type Job, type JobEnd, type JobResult, type JobRun, type JobsDeps, type ServiceTag } from './jobs.js';
 
 interface Fake {
   job: Job;
@@ -310,5 +310,182 @@ describe('assistant jobs', () => {
     const { jobId } = submit('k-cancel');
     jobs.beginCancel(jobId)?.settle();
     expect(jobs.getJob(jobId)).toMatchObject({ state: 'cancelled', result: partial });
+  });
+});
+
+describe('служебные job (автономия, W2): очередь и пределы', () => {
+  const tag = (kind: ServiceTag['kind'], group: string | null = null, fallback = 'not ready'): ServiceTag => ({ kind, group, fallback });
+  const service = (jobs: ReturnType<typeof setup>['jobs'], key: string, extra: ServiceTag = tag('outcome')) =>
+    jobs.submitJob({ origin: 'system', text: key, idempotencyKey: key, correlation: { voiceSessionId: 'host', delegationId: key, turnId: key }, service: extra });
+  const submit2 = (jobs: ReturnType<typeof setup>['jobs'], key: string) => jobs.submitJob({ origin: 'island', text: key, idempotencyKey: key, correlation: { mode: 'text' } });
+  const stateOf = (jobs: ReturnType<typeof setup>['jobs'], ids: Array<{ jobId: string }>) => ids.map((item) => jobs.getJob(item.jobId)?.state);
+
+  it('служебный job хранит свой вид и готовый текст и переживает рестарт; у человеческого его нет', () => {
+    const { jobs, submit, db } = setup();
+    const human = submit('h1');
+    const own = service(jobs, 's1', tag('watch', 'g1', 'S03 replied; the summary is not ready.'));
+    jobs.stop();
+    const again = setup({}, db);
+    expect(again.jobs.getJob(own.jobId)).toMatchObject({ origin: 'system', context: null, service: { kind: 'watch', group: 'g1', fallback: 'S03 replied; the summary is not ready.' } });
+    expect(again.jobs.getJob(human.jobId)?.service).toBeNull();
+  });
+
+  it('RW-11: человеческий job запускается раньше служебного, стоявшего в очереди первым', async () => {
+    const { jobs, runs, submit } = setup();
+    submit('h1');
+    submit('h2');
+    const early = service(jobs, 's1');
+    const human = submit('h3');
+    expect(stateOf(jobs, [early, human])).toEqual(['queued', 'queued']);
+    runs[0]!.end({ ok: true, summary: 'x', result: result('x'), outcome: 'completed' });
+    await settled();
+    expect(stateOf(jobs, [early, human])).toEqual(['queued', 'running']);
+    runs[1]!.end({ ok: true, summary: 'x', result: result('x'), outcome: 'completed' });
+    await settled();
+    expect(stateOf(jobs, [early, human])).toEqual(['running', 'running']);
+    expect(runs.map((run) => run.job.requestText)).toEqual(['h1', 'h2', 'h3', 's1']);
+  });
+
+  it('RW-11: одновременно идёт один служебный job; следующий — после его конца', async () => {
+    const { jobs, runs } = setup({ capPerProvider: 50 });
+    const a = service(jobs, 's1');
+    const b = service(jobs, 's2');
+    expect(stateOf(jobs, [a, b])).toEqual(['running', 'queued']);
+    runs[0]!.end({ ok: true, summary: 'x', result: result('x'), outcome: 'completed' });
+    await settled();
+    expect(stateOf(jobs, [a, b])).toEqual(['completed', 'running']);
+    expect(runs).toHaveLength(2);
+  });
+
+  it('RW-11: в очереди не больше пяти событий слежения — старейшие сняты; итоги действий не снимаются; сообщено, что снято', () => {
+    const { jobs, db } = setup({ capPerProvider: 50 });
+    const busy = service(jobs, 'busy');
+    const outcome = service(jobs, 'outcome-1');
+    const watches = Array.from({ length: 6 }, (_, index) => service(jobs, `w${index}`, tag('watch', `g${index}`)));
+    expect(stateOf(jobs, [busy, outcome])).toEqual(['running', 'queued']);
+    expect(stateOf(jobs, watches)).toEqual(['cancelled', 'queued', 'queued', 'queued', 'queued', 'queued']);
+    db.exec('BEGIN IMMEDIATE');
+    const seventh = jobs.beginSubmit({ origin: 'system', text: 'w6', idempotencyKey: 'w6', correlation: { mode: 'text' }, service: tag('watch', 'g6') });
+    db.exec('COMMIT');
+    seventh.settle();
+    expect(seventh.dropped).toEqual([{ jobId: watches[1]!.jobId, reason: 'overflow' }]);
+    expect(jobs.getJob(watches[1]!.jobId)).toMatchObject({ state: 'cancelled', result: null });
+    expect(jobs.getJob(outcome.jobId)?.state).toBe('queued');
+  });
+
+  it('RW-11: новое событие той же сессии заменяет ждущее; другой сессии — нет; идущий не трогается', () => {
+    const { jobs } = setup({ capPerProvider: 50 });
+    const running = service(jobs, 'w0', tag('watch', 'g1'));
+    const first = service(jobs, 'w1', tag('watch', 'g1'));
+    const other = service(jobs, 'w2', tag('watch', 'g2'));
+    const next = jobs.beginSubmit({ origin: 'system', text: 'w3', idempotencyKey: 'w3', correlation: { mode: 'text' }, service: tag('watch', 'g1') });
+    next.settle();
+    expect(next.dropped).toEqual([{ jobId: first.jobId, reason: 'replaced' }]);
+    expect(stateOf(jobs, [running, first, other, next])).toEqual(['running', 'cancelled', 'queued', 'queued']);
+  });
+
+  it('beginSubmit: запись сразу, событие и запуск — в settle; повтор ключа ничего не создаёт', () => {
+    const { jobs, runs, db } = setup();
+    const events: string[] = [];
+    jobs.onJobChanged((job) => events.push(job.state));
+    db.exec('BEGIN IMMEDIATE');
+    const begun = jobs.beginSubmit({ origin: 'system', text: 's1', idempotencyKey: 's1', correlation: { mode: 'text' }, service: tag('outcome') });
+    expect(begun.created).toBe(true);
+    db.exec('ROLLBACK');
+    expect(jobs.getJob(begun.jobId)).toBeNull();
+    expect(events).toEqual([]);
+    expect(runs).toHaveLength(0);
+    const second = jobs.beginSubmit({ origin: 'system', text: 's1', idempotencyKey: 's1', correlation: { mode: 'text' }, service: tag('outcome') });
+    second.settle();
+    expect(events).toEqual(['queued', 'running']);
+    const repeat = jobs.beginSubmit({ origin: 'system', text: 's1', idempotencyKey: 's1', correlation: { mode: 'text' }, service: tag('outcome') });
+    repeat.settle();
+    expect(repeat).toMatchObject({ jobId: second.jobId, created: false, dropped: [] });
+    expect(runs).toHaveLength(1);
+  });
+
+  it('RW-22: служебный job не начат за 5 минут — закрыт готовым текстом без прогона; человеческий не трогается', async () => {
+    vi.useFakeTimers();
+    try {
+      const { jobs, runs, submit, execute } = setup({ capPerProvider: 1 });
+      const human = submit('h1');
+      const waiting = submit('h2');
+      const own = service(jobs, 's1', tag('watch', 'g1', 'S03 replied; the summary is not ready.'));
+      await vi.advanceTimersByTimeAsync(SERVICE_TTL_MS - 1000);
+      expect(jobs.getJob(own.jobId)?.state).toBe('queued');
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(jobs.getJob(own.jobId)).toMatchObject({
+        state: 'completed',
+        resultSummary: 'S03 replied; the summary is not ready.',
+        result: { answer: 'S03 replied; the summary is not ready.', cards: [], toolRefs: [] },
+      });
+      expect(jobs.getJob(waiting.jobId)?.state).toBe('queued');
+      expect(execute).toHaveBeenCalledTimes(1);
+      expect(runs.map((run) => run.job.jobId)).toEqual([human.jobId]);
+      jobs.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('RW-22: после рестарта просроченный служебный job закрывается при первом же разборе очереди', async () => {
+    const db = openMemoryDb();
+    let at = 1_000;
+    const first = setup({ now: () => at, capPerProvider: 1 }, db);
+    first.submit('h1');
+    const own = service(first.jobs, 's1', tag('outcome', null, 'Done (action p1). Do not repeat it.'));
+    first.jobs.stop();
+    at += SERVICE_TTL_MS;
+    const next = setup({ now: () => at, capPerProvider: 1 }, db);
+    await next.jobs.recover();
+    expect(next.jobs.getJob(own.jobId)).toMatchObject({ state: 'completed', resultSummary: 'Done (action p1). Do not repeat it.' });
+    expect(next.execute).not.toHaveBeenCalled();
+    next.jobs.stop();
+  });
+
+  it('рестарт посреди пересказа: служебный job закрыт готовым текстом, а не «исход неизвестен»', async () => {
+    const { jobs, db } = setup({ capPerProvider: 50 });
+    const own = service(jobs, 's1', tag('watch', 'g1', 'S03 replied; the summary is not ready.'));
+    const human = submit2(jobs, 'h1');
+    jobs.stop();
+    const next = setup({}, db);
+    await next.jobs.recover();
+    expect(next.jobs.getJob(own.jobId)).toMatchObject({ state: 'completed', resultSummary: 'S03 replied; the summary is not ready.', result: { answer: 'S03 replied; the summary is not ready.' } });
+    expect(next.jobs.getJob(human.jobId)?.state).toBe('needs_confirmation');
+  });
+
+  it('job system без ServiceTag не крутит таймер срока', async () => {
+    vi.useFakeTimers();
+    try {
+      const { jobs } = setup({ capPerProvider: 1 });
+      submit2(jobs, 'h1');
+      const bare = jobs.submitJob({ origin: 'system', text: 'bare', idempotencyKey: 'bare', correlation: { mode: 'text' } });
+      await vi.advanceTimersByTimeAsync(SERVICE_TTL_MS + 1000);
+      expect(vi.getTimerCount()).toBe(0);
+      expect(jobs.getJob(bare.jobId)?.state).toBe('queued');
+      jobs.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('closeWithoutRun: только служебный job в очереди; человеческий и идущий — нет', () => {
+    const { jobs, submit } = setup({ capPerProvider: 1 });
+    submit('h1');
+    const human = submit('h2');
+    const own = service(jobs, 's1');
+    expect(jobs.closeWithoutRun(human.jobId, 'x')).toBeNull();
+    expect(jobs.getJob(human.jobId)?.state).toBe('queued');
+    expect(jobs.closeWithoutRun(own.jobId, 'ready text')).toMatchObject({ state: 'completed', resultSummary: 'ready text' });
+    expect(jobs.closeWithoutRun(own.jobId, 'again')).toBeNull();
+  });
+
+  it('cancelQueuedService: снимает ждущие события слежения; идущий пересказ и итоги действий остаются', () => {
+    const { jobs } = setup({ capPerProvider: 50 });
+    const running = service(jobs, 'w0', tag('watch', 'g0'));
+    const watch = service(jobs, 'w1', tag('watch', 'g1'));
+    const outcome = service(jobs, 'o1');
+    expect(jobs.cancelQueuedService('watch').map((job) => job.jobId)).toEqual([watch.jobId]);
+    expect(stateOf(jobs, [running, watch, outcome])).toEqual(['running', 'cancelled', 'queued']);
   });
 });
