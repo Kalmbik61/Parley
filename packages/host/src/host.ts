@@ -940,7 +940,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     sendLetter: (input) => sendHumanLetter(input, { via: 'assistant' }),
     createRoom: (input) => createHumanRoom(input),
     resolveRoomProposal: (input) => resolveRoomProposal(input),
-    endpoint: { origin: () => hookServer.origin(), setToken: (token) => assistantEndpoint.setToken(token) },
+    endpoint: { origin: () => hookServer.origin(), setToken: (run) => assistantEndpoint.setToken(run) },
     // Шаги плана карточки `actions` (спека 2026-10-28, 6.1): те же функции хоста, что зовёт окно.
     createWork: async (input) => (await createWork(input.projectPath, { title: input.title, goal: input.goal })).work.id,
     // `exactOptionalPropertyTypes`: zod даёт `role?: … | undefined`, а `CreateSessionInput` явного `undefined` ключом не принимает —
@@ -964,6 +964,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     addRoomMember: (input) => addRoomMember(input),
     roles: async (projectPath) => roleSummaries(await roleCatalog(projectPath, { codex: true })).roles,
     leanAgents: async () => (await loadConfig()).config.leanAgents,
+    // Флаг автономии — для записи допуска попытки хода; читается без кэша, при выпуске её токена (A2).
+    autonomy: async () => (await loadConfig()).config.assistantAutonomy,
     providerReady: sessionReady,
     // `telegram` создаётся ниже, но зовётся уже после запуска, как `onReminderWhileOff`.
     actionsShown: () =>
@@ -1003,6 +1005,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       binary: (command) => findRunnerBinary(command, process.env),
       cwd: assistantCwd(parleyHome()),
       tokens: assistantJobTokens,
+      // Флаг автономии — для записи допуска прогона job; читается при выпуске его токена (A2).
+      autonomy: async () => (await loadConfig()).config.assistantAutonomy,
       promptOf: (job) => jobPrompt?.(job) ?? job.requestText,
       endpointUrl: () => {
         const origin = hookServer.origin();

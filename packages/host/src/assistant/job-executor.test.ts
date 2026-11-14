@@ -340,3 +340,31 @@ it('uses the permitted overview names for S01, mentions and full refs, preservin
     result: { answer: 'Anna Anna Anna Anna uses S24.', cards: [{ cardId: 'p1', kind: 'message' }], toolRefs: [{ tool: 'parley_overview', ok: true, at: 1 }] },
   });
 });
+
+describe('запись допуска job (автономия, A2)', () => {
+  it.each([
+    ['system', true, false],
+    ['island', true, true],
+    ['island', false, false],
+    ['telegram', true, false],
+  ] as const)('job с происхождением %s при флаге %s: autoAtStart = %s', async (origin, flag, expected) => {
+    let seen: unknown = null;
+    const { execute } = setup({ ok: true }, { autonomy: async () => flag, during: (tokens, token) => { seen = tokens.admissionOf(token); } });
+    await execute({ ...job, origin }).done;
+    expect(seen).toEqual({ kind: 'job', runId: expect.any(String), jobId: 'job-1', origin, autoAtStart: expected });
+  });
+
+  it('флаг включили посреди прогона: запись допуска этого прогона не меняется', async () => {
+    let flag = false;
+    let seen: unknown = null;
+    const { execute } = setup({ ok: true }, {
+      autonomy: async () => flag,
+      during: (tokens, token) => {
+        flag = true;
+        seen = tokens.admissionOf(token);
+      },
+    });
+    await execute({ ...job, origin: 'island' }).done;
+    expect(seen).toMatchObject({ origin: 'island', autoAtStart: false });
+  });
+});

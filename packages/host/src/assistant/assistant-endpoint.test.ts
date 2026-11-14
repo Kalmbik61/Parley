@@ -3,7 +3,7 @@ import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { silentLog } from '../../test/feed-fakes.js';
 import { createJobTokens, type JobTokens } from './job-tokens.js';
-import { ASSISTANT_BODY_LIMIT, ASSISTANT_PATH, ASSISTANT_TOOL_NAMES, createAssistantEndpoint, type AssistantReply } from './assistant-endpoint.js';
+import { ASSISTANT_BODY_LIMIT, ASSISTANT_PATH, ASSISTANT_TOOL_NAMES, createAssistantEndpoint, type AssistantReply, type TurnAdmission } from './assistant-endpoint.js';
 
 let servers: Server[] = [];
 afterEach(async () => {
@@ -13,9 +13,12 @@ afterEach(async () => {
 
 /** Обработчик инструмента по умолчанию — `200 {text:'ok'}`; тесты переопределяют через `mock*Once`. */
 const okTool = () => vi.fn(async (): Promise<AssistantReply> => ({ status: 200, body: { text: 'ok' } }));
+/** Запись допуска хода, что сервис отдаёт приёмнику вместе с токеном попытки (A2). */
+const TURN: TurnAdmission = Object.freeze({ kind: 'turn', runId: 'run-1', origin: 'island', autoAtStart: false });
+const START = { origin: 'island', autoAtStart: false } as const;
 
 /** Сервер с маршрутами приёмника — как их подключает сервер хуков: только точный путь, остальное — 404. */
-async function boot(tool = okTool(), jobTokens?: Pick<JobTokens, 'jobOf'>) {
+async function boot(tool = okTool(), jobTokens?: Pick<JobTokens, 'admissionOf'>) {
   const endpoint = createAssistantEndpoint({ log: silentLog(), tool, ...(jobTokens === undefined ? {} : { jobTokens }) });
   const routes = endpoint.routes();
   const server = createServer((req, res) => {
@@ -42,7 +45,7 @@ describe('приёмник инструментов помощника (спек
   it('маршрут на каждый инструмент, и только на них', async () => {
     const { endpoint, post } = await boot();
     expect(Object.keys(endpoint.routes()).sort()).toEqual([...ASSISTANT_TOOL_NAMES].map((name) => `${ASSISTANT_PATH}/${name}`).sort());
-    endpoint.setToken('t');
+    endpoint.setToken({ token: 't', admission: TURN });
     expect((await post('unknown_tool', 't')).status).toBe(404);
   });
 
@@ -50,11 +53,11 @@ describe('приёмник инструментов помощника (спек
     const { endpoint, tool, post } = await boot();
     expect((await post('parley_overview', 'nope')).status).toBe(401);
     expect((await post('parley_overview', null)).status).toBe(401);
-    endpoint.setToken('secret-1');
+    endpoint.setToken({ token: 'secret-1', admission: TURN });
     const ok = await post('parley_overview', 'secret-1');
     expect(ok.status).toBe(200);
     expect(await ok.json()).toEqual({ text: 'ok' });
-    expect(tool).toHaveBeenCalledWith('parley_overview', { a: 1 }, { kind: 'conversation' });
+    expect(tool).toHaveBeenCalledWith('parley_overview', { a: 1 }, TURN);
     expect((await post('parley_overview', 'secret-2')).status).toBe(401);
     endpoint.setToken(null);
     expect((await post('parley_overview', 'secret-1')).status).toBe(401);
@@ -64,18 +67,18 @@ describe('приёмник инструментов помощника (спек
   it('propose_room и propose_room_decision доходят до обработчика под своими именами', async () => {
     const tool = okTool();
     const { endpoint, post } = await boot(tool);
-    endpoint.setToken('t');
+    endpoint.setToken({ token: 't', admission: TURN });
     expect((await post('propose_room', 't')).status).toBe(200);
     expect((await post('propose_room_decision', 't')).status).toBe(200);
-    expect(tool).toHaveBeenNthCalledWith(1, 'propose_room', { a: 1 }, { kind: 'conversation' });
-    expect(tool).toHaveBeenNthCalledWith(2, 'propose_room_decision', { a: 1 }, { kind: 'conversation' });
+    expect(tool).toHaveBeenNthCalledWith(1, 'propose_room', { a: 1 }, TURN);
+    expect(tool).toHaveBeenNthCalledWith(2, 'propose_room_decision', { a: 1 }, TURN);
   });
 
   it('статус и тело обработчика уходят как есть; исключение — 500 с текстом', async () => {
     const tool = okTool();
     tool.mockResolvedValueOnce({ status: 409, body: { error: 'busy' } }).mockRejectedValueOnce(new Error('boom'));
     const { endpoint, post } = await boot(tool);
-    endpoint.setToken('t');
+    endpoint.setToken({ token: 't', admission: TURN });
     const conflict = await post('propose_message', 't');
     expect(conflict.status).toBe(409);
     expect(await conflict.json()).toEqual({ error: 'busy' });
@@ -86,9 +89,9 @@ describe('приёмник инструментов помощника (спек
 
   it('пустое тело — пустые аргументы; битый JSON или не объект — 400', async () => {
     const { endpoint, tool, post } = await boot();
-    endpoint.setToken('t');
+    endpoint.setToken({ token: 't', admission: TURN });
     expect((await post('parley_detail', 't', '')).status).toBe(200);
-    expect(tool).toHaveBeenLastCalledWith('parley_detail', {}, { kind: 'conversation' });
+    expect(tool).toHaveBeenLastCalledWith('parley_detail', {}, TURN);
     expect((await post('parley_detail', 't', '{')).status).toBe(400);
     expect((await post('parley_detail', 't', '[1]')).status).toBe(400);
     expect(tool).toHaveBeenCalledTimes(1);
@@ -96,7 +99,7 @@ describe('приёмник инструментов помощника (спек
 
   it('тело больше предела — 413 (образец — тест 413 в hooks/hook-server.test.ts)', async () => {
     const { endpoint, tool, origin } = await boot();
-    endpoint.setToken('t');
+    endpoint.setToken({ token: 't', admission: TURN });
     const status = await new Promise<number>((resolve, reject) => {
       const req = request(`${origin}${ASSISTANT_PATH}/parley_detail`, { method: 'POST', headers: { authorization: 'Bearer t', 'content-type': 'application/json' } }, (res) => {
         res.resume();
@@ -118,16 +121,16 @@ describe('токены job (план голоса, T1)', () => {
   it('токен job приводит к вызову с его jobId; токен разговора не нужен', async () => {
     const tokens = createJobTokens();
     const { tool, post } = await boot(okTool(), tokens);
-    const token = tokens.issue('job-1');
+    const token = tokens.issue('job-1', START);
     expect((await post('parley_overview', token)).status).toBe(200);
-    expect(tool).toHaveBeenCalledWith('parley_overview', { a: 1 }, { kind: 'job', jobId: 'job-1' });
+    expect(tool).toHaveBeenCalledWith('parley_overview', { a: 1 }, tokens.admissionOf(token));
   });
 
   it('токен job не открывает инструменты вне allowlist: 403, сервис не вызывается', async () => {
     const tokens = createJobTokens();
     const { endpoint, tool, post } = await boot(okTool(), tokens);
-    endpoint.setToken('conversation');
-    const token = tokens.issue('job-1');
+    endpoint.setToken({ token: 'conversation', admission: TURN });
+    const token = tokens.issue('job-1', START);
     for (const name of ['schedule_check', 'list_reminders', 'cancel_reminder', 'end_conversation']) {
       expect((await post(name, token)).status).toBe(403);
     }
@@ -139,29 +142,29 @@ describe('токены job (план голоса, T1)', () => {
   it('link_request только у токена job: токен разговора получает 403, сервис не вызывается', async () => {
     const tokens = createJobTokens();
     const { endpoint, tool, post } = await boot(okTool(), tokens);
-    endpoint.setToken('conversation');
+    endpoint.setToken({ token: 'conversation', admission: TURN });
     expect((await post('link_request', 'conversation')).status).toBe(403);
     expect(tool).not.toHaveBeenCalled();
-    const token = tokens.issue('job-1');
+    const token = tokens.issue('job-1', START);
     expect((await post('link_request', token, '{"supersedes":[],"reason":"x"}')).status).toBe(200);
-    expect(tool).toHaveBeenCalledWith('link_request', { supersedes: [], reason: 'x' }, { kind: 'job', jobId: 'job-1' });
+    expect(tool).toHaveBeenCalledWith('link_request', { supersedes: [], reason: 'x' }, tokens.admissionOf(token));
   });
 
   it('request_status только у токена job: токен разговора получает 403, сервис не вызывается', async () => {
     const tokens = createJobTokens();
     const { endpoint, tool, post } = await boot(okTool(), tokens);
-    endpoint.setToken('conversation');
+    endpoint.setToken({ token: 'conversation', admission: TURN });
     expect((await post('request_status', 'conversation')).status).toBe(403);
     expect(tool).not.toHaveBeenCalled();
-    const token = tokens.issue('job-1');
+    const token = tokens.issue('job-1', START);
     expect((await post('request_status', token, '{}')).status).toBe(200);
-    expect(tool).toHaveBeenCalledWith('request_status', {}, { kind: 'job', jobId: 'job-1' });
+    expect(tool).toHaveBeenCalledWith('request_status', {}, tokens.admissionOf(token));
   });
 
   it('propose_* разрешены job', async () => {
     const tokens = createJobTokens();
     const { tool, post } = await boot(okTool(), tokens);
-    const token = tokens.issue('job-1');
+    const token = tokens.issue('job-1', START);
     for (const name of ['propose_message', 'propose_room', 'propose_decision', 'propose_room_decision', 'propose_actions']) {
       expect((await post(name, token)).status).toBe(200);
     }
@@ -171,17 +174,41 @@ describe('токены job (план голоса, T1)', () => {
   it('отозванный, чужой и пустой токен job — 401; токен job не работает как токен разговора и наоборот', async () => {
     const tokens = createJobTokens();
     const { endpoint, tool, post } = await boot(okTool(), tokens);
-    const token = tokens.issue('job-1');
+    const token = tokens.issue('job-1', START);
     tokens.revoke('job-1');
     expect((await post('parley_overview', token)).status).toBe(401);
     expect((await post('parley_overview', 'job_deadbeef')).status).toBe(401);
-    endpoint.setToken('conversation');
-    const again = tokens.issue('job-2');
+    endpoint.setToken({ token: 'conversation', admission: TURN });
+    const again = tokens.issue('job-2', START);
     expect((await post('parley_overview', again)).status).toBe(200);
-    expect(tool).toHaveBeenLastCalledWith('parley_overview', { a: 1 }, { kind: 'job', jobId: 'job-2' });
+    expect(tool).toHaveBeenLastCalledWith('parley_overview', { a: 1 }, tokens.admissionOf(again));
     // Закрытый разговор не закрывает job, а токен разговора не принадлежит job.
     endpoint.setToken(null);
     expect((await post('parley_overview', again)).status).toBe(200);
     expect((await post('parley_overview', 'conversation')).status).toBe(401);
+  });
+});
+
+describe('допуск запуска (автономия, A2)', () => {
+  it('токен попытки хода → её запись допуска целиком; новая попытка — прежний токен 401 без вызова обработчика', async () => {
+    const { endpoint, tool, post } = await boot();
+    const reminder: TurnAdmission = Object.freeze({ kind: 'turn', runId: 'run-r', origin: 'reminder', autoAtStart: false });
+    const island: TurnAdmission = Object.freeze({ kind: 'turn', runId: 'run-i', origin: 'island', autoAtStart: true });
+    endpoint.setToken({ token: 'turn-reminder', admission: reminder });
+    expect((await post('propose_message', 'turn-reminder')).status).toBe(200);
+    expect(tool).toHaveBeenLastCalledWith('propose_message', { a: 1 }, reminder);
+    endpoint.setToken({ token: 'turn-island', admission: island });
+    expect((await post('propose_message', 'turn-reminder')).status).toBe(401);
+    expect(tool).toHaveBeenCalledTimes(1);
+    expect((await post('propose_message', 'turn-island')).status).toBe(200);
+    expect(tool).toHaveBeenLastCalledWith('propose_message', { a: 1 }, island);
+  });
+
+  it('токен job → запись допуска job с происхождением и autoAtStart', async () => {
+    const tokens = createJobTokens();
+    const { tool, post } = await boot(okTool(), tokens);
+    const token = tokens.issue('job-1', { origin: 'system', autoAtStart: false });
+    expect((await post('parley_overview', token)).status).toBe(200);
+    expect(tool).toHaveBeenCalledWith('parley_overview', { a: 1 }, { kind: 'job', runId: expect.any(String), jobId: 'job-1', origin: 'system', autoAtStart: false });
   });
 });

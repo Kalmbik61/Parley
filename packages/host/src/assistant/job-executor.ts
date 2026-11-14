@@ -20,6 +20,7 @@ import {
   type ProviderEntry,
 } from '@parley/core';
 import { normalizeHumanText } from '@parley/core/assistant';
+import { autoAtStartOf } from './assistant-endpoint.js';
 import type { JobTokens } from './job-tokens.js';
 import type { Job, JobEnd, JobResult, JobRun } from './jobs.js';
 import { runTurn, type TurnHandle, type TurnSpec } from './turn.js';
@@ -65,6 +66,8 @@ export interface JobExecutorDeps {
   promptOf?(job: Job): string;
   /** Токены job и записи хоста о его вызовах и карточках. */
   tokens: Pick<JobTokens, 'issue' | 'revoke' | 'peek' | 'take'>;
+  /** Флаг `assistantAutonomy` для записи допуска прогона; читается один раз, при выпуске токена. Без него — выключен. */
+  autonomy?(): Promise<boolean>;
   /** База маршрута помощника (`<origin>/assistant`); `null` — сервер хуков ещё не поднят. */
   endpointUrl(): string | null;
   run?(spec: TurnSpec, onEvent: Parameters<typeof runTurn>[1]): TurnHandle;
@@ -86,7 +89,8 @@ export function createJobExecutor(deps: JobExecutorDeps): (job: Job) => JobRun {
       if (problem !== null) return failure('start', problem);
       const url = deps.endpointUrl();
       if (url === null) return failure('start', 'Parley is still starting — try again');
-      const token = deps.tokens.issue(job.jobId);
+      const autonomy = (await deps.autonomy?.()) ?? false;
+      const token = deps.tokens.issue(job.jobId, { origin: job.origin, autoAtStart: autoAtStartOf(job.origin, autonomy) });
       let dir: string | null = null;
       try {
         const codex = entry.runner.mcpConfig === 'codex-override';

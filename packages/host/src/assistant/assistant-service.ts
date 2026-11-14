@@ -4,7 +4,7 @@
  * и отправка от имени человека. Состояние для окна — событием `assistant.changed`.
  */
 
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { chmod, mkdir, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
@@ -50,7 +50,7 @@ import { createConversationStore, type ConversationStore } from './conversation-
 import type { ActivityService } from '../activity/activity-service.js';
 import type { FeedService } from '../feed/feed-service.js';
 import { memberOf, preparePlan, type PreparedPlan } from './actions.js';
-import { ASSISTANT_PATH, type AssistantCaller, type AssistantReply } from './assistant-endpoint.js';
+import { ASSISTANT_PATH, autoAtStartOf, type AssistantReply, type RunAdmission, type TurnAdmission } from './assistant-endpoint.js';
 import type { JobTokens } from './job-tokens.js';
 import type { RequestLinker } from './request-link.js';
 import type { RequestStatusReader } from './request-status.js';
@@ -107,12 +107,14 @@ export interface AssistantServiceDeps {
   addRoomMember(input: Params<'rooms.addMember'>): Promise<string>;
   roles(projectPath: string): Promise<readonly RoleSummary[]>;
   leanAgents(): Promise<boolean>;
+  /** Флаг `assistantAutonomy` (спека автономии §5.1): читается один раз на попытку хода, при выпуске её токена. Без него — выключен. */
+  autonomy?(): Promise<boolean>;
   /** Готовность провайдера к запуску агента, без проверки версии для помощника. */
   providerReady(entry: ProviderEntry): Promise<string | null>;
   /** Карточку `actions` есть кому показать: окно с `assistant-actions` или привязанный Telegram. */
   actionsShown(): boolean;
-  /** Сервер хуков (`origin`) и приёмник помощника (`setToken`, задача 8). */
-  endpoint: { origin(): string | null; setToken(token: string | null): void };
+  /** Сервер хуков (`origin`) и приёмник помощника (`setToken`: токен попытки хода и её запись допуска, задача 8 и A2). */
+  endpoint: { origin(): string | null; setToken(run: TurnRun | null): void };
   providers(): Promise<Record<string, ProviderEntry>>;
   /** `null` — провайдер готов; иначе причина по-английски. */
   ready(entry: ProviderEntry): Promise<string | null>;
@@ -172,8 +174,11 @@ export interface AssistantService {
   reset(): void;
   state(): AssistantState;
   sent(ref: SessionRef): Promise<Array<{ text: string; at: string }>>;
-  /** `caller` — разговор по умолчанию; job вызывает только инструменты из `JOB_TOOL_ALLOWLIST`. */
-  tool(name: string, args: unknown, caller?: AssistantCaller): Promise<AssistantReply>;
+  /**
+   * `caller` — запись допуска с границы HTTP; без неё — идущая попытка хода. Запись хода, чья попытка кончилась,
+   * отменена или вытеснена, — 401. Job вызывает только инструменты из `JOB_TOOL_ALLOWLIST`.
+   */
+  tool(name: string, args: unknown, caller?: RunAdmission): Promise<AssistantReply>;
   /** Срок напоминания (его отдаёт хост в `reminders.start`): ждёт конца идущего хода и сам запускает новый. */
   onReminder(reminder: Reminder, late: boolean): Promise<'fired' | 'skipped' | 'later' | 'retry'>;
   stop(): void;
@@ -185,11 +190,18 @@ interface Conversation {
   language: AssistantLanguage;
   /** Род, с которым идёт разговор: сменился в зеркале — следующий ход несёт строку `[system: voice changed …]`. */
   gender: AssistantGender;
-  token: string;
+  /** Идентичность разговора для заметок исхода (`Pending.token`); учётные данные хода — отдельно, у попытки (`TurnRun`). */
+  id: string;
   sessionId: string | null;
   endAfterTurn: boolean;
   /** Диалог CLI только что начат (рестарт, idle, смена провайдера): первый ход получит выжимку истории. */
   recapPending: boolean;
+}
+
+/** Учётные данные попытки хода (спека автономии §5.2): свой токен на каждый запуск CLI и неизменяемая запись допуска. */
+interface TurnRun {
+  token: string;
+  admission: TurnAdmission;
 }
 
 type RoomTarget = Extract<AssistantTarget, { kind: 'room' }>;
@@ -197,19 +209,24 @@ type SessionTarget = Extract<AssistantTarget, { kind: 'session' }>;
 type WorkTarget = Extract<AssistantTarget, { kind: 'work' }>;
 
 /**
- * Кто создаёт карточку. Разговор — его токен и источник карточек канала; job (план голоса, T1) — своя метка вместо
- * токена разговора и свой источник `job:<id>`, чтобы его карточка не вытесняла карточку острова и наоборот.
+ * Кто создаёт карточку. Разговор — его `id` (в поле `token`) и источник карточек канала; job (план голоса, T1) — своя
+ * метка вместо id разговора и свой источник `job:<id>`, чтобы его карточка не вытесняла карточку острова и наоборот.
+ * `admission` — запись допуска вызывающего запуска; по ней пока ничто не ветвится (A3).
  */
 /** Job нельзя готовить карточки: его Request частичный или вытеснен. Для job это отказ 409, не сбой хоста. */
 class JobRefusal extends Error {}
+/** Попытка хода кончилась, отменена или вытеснена, пока шёл вызов: её запись допуска больше не действует. */
+class TurnEnded extends Error {}
+const TURN_ENDED: AssistantReply = { status: 401, body: { error: 'This assistant turn has ended' } };
 
 interface Owner {
   token: string;
   source?: string;
   jobId?: string;
+  admission: RunAdmission;
 }
 
-/** Ждущая карточка. Вид (`kind`) совпадает с `view.action` и сужает остальные поля; `token` — разговор, что её создал. */
+/** Ждущая карточка. Вид (`kind`) совпадает с `view.action` и сужает остальные поля; `token` — id разговора, что её создал. */
 type Pending = PendingBody & { token: string; /** Откуда пришло решение; ставится в `decide`. */ via?: CardVia };
 type PendingBody =
   | {
@@ -349,6 +366,8 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
   let state: AssistantState = { ...EMPTY, instance };
   let conversation: Conversation | null = null;
   let turn: TurnHandle | null = null;
+  /** Учётные данные идущей попытки хода; `null` — токен хода снят и приёмник ему отвечает 401. */
+  let attempt: TurnRun | null = null;
   const cards = deps.cards ?? createCardStore(openMemoryDb());
   const cardTtl = deps.cardTtlMs ?? ASSISTANT_CARD_TTL_MS;
   const history = deps.conversations ?? createConversationStore(openMemoryDb());
@@ -456,7 +475,9 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     // Request job вытеснили или он частичный, пока шёл `await`: карточка уже не нужна, а вытесненный её отзыв не пережил бы.
     const refused = owner.jobId === undefined ? null : (deps.requestLink?.proposeRefusal(owner.jobId) ?? null);
     if (refused !== null) throw new JobRefusal(refused);
-    const { view, kind, ...payload } = card; // `token` остаётся в payload: заметка исхода уходит только в тот разговор, что создал карточку
+    // Попытка хода кончилась, пока шёл `await`: её запись допуска уже не действует, карточки нет.
+    if (owner.admission.kind === 'turn' && attempt?.admission.runId !== owner.admission.runId) throw new TurnEnded();
+    const { view, kind, ...payload } = card; // `token` (id разговора) остаётся в payload: заметка исхода уходит только в тот разговор, что создал карточку
     const before = cards.active();
     const row = cards.put({ proposalId: view.id, kind, view, payload, source: owner.source ?? cardSource, expiresAt: now() + cardTtl }, now());
     // Карточки job записывает хост, а не модель: они попадают в `JobResult.cards`.
@@ -497,9 +518,24 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
   };
   const restPhase = (): AssistantState['phase'] => (shown() === null ? 'idle' : 'awaiting-confirm');
 
+  /** Новая попытка хода — новый токен и запись допуска; прежний токен перестаёт действовать сразу. */
+  function issueRun(origin: AssistantOrigin, autonomy: boolean): TurnRun {
+    const next: TurnRun = { token: randomBytes(32).toString('hex'), admission: Object.freeze({ kind: 'turn', runId: randomUUID(), origin, autoAtStart: autoAtStartOf(origin, autonomy) }) };
+    attempt = next;
+    deps.endpoint.setToken(next);
+    return next;
+  }
+
+  /** Снимает токен попытки; с `only` — только если действует именно она (новую попытку не трогает). */
+  function revokeRun(only?: TurnRun): void {
+    if (attempt === null || (only !== undefined && attempt !== only)) return;
+    attempt = null;
+    deps.endpoint.setToken(null);
+  }
+
   function endConversation(): void {
     conversation = null;
-    deps.endpoint.setToken(null);
+    revokeRun();
     outcomeNote = null;
     // Карточки durable и разговор переживают: конец диалога CLI их не снимает.
   }
@@ -537,17 +573,16 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       endConversation();
     }
     if (conversation === null) {
-      conversation = { provider: entry.id, model, language, gender: voiceGender(), token: randomBytes(32).toString('hex'), sessionId: null, endAfterTurn: false, recapPending: true };
-      deps.endpoint.setToken(conversation.token);
+      conversation = { provider: entry.id, model, language, gender: voiceGender(), id: randomBytes(32).toString('hex'), sessionId: null, endAfterTurn: false, recapPending: true };
     }
     return conversation;
   }
 
-  async function files(current: Conversation, url: string, gender: AssistantGender): Promise<{ mcpFile: string; promptFile: string }> {
+  async function files(current: Conversation, url: string, gender: AssistantGender, token: string): Promise<{ mcpFile: string; promptFile: string }> {
     await mkdir(dir, { recursive: true, mode: 0o700 });
     const mcpFile = path.join(dir, 'mcp.json');
     const promptFile = path.join(dir, `prompt-${current.language}.md`);
-    await writeFile(mcpFile, assistantMcpJson({ url, token: current.token }), { mode: 0o600 });
+    await writeFile(mcpFile, assistantMcpJson({ url, token }), { mode: 0o600 });
     await chmod(mcpFile, 0o600);
     await writeFile(promptFile, assistantPrompt(current.language, gender), { mode: 0o600 });
     return { mcpFile, promptFile };
@@ -564,22 +599,41 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
   function stopTurn(): void {
     const old = turn;
     turn = null;
+    revokeRun();
     old?.cancel();
     releaseWaiters();
   }
 
+  /** Попытка хода со своими учётными данными: не дошла до запуска CLI или упала — её токен снимается. */
   async function start(entry: ProviderEntry, model: string | null, language: AssistantLanguage, text: string, retried: boolean, ask: Ask): Promise<StartReason> {
+    // Перебитый вопрос не трогает разговор: `ensure` с другим провайдером или языком сняла бы токен новой попытки.
+    if (ask.ticket !== asks || stopped) return 'evicted';
     const current = await ensure(entry, model, language);
-    const next = state.turn + 1;
-    const askId = ask.id;
     const base = deps.endpoint.origin();
     if (base === null) {
-      publish({ ...EMPTY, proposal: state.proposal, phase: 'error', mood: 'error', question: text, error: 'Parley is still starting — try again', turn: next, askId, origin: ask.origin });
+      publish({ ...EMPTY, proposal: state.proposal, phase: 'error', mood: 'error', question: text, error: 'Parley is still starting — try again', turn: state.turn + 1, askId: ask.id, origin: ask.origin });
       return 'not-ready';
     }
-    const url = `${base}${ASSISTANT_PATH}`;
+    // Флаг читается один раз, при выпуске токена (спека автономии §5.2). Пока его ждали, вопрос перебили: новая
+    // попытка уже могла выпустить свой токен, и эта его не заменяет.
+    const autonomy = (await deps.autonomy?.()) ?? false;
+    if (ask.ticket !== asks || stopped) return 'evicted';
+    const credentials = issueRun(ask.origin, autonomy);
+    try {
+      const reason = await launch(entry, model, language, text, retried, ask, current, `${base}${ASSISTANT_PATH}`, credentials);
+      if (reason !== 'started') revokeRun(credentials);
+      return reason;
+    } catch (error) {
+      revokeRun(credentials);
+      throw error;
+    }
+  }
+
+  async function launch(entry: ProviderEntry, model: string | null, language: AssistantLanguage, text: string, retried: boolean, ask: Ask, current: Conversation, url: string, credentials: TurnRun): Promise<StartReason> {
+    const next = state.turn + 1;
+    const askId = ask.id;
     const gender = voiceGender();
-    const { mcpFile, promptFile } = await files(current, url, gender);
+    const { mcpFile, promptFile } = await files(current, url, gender, credentials.token);
     const codex = entry.runner.mcpConfig === 'codex-override';
     // Сессия CLI живёт дольше хода, а род в зеркале сменился: новый род — со следующего ответа, разговор тот же (Р3).
     const voiceNote = current.sessionId !== null && current.gender !== gender ? `[system: voice changed — speak as ${gender}]` : null;
@@ -593,7 +647,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       entry,
       {
         prompt,
-        mcpConfig: codex ? assistantCodexMcp({ url, token: current.token }) : mcpFile,
+        mcpConfig: codex ? assistantCodexMcp({ url, token: credentials.token }) : mcpFile,
         systemPrompt: assistantPrompt(language, gender),
         developerInstructions: codexInstructionsFile(promptFile),
         ...(model === null ? {} : { model }),
@@ -679,6 +733,8 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       .then(async (end) => {
         if (turn !== handle) return;
         turn = null;
+        // Попытка кончилась: её токен больше не действует, повтор (если будет) получит новый.
+        revokeRun(credentials);
         if (take(stripper.end())) publish({ mood: firstMood(moods), answer, moods });
         if (end.ok && answer !== '') remember(() => history.write({ turnKey: ask.key, role: 'assistant', channel: ask.origin, text: answer }, now()));
         await finish(end, entry, model, language, text, retried, current, ask);
@@ -1038,7 +1094,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
   function settle(current: Pending, outcome: 'sent' | 'done' | 'cancelled', reason?: string, error?: string): { applied: true; error: string | null } {
     // Карточку `decide` уже забрал; новую, что предложили за время ожидания, не трогаем. Заметку пишем только
     // в тот разговор, что создал карточку: после `reset` она ушла бы в чужой.
-    if (conversation?.token === current.token) outcomeNote = `[system: proposal ${current.view.id} was ${outcome}${reason === undefined ? '' : `: ${reason}`}]`;
+    if (conversation?.id === current.token) outcomeNote = `[system: proposal ${current.view.id} was ${outcome}${reason === undefined ? '' : `: ${reason}`}]`;
     touch();
     settleCard(current.view.id, current.via ?? 'island', outcome);
     publish({ proposal: shown()?.view ?? null, outcome, phase: turn === null ? restPhase() : state.phase });
@@ -1219,7 +1275,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
         running = null;
         settleCard(id, current.via ?? 'island', final.status === 'stopped' ? 'stopped' : 'done');
         touch();
-        if (conversation?.token === current.token) outcomeNote = planNote(id, final);
+        if (conversation?.id === current.token) outcomeNote = planNote(id, final);
         publish({ report: final, outcome: 'done', phase: turn === null ? restPhase() : state.phase });
       })
       .catch((error: unknown) => {
@@ -1390,7 +1446,8 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
   }
 
   /** Инструмент job: `link_request` решает связь, `propose_*` не доходит до карточки у частичного и вытесненного Request. */
-  async function jobTool(name: string, args: unknown, jobId: string): Promise<AssistantReply> {
+  async function jobTool(name: string, args: unknown, caller: Extract<RunAdmission, { kind: 'job' }>): Promise<AssistantReply> {
+    const { jobId } = caller;
     if (name === 'link_request') {
       if (deps.requestLink === undefined) return { status: 409, body: { error: 'link_request is not available' } };
       const outcome = deps.requestLink.link(jobId, args);
@@ -1408,14 +1465,13 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       if (refused !== null) return { status: 409, body: { error: refused } };
     }
     try {
-      return await dispatch(name, args, { token: `job:${jobId}`, source: `job:${jobId}`, jobId });
+      return await dispatch(name, args, { token: `job:${jobId}`, source: `job:${jobId}`, jobId, admission: caller });
     } catch (error) {
       if (error instanceof JobRefusal) return { status: 409, body: { error: error.message } };
       throw error;
     }
   }
 
-  const CONVERSATION_CALLER: AssistantCaller = { kind: 'conversation' };
   const api: AssistantService = {
     async ask(params, origin = 'island') {
       lastAsk = { provider: params.provider, model: params.model, language: params.language };
@@ -1433,6 +1489,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     settings: () => mirror,
     cancel() {
       asks += 1;
+      revokeRun(); // и попытка, что ещё запускается: токен снимается сразу, а не после её проверки билета
       if (turn === null) return;
       stopTurn();
       publish({ phase: restPhase(), detail: null });
@@ -1557,19 +1614,27 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       return state;
     },
     sent: (ref) => readSent(deps.home, ref),
-    async tool(name, args, caller = CONVERSATION_CALLER) {
-      if (caller.kind === 'job') {
+    async tool(name, args, caller) {
+      if (caller?.kind === 'job') {
         // Токен job уже отсёк приёмник; список проверяется ещё раз здесь, чтобы сервис не зависел от приёмника.
         if (!JOB_TOOL_ALLOWLIST.includes(name)) return { status: 403, body: { error: `${name} is not available to background jobs` } };
-        const reply = await jobTool(name, args, caller.jobId);
+        const reply = await jobTool(name, args, caller);
         deps.jobTools?.recordTool(caller.jobId, name, reply.status >= 200 && reply.status < 300);
         return reply;
       }
       // Токен разговора `link_request` не вызывает: приёмник его уже отсёк, здесь то же правило для сервиса.
       if (JOB_ONLY_TOOLS.includes(name)) return { status: 403, body: { error: `${name} is only available to background jobs` } };
       const current = conversation;
-      if (current === null) return { status: 409, body: { error: 'No assistant conversation is active' } };
-      return dispatch(name, args, { token: current.token }, current);
+      const admission = caller ?? attempt?.admission;
+      if (current === null || admission === undefined) return { status: 409, body: { error: 'No assistant conversation is active' } };
+      // Запись с границы HTTP сверяется с идущей попыткой: попытка могла кончиться, пока читалось тело вызова.
+      if (attempt?.admission.runId !== admission.runId) return TURN_ENDED;
+      try {
+        return await dispatch(name, args, { token: current.id, admission }, current);
+      } catch (error) {
+        if (error instanceof TurnEnded) return TURN_ENDED;
+        throw error;
+      }
     },
     async onReminder(reminder, late) {
       // Идущий ход не перебиваем: ждём, пока он закончится и никакой вопрос человека не запускается. Параметры
@@ -1610,7 +1675,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       if (idleTimer !== null) clearTimeout(idleTimer);
       if (sweepTimer !== null) clearTimeout(sweepTimer);
       sweepTimer = null;
-      deps.endpoint.setToken(null);
+      revokeRun();
     },
   };
   return api;

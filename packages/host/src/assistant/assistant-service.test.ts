@@ -19,6 +19,10 @@ import { JOB_CANCEL_SAFE_TOOLS } from '@parley/core';
 import { createAssistantService, type AssistantServiceDeps } from './assistant-service.js';
 import type { Reminder } from './reminders.js';
 import type { TurnEnd, TurnSpec } from './turn.js';
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { silentLog } from '../../test/feed-fakes.js';
+import { ASSISTANT_PATH, createAssistantEndpoint, type RunAdmission, type TurnAdmission } from './assistant-endpoint.js';
 
 interface FakeTurn { spec: TurnSpec; emit(event: AssistantStreamEvent): void; end(result: TurnEnd): void; cancelled: boolean }
 
@@ -2269,4 +2273,203 @@ it('records only names from the job overview for final-answer cleanup', async ()
   const member = overview.rooms.flatMap((room) => room.members).find((member) => member.ref.endsWith(':s-03'))!;
   expect(tokens.peek('job-overview').humanRefs).toMatchObject({ [member.ref]: member.displayName, 's-03': member.displayName, S03: member.displayName, '@s03': member.displayName });
   service.stop();
+});
+
+describe('assistant-service: допуск запуска (автономия, A2)', () => {
+  type TurnRun = { token: string; admission: TurnAdmission } | null;
+  const servers: Server[] = [];
+  afterEach(async () => {
+    await Promise.all(servers.splice(0).map((server) => new Promise<void>((resolve) => server.close(() => resolve()))));
+  });
+
+  /** Сервис за настоящим приёмником: токен попытки и запись допуска сервис отдаёт приёмнику, как в host.ts. */
+  async function admitted(extra: Partial<AssistantServiceDeps> = {}) {
+    const runs: TurnRun[] = [];
+    const handler = vi.fn((name: string, args: unknown, caller: RunAdmission) => service.tool(name, args, caller));
+    const endpoint = createAssistantEndpoint({ log: silentLog(), tool: handler });
+    const service = createAssistantService({
+      ...deps,
+      ...extra,
+      endpoint: { origin: () => 'http://127.0.0.1:9', setToken: (run) => { runs.push(run); endpoint.setToken(run); } },
+    });
+    const routes = endpoint.routes();
+    const server = createServer((req, res) => {
+      const route = routes[req.url ?? ''];
+      if (route === undefined) res.writeHead(404).end();
+      else route(req, res);
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const post = (name: string, token: string, body: unknown = {}): Promise<Response> =>
+      fetch(`${origin}${ASSISTANT_PATH}/${name}`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    /** Действующий токен хода; `null` — токен снят. */
+    const current = (): TurnRun => runs.at(-1) ?? null;
+    return { service, runs, current, post, handler };
+  }
+
+  for (const prior of ['reminder', 'telegram'] as const) {
+    it(`ход ${prior} сменился ходом island: поздний вызов старого хода — 401, карточки нет; запись нового хода — island`, async () => {
+      const { service, current, post, handler } = await admitted({ autonomy: async () => true });
+      await service.ask(ASK, prior);
+      const old = current()!;
+      expect(old.admission).toMatchObject({ kind: 'turn', origin: prior, autoAtStart: false });
+      await service.ask({ ...ASK, text: 'новый' }, 'island');
+      const fresh = current()!;
+      expect(fresh.token).not.toBe(old.token);
+      expect(fresh.admission).toMatchObject({ kind: 'turn', origin: 'island', autoAtStart: true });
+      expect(fresh.admission.runId).not.toBe(old.admission.runId);
+      expect((await post('propose_message', old.token, { target: 'Auth', text: 'старое' })).status).toBe(401);
+      expect(handler).not.toHaveBeenCalled();
+      expect(last().proposal).toBeNull();
+      // Запись с границы, что опоздала на смену хода, сервис тоже не принимает.
+      expect((await service.tool('propose_message', { target: 'Auth', text: 'старое' }, old.admission)).status).toBe(401);
+      expect(last().proposal).toBeNull();
+      expect((await post('propose_message', fresh.token, { target: 'Auth', text: 'новое' })).status).toBe(200);
+      expect(handler).toHaveBeenLastCalledWith('propose_message', { target: 'Auth', text: 'новое' }, fresh.admission);
+      expect(last().proposal?.text).toBe('новое');
+    });
+  }
+
+  it('отмена хода между проверкой токена и обработкой: обработчик не создаёт карточку', async () => {
+    const { service, current } = await admitted();
+    await service.ask(ASK);
+    const admission = current()!.admission; // так её отдала граница HTTP до отмены
+    service.cancel();
+    expect(current()).toBeNull();
+    expect(await service.tool('propose_message', { target: 'Auth', text: 'x' }, admission)).toMatchObject({ status: 401 });
+    expect(last().proposal).toBeNull();
+    expect(service.phoneCards()).toEqual([]);
+  });
+
+  it('отмена хода, пока обработчик ждёт ленту: карточка не создаётся', async () => {
+    const card = { kind: 'permission', cardId: 'c1', id: 'c1', state: 'pending', toolUseId: null, toolName: 'Bash', toolInput: { command: 'rm -rf dist' }, suggestions: [], notified: false };
+    let release: (value: { items: unknown[] }) => void = () => {};
+    const snapshot = vi.fn(() => new Promise((resolve) => { release = resolve; }));
+    const { service, current } = await admitted({
+      activity: { get: () => ({ activity: { activity: 'blocked', waitingFor: null }, metrics: null }) as never },
+      feed: { snapshot, decide: vi.fn(), peekAttention: () => [] } as never,
+    });
+    await service.ask(ASK);
+    const reply = service.tool('propose_decision', { target: 'S03', decision: { kind: 'permission', behavior: 'allow' } }, current()!.admission);
+    await vi.waitFor(() => expect(snapshot).toHaveBeenCalled());
+    service.cancel();
+    release({ items: [card] });
+    expect((await reply).status).toBe(401);
+    expect(last().proposal).toBeNull();
+    expect(service.phoneCards()).toEqual([]);
+  });
+
+  it.each([
+    ['island', true, true],
+    ['island', false, false],
+    ['reminder', true, false],
+    ['telegram', true, false],
+  ] as const)('ход %s при флаге %s: autoAtStart = %s; флаг читается один раз, при выпуске токена', async (origin, flag, expected) => {
+    const autonomy = vi.fn(async () => flag);
+    const { service, current } = await admitted({ autonomy });
+    await service.ask(ASK, origin);
+    expect(current()!.admission).toEqual({ kind: 'turn', runId: expect.any(String), origin, autoAtStart: expected });
+    expect(autonomy).toHaveBeenCalledTimes(1);
+  });
+
+  it('флаг включили посреди хода: запись допуска хода не меняется; следующий ход — уже с новым значением', async () => {
+    let flag = false;
+    const { service, runs, current, post, handler } = await admitted({ autonomy: async () => flag });
+    await service.ask(ASK);
+    const first = current()!;
+    flag = true;
+    expect((await post('parley_overview', first.token)).status).toBe(200);
+    expect(handler).toHaveBeenLastCalledWith('parley_overview', {}, first.admission);
+    expect(first.admission.autoAtStart).toBe(false);
+    expect(Object.isFrozen(first.admission)).toBe(true);
+    expect(runs).toEqual([first]);
+    turns[0]?.end({ ok: true });
+    await flush();
+    await service.ask({ ...ASK, text: 'дальше' });
+    expect(current()!.admission).toMatchObject({ origin: 'island', autoAtStart: true });
+  });
+
+  it('токен на попытку: конец хода, повтор после сбоя продолжения, cancel и reset снимают прежний токен', async () => {
+    const { service, current, post } = await admitted();
+    await service.ask(ASK);
+    const ended = current()!;
+    turns[0]?.emit({ type: 'session', id: 'old' });
+    turns[0]?.end({ ok: true });
+    await flush();
+    expect(current()).toBeNull();
+    expect((await post('parley_overview', ended.token)).status).toBe(401);
+
+    await service.ask({ ...ASK, text: 'дальше' });
+    const first = current()!;
+    expect(first.token).not.toBe(ended.token);
+    turns[1]?.end({ ok: false, kind: 'resume', message: 'No conversation found' });
+    await vi.waitFor(() => expect(turns).toHaveLength(3));
+    const retry = current()!;
+    expect(retry.token).not.toBe(first.token);
+    expect(retry.admission.runId).not.toBe(first.admission.runId);
+    expect((await post('parley_overview', first.token)).status).toBe(401);
+    expect((await post('parley_overview', retry.token)).status).toBe(200);
+
+    service.cancel();
+    expect((await post('parley_overview', retry.token)).status).toBe(401);
+
+    await service.ask({ ...ASK, text: 'ещё' });
+    const beforeReset = current()!;
+    service.reset();
+    expect(current()).toBeNull();
+    expect((await post('parley_overview', beforeReset.token)).status).toBe(401);
+  });
+
+  it('перебитый вопрос с другим языком не снимает токен новой попытки и не подменяет её разговор', async () => {
+    let calls = 0;
+    let releaseFirst: () => void = () => {};
+    const providers = async (): Promise<Record<string, ProviderEntry>> => {
+      calls += 1;
+      if (calls === 1) await new Promise<void>((resolve) => { releaseFirst = resolve; });
+      return { claude: CLAUDE, codex: CODEX };
+    };
+    const { service, current, post } = await admitted({ providers });
+    const first = service.ask({ ...ASK, language: 'en' });
+    await vi.waitFor(() => expect(calls).toBe(1));
+    await service.ask({ ...ASK, text: 'новый' });
+    const fresh = current()!;
+    releaseFirst();
+    await first;
+    expect(turns).toHaveLength(1);
+    expect(current()).toBe(fresh);
+    expect((await post('parley_overview', fresh.token)).status).toBe(200);
+  });
+
+  it('заметка исхода после смены токена попадает в разговор, создавший карточку', async () => {
+    const { service, current } = await admitted();
+    await service.ask(ASK);
+    await service.tool('propose_message', { target: 'Auth', text: 'x' }, current()!.admission);
+    const id = last().proposal!.id;
+    turns[0]?.end({ ok: true });
+    await flush();
+    await service.ask({ ...ASK, text: 'второй' }); // новая попытка: новый токен, тот же разговор
+    await service.decide(id, 'cancel');
+    turns[1]?.end({ ok: true });
+    await flush();
+    await service.ask({ ...ASK, text: 'третий' });
+    expect(turns[2]?.spec.args[1]).toBe(`[system: proposal ${id} was cancelled]\nтретий`);
+  });
+
+  it('заметка исхода не попадает в новый разговор после reset, даже если токен уже сменился', async () => {
+    let release: (value: string) => void = () => {};
+    const { service, current } = await admitted({ createRoom: vi.fn().mockReturnValue(new Promise<string>((resolve) => { release = resolve; })) });
+    await service.ask(ASK);
+    await service.tool('propose_room', { work: 'Parley', title: 'Docs', members: ['S03', 'S02'], lead: 'S03' }, current()!.admission);
+    const id = last().proposal!.id;
+    turns[0]?.end({ ok: true });
+    await flush();
+    await service.ask({ ...ASK, text: 'второй' });
+    const deciding = service.decide(id, 'send');
+    service.reset();
+    release('r-9');
+    await deciding;
+    await service.ask({ ...ASK, text: 'после сброса' });
+    expect(turns.at(-1)?.spec.args.join(' ')).not.toContain('[system: proposal');
+  });
 });
