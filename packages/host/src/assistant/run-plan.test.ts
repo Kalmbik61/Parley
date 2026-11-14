@@ -70,6 +70,8 @@ function makeExec() {
     roomMessage: vi.fn<PlanExecutors['roomMessage']>(async () => undefined),
     sessionMessage: vi.fn<PlanExecutors['sessionMessage']>(async () => null),
     lean: vi.fn<PlanExecutors['lean']>(async () => true),
+    now: undefined as PlanExecutors['now'],
+    gave: undefined as PlanExecutors['gave'],
   };
   return exec;
 }
@@ -484,5 +486,50 @@ describe('политика плана (спека автономии §5.9)', ()
     } finally {
       STEP_CLASSES['close'] = 'auto';
     }
+  });
+});
+
+describe('runPlan: слежение за ответом (спека автономии §6.2)', () => {
+  const gave = vi.fn<NonNullable<PlanExecutors['gave']>>();
+  let clock = 100;
+  beforeEach(() => {
+    gave.mockReset();
+    clock = 100;
+    exec.now = () => clock;
+    exec.gave = gave;
+  });
+  const message = (name: string, id: string): PreparedStep => ({ do: 'message', room: null, session: known(id, name), text: 'Do it.', kind: null, to: [] });
+
+  it('since снят до эффекта; сообщение уходит после успешного шага, с именем и ref', async () => {
+    exec.sessionMessage.mockImplementation(async () => {
+      clock = 500;
+      return null;
+    });
+    await run([message('S03 Ruslan', 's-03')]);
+    expect(gave).toHaveBeenCalledWith({ ref: ref('w-1', 's-03'), name: 'S03 Ruslan', kind: 'prompt', since: 100 });
+  });
+
+  it('отказ шага — сообщения нет', async () => {
+    exec.sessionMessage.mockResolvedValue('S03 Ruslan can\'t take a message now (busy)');
+    await run([message('S03 Ruslan', 's-03')]);
+    expect(gave).not.toHaveBeenCalled();
+  });
+
+  it('create_session с задачей и wake с текстом — слежение; без задачи и текста, удержанные и письма в комнату — нет', async () => {
+    await run([createWork, createAgent('Alice'), createAgent('Bob', { task: '' }), { do: 'wake', session: known('s-06', 'S06 Nik'), text: 'Continue.' }]);
+    expect(gave.mock.calls.map(([work]) => work.name)).toEqual(['Alice', 'S06 Nik']);
+    gave.mockReset();
+    exec.resume.mockResolvedValueOnce('held');
+    await run([{ do: 'wake', session: known('s-06', 'S06 Nik'), text: 'Continue.' }]);
+    await run([{ do: 'wake', session: known('s-06', 'S06 Nik'), text: null }]);
+    await run([{ do: 'message', room: { projectPath: '/p', workId: 'w-1', roomId: 'r-1', title: 'Auth' }, session: null, text: 'Hi.', kind: 'note', to: [] }]);
+    expect(gave).not.toHaveBeenCalled();
+  });
+
+  it('RW-06: остановка плана на третьем шаге оставляет слежения первых двух', async () => {
+    let calls = 0;
+    const report = await run([message('S03 Ruslan', 's-03'), message('S05 Vera', 's-05'), message('S06 Nik', 's-06')], () => ++calls > 2);
+    expect(report.status).toBe('stopped');
+    expect(gave.mock.calls.map(([work]) => work.name)).toEqual(['S03 Ruslan', 'S05 Vera']);
   });
 });

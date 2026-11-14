@@ -188,6 +188,8 @@ export interface AssistantState {
   report?: ActionsReport | null;
   /** Включён ли автономный режим (`assistantAutonomy`); хост шлёт при старте и при смене флага. Старый хост не шлёт. */
   autonomous?: boolean;
+  /** Одна строка о снятом слежении за ответом сессии («Stopped waiting for a reply from …»); остров показывает её уведомлением. Старый хост не шлёт. */
+  watchNote?: string;
 }
 
 const sessionRef = z.object({ projectPath: z.string(), workId: z.string(), sessionId: z.string() });

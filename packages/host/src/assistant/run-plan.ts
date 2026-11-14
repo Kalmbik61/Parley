@@ -28,6 +28,13 @@ export interface PlanExecutors {
   /** Письмо сессии: живой — `send`, спящей — подъём этим текстом. `string` — отказ, `null` — ушло. */
   sessionMessage(ref: SessionRef, name: string, text: string): Promise<string | null>;
   lean(): Promise<boolean>;
+  /** Часы для `since` слежения за ответом (мс); без них — `Date.now`. */
+  now?(): number;
+  /**
+   * Шаг дал сессии работу, и его эффект удался (слежение за ответом, спека автономии §6.2): `since` снят до эффекта.
+   * Зовётся только для создания с задачей, подъёма с текстом и письма сессии.
+   */
+  gave?(work: { ref: SessionRef; name: string; kind: 'prompt'; since: number }): void;
 }
 
 /**
@@ -189,6 +196,7 @@ export async function runPlan(proposalId: string, plan: PreparedPlan, exec: Plan
 
   async function runStep(step: PreparedStep, n: number): Promise<void> {
     const source = exec.source();
+    const clock = (): number => (exec.now ?? Date.now)();
     // Эффект шага начинается: до этого шаг только сверял цели и мог отказать без последствий.
     const begin = (): void => hooks?.started(n);
     switch (step.do) {
@@ -202,9 +210,11 @@ export async function runPlan(proposalId: string, plan: PreparedPlan, exec: Plan
         const work = workOf(step.work, source);
         const before = sessionIdsOf(source, work.projectPath, work.workId);
         let created: { ref: SessionRef; held: boolean; queued?: QueueReason };
+        let since = 0;
         try {
           const lean = await exec.lean();
           begin();
+          since = clock();
           created = await exec.createSession({
             projectPath: work.projectPath,
             workId: work.workId,
@@ -229,12 +239,16 @@ export async function runPlan(proposalId: string, plan: PreparedPlan, exec: Plan
         outputs.set(n, { kind: 'session', ref: created.ref, name });
         if (created.held) report.notes.push(`${name} ${HELD_NOTE}`);
         if (created.queued !== undefined) report.notes.push(`${name} ${QUEUED_NOTE}; it starts by itself`);
+        // Работа дана, если сессия стартовала сразу: удерживаемая и стоящая в очереди задачу пока не получила.
+        if (step.task.trim() !== '' && !created.held && created.queued === undefined) exec.gave?.({ ref: created.ref, name, kind: 'prompt', since });
         return;
       }
       case 'wake': {
         const target = checked(step.session, 'wake', source);
         begin();
+        const since = clock();
         const outcome = await exec.resume(target.ref, step.text);
+        if (outcome === 'started' && step.text !== null && step.text.trim() !== '') exec.gave?.({ ref: target.ref, name: target.name, kind: 'prompt', since });
         if (outcome === 'held') report.notes.push(`${target.name} ${HELD_NOTE}`);
         if (outcome === 'queued') report.notes.push(`${target.name} ${QUEUED_NOTE}; send the text again after it starts`);
         return;
@@ -292,8 +306,10 @@ export async function runPlan(proposalId: string, plan: PreparedPlan, exec: Plan
         if (step.session === null) throw new Error('The message has no target');
         const target = checked(step.session, 'message', source);
         begin();
+        const since = clock();
         const refusal = await exec.sessionMessage(target.ref, target.name, step.text);
         if (refusal !== null) throw new Error(refusal);
+        exec.gave?.({ ref: target.ref, name: target.name, kind: 'prompt', since });
         return;
       }
     }

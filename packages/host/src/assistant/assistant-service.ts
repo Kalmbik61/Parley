@@ -26,6 +26,7 @@ import {
   parseCodexLine,
   participantLabel,
   pendingCards,
+  silentTurnEnd,
   planRefOf,
   readLetters,
   sessionMention,
@@ -62,6 +63,8 @@ import { isLastCheck, type Reminder, type ReminderStore } from './reminders.js';
 import { roomPageText, type LetterPage } from './room-page.js';
 import { appendSent, readSent } from './sent-log.js';
 import { planClick, planOutcome, runPlan, type ActionOutcome, type PlanExecutors } from './run-plan.js';
+import { createReplyWatch, type RecentSession, type WatchEvent, type WatchKind } from './reply-watch.js';
+import { buildReplySnapshot, type ReplySnapshot } from './reply-snapshot.js';
 import { historyText } from './session-history.js';
 import { runTurn, type TurnEnd, type TurnHandle, type TurnSpec } from './turn.js';
 
@@ -130,6 +133,9 @@ export function restartOutcome(row: CardRow): ActionOutcome {
   return { status: 'partial', effects: confirmed, retry: 'unsafe', reason: `Parley restarted after step ${Math.max(...progress.confirmed)} of ${progress.steps}; later steps did not start` };
 }
 
+/** Событие слежения вместе со снимком, закреплённым в момент события. */
+export type WatchDelivery = WatchEvent & { snapshot: ReplySnapshot };
+
 export interface AssistantServiceDeps {
   broadcast<E extends EventName>(event: E, data: EventData<E>): void;
   works: Pick<WorksService, 'snapshot'>;
@@ -170,6 +176,13 @@ export interface AssistantServiceDeps {
    * запуск уже не жив, или запуск кончился при готовом итоге `pending`. Реализацию — служебное сообщение — даёт W2.
    */
   deliverOutcome?(card: CardRow, outcome: ActionOutcome): void;
+  /**
+   * Событие слежения за ответом сессии (спека автономии §6.2) с закреплённым снимком (§6.3): сессия закончила свой ход
+   * или ждёт человека. Реализацию — служебное сообщение — даёт W2; без неё события не выдаются.
+   */
+  onWatchEvent?(event: WatchDelivery): void;
+  /** Время запуска процесса сессии (мс) для `silentTurnEnd`; `undefined` — процесса нет. */
+  startedAt?(ref: SessionRef): number | undefined;
   /** Срок вызова инструмента в автономном режиме; по умолчанию `AUTO_CALL_MS`. */
   autoCallMs?: number;
   /** Готовность провайдера к запуску агента, без проверки версии для помощника. */
@@ -247,6 +260,14 @@ export interface AssistantService {
    * person». Для плана клика и автономного. `false` — такой план сейчас не идёт. Метод окна — A6.
    */
   stopPlan(proposalId: string): boolean;
+  /** Активность сессии изменилась (`activity.onChange`): слежение сверяется с ней и с лентой. Без слежения — ничего. */
+  watchActivity(ref: SessionRef): void;
+  /** Работы изменились: сессия, что была активна и закрыта или усыплена, закрывает слежение за ней. */
+  watchWorks(): void;
+  /** Сессии под слежением. */
+  watchedSessions(): SessionRef[];
+  /** Последние сессии, которым помощник давал работу без подтверждения (до трёх). */
+  recentSessions(): RecentSession[];
   /** Перечитывает флаг автономии и публикует `autonomous` в `assistant.changed`: зовётся при смене `assistantAutonomy`. */
   refreshAutonomy(): Promise<void>;
   /** Журнал решённых карточек (`assistant.journal`), новые первыми. */
@@ -508,6 +529,63 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     deps.broadcast('assistant.changed', state);
     for (const listener of [...stateListeners]) listener(state);
   };
+  // --- слежение за ответом сессии (спека автономии §6.2) ---
+
+  const watch = createReplyWatch({
+    now,
+    setTimer: (fn, ms) => {
+      const timer = setTimeout(fn, ms);
+      timer.unref?.();
+      return () => clearTimeout(timer);
+    },
+    onEvent: (event) => void deliverWatch(event),
+    onNote: (note) => publish({ watchNote: note }),
+  });
+  /** Сессии, что видели `active` после постановки слежения: закрытие и сон считаются только после этого. */
+  const seenActive = new Set<string>();
+  const watchKey = (ref: SessionRef): string => `${ref.projectPath}\u0000${ref.workId}\u0000${ref.sessionId}`;
+  const lifecycleOf = (ref: SessionRef): SessionLifecycle | undefined =>
+    deps.works.snapshot().entries.find((entry) => entry.projectPath === ref.projectPath && entry.map.work.id === ref.workId)?.map.sessions.find((candidate) => candidate.id === ref.sessionId)?.lifecycle;
+
+  /** Снимок на момент события и передача его наружу: лента и журнал читаются здесь, чтобы закрепить содержимое. */
+  async function deliverWatch(event: WatchEvent): Promise<void> {
+    if (deps.onWatchEvent === undefined) return;
+    try {
+      let items: readonly FeedItem[] | null = null;
+      try {
+        items = deps.feed === undefined ? null : (await deps.feed.snapshot(event.ref)).items;
+      } catch {
+        // ленты у сессии нет — снимок с отметкой «ответ прочитать не удалось»
+      }
+      const sent = await readSent(deps.home, event.ref).catch(() => []);
+      deps.onWatchEvent({ ...event, snapshot: buildReplySnapshot({ event, items, sent }) });
+    } catch (error) {
+      deps.log(`assistant: watch event ${event.key} was not delivered: ${(error as Error).message}`);
+    }
+  }
+
+  /** Сверка слежения с лентой (записи `prompt` после постановки) и текущей активностью. */
+  async function syncWatch(ref: SessionRef): Promise<void> {
+    if (!watch.watching(ref)) return;
+    if (watch.awaitingPrompt(ref) && deps.feed !== undefined) {
+      try {
+        for (const item of (await deps.feed.snapshot(ref)).items) if (item.kind === 'prompt') watch.onPrompt(ref, Date.parse(item.at));
+      } catch {
+        // ленты нет — свой ход не определить, слежение дождётся срока
+      }
+    }
+    const live = deps.activity.get(ref);
+    const started = deps.startedAt?.(ref);
+    watch.onActivity(ref, { need: live?.activity.need ?? null }, live === undefined || started === undefined ? null : silentTurnEnd(live.activity, started));
+  }
+
+  /** Слежение ставится только действием, исполненным без подтверждения; сразу после постановки активность перечитывается. */
+  function armWatch(ref: SessionRef, name: string, kind: WatchKind, since: number): void {
+    watch.arm({ ref, name, kind, since });
+    if (lifecycleOf(ref) === 'active') seenActive.add(watchKey(ref));
+    void syncWatch(ref).catch((error: unknown) => deps.log(`assistant: watch of ${name} was not synced: ${(error as Error).message}`));
+  }
+
   /** Изменение карточки ядра уходит слушателям по одной: каждый канал закрывает именно ту карточку, что решена. */
   const changeOf = (row: CardRow): AssistantCardChanged => ({
     cardId: row.proposalId,
@@ -1678,14 +1756,18 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       await deps.sendLetter({ projectPath, workId, roomId, to: current.to, text: withMentions(current.to, current.view.text), kind: current.view.kind ?? 'note' });
       return doneWith([effect]);
     }
+    const since = now();
     const refusal = await deliverToSession(current.target.ref, current.target.name, current.view.text, begin);
     if (refusal !== null) return notDone(refusal);
+    let unlogged: string | null = null;
     try {
       await appendSent(deps.home, current.target.ref, current.view.text, new Date(now()).toISOString());
     } catch (error) {
-      return doneWith([effect], `the message was sent, but it was not written to the sent log: ${(error as Error).message}`);
+      unlogged = `the message was sent, but it was not written to the sent log: ${(error as Error).message}`;
     }
-    return doneWith([effect]);
+    // Слежение — после записи в журнал: снимок события берёт последнее письмо помощника оттуда.
+    armWatch(current.target.ref, current.target.name, 'prompt', since);
+    return unlogged === null ? doneWith([effect]) : doneWith([effect], unlogged);
   }
 
   async function autoRoom(current: Extract<Pending, { kind: 'room' }>, begin: () => void): Promise<ActionOutcome> {
@@ -1722,12 +1804,14 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
   async function autoDecision(current: Extract<Pending, { kind: 'decision' }>, begin: () => void): Promise<ActionOutcome> {
     if (deps.feed === undefined) return notDone('the agent feed is not available');
     begin();
+    const since = now();
     const result = await deps.feed.decide(current.ref, current.view.card.cardId, current.view.decision);
     if (!result.applied) {
       if (result.state === 'pending') return notDone('the agent is not ready for the answer yet');
       if (result.state === 'stale') return notDone('the request is no longer open');
       return notDone('it was already answered');
     }
+    armWatch(current.ref, current.view.target, 'resume', since);
     return doneWith([`answered ${current.view.target}: ${current.view.card.summary}`]);
   }
 
@@ -1747,6 +1831,8 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
         current.plan,
         {
           ...executors,
+          now,
+          gave: ({ ref, name, kind, since }) => armWatch(ref, name, kind, since),
           sessionMessage: async (ref, name, text) => {
             const refusal = await deliverToSession(ref, name, text);
             if (refusal !== null) return refusal;
@@ -2177,8 +2263,30 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     async refreshAutonomy() {
       const autonomous = (await deps.autonomy?.()) ?? false;
       if (stopped || state.autonomous === autonomous) return;
+      // Режим выключен — стоявшие слежения снимаются; повторное включение их не возвращает.
+      if (!autonomous) {
+        watch.clear();
+        seenActive.clear();
+      }
       publish({ autonomous });
     },
+    watchActivity(ref) {
+      if (stopped) return;
+      void syncWatch(ref).catch((error: unknown) => deps.log(`assistant: watch sync failed: ${(error as Error).message}`));
+    },
+    watchWorks() {
+      if (stopped) return;
+      for (const ref of watch.refs()) {
+        const lifecycle = lifecycleOf(ref);
+        if (lifecycle === 'active') seenActive.add(watchKey(ref));
+        else if ((lifecycle === 'closed' || lifecycle === 'sleeping') && seenActive.has(watchKey(ref))) {
+          seenActive.delete(watchKey(ref));
+          watch.onClosing(ref);
+        }
+      }
+    },
+    watchedSessions: () => watch.refs(),
+    recentSessions: () => watch.recent(),
     journal(limit) {
       return cards.recent(limit).map((row) => {
         const view = row.view as AssistantProposal;
@@ -2251,6 +2359,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     },
     stop() {
       stopped = true;
+      watch.clear();
       asks += 1; // запуск, что ещё в пути, не стартует
       stopTurn();
       const waiters = idleWaiters;

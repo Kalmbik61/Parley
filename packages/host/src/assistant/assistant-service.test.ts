@@ -2564,6 +2564,51 @@ describe('assistant-service: исполнение без подтвержден�
     expect(h.changes.map((change) => `${change.cardId}:${change.state}`)).toEqual(['p1:needs_confirmation', 'p1:superseded', 'p2:decided']);
   });
 
+  it('RW-16: письмо сессии, подтверждённое кликом, слежения не ставит; автоматическое — ставит', async () => {
+    const h = await auto();
+    h.switches.flag = false;
+    await h.service.tool('propose_message', { target: 'S03', text: 'по клику' });
+    expect(await h.service.decide('p1', 'send')).toEqual({ applied: true, error: null });
+    expect(h.service.watchedSessions()).toEqual([]);
+    expect(h.service.recentSessions()).toEqual([]);
+    h.switches.flag = true;
+    await h.service.tool('propose_message', { target: 'S02', text: 'сразу' });
+    expect(h.service.watchedSessions()).toEqual([{ projectPath: '/p', workId: 'w-1', sessionId: 's-02' }]);
+    expect(h.service.recentSessions()).toMatchObject([{ name: 'S02 Anna', kind: 'prompt' }]);
+  });
+
+  it('автоматический план: слежение ставится по успешному шагу; флаг выключили — слежения сняты', async () => {
+    const h = await auto();
+    const reply = await h.service.tool('propose_actions', { steps: [{ do: 'message', target: 'S03', text: 'Run tests' }] });
+    expect(reply.body).toMatchObject({ text: expect.stringMatching(/^Done/) });
+    expect(h.service.watchedSessions()).toHaveLength(1);
+    h.switches.flag = false;
+    await h.service.refreshAutonomy();
+    expect(h.service.watchedSessions()).toEqual([]);
+  });
+
+  it('событие «ждёт человека» доходит до onWatchEvent со снимком: карточка ждущей сессии и письмо помощника', async () => {
+    const onWatchEvent = vi.fn();
+    const soon = new Date(Date.now() + 5000).toISOString();
+    const items = [
+      { id: 'p1', at: new Date(Date.now() + 1000).toISOString(), kind: 'prompt', text: 'x', images: 0 },
+      { id: 'c1', cardId: 'c1', at: soon, kind: 'permission', state: 'pending', toolUseId: null, toolName: 'Bash', toolInput: { command: 'ls' }, suggestions: [], notified: false },
+    ];
+    const h = await auto({
+      onWatchEvent,
+      feed: { snapshot: vi.fn(async () => ({ items })), decide: vi.fn() } as never,
+      activity: { get: () => ({ activity: { activity: 'blocked', waitingFor: null, need: { kind: 'permission', since: soon, detail: 'Bash' } }, metrics: null }) as never },
+    });
+    await h.service.tool('propose_message', { target: 'S02', text: 'run ls' });
+    await vi.waitFor(() => expect(onWatchEvent).toHaveBeenCalledTimes(1));
+    expect(onWatchEvent.mock.calls[0]?.[0]).toMatchObject({
+      event: 'needs-human',
+      name: 'S02 Anna',
+      key: `need:permission:${soon}`,
+      snapshot: { waiting: { kind: 'permission', detail: 'Bash', card: { type: 'permission' } }, lastLetter: 'run ls' },
+    });
+  });
+
   it.each(['reminder', 'telegram'] as const)('AU-04/AU-05: ход %s при включённом флаге — карточка ждёт клика', async (origin) => {
     const h = await auto({}, origin);
     const reply = await h.service.tool('propose_message', { target: 'Auth', text: 'x' });

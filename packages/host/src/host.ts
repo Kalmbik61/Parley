@@ -966,6 +966,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     leanAgents: async () => (await loadConfig()).config.leanAgents,
     // Флаг автономии — для записи допуска попытки хода; читается без кэша, при выпуске её токена (A2).
     autonomy: async () => (await loadConfig()).config.assistantAutonomy,
+    startedAt: (ref) => ptyManager.get(ref)?.startedAt,
     // Прогон job действителен для автономного действия (спека автономии §5.2, правило 3): токен этого прогона жив и job `running`.
     jobLive: (admission) => assistantJobTokens.current(admission.jobId)?.runId === admission.runId && assistantJobs.getJob(admission.jobId)?.state === 'running',
     providerReady: sessionReady,
@@ -994,6 +995,10 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   });
   const reminderTarget = assistantService;
   // Окно узнаёт о режиме при старте; смену флага подхватывает обёртка `settings.set`.
+  // Слежение за ответом сессий, которым помощник дал работу без подтверждения (спека автономии §6.2).
+  const watchingAssistant = assistantService;
+  activityService.onChange((ref) => watchingAssistant.watchActivity(ref));
+  worksService.onChange(() => watchingAssistant.watchWorks());
   void assistantService.refreshAutonomy().catch((error: Error) => log.info(`assistant: autonomy flag was not read: ${error.message}`));
 
   // Вход job голосового Request (текст, контекст, открытые Request): Request создаётся после jobs, поэтому поздняя привязка.
