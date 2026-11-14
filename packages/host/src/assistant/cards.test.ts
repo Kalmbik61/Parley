@@ -151,6 +151,14 @@ describe('card store', () => {
       store.settleAuto('p4', 'done', result, 30);
       expect(store.get('p4')).toMatchObject({ outcome: null, result: null });
     });
+    it('строка, прочитанная без столбца result_json (схема шага 15), читается без итога', () => {
+      const db = openMemoryDb();
+      db.exec('ALTER TABLE assistant_cards DROP COLUMN result_json');
+      db.prepare(
+        `INSERT INTO assistant_cards (proposal_id, kind, view_json, payload_json, source, state, revision, expires_at, created_at, decided_via, outcome, progress_json, result_state) VALUES ('p5', 'message', '{}', '{}', 'island', 'decided', 2, 1000, 10, 'auto', 'done', '{"steps":1,"started":[1],"confirmed":[1]}', 'pending')`,
+      ).run();
+      expect(createCardStore(db).get('p5')).toMatchObject({ outcome: 'done', progress: { steps: 1 }, result: null, resultState: 'pending' });
+    });
     it('строка прежней версии (без хода и result_state, как пишет её старый код) читается: хода нет, клик работает', () => {
       // Сам шаг миграции 14 → 15 с сохранением строк проверяет core (db.test.ts, шаг 15).
       const db = openMemoryDb();

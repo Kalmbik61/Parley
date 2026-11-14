@@ -3050,26 +3050,94 @@ describe('assistant-service: исполнение без подтвержден�
     expect(h.store.get('p1')).toBeNull();
   });
 
-  it('срок: подготовка, ожидание слота и исполнение — в одном бюджете вызова', async () => {
+  it('срок: подготовка, ожидание слота и исполнение — в одном бюджете вызова (управляемые часы)', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      const gate = deferred();
+      (deps.stopSession as Mock).mockImplementationOnce(() => gate.promise);
+      (deps.interrupt as Mock).mockImplementationOnce(() => new Promise(() => {})); // действие не кончается
+      let providersCalls = 0;
+      const h = await auto({
+        autoCallMs: 1000,
+        // Третий вызов реестра — подготовка второго плана: 300 мс.
+        providers: () => (++providersCalls <= 2 ? Promise.resolve({ claude: CLAUDE, codex: CODEX }) : new Promise((resolve) => setTimeout(() => resolve({ claude: CLAUDE, codex: CODEX }), 300))),
+      });
+      void h.service.tool('propose_actions', { steps: [{ do: 'sleep', session: 'S03' }] });
+      await vi.waitFor(() => expect(deps.stopSession).toHaveBeenCalledTimes(1));
+      const start = Date.now();
+      let repliedAt: number | null = null;
+      const second = h.service.tool('propose_actions', { steps: [{ do: 'interrupt', session: 'S03' }] }).then((reply) => {
+        repliedAt = Date.now();
+        return reply;
+      });
+      setTimeout(() => gate.release(), 600); // слот освобождается на 600-й мс, после 300 мс подготовки
+      await vi.advanceTimersByTimeAsync(999);
+      expect(deps.interrupt).toHaveBeenCalledTimes(1);
+      expect(repliedAt).toBeNull();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await second).toEqual({ status: 200, body: { text: 'Still running (action p2). Call action_status with id "p2" to get the outcome.' } });
+      // Ответ — ровно у единого срока от прихода вызова, а не через новый полный срок после подготовки или слота.
+      expect(repliedAt! - start).toBe(1000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('срок: слот занят до конца срока, флаг выключен и читается сразу — Not started, ни карточки, ни эффекта', async () => {
     const gate = deferred();
     (deps.stopSession as Mock).mockImplementationOnce(() => gate.promise);
-    const action = deferred();
-    (deps.interrupt as Mock).mockImplementationOnce(() => action.promise);
-    let providersCalls = 0;
-    const h = await auto({
-      autoCallMs: 150,
-      providers: () => (++providersCalls <= 2 ? Promise.resolve({ claude: CLAUDE, codex: CODEX }) : new Promise((resolve) => setTimeout(() => resolve({ claude: CLAUDE, codex: CODEX }), 50))),
-    });
+    const h = await auto({ autoCallMs: 60 });
     const first = h.service.tool('propose_actions', { steps: [{ do: 'sleep', session: 'S03' }] });
     await vi.waitFor(() => expect(deps.stopSession).toHaveBeenCalledTimes(1));
-    const started = Date.now();
-    const second = h.service.tool('propose_actions', { steps: [{ do: 'interrupt', session: 'S03' }] }); // 50 мс подготовки
-    setTimeout(() => gate.release(), 100); // ещё ~50 мс ожидания слота
-    expect(await second).toEqual({ status: 200, body: { text: 'Still running (action p2). Call action_status with id "p2" to get the outcome.' } });
-    expect(Date.now() - started).toBeLessThan(400);
-    expect(deps.interrupt).toHaveBeenCalledTimes(1);
-    action.release();
+    const waiting = h.service.tool('propose_actions', { steps: [{ do: 'interrupt', session: 'S03' }] });
+    await flush();
+    h.switches.flag = false;
+    expect(await waiting).toEqual({ status: 409, body: { error: 'Not started: Parley is busy. Nothing was done; you may try again.' } });
+    expect(h.store.get('p2')).toBeNull();
+    expect(h.store.active()).toEqual([]);
+    expect(deps.interrupt).not.toHaveBeenCalled();
+    expect(last().proposal).toBeNull();
+    gate.release();
     await first;
+  });
+
+  it('срок: подготовка кончилась после срока раньше своего таймера — без обычной карточки', async () => {
+    let clock = 1_000;
+    let calls = 0;
+    const h = await auto({
+      now: () => clock,
+      autoCallMs: 100,
+      // Подготовка «длилась» 200 мс по часам сервиса, но разрешилась сразу — раньше таймера срока.
+      providers: () => {
+        calls += 1;
+        if (calls > 1) clock += 200;
+        return Promise.resolve({ claude: CLAUDE, codex: CODEX });
+      },
+    });
+    h.switches.flag = false;
+    expect(await h.service.tool('propose_actions', { steps: [{ do: 'sleep', session: 'S03' }] })).toEqual({ status: 409, body: { error: 'Not started: Parley is busy. Nothing was done; you may try again.' } });
+    expect(h.store.get('p1')).toBeNull();
+    expect(last().proposal).toBeNull();
+  });
+
+  it('без допуска автономии срок не действует: поздняя подготовка даёт обычную карточку', async () => {
+    let clock = 1_000;
+    let calls = 0;
+    const h = await auto({ now: () => clock, autoCallMs: 100, providers: () => { calls += 1; if (calls > 1) clock += 200; return Promise.resolve({ claude: CLAUDE, codex: CODEX }); } }, 'reminder');
+    expect((await h.service.tool('propose_actions', { steps: [{ do: 'sleep', session: 'S03' }] })).body).toMatchObject({ text: expect.stringMatching(/^Shown to the person as a card/) });
+    expect(h.store.get('p1')?.state).toBe('active');
+  });
+
+  it('слот: сбой putDecided — ничего не записано, слот свободен, следующий план стартует', async () => {
+    const h = await auto();
+    const put = vi.spyOn(h.store, 'putDecided').mockImplementationOnce(() => {
+      throw new Error('database is locked');
+    });
+    expect(await h.service.tool('propose_actions', { steps: [{ do: 'sleep', session: 'S03' }] })).toEqual({ status: 409, body: { error: 'Not started: Parley could not start it: database is locked. Nothing was done; you may try again.' } });
+    put.mockRestore();
+    expect(h.store.get('p1')).toBeNull();
+    expect(h.changes).toEqual([]);
+    expect((await h.service.tool('propose_actions', { steps: [{ do: 'sleep', session: 'S03' }] })).body).toMatchObject({ text: expect.stringMatching(/^Done \(action p2\)/) });
   });
 
   it('AU-06: флаг выключили во время подготовки — обычная карточка', async () => {

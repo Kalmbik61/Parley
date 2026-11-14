@@ -68,7 +68,7 @@ interface Raw {
   decided_via: CardVia | null;
   outcome: string | null;
   progress_json: string | null;
-  result_json: string | null;
+  result_json?: string | null;
   result_state: ResultState | null;
 }
 
@@ -86,7 +86,8 @@ const fromRaw = (row: Raw): CardRow => ({
   decidedVia: row.decided_via,
   outcome: row.outcome,
   progress: row.progress_json === null ? null : (JSON.parse(row.progress_json) as CardProgress),
-  result: row.result_json === null ? null : (JSON.parse(row.result_json) as ActionOutcome),
+  // Строка без итога (клик или схема, прочитанная без столбца шага 16) читается как строка без итога.
+  result: row.result_json === null || row.result_json === undefined ? null : (JSON.parse(row.result_json) as ActionOutcome),
   resultState: row.result_state,
 });
 

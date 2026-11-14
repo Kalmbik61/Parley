@@ -1459,15 +1459,16 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     for (const wake of [...slotWaiters]) wake();
   }
 
-  /** Ждёт освобождения слота плана не дольше `ms`. */
-  function waitSlot(ms: number): Promise<void> {
+  /** Ждёт освобождения слота плана не дольше `ms`; `false` — срок вышел, а слот так и не освободился. */
+  function waitSlot(ms: number): Promise<boolean> {
     return new Promise((resolve) => {
-      const wake = (): void => {
+      const finish = (freed: boolean): void => {
         clearTimeout(timer);
         slotWaiters.delete(wake);
-        resolve();
+        resolve(freed);
       };
-      const timer = setTimeout(wake, Math.max(0, ms));
+      const wake = (): void => finish(true);
+      const timer = setTimeout(() => finish(false), Math.max(0, ms));
       timer.unref?.();
       slotWaiters.add(wake);
     });
@@ -1497,6 +1498,8 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
    */
   function executionPoint(card: Pending, owner: Owner, autonomy: boolean): Point {
     checkOwner(owner);
+    // Запуск с допуском автономии после срока ничего не пишет — ни действия, ни обычной карточки.
+    if (owner.admission.autoAtStart && now() >= owner.deadline) return { kind: 'late' };
     if (!owner.admission.autoAtStart || !autonomy) {
       setPending(card, owner);
       return { kind: 'card', note: null };
@@ -1506,7 +1509,6 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       setPending(card, owner);
       return { kind: 'card', note: `It was not run without the click: ${click}.` };
     }
-    if (now() >= owner.deadline) return { kind: 'late' };
     if (card.kind === 'actions') {
       if (running !== null) return { kind: 'busy' };
       running = card.view.id;
@@ -1565,7 +1567,9 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       promise.then(
         (value) => {
           clearTimeout(timer);
-          resolve(value);
+          // Ожидание кончилось после срока, а таймер ещё не успел: тоже поздно.
+          if (now() >= owner.deadline) reject(new CallLate());
+          else resolve(value);
         },
         (error: unknown) => {
           clearTimeout(timer);
@@ -1578,6 +1582,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
   /** Вызов `propose_*` после подготовки: точка исполнения, при занятом слоте — ожидание в пределах срока и повтор. */
   async function place(card: Pending, owner: Owner, shownText: string): Promise<AssistantReply> {
     for (;;) {
+      if (owner.admission.autoAtStart && now() >= owner.deadline) return NOT_STARTED;
       // Флаг — последнее ожидание перед точкой исполнения: выключение действует на этот же вызов.
       const autonomy = owner.admission.autoAtStart ? ((await bounded(owner, deps.autonomy?.() ?? Promise.resolve(false))) ?? false) : false;
       const point = executionPoint(card, owner, autonomy);
@@ -1588,7 +1593,8 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       if (point.kind === 'late') return NOT_STARTED;
       if (point.kind === 'failed') return { status: 409, body: { error: `Not started: ${point.reason}. Nothing was done; you may try again.` } };
       if (point.kind === 'auto') return awaitOutcome(point.run, owner);
-      await waitSlot(owner.deadline - now());
+      // Слот не освободился до срока: Not started, без чтения флага и без обычной карточки.
+      if (!(await waitSlot(owner.deadline - now()))) return NOT_STARTED;
     }
   }
 
