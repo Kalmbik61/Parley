@@ -14,7 +14,8 @@ import { createJobTokens } from './job-tokens.js';
 import { createJobs, type Job, type JobEnd, type JobRun } from './jobs.js';
 import { createRequestLinker } from './request-link.js';
 import { createRequestStatus } from './request-status.js';
-import { createRequests } from './requests.js';
+import { createRequests, originKeyOf } from './requests.js';
+import { createServiceMessages, type ServiceMessages } from './service-messages.js';
 import { JOB_CANCEL_SAFE_TOOLS } from '@parley/core';
 import { createAssistantService, restartOutcome, type AssistantServiceDeps } from './assistant-service.js';
 import { STEP_CLASSES } from './run-plan.js';
@@ -3306,5 +3307,235 @@ describe('assistant-service: исполнение без подтвержден�
     expect(tokens.at(-1)).not.toBeNull();
     expect((await service.tool('parley_overview', {})).status).toBe(200);
     service.stop();
+  });
+});
+
+describe('assistant-service: служебные сообщения (автономия, W2)', () => {
+  const JOB_RUN = { kind: 'job', runId: 'run-1', jobId: 'job-1', origin: 'island', autoAtStart: true } as const;
+  const deferred = () => {
+    let release: () => void = () => {};
+    const promise = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    return { promise, release: () => release() };
+  };
+  /** Хост на одной базе, как в `host.ts`: карточки, jobs (прогон CLI подменён), Request и служебные сообщения. */
+  async function wired(extra: Partial<AssistantServiceDeps> = {}, db = openMemoryDb()) {
+    const store = createCardStore(db);
+    const switches = { flag: true, live: true };
+    const runs: Array<{ job: Job; end(end: JobEnd): void }> = [];
+    const jobs = createJobs({
+      db,
+      capPerProvider: 50,
+      defaultProvider: () => 'claude',
+      execute: (job): JobRun => {
+        let settle: (end: JobEnd) => void = () => {};
+        const done = new Promise<JobEnd>((resolve) => {
+          settle = resolve;
+        });
+        runs.push({ job, end: (end) => settle(end) });
+        return { cancel: () => settle({ ok: false, kind: 'cancelled', message: 'cancelled' }), done };
+      },
+    });
+    const requests = createRequests({ db, jobs });
+    // eslint-disable-next-line prefer-const -- поздняя привязка, как в host.ts: сервис создаётся раньше сообщений
+    let messages: ServiceMessages | undefined;
+    const service = createAssistantService({
+      ...deps,
+      cards: store,
+      jobTools: { recordTool: vi.fn(), recordCard: vi.fn() },
+      autonomy: async () => switches.flag,
+      jobLive: () => switches.live,
+      deliverOutcome: (card, outcome) => void messages?.outcome(card, outcome),
+      onWatchEvent: (event) => void messages?.watchEvent(event),
+      onAutonomyOff: () => void messages?.autonomyOff(),
+      ...extra,
+    });
+    messages = createServiceMessages({ requests, jobs, takeResult: (id) => store.takeResult(id, 'sent_as_message'), autonomous: () => service.state().autonomous, note: (text) => service.noteWatch(text) });
+    await service.refreshAutonomy();
+    const serviceRequests = () => requests.list('island', 'test').filter((request) => request.origin === 'system');
+    return { db, store, switches, jobs, requests, messages, service, runs, serviceRequests };
+  }
+  const delivery = (sessionId: string, key: string, workId = 'w-1') => ({
+    watchId: `w-${sessionId}`,
+    ref: { projectPath: '/p', workId, sessionId },
+    name: `${sessionId} Anna`,
+    event: 'turn-end' as const,
+    key,
+    boundary: 1,
+    turnEndedAt: 2,
+    snapshot: { event: 'turn-end' as const, key, session: `${sessionId} Anna`, reply: `answer of ${sessionId}`, replyNote: null, waiting: null, lastLetter: 'run tests' },
+  });
+
+  it('AU-21: итог взят через action_status — служебного сообщения нет', async () => {
+    const gate = deferred();
+    (deps.stopSession as Mock).mockImplementationOnce(() => gate.promise);
+    const h = await wired({ autoCallMs: 60 });
+    await h.service.ask(ASK);
+    expect((await h.service.tool('propose_actions', { steps: [{ do: 'sleep', session: 'S03' }] })).body).toMatchObject({ text: expect.stringMatching(/^Still running/) });
+    const status = h.service.tool('action_status', { id: 'p1' });
+    gate.release();
+    expect((await status).body).toMatchObject({ text: expect.stringMatching(/^Done \(action p1\)/) });
+    turns[0]?.end({ ok: true });
+    await flush();
+    h.service.deliverRestartOutcomes();
+    expect(h.serviceRequests()).toEqual([]);
+    expect(h.store.get('p1')?.resultState).toBe('taken_by_run');
+  });
+
+  it('AU-21: job отменён до получения итога — одно служебное сообщение; повторы второго не создают', async () => {
+    const slow = deferred();
+    (deps.sendLetter as Mock).mockImplementationOnce(() => slow.promise.then(() => 'm-9'));
+    const h = await wired({ autoCallMs: 30 });
+    await h.service.ask(ASK);
+    const call = h.service.tool('propose_message', { target: 'Auth', text: 'job' }, JOB_RUN);
+    await vi.waitFor(() => expect(deps.sendLetter).toHaveBeenCalledTimes(1));
+    h.switches.live = false;
+    h.service.jobEnded('job-1');
+    slow.release();
+    await call;
+    await vi.waitFor(() => expect(h.serviceRequests()).toHaveLength(1));
+    const [message] = h.serviceRequests();
+    expect(message).toMatchObject({
+      origin: 'system',
+      conversationId: 'island',
+      originKey: originKeyOf('host', 'outcome:p1'),
+      text: 'Outcome of action p1',
+      link: { kind: 'independent' },
+      context: { service: 'outcome', cardId: 'p1', kind: 'message', outcome: { status: 'done', effects: ['message to Auth'] } },
+    });
+    expect(h.jobs.getJob(message!.jobId)).toMatchObject({ origin: 'system', service: { kind: 'outcome', group: null, fallback: 'Done (action p1). Done: message to Auth. Do not repeat it.' } });
+    expect(h.store.get('p1')?.resultState).toBe('sent_as_message');
+    // Повторы: конец того же job, доставка после рестарта, прямой повтор доставки и action_status — второго нет.
+    h.service.jobEnded('job-1');
+    h.service.deliverRestartOutcomes();
+    expect(h.messages.outcome(h.store.get('p1')!, { status: 'done', effects: [], retry: 'unsafe', reason: null })).toBeNull();
+    h.switches.live = true;
+    expect((await h.service.tool('action_status', { id: 'p1' }, JOB_RUN)).status).toBe(404);
+    expect(h.serviceRequests()).toHaveLength(1);
+  });
+
+  it('AU-15: job закончился до рестарта — исход каждой карточки по записям хода приходит служебным сообщением, один раз', async () => {
+    const db = openMemoryDb();
+    const store = createCardStore(db);
+    const before = createJobs({ db, capPerProvider: 50, defaultProvider: () => 'claude', execute: (): JobRun => ({ cancel: () => {}, done: new Promise<JobEnd>(() => {}) }) });
+    const ended = before.submitJob({ origin: 'island', text: 'go', idempotencyKey: 'k-end', correlation: { mode: 'text' } });
+    before.stop();
+    db.prepare(`UPDATE assistant_jobs SET state = 'completed' WHERE job_id = ?`).run(ended.jobId);
+    const put = (id: string, steps: number, started: number[], confirmed: number[]) => {
+      store.putDecided({ proposalId: id, kind: 'actions', view: { action: 'actions', id, target: '', where: '', text: '', steps: Array.from({ length: steps }, (_, index) => ({ verb: 'sleep', line: `line ${index + 1}`, text: null, danger: false })) }, payload: {}, source: `job:${ended.jobId}`, expiresAt: 10_000_000, steps }, 'auto', 1);
+      for (const step of started) store.recordStep(id, 'started', step);
+      for (const step of confirmed) store.recordStep(id, 'confirmed', step);
+    };
+    put('p1', 2, [], []);
+    put('p2', 3, [1, 2], [1]);
+    put('p3', 2, [1, 2], [1, 2]);
+    const h = await wired({}, db);
+    await h.jobs.recover();
+    h.service.deliverRestartOutcomes();
+    const outcomes = h.serviceRequests().map((request) => [request.context?.['cardId'], (request.context?.['outcome'] as { status: string }).status]);
+    expect(outcomes).toEqual([
+      ['p1', 'not_done'],
+      ['p2', 'unknown'],
+      ['p3', 'done'],
+    ]);
+    expect(h.serviceRequests()[1]?.context).toMatchObject({ outcome: { effects: ['line 1'], retry: 'unsafe', reason: 'Parley restarted during step 2 of 3; later steps did not start' } });
+    for (const id of ['p1', 'p2', 'p3']) expect(h.store.get(id)).toMatchObject({ state: 'decided', resultState: 'sent_as_message' });
+    expect(h.store.active()).toEqual([]);
+    expect(deps.stopSession).not.toHaveBeenCalled();
+    expect(h.jobs.getJob(ended.jobId)?.state).toBe('completed');
+    // Второй рестарт: итоги уже отправлены, второго сообщения нет.
+    h.service.stop();
+    h.jobs.stop();
+    const again = await wired({}, db);
+    await again.jobs.recover();
+    again.service.deliverRestartOutcomes();
+    expect(again.serviceRequests()).toHaveLength(3);
+  });
+
+  it('RW-04: повтор события — тот же Request; та же сессия s-01 другой работы — другой; снимок закреплён в контексте', async () => {
+    const h = await wired();
+    const first = h.messages.watchEvent(delivery('s-01', 'turn:2'));
+    expect(h.messages.watchEvent(delivery('s-01', 'turn:2'))?.requestId).toBe(first?.requestId);
+    const otherWork = h.messages.watchEvent(delivery('s-01', 'turn:2', 'w-2'));
+    expect(otherWork?.requestId).not.toBe(first?.requestId);
+    expect(first).toMatchObject({
+      origin: 'system',
+      originKey: originKeyOf('host', 'watch:/p:w-1:s-01:turn:2'),
+      text: 'Reply from s-01 Anna',
+      context: { service: 'watch', event: 'turn-end', key: 'turn:2', name: 's-01 Anna', snapshot: { reply: 'answer of s-01', lastLetter: 'run tests' } },
+    });
+    expect(h.jobs.getJob(first!.jobId)?.service).toEqual({ kind: 'watch', group: JSON.stringify(['/p', 'w-1', 's-01']), fallback: 's-01 Anna replied; the summary is not ready.' });
+    expect(h.serviceRequests()).toHaveLength(2);
+  });
+
+  it('событие слежения сервиса доходит до служебного Request через onWatchEvent', async () => {
+    const soon = new Date(Date.now() + 5000).toISOString();
+    const items = [
+      { id: 'p1', at: new Date(Date.now() + 1000).toISOString(), kind: 'prompt', text: 'x', images: 0 },
+      { id: 'c1', cardId: 'c1', at: soon, kind: 'permission', state: 'pending', toolUseId: null, toolName: 'Bash', toolInput: { command: 'ls' }, suggestions: [], notified: false },
+    ];
+    const h = await wired({
+      feed: { snapshot: vi.fn(async () => ({ items })), decide: vi.fn() } as never,
+      activity: { get: () => ({ activity: { activity: 'blocked', waitingFor: null, need: { kind: 'permission', since: soon, detail: 'Bash' } }, metrics: null }) as never },
+    });
+    await h.service.ask(ASK);
+    await h.service.tool('propose_message', { target: 'S02', text: 'run ls' });
+    await vi.waitFor(() => expect(h.serviceRequests()).toHaveLength(1));
+    expect(h.serviceRequests()[0]).toMatchObject({
+      text: 'S02 Anna is waiting: permission',
+      originKey: originKeyOf('host', `watch:/p:w-1:s-02:need:permission:${soon}`),
+      context: { service: 'watch', event: 'needs-human', snapshot: { waiting: { kind: 'permission', card: { type: 'permission' } }, lastLetter: 'run ls' } },
+    });
+  });
+
+  it('RW-21: выключение режима — событие после него Request не создаёт, ждущие о слежении отменены, идущий пересказ доставлен, итог действия доставлен, включение слежений не возвращает', async () => {
+    const h = await wired();
+    await h.service.ask(ASK);
+    await h.service.tool('propose_message', { target: 'S02', text: 'run tests' });
+    expect(h.service.watchedSessions()).toHaveLength(1);
+    const running = h.messages.watchEvent(delivery('s-01', 'turn:1'))!;
+    const queued = h.messages.watchEvent(delivery('s-03', 'turn:1'))!;
+    h.store.putDecided({ proposalId: 'p9', kind: 'message', view: { id: 'p9', target: 'Auth', where: 'W', text: 'x' }, payload: {}, source: 'island', expiresAt: 9, steps: 1 }, 'auto', 1);
+    h.store.settleAuto('p9', 'done', { status: 'done', effects: ['message to Auth'], retry: 'unsafe', reason: null }, 2);
+    const outcome = h.messages.outcome(h.store.get('p9')!, { status: 'done', effects: ['message to Auth'], retry: 'unsafe', reason: null })!;
+    expect([running, queued, outcome].map((request) => h.jobs.getJob(request.jobId)?.state)).toEqual(['running', 'queued', 'queued']);
+
+    h.switches.flag = false;
+    await h.service.refreshAutonomy();
+    // 1. Событие после выключения Request не создаёт.
+    expect(h.messages.watchEvent(delivery('s-04', 'turn:1'))).toBeNull();
+    // 2. Ждущее сообщение о слежении отменено без доставки; 3. идущий пересказ не тронут; 4. итог действия остаётся.
+    expect([running, queued, outcome].map((request) => h.jobs.getJob(request.jobId)?.state)).toEqual(['running', 'cancelled', 'queued']);
+    h.runs.find((run) => run.job.jobId === running.jobId)!.end({ ok: true, summary: 'S01 says done', result: { answer: 'S01 says done', capturedAt: 1, cards: [], toolRefs: [] }, outcome: 'completed' });
+    await vi.waitFor(() => expect(h.jobs.getJob(running.jobId)?.state).toBe('completed'));
+    expect(h.jobs.getJob(outcome.jobId)?.state).toBe('running');
+    expect(h.serviceRequests().map((request) => request.requestId)).toEqual([running.requestId, queued.requestId, outcome.requestId]);
+    // 5. Повторное включение слежений не возвращает.
+    h.switches.flag = true;
+    await h.service.refreshAutonomy();
+    expect(h.service.watchedSessions()).toEqual([]);
+    expect(h.serviceRequests()).toHaveLength(3);
+  });
+
+  it('RW-21: известное значение флага (settings.set) применяется сразу, без перечитывания: событие сразу после выключения Request не создаёт', async () => {
+    const autonomy = vi.fn(async () => true);
+    const h = await wired({ autonomy });
+    autonomy.mockClear();
+    const pending = h.service.refreshAutonomy(false);
+    expect(h.service.state().autonomous).toBe(false);
+    expect(h.messages.watchEvent(delivery('s-01', 'turn:1'))).toBeNull();
+    await pending;
+    expect(autonomy).not.toHaveBeenCalled();
+  });
+
+  it('watchNote: переполнение очереди — заметка человеку; следующий ход разговора её сбрасывает', async () => {
+    const h = await wired();
+    h.messages.watchEvent(delivery('s-00', 'turn:1')); // идёт: служебный слот занят
+    for (let index = 1; index <= 6; index += 1) h.messages.watchEvent(delivery(`s-0${index}`, 'turn:1'));
+    expect(h.service.state().watchNote).toBe('Skipped the reply from s-01 Anna: too many messages were waiting');
+    expect(last().watchNote).toBe('Skipped the reply from s-01 Anna: too many messages were waiting');
+    await h.service.ask(ASK);
+    expect(h.service.state().watchNote).toBeNull();
   });
 });

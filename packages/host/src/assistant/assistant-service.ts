@@ -181,6 +181,11 @@ export interface AssistantServiceDeps {
    * или ждёт человека. Реализацию — служебное сообщение — даёт W2; без неё события не выдаются.
    */
   onWatchEvent?(event: WatchDelivery): void;
+  /**
+   * Режим выключен (спека автономии §6.2): зовётся синхронно вместе со снятием слежений, чтобы ждущие служебные
+   * сообщения о событиях слежения отменились без доставки (W2). Идущий пересказ и итоги действий не трогаются.
+   */
+  onAutonomyOff?(): void;
   /** Время запуска процесса сессии (мс) для `silentTurnEnd`; `undefined` — процесса нет. */
   startedAt?(ref: SessionRef): number | undefined;
   /** Срок вызова инструмента в автономном режиме; по умолчанию `AUTO_CALL_MS`. */
@@ -268,8 +273,14 @@ export interface AssistantService {
   watchedSessions(): SessionRef[];
   /** Последние сессии, которым помощник давал работу без подтверждения (до трёх). */
   recentSessions(): RecentSession[];
-  /** Перечитывает флаг автономии и публикует `autonomous` в `assistant.changed`: зовётся при смене `assistantAutonomy`. */
-  refreshAutonomy(): Promise<void>;
+  /** Заметка человеку о служебных сообщениях (`watchNote`): сообщение о событии слежения снято переполнением очереди. */
+  noteWatch(note: string): void;
+  /**
+   * Перечитывает флаг автономии и публикует `autonomous` в `assistant.changed`: зовётся при смене `assistantAutonomy`.
+   * `known` — значение, которое вызывающий уже знает (`settings.set`): применяется сразу, без чтения конфигурации, чтобы
+   * событие слежения сразу после выключения не успело создать служебный Request.
+   */
+  refreshAutonomy(known?: boolean): Promise<void>;
   /** Журнал решённых карточек (`assistant.journal`), новые первыми. */
   journal(limit: number): AssistantJournalItem[];
   /** Прогон job кончился: итоги его автономных действий, что никому не достались, уходят в `deliverOutcome`. */
@@ -895,7 +906,8 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     current.recapPending = false;
     if (!retried) remember(() => history.write({ turnKey: ask.key, role: 'user', channel: ask.origin, text }, now()));
     // Отчёт идущего плана переживает новый ход; законченный убирается.
-    publish({ phase: 'thinking', detail: null, question: text, answer: '', mood: 'calm', moods: [], outcome: null, error: null, turn: next, askId, origin: ask.origin, ...(state.report?.status === 'running' ? {} : { report: null }) });
+    // Заметка о слежении относится к прошлому: новый ход её сбрасывает.
+    publish({ phase: 'thinking', detail: null, question: text, answer: '', mood: 'calm', moods: [], outcome: null, error: null, watchNote: null, turn: next, askId, origin: ask.origin, ...(state.report?.status === 'running' ? {} : { report: null }) });
 
     // Метки эмоций срезаются все, по предложениям (#9 §6.7 L3). Эмоцию решает первый текст после последнего
     // инструмента: GLM ставит метку до инструмента отдельным блоком.
@@ -2260,13 +2272,19 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
         throw error;
       }
     },
-    async refreshAutonomy() {
-      const autonomous = (await deps.autonomy?.()) ?? false;
+    async refreshAutonomy(known) {
+      const autonomous = known ?? (await deps.autonomy?.()) ?? false;
       if (stopped || state.autonomous === autonomous) return;
       // Режим выключен — стоявшие слежения снимаются; повторное включение их не возвращает.
       if (!autonomous) {
         watch.clear();
         seenActive.clear();
+        // Ждущие служебные сообщения о событиях слежения отменяются без доставки (спека автономии §6.2).
+        try {
+          deps.onAutonomyOff?.();
+        } catch (error) {
+          deps.log(`assistant: service messages were not cancelled: ${(error as Error).message}`);
+        }
       }
       publish({ autonomous });
     },
@@ -2287,6 +2305,9 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     },
     watchedSessions: () => watch.refs(),
     recentSessions: () => watch.recent(),
+    noteWatch(note) {
+      if (!stopped) publish({ watchNote: note });
+    },
     journal(limit) {
       return cards.recent(limit).map((row) => {
         const view = row.view as AssistantProposal;

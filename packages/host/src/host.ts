@@ -133,6 +133,7 @@ import { createRequests } from './assistant/requests.js';
 import { createRequestLinker, type RequestLinker } from './assistant/request-link.js';
 import { createRequestStatus, type RequestStatusReader } from './assistant/request-status.js';
 import { createJobPrompt } from './assistant/job-context.js';
+import { createServiceMessages, type ServiceMessages } from './assistant/service-messages.js';
 import { createJobExecutor } from './assistant/job-executor.js';
 import { createLiveClient } from './voice/live-client.js';
 import { createVoiceSessionService } from './voice/voice-session-service.js';
@@ -530,6 +531,9 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   let assistantLinker: RequestLinker | undefined;
   // eslint-disable-next-line prefer-const -- поздняя привязка: Request создаются после сервиса помощника
   let assistantStatus: RequestStatusReader | undefined;
+  // Служебные сообщения в разговор острова (спека автономии §6.3): строятся после jobs и Request, сервис зовёт их позже.
+  // eslint-disable-next-line prefer-const -- поздняя привязка: Request создаются после сервиса помощника
+  let serviceMessages: ServiceMessages | undefined;
   // Токены job помощника (план голоса, T1): у каждого job свой токен MCP, токен разговора ему не отдаётся.
   const assistantJobTokens = createJobTokens();
   const assistantEndpoint = createAssistantEndpoint({
@@ -967,6 +971,10 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     // Флаг автономии — для записи допуска попытки хода; читается без кэша, при выпуске её токена (A2).
     autonomy: async () => (await loadConfig()).config.assistantAutonomy,
     startedAt: (ref) => ptyManager.get(ref)?.startedAt,
+    // Итог автономного действия без получателя и событие слежения — служебным Request (спека автономии §5.3, §6.3).
+    deliverOutcome: (card, outcome) => void serviceMessages?.outcome(card, outcome),
+    onWatchEvent: (event) => void serviceMessages?.watchEvent(event),
+    onAutonomyOff: () => void serviceMessages?.autonomyOff(),
     // Прогон job действителен для автономного действия (спека автономии §5.2, правило 3): токен этого прогона жив и job `running`.
     jobLive: (admission) => assistantJobTokens.current(admission.jobId)?.runId === admission.runId && assistantJobs.getJob(admission.jobId)?.state === 'running',
     providerReady: sessionReady,
@@ -1030,6 +1038,14 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   // Request голосовых поручений: durable в той же базе, связан с job по ключу; закрытие голоса job не отменяет.
   const assistantRequests = createRequests({ db: sideDb, jobs: assistantJobs });
   jobPrompt = createJobPrompt({ requests: assistantRequests, jobs: assistantJobs });
+  serviceMessages = createServiceMessages({
+    requests: assistantRequests,
+    jobs: assistantJobs,
+    takeResult: (proposalId) => assistantCards.takeResult(proposalId, 'sent_as_message'),
+    // Флаг из состояния сервиса — синхронно, в одном участке с созданием Request; его ведёт `refreshAutonomy`.
+    autonomous: () => assistantService.state().autonomous === true,
+    note: (text) => assistantService.noteWatch(text),
+  });
   assistantStatus = createRequestStatus({ requests: assistantRequests });
   assistantLinker = createRequestLinker({
     db: sideDb,
@@ -1309,8 +1325,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
         for (const client of handle.context.clients()) if (client.role === 'remote') client.close();
       }
       voiceDailyMinutes = result.config.voiceDailyMinutes;
-      // Флаг автономии меняется без перезапуска: сервис перечитывает его и переиздаёт состояние.
-      void assistantService.refreshAutonomy();
+      // Флаг автономии меняется без перезапуска: сервис применяет новое значение сразу и переиздаёт состояние.
+      void assistantService.refreshAutonomy(result.config.assistantAutonomy);
       return result;
     };
   }
