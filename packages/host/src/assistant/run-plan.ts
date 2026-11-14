@@ -30,6 +30,49 @@ export interface PlanExecutors {
   lean(): Promise<boolean>;
 }
 
+/**
+ * Итог действия для ответа модели (спека автономии §5.3): статус, что сделано, можно ли повторять и почему. Решение по
+ * карточке (`applied`) им не является.
+ */
+export interface ActionOutcome {
+  status: 'done' | 'partial' | 'not_done' | 'unknown';
+  effects: string[];
+  retry: 'safe' | 'unsafe';
+  reason: string | null;
+}
+
+/**
+ * Классы видов шагов (спека автономии §5.9): `auto` — шаг исполняется без клика, `click` — план с ним целиком идёт
+ * обычной карточкой. На этапе 1 все виды — `auto`; вид, которого в таблице нет, считается `click`.
+ */
+export const STEP_CLASSES: Record<string, 'auto' | 'click'> = {
+  create_work: 'auto',
+  create_session: 'auto',
+  wake: 'auto',
+  interrupt: 'auto',
+  sleep: 'auto',
+  close: 'auto',
+  create_room: 'auto',
+  add_to_room: 'auto',
+  message: 'auto',
+};
+
+/** Политика плана: `null` — весь план можно исполнить без клика; иначе причина по-английски, почему нужен клик. */
+export function planClick(steps: readonly { do: string }[]): string | null {
+  for (const [index, step] of steps.entries()) {
+    const kind = Object.hasOwn(STEP_CLASSES, step.do) ? STEP_CLASSES[step.do] : undefined;
+    if (kind === undefined) return `step ${index + 1} (${step.do}) is not known to run without a click`;
+    if (kind === 'click') return `step ${index + 1} (${step.do}) always needs the person's click`;
+  }
+  return null;
+}
+
+/** Ход исполнения плана для durable-записи: `started` — перед эффектом шага, `confirmed` — после его успешного возврата. */
+export interface PlanHooks {
+  started(step: number): void;
+  confirmed(step: number): void;
+}
+
 /** Что сделал шаг: на это ссылаются `"$N"` последующих шагов. */
 type Output =
   | { kind: 'work'; projectPath: string; workId: string; title: string }
@@ -65,9 +108,11 @@ function sessionIdsOf(source: OverviewSource, projectPath: string, workId: strin
 
 /**
  * Выполняет план. Возвращает итоговый отчёт; ход виден через `onProgress` — он получает копию отчёта после каждой смены
- * статуса шага. `stop()` проверяется перед каждым шагом (хост закрывается).
+ * статуса шага. `stop()` проверяется перед каждым шагом: `true` — хост закрывается, строка — причина остановки (человек
+ * нажал «Stop»); идущий шаг не прерывается. `hooks` получают ход исполнения: `started(k)` — перед эффектом шага k,
+ * `confirmed(k)` — после его успешного возврата.
  */
-export async function runPlan(proposalId: string, plan: PreparedPlan, exec: PlanExecutors, onProgress: (report: ActionsReport) => void, stop: () => boolean): Promise<ActionsReport> {
+export async function runPlan(proposalId: string, plan: PreparedPlan, exec: PlanExecutors, onProgress: (report: ActionsReport) => void, stop: () => boolean | string, hooks?: PlanHooks): Promise<ActionsReport> {
   const report: ActionsReport = {
     proposalId,
     status: 'running',
@@ -140,8 +185,11 @@ export async function runPlan(proposalId: string, plan: PreparedPlan, exec: Plan
 
   async function runStep(step: PreparedStep, n: number): Promise<void> {
     const source = exec.source();
+    // Эффект шага начинается: до этого шаг только сверял цели и мог отказать без последствий.
+    const begin = (): void => hooks?.started(n);
     switch (step.do) {
       case 'create_work': {
+        begin();
         const workId = await exec.createWork({ projectPath: step.projectPath, title: step.title, goal: step.goal });
         outputs.set(n, { kind: 'work', projectPath: step.projectPath, workId, title: step.title });
         return;
@@ -151,6 +199,8 @@ export async function runPlan(proposalId: string, plan: PreparedPlan, exec: Plan
         const before = sessionIdsOf(source, work.projectPath, work.workId);
         let created: { ref: SessionRef; held: boolean; queued?: QueueReason };
         try {
+          const lean = await exec.lean();
+          begin();
           created = await exec.createSession({
             projectPath: work.projectPath,
             workId: work.workId,
@@ -159,7 +209,7 @@ export async function runPlan(proposalId: string, plan: PreparedPlan, exec: Plan
             task: step.task,
             role: step.role,
             model: step.model,
-            lean: await exec.lean(),
+            lean,
           });
         } catch (error) {
           // Запись могла появиться до сбоя запуска: человек увидит её в Parley как pending и не будет гадать.
@@ -179,27 +229,35 @@ export async function runPlan(proposalId: string, plan: PreparedPlan, exec: Plan
       }
       case 'wake': {
         const target = checked(step.session, 'wake', source);
+        begin();
         const outcome = await exec.resume(target.ref, step.text);
         if (outcome === 'held') report.notes.push(`${target.name} ${HELD_NOTE}`);
         if (outcome === 'queued') report.notes.push(`${target.name} ${QUEUED_NOTE}; send the text again after it starts`);
         return;
       }
       case 'interrupt': {
-        await exec.interrupt(checked(step.session, 'interrupt', source).ref);
+        const target = checked(step.session, 'interrupt', source);
+        begin();
+        await exec.interrupt(target.ref);
         return;
       }
       case 'sleep': {
-        await exec.sleep(checked(step.session, 'sleep', source).ref);
+        const target = checked(step.session, 'sleep', source);
+        begin();
+        await exec.sleep(target.ref);
         return;
       }
       case 'close': {
-        await exec.close(checked(step.session, 'close', source).ref);
+        const target = checked(step.session, 'close', source);
+        begin();
+        await exec.close(target.ref);
         return;
       }
       case 'create_room': {
         const work = workOf(step.work, source);
         const members = step.members.map((pick) => checked(pick, 'message', source));
         const lead = checked(step.lead, 'message', source);
+        begin();
         const roomId = await exec.createRoom({ projectPath: work.projectPath, workId: work.workId, title: step.title, members: members.map((member) => member.ref.sessionId), lead: lead.ref.sessionId });
         outputs.set(n, { kind: 'room', projectPath: work.projectPath, workId: work.workId, roomId, title: step.title });
         if (step.task !== null) {
@@ -214,6 +272,7 @@ export async function runPlan(proposalId: string, plan: PreparedPlan, exec: Plan
       case 'add_to_room': {
         const room = roomOf(step.room, source);
         const target = checked(step.session, 'message', source);
+        begin();
         await exec.addMember({ projectPath: room.projectPath, workId: room.workId, roomId: room.roomId, sessionId: target.ref.sessionId });
         return;
       }
@@ -221,11 +280,13 @@ export async function runPlan(proposalId: string, plan: PreparedPlan, exec: Plan
         if (step.room !== null) {
           const room = roomOf(step.room, source);
           const to = step.to.map((pick) => checked(pick, 'message', source).ref.sessionId);
+          begin();
           await exec.roomMessage({ projectPath: room.projectPath, workId: room.workId, roomId: room.roomId, to, text: step.text, kind: step.kind ?? 'note' });
           return;
         }
         if (step.session === null) throw new Error('The message has no target');
         const target = checked(step.session, 'message', source);
+        begin();
         const refusal = await exec.sessionMessage(target.ref, target.name, step.text);
         if (refusal !== null) throw new Error(refusal);
         return;
@@ -235,15 +296,16 @@ export async function runPlan(proposalId: string, plan: PreparedPlan, exec: Plan
 
   for (const [index, step] of plan.steps.entries()) {
     const stopping = stop();
-    if (!stopping) setStatus(index, 'running');
+    if (stopping === false) setStatus(index, 'running');
     let failure: string | null = null;
     try {
-      if (stopping) throw new Error('Parley is stopping');
+      if (stopping !== false) throw new Error(stopping === true ? 'Parley is stopping' : stopping);
       await runStep(step, index + 1);
     } catch (error) {
       failure = messageOf(error);
     }
     if (failure === null) {
+      hooks?.confirmed(index + 1);
       setStatus(index, 'done');
       continue;
     }
@@ -259,4 +321,20 @@ export async function runPlan(proposalId: string, plan: PreparedPlan, exec: Plan
   }
   report.status = 'done';
   return copy();
+}
+
+/**
+ * Итог законченного плана для модели (спека автономии §5.3). `started` — шаги, чей эффект был начат: шаг, упавший до
+ * эффекта, — отказ без последствий; упавший после — исход шага неизвестен.
+ */
+export function planOutcome(report: ActionsReport, started: ReadonlySet<number>): ActionOutcome {
+  const done = report.steps.filter((step) => step.status === 'done').map((step) => step.line);
+  const notes = report.notes.length === 0 ? null : report.notes.join('; ');
+  if (report.status !== 'stopped') return { status: 'done', effects: done, retry: 'unsafe', reason: notes };
+  const at = report.failedStep ?? report.steps.length;
+  const touched = started.has(at);
+  const reason = `stopped at step ${at} of ${report.steps.length}: ${report.reason ?? 'unknown reason'}${touched ? `; step ${at} may have taken effect` : ''}`;
+  if (done.length > 0) return { status: 'partial', effects: done, retry: 'unsafe', reason };
+  if (touched) return { status: 'unknown', effects: [], retry: 'unsafe', reason };
+  return { status: 'not_done', effects: [], retry: 'safe', reason };
 }

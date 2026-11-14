@@ -4,7 +4,7 @@ import type { ActionsReport, SessionRef } from '@parley/protocol';
 import type { SessionLive } from '../activity/activity-service.js';
 import type { PreparedPlan, PreparedStep, SessionPick } from './actions.js';
 import type { OverviewSource } from './overview.js';
-import { runPlan, type PlanExecutors } from './run-plan.js';
+import { planClick, planOutcome, runPlan, STEP_CLASSES, type PlanExecutors } from './run-plan.js';
 
 const session = (id: string, label: string, lifecycle: WorkSession['lifecycle']): WorkSession =>
   ({ id, label, provider: 'claude', task: '', summary: null, lifecycle }) as unknown as WorkSession;
@@ -340,5 +340,112 @@ describe('runPlan: комнаты и письма', () => {
     const report = await run([step, { do: 'add_to_room', room, session: made(1) }]);
     expect(report.status).toBe('done');
     expect(exec.addMember).toHaveBeenCalledWith({ projectPath: '/p', workId: 'w-1', roomId: 'r-1', sessionId: 's-01' });
+  });
+});
+
+describe('runPlan: ход исполнения и итог (спека автономии §5.3)', () => {
+  const traced = async (steps: PreparedStep[], stop: () => boolean | string = () => false) => {
+    const marks: string[] = [];
+    const started = new Set<number>();
+    const report = await runPlan('p1', plan(steps), exec, onProgress, stop, {
+      started: (step) => {
+        started.add(step);
+        marks.push(`started:${step}`);
+      },
+      confirmed: (step) => marks.push(`confirmed:${step}`),
+    });
+    return { report, marks, outcome: planOutcome(report, started) };
+  };
+
+  it('started — перед эффектом шага, confirmed — после его возврата; весь план — done, сделанное перечислено', async () => {
+    const order: string[] = [];
+    exec.sleep.mockImplementation(async () => {
+      order.push('sleep');
+    });
+    const { marks, outcome } = await traced([
+      { do: 'sleep', session: known('s-05', 'S05 Vera') },
+      { do: 'close', session: known('s-03', 'S03 Ruslan') },
+    ]);
+    expect(marks).toEqual(['started:1', 'confirmed:1', 'started:2', 'confirmed:2']);
+    expect(outcome).toEqual({ status: 'done', effects: ['line 1', 'line 2'], retry: 'unsafe', reason: null });
+    expect(order).toEqual(['sleep']);
+  });
+
+  it('пометки шагов входят в причину итога done', async () => {
+    exec.createSession.mockResolvedValueOnce({ ref: ref('w-1', 's-07'), held: true });
+    const step: PreparedStep = { do: 'create_session', work: { projectPath: '/p', workId: 'w-1', title: 'Parley' }, label: 'Alice', role: null, provider: 'claude', model: null, task: '' };
+    const { outcome } = await traced([step]);
+    expect(outcome).toMatchObject({ status: 'done', reason: expect.stringContaining('waits for you to trust the folder') });
+  });
+
+  it('план из 5 шагов падает на третьем (эффект начат): partial, сделаны 1–2, причина называет шаг; 4–5 не начаты', async () => {
+    exec.sleep.mockRejectedValueOnce(new Error('pty is gone'));
+    const { report, marks, outcome } = await traced([
+      { do: 'wake', session: known('s-06', 'S06 Nik'), text: null },
+      { do: 'interrupt', session: known('s-03', 'S03 Ruslan') },
+      { do: 'sleep', session: known('s-05', 'S05 Vera') },
+      { do: 'close', session: known('s-05', 'S05 Vera') },
+      { do: 'close', session: known('s-03', 'S03 Ruslan') },
+    ]);
+    expect(report.status).toBe('stopped');
+    expect(marks).toEqual(['started:1', 'confirmed:1', 'started:2', 'confirmed:2', 'started:3']);
+    expect(outcome).toEqual({ status: 'partial', effects: ['line 1', 'line 2'], retry: 'unsafe', reason: 'stopped at step 3 of 5: pty is gone; step 3 may have taken effect' });
+  });
+
+  it('отказ сверки на первом шаге до эффекта: not_done, повтор разрешён; started не пишется', async () => {
+    w1.sessions[0]!.lifecycle = 'sleeping';
+    const { marks, outcome } = await traced([{ do: 'sleep', session: known('s-03', 'S03 Ruslan') }]);
+    expect(marks).toEqual([]);
+    expect(outcome).toEqual({ status: 'not_done', effects: [], retry: 'safe', reason: 'stopped at step 1 of 1: S03 Ruslan is already asleep' });
+  });
+
+  it('сбой эффекта первого шага: unknown, повтор запрещён', async () => {
+    exec.sleep.mockRejectedValueOnce(new Error('socket closed'));
+    const { outcome } = await traced([{ do: 'sleep', session: known('s-05', 'S05 Vera') }]);
+    expect(outcome).toEqual({ status: 'unknown', effects: [], retry: 'unsafe', reason: 'stopped at step 1 of 1: socket closed; step 1 may have taken effect' });
+  });
+
+  it('комната создана, задача не ушла: шаг начат и упал — unknown с причиной про комнату', async () => {
+    exec.roomMessage.mockRejectedValueOnce(new Error('db locked'));
+    const room: PreparedStep = { do: 'create_room', work: { projectPath: '/p', workId: 'w-1', title: 'Parley' }, title: 'QA', members: [known('s-03', 'S03 Ruslan')], lead: known('s-03', 'S03 Ruslan'), task: 'go' };
+    const { outcome } = await traced([room]);
+    expect(outcome).toMatchObject({ status: 'unknown', retry: 'unsafe', reason: expect.stringContaining('room "QA" was created, but its task was not sent: db locked') });
+  });
+
+  it('stop() со строкой: идущий шаг доводится, следующий не начат, причина — эта строка', async () => {
+    let release: () => void = () => {};
+    exec.sleep.mockImplementation(() => new Promise<void>((resolve) => { release = resolve; }));
+    let stopNow: string | false = false;
+    const running = traced([
+      { do: 'sleep', session: known('s-05', 'S05 Vera') },
+      { do: 'close', session: known('s-03', 'S03 Ruslan') },
+    ], () => stopNow);
+    await vi.waitFor(() => expect(exec.sleep).toHaveBeenCalled());
+    stopNow = 'Stopped by the person';
+    release();
+    const { report, marks, outcome } = await running;
+    expect(report).toMatchObject({ status: 'stopped', failedStep: 2, reason: 'Stopped by the person' });
+    expect(report.steps.map((step) => step.status)).toEqual(['done', 'failed']);
+    expect(exec.close).not.toHaveBeenCalled();
+    expect(marks).toEqual(['started:1', 'confirmed:1']);
+    expect(outcome).toEqual({ status: 'partial', effects: ['line 1'], retry: 'unsafe', reason: 'stopped at step 2 of 2: Stopped by the person' });
+  });
+});
+
+describe('политика плана (спека автономии §5.9)', () => {
+  it('все нынешние виды шагов — auto', () => {
+    const kinds = ['create_work', 'create_session', 'wake', 'interrupt', 'sleep', 'close', 'create_room', 'add_to_room', 'message'];
+    expect(Object.keys(STEP_CLASSES).sort()).toEqual([...kinds].sort());
+    expect(planClick(kinds.map((kind) => ({ do: kind })))).toBeNull();
+  });
+  it('неизвестный вид или вид класса click — весь план кликом, причина называет шаг', () => {
+    expect(planClick([{ do: 'sleep' }, { do: 'delete_work' }])).toBe('step 2 (delete_work) is not known to run without a click');
+    expect(planClick([{ do: 'toString' }])).toBe('step 1 (toString) is not known to run without a click');
+    STEP_CLASSES['close'] = 'click';
+    try {
+      expect(planClick([{ do: 'close' }])).toBe("step 1 (close) always needs the person's click");
+    } finally {
+      STEP_CLASSES['close'] = 'auto';
+    }
   });
 });
