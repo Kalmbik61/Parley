@@ -2309,6 +2309,32 @@ describe('assistant-service: допуск запуска (автономия, A2
     return { service, runs, current, post, handler };
   }
 
+  describe('режим хода в промпте и конфиге MCP (A4)', () => {
+    const SEEN = {
+      ...CODEX,
+      runner: { ...CODEX.runner, assistantArgs: ['exec', '-c', '{mcpConfig}', '--system-prompt', '{systemPrompt}', '{prompt}'] },
+    } as unknown as ProviderEntry;
+    const sent = async (origin: 'island' | 'reminder' | 'telegram'): Promise<{ mcp: string; prompt: string }> => {
+      const before = turns.length;
+      const { service } = await admitted({ autonomy: async () => true, providers: async () => ({ codex: SEEN }) });
+      await service.ask(ASK, origin);
+      const args = turns[before]!.spec.args;
+      return { mcp: args[args.indexOf('-c') + 1]!, prompt: args[args.indexOf('--system-prompt') + 1]! };
+    };
+    it.each(['reminder', 'telegram'] as const)('ход %s при включённом флаге — обычный промпт и конфиг', async (origin) => {
+      const { mcp, prompt } = await sent(origin);
+      expect(mcp).not.toContain('PARLEY_ASSISTANT_MODE');
+      expect(prompt).toContain('confirms or cancels');
+      expect(prompt).not.toContain('action_status');
+    });
+    it('ход island при включённом флаге — вариант для режима', async () => {
+      const { mcp, prompt } = await sent('island');
+      expect(mcp).toContain('PARLEY_ASSISTANT_MODE="auto"');
+      expect(prompt).not.toContain('confirms or cancels');
+      expect(prompt).toContain('call action_status');
+    });
+  });
+
   for (const prior of ['reminder', 'telegram'] as const) {
     it(`ход ${prior} сменился ходом island: поздний вызов старого хода — 401, карточки нет; запись нового хода — island`, async () => {
       const { service, current, post, handler } = await admitted({ autonomy: async () => true });

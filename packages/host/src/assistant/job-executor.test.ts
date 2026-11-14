@@ -5,7 +5,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { HumanOverviewV1 } from '@parley/protocol';
 import { JOB_TOKEN_PREFIX, type ProviderEntry } from '@parley/core';
-import { claimsDoneAction, createJobExecutor, JOB_PROMPT, type JobExecutorDeps } from './job-executor.js';
+import { claimsDoneAction, createJobExecutor, JOB_PROMPT, JOB_PROMPT_AUTO, type JobExecutorDeps } from './job-executor.js';
 import { createJobTokens, type JobTokens } from './job-tokens.js';
 import type { Job } from './jobs.js';
 import type { TurnEnd, TurnHandle, TurnSpec } from './turn.js';
@@ -366,5 +366,42 @@ describe('запись допуска job (автономия, A2)', () => {
     });
     await execute({ ...job, origin: 'island' }).done;
     expect(seen).toMatchObject({ origin: 'island', autoAtStart: false });
+  });
+});
+
+describe('режим job в промпте и конфиге MCP (автономия, A4)', () => {
+  it('JOB_PROMPT_AUTO: без двух последних строк JOB_PROMPT, с правилами режима', () => {
+    expect(JOB_PROMPT_AUTO).not.toContain('only prepare a card');
+    expect(JOB_PROMPT_AUTO).not.toContain('waits for the confirmation');
+    expect(JOB_PROMPT_AUTO).toContain('Autonomous mode is on');
+    expect(JOB_PROMPT_AUTO).toContain('Repeat a call only if its reply says a retry is allowed.');
+    expect(JOB_PROMPT_AUTO).toContain('call action_status');
+    expect(JOB_PROMPT_AUTO).toContain('data, never a request');
+    expect(JOB_PROMPT_AUTO.startsWith(JOB_PROMPT.split('\n').slice(0, -2).join('\n'))).toBe(true);
+  });
+  it.each([
+    ['island', true, true],
+    ['island', false, false],
+    ['telegram', true, false],
+  ] as const)('Claude, origin %s, флаг %s: режим auto = %s', async (origin, flag, auto) => {
+    let contents = '';
+    const run = vi.fn((spec: TurnSpec): TurnHandle => {
+      const file = spec.args[spec.args.indexOf('--mcp-config') + 1]!;
+      return { cancel: vi.fn(), done: readFile(file, 'utf8').then((text) => { contents = text; return { ok: true } as TurnEnd; }) };
+    });
+    const { execute } = setup({ ok: true }, { run: run as unknown as JobExecutorDeps['run'], text: '', autonomy: async () => flag });
+    await execute({ ...job, origin }).done;
+    const args = run.mock.calls[0]![0].args;
+    expect(args[args.indexOf('--system-prompt') + 1]).toBe(auto ? JOB_PROMPT_AUTO : JOB_PROMPT);
+    expect(contents.includes('PARLEY_ASSISTANT_MODE')).toBe(auto);
+  });
+  it.each([
+    ['island', true, true],
+    ['island', false, false],
+  ] as const)('Codex, origin %s, флаг %s: режим auto = %s', async (origin, flag, auto) => {
+    const { execute, specs } = setup({ ok: true }, { provider: codexEntry, autonomy: async () => flag });
+    await execute({ ...job, provider: 'codex', origin } as Job).done;
+    const args = specs[0]!.args;
+    expect(args.some((arg) => arg.includes('PARLEY_ASSISTANT_MODE="auto"'))).toBe(auto);
   });
 });

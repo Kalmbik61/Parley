@@ -404,8 +404,27 @@ export interface AssistantServerOptions {
   /** База маршрута хоста (`PARLEY_ASSISTANT_URL`), без завершающего `/`. */
   url: string;
   token: string;
+  /** `'auto'` — автономный режим (`PARLEY_ASSISTANT_MODE`): описания `propose_*` без карточки. */
+  mode?: 'auto';
   /** Для тестов. */
   fetch?: typeof fetch;
+}
+
+const AUTO_TAIL = 'Autonomous mode is on: Parley does this at once, without a card. The reply says what happened and whether a retry is allowed.';
+
+/** Автономный режим: хвост описания о карточке заменён; прочие описания и порядок те же. */
+const AUTO_DESCRIPTIONS: Readonly<Record<string, ReadonlyArray<readonly [string, string]>>> = {
+  propose_message: [[' after the person confirms.', ' when it is sent.'], [' Nothing is sent: the person sees a card and confirms or cancels it.', ` ${AUTO_TAIL}`]],
+  propose_room: [[' Nothing is created: the person sees a card and confirms or cancels it.', ` ${AUTO_TAIL}`]],
+  propose_decision: [[' Nothing is decided: the person sees a card and confirms or cancels it.', ` ${AUTO_TAIL}`]],
+  propose_room_decision: [[' Nothing is decided: the person sees a card and confirms or cancels it.', ` ${AUTO_TAIL}`]],
+  propose_actions: [['Prepare one card with a plan of actions; the person confirms it with the card\'s button.', 'Prepare one plan of actions.'], [' Nothing happens until the person clicks.', ` ${AUTO_TAIL}`]],
+};
+
+function autoTool(tool: Tool): Tool {
+  const edits = AUTO_DESCRIPTIONS[tool.name];
+  if (edits === undefined) return tool;
+  return { ...tool, description: edits.reduce((text, [from, to]) => text.replace(from, to), tool.description ?? '') };
 }
 
 /** Transport-only JSON envelope: core does not depend on the host protocol package. */
@@ -421,7 +440,8 @@ export function createAssistantServer(options: AssistantServerOptions): Server {
   const tools = options.token.startsWith(JOB_TOKEN_PREFIX)
     ? ASSISTANT_TOOLS.filter((tool) => JOB_TOOL_ALLOWLIST.includes(tool.name))
     : ASSISTANT_TOOLS.filter((tool) => !JOB_ONLY_TOOLS.includes(tool.name));
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
+  const listed = options.mode === 'auto' ? tools.map(autoTool) : tools;
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: listed }));
   server.setRequestHandler(CallToolRequestSchema, async (request): Promise<ToolResult> => {
     const name = request.params.name;
     if (!tools.some((tool) => tool.name === name)) return failure(`unknown tool ${name}`);

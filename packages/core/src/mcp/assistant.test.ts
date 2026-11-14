@@ -175,3 +175,32 @@ describe('human overview transport (H8)', () => {
     await client.close();
   });
 });
+
+describe('описания propose_* в автономном режиме (A4)', () => {
+  const PROPOSE = ['propose_message', 'propose_room', 'propose_decision', 'propose_room_decision', 'propose_actions'];
+  async function listed(mode?: 'auto'): Promise<Tool[]> {
+    const server = createAssistantServer({ url: 'http://127.0.0.1:1/assistant', token: 't0k', fetch: vi.fn(), ...(mode === undefined ? {} : { mode }) });
+    const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverSide);
+    const client = new Client({ name: 'test', version: '0' });
+    await client.connect(clientSide);
+    return (await client.listTools()).tools;
+  }
+  it('без режима описания равны ASSISTANT_TOOLS', async () => {
+    const tools = await listed();
+    for (const name of PROPOSE) expect(tools.find((tool) => tool.name === name)?.description).toBe(ASSISTANT_TOOLS.find((tool) => tool.name === name)?.description);
+  });
+  it('с режимом нет слов про карточку; хвост замещён; прочие инструменты те же', async () => {
+    const tools = await listed('auto');
+    for (const name of PROPOSE) {
+      const description = tools.find((tool) => tool.name === name)?.description ?? '';
+      expect(description).not.toContain('the person sees a card');
+      expect(description).not.toContain('Nothing is sent');
+      expect(description).not.toContain('Nothing happens until the person clicks');
+      expect(description).toContain('Autonomous mode is on: Parley does this at once, without a card. The reply says what happened and whether a retry is allowed.');
+    }
+    const plain = await listed();
+    expect(tools.map((tool) => tool.name)).toEqual(plain.map((tool) => tool.name));
+    for (const tool of tools.filter((item) => !PROPOSE.includes(item.name))) expect(tool).toEqual(plain.find((item) => item.name === tool.name));
+  });
+});
