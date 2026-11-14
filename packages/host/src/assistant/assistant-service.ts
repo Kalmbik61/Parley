@@ -250,11 +250,12 @@ export interface AssistantService {
   /** Прогон job кончился: итоги его автономных действий, что никому не достались, уходят в `deliverOutcome`. */
   jobEnded(jobId: string): void;
   /**
-   * Рестарт (спека автономии §5.3): исходы автономных карточек job, что был `running`, для его резюме `needs_confirmation`;
-   * их итог становится `taken_by_run`. `null` — у job таких карточек нет.
+   * Рестарт (спека автономии §5.3): исходы закрытых автономных карточек job, что был `running`, с невыданным итогом — для
+   * его резюме, не длиннее `room` знаков; вошедшие становятся `taken_by_run`, не вошедшие остаются `pending`. Зовётся
+   * внутри транзакции записи job: её откат возвращает итоги в `pending`. `null` — нечего добавить.
    */
-  claimRestartOutcome(jobId: string): string | null;
-  /** Рестарт: исходы автономных карточек, что не забрал ни один job, уходят в `deliverOutcome`. */
+  claimRestartOutcome(jobId: string, room: number): string | null;
+  /** Рестарт: невыданные итоги автономных карточек (`result_state = 'pending'`), не взятые job, уходят в `deliverOutcome`. */
   deliverRestartOutcomes(): void;
   /** Срок напоминания (его отдаёт хост в `reminders.start`): ждёт конца идущего хода и сам запускает новый. */
   onReminder(reminder: Reminder, late: boolean): Promise<'fired' | 'skipped' | 'later' | 'retry'>;
@@ -297,6 +298,8 @@ class TurnEnded extends Error {}
 const TURN_ENDED: AssistantReply = { status: 401, body: { error: 'This assistant turn has ended' } };
 /** Прогон job с допуском автономии кончился или отменён, пока шёл вызов: ни карточки, ни действия. */
 class RunEnded extends Error {}
+/** Срок автономного вызова вышел до точки исполнения (подготовка или чтение флага): ничего не создано. */
+class CallLate extends Error {}
 const RUN_ENDED: AssistantReply = { status: 409, body: { error: 'This background task has ended; nothing was done' } };
 
 interface Owner {
@@ -479,8 +482,6 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
   const autoCallMs = deps.autoCallMs ?? AUTO_CALL_MS;
   /** Автономные действия этого процесса по id карточки: `action_status` и доставка итога, что не достался запуску. */
   const autoRuns = new Map<string, AutoRun>();
-  /** Исходы автономных карточек, закрытых при старте, чей итог ещё никому не достался (`claimRestartOutcome`, `deliverRestartOutcomes`). */
-  const restarted = new Map<string, { row: CardRow; outcome: ActionOutcome }>();
   let outcomeNote: string | null = null;
   let proposals = cards.lastNumber();
   let idleTimer: NodeJS.Timeout | null = null;
@@ -1134,8 +1135,9 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     if (deps.feed === undefined) return { status: 409, body: { error: `${session.name} has no feed to answer` } };
     let snapshot: Awaited<ReturnType<NonNullable<typeof deps.feed>['snapshot']>>;
     try {
-      snapshot = await deps.feed.snapshot(session.ref, undefined, 'attention');
-    } catch {
+      snapshot = await bounded(owner, deps.feed.snapshot(session.ref, undefined, 'attention'));
+    } catch (error) {
+      if (error instanceof CallLate) throw error;
       return { status: 409, body: { error: `${session.name} has no feed to answer` } };
     }
     if (snapshot.decisions === 'terminal') return { status: 409, body: { error: `${session.name} answers at your Mac only` } };
@@ -1335,13 +1337,17 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     // Запуск с допуском автономии не отказывает сразу: в точке исполнения он ждёт слот в пределах срока вызова.
     if (running !== null && !owner.admission.autoAtStart) return { status: 409, body: { error: 'A plan is still running; wait until it ends' } };
     if (!deps.actionsShown()) return { status: 409, body: { error: 'No Parley window can show this card; ask the person to open or update Parley' } };
-    const prepared = await preparePlan(input, {
-      source: src,
-      roles: deps.roles,
-      registry: await deps.providers(),
-      ready: deps.providerReady,
-      fallbackProvider: mirror?.defaultProvider ?? null,
-    });
+    const registry = await bounded(owner, deps.providers());
+    const prepared = await bounded(
+      owner,
+      preparePlan(input, {
+        source: src,
+        roles: deps.roles,
+        registry,
+        ready: deps.providerReady,
+        fallbackProvider: mirror?.defaultProvider ?? null,
+      }),
+    );
     if ('error' in prepared) return { status: 400, body: { error: prepared.error } };
     const { plan } = prepared;
     proposals += 1;
@@ -1394,25 +1400,31 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
   function startPlan(current: Extract<Pending, { kind: 'actions' }>): { applied: true; error: null } {
     const id = current.view.id;
     running = id;
-    publish({
-      proposal: shown()?.view ?? null,
-      outcome: null,
-      phase: turn === null ? restPhase() : state.phase,
-      report: waitingReport(id, current.plan),
-    });
-    void runPlan(id, current.plan, executors, (report) => publish({ report }), stopOf(id))
-      .catch((error: unknown): ActionsReport => failedReport(id, current.plan, error))
-      .then((final) => {
+    // Всё после захвата слота — внутри одного обещания с `finally`: сбой публикации или записи слот не держит.
+    void (async () => {
+      let settled = false;
+      try {
+        publish({
+          proposal: shown()?.view ?? null,
+          outcome: null,
+          phase: turn === null ? restPhase() : state.phase,
+          report: waitingReport(id, current.plan),
+        });
+        const final = await runPlan(id, current.plan, executors, (report) => publish({ report }), stopOf(id)).catch((error: unknown): ActionsReport => failedReport(id, current.plan, error));
         freeSlot(id);
         settleCard(id, current.via ?? 'island', final.status === 'stopped' ? 'stopped' : 'done');
+        settled = true;
         touch();
         if (conversation?.id === current.token) outcomeNote = planNote(id, final);
         publish({ report: final, outcome: 'done', phase: turn === null ? restPhase() : state.phase });
-      })
-      .catch((error: unknown) => {
+      } catch (error) {
         deps.log(`assistant: plan ${id} report failed: ${(error as Error).message}`);
-      })
-      .finally(() => freeSlot(id));
+        // Захваченная карточка без исхода не остаётся: план не дошёл до итога.
+        if (!settled && cards.get(id)?.outcome === null) settleCard(id, current.via ?? 'island', 'failed');
+      } finally {
+        freeSlot(id);
+      }
+    })().catch((error: unknown) => deps.log(`assistant: plan ${id} was not closed: ${(error as Error).message}`));
     return { applied: true, error: null };
   }
 
@@ -1475,7 +1487,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
 
   // --- автономное исполнение (спека автономии §5.3) ---
 
-  type Point = { kind: 'card'; note: string | null } | { kind: 'busy' } | { kind: 'late' } | { kind: 'auto'; run: AutoRun };
+  type Point = { kind: 'card'; note: string | null } | { kind: 'busy' } | { kind: 'late' } | { kind: 'auto'; run: AutoRun } | { kind: 'failed'; reason: string };
 
   /**
    * Точка исполнения (спека автономии §5.3, участок 2): один синхронный участок без `await`, после всей подготовки.
@@ -1500,39 +1512,81 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       running = card.view.id;
     }
     const { view, kind, ...payload } = card;
-    const before = cards.active();
+    let written = false;
     try {
+      const before = cards.active();
       // `runId` — чей это итог: `action_status` отдаёт его только создавшему запуску.
       cards.putDecided(
         { proposalId: view.id, kind, view, payload: { ...payload, runId: owner.admission.runId }, source: owner.source ?? cardSource, expiresAt: now() + cardTtl, steps: card.kind === 'actions' ? card.plan.steps.length : 1 },
         'auto',
         now(),
       );
+      written = true;
+      if (owner.jobId !== undefined) deps.jobTools?.recordCard(owner.jobId, { cardId: view.id, kind });
+      armSweep();
+      emitSuperseded(before);
+      if (before.some((row) => row.proposalId === state.proposal?.id)) publish({ proposal: shown()?.view ?? null, phase: turn === null ? restPhase() : state.phase });
     } catch (error) {
-      freeSlot(view.id);
-      throw error;
+      // Действие ещё не начато: слот свободен, записанная карточка закрывается достоверным `not_done` и в active не идёт.
+      if (card.kind === 'actions') freeSlot(view.id);
+      const reason = `Parley could not start it: ${(error as Error).message}`;
+      if (written) closeNotStarted(view.id, card.kind, reason);
+      return { kind: 'failed', reason };
     }
-    if (owner.jobId !== undefined) deps.jobTools?.recordCard(owner.jobId, { cardId: view.id, kind });
-    armSweep();
-    emitSuperseded(before);
-    if (before.some((row) => row.proposalId === state.proposal?.id)) publish({ proposal: shown()?.view ?? null, phase: turn === null ? restPhase() : state.phase });
     const run: AutoRun = { id: view.id, admission: owner.admission, outcome: null, done: Promise.resolve(null as unknown as ActionOutcome) };
     autoRuns.set(view.id, run);
-    run.done = perform(card).then((outcome) => finishAuto(run, card, outcome));
+    run.done = perform(card)
+      .catch((error: unknown): ActionOutcome => ({ status: 'unknown', effects: [], retry: 'unsafe', reason: (error as Error).message }))
+      .then((outcome) => finishAuto(run, card, outcome));
     return { kind: 'auto', run };
+  }
+
+  /** Автономная карточка записана, а действие не начато: исход `failed`, итог `not_done` отдан этому же вызову. */
+  function closeNotStarted(id: string, kind: string, reason: string): void {
+    try {
+      cards.settleAuto(id, cardOutcomeOf(kind, 'not_done'), notDone(reason), now());
+      cards.takeResult(id, 'taken_by_run');
+      emitCard(cards.get(id));
+    } catch (error) {
+      // Не закрылась — после рестарта её закроет ход исполнения: ни одного `started`, исход `not_done`.
+      deps.log(`assistant: action ${id} was not closed: ${(error as Error).message}`);
+    }
+  }
+
+  /**
+   * Ожидание подготовки автономного вызова в пределах его срока (спека автономии §5.3): срок вышел — `CallLate`, и
+   * поздно завершившаяся подготовка уже ничего не запишет. Вызову без допуска автономии срок не ставится.
+   */
+  function bounded<T>(owner: Owner, promise: Promise<T>): Promise<T> {
+    if (!owner.admission.autoAtStart) return promise;
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new CallLate()), Math.max(0, owner.deadline - now()));
+      timer.unref?.();
+      promise.then(
+        (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        (error: unknown) => {
+          clearTimeout(timer);
+          reject(error as Error);
+        },
+      );
+    });
   }
 
   /** Вызов `propose_*` после подготовки: точка исполнения, при занятом слоте — ожидание в пределах срока и повтор. */
   async function place(card: Pending, owner: Owner, shownText: string): Promise<AssistantReply> {
     for (;;) {
       // Флаг — последнее ожидание перед точкой исполнения: выключение действует на этот же вызов.
-      const autonomy = owner.admission.autoAtStart ? ((await deps.autonomy?.()) ?? false) : false;
+      const autonomy = owner.admission.autoAtStart ? ((await bounded(owner, deps.autonomy?.() ?? Promise.resolve(false))) ?? false) : false;
       const point = executionPoint(card, owner, autonomy);
       if (point.kind === 'card') {
         publish({ proposal: card.view, outcome: null });
         return { status: 200, body: { text: point.note === null ? shownText : `${shownText} ${point.note}` } };
       }
       if (point.kind === 'late') return NOT_STARTED;
+      if (point.kind === 'failed') return { status: 409, body: { error: `Not started: ${point.reason}. Nothing was done; you may try again.` } };
       if (point.kind === 'auto') return awaitOutcome(point.run, owner);
       await waitSlot(owner.deadline - now());
     }
@@ -1560,7 +1614,8 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
   /** Закончившееся автономное действие: исход карточки (одно событие `decided`), слот плана, итог тому, кто его ждёт. */
   function finishAuto(run: AutoRun, card: Pending, outcome: ActionOutcome): ActionOutcome {
     try {
-      cards.settle(run.id, 'auto', cardOutcomeOf(card.kind, outcome.status), now());
+      // Исход и структурный итог — durable вместе: после рестарта невыданный итог восстанавливается из строки.
+      cards.settleAuto(run.id, cardOutcomeOf(card.kind, outcome.status), outcome, now());
       emitCard(cards.get(run.id));
     } catch (error) {
       deps.log(`assistant: action ${run.id} outcome was not recorded: ${(error as Error).message}`);
@@ -1568,7 +1623,11 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       if (card.kind === 'actions') freeSlot(run.id);
     }
     run.outcome = outcome;
-    if (!runAlive(run.admission)) offer(run);
+    try {
+      if (!runAlive(run.admission)) offer(run);
+    } catch (error) {
+      deps.log(`assistant: action ${run.id} outcome was not offered: ${(error as Error).message}`);
+    }
     return outcome;
   }
 
@@ -1662,21 +1721,62 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
   async function performPlan(current: Extract<Pending, { kind: 'actions' }>): Promise<ActionOutcome> {
     const id = current.view.id;
     const started = new Set<number>();
-    publish({ report: waitingReport(id, current.plan) });
+    const partial = new Map<number, string[]>();
+    /** Письма сессиям, что ушли, но не записались в журнал отправленного: шаг сделан, причина — в итог. */
+    const unlogged: string[] = [];
+    let last: ActionsReport = waitingReport(id, current.plan);
     let report: ActionsReport;
     try {
-      report = await runPlan(id, current.plan, executors, (next) => publish({ report: next }), stopOf(id), {
-        started: (step) => {
-          started.add(step);
-          cards.recordStep(id, 'started', step);
+      publish({ report: last });
+      report = await runPlan(
+        id,
+        current.plan,
+        {
+          ...executors,
+          sessionMessage: async (ref, name, text) => {
+            const refusal = await deliverToSession(ref, name, text);
+            if (refusal !== null) return refusal;
+            try {
+              await appendSent(deps.home, ref, text, new Date(now()).toISOString());
+            } catch (error) {
+              unlogged.push(`the message to ${name} was sent, but it was not written to the sent log: ${(error as Error).message}`);
+            }
+            return null;
+          },
         },
-        confirmed: (step) => cards.recordStep(id, 'confirmed', step),
-      });
+        (next) => {
+          last = next;
+          publish({ report: next });
+        },
+        stopOf(id),
+        {
+          started: (step) => {
+            started.add(step);
+            cards.recordStep(id, 'started', step);
+          },
+          confirmed: (step) => cards.recordStep(id, 'confirmed', step),
+          effect: (step, what) => partial.set(step, [...(partial.get(step) ?? []), what]),
+        },
+      );
     } catch (error) {
-      report = failedReport(id, current.plan, error);
+      // Сбой вне шага (публикация отчёта): сделанное по последнему отчёту сохраняется, идущий шаг — неизвестен.
+      report = stoppedFrom(last, error);
     }
-    publish({ report });
-    return planOutcome(report, started);
+    try {
+      publish({ report });
+    } catch (error) {
+      deps.log(`assistant: plan ${id} report failed: ${(error as Error).message}`);
+    }
+    const outcome = planOutcome(report, started, partial);
+    if (unlogged.length === 0) return outcome;
+    return { ...outcome, reason: [outcome.reason, ...unlogged].filter((part) => part !== null).join('; ') };
+  }
+
+  /** Отчёт остановленного плана из последнего известного: сделанные шаги остаются, идущий — `failed`, ждущие — `skipped`. */
+  function stoppedFrom(last: ActionsReport, error: unknown): ActionsReport {
+    const at = last.steps.findIndex((step) => step.status !== 'done');
+    const steps = last.steps.map((step, index) => ({ ...step, status: step.status === 'done' ? ('done' as const) : index === at ? ('failed' as const) : ('skipped' as const) }));
+    return { ...last, status: 'stopped', steps, failedStep: at === -1 ? last.steps.length : at + 1, reason: (error as Error).message, notes: [...last.notes] };
   }
 
   /** Запускает ход по вопросу человека (`island`) или по напоминанию (`reminder`). */
@@ -1744,14 +1844,15 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
   }
 
   // Рестарт хоста: автономная карточка без итога закрывается по ходу исполнения и не исполняется снова (спека автономии
-  // §5.3); чей итог ещё никому не достался — ждёт job (`claimRestartOutcome`) или доставки (`deliverRestartOutcomes`).
+  // §5.3). Её итог, как и итог карточек, закрытых до рестарта и никем не взятых (`result_state = 'pending'`), лежит в базе:
+  // его забирает job (`claimRestartOutcome`) или доставка (`deliverRestartOutcomes`).
   const autoClosed = cards.unsettledAuto().map((row) => {
     const outcome = restartOutcome(row);
-    cards.settle(row.proposalId, 'auto', cardOutcomeOf(row.kind, outcome.status), now());
-    const settled = cards.get(row.proposalId);
-    if (settled?.resultState === 'pending') restarted.set(row.proposalId, { row: settled, outcome });
+    cards.settleAuto(row.proposalId, cardOutcomeOf(row.kind, outcome.status), outcome, now());
     return row;
   });
+  /** Структурный итог закрытой автономной карточки; у строки без него — по ходу исполнения. */
+  const resultOf = (row: CardRow): ActionOutcome => row.result ?? restartOutcome(row);
   // Просроченное гаснет, нетерминальная карточка снова показывается окну и подтверждается как прежде.
   startupChanged = [...autoClosed, ...cards.closeUnsettled(now()), ...cards.expireDue(now())].map((card) => card.proposalId);
   const resumed = shown();
@@ -1875,6 +1976,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     } catch (error) {
       if (error instanceof JobRefusal) return { status: 409, body: { error: error.message } };
       if (error instanceof RunEnded) return RUN_ENDED;
+      if (error instanceof CallLate) return NOT_STARTED;
       throw error;
     }
   }
@@ -1915,7 +2017,13 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
         slot = true;
       }
       // Карточка забирается до первого await и персистентно: второй `decide` с тем же id не выполнит действие повторно.
-      const claimed = cards.claim(proposalId, now());
+      let claimed: ReturnType<CardStore['claim']>;
+      try {
+        claimed = cards.claim(proposalId, now());
+      } catch (error) {
+        if (slot) freeSlot(proposalId);
+        throw error;
+      }
       if (!claimed.ok && slot) freeSlot(proposalId);
       // Срок вышел внутри claim (sweep его не успел): переход виден каналам так же, как погашение по таймеру.
       if (!claimed.ok && claimed.reason === 'expired' && peek.state === 'active') emitCard(cards.get(proposalId));
@@ -2048,6 +2156,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
         return await dispatch(name, args, { token: current.id, admission, deadline }, current);
       } catch (error) {
         if (error instanceof TurnEnded) return TURN_ENDED;
+        if (error instanceof CallLate) return NOT_STARTED;
         throw error;
       }
     },
@@ -2059,22 +2168,27 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     jobEnded(jobId) {
       runEnded((admission) => admission.kind === 'job' && admission.jobId === jobId);
     },
-    claimRestartOutcome(jobId) {
+    claimRestartOutcome(jobId, room) {
       const texts: string[] = [];
-      for (const [id, entry] of [...restarted]) {
-        if (entry.row.source !== `job:${jobId}`) continue;
-        restarted.delete(id);
-        if (cards.takeResult(id, 'taken_by_run')) texts.push(outcomeText(id, entry.outcome));
+      let used = 0;
+      for (const row of cards.pendingResults(`job:${jobId}`)) {
+        if (autoRuns.has(row.proposalId)) continue;
+        const text = outcomeText(row.proposalId, resultOf(row));
+        const size = text.length + (texts.length === 0 ? 0 : 1);
+        // Не влезает в резюме — остаётся `pending` и уйдёт через `deliverOutcome`: исход не теряется.
+        if (used + size > room) continue;
+        if (!cards.takeResult(row.proposalId, 'taken_by_run')) continue;
+        texts.push(text);
+        used += size;
       }
       return texts.length === 0 ? null : texts.join(' ');
     },
     deliverRestartOutcomes() {
-      const left = [...restarted.values()];
-      restarted.clear();
-      for (const { row, outcome } of left) {
-        if (cards.get(row.proposalId)?.resultState !== 'pending') continue;
+      for (const row of cards.pendingResults()) {
+        // Итог действия этого процесса ждёт свой запуск (`action_status`) или уйдёт через `offer`.
+        if (autoRuns.has(row.proposalId)) continue;
         try {
-          deps.deliverOutcome?.(row, outcome);
+          deps.deliverOutcome?.(row, resultOf(row));
         } catch (error) {
           deps.log(`assistant: outcome of ${row.proposalId} was not delivered: ${(error as Error).message}`);
         }

@@ -73,9 +73,10 @@ export interface JobsDeps {
   verify?(job: Job): Promise<'confirmed' | 'unconfirmed'>;
   /**
    * Что добавить к резюме job, что был `running` при остановке хоста: исходы его автономных карточек (спека автономии
-   * §5.3, `claimRestartOutcome` помощника). `null` — нечего.
+   * §5.3, `claimRestartOutcome` помощника), не длиннее `room` знаков. Зовётся внутри транзакции записи job: что она
+   * пометила взятым, откатывается вместе с ней. `null` — нечего.
    */
-  restartNote?(job: Job): string | null;
+  restartNote?(job: Job, room: number): string | null;
   now?(): number;
   log?(line: string): void;
   /** Пауза перед повтором job после `limit`. */
@@ -129,6 +130,8 @@ export interface Jobs {
 }
 
 export const JOB_CAP_PER_PROVIDER = 2;
+/** Предел длины резюме job. */
+const SUMMARY_LIMIT = 2000;
 export const JOB_LIMIT_RETRY_MS = 5 * 60_000;
 
 interface Raw {
@@ -374,11 +377,20 @@ export function createJobs(deps: JobsDeps): Jobs {
         } catch (error) {
           deps.log?.(`assistant jobs: verify ${job.jobId} failed: ${(error as Error).message}`);
         }
-        const note = deps.restartNote?.(job) ?? null;
-        const tail = note === null ? '' : ` ${note}`;
         // Нет подтверждения — исход неизвестен: человек решает, а не «успех» и не «провал».
-        if (verdict === 'confirmed') move(job.jobId, ['running'], 'completed', `Confirmed after the host restarted${tail}`.slice(0, 2000));
-        else move(job.jobId, ['running'], 'needs_confirmation', `The host restarted while this job was running; the outcome is unknown${tail}`.slice(0, 2000));
+        const [state, base] = verdict === 'confirmed' ? (['completed', 'Confirmed after the host restarted'] as const) : (['needs_confirmation', 'The host restarted while this job was running; the outcome is unknown'] as const);
+        // Резюме и пометка взятых итогов карточек — одной транзакцией: сбой записи job итогов не теряет.
+        db.exec('BEGIN IMMEDIATE');
+        try {
+          const note = deps.restartNote?.(job, SUMMARY_LIMIT - base.length - 1) ?? null;
+          if (!write(job.jobId, ['running'], state, note === null ? base : `${base} ${note}`, null)) throw new Error('the job is no longer running');
+          db.exec('COMMIT');
+        } catch (error) {
+          db.exec('ROLLBACK');
+          deps.log?.(`assistant jobs: recover ${job.jobId} failed: ${(error as Error).message}`);
+          continue;
+        }
+        emit(get(job.jobId) as Job);
       }
       pump();
     },

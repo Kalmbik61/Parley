@@ -6,6 +6,7 @@
  */
 
 import type { DatabaseSync } from 'node:sqlite';
+import type { ActionOutcome } from './run-plan.js';
 
 export type CardState = 'active' | 'decided' | 'expired' | 'superseded';
 export type CardVia = 'island' | 'telegram' | 'mobile' | 'auto';
@@ -37,6 +38,8 @@ export interface CardRow {
   outcome: string | null;
   /** `null` — карточка решается кликом. */
   progress: CardProgress | null;
+  /** Структурный итог автономного действия; пишется вместе с исходом (`settleAuto`). */
+  result: ActionOutcome | null;
   resultState: ResultState | null;
 }
 
@@ -65,6 +68,7 @@ interface Raw {
   decided_via: CardVia | null;
   outcome: string | null;
   progress_json: string | null;
+  result_json: string | null;
   result_state: ResultState | null;
 }
 
@@ -82,6 +86,7 @@ const fromRaw = (row: Raw): CardRow => ({
   decidedVia: row.decided_via,
   outcome: row.outcome,
   progress: row.progress_json === null ? null : (JSON.parse(row.progress_json) as CardProgress),
+  result: row.result_json === null ? null : (JSON.parse(row.result_json) as ActionOutcome),
   resultState: row.result_state,
 });
 
@@ -99,6 +104,10 @@ export interface CardStore {
   takeResult(proposalId: string, to: Exclude<ResultState, 'pending'>): boolean;
   /** Автономные карточки без итога (хост умер посреди действия): их исход определяет ход исполнения. */
   unsettledAuto(): CardRow[];
+  /** Итог автономной карточки: исход для журнала и структурный итог для получателя — одним UPDATE, один раз. */
+  settleAuto(proposalId: string, outcome: string, result: ActionOutcome, now: number): void;
+  /** Закрытые автономные карточки, чей итог ещё никому не достался (`result_state = 'pending'`); `source` — только этого источника. */
+  pendingResults(source?: string): CardRow[];
   get(proposalId: string): CardRow | null;
   /** Активные карточки, новые последними. Срок не проверяется: сначала `expireDue`. */
   active(): CardRow[];
@@ -173,6 +182,16 @@ export function createCardStore(db: DatabaseSync): CardStore {
     },
     takeResult(proposalId, to) {
       return Number(db.prepare(`UPDATE assistant_cards SET result_state = ? WHERE proposal_id = ? AND result_state = 'pending'`).run(to, proposalId).changes) === 1;
+    },
+    settleAuto(proposalId, outcome, result, now) {
+      db.prepare(
+        `UPDATE assistant_cards SET decided_at = ?, decided_via = 'auto', outcome = ?, result_json = ?, revision = revision + 1 WHERE proposal_id = ? AND state = 'decided' AND outcome IS NULL AND progress_json IS NOT NULL`,
+      ).run(now, outcome, JSON.stringify(result), proposalId);
+    },
+    pendingResults(source) {
+      const where = `state = 'decided' AND outcome IS NOT NULL AND progress_json IS NOT NULL AND result_state = 'pending'`;
+      const rows = source === undefined ? db.prepare(`SELECT * FROM assistant_cards WHERE ${where} ORDER BY created_at, rowid`).all() : db.prepare(`SELECT * FROM assistant_cards WHERE ${where} AND source = ? ORDER BY created_at, rowid`).all(source);
+      return (rows as unknown as Raw[]).map(fromRaw);
     },
     unsettledAuto() {
       return (db.prepare(`SELECT * FROM assistant_cards WHERE state = 'decided' AND outcome IS NULL AND progress_json IS NOT NULL ORDER BY created_at, rowid`).all() as unknown as Raw[]).map(fromRaw);

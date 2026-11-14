@@ -1017,7 +1017,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     }),
     defaultProvider: () => assistantService?.settings()?.provider ?? ASSISTANT_PROVIDER_ORDER[0] ?? 'claude',
     // Job, что шёл при остановке: исходы его автономных карточек — в его резюме (спека автономии §5.3).
-    restartNote: (job) => assistantService.claimRestartOutcome(job.jobId),
+    restartNote: (job, room) => assistantService.claimRestartOutcome(job.jobId, room),
     log: (line) => log.info(line),
   });
   // Request голосовых поручений: durable в той же базе, связан с job по ключу; закрытие голоса job не отменяет.

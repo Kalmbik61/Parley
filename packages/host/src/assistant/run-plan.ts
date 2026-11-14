@@ -67,10 +67,14 @@ export function planClick(steps: readonly { do: string }[]): string | null {
   return null;
 }
 
-/** Ход исполнения плана для durable-записи: `started` — перед эффектом шага, `confirmed` — после его успешного возврата. */
+/**
+ * Ход исполнения плана для durable-записи: `started` — перед эффектом шага, `confirmed` — после его успешного возврата.
+ * `effect` — эффект, подтверждённый внутри составного шага до его сбоя (комната создана, задача ещё отправляется).
+ */
 export interface PlanHooks {
   started(step: number): void;
   confirmed(step: number): void;
+  effect?(step: number, what: string): void;
 }
 
 /** Что сделал шаг: на это ссылаются `"$N"` последующих шагов. */
@@ -261,6 +265,7 @@ export async function runPlan(proposalId: string, plan: PreparedPlan, exec: Plan
         const roomId = await exec.createRoom({ projectPath: work.projectPath, workId: work.workId, title: step.title, members: members.map((member) => member.ref.sessionId), lead: lead.ref.sessionId });
         outputs.set(n, { kind: 'room', projectPath: work.projectPath, workId: work.workId, roomId, title: step.title });
         if (step.task !== null) {
+          hooks?.effect?.(n, `room "${step.title}" created`);
           try {
             await exec.roomMessage({ projectPath: work.projectPath, workId: work.workId, roomId, to: [], text: step.task, kind: 'note' });
           } catch (error) {
@@ -305,9 +310,24 @@ export async function runPlan(proposalId: string, plan: PreparedPlan, exec: Plan
       failure = messageOf(error);
     }
     if (failure === null) {
-      hooks?.confirmed(index + 1);
+      // Эффект шага вернулся: шаг сделан, даже если его подтверждение не записалось. Тогда следующие шаги не начинаются.
+      let unrecorded: string | null = null;
+      try {
+        hooks?.confirmed(index + 1);
+      } catch (error) {
+        unrecorded = messageOf(error);
+      }
       setStatus(index, 'done');
-      continue;
+      if (unrecorded === null) continue;
+      report.status = 'stopped';
+      report.failedStep = index + 1;
+      report.reason = `step ${index + 1} was done, but Parley could not record it (${unrecorded}); later steps were not started`;
+      for (let rest = index + 1; rest < report.steps.length; rest += 1) {
+        const skipped = report.steps[rest];
+        if (skipped !== undefined) skipped.status = 'skipped';
+      }
+      progress();
+      return copy();
     }
     report.status = 'stopped';
     report.failedStep = index + 1;
@@ -325,16 +345,24 @@ export async function runPlan(proposalId: string, plan: PreparedPlan, exec: Plan
 
 /**
  * Итог законченного плана для модели (спека автономии §5.3). `started` — шаги, чей эффект был начат: шаг, упавший до
- * эффекта, — отказ без последствий; упавший после — исход шага неизвестен.
+ * эффекта, — отказ без последствий; упавший после — исход шага неизвестен. `partial` — эффекты, подтверждённые внутри
+ * упавшего составного шага (`PlanHooks.effect`): с ними итог — `partial`.
  */
-export function planOutcome(report: ActionsReport, started: ReadonlySet<number>): ActionOutcome {
+export function planOutcome(report: ActionsReport, started: ReadonlySet<number>, partial: ReadonlyMap<number, readonly string[]> = new Map()): ActionOutcome {
   const done = report.steps.filter((step) => step.status === 'done').map((step) => step.line);
   const notes = report.notes.length === 0 ? null : report.notes.join('; ');
-  if (report.status !== 'stopped') return { status: 'done', effects: done, retry: 'unsafe', reason: notes };
+  // Все шаги сделаны (в том числе когда не записалось подтверждение последнего): действие выполнено целиком.
+  if (report.status !== 'stopped' || report.steps.every((step) => step.status === 'done')) {
+    const reason = [report.status === 'stopped' ? report.reason : null, notes].filter((part) => part !== null).join('; ');
+    return { status: 'done', effects: done, retry: 'unsafe', reason: reason === '' ? null : reason };
+  }
   const at = report.failedStep ?? report.steps.length;
-  const touched = started.has(at);
+  const inside = partial.get(at) ?? [];
+  const effects = [...done, ...inside];
+  // Шаг остановки сделан (не записалось подтверждение) или его эффект известен — «мог случиться» не про него.
+  const touched = report.steps[at - 1]?.status !== 'done' && started.has(at) && inside.length === 0;
   const reason = `stopped at step ${at} of ${report.steps.length}: ${report.reason ?? 'unknown reason'}${touched ? `; step ${at} may have taken effect` : ''}`;
-  if (done.length > 0) return { status: 'partial', effects: done, retry: 'unsafe', reason };
+  if (effects.length > 0) return { status: 'partial', effects, retry: 'unsafe', reason };
   if (touched) return { status: 'unknown', effects: [], retry: 'unsafe', reason };
   return { status: 'not_done', effects: [], retry: 'safe', reason };
 }

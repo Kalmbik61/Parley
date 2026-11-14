@@ -344,31 +344,45 @@ describe('runPlan: комнаты и письма', () => {
 });
 
 describe('runPlan: ход исполнения и итог (спека автономии §5.3)', () => {
-  const traced = async (steps: PreparedStep[], stop: () => boolean | string = () => false) => {
+  const traced = async (steps: PreparedStep[], stop: () => boolean | string = () => false, failConfirm: number | null = null) => {
     const marks: string[] = [];
     const started = new Set<number>();
+    const partial = new Map<number, string[]>();
     const report = await runPlan('p1', plan(steps), exec, onProgress, stop, {
       started: (step) => {
         started.add(step);
         marks.push(`started:${step}`);
       },
-      confirmed: (step) => marks.push(`confirmed:${step}`),
+      confirmed: (step) => {
+        if (step === failConfirm) throw new Error('database is locked');
+        marks.push(`confirmed:${step}`);
+      },
+      effect: (step, what) => partial.set(step, [...(partial.get(step) ?? []), what]),
     });
-    return { report, marks, outcome: planOutcome(report, started) };
+    return { report, marks, outcome: planOutcome(report, started, partial) };
   };
 
-  it('started — перед эффектом шага, confirmed — после его возврата; весь план — done, сделанное перечислено', async () => {
-    const order: string[] = [];
+  it('один журнал порядка: started → эффект → confirmed; пока эффект удержан, confirmed не записан', async () => {
+    const log: string[] = [];
+    let release: () => void = () => {};
     exec.sleep.mockImplementation(async () => {
-      order.push('sleep');
+      log.push('effect:1');
+      await new Promise<void>((resolve) => { release = resolve; });
+      log.push('effect:1 returned');
     });
-    const { marks, outcome } = await traced([
+    exec.close.mockImplementation(async () => {
+      log.push('effect:2');
+    });
+    const running = runPlan('p1', plan([
       { do: 'sleep', session: known('s-05', 'S05 Vera') },
       { do: 'close', session: known('s-03', 'S03 Ruslan') },
-    ]);
-    expect(marks).toEqual(['started:1', 'confirmed:1', 'started:2', 'confirmed:2']);
-    expect(outcome).toEqual({ status: 'done', effects: ['line 1', 'line 2'], retry: 'unsafe', reason: null });
-    expect(order).toEqual(['sleep']);
+    ]), exec, onProgress, () => false, { started: (step) => log.push(`started:${step}`), confirmed: (step) => log.push(`confirmed:${step}`) });
+    await vi.waitFor(() => expect(log).toContain('effect:1'));
+    expect(log).toEqual(['started:1', 'effect:1']);
+    release();
+    const report = await running;
+    expect(log).toEqual(['started:1', 'effect:1', 'effect:1 returned', 'confirmed:1', 'started:2', 'effect:2', 'confirmed:2']);
+    expect(planOutcome(report, new Set([1, 2]))).toEqual({ status: 'done', effects: ['line 1', 'line 2'], retry: 'unsafe', reason: null });
   });
 
   it('пометки шагов входят в причину итога done', async () => {
@@ -405,11 +419,34 @@ describe('runPlan: ход исполнения и итог (спека авто�
     expect(outcome).toEqual({ status: 'unknown', effects: [], retry: 'unsafe', reason: 'stopped at step 1 of 1: socket closed; step 1 may have taken effect' });
   });
 
-  it('комната создана, задача не ушла: шаг начат и упал — unknown с причиной про комнату', async () => {
+  const roomStep: PreparedStep = { do: 'create_room', work: { projectPath: '/p', workId: 'w-1', title: 'Parley' }, title: 'QA', members: [known('s-03', 'S03 Ruslan')], lead: known('s-03', 'S03 Ruslan'), task: 'go' };
+  it('комната создана, задача не ушла (первый шаг): partial, созданная комната в effects', async () => {
     exec.roomMessage.mockRejectedValueOnce(new Error('db locked'));
-    const room: PreparedStep = { do: 'create_room', work: { projectPath: '/p', workId: 'w-1', title: 'Parley' }, title: 'QA', members: [known('s-03', 'S03 Ruslan')], lead: known('s-03', 'S03 Ruslan'), task: 'go' };
-    const { outcome } = await traced([room]);
-    expect(outcome).toMatchObject({ status: 'unknown', retry: 'unsafe', reason: expect.stringContaining('room "QA" was created, but its task was not sent: db locked') });
+    const { outcome } = await traced([roomStep]);
+    expect(outcome).toEqual({ status: 'partial', effects: ['room "QA" created'], retry: 'unsafe', reason: 'stopped at step 1 of 1: room "QA" was created, but its task was not sent: db locked' });
+  });
+  it('комната создана, задача не ушла (после сделанного шага): partial, в effects и шаг, и комната', async () => {
+    exec.roomMessage.mockRejectedValueOnce(new Error('db locked'));
+    const { outcome } = await traced([{ do: 'sleep', session: known('s-05', 'S05 Vera') }, roomStep]);
+    expect(outcome).toMatchObject({ status: 'partial', effects: ['line 1', 'room "QA" created'], retry: 'unsafe' });
+  });
+  it('сбой записи confirmed на третьем шаге: шаги 1–3 сделаны и в effects, остановка на шаге 3, следующие не начаты', async () => {
+    const steps: PreparedStep[] = [
+      { do: 'interrupt', session: known('s-03', 'S03 Ruslan') },
+      { do: 'wake', session: known('s-06', 'S06 Nik'), text: null },
+      { do: 'sleep', session: known('s-05', 'S05 Vera') },
+      { do: 'close', session: known('s-05', 'S05 Vera') },
+    ];
+    const { report, outcome } = await traced(steps, () => false, 3);
+    expect(report).toMatchObject({ status: 'stopped', failedStep: 3, reason: 'step 3 was done, but Parley could not record it (database is locked); later steps were not started' });
+    expect(report.steps.map((step) => step.status)).toEqual(['done', 'done', 'done', 'skipped']);
+    expect(exec.close).not.toHaveBeenCalled();
+    expect(outcome).toEqual({ status: 'partial', effects: ['line 1', 'line 2', 'line 3'], retry: 'unsafe', reason: 'stopped at step 3 of 4: step 3 was done, but Parley could not record it (database is locked); later steps were not started' });
+  });
+  it('сбой записи confirmed последнего шага: всё сделано — done с причиной', async () => {
+    const { report, outcome } = await traced([{ do: 'sleep', session: known('s-05', 'S05 Vera') }], () => false, 1);
+    expect(report.steps.map((step) => step.status)).toEqual(['done']);
+    expect(outcome).toEqual({ status: 'done', effects: ['line 1'], retry: 'unsafe', reason: 'step 1 was done, but Parley could not record it (database is locked); later steps were not started' });
   });
 
   it('stop() со строкой: идущий шаг доводится, следующий не начат, причина — эта строка', async () => {

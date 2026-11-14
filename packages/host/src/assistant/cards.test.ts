@@ -132,6 +132,25 @@ describe('card store', () => {
       expect(store.get('p1')).toMatchObject({ outcome: null, decidedVia: 'auto' });
       expect(store.get('p2')).toMatchObject({ outcome: 'done', decidedAt: 12, decidedVia: 'auto' });
     });
+    it('settleAuto пишет исход и структурный итог один раз; pendingResults — закрытые с невыданным итогом, по источнику', () => {
+      const store = createCardStore(openMemoryDb());
+      store.putDecided({ ...card('p1', 'job:a'), steps: 1 }, 'auto', 10);
+      store.putDecided({ ...card('p2'), steps: 1 }, 'auto', 11);
+      store.putDecided({ ...card('p3', 'job:a'), steps: 1 }, 'auto', 12);
+      const result = { status: 'partial' as const, effects: ['room "QA" created'], retry: 'unsafe' as const, reason: 'its task was not sent' };
+      store.settleAuto('p1', 'partial', result, 20);
+      store.settleAuto('p1', 'done', { ...result, status: 'done' }, 21);
+      store.settleAuto('p2', 'done', { ...result, status: 'done' }, 22);
+      store.takeResult('p2', 'taken_by_run');
+      expect(store.get('p1')).toMatchObject({ outcome: 'partial', decidedAt: 20, decidedVia: 'auto', result, resultState: 'pending' });
+      expect(store.pendingResults().map((row) => row.proposalId)).toEqual(['p1']);
+      expect(store.pendingResults('job:a').map((row) => row.proposalId)).toEqual(['p1']);
+      expect(store.pendingResults('island')).toEqual([]);
+      store.put(card('p4'), 13);
+      store.claim('p4', 14);
+      store.settleAuto('p4', 'done', result, 30);
+      expect(store.get('p4')).toMatchObject({ outcome: null, result: null });
+    });
     it('строка прежней версии (без хода и result_state, как пишет её старый код) читается: хода нет, клик работает', () => {
       // Сам шаг миграции 14 → 15 с сохранением строк проверяет core (db.test.ts, шаг 15).
       const db = openMemoryDb();
@@ -139,7 +158,7 @@ describe('card store', () => {
         `INSERT INTO assistant_cards (proposal_id, kind, view_json, payload_json, source, state, revision, expires_at, created_at) VALUES ('p4', 'message', '{"id":"p4"}', '{"to":[]}', 'island', 'active', 1, 1000, 10)`,
       ).run();
       const store = createCardStore(db);
-      expect(store.get('p4')).toMatchObject({ proposalId: 'p4', state: 'active', view: { id: 'p4' }, progress: null, resultState: null });
+      expect(store.get('p4')).toMatchObject({ proposalId: 'p4', state: 'active', view: { id: 'p4' }, progress: null, result: null, resultState: null });
       expect(store.claim('p4', 20)).toMatchObject({ ok: true });
     });
   });

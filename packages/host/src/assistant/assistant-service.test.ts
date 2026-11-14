@@ -2834,12 +2834,12 @@ describe('assistant-service: исполнение без подтвержден�
       };
       return { db, store, running, ended, put };
     }
-    async function restart(r: ReturnType<typeof restartSetup>) {
+    async function restart(r: ReturnType<typeof restartSetup>, deliver = true) {
       const delivered: Array<{ cardId: string; outcome: unknown }> = [];
       const changes: Change[] = [];
-      const service = createAssistantService({ ...deps, cards: r.store, deliverOutcome: (card, outcome) => delivered.push({ cardId: card.proposalId, outcome }) });
+      const service = createAssistantService({ ...deps, cards: r.store, ...(deliver ? { deliverOutcome: (card: CardRow, outcome: unknown) => delivered.push({ cardId: card.proposalId, outcome }) } : {}) });
       service.onCardChanged((change) => changes.push({ cardId: change.cardId, state: change.state, decidedVia: change.decidedVia, outcome: change.outcome }));
-      const jobs = createJobs({ db: r.db, capPerProvider: 50, defaultProvider: () => 'claude', execute: (): JobRun => ({ cancel: () => {}, done: new Promise<JobEnd>(() => {}) }), restartNote: (job) => service.claimRestartOutcome(job.jobId) });
+      const jobs = createJobs({ db: r.db, capPerProvider: 50, defaultProvider: () => 'claude', execute: (): JobRun => ({ cancel: () => {}, done: new Promise<JobEnd>(() => {}) }), restartNote: (job, room) => service.claimRestartOutcome(job.jobId, room) });
       await jobs.recover();
       service.deliverRestartOutcomes();
       return { service, jobs, delivered, changes };
@@ -2876,17 +2876,78 @@ describe('assistant-service: исполнение без подтвержден�
       expect(deps.stopSession).not.toHaveBeenCalled();
     });
 
-    it('job закончился до рестарта — исход уходит в deliverOutcome, резюме job не трогается', async () => {
+    const PARTIAL = { status: 'partial', effects: ['line 1', 'room "QA" created'], retry: 'unsafe', reason: 'stopped at step 2 of 2: room "QA" was created, but its task was not sent: db locked' } as const;
+
+    it('job закончился до рестарта — все строки матрицы уходят в deliverOutcome, резюме job не трогается', async () => {
       const r = restartSetup();
-      r.put('p1', `job:${r.ended.jobId}`, 1, [1], []);
-      r.put('p2', 'island', 1, [1], [1]);
-      const { jobs, delivered } = await restart(r);
+      const source = `job:${r.ended.jobId}`;
+      r.put('p1', source, 2, [], []);
+      r.put('p2', source, 1, [1], []);
+      r.put('p3', source, 2, [1, 2], [1, 2]);
+      r.put('p4', 'island', 2, [1, 2], [1, 2]);
+      r.store.settleAuto('p4', 'stopped', PARTIAL, 2); // закрыта до рестарта, итог никто не взял
+      const { jobs, delivered, changes } = await restart(r);
       expect(delivered).toEqual([
-        { cardId: 'p1', outcome: { status: 'unknown', effects: [], retry: 'unsafe', reason: 'Parley restarted while the action was running' } },
-        { cardId: 'p2', outcome: { status: 'done', effects: ['line 1'], retry: 'unsafe', reason: null } },
+        { cardId: 'p1', outcome: { status: 'not_done', effects: [], retry: 'safe', reason: 'Parley restarted before the action started' } },
+        { cardId: 'p2', outcome: { status: 'unknown', effects: [], retry: 'unsafe', reason: 'Parley restarted while the action was running' } },
+        { cardId: 'p3', outcome: { status: 'done', effects: ['line 1', 'line 2'], retry: 'unsafe', reason: null } },
+        { cardId: 'p4', outcome: PARTIAL },
       ]);
-      expect(jobs.getJob(r.ended.jobId)?.state).toBe('completed');
+      expect(jobs.getJob(r.ended.jobId)).toMatchObject({ state: 'completed', resultSummary: null });
+      expect(r.store.get('p1')).toMatchObject({ outcome: 'stopped', resultState: 'pending', result: delivered[0]!.outcome });
+      // Событие — только по закрытым при этом старте; закрытая раньше своё уже отдала.
+      expect(changes.map((change) => change.cardId)).toEqual(['p1', 'p2', 'p3']);
+    });
+
+    it('закрытая карточка с невыданным итогом у шедшего job: структурный итог из базы — в его резюме', async () => {
+      const r = restartSetup();
+      r.put('p1', `job:${r.running.jobId}`, 2, [1, 2], [1, 2]);
+      r.store.settleAuto('p1', 'stopped', PARTIAL, 2);
+      const { jobs, delivered } = await restart(r);
+      expect(jobs.getJob(r.running.jobId)?.resultSummary).toBe(
+        'The host restarted while this job was running; the outcome is unknown Partly done (action p1). Done: line 1; room "QA" created. Reason: stopped at step 2 of 2: room "QA" was created, but its task was not sent: db locked. Do not repeat it.',
+      );
+      expect(r.store.get('p1')?.resultState).toBe('taken_by_run');
+      expect(delivered).toEqual([]);
+    });
+
+    it('два рестарта подряд до доставки: итог не теряется и уходит со второго старта тем же', async () => {
+      const r = restartSetup();
+      r.put('p1', 'island', 3, [1, 2], [1]);
+      const first = await restart(r, false); // хост упал, не доставив
+      first.service.stop();
       expect(r.store.get('p1')).toMatchObject({ outcome: 'unknown', resultState: 'pending' });
+      const second = await restart(r);
+      expect(second.delivered).toEqual([{ cardId: 'p1', outcome: { status: 'unknown', effects: ['line 1'], retry: 'unsafe', reason: 'Parley restarted during step 2 of 3; later steps did not start' } }]);
+      expect(second.changes).toEqual([]);
+    });
+
+    it('много исходов у шедшего job: резюме не длиннее 2000, не вошедшие остаются pending и уходят в deliverOutcome', async () => {
+      const r = restartSetup();
+      const source = `job:${r.running.jobId}`;
+      const long = 'x'.repeat(300);
+      for (let index = 1; index <= 12; index += 1) {
+        r.put(`p${index}`, source, 1, [1], [1]);
+        r.store.settleAuto(`p${index}`, 'done', { status: 'done', effects: [`effect ${index} ${long}`], retry: 'unsafe', reason: null }, 2);
+      }
+      const { jobs, delivered } = await restart(r);
+      const summary = jobs.getJob(r.running.jobId)!.resultSummary!;
+      expect(summary.length).toBeLessThanOrEqual(2000);
+      const inSummary = Array.from({ length: 12 }, (_, index) => `p${index + 1}`).filter((id) => summary.includes(`(action ${id})`));
+      expect(inSummary.length).toBeGreaterThan(0);
+      expect(delivered.map((item) => item.cardId)).toEqual(Array.from({ length: 12 }, (_, index) => `p${index + 1}`).filter((id) => !inSummary.includes(id)));
+      for (const id of inSummary) expect(r.store.get(id)?.resultState).toBe('taken_by_run');
+      for (const { cardId } of delivered) expect(r.store.get(cardId)?.resultState).toBe('pending');
+    });
+
+    it('запись job при восстановлении упала: пометки взятых итогов откатились, итоги уходят в deliverOutcome', async () => {
+      const r = restartSetup();
+      r.put('p1', `job:${r.running.jobId}`, 1, [1], [1]);
+      r.db.exec(`CREATE TRIGGER fail_jobs BEFORE UPDATE ON assistant_jobs BEGIN SELECT RAISE(ABORT, 'disk full'); END`);
+      const { jobs, delivered } = await restart(r);
+      expect(jobs.getJob(r.running.jobId)?.state).toBe('running');
+      expect(r.store.get('p1')).toMatchObject({ outcome: 'done', resultState: 'pending' });
+      expect(delivered).toEqual([{ cardId: 'p1', outcome: { status: 'done', effects: ['line 1'], retry: 'unsafe', reason: null } }]);
     });
   });
 
@@ -2923,6 +2984,130 @@ describe('assistant-service: исполнение без подтвержден�
     expect(reply).toEqual({ status: 409, body: { error: `Nothing was changed: A card of ${old.request.requestId} was already confirmed or decided` } });
     expect(requests.get(old.request.requestId)?.supersededBy).toBeNull();
     service.stop();
+  });
+
+  it('пока эффект удержан, в базе started без confirmed; после возврата — confirmed', async () => {
+    const slow = deferred();
+    (deps.sendLetter as Mock).mockImplementationOnce(() => slow.promise.then(() => 'm-9'));
+    const h = await auto();
+    const call = h.service.tool('propose_message', { target: 'Auth', text: 'x' });
+    await vi.waitFor(() => expect(deps.sendLetter).toHaveBeenCalledTimes(1));
+    expect(h.store.get('p1')).toMatchObject({ outcome: null, progress: { started: [1], confirmed: [] } });
+    slow.release();
+    await call;
+    expect(h.store.get('p1')).toMatchObject({ outcome: 'done', progress: { started: [1], confirmed: [1] }, result: { status: 'done', effects: ['message to Auth'] } });
+  });
+
+  it('слот: исключение claim при клике освобождает слот — следующий план стартует', async () => {
+    const h = await auto();
+    h.switches.flag = false;
+    await h.service.tool('propose_actions', { steps: [{ do: 'sleep', session: 'S03' }] });
+    const claim = vi.spyOn(h.store, 'claim').mockImplementationOnce(() => {
+      throw new Error('database is locked');
+    });
+    await expect(h.service.decide('p1', 'send', 'actions')).rejects.toThrow('database is locked');
+    claim.mockRestore();
+    expect(await h.service.decide('p1', 'send', 'actions')).toEqual({ applied: true, error: null });
+    await vi.waitFor(() => expect(h.store.get('p1')?.outcome).toBe('done'));
+    h.switches.flag = true;
+    expect((await h.service.tool('propose_actions', { steps: [{ do: 'interrupt', session: 'S03' }] })).body).toMatchObject({ text: expect.stringMatching(/^Done/) });
+  });
+
+  it('слот: сбой после putDecided — карточка закрыта достоверным not_done, в active не идёт; слот свободен, следующий план стартует', async () => {
+    const h = await auto();
+    h.tools.recordCard.mockImplementationOnce(() => {
+      throw new Error('database is locked');
+    });
+    const reply = await h.service.tool('propose_actions', { steps: [{ do: 'sleep', session: 'S03' }] }, JOB_RUN);
+    expect(reply).toEqual({ status: 409, body: { error: 'Not started: Parley could not start it: database is locked. Nothing was done; you may try again.' } });
+    expect(deps.stopSession).not.toHaveBeenCalled();
+    expect(h.store.get('p1')).toMatchObject({ state: 'decided', outcome: 'stopped', resultState: 'taken_by_run', result: { status: 'not_done', retry: 'safe' } });
+    expect(h.store.active()).toEqual([]);
+    expect(h.changes).toEqual([{ cardId: 'p1', state: 'decided', decidedVia: 'auto', outcome: 'stopped' }]);
+    expect((await h.service.tool('propose_actions', { steps: [{ do: 'sleep', session: 'S03' }] })).body).toMatchObject({ text: expect.stringMatching(/^Done \(action p2\)/) });
+  });
+
+  it('срок: подготовка дольше срока — Not started; поздно завершившаяся подготовка карточку не пишет', async () => {
+    let release: () => void = () => {};
+    let calls = 0;
+    // Первый вызов реестра — выбор провайдера хода; второй — подготовка плана, она висит дольше срока.
+    const h = await auto({ autoCallMs: 50, providers: () => (++calls <= 1 ? Promise.resolve({ claude: CLAUDE, codex: CODEX }) : new Promise((resolve) => { release = () => resolve({ claude: CLAUDE, codex: CODEX }); })) });
+    const reply = await h.service.tool('propose_actions', { steps: [{ do: 'sleep', session: 'S03' }] });
+    expect(reply).toEqual({ status: 409, body: { error: 'Not started: Parley is busy. Nothing was done; you may try again.' } });
+    release();
+    await flush();
+    await flush();
+    expect(h.store.get('p1')).toBeNull();
+    expect(deps.stopSession).not.toHaveBeenCalled();
+    expect(last().proposal).toBeNull();
+  });
+
+  it('срок: чтение флага дольше срока — Not started, ничего не создано', async () => {
+    let calls = 0;
+    const h = await auto({ autoCallMs: 50, autonomy: () => (++calls === 1 ? Promise.resolve(true) : new Promise<boolean>(() => {})) });
+    expect(await h.service.tool('propose_message', { target: 'Auth', text: 'x' })).toEqual({ status: 409, body: { error: 'Not started: Parley is busy. Nothing was done; you may try again.' } });
+    expect(deps.sendLetter).not.toHaveBeenCalled();
+    expect(h.store.get('p1')).toBeNull();
+  });
+
+  it('срок: подготовка, ожидание слота и исполнение — в одном бюджете вызова', async () => {
+    const gate = deferred();
+    (deps.stopSession as Mock).mockImplementationOnce(() => gate.promise);
+    const action = deferred();
+    (deps.interrupt as Mock).mockImplementationOnce(() => action.promise);
+    let providersCalls = 0;
+    const h = await auto({
+      autoCallMs: 150,
+      providers: () => (++providersCalls <= 2 ? Promise.resolve({ claude: CLAUDE, codex: CODEX }) : new Promise((resolve) => setTimeout(() => resolve({ claude: CLAUDE, codex: CODEX }), 50))),
+    });
+    const first = h.service.tool('propose_actions', { steps: [{ do: 'sleep', session: 'S03' }] });
+    await vi.waitFor(() => expect(deps.stopSession).toHaveBeenCalledTimes(1));
+    const started = Date.now();
+    const second = h.service.tool('propose_actions', { steps: [{ do: 'interrupt', session: 'S03' }] }); // 50 мс подготовки
+    setTimeout(() => gate.release(), 100); // ещё ~50 мс ожидания слота
+    expect(await second).toEqual({ status: 200, body: { text: 'Still running (action p2). Call action_status with id "p2" to get the outcome.' } });
+    expect(Date.now() - started).toBeLessThan(400);
+    expect(deps.interrupt).toHaveBeenCalledTimes(1);
+    action.release();
+    await first;
+  });
+
+  it('AU-06: флаг выключили во время подготовки — обычная карточка', async () => {
+    let release: () => void = () => {};
+    let calls = 0;
+    const h = await auto({ providers: () => (++calls <= 1 ? Promise.resolve({ claude: CLAUDE, codex: CODEX }) : new Promise((resolve) => { release = () => resolve({ claude: CLAUDE, codex: CODEX }); })) });
+    const reply = h.service.tool('propose_actions', { steps: [{ do: 'sleep', session: 'S03' }] });
+    await vi.waitFor(() => expect(calls).toBe(2));
+    h.switches.flag = false;
+    release();
+    expect((await reply).body).toMatchObject({ text: expect.stringMatching(/^Shown to the person as a card with the plan/) });
+    expect(deps.stopSession).not.toHaveBeenCalled();
+    expect(h.store.get('p1')?.state).toBe('active');
+  });
+
+  it('AU-06: флаг выключили, пока вызов ждал слот, — обычная карточка, плана нет', async () => {
+    const gate = deferred();
+    (deps.stopSession as Mock).mockImplementationOnce(() => gate.promise);
+    const h = await auto();
+    const first = h.service.tool('propose_actions', { steps: [{ do: 'sleep', session: 'S03' }] });
+    await vi.waitFor(() => expect(deps.stopSession).toHaveBeenCalledTimes(1));
+    const waiting = h.service.tool('propose_actions', { steps: [{ do: 'interrupt', session: 'S03' }] });
+    await flush();
+    h.switches.flag = false;
+    gate.release();
+    expect((await waiting).body).toMatchObject({ text: expect.stringMatching(/^Shown to the person as a card with the plan/) });
+    expect(deps.interrupt).not.toHaveBeenCalled();
+    expect(h.store.get('p2')?.state).toBe('active');
+    await first;
+  });
+
+  it('AU-11 через план: письмо сессии ушло, журнал отправленного упал — шаг подтверждён, план идёт дальше, done с причиной; повтор запрещён', async () => {
+    const h = await auto();
+    await mkdir(path.join(assistantCwd(home), 'sent.jsonl'), { recursive: true });
+    const reply = await h.service.tool('propose_actions', { steps: [{ do: 'message', target: 'S03', text: 'hello' }, { do: 'sleep', session: 'S03' }] });
+    expect(reply.body).toMatchObject({ text: expect.stringMatching(/^Done \(action p1\)\. Done: .+; .+\. Reason: the message to S03 Ruslan was sent, but it was not written to the sent log: .+\. Do not repeat it\.$/) });
+    expect(deps.stopSession).toHaveBeenCalledTimes(1);
+    expect(h.store.get('p1')).toMatchObject({ outcome: 'done', progress: { started: [1, 2], confirmed: [1, 2] } });
   });
 
   it('гонка с таймером тишины: попытка, что ещё запускается, держит разговор и свой токен', async () => {

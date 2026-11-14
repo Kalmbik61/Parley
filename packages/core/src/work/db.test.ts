@@ -498,10 +498,11 @@ describe('реестр миграций', () => {
     expect(() => step.up(db)).not.toThrow();
   });
 
-  it('шаг 15 добавляет nullable progress_json и result_state в assistant_cards; повтор на базе с колонками не падает', () => {
+  it('шаг 15 добавляет nullable progress_json, result_json и result_state в assistant_cards; повтор на базе с колонками не падает', () => {
     const db = workDb();
     const columns = db.prepare('PRAGMA table_info(assistant_cards)').all() as Array<{ name: string; type: string; notnull: number }>;
     expect(columns.find((row) => row.name === 'progress_json')).toMatchObject({ type: 'TEXT', notnull: 0 });
+    expect(columns.find((row) => row.name === 'result_json')).toMatchObject({ type: 'TEXT', notnull: 0 });
     expect(columns.find((row) => row.name === 'result_state')).toMatchObject({ type: 'TEXT', notnull: 0 });
     const step = MIGRATIONS[14]!;
     expect(step.version).toBe(15);
@@ -518,7 +519,7 @@ describe('реестр миграций', () => {
       ).run();
       runMigrations(db);
       expect(version(db)).toBe(WORK_DB_SCHEMA_VERSION);
-      expect(db.prepare("SELECT state, outcome, progress_json, result_state FROM assistant_cards WHERE proposal_id = 'p1'").get()).toEqual({ state: 'decided', outcome: 'sent', progress_json: null, result_state: null });
+      expect(db.prepare("SELECT state, outcome, progress_json, result_json, result_state FROM assistant_cards WHERE proposal_id = 'p1'").get()).toEqual({ state: 'decided', outcome: 'sent', progress_json: null, result_json: null, result_state: null });
     } finally {
       db.close();
     }

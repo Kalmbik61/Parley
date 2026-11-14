@@ -376,13 +376,14 @@ export const MIGRATIONS: readonly MigrationStep[] = [
       if (!has) db.exec('ALTER TABLE assistant_jobs ADD COLUMN context_json TEXT');
     },
   },
-  // 15: автономные карточки помощника (спека автономии §5.3): ход исполнения (JSON по шагам) и кому достался итог.
-  // У карточек, решённых кликом, оба столбца пусты.
+  // 15: автономные карточки помощника (спека автономии §5.3): ход исполнения (JSON по шагам), структурный итог действия
+  // (JSON: статус, эффекты, можно ли повторять, причина) и кому достался итог. У карточек, решённых кликом, столбцы пусты.
   {
     version: 15,
     up: (db) => {
       const have = new Set(db.prepare('PRAGMA table_info(assistant_cards)').all().map((column) => column['name']));
       if (!have.has('progress_json')) db.exec('ALTER TABLE assistant_cards ADD COLUMN progress_json TEXT');
+      if (!have.has('result_json')) db.exec('ALTER TABLE assistant_cards ADD COLUMN result_json TEXT');
       if (!have.has('result_state')) db.exec('ALTER TABLE assistant_cards ADD COLUMN result_state TEXT');
     },
   },
