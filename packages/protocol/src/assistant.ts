@@ -186,6 +186,8 @@ export interface AssistantState {
   origin?: AssistantOrigin;
   /** Отчёт о выполнении карточки `actions`; `null` — плана нет. Старый хост не шлёт. */
   report?: ActionsReport | null;
+  /** Включён ли автономный режим (`assistantAutonomy`); хост шлёт при старте и при смене флага. Старый хост не шлёт. */
+  autonomous?: boolean;
 }
 
 const sessionRef = z.object({ projectPath: z.string(), workId: z.string(), sessionId: z.string() });
@@ -273,6 +275,10 @@ export const assistantMethodSchemas = {
   }),
   /** «Запросить заново»: новая карточка на месте просроченной (новый id). */
   'assistant.reissue': z.object({ proposalId: z.string().min(1) }),
+  /** «Stop» идущего плана (спека автономии §5.6): следующие шаги не начнутся. */
+  'assistant.stopPlan': z.object({ proposalId: z.string().min(1) }),
+  /** Журнал решённых карточек, новые первыми (спека автономии §5.7). */
+  'assistant.journal': z.object({ limit: z.number().int().min(1).max(100).default(30) }),
   /**
    * Решение по карточке ядра с телефона (`decidedVia: 'mobile'`): `revision` — та, что клиент видел в `assistant.card.changed`;
    * устаревшая отвергается без действия. Карточка может быть без job (письмо с острова).
@@ -306,6 +312,16 @@ export const assistantMethodSchemas = {
 
 /** Параметры `assistant.configure`. */
 export type AssistantSettings = z.infer<(typeof assistantMethodSchemas)['assistant.configure']>;
+
+/** Строка журнала решённых карточек: `lines` — шаги плана или цель и начало текста; `decidedAt` — мс. */
+export interface AssistantJournalItem {
+  id: string;
+  kind: string;
+  lines: string[];
+  decidedAt: number | null;
+  via: AssistantDecidedVia | null;
+  outcome: string | null;
+}
 
 /** Событие `assistant.job.changed`: job помощника сменил состояние; `revision` растёт только вверх. */
 export interface AssistantJobChanged {
@@ -428,6 +444,8 @@ export interface AssistantMethodResults {
   'assistant.cancel': { ok: true };
   'assistant.decide': { applied: boolean; error: string | null };
   'assistant.reissue': { applied: boolean; error: string | null; proposalId: string | null };
+  'assistant.stopPlan': { stopped: boolean };
+  'assistant.journal': { items: AssistantJournalItem[] };
   'cards.decide': CardDecideResult;
   'jobs.ackInline': { ok: boolean; deliveredInline: boolean; reason: 'acked' | 'already_acked' | 'stale' | 'not_found' };
   'assistant.reset': { ok: true };

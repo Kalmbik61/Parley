@@ -170,4 +170,18 @@ describe('card store', () => {
       expect(store.claim('p4', 20)).toMatchObject({ ok: true });
     });
   });
+
+  it('recent: только решённые с исходом, новые первыми, не больше limit', () => {
+    const store = createCardStore(openMemoryDb());
+    store.put(card('p1'), 1); // активная
+    for (const [id, at] of [['p2', 10], ['p3', 20], ['p4', 30]] as const) {
+      store.put(card(id, id), at);
+      store.claim(id, at);
+      store.settle(id, 'island', 'sent', at);
+    }
+    store.put(card('p5', 'p5'), 40);
+    store.claim('p5', 40); // захвачена, исхода нет
+    expect(store.recent(10).map((row) => row.proposalId)).toEqual(['p4', 'p3', 'p2']);
+    expect(store.recent(2).map((row) => row.proposalId)).toEqual(['p4', 'p3']);
+  });
 });

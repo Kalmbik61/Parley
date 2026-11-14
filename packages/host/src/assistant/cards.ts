@@ -109,6 +109,8 @@ export interface CardStore {
   settleAuto(proposalId: string, outcome: string, result: ActionOutcome, now: number): void;
   /** Закрытые автономные карточки, чей итог ещё никому не достался (`result_state = 'pending'`); `source` — только этого источника. */
   pendingResults(source?: string): CardRow[];
+  /** Решённые карточки с исходом, новые первыми, не больше `limit`. */
+  recent(limit: number): CardRow[];
   get(proposalId: string): CardRow | null;
   /** Активные карточки, новые последними. Срок не проверяется: сначала `expireDue`. */
   active(): CardRow[];
@@ -196,6 +198,9 @@ export function createCardStore(db: DatabaseSync): CardStore {
     },
     unsettledAuto() {
       return (db.prepare(`SELECT * FROM assistant_cards WHERE state = 'decided' AND outcome IS NULL AND progress_json IS NOT NULL ORDER BY created_at, rowid`).all() as unknown as Raw[]).map(fromRaw);
+    },
+    recent(limit) {
+      return (db.prepare(`SELECT * FROM assistant_cards WHERE state = 'decided' AND outcome IS NOT NULL ORDER BY decided_at DESC, rowid DESC LIMIT ?`).all(limit) as unknown as Raw[]).map(fromRaw);
     },
     get: one,
     active() {

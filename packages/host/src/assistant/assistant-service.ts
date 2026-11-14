@@ -42,7 +42,7 @@ import {
   presentedActivity,
 } from '@parley/core';
 import { createMoodStripper, matchConfirm, type AssistantGender, type AssistantMood, type MoodMark, type MoodStrip } from '@parley/core/assistant';
-import { feedDecision, type ActionsReport, type AssistantCardChanged, type AssistantDetail, type AssistantProposal, type AssistantOrigin, type HumanOverviewV1, type AssistantSettings, type AssistantState, type EventData, type CardDecideResult, type EventName, type Params, type SendResult, type SessionRef } from '@parley/protocol';
+import { feedDecision, type ActionsReport, type AssistantCardChanged, type AssistantDetail, type AssistantJournalItem, type AssistantProposal, type AssistantOrigin, type HumanOverviewV1, type AssistantSettings, type AssistantState, type EventData, type CardDecideResult, type EventName, type Params, type SendResult, type SessionRef } from '@parley/protocol';
 import { projectPhoneCard, type PhoneCard } from '@parley/protocol/remote';
 import { HostError } from '../errors.js';
 import { createCardStore, type CardRow, type CardStore, type CardVia } from './cards.js';
@@ -247,6 +247,10 @@ export interface AssistantService {
    * person». Для плана клика и автономного. `false` — такой план сейчас не идёт. Метод окна — A6.
    */
   stopPlan(proposalId: string): boolean;
+  /** Перечитывает флаг автономии и публикует `autonomous` в `assistant.changed`: зовётся при смене `assistantAutonomy`. */
+  refreshAutonomy(): Promise<void>;
+  /** Журнал решённых карточек (`assistant.journal`), новые первыми. */
+  journal(limit: number): AssistantJournalItem[];
   /** Прогон job кончился: итоги его автономных действий, что никому не достались, уходят в `deliverOutcome`. */
   jobEnded(jobId: string): void;
   /**
@@ -2169,6 +2173,18 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
         if (error instanceof CallLate) return NOT_STARTED;
         throw error;
       }
+    },
+    async refreshAutonomy() {
+      const autonomous = (await deps.autonomy?.()) ?? false;
+      if (stopped || state.autonomous === autonomous) return;
+      publish({ autonomous });
+    },
+    journal(limit) {
+      return cards.recent(limit).map((row) => {
+        const view = row.view as AssistantProposal;
+        const lines = view.action === 'actions' ? view.steps.map((step) => step.line) : [view.target, view.text.slice(0, 200)];
+        return { id: row.proposalId, kind: row.kind, lines, decidedAt: row.decidedAt, via: row.decidedVia, outcome: row.outcome };
+      });
     },
     stopPlan(proposalId) {
       if (running !== proposalId) return false;

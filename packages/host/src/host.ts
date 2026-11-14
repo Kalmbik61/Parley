@@ -993,6 +993,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     onReminderWhileOff: (reminder) => telegram.reminderWhileOff(reminder),
   });
   const reminderTarget = assistantService;
+  // Окно узнаёт о режиме при старте; смену флага подхватывает обёртка `settings.set`.
+  void assistantService.refreshAutonomy().catch((error: Error) => log.info(`assistant: autonomy flag was not read: ${error.message}`));
 
   // Вход job голосового Request (текст, контекст, открытые Request): Request создаётся после jobs, поэтому поздняя привязка.
   // eslint-disable-next-line prefer-const -- поздняя привязка: замыкание executor читает её раньше присваивания
@@ -1302,6 +1304,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
         for (const client of handle.context.clients()) if (client.role === 'remote') client.close();
       }
       voiceDailyMinutes = result.config.voiceDailyMinutes;
+      // Флаг автономии меняется без перезапуска: сервис перечитывает его и переиздаёт состояние.
+      void assistantService.refreshAutonomy();
       return result;
     };
   }

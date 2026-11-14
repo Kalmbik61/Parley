@@ -40,6 +40,24 @@ describe('createAssistantHandlers', () => {
     expect(reissue).toHaveBeenCalledWith('p1');
   });
 
+  it('assistant.stopPlan: зовёт сервис, id чужого плана — stopped false', async () => {
+    const stopPlan = vi.fn((id: string) => id === 'p1');
+    const handlers = createAssistantHandlers({ stopPlan } as unknown as AssistantService);
+    expect(await call(handlers, 'assistant.stopPlan', METHODS['assistant.stopPlan'].parse({ proposalId: 'p1' }))).toEqual({ stopped: true });
+    expect(await call(handlers, 'assistant.stopPlan', METHODS['assistant.stopPlan'].parse({ proposalId: 'p2' }))).toEqual({ stopped: false });
+  });
+
+  it('assistant.journal: limit по умолчанию 30, границы 1..100', async () => {
+    const items = [{ id: 'p1', kind: 'actions', lines: ['a'], decidedAt: 1, via: 'auto', outcome: 'done' }];
+    const journal = vi.fn().mockReturnValue(items);
+    const handlers = createAssistantHandlers({ journal } as unknown as AssistantService);
+    expect(await call(handlers, 'assistant.journal', METHODS['assistant.journal'].parse({}))).toEqual({ items });
+    expect(journal).toHaveBeenCalledWith(30);
+    expect(METHODS['assistant.journal'].safeParse({ limit: 0 }).success).toBe(false);
+    expect(METHODS['assistant.journal'].safeParse({ limit: 101 }).success).toBe(false);
+    expect(METHODS['assistant.journal'].parse({ limit: 100 }).limit).toBe(100);
+  });
+
   it('assistant.ask не меняется: рода в параметрах вопроса нет', () => {
     const parsed = METHODS['assistant.ask'].parse({ text: 'x', provider: null, model: null, language: 'ru', voiceGender: 'male' });
     expect(parsed).not.toHaveProperty('voiceGender');

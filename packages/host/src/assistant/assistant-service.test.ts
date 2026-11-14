@@ -2824,6 +2824,42 @@ describe('assistant-service: исполнение без подтвержден�
     expect(last().report).toMatchObject({ reason: 'Stopped by the person' });
   });
 
+  it('AU-19: autonomous в состоянии равен флагу; после смены флага refreshAutonomy шлёт assistant.changed с новым значением', async () => {
+    const h = await auto();
+    await h.service.refreshAutonomy();
+    expect(h.service.state().autonomous).toBe(true);
+    expect(last().autonomous).toBe(true);
+    h.switches.flag = false;
+    await h.service.refreshAutonomy();
+    expect(h.service.state().autonomous).toBe(false);
+    expect(last().autonomous).toBe(false);
+  });
+
+  it('AU-14: «Stop» плана из трёх шагов — идущий доведён, третий skipped; чужой id — stopped false, план идёт дальше', async () => {
+    const gate = deferred();
+    (deps.interrupt as Mock).mockImplementationOnce(() => gate.promise);
+    const h = await auto({ autoCallMs: 30 });
+    await h.service.tool('propose_actions', { steps: [{ do: 'interrupt', session: 'S03' }, { do: 'sleep', session: 'S03' }, { do: 'close', session: 'S03' }] }, JOB_RUN);
+    expect(h.service.stopPlan('other')).toBe(false);
+    expect(h.service.stopPlan('p1')).toBe(true);
+    gate.release();
+    await vi.waitFor(() => expect(h.store.get('p1')?.outcome).toBe('stopped'));
+    expect(last().report).toMatchObject({ reason: 'Stopped by the person', steps: [{ status: 'done' }, { status: 'failed' }, { status: 'skipped' }] });
+  });
+
+  it('AU-20: journal — решённые карточки новыми первыми; план — строки шагов, письмо — цель и первые 200 знаков; via auto', async () => {
+    const h = await auto();
+    h.store.putDecided({ proposalId: 'j1', kind: 'actions', view: { action: 'actions', id: 'j1', target: 'S03', where: 'W', text: 't', steps: [{ line: 'interrupt S03', status: 'done' }, { line: 'close S03', status: 'done' }] }, payload: {}, source: 'island', expiresAt: 9, steps: 2 }, 'auto', 100);
+    h.store.settleAuto('j1', 'done', { status: 'done' } as never, 110);
+    h.store.putDecided({ proposalId: 'j2', kind: 'message', view: { id: 'j2', target: 'Auth', where: 'W', text: 'x'.repeat(300) }, payload: {}, source: 'island', expiresAt: 9, steps: 1 }, 'auto', 120);
+    h.store.settleAuto('j2', 'done', { status: 'done' } as never, 130);
+    const items = h.service.journal(30);
+    expect(items.map((item) => item.id)).toEqual(['j2', 'j1']);
+    expect(items[0]).toMatchObject({ kind: 'message', lines: ['Auth', 'x'.repeat(200)], decidedAt: 130, via: 'auto', outcome: 'done' });
+    expect(items[1]).toMatchObject({ kind: 'actions', lines: ['interrupt S03', 'close S03'], via: 'auto' });
+    expect(h.service.journal(1)).toHaveLength(1);
+  });
+
   it('AU-16: автоматическая карточка — не телефону и не в Telegram; слушатель карточек получает ровно одно событие', async () => {
     const h = await auto();
     const sendCard = vi.fn().mockResolvedValue(undefined);
