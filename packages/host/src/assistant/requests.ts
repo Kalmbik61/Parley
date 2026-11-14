@@ -8,12 +8,17 @@
  * Поле `transcriptPartial` только хранится: что с ним делать, решает T4; `link_request` и `propose_*` частичному Request
  * отказывают (T5). Вид Request несёт и ворота очереди (§5 п.5): `gate`, `heldSince`, `heldBy`, `stale` вычисляются при чтении
  * из того, что лежит в базе, поэтому переживают рестарт хоста.
+ *
+ * Служебный Request (спека автономии §6.3) — сообщение хоста человеку о событии слежения или итоге действия: job
+ * происхождения `system`, ключ `['host', '<вид>:…']`, сразу связан как независимый и ворот не держит. Его нет во входе
+ * чужих job (`openBefore` отсекает его в SQL, до `LIMIT`), в `request_status` и в `link_request`. Создаёт его только хост.
  */
 
 import { randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import type { AssistantRequestAck, AssistantRequestView } from '@parley/protocol';
-import type { Jobs } from './jobs.js';
+import { HostError } from '../errors.js';
+import type { Jobs, ServiceTag } from './jobs.js';
 
 export type RequestView = AssistantRequestView;
 
@@ -29,11 +34,31 @@ export interface SubmitRequestInput {
   text: string;
   context?: Record<string, unknown> | undefined;
   transcriptPartial?: boolean | undefined;
+  /**
+   * Происхождение job: `island` — поручение человека (по умолчанию), `system` — служебное сообщение хоста (спека
+   * автономии §6.3). RPC `requests.submit` поле не принимает: острову служебные Request создавать нельзя.
+   */
+  origin?: 'island' | 'system';
+  /** Только для `system`: вид, группа замены и готовый текст служебного job. */
+  service?: ServiceTag;
 }
+
+/** Служебный Request: `voiceSessionId` — `SERVICE_VOICE_SESSION`, `delegationId` — `<вид>:…` (ключ события или id карточки). */
+export type ServiceRequestInput = SubmitRequestInput & { origin: 'system'; service: ServiceTag };
+
+/** Первая часть ключа служебного Request: `['host', '<вид>:…']`. Поручению острова этот id не дан. */
+export const SERVICE_VOICE_SESSION = 'host';
 
 export interface Requests {
   /** Идемпотентно по `originKey`. `created: false` — Request уже был (повтор события, потерянный ответ). */
   submit(input: SubmitRequestInput): { request: RequestView; created: boolean };
+  /**
+   * Служебный Request одной транзакцией: `guard` (например, переход итога карточки в `sent_as_message`), job `system` со
+   * снятием служебных job, которые он заменяет или вытесняет, Request сразу связанный как независимый и пометка Request
+   * снятых неактуальными. `guard` вернул `false` — ничего не создано, ответ `null`. `overflow` — Request, снятые
+   * переполнением очереди (о них человеку — заметка); заменённые событием той же сессии в него не входят.
+   */
+  submitService(input: ServiceRequestInput, guard?: () => boolean): { request: RequestView; created: boolean; overflow: RequestView[] } | null;
   get(requestId: string): RequestView | null;
   /** Открытые Request разговора и терминальные, чьё финальное состояние потребитель ещё не получил. По возрастанию `seq`. */
   list(conversationId: string, consumer: string): RequestView[];
@@ -41,7 +66,7 @@ export interface Requests {
   byJob(jobId: string): RequestView | null;
   /**
    * Открытые Request разговора старше `beforeSeq` (не вытеснены; итог ещё идёт или не доставлен в Live), не больше `limit`
-   * последних, по возрастанию `seq`: то, что новый job может вытеснить.
+   * последних, по возрастанию `seq`: то, что новый job может вытеснить. Служебных нет: они отсечены до `LIMIT`.
    */
   openBefore(conversationId: string, beforeSeq: number, limit: number): RequestView[];
   /** Потребитель получил итог. Идемпотентно; принимается только ревизия финального состояния job (как `jobs.ackInline`). */
@@ -50,7 +75,8 @@ export interface Requests {
 
 export interface RequestsDeps {
   db: DatabaseSync;
-  jobs: Pick<Jobs, 'submitJob' | 'getJob'>;
+  /** `beginSubmit` нужен только служебным Request. */
+  jobs: Pick<Jobs, 'submitJob' | 'getJob'> & Partial<Pick<Jobs, 'beginSubmit'>>;
   now?(): number;
 }
 
@@ -115,6 +141,7 @@ export function createRequests(deps: RequestsDeps): Requests {
     }
     return {
       requestId: row.request_id,
+      origin: job.origin === 'system' ? 'system' : 'island',
       originKey: row.origin_key,
       conversationId: row.conversation_id,
       seq: row.seq,
@@ -134,8 +161,72 @@ export function createRequests(deps: RequestsDeps): Requests {
     };
   }
 
+  function submitService(input: ServiceRequestInput, guard?: () => boolean): ReturnType<Requests['submitService']> {
+    const begin = jobs.beginSubmit;
+    if (begin === undefined) throw new Error('service requests need jobs.beginSubmit');
+    const originKey = originKeyOf(input.voiceSessionId, input.delegationId);
+    let settle = (): void => {};
+    let created = false;
+    let overflow: string[] = [];
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      if (guard !== undefined && !guard()) {
+        db.exec('ROLLBACK');
+        return null;
+      }
+      if (byOrigin(originKey) === undefined) {
+        const job = begin({
+          origin: 'system',
+          text: input.text,
+          idempotencyKey: `request:${originKey}`,
+          correlation: { voiceSessionId: input.voiceSessionId, delegationId: input.delegationId, turnId: input.turnId ?? input.delegationId },
+          service: input.service,
+        });
+        settle = job.settle;
+        // Ключ занят job не служебного происхождения (например, телефон прислал тот же idempotencyKey): итог к нему не привязывается.
+        if (!job.created && jobs.getJob(job.jobId)?.origin !== 'system') throw new Error(`the key of service message ${input.delegationId} is taken`);
+        const dropped = job.dropped.map((drop) => ({ ...drop, row: db.prepare('SELECT * FROM assistant_requests WHERE job_id = ?').get(drop.jobId) as unknown as Raw | undefined }));
+        // Заменённое событие той же сессии: новый снимок называет, сколько ответов было до него.
+        const earlier = dropped
+          .filter((drop) => drop.reason === 'replaced' && drop.row !== undefined)
+          .reduce((sum, drop) => sum + 1 + Number((JSON.parse(drop.row?.context_json ?? '{}') as { earlierReplies?: number }).earlierReplies ?? 0), 0);
+        const context = earlier === 0 ? (input.context ?? null) : { ...input.context, earlierReplies: earlier };
+        const stamp = now();
+        const requestId = `req-${randomUUID()}`;
+        db.prepare(
+          `INSERT INTO assistant_requests (request_id, origin_key, conversation_id, seq, version, text, context_json, job_id, transcript_partial, link_kind, link_supersedes_json, link_reason, linked_at, created_at, updated_at)
+           SELECT ?, ?, ?, COALESCE(MAX(seq), 0) + 1, 1, ?, ?, ?, 0, 'independent', '[]', 'service message', ?, ?, ? FROM assistant_requests WHERE conversation_id = ?`,
+        ).run(requestId, originKey, input.conversationId, input.text, context === null ? null : JSON.stringify(context), job.jobId, stamp, stamp, stamp, input.conversationId);
+        for (const drop of dropped) {
+          if (drop.row === undefined) continue;
+          db.prepare('UPDATE assistant_requests SET superseded_by = ?, version = version + 1, updated_at = ? WHERE request_id = ? AND superseded_by IS NULL').run(requestId, stamp, drop.row.request_id);
+        }
+        overflow = dropped.filter((drop) => drop.reason === 'overflow' && drop.row !== undefined).map((drop) => drop.row?.request_id as string);
+        created = true;
+      }
+      db.exec('COMMIT');
+    } catch (error) {
+      db.exec('ROLLBACK');
+      throw error;
+    }
+    // После COMMIT: события job и очередь.
+    settle();
+    const request = view(byOrigin(originKey) as Raw);
+    if (request === null) throw new Error('request job missing');
+    const dropped = overflow.map((requestId) => db.prepare('SELECT * FROM assistant_requests WHERE request_id = ?').get(requestId) as unknown as Raw);
+    return { request, created, overflow: dropped.map(view).filter((item): item is RequestView => item !== null) };
+  }
+
   return {
+    submitService,
     submit(input) {
+      if (input.origin === 'system') {
+        // Без `guard` служебный submit всегда отвечает Request.
+        const { request, created } = submitService(input as ServiceRequestInput) as NonNullable<ReturnType<typeof submitService>>;
+        return { request, created };
+      }
+      // Ключ `host` — у служебных Request: поручение острова не должно ни занять его, ни прочитать чужое.
+      if (input.voiceSessionId === SERVICE_VOICE_SESSION) throw new HostError('bad_request', `voiceSessionId "${SERVICE_VOICE_SESSION}" is reserved`);
       const originKey = originKeyOf(input.voiceSessionId, input.delegationId);
       const existing = byOrigin(originKey);
       if (existing !== undefined) {
@@ -195,7 +286,7 @@ export function createRequests(deps: RequestsDeps): Requests {
           `SELECT r.* FROM assistant_requests r
              JOIN assistant_jobs j ON j.job_id = r.job_id
              LEFT JOIN assistant_request_deliveries d ON d.request_id = r.request_id AND d.consumer = ?
-            WHERE r.conversation_id = ? AND r.seq < ? AND r.superseded_by IS NULL AND (j.state IN (${marks}) OR d.job_revision IS NULL OR d.job_revision < j.revision)
+            WHERE r.conversation_id = ? AND r.seq < ? AND r.superseded_by IS NULL AND j.origin <> 'system' AND (j.state IN (${marks}) OR d.job_revision IS NULL OR d.job_revision < j.revision)
             ORDER BY r.seq DESC LIMIT ?`,
         )
         .all(LIVE_CONSUMER, conversationId, beforeSeq, ...OPEN_JOB_STATES, limit) as unknown as Raw[];

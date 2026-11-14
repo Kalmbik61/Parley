@@ -27,6 +27,8 @@ export function createIngest(deps: IngestDeps): Ingest {
   const now = deps.now ?? Date.now;
   return {
     onJob(job) {
+      // Служебный job (спека автономии §6.3) — сообщение острову: ни строки, ни push, ни Telegram.
+      if (job.origin === 'system') return;
       if (job.state !== 'completed' && job.state !== 'failed' && job.state !== 'cancelled') return;
       const { row, created } = deps.store.write(
         {

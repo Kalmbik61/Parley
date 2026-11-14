@@ -57,7 +57,8 @@ export function createRequestStatus(deps: RequestStatusDeps): RequestStatusReade
       const at = now();
       const open = deps.requests
         .list(own.conversationId, LIVE_CONSUMER)
-        .filter((request) => request.requestId !== own.requestId && !request.stale)
+        // Служебные Request (спека автономии §6.3) — не поручения человека: отсекаются до предела списка.
+        .filter((request) => request.requestId !== own.requestId && !request.stale && request.origin !== 'system')
         .slice(-STATUS_MAX_REQUESTS);
       if (open.length === 0) return { ok: true, text: `Status as of ${clockOf(at)}: there are no other open requests in this conversation.` };
       return { ok: true, text: [`Status as of ${clockOf(at)}, open requests of this conversation, oldest first:`, ...open.map((request) => line(request, at))].join('\n') };

@@ -188,8 +188,12 @@ export interface AssistantState {
   report?: ActionsReport | null;
   /** Включён ли автономный режим (`assistantAutonomy`); хост шлёт при старте и при смене флага. Старый хост не шлёт. */
   autonomous?: boolean;
-  /** Одна строка о снятом слежении за ответом сессии («Stopped waiting for a reply from …»); остров показывает её уведомлением. Старый хост не шлёт. */
-  watchNote?: string;
+  /**
+   * Одна строка о снятом слежении за ответом сессии («Stopped waiting for a reply from …») или о сообщении, снятом
+   * переполнением очереди; остров показывает её уведомлением. `null` — заметки нет (сброшена новым ходом разговора).
+   * Старый хост не шлёт.
+   */
+  watchNote?: string | null;
 }
 
 const sessionRef = z.object({ projectPath: z.string(), workId: z.string(), sessionId: z.string() });
@@ -382,6 +386,11 @@ export interface AssistantRequestJob {
  */
 export interface AssistantRequestView {
   requestId: string;
+  /**
+   * Происхождение job (спека автономии §6.3): `island` — поручение человека, `system` — служебное сообщение хоста о
+   * событии слежения или итоге действия. Нет поля (старый хост) — `island`.
+   */
+  origin?: 'island' | 'system';
   originKey: string;
   conversationId: string;
   seq: number;

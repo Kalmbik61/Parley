@@ -98,3 +98,26 @@ describe('request_status', () => {
     expect(outcome.text).not.toContain('question number 3"');
   });
 });
+
+describe('request_status: служебных нет (автономия, W2)', () => {
+  it('RW-10: служебные Request не входят в статус, даже когда их больше восьми', () => {
+    const h = setup();
+    h.submit('d1', { text: 'human question' });
+    for (let index = 0; index < 9; index += 1) {
+      h.requests.submit({
+        conversationId: 'conv-1',
+        voiceSessionId: 'host',
+        delegationId: `watch:/p:w-1:s-0${index}:turn:1`,
+        text: `Reply from S0${index}`,
+        origin: 'system',
+        service: { kind: 'watch', group: `g${index}`, fallback: 'x' },
+      });
+    }
+    const asker = h.submit('asker', { text: 'status?' });
+    const outcome = h.status.status(asker.jobId);
+    if (!outcome.ok) throw new Error('refused');
+    expect(outcome.text.split('\n').filter((row) => row.startsWith('- '))).toHaveLength(1);
+    expect(outcome.text).toContain('human question');
+    expect(outcome.text).not.toContain('Reply from');
+  });
+});

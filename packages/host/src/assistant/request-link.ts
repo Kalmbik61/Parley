@@ -126,6 +126,8 @@ export function createRequestLinker(deps: RequestLinkerDeps): RequestLinker {
     const old = requests.get(target.requestId);
     // Чужой разговор и несуществующий Request отвечают одинаково: id чужого разговора модель не должна уметь зондировать.
     if (old === null || old.conversationId !== own.conversationId) throw new Refuse(404, `${target.requestId} is not an open request of this conversation`);
+    // Служебное сообщение хоста (спека автономии §6.3) — не поручение человека: вытеснять его нельзя.
+    if (old.origin === 'system') throw new Refuse(409, `${old.requestId} is a service message, not a request of the person`);
     if (old.requestId === own.requestId || old.seq > own.seq) throw new Refuse(409, `${old.requestId} is not older than this request`);
     if (old.supersededBy !== null) throw new Refuse(409, `${old.requestId} was already replaced`);
     if (old.version !== target.expectedVersion) throw new Refuse(409, `${old.requestId} changed: its version is ${old.version}, not ${target.expectedVersion}`);

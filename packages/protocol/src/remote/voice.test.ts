@@ -142,6 +142,12 @@ describe('голос и jobs: проекция job для телефона', () 
     expect(JSON.stringify(projectJobResult({ job }))).not.toContain('argv');
     expect(projectJobResult(null)).toEqual({ job: null });
   });
+
+  it('RW-12: служебный job (origin system) телефону не проецируется — ни событием, ни ответом jobs.get', () => {
+    const service = { ...job, origin: 'system', correlation: { voiceSessionId: 'host', delegationId: 'watch:/p:w-1:s-01:turn:1', turnId: 'watch:/p:w-1:s-01:turn:1' } };
+    expect(projectPhoneJob(service)).toBeNull();
+    expect(projectJobResult({ job: service })).toEqual({ job: null });
+  });
 });
 
 describe('карточки помощника на телефоне (T4a)', () => {

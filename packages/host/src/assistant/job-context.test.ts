@@ -104,3 +104,32 @@ describe('вход job телефона: контекст разговора', (
     expect(h.jobs.getJob(a.jobId)).not.toBeNull();
   });
 });
+
+describe('вход job: служебных нет (автономия, W2)', () => {
+  it('RW-10: служебные Request не попадают в «Earlier open requests», даже когда их больше восьми; вход служебного job — без link_request', () => {
+    const db = openMemoryDb();
+    const execute = (): JobRun => ({ cancel: () => {}, done: new Promise<JobEnd>(() => {}) });
+    const jobs = createJobs({ db, execute, defaultProvider: () => 'claude', capPerProvider: 50 });
+    const requests = createRequests({ db, jobs });
+    const prompt = createJobPrompt({ requests, jobs });
+    const human = requests.submit({ conversationId: 'island', voiceSessionId: 'live_1', delegationId: 'd1', text: 'human question' }).request;
+    const services = Array.from(
+      { length: 9 },
+      (_, index) =>
+        requests.submit({
+          conversationId: 'island',
+          voiceSessionId: 'host',
+          delegationId: `watch:/p:w-1:s-0${index}:turn:1`,
+          text: `Reply from S0${index}`,
+          origin: 'system',
+          service: { kind: 'watch', group: `g${index}`, fallback: 'x' },
+        }).request,
+    );
+    const asker = requests.submit({ conversationId: 'island', voiceSessionId: 'live_1', delegationId: 'd2', text: 'next question' }).request;
+    const text = prompt(jobs.getJob(asker.jobId) as Job);
+    expect(text).toContain(`requestId ${human.requestId}`);
+    expect(text).not.toContain('Reply from');
+    const own = prompt(jobs.getJob(services[8]!.jobId) as Job);
+    expect(own).toBe('Reply from S08');
+  });
+});
