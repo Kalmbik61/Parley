@@ -67,6 +67,15 @@ describe('notification ingest', () => {
     expect(store.get('needs_confirmation:p1')).toMatchObject({ state: 'acked', ackedVia: 'mobile' });
   });
 
+  it('автономная карточка (decidedVia auto) не даёт строки и не трогает чужую', () => {
+    const { ingest, store, count } = setup();
+    ingest.onCard(card('decided', { cardId: 'p2', decidedVia: 'auto', outcome: 'done', revision: 2 }));
+    expect(count()).toBe(0);
+    ingest.onCard(card('needs_confirmation'));
+    ingest.onCard(card('decided', { decidedVia: 'auto', outcome: 'done', revision: 2 }));
+    expect(store.get('needs_confirmation:p1')).toMatchObject({ state: 'new' });
+  });
+
   it('expired: строка терминальна, ожидающая доставка снята; позднее решение её не воскрешает', () => {
     const { ingest, store } = setup();
     ingest.onCard(card('needs_confirmation'));

@@ -195,8 +195,8 @@ const sessionRef = z.object({ projectPath: z.string(), workId: z.string(), sessi
 export { assistantJobOriginSchema, assistantJobCorrelationSchema } from './remote/job-schemas.js';
 export type { AssistantJobOrigin, AssistantJobCorrelation } from './remote/job-schemas.js';
 
-/** Откуда решена карточка: окно, кнопка Telegram или телефон. */
-export const assistantDecidedViaSchema = z.enum(['island', 'telegram', 'mobile']);
+/** Откуда решена карточка: окно, кнопка Telegram, телефон или сам хост в автономном режиме (`auto`, спека автономии §5.3). */
+export const assistantDecidedViaSchema = z.enum(['island', 'telegram', 'mobile', 'auto']);
 export type AssistantDecidedVia = z.infer<typeof assistantDecidedViaSchema>;
 
 /**

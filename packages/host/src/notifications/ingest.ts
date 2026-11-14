@@ -42,6 +42,8 @@ export function createIngest(deps: IngestDeps): Ingest {
       if (created) deps.dispatch?.(row, job.deliveredInline);
     },
     onCard(change) {
+      // Автономная карточка (спека автономии §5.3) клика не ждёт: ни эскалации, ни строки, ни доставки.
+      if (change.decidedVia === 'auto') return;
       const key = needsConfirmationKey(change.cardId);
       if (change.state === 'needs_confirmation') {
         const { row, created } = deps.store.write(

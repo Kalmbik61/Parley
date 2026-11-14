@@ -8,7 +8,18 @@
 import type { DatabaseSync } from 'node:sqlite';
 
 export type CardState = 'active' | 'decided' | 'expired' | 'superseded';
-export type CardVia = 'island' | 'telegram' | 'mobile';
+export type CardVia = 'island' | 'telegram' | 'mobile' | 'auto';
+/**
+ * Ход исполнения автономной карточки (спека автономии §5.3), durable: есть строка — допуск записан (`recorded`);
+ * `started` — шаги, чей эффект начат, `confirmed` — чей эффект подтверждён. Одиночное действие — план из одного шага.
+ */
+export interface CardProgress {
+  steps: number;
+  started: number[];
+  confirmed: number[];
+}
+/** Кому достался итог автономного действия: ещё никому, запуску, что создал карточку, или служебному сообщению. */
+export type ResultState = 'pending' | 'taken_by_run' | 'sent_as_message';
 
 export interface CardRow {
   proposalId: string;
@@ -24,6 +35,9 @@ export interface CardRow {
   decidedAt: number | null;
   decidedVia: CardVia | null;
   outcome: string | null;
+  /** `null` — карточка решается кликом. */
+  progress: CardProgress | null;
+  resultState: ResultState | null;
 }
 
 export interface NewCard {
@@ -50,6 +64,8 @@ interface Raw {
   decided_at: number | null;
   decided_via: CardVia | null;
   outcome: string | null;
+  progress_json: string | null;
+  result_state: ResultState | null;
 }
 
 const fromRaw = (row: Raw): CardRow => ({
@@ -65,11 +81,24 @@ const fromRaw = (row: Raw): CardRow => ({
   decidedAt: row.decided_at,
   decidedVia: row.decided_via,
   outcome: row.outcome,
+  progress: row.progress_json === null ? null : (JSON.parse(row.progress_json) as CardProgress),
+  resultState: row.result_state,
 });
 
 export interface CardStore {
   /** Новая активная карточка; активная карточка того же источника становится `superseded`. */
   put(card: NewCard, now: number): CardRow;
+  /**
+   * Автономная карточка (спека автономии §5.3): одна транзакция вытесняет активные карточки источника и вставляет строку
+   * сразу `decided` с `decided_via`, ходом `recorded` на `steps` шагов и `result_state = 'pending'`. Активной она не бывает.
+   */
+  putDecided(card: NewCard & { steps: number }, via: CardVia, now: number): CardRow;
+  /** Запись хода: `started` — перед эффектом шага `step`, `confirmed` — после его успешного возврата. */
+  recordStep(proposalId: string, mark: 'started' | 'confirmed', step: number): void;
+  /** Условный переход `result_state` из `pending`; `true` — переход сделал этот вызов. */
+  takeResult(proposalId: string, to: Exclude<ResultState, 'pending'>): boolean;
+  /** Автономные карточки без итога (хост умер посреди действия): их исход определяет ход исполнения. */
+  unsettledAuto(): CardRow[];
   get(proposalId: string): CardRow | null;
   /** Активные карточки, новые последними. Срок не проверяется: сначала `expireDue`. */
   active(): CardRow[];
@@ -92,7 +121,10 @@ export interface CardStore {
   withdrawBySource(source: string): CardRow[];
   /** Новая карточка с тем же содержимым вместо просроченной («Запросить заново»); старая остаётся как была. */
   reissue(proposalId: string, newId: string, expiresAt: number, now: number): CardRow | null;
-  /** Старт хоста: захваченная карточка без итога (хост умер посреди действия) получает исход `unknown` и остаётся неисполнимой. */
+  /**
+   * Старт хоста: захваченная кликом карточка без итога (хост умер посреди действия) получает исход `unknown` и остаётся
+   * неисполнимой. Автономные не трогает: их закрывает сервис по ходу исполнения (`unsettledAuto`).
+   */
   closeUnsettled(now: number): CardRow[];
   /** Наибольший номер `pN` среди выданных id: счётчик сервиса продолжается после рестарта. */
   lastNumber(): number;
@@ -117,6 +149,33 @@ export function createCardStore(db: DatabaseSync): CardStore {
         throw error;
       }
       return one(card.proposalId) as CardRow;
+    },
+    putDecided(card, via, now) {
+      const progress: CardProgress = { steps: card.steps, started: [], confirmed: [] };
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        db.prepare(`UPDATE assistant_cards SET state = 'superseded', revision = revision + 1 WHERE state = 'active' AND source = ?`).run(card.source);
+        db.prepare(
+          `INSERT INTO assistant_cards (proposal_id, kind, view_json, payload_json, source, state, revision, expires_at, created_at, decided_via, progress_json, result_state) VALUES (?, ?, ?, ?, ?, 'decided', 1, ?, ?, ?, ?, 'pending')`,
+        ).run(card.proposalId, card.kind, JSON.stringify(card.view), JSON.stringify(card.payload), card.source, card.expiresAt, now, via, JSON.stringify(progress));
+        db.exec('COMMIT');
+      } catch (error) {
+        db.exec('ROLLBACK');
+        throw error;
+      }
+      return one(card.proposalId) as CardRow;
+    },
+    recordStep(proposalId, mark, step) {
+      const progress = one(proposalId)?.progress;
+      if (progress === null || progress === undefined || progress[mark].includes(step)) return;
+      const next: CardProgress = { ...progress, [mark]: [...progress[mark], step] };
+      db.prepare('UPDATE assistant_cards SET progress_json = ? WHERE proposal_id = ?').run(JSON.stringify(next), proposalId);
+    },
+    takeResult(proposalId, to) {
+      return Number(db.prepare(`UPDATE assistant_cards SET result_state = ? WHERE proposal_id = ? AND result_state = 'pending'`).run(to, proposalId).changes) === 1;
+    },
+    unsettledAuto() {
+      return (db.prepare(`SELECT * FROM assistant_cards WHERE state = 'decided' AND outcome IS NULL AND progress_json IS NOT NULL ORDER BY created_at, rowid`).all() as unknown as Raw[]).map(fromRaw);
     },
     get: one,
     active() {
@@ -145,7 +204,7 @@ export function createCardStore(db: DatabaseSync): CardStore {
     },
     release(proposalId) {
       const card = one(proposalId);
-      if (card === null || card.state !== 'decided' || card.outcome !== null) return false;
+      if (card === null || card.state !== 'decided' || card.outcome !== null || card.progress !== null) return false;
       const busy = db.prepare(`SELECT 1 FROM assistant_cards WHERE state = 'active' AND source = ?`).get(card.source);
       if (busy !== undefined) return false;
       db.prepare(`UPDATE assistant_cards SET state = 'active', revision = revision + 1 WHERE proposal_id = ?`).run(proposalId);
@@ -169,8 +228,8 @@ export function createCardStore(db: DatabaseSync): CardStore {
       return this.put({ proposalId: newId, kind: old.kind, view, payload: old.payload, source: old.source, expiresAt }, now);
     },
     closeUnsettled(now) {
-      const rows = (db.prepare(`SELECT * FROM assistant_cards WHERE state = 'decided' AND outcome IS NULL`).all() as unknown as Raw[]).map(fromRaw);
-      if (rows.length > 0) db.prepare(`UPDATE assistant_cards SET outcome = 'unknown', decided_at = COALESCE(decided_at, ?), revision = revision + 1 WHERE state = 'decided' AND outcome IS NULL`).run(now);
+      const rows = (db.prepare(`SELECT * FROM assistant_cards WHERE state = 'decided' AND outcome IS NULL AND progress_json IS NULL`).all() as unknown as Raw[]).map(fromRaw);
+      if (rows.length > 0) db.prepare(`UPDATE assistant_cards SET outcome = 'unknown', decided_at = COALESCE(decided_at, ?), revision = revision + 1 WHERE state = 'decided' AND outcome IS NULL AND progress_json IS NULL`).run(now);
       return rows;
     },
     lastNumber() {
