@@ -4,7 +4,9 @@
  * конфиг. Голоса OpenAI и ключ — в VoiceProviderSection.
  */
 import { useEffect, useState } from 'react';
+import type { ParleyConfig } from '@parley/core';
 import type { Result } from '@parley/protocol';
+import type { ParleyBridge } from '../../../shared/bridge.js';
 import type { AssistantShortcutStatus } from '../../../shared/island.js';
 import { S } from '../../../shared/strings.js';
 import { LANGUAGE_OPTIONS } from '../../../shared/voice-types.js';
@@ -13,6 +15,7 @@ import { getHostClient } from '../../host-client.js';
 import { useUiStore } from '../../store/ui.js';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../ui/select.js';
 import { Switch } from '../../ui/switch.js';
+import { AssistantJournal } from './AssistantJournal.js';
 import { ShortcutField } from './ShortcutField.js';
 import { VoiceProviderSection } from './VoiceProviderSection.js';
 
@@ -23,7 +26,17 @@ const AUTO = '__auto';
 const DEFAULT_MODEL = '__default';
 const SYSTEM_LANGUAGE = '__system';
 
-export function AssistantSettings(): JSX.Element {
+export interface AssistantSettingsProps {
+  bridge: ParleyBridge;
+  /** `null` until `settings.get` answers. */
+  config: ParleyConfig | null;
+  locked: Record<string, string>;
+  save: (key: keyof ParleyConfig, value: string) => Promise<void>;
+  /** Error of the last failed `settings.set` for `assistantAutonomy`. */
+  error?: string | undefined;
+}
+
+export function AssistantSettings({ config, locked, save, error }: AssistantSettingsProps): JSX.Element {
   const assistant = useUiStore((state) => state.ui.assistant);
   const patchUi = useUiStore((state) => state.patchUi);
   const bridge = getHostClient();
@@ -135,6 +148,29 @@ export function AssistantSettings(): JSX.Element {
         <span>{text.speak}</span>
         <Switch aria-label={text.speak} checked={assistant.speak} onCheckedChange={(checked) => patch({ speak: checked })} />
       </label>
+
+      {config?.assistantAutonomy !== undefined ? (
+        <div className="flex flex-col gap-1">
+          <label className="flex items-center justify-between gap-2">
+            <span>
+              {text.autonomy}
+              {locked.assistantAutonomy !== undefined ? (
+                <span className="text-muted-foreground"> {S.settings.lockedBy(locked.assistantAutonomy)}</span>
+              ) : null}
+            </span>
+            <Switch
+              aria-label={text.autonomy}
+              checked={config.assistantAutonomy}
+              disabled={config === null || locked.assistantAutonomy !== undefined}
+              onCheckedChange={(checked) => void save('assistantAutonomy', checked ? 'true' : 'false')}
+            />
+          </label>
+          <p className="text-xs text-muted-foreground">{text.autonomyHint}</p>
+          {error !== undefined ? <p className="text-xs text-destructive">{error}</p> : null}
+        </div>
+      ) : null}
+
+      <AssistantJournal />
 
       <VoiceProviderSection />
     </div>

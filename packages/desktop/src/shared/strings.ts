@@ -3228,6 +3228,12 @@ export const S = {
       glmSlow: 'GLM answers in about 13 seconds.',
       /** «Speak answers» (план 3b, B20). */
       speak: 'Speak answers',
+      autonomy: 'Autonomous mode',
+      autonomyHint:
+        'The assistant does what you ask at once, without confirmation cards. Works from the island on this Mac only; Telegram and the phone still ask.',
+      journalTitle: 'Recent actions',
+      journalEmpty: 'No actions yet',
+      journalAuto: 'auto',
     },
   },
 
