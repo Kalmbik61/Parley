@@ -14,6 +14,8 @@ All notable changes to Parley are documented in this file.
 
 - **The Claude limit follows a reset inside a window.** After the vendor reset the Claude limits in the middle of a window, Parley kept showing the old, higher percentage until the window ended: in the status bar, on the provider card, in the number agents read and in the suggested switch target. It now follows the sessions that saw the new usage, and existing limit files need no cleanup.
 
+- **A collapsed room counts the agents its expanded view shows.** The provider badges under a collapsed room counted every participant, closed ones too, so a room could show six Claude agents while expanding it listed four. Closed participants are now counted only while the card shows closed sessions ("N more closed"), the same rule the expanded room follows.
+
 ## 0.35.0
 
 ### Added
