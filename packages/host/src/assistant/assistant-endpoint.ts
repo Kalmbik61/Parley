@@ -30,6 +30,7 @@ export const ASSISTANT_TOOL_NAMES = [
   'propose_decision',
   'propose_room_decision',
   'propose_actions',
+  'action_status',
   'schedule_check',
   'list_reminders',
   'cancel_reminder',
@@ -49,7 +50,7 @@ export interface TurnAdmission {
   readonly runId: string;
   /** Происхождение хода (`Ask.origin`). */
   readonly origin: AssistantOrigin;
-  /** `assistantAutonomy` был включён при выпуске токена и `origin === 'island'`. Пока ничего не исполняет (A3). */
+  /** `assistantAutonomy` был включён при выпуске токена и `origin === 'island'`; исполнение без клика — по правилу §5.2 (A3). */
   readonly autoAtStart: boolean;
 }
 export interface JobAdmission {

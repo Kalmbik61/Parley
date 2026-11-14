@@ -1,5 +1,5 @@
 /**
- * Режим помощника `parley-mcp` (спека 2026-10-14, 7.1): четырнадцать инструментов разговора, а `link_request` и `request_status` только для
+ * Режим помощника `parley-mcp` (спека 2026-10-14, 7.1): пятнадцать инструментов разговора, а `link_request` и `request_status` только для
  * job, каждый — POST в маршрут хоста `/assistant/<имя>` с токеном. Карту работ сервер сам не читает: всё знает хост.
  */
 
@@ -270,6 +270,18 @@ export const ASSISTANT_TOOLS: Tool[] = [
     },
   },
   {
+    name: 'action_status',
+    description:
+      'Read the outcome of an action that Parley ran right away for you. Call it when a propose_* tool answered "Still running" with an action id: it waits for the action to end for a while and tells what was done, or answers "Still running" again. Only the run that started the action can read it. It never runs or repeats anything.',
+    inputSchema: {
+      type: 'object',
+      properties: { id: { type: 'string', description: 'The action id from the "Still running" answer, for example p12.' } },
+      required: ['id'],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true },
+  },
+  {
     name: 'schedule_check',
     description:
       'Ask Parley to wake you later to check something; say the time back to the person. This is not a card. Give in_minutes (from now) or at (a local time), and every_minutes to repeat. what is what to check and report.',
@@ -359,6 +371,7 @@ export const JOB_TOOL_ALLOWLIST: readonly string[] = [
   'propose_decision',
   'propose_room_decision',
   'propose_actions',
+  'action_status',
   'link_request',
   'request_status',
 ];
@@ -382,6 +395,7 @@ export const JOB_CANCEL_SAFE_TOOLS: readonly string[] = [
   'propose_decision',
   'propose_room_decision',
   'propose_actions',
+  'action_status',
   'link_request',
   'request_status',
 ];

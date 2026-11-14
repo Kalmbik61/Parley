@@ -15,7 +15,7 @@ async function connect(fetch: typeof globalThis.fetch, token = 't0k'): Promise<C
 const reply = (status: number, body: unknown): Response => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
 describe('parley-mcp в режиме помощника', () => {
-  it('отдаёт четырнадцать инструментов в заданном порядке', async () => {
+  it('отдаёт пятнадцать инструментов в заданном порядке', async () => {
     const client = await connect(vi.fn());
     const { tools } = await client.listTools();
     expect(tools.map((tool) => tool.name)).toEqual([
@@ -29,6 +29,7 @@ describe('parley-mcp в режиме помощника', () => {
       'propose_decision',
       'propose_room_decision',
       'propose_actions',
+      'action_status',
       'schedule_check',
       'list_reminders',
       'cancel_reminder',
@@ -123,6 +124,18 @@ describe('parley-mcp в режиме помощника', () => {
       expect(fetch).not.toHaveBeenCalled();
       const job = await connect(fetch, `${JOB_TOKEN_PREFIX}abc`);
       expect((await job.listTools()).tools.map((candidate) => candidate.name)).toContain('request_status');
+    });
+    it('action_status (автономия, A3): только чтение, у разговора и у job, безопасен для отмены', async () => {
+      const tool = ASSISTANT_TOOLS.find((candidate) => candidate.name === 'action_status')!;
+      expect(tool.annotations?.readOnlyHint).toBe(true);
+      expect(tool.inputSchema).toMatchObject({ required: ['id'], additionalProperties: false });
+      expect(JOB_TOOL_ALLOWLIST).toContain('action_status');
+      expect(JOB_CANCEL_SAFE_TOOLS).toContain('action_status');
+      expect(JOB_ONLY_TOOLS).not.toContain('action_status');
+      const fetch = vi.fn(async () => reply(200, { text: 'Done (action p1).' }));
+      const client = await connect(fetch);
+      expect((await client.callTool({ name: 'action_status', arguments: { id: 'p1' } })).content).toEqual([{ type: 'text', text: 'Done (action p1).' }]);
+      expect(fetch).toHaveBeenCalledWith(expect.stringMatching(/\/action_status$/), expect.objectContaining({ body: JSON.stringify({ id: 'p1' }) }));
     });
     it('список безопасных для отмены инструментов явный: чтение, propose_* и link_request', () => {
       expect([...JOB_CANCEL_SAFE_TOOLS].sort()).toEqual([...JOB_TOOL_ALLOWLIST].sort());

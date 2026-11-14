@@ -90,6 +90,20 @@ describe('assistant jobs', () => {
     expect(next.jobs.getJob(b.jobId)?.state).toBe('needs_confirmation');
   });
 
+  it('recover: резюме job, что шёл при остановке, получает строку restartNote (исходы автономных карточек)', async () => {
+    const db = openMemoryDb();
+    const first = setup({}, db);
+    const a = first.submit('a');
+    const b = first.submit('b');
+    first.jobs.stop();
+    const restartNote = vi.fn((job: Job) => (job.jobId === a.jobId ? 'Done (action p1).' : null));
+    const next = setup({ restartNote }, db);
+    await next.jobs.recover();
+    expect(next.jobs.getJob(a.jobId)).toMatchObject({ state: 'needs_confirmation', resultSummary: 'The host restarted while this job was running; the outcome is unknown Done (action p1).' });
+    expect(next.jobs.getJob(b.jobId)).toMatchObject({ state: 'needs_confirmation', resultSummary: 'The host restarted while this job was running; the outcome is unknown' });
+    expect(restartNote).toHaveBeenCalledTimes(2);
+  });
+
   it('кап: третий job провайдера ждёт в queued и стартует после освобождения слота; другой провайдер не ждёт', async () => {
     const { jobs, runs, submit } = setup();
     const j1 = submit('1');

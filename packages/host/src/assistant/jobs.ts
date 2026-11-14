@@ -71,6 +71,11 @@ export interface JobsDeps {
   defaultProvider(): string;
   /** Сверка реального состояния для job, что был `running` при остановке хоста. Нет сверки — исход неизвестен. */
   verify?(job: Job): Promise<'confirmed' | 'unconfirmed'>;
+  /**
+   * Что добавить к резюме job, что был `running` при остановке хоста: исходы его автономных карточек (спека автономии
+   * §5.3, `claimRestartOutcome` помощника). `null` — нечего.
+   */
+  restartNote?(job: Job): string | null;
   now?(): number;
   log?(line: string): void;
   /** Пауза перед повтором job после `limit`. */
@@ -369,9 +374,11 @@ export function createJobs(deps: JobsDeps): Jobs {
         } catch (error) {
           deps.log?.(`assistant jobs: verify ${job.jobId} failed: ${(error as Error).message}`);
         }
+        const note = deps.restartNote?.(job) ?? null;
+        const tail = note === null ? '' : ` ${note}`;
         // Нет подтверждения — исход неизвестен: человек решает, а не «успех» и не «провал».
-        if (verdict === 'confirmed') move(job.jobId, ['running'], 'completed', 'Confirmed after the host restarted');
-        else move(job.jobId, ['running'], 'needs_confirmation', 'The host restarted while this job was running; the outcome is unknown');
+        if (verdict === 'confirmed') move(job.jobId, ['running'], 'completed', `Confirmed after the host restarted${tail}`.slice(0, 2000));
+        else move(job.jobId, ['running'], 'needs_confirmation', `The host restarted while this job was running; the outcome is unknown${tail}`.slice(0, 2000));
       }
       pump();
     },

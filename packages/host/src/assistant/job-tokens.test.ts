@@ -96,4 +96,12 @@ describe('запись допуска job (автономия, A2)', () => {
     expect(tokens.admissionOf(second)).toBeNull();
     expect(tokens.admissionOf('')).toBeNull();
   });
+  it('current: запись действующего прогона job по jobId; после revoke и до issue — null', () => {
+    const tokens = createJobTokens();
+    expect(tokens.current('job-a')).toBeNull();
+    const token = tokens.issue('job-a', { origin: 'island', autoAtStart: true });
+    expect(tokens.current('job-a')).toBe(tokens.admissionOf(token));
+    tokens.revoke('job-a');
+    expect(tokens.current('job-a')).toBeNull();
+  });
 });

@@ -966,6 +966,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     leanAgents: async () => (await loadConfig()).config.leanAgents,
     // Флаг автономии — для записи допуска попытки хода; читается без кэша, при выпуске её токена (A2).
     autonomy: async () => (await loadConfig()).config.assistantAutonomy,
+    // Прогон job действителен для автономного действия (спека автономии §5.2, правило 3): токен этого прогона жив и job `running`.
+    jobLive: (admission) => assistantJobTokens.current(admission.jobId)?.runId === admission.runId && assistantJobs.getJob(admission.jobId)?.state === 'running',
     providerReady: sessionReady,
     // `telegram` создаётся ниже, но зовётся уже после запуска, как `onReminderWhileOff`.
     actionsShown: () =>
@@ -1014,6 +1016,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       },
     }),
     defaultProvider: () => assistantService?.settings()?.provider ?? ASSISTANT_PROVIDER_ORDER[0] ?? 'claude',
+    // Job, что шёл при остановке: исходы его автономных карточек — в его резюме (спека автономии §5.3).
+    restartNote: (job) => assistantService.claimRestartOutcome(job.jobId),
     log: (line) => log.info(line),
   });
   // Request голосовых поручений: durable в той же базе, связан с job по ключу; закрытие голоса job не отменяет.
@@ -1029,6 +1033,10 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     safeTools: JOB_CANCEL_SAFE_TOOLS,
   });
   assistantJobs.onJobChanged((job) => handle.context.broadcast('assistant.job.changed', { jobId: job.jobId, state: job.state, revision: job.revision }));
+  // Прогон job кончился: итоги его автономных действий, что он не забрал, уходят дальше (спека автономии §5.3).
+  assistantJobs.onJobChanged((job) => {
+    if (job.state !== 'queued' && job.state !== 'running') assistantService.jobEnded(job.jobId);
+  });
   assistantService.onCardChanged((change) => handle.context.broadcast('assistant.card.changed', change));
   // Телефону — проекция job без логов и argv (план голоса, B3); граница `remote` пропускает событие по REMOTE_EVENTS.
   assistantJobs.onJobChanged((job) => {
@@ -1057,7 +1065,11 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   });
   assistantJobs.onJobChanged((job) => notificationIngest.onJob(job));
   assistantService.onCardChanged((change) => notificationIngest.onCard(change));
-  void assistantJobs.recover().catch((error: unknown) => log.info(`assistant jobs: recover failed: ${(error as Error).message}`));
+  // После сверки job: исходы автономных карточек, что не забрал ни один job, уходят в доставку (спека автономии §5.3).
+  void assistantJobs
+    .recover()
+    .catch((error: unknown) => log.info(`assistant jobs: recover failed: ${(error as Error).message}`))
+    .finally(() => assistantService.deliverRestartOutcomes());
   handle.context.onShutdown(async () => assistantJobs.stop());
 
   // Канал Telegram (план B): опрос бота, карточки и письма; остановка раньше помощника, чтобы мост отписался первым.

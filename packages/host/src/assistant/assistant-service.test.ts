@@ -3,12 +3,12 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
-import { closeWorkDb, createWork, openMemoryDb, pendingCards, WorkNotFoundError, writeLetters } from '@parley/core';
+import { assistantCwd, closeWorkDb, createWork, openMemoryDb, pendingCards, WorkNotFoundError, writeLetters } from '@parley/core';
 import type { AssistantStreamEvent, ProviderEntry, WorkEntry, WorkMap } from '@parley/core';
 import type { AssistantState, HumanOverviewV1 } from '@parley/protocol';
 import { HostError } from '../errors.js';
 import { createAssistantBridge } from '../telegram/assistant-bridge.js';
-import { createCardStore } from './cards.js';
+import { createCardStore, type CardRow } from './cards.js';
 import { createConversationStore } from './conversation-store.js';
 import { createJobTokens } from './job-tokens.js';
 import { createJobs, type Job, type JobEnd, type JobRun } from './jobs.js';
@@ -16,7 +16,8 @@ import { createRequestLinker } from './request-link.js';
 import { createRequestStatus } from './request-status.js';
 import { createRequests } from './requests.js';
 import { JOB_CANCEL_SAFE_TOOLS } from '@parley/core';
-import { createAssistantService, type AssistantServiceDeps } from './assistant-service.js';
+import { createAssistantService, restartOutcome, type AssistantServiceDeps } from './assistant-service.js';
+import { STEP_CLASSES } from './run-plan.js';
 import type { Reminder } from './reminders.js';
 import type { TurnEnd, TurnSpec } from './turn.js';
 import { createServer, type Server } from 'node:http';
@@ -2327,7 +2328,10 @@ describe('assistant-service: допуск запуска (автономия, A2
       expect(last().proposal).toBeNull();
       expect((await post('propose_message', fresh.token, { target: 'Auth', text: 'новое' })).status).toBe(200);
       expect(handler).toHaveBeenLastCalledWith('propose_message', { target: 'Auth', text: 'новое' }, fresh.admission);
-      expect(last().proposal?.text).toBe('новое');
+      // С A3 ход island при включённом флаге исполняет сам: письмо ушло, карточки с кнопками нет.
+      expect(deps.sendLetter).toHaveBeenCalledTimes(1);
+      expect(deps.sendLetter).toHaveBeenLastCalledWith(expect.objectContaining({ roomId: 'r-1', text: 'новое' }));
+      expect(last().proposal).toBeNull();
     });
   }
 
@@ -2471,5 +2475,476 @@ describe('assistant-service: допуск запуска (автономия, A2
     await deciding;
     await service.ask({ ...ASK, text: 'после сброса' });
     expect(turns.at(-1)?.spec.args.join(' ')).not.toContain('[system: proposal');
+  });
+});
+
+describe('assistant-service: исполнение без подтверждения (автономия, A3)', () => {
+  type Change = { cardId: string; state: string; decidedVia: string | null; outcome: string | null };
+  const JOB_RUN = { kind: 'job', runId: 'run-1', jobId: 'job-1', origin: 'island', autoAtStart: true } as const;
+
+  /** Сервис с допуском island и включённым флагом; `flag` и `live` (жив ли job) меняются тестом. */
+  async function auto(extra: Partial<AssistantServiceDeps> = {}, origin: 'island' | 'reminder' | 'telegram' = 'island') {
+    const db = openMemoryDb();
+    const store = createCardStore(db);
+    const switches = { flag: true, live: true };
+    const changes: Change[] = [];
+    const delivered: Array<{ cardId: string; status: string; resultState: string | null }> = [];
+    const tools = { recordTool: vi.fn(), recordCard: vi.fn() };
+    const service = createAssistantService({
+      ...deps,
+      cards: store,
+      jobTools: tools,
+      autonomy: async () => switches.flag,
+      jobLive: () => switches.live,
+      deliverOutcome: (card, outcome) => delivered.push({ cardId: card.proposalId, status: outcome.status, resultState: card.resultState }),
+      ...extra,
+    });
+    service.onCardChanged((change) => changes.push({ cardId: change.cardId, state: change.state, decidedVia: change.decidedVia, outcome: change.outcome }));
+    await service.ask(ASK, origin);
+    return { service, store, switches, changes, delivered, tools, db };
+  }
+  const deferred = () => {
+    let release: () => void = () => {};
+    const promise = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    return { promise, release: () => release() };
+  };
+
+  it('AU-02: просьба с острова «создай сессию в работе и дай задачу» — сессия создана без клика; карточка decided via auto, исход done; активной не была, needs_confirmation не было', async () => {
+    const h = await auto();
+    const reply = await h.service.tool('propose_actions', { steps: [{ do: 'create_session', work: 'Parley', name: 'Vera', task: 'Run tests' }] });
+    expect(reply).toEqual({ status: 200, body: { text: expect.stringMatching(/^Done \(action p1\)\. Done: .*Vera.*\. Do not repeat it\.$/) } });
+    expect(deps.createSession).toHaveBeenCalledWith({ projectPath: '/p', workId: 'w-1', provider: 'claude', label: 'Vera', task: 'Run tests', parent: null, lean: true });
+    expect(h.store.get('p1')).toMatchObject({ state: 'decided', decidedVia: 'auto', outcome: 'done', resultState: 'taken_by_run', progress: { steps: 1, started: [1], confirmed: [1] } });
+    expect(h.changes).toEqual([{ cardId: 'p1', state: 'decided', decidedVia: 'auto', outcome: 'done' }]);
+    expect(states.some((state) => state.proposal !== null)).toBe(false);
+    expect(h.store.active()).toEqual([]);
+    expect(last().report).toMatchObject({ proposalId: 'p1', status: 'done' });
+  });
+
+  it('письмо в комнату исполняется сразу; поверх ждущей карточки того же источника — она вытеснена', async () => {
+    const h = await auto();
+    h.switches.flag = false;
+    await h.service.tool('propose_message', { target: 'Auth', text: 'по клику' });
+    expect(h.store.get('p1')?.state).toBe('active');
+    h.switches.flag = true;
+    const reply = await h.service.tool('propose_message', { target: 'Gate', text: 'сразу' });
+    expect(reply).toEqual({ status: 200, body: { text: 'Done (action p2). Done: message to Gate. Do not repeat it.' } });
+    expect(deps.sendLetter).toHaveBeenCalledTimes(1);
+    expect(deps.sendLetter).toHaveBeenCalledWith(expect.objectContaining({ roomId: 'r-2', text: 'сразу' }));
+    expect(h.store.get('p1')?.state).toBe('superseded');
+    expect(last().proposal).toBeNull();
+    expect(h.changes.map((change) => `${change.cardId}:${change.state}`)).toEqual(['p1:needs_confirmation', 'p1:superseded', 'p2:decided']);
+  });
+
+  it.each(['reminder', 'telegram'] as const)('AU-04/AU-05: ход %s при включённом флаге — карточка ждёт клика', async (origin) => {
+    const h = await auto({}, origin);
+    const reply = await h.service.tool('propose_message', { target: 'Auth', text: 'x' });
+    expect(reply).toEqual({ status: 200, body: { text: expect.stringMatching(/^Shown to the person as a card/) } });
+    expect(deps.sendLetter).not.toHaveBeenCalled();
+    expect(h.store.get('p1')).toMatchObject({ state: 'active', progress: null, resultState: null });
+  });
+
+  it('AU-05: job с телефона (origin mobile, autoAtStart false) при включённом флаге — карточка ждёт клика', async () => {
+    const h = await auto();
+    const reply = await h.service.tool('propose_message', { target: 'Auth', text: 'x' }, { ...JOB_RUN, origin: 'mobile', autoAtStart: false });
+    expect(reply.status).toBe(200);
+    expect(deps.sendLetter).not.toHaveBeenCalled();
+    expect(h.store.get('p1')).toMatchObject({ state: 'active', source: 'job:job-1' });
+    expect(h.service.phoneCard('p1')).not.toBeNull();
+  });
+
+  it('AU-06: флаг выключили посреди запуска — следующий propose_* создаёт обычную карточку', async () => {
+    const h = await auto();
+    expect((await h.service.tool('propose_message', { target: 'Auth', text: 'раз' })).body).toMatchObject({ text: expect.stringMatching(/^Done/) });
+    h.switches.flag = false;
+    const reply = await h.service.tool('propose_message', { target: 'Auth', text: 'два' });
+    expect(reply.body).toMatchObject({ text: expect.stringMatching(/^Shown to the person as a card/) });
+    expect(deps.sendLetter).toHaveBeenCalledTimes(1);
+    expect(h.store.get('p2')?.state).toBe('active');
+  });
+
+  it('AU-08: отмена job, пока propose_actions ждёт слот, — действия нет, записи нет; отмена после точки исполнения — действие доведено, итог записан', async () => {
+    const gate = deferred();
+    (deps.stopSession as Mock).mockImplementationOnce(() => gate.promise);
+    const h = await auto();
+    const first = h.service.tool('propose_actions', { steps: [{ do: 'sleep', session: 'S03' }] });
+    await vi.waitFor(() => expect(deps.stopSession).toHaveBeenCalledTimes(1));
+    const waiting = h.service.tool('propose_actions', { steps: [{ do: 'interrupt', session: 'S03' }] }, JOB_RUN);
+    await flush();
+    h.switches.live = false; // job отменён, пока его вызов ждёт слот
+    gate.release();
+    expect(await waiting).toEqual({ status: 409, body: { error: 'This background task has ended; nothing was done' } });
+    expect((await first).body).toMatchObject({ text: expect.stringMatching(/^Done \(action p1\)/) });
+    expect(deps.interrupt).not.toHaveBeenCalled();
+    expect(h.store.get('p2')).toBeNull();
+    expect(h.tools.recordCard).not.toHaveBeenCalled();
+
+    // После точки исполнения отмена ничего не откатывает и не останавливает.
+    const slow = deferred();
+    (deps.sendLetter as Mock).mockImplementationOnce(() => slow.promise.then(() => 'm-9'));
+    h.switches.live = true;
+    const call = h.service.tool('propose_message', { target: 'Auth', text: 'job' }, JOB_RUN);
+    await vi.waitFor(() => expect(deps.sendLetter).toHaveBeenCalledTimes(1));
+    expect(h.tools.recordCard).toHaveBeenCalledWith('job-1', { cardId: 'p3', kind: 'message' });
+    h.switches.live = false;
+    h.service.jobEnded('job-1');
+    slow.release();
+    expect(await call).toEqual({ status: 409, body: { error: 'This background task has ended; nothing was done' } });
+    expect(h.store.get('p3')).toMatchObject({ decidedVia: 'auto', outcome: 'done', resultState: 'pending' });
+    expect(h.delivered).toEqual([{ cardId: 'p3', status: 'done', resultState: 'pending' }]);
+  });
+
+  it('AU-09: два propose_actions одновременно и клик по ждущей карточке плана — не больше одного плана за раз', async () => {
+    let inflight = 0;
+    let most = 0;
+    const gates: Array<() => void> = [];
+    const step = () => {
+      inflight += 1;
+      most = Math.max(most, inflight);
+      return new Promise<void>((resolve) => gates.push(() => {
+        inflight -= 1;
+        resolve();
+      }));
+    };
+    (deps.stopSession as Mock).mockImplementation(step);
+    (deps.closeSession as Mock).mockImplementation(step);
+    const h = await auto();
+    // Ждущая карточка плана — от job без допуска автономии.
+    await h.service.tool('propose_actions', { steps: [{ do: 'close', session: 'S02' }] }, { ...JOB_RUN, origin: 'system', autoAtStart: false });
+    expect(h.store.get('p1')?.state).toBe('active');
+    const a = h.service.tool('propose_actions', { steps: [{ do: 'sleep', session: 'S03' }] });
+    const b = h.service.tool('propose_actions', { steps: [{ do: 'sleep', session: 'S02' }] });
+    await vi.waitFor(() => expect(gates).toHaveLength(1));
+    expect(await h.service.decide('p1', 'send', 'actions')).toEqual({ applied: false, error: 'Another plan is still running' });
+    gates.shift()!();
+    await vi.waitFor(() => expect(gates).toHaveLength(1));
+    expect(await h.service.decide('p1', 'send', 'actions')).toEqual({ applied: false, error: 'Another plan is still running' });
+    gates.shift()!();
+    expect((await a).body).toMatchObject({ text: expect.stringMatching(/^Done/) });
+    expect((await b).body).toMatchObject({ text: expect.stringMatching(/^Done/) });
+    expect(await h.service.decide('p1', 'send', 'actions')).toEqual({ applied: true, error: null });
+    await vi.waitFor(() => expect(gates).toHaveLength(1));
+    gates.shift()!();
+    await vi.waitFor(() => expect(h.store.get('p1')?.outcome).toBe('done'));
+    expect(most).toBe(1);
+  });
+
+  it('AU-10: слот занят дольше срока вызова — Not started, ничего не создано', async () => {
+    const gate = deferred();
+    (deps.stopSession as Mock).mockImplementationOnce(() => gate.promise);
+    const h = await auto({ autoCallMs: 80 });
+    const first = h.service.tool('propose_actions', { steps: [{ do: 'sleep', session: 'S03' }] });
+    await vi.waitFor(() => expect(deps.stopSession).toHaveBeenCalledTimes(1));
+    expect(await h.service.tool('propose_actions', { steps: [{ do: 'interrupt', session: 'S03' }] })).toEqual({ status: 409, body: { error: 'Not started: Parley is busy. Nothing was done; you may try again.' } });
+    expect(deps.interrupt).not.toHaveBeenCalled();
+    expect(h.store.get('p2')).toBeNull();
+    gate.release();
+    await first;
+  });
+
+  it('AU-10/AU-21: план дольше остатка срока — Still running; action_status отдаёт итог, повтор — тот же; итог взят запуском, deliverOutcome не зовётся', async () => {
+    const gate = deferred();
+    (deps.stopSession as Mock).mockImplementationOnce(() => gate.promise);
+    const h = await auto({ autoCallMs: 60 });
+    expect(await h.service.tool('propose_actions', { steps: [{ do: 'sleep', session: 'S03' }] })).toEqual({
+      status: 200,
+      body: { text: 'Still running (action p1). Call action_status with id "p1" to get the outcome.' },
+    });
+    expect(await h.service.tool('action_status', { id: 'p1' })).toEqual({ status: 200, body: { text: expect.stringMatching(/^Still running \(action p1\)/) } });
+    expect(h.store.get('p1')).toMatchObject({ outcome: null, resultState: 'pending' });
+    const status = h.service.tool('action_status', { id: 'p1' });
+    gate.release();
+    const done = await status;
+    expect(done.body).toMatchObject({ text: expect.stringMatching(/^Done \(action p1\)/) });
+    expect(h.store.get('p1')).toMatchObject({ outcome: 'done', resultState: 'taken_by_run' });
+    expect(await h.service.tool('action_status', { id: 'p1' })).toEqual(done);
+    turns[0]?.end({ ok: true });
+    await flush();
+    expect(h.delivered).toEqual([]);
+  });
+
+  it('action_status: чужой запуск и неизвестный id — 404; токен job — тоже его инструмент', async () => {
+    const h = await auto();
+    await h.service.tool('propose_message', { target: 'Auth', text: 'x' });
+    expect(await h.service.tool('action_status', { id: 'p1' }, JOB_RUN)).toEqual({ status: 404, body: { error: 'No action p1 was run by you' } });
+    expect((await h.service.tool('action_status', { id: 'p9' })).status).toBe(404);
+    expect((await h.service.tool('action_status', {})).status).toBe(400);
+    expect((await h.service.tool('action_status', { id: 'p1' })).body).toMatchObject({ text: expect.stringMatching(/^Done \(action p1\)/) });
+  });
+
+  it('AU-21: ход кончился до итога — итог уходит в deliverOutcome один раз; action_status нового хода его не получает', async () => {
+    const slow = deferred();
+    (deps.sendLetter as Mock).mockImplementationOnce(() => slow.promise.then(() => 'm-9'));
+    const h = await auto({ autoCallMs: 30 });
+    expect((await h.service.tool('propose_message', { target: 'Auth', text: 'x' })).body).toMatchObject({ text: expect.stringMatching(/^Still running/) });
+    turns[0]?.end({ ok: true });
+    await flush();
+    expect(h.delivered).toEqual([]);
+    slow.release();
+    await vi.waitFor(() => expect(h.delivered).toEqual([{ cardId: 'p1', status: 'done', resultState: 'pending' }]));
+    await h.service.ask({ ...ASK, text: 'ну?' });
+    expect((await h.service.tool('action_status', { id: 'p1' })).status).toBe(404);
+    h.service.jobEnded('job-1');
+    expect(h.delivered).toHaveLength(1);
+  });
+
+  it('AU-11: комната создана, задача не ушла — partial, повтор запрещён; исход карточки partial', async () => {
+    (deps.sendLetter as Mock).mockRejectedValueOnce(new Error('db locked'));
+    const h = await auto();
+    const reply = await h.service.tool('propose_room', { work: 'Parley', title: 'QA', members: ['S03'], task: 'go' });
+    expect(reply).toEqual({ status: 200, body: { text: 'Partly done (action p1). Done: room "QA" created. Reason: its task was not sent: db locked. Do not repeat it.' } });
+    expect(deps.createRoom).toHaveBeenCalledTimes(1);
+    expect(h.store.get('p1')).toMatchObject({ outcome: 'partial', progress: { started: [1], confirmed: [] } });
+  });
+
+  it('AU-11: письмо сессии ушло, журнал отправленного упал — done с причиной, повтор запрещён', async () => {
+    const h = await auto();
+    await mkdir(path.join(assistantCwd(home), 'sent.jsonl'), { recursive: true }); // запись журнала падает: на месте файла папка
+    const reply = await h.service.tool('propose_message', { target: 'S03', text: 'hello' });
+    expect(deps.send).toHaveBeenCalledWith({ ref: { projectPath: '/p', workId: 'w-1', sessionId: 's-03' }, text: 'hello', submit: true });
+    expect(reply.body).toMatchObject({ text: expect.stringMatching(/^Done \(action p1\)\. Done: message to S03 Ruslan\. Reason: the message was sent, but it was not written to the sent log: .+\. Do not repeat it\.$/) });
+    expect(h.store.get('p1')?.outcome).toBe('done');
+  });
+
+  it('AU-11: запрос сессии уже закрыт — not_done, повтор разрешён; исход failed', async () => {
+    const card = { kind: 'permission', cardId: 'c1', id: 'c1', state: 'pending', toolUseId: null, toolName: 'Bash', toolInput: { command: 'ls' }, suggestions: [], notified: false };
+    const decide = vi.fn().mockResolvedValue({ applied: false, state: 'stale' });
+    const h = await auto({
+      activity: { get: () => ({ activity: { activity: 'blocked', waitingFor: null }, metrics: null }) as never },
+      feed: { snapshot: async () => ({ items: [card] }), decide, peekAttention: () => [] } as never,
+    });
+    const reply = await h.service.tool('propose_decision', { target: 'S03', decision: { kind: 'permission', behavior: 'allow' } });
+    expect(reply).toEqual({ status: 200, body: { text: 'Not done (action p1). Reason: the request is no longer open. Nothing was changed; you may try again.' } });
+    expect(h.store.get('p1')?.outcome).toBe('failed');
+  });
+
+  it('AU-12: план из 5 шагов падает на третьем — ответ называет шаг и причину, шаги 4–5 не выполнены, журнал stopped', async () => {
+    (deps.stopSession as Mock).mockRejectedValueOnce(new Error('pty is gone'));
+    const h = await auto();
+    const reply = await h.service.tool('propose_actions', {
+      steps: [
+        { do: 'interrupt', session: 'S03' },
+        { do: 'message', target: 'S02', text: 'hi' },
+        { do: 'sleep', session: 'S03' },
+        { do: 'close', session: 'S03' },
+        { do: 'close', session: 'S02' },
+      ],
+    });
+    expect(reply.body).toMatchObject({ text: expect.stringMatching(/^Partly done \(action p1\)\. Done: .+; .+\. Reason: stopped at step 3 of 5: pty is gone; step 3 may have taken effect\. Do not repeat it\.$/) });
+    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(h.store.get('p1')).toMatchObject({ outcome: 'stopped', progress: { steps: 5, started: [1, 2, 3], confirmed: [1, 2] } });
+    expect(last().report).toMatchObject({ status: 'stopped', failedStep: 3 });
+  });
+
+  it('AU-13: план с шагом неизвестного вида — обычная карточка с причиной, до клика ни один шаг не исполнен', async () => {
+    const h = await auto();
+    const saved = STEP_CLASSES['sleep'];
+    delete STEP_CLASSES['sleep'];
+    try {
+      const reply = await h.service.tool('propose_actions', { steps: [{ do: 'interrupt', session: 'S03' }, { do: 'sleep', session: 'S03' }] });
+      expect(reply.body).toMatchObject({ text: expect.stringContaining('It was not run without the click: step 2 (sleep) is not known to run without a click.') });
+    } finally {
+      STEP_CLASSES['sleep'] = saved!;
+    }
+    expect(deps.interrupt).not.toHaveBeenCalled();
+    expect(deps.stopSession).not.toHaveBeenCalled();
+    expect(h.store.get('p1')).toMatchObject({ state: 'active', progress: null });
+    expect(last().proposal).toMatchObject({ action: 'actions' });
+  });
+
+  it('AU-14: «Stop» во время шага — шаг доведён, следующие не начаты, причина Stopped by the person; отмена job план не останавливает', async () => {
+    const gate = deferred();
+    (deps.interrupt as Mock).mockImplementationOnce(() => gate.promise);
+    const h = await auto({ autoCallMs: 30 });
+    const reply = await h.service.tool('propose_actions', { steps: [{ do: 'interrupt', session: 'S03' }, { do: 'sleep', session: 'S03' }, { do: 'close', session: 'S03' }] }, JOB_RUN);
+    expect(reply.body).toMatchObject({ text: expect.stringMatching(/^Still running/) });
+    h.switches.live = false; // отмена job после точки исполнения
+    h.service.jobEnded('job-1');
+    expect(h.service.stopPlan('p9')).toBe(false);
+    expect(h.service.stopPlan('p1')).toBe(true);
+    gate.release();
+    await vi.waitFor(() => expect(h.store.get('p1')?.outcome).toBe('stopped'));
+    expect(deps.stopSession).not.toHaveBeenCalled();
+    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(last().report).toMatchObject({ status: 'stopped', failedStep: 2, reason: 'Stopped by the person', steps: [{ status: 'done' }, { status: 'failed' }, { status: 'skipped' }] });
+    expect(h.delivered).toEqual([{ cardId: 'p1', status: 'partial', resultState: 'pending' }]);
+  });
+
+  it('отмена job без «Stop»: план идёт до конца', async () => {
+    const gate = deferred();
+    (deps.interrupt as Mock).mockImplementationOnce(() => gate.promise);
+    const h = await auto({ autoCallMs: 30 });
+    await h.service.tool('propose_actions', { steps: [{ do: 'interrupt', session: 'S03' }, { do: 'sleep', session: 'S03' }] }, JOB_RUN);
+    h.switches.live = false;
+    h.service.jobEnded('job-1');
+    gate.release();
+    await vi.waitFor(() => expect(h.store.get('p1')?.outcome).toBe('done'));
+    expect(deps.stopSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('«Stop» работает и для плана, запущенного кликом', async () => {
+    const gate = deferred();
+    (deps.interrupt as Mock).mockImplementationOnce(() => gate.promise);
+    const h = await auto();
+    h.switches.flag = false;
+    await h.service.tool('propose_actions', { steps: [{ do: 'interrupt', session: 'S03' }, { do: 'sleep', session: 'S03' }] });
+    await h.service.decide('p1', 'send', 'actions');
+    expect(h.service.stopPlan('p1')).toBe(true);
+    gate.release();
+    await vi.waitFor(() => expect(h.store.get('p1')?.outcome).toBe('stopped'));
+    expect(deps.stopSession).not.toHaveBeenCalled();
+    expect(last().report).toMatchObject({ reason: 'Stopped by the person' });
+  });
+
+  it('AU-16: автоматическая карточка — не телефону и не в Telegram; слушатель карточек получает ровно одно событие', async () => {
+    const h = await auto();
+    const sendCard = vi.fn().mockResolvedValue(undefined);
+    const closeCard = vi.fn().mockResolvedValue(undefined);
+    const bridge = createAssistantBridge({ assistant: h.service, sendText: vi.fn(), sendCard, closeCard, typing: vi.fn(), cardsToggle: () => true, log: () => {} });
+    await h.service.tool('propose_message', { target: 'Auth', text: 'x' });
+    await h.service.tool('propose_actions', { steps: [{ do: 'sleep', session: 'S03' }] });
+    await flush();
+    expect(h.service.phoneCard('p1')).toBeNull();
+    expect(h.service.phoneCard('p2')).toBeNull();
+    expect(h.service.phoneCards()).toEqual([]);
+    expect(sendCard).not.toHaveBeenCalled();
+    expect(closeCard).not.toHaveBeenCalled();
+    expect(h.changes).toEqual([
+      { cardId: 'p1', state: 'decided', decidedVia: 'auto', outcome: 'done' },
+      { cardId: 'p2', state: 'decided', decidedVia: 'auto', outcome: 'done' },
+    ]);
+    bridge.stop();
+  });
+
+  describe('AU-15: рестарт хоста по записям хода', () => {
+    function restartSetup() {
+      const db = openMemoryDb();
+      const store = createCardStore(db);
+      const first = createJobs({ db, capPerProvider: 50, defaultProvider: () => 'claude', execute: (): JobRun => ({ cancel: () => {}, done: new Promise<JobEnd>(() => {}) }) });
+      const running = first.submitJob({ origin: 'island', text: 'go', idempotencyKey: 'k-run', correlation: { mode: 'text' } });
+      const ended = first.submitJob({ origin: 'island', text: 'go', idempotencyKey: 'k-end', correlation: { mode: 'text' } });
+      first.stop();
+      db.prepare(`UPDATE assistant_jobs SET state = 'completed' WHERE job_id = ?`).run(ended.jobId);
+      const put = (id: string, source: string, steps: number, started: number[], confirmed: number[]) => {
+        store.putDecided({ proposalId: id, kind: 'actions', view: { action: 'actions', id, target: '', where: '', text: '', steps: Array.from({ length: steps }, (_, index) => ({ verb: 'sleep', line: `line ${index + 1}`, text: null, danger: false })) }, payload: {}, source, expiresAt: 10_000_000, steps }, 'auto', 1);
+        for (const step of started) store.recordStep(id, 'started', step);
+        for (const step of confirmed) store.recordStep(id, 'confirmed', step);
+      };
+      return { db, store, running, ended, put };
+    }
+    async function restart(r: ReturnType<typeof restartSetup>) {
+      const delivered: Array<{ cardId: string; outcome: unknown }> = [];
+      const changes: Change[] = [];
+      const service = createAssistantService({ ...deps, cards: r.store, deliverOutcome: (card, outcome) => delivered.push({ cardId: card.proposalId, outcome }) });
+      service.onCardChanged((change) => changes.push({ cardId: change.cardId, state: change.state, decidedVia: change.decidedVia, outcome: change.outcome }));
+      const jobs = createJobs({ db: r.db, capPerProvider: 50, defaultProvider: () => 'claude', execute: (): JobRun => ({ cancel: () => {}, done: new Promise<JobEnd>(() => {}) }), restartNote: (job) => service.claimRestartOutcome(job.jobId) });
+      await jobs.recover();
+      service.deliverRestartOutcomes();
+      return { service, jobs, delivered, changes };
+    }
+
+    it('(а) карточки нет — ничего не создано и не исполнено; job уходит в needs_confirmation с прежним резюме', async () => {
+      const r = restartSetup();
+      const { jobs, delivered, changes } = await restart(r);
+      expect(jobs.getJob(r.running.jobId)).toMatchObject({ state: 'needs_confirmation', resultSummary: 'The host restarted while this job was running; the outcome is unknown' });
+      expect(delivered).toEqual([]);
+      expect(changes).toEqual([]);
+      expect(deps.stopSession).not.toHaveBeenCalled();
+    });
+
+    it('(б)–(г) job шёл: исход каждой карточки — в его резюме, result_state taken_by_run; активной карточки и повторного исполнения нет', async () => {
+      const r = restartSetup();
+      const source = `job:${r.running.jobId}`;
+      r.put('p1', source, 2, [], []);
+      r.put('p2', source, 3, [1, 2], [1]);
+      r.put('p3', source, 2, [1, 2], [1, 2]);
+      const { jobs, delivered, changes, service } = await restart(r);
+      expect(r.store.get('p1')).toMatchObject({ outcome: 'stopped', resultState: 'taken_by_run' });
+      expect(r.store.get('p2')).toMatchObject({ outcome: 'unknown', resultState: 'taken_by_run' });
+      expect(r.store.get('p3')).toMatchObject({ outcome: 'done', resultState: 'taken_by_run' });
+      const summary = jobs.getJob(r.running.jobId)!.resultSummary!;
+      expect(jobs.getJob(r.running.jobId)?.state).toBe('needs_confirmation');
+      expect(summary).toContain('Not done (action p1). Reason: Parley restarted before the action started. Nothing was changed; you may try again.');
+      expect(summary).toContain('Outcome unknown, it may have taken effect (action p2). Done: line 1. Reason: Parley restarted during step 2 of 3; later steps did not start. Do not repeat it.');
+      expect(summary).toContain('Done (action p3). Done: line 1; line 2. Do not repeat it.');
+      expect(delivered).toEqual([]);
+      expect(changes.map((change) => `${change.cardId}:${change.state}:${change.decidedVia}`)).toEqual(['p1:decided:auto', 'p2:decided:auto', 'p3:decided:auto']);
+      expect(r.store.active()).toEqual([]);
+      expect(service.phoneCards()).toEqual([]);
+      expect(deps.stopSession).not.toHaveBeenCalled();
+    });
+
+    it('job закончился до рестарта — исход уходит в deliverOutcome, резюме job не трогается', async () => {
+      const r = restartSetup();
+      r.put('p1', `job:${r.ended.jobId}`, 1, [1], []);
+      r.put('p2', 'island', 1, [1], [1]);
+      const { jobs, delivered } = await restart(r);
+      expect(delivered).toEqual([
+        { cardId: 'p1', outcome: { status: 'unknown', effects: [], retry: 'unsafe', reason: 'Parley restarted while the action was running' } },
+        { cardId: 'p2', outcome: { status: 'done', effects: ['line 1'], retry: 'unsafe', reason: null } },
+      ]);
+      expect(jobs.getJob(r.ended.jobId)?.state).toBe('completed');
+      expect(r.store.get('p1')).toMatchObject({ outcome: 'unknown', resultState: 'pending' });
+    });
+  });
+
+  it('restartOutcome одиночного действия: шаг начат — unknown «во время действия»', () => {
+    const row = { kind: 'message', view: { action: 'message', target: 'Auth', text: 'x' }, progress: { steps: 1, started: [1], confirmed: [] } } as unknown as CardRow;
+    expect(restartOutcome(row)).toEqual({ status: 'unknown', effects: [], retry: 'unsafe', reason: 'Parley restarted while the action was running' });
+    expect(restartOutcome({ ...row, progress: { steps: 1, started: [1], confirmed: [1] } })).toEqual({ status: 'done', effects: ['message to Auth'], retry: 'unsafe', reason: null });
+  });
+
+  it('link_request на Request с автоматически исполненной карточкой — отказ', async () => {
+    const db = openMemoryDb();
+    const jobs = createJobs({ db, capPerProvider: 50, defaultProvider: () => 'claude', execute: (): JobRun => ({ cancel: () => {}, done: new Promise<JobEnd>(() => {}) }) });
+    const requests = createRequests({ db, jobs });
+    const store = createCardStore(db);
+    const tokens = createJobTokens();
+    const linker = createRequestLinker({ db, requests, jobs, cards: store, tokens, safeTools: JOB_CANCEL_SAFE_TOOLS });
+    const service = createAssistantService({
+      ...deps,
+      cards: store,
+      jobTools: tokens,
+      requestLink: linker,
+      autonomy: async () => true,
+      jobLive: (admission) => tokens.current(admission.jobId)?.runId === admission.runId && jobs.getJob(admission.jobId)?.state === 'running',
+    });
+    const submit = (id: string) => {
+      const { request } = requests.submit({ conversationId: 'conv-1', voiceSessionId: 'live', delegationId: id, text: `q ${id}`, transcriptPartial: false });
+      const token = tokens.issue(request.jobId, { origin: 'island', autoAtStart: true });
+      return { request, admission: tokens.admissionOf(token)! };
+    };
+    const old = submit('d1');
+    expect((await service.tool('propose_message', { target: 'Auth', text: 'old' }, old.admission)).body).toMatchObject({ text: expect.stringMatching(/^Done/) });
+    const fresh = submit('d2');
+    const reply = await service.tool('link_request', { supersedes: [{ requestId: old.request.requestId, expectedVersion: 1 }], reason: 'corrected' }, fresh.admission);
+    expect(reply).toEqual({ status: 409, body: { error: `Nothing was changed: A card of ${old.request.requestId} was already confirmed or decided` } });
+    expect(requests.get(old.request.requestId)?.supersededBy).toBeNull();
+    service.stop();
+  });
+
+  it('гонка с таймером тишины: попытка, что ещё запускается, держит разговор и свой токен', async () => {
+    let gate: (() => void) | null = null;
+    let launches = 0;
+    const tokens: Array<unknown> = [];
+    const service = createAssistantService({
+      ...deps,
+      idleMs: 20,
+      endpoint: { origin: () => 'http://127.0.0.1:9', setToken: (run) => tokens.push(run) },
+      launchEnv: () => (++launches === 2 ? new Promise((resolve) => { gate = () => resolve({}); }) : Promise.resolve({})),
+    });
+    await service.ask(ASK);
+    turns[0]?.end({ ok: true }); // конец хода ставит таймер тишины
+    await flush();
+    const asking = service.ask({ ...ASK, text: 'дальше' });
+    await vi.waitFor(() => expect(gate).not.toBeNull());
+    await new Promise((resolve) => setTimeout(resolve, 60)); // тишина истекла, пока попытка запускается
+    gate!();
+    await asking;
+    expect(tokens.at(-1)).not.toBeNull();
+    expect((await service.tool('parley_overview', {})).status).toBe(200);
+    service.stop();
   });
 });

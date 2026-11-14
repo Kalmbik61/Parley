@@ -39,6 +39,8 @@ export interface JobTokens {
   revoke(jobId: string): void;
   /** Запись допуска по токену; `null` — это не токен действующего job. Сравнение в постоянное время. */
   admissionOf(token: string): JobAdmission | null;
+  /** Запись допуска действующего прогона job; `null` — токен job отозван или не выдавался. */
+  current(jobId: string): JobAdmission | null;
   /** `jobId` по токену (`admissionOf(token)?.jobId`). */
   jobOf(token: string): string | null;
   recordTool(jobId: string, tool: string, ok: boolean): void;
@@ -81,6 +83,7 @@ export function createJobTokens(now: () => number = Date.now): JobTokens {
       byJob.delete(jobId);
     },
     admissionOf,
+    current: (jobId) => byJob.get(jobId)?.admission ?? null,
     jobOf: (token) => admissionOf(token)?.jobId ?? null,
     recordTool(jobId, tool, ok) {
       if (!byJob.has(jobId)) return; // отозванный токен ничего не пишет
