@@ -87,6 +87,11 @@ describe('стор помощника', () => {
     await store.getState().decide('send');
     expect(deps.call).toHaveBeenCalledWith('assistant.decide', { proposalId: 'p7', decision: 'send', action: 'actions' });
   });
+  it('stopPlan зовёт assistant.stopPlan с id плана', async () => {
+    const { store, deps } = setup();
+    await store.getState().stopPlan('p7');
+    expect(deps.call).toHaveBeenCalledWith('assistant.stopPlan', { proposalId: 'p7' });
+  });
   it('решение по письму — без поля action', async () => {
     const { store, deps } = setup();
     store.getState().applyHost({ ...HOST_IDLE, phase: 'awaiting-confirm', proposal: { id: 'p1', target: 'Auth', where: 'w', kind: 'note', text: 't', wake: false }, turn: 1 });

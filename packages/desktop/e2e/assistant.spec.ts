@@ -491,6 +491,25 @@ test.describe('помощник на острове', () => {
       .toContain('E2E plan work');
   });
 
+  test('A8: значок «Auto» на острове 800×500 — виден при включённом режиме, нет при выключенном', async () => {
+    test.setTimeout(120_000);
+    for (const on of [true, false]) {
+      const window = await launchWithAssistant(on ? { PARLEY_ASSISTANT_AUTONOMY: '1' } : {});
+      const island = await openAssistant(window);
+      await expect(island.getByTestId('assistant-status')).toBeVisible();
+      if (on) {
+        await expect(island.getByTestId('assistant-auto')).toHaveText('Auto');
+        await expect(island.getByTestId('assistant-auto')).toHaveAttribute('title', 'Autonomous mode: actions run without confirmation');
+      } else {
+        await expect(island.getByTestId('assistant-auto')).toHaveCount(0);
+      }
+      // Идущий план и компактный вид (Live) без ключа OpenAI и живого плана хоста в e2e не воспроизвести: их держат модульные тесты.
+      await stopApp(app);
+      app = null;
+      await stopHost(home);
+    }
+  });
+
   test('«check in 2 seconds» → ответ → Esc → остров сам раскрывается с ответом по напоминанию', async () => {
     test.setTimeout(120_000);
     const window = await launchWithAssistant();

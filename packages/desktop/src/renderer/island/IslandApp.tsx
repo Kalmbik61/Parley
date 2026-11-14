@@ -875,6 +875,7 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
           onSubmit: (text) => void useAssistantStore.getState().submit(text),
           onMic: () => useAssistantStore.getState().toggleListening(),
           onDecide: (decision) => void useAssistantStore.getState().decide(decision),
+          ...(progressConnection.methods?.includes('assistant.stopPlan') === true ? { onStopPlan: (proposalId: string) => void useAssistantStore.getState().stopPlan(proposalId) } : {}),
           onTakeKeyboard: () => useAssistantStore.getState().takeKeyboard(),
           onUnqueue: (id) => useAssistantStore.getState().unqueue(id),
           onShowRequests: () => useAssistantStore.getState().close(),

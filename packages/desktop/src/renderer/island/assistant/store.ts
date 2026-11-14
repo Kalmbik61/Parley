@@ -150,6 +150,8 @@ export interface AssistantStoreState {
   setLiveActive(active: boolean): void;
   decide(decision: 'send' | 'cancel'): Promise<void>;
   reset(): Promise<void>;
+  /** Остановить идущий план: хост доводит текущий шаг и не начинает следующие. */
+  stopPlan(proposalId: string): Promise<void>;
   /** Сообщение порта голоса: кусок, срыв по длине или состояние движка. */
   speechMessage(message: IslandTtsMessage): void;
   /** Пришли настройки речи: выключение глушит речь, включение греет движок. Первое значение — точка отсчёта. */
@@ -553,6 +555,9 @@ export function createAssistantStore(): UseBoundStore<StoreApi<AssistantStoreSta
         } finally {
           set({ deciding: null });
         }
+      },
+      stopPlan: async (proposalId) => {
+        await deps?.call('assistant.stopPlan', { proposalId }).catch(() => {});
       },
       reset: async () => {
         set({ queue: [], sending: null, history: [], cardError: null });

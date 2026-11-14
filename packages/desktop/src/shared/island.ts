@@ -247,6 +247,7 @@ export const ISLAND_METHODS: ReadonlySet<string> = new Set([
   'assistant.decide',
   'assistant.reset',
   'assistant.state',
+  'assistant.stopPlan',
   'consents.list',
   'consents.decide',
   // Live-голос острова (T3): хост держит ключ и бюджет, остров получает только SDP-ответ.

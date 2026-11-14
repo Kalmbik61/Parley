@@ -3095,6 +3095,11 @@ export const S = {
   /** Помощник на острове (спека 2026-10-14, раздел 6): тексты вида, настроек и подтверждения. */
   assistant: {
     ask: 'Ask the assistant',
+    /** Значок автономного режима на острове и кнопка остановки плана. */
+    autoBadge: 'Auto',
+    autoBadgeHint: 'Autonomous mode: actions run without confirmation',
+    stopPlan: 'Stop',
+    stopping: 'Stopping after the current step',
     placeholder: 'Ask the assistant…',
     ready: 'Ask about your agents, or tell a room something',
     escToClose: 'Esc to close',
