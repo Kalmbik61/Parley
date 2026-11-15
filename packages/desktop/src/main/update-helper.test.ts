@@ -349,7 +349,10 @@ async function makeRig(opts: RigOptions = {}): Promise<Rig> {
   await chmod(open, 0o755);
   await chmod(ps, 0o755);
 
-  rig.options = { waitMs: opts.waitMs ?? 300, mv, rm: rmTool, open, ps };
+  // Предел по умолчанию — с запасом: ожидание кончается, как только условие выполнено, так что успешным случаям он
+  // времени не добавляет, а под нагрузкой короткий предел успевал истечь раньше, чем приходил список процессов.
+  // Случаи, которые ждут самого истечения, задают короткий предел сами.
+  rig.options = { waitMs: opts.waitMs ?? 5000, mv, rm: rmTool, open, ps };
   if (opts.dateBody) {
     const date = path.join(tools, 'date');
     await writeFile(date, ['#!/bin/sh', ...opts.dateBody, ''].join('\n'));
@@ -855,8 +858,10 @@ describe.skipIf(process.platform !== 'darwin')('сценарий замены н
   // R4: предел ожидания по прошедшему времени, включая сами проверки (спека §5.5 шаги 1 и 2, §13 п. 10)
   describe('R4: предел ожидания по часам', () => {
     // Предел 1 с; часы знают целые секунды, значит сценарий кончает не раньше 1 с и не позже ~2 с плюс одна проверка.
+    // Верхняя граница — с запасом на загруженную машину (полный прогон гоняет сотни файлов разом): подвисший `ps`
+    // в этих тестах спит 20 с, а прежний счёт шагов давал 20 с и больше, так что 10 с их по-прежнему различают.
     const LIMIT = 1000;
-    const UPPER = 3500;
+    const UPPER = 10_000;
 
     it(
       'процесс окна не кончается: quit_timeout укладывается в верхнюю границу, ничего не тронуто',
@@ -893,11 +898,13 @@ describe.skipIf(process.platform !== 'darwin')('сценарий замены н
       'другой экземпляр не кончается, а проверка идёт 0,5 с: still_running в верхней границе',
       async () => {
         const rig = await makeRig({ waitMs: LIMIT });
+        const callsFile = path.join(rig.tools, 'ps.calls');
         // Путь приложения известен только после makeRig: пишем подставной ps с ним.
         await writeFile(
           rig.options.ps!,
           [
             '#!/bin/sh',
+            `echo call >> ${q(callsFile)}`,
             '/bin/sleep 0.5',
             `printf '%s\\n' ${q(`${rig.app}/Contents/MacOS/Parley`)}`,
             '',
@@ -907,6 +914,13 @@ describe.skipIf(process.platform !== 'darwin')('сценарий замены н
         expect(await run(rig)).toBe(0);
         const elapsed = Date.now() - t0;
         expect(elapsed).toBeLessThan(UPPER);
+        // Предел по часам, а не по числу шагов: за 1 с с запасом на секунду часов проверок по 0,5 с — считаные
+        // штуки (счёт шагов давал их десять). Нагрузка делает проверки медленнее, то есть их число только меньше.
+        const calls = ((await readText(callsFile)) ?? '')
+          .split('\n')
+          .filter((line) => line !== '').length;
+        expect(calls).toBeGreaterThanOrEqual(1);
+        expect(calls).toBeLessThanOrEqual(5);
         const s = await state(rig);
         expect(s.result).toBe(`failed ${VERSION} still_running\n`);
         expect(s.app).toBe('old');

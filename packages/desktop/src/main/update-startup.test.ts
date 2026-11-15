@@ -511,7 +511,7 @@ interface Rig extends Place {
  * `release` на каждом вызове, пока тест его не создаст; `held` получает pid ждущего `mv`.
  */
 async function makeRig(
-  opts: { holdMv?: boolean; openCode?: number; psLines?: string[] } = {},
+  opts: { holdMv?: boolean; openCode?: number; psLines?: string[]; waitMs?: number } = {},
 ): Promise<Rig> {
   const place = await makePlace();
   await writeFile(path.join(place.bundle.app, 'Contents', 'MacOS', 'Parley'), 'old');
@@ -552,7 +552,11 @@ async function makeRig(
   await Promise.all([chmod(open, 0o755), chmod(ps, 0o755), chmod(mv, 0o755)]);
 
   const helper = path.join(stageDir, 'helper.sh');
-  await writeFile(helper, helperScript({ waitMs: 300, mv, open, ps }), { mode: 0o700 });
+  // Предел с запасом: ожидание кончается, как только условие выполнено, а под нагрузкой короткий предел успевал
+  // истечь раньше, чем приходил список процессов. Случай, который ждёт самого истечения, задаёт короткий предел сам.
+  await writeFile(helper, helperScript({ waitMs: opts.waitMs ?? 5000, mv, open, ps }), {
+    mode: 0o700,
+  });
   return { ...place, stageDir, staged, helper, openLog, held, release, psOut };
 }
 
@@ -617,7 +621,7 @@ describe.skipIf(process.platform !== 'darwin')(
       it(
         'still_running: прежнее приложение на месте, запущена прежняя версия -> тост отказа; каталог убрал сценарий',
         async () => {
-          const rig = await makeRig();
+          const rig = await makeRig({ waitMs: 300 });
           // Другой экземпляр того же приложения: его исполняемый файл лежит в <приложение>/Contents/MacOS/.
           await writeFile(rig.psOut, `${rig.bundle.app}/Contents/MacOS/Parley\n`);
           expect(await startHelper(rig).done).toBe(0);
