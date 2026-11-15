@@ -36,7 +36,7 @@
 
 import { memo, useRef, useState } from 'react';
 import { create } from 'zustand';
-import { AtSign, ChevronDown, Hash, Mail, Plus } from 'lucide-react';
+import { AtSign, ChevronDown, ChevronUp, Hash, Mail, Plus } from 'lucide-react';
 import type { SessionLifecycle, WindowWorkEntry } from '@parley/core';
 import { sessionDotStateWithNeed, type DotState } from '@parley/core/session-state';
 import { refKey } from '@parley/protocol';
@@ -318,6 +318,7 @@ export const WorkCard = memo(function WorkCard({
           }}
           className={cn(toggleClass, 'mt-px')}
         >
+          <ChevronUp className="mr-1 size-[13px] shrink-0" aria-hidden="true" />
           {hideLabel}
         </button>
       ) : null}

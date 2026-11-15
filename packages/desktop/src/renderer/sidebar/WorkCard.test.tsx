@@ -357,6 +357,7 @@ describe('WorkCard (тест 3)', () => {
     expect(card().querySelectorAll('[data-closed-sessions-list] [data-session-id]')).toHaveLength(11);
     const hide = card().querySelector('[data-closed-sessions-hide]') as HTMLElement;
     expect(hide.textContent).toBe('Hide closed');
+    expect(hide.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true');
     expect((card().querySelector('[data-closed-sessions-list]') as HTMLElement).compareDocumentPosition(hide) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
     fireEvent.click(hide);
     expect(card().querySelector('[data-closed-sessions-list]')).toBeNull();
