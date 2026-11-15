@@ -53,9 +53,9 @@ export function helperScript(options: HelperOptions = {}): string {
 
   // Внимание: это обычный шаблон JS. `\${` даёт `${` оболочки, `\\n` даёт `\n` в printf.
   return `#!/bin/sh
-# Замена Parley на подготовленную версию (спека self-update §5.5).
-# Запуск: /bin/sh helper.sh <pid окна> <приложение> <подготовленное приложение> <версия> <файл итога>
-# Пути и версия приходят только аргументами и всегда раскрываются в двойных кавычках.
+# Replace Parley with the prepared version (spec self-update §5.5).
+# Run: /bin/sh helper.sh <window pid> <app> <prepared app> <version> <result file>
+# Paths and version arrive only as arguments and are always expanded inside double quotes.
 
 MV=${tool('mv')}
 RM=${tool('rm')}
@@ -76,7 +76,7 @@ STAGEDIR=
 OLD=
 LOCK=
 
-# Версия вида X.Y.Z, только цифры и две точки.
+# Version of the form X.Y.Z: digits only and two dots.
 is_version() {
   case $1 in ''|*[!0-9.]*|*.) return 1 ;; esac
   _old_ifs=$IFS
@@ -86,7 +86,7 @@ is_version() {
   [ "$#" -eq 3 ] && [ -n "$1" ] && [ -n "$2" ] && [ -n "$3" ]
 }
 
-# Проверка аргументов до любого действия: сломанный вызов ничего не трогает.
+# Argument check before any action: a broken call touches nothing.
 check_args() {
   [ "$#" -eq 5 ] || return 1
   case $1 in ''|*[!0-9]*) return 1 ;; esac
@@ -100,7 +100,7 @@ check_args() {
   case $APPBASE in ?*.app) ;; *) return 1 ;; esac
   case \${3##*/} in ?*) ;; *) return 1 ;; esac
   STAGEDIR=\${3%/*}
-  # Каталог подготовки — рядом с приложением и с именем из спеки: его сценарий удаляет целиком.
+  # The staging directory sits next to the app and has the name from the spec: the script removes it whole.
   [ "\${STAGEDIR%/*}" = "$APPDIR" ] || return 1
   case \${STAGEDIR##*/} in ".$APPBASE.update-"?*) ;; *) return 1 ;; esac
   PID=$1
@@ -117,7 +117,7 @@ exists() {
   [ -e "$1" ] || [ -L "$1" ]
 }
 
-# Удаление дерева: только непустой абсолютный путь, не из одних слэшей.
+# Tree removal: only a non-empty absolute path, not made of slashes alone.
 rm_tree() {
   case $1 in /*[!/]*) ;; *) return 1 ;; esac
   "$RM" -rf -- "$1"
@@ -134,7 +134,7 @@ remove_staging() {
   return 0
 }
 
-# Шаг 1: ждёт конца процесса окна.
+# Step 1: wait for the window process to end.
 wait_window() {
   _n=0
   while kill -0 "$PID" 2>/dev/null; do
@@ -145,16 +145,16 @@ wait_window() {
   return 0
 }
 
-# Шаг 1а: замок замены — замок ядра на файле рядом с приложением, без ожидания. Ядро снимает его с концом
-# последнего процесса, державшего дескриптор. Файл замка не удаляется и ничего не содержит.
-# Ошибка открытия под \`||\` оболочку не завершает (проверено на /bin/sh macOS); \`command exec\` не годится: bash 3.2 падает.
+# Step 1a: swap lock, a kernel lock on a file next to the app, without waiting. The kernel releases it when the
+# last process holding the descriptor ends. The lock file is never removed and holds nothing.
+# A failed open under \`||\` does not end the shell (checked on macOS /bin/sh); \`command exec\` does not work: bash 3.2 crashes.
 take_lock() {
   exec 9>"$LOCK" || return 1
   "$LOCKF" -s -t 0 9
 }
 
-# Шаг 2: есть ли процесс, чей исполняемый файл лежит в <приложение>/Contents/MacOS/ (точное начало строки).
-# Не удалось получить список — считаем, что процесс есть.
+# Step 2: is there a process whose executable lies in <app>/Contents/MacOS/ (exact start of the string).
+# If the list could not be obtained, assume a process exists.
 others_running() {
   _out=$("$PS" -axo comm= 2>/dev/null) || return 0
   _prefix="$APP/Contents/MacOS/"
@@ -176,7 +176,7 @@ wait_others() {
   return 0
 }
 
-# Отказ шагов 2-6: итог; если приложение на месте — убрать каталог подготовки и открыть прежнее приложение.
+# Steps 2-6 refused: write the result; if the app is in place, remove the staging directory and open the old app.
 fail() {
   write_result "failed $VERSION $1"
   if [ -d "$APP" ]; then
@@ -186,7 +186,7 @@ fail() {
   return 0
 }
 
-# Возврат прежнего приложения на место: не удался (в том числе место занято) — приложения нет.
+# Put the old app back in place: if that failed (including when the place is taken), there is no app.
 put_back() {
   exists "$APP" && return 1
   "$MV" "$OLD" "$APP"
@@ -195,10 +195,10 @@ put_back() {
 main() {
   check_args "$@" || return 64
 
-  # quit_timeout: ничего не тронуто, итога нет.
+  # quit_timeout: nothing touched, no result.
   wait_window || return 0
 
-  # busy: свой каталог подготовки убрать, приложение открыть; итога нет.
+  # busy: remove own staging directory, open the app; no result.
   if ! take_lock; then
     remove_staging
     "$OPEN" "$APP" 9>&- || :
@@ -215,7 +215,7 @@ main() {
     return 0
   fi
 
-  # Шаг 4: остаток прежней замены; приложение на месте, значит, это не единственная копия.
+  # Step 4: leftover of a previous swap; the app is in place, so this is not the only copy.
   if exists "$OLD"; then
     if ! rm_tree "$OLD"; then
       fail swap_failed
@@ -223,13 +223,13 @@ main() {
     fi
   fi
 
-  # Шаг 5: перед каждым mv места назначения не должно быть: mv на существующий каталог кладёт источник внутрь.
+  # Step 5: before each mv the destination must not exist: mv onto an existing directory puts the source inside.
   if exists "$OLD" || ! "$MV" "$APP" "$OLD"; then
     fail swap_failed
     return 0
   fi
 
-  # Шаг 6: подготовленное — на место; не вышло — вернуть прежнее.
+  # Step 6: prepared app into place; if that failed, put the old one back.
   if exists "$APP" || ! "$MV" "$STAGED" "$APP"; then
     if put_back; then
       fail swap_failed
@@ -239,13 +239,13 @@ main() {
     return 0
   fi
 
-  # Шаг 7: итог, затем открыть новое приложение с закрытым дескриптором замка.
+  # Step 7: result, then open the new app with the lock descriptor closed.
   write_result "swapped $VERSION"
   if ! "$OPEN" "$APP" 9>&-; then
     write_result "failed $VERSION launch_failed"
   fi
 
-  # Шаг 8: каталог подготовки.
+  # Step 8: staging directory.
   remove_staging
   return 0
 }
