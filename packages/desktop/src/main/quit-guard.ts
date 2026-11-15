@@ -26,6 +26,11 @@ export interface QuitGuardDeps {
   /** Тестовый режим: выход по-старому, хост живёт. */
   keepHost: boolean;
   log(line: string): void;
+  /**
+   * Как повторить выход после вопроса и остановки хоста. По умолчанию — прямой `quit()`; main передаёт сюда
+   * «свой» вызов намерения выхода (`quit-intent.ts`), чтобы повтор не сбросил намерение «Restart now».
+   */
+  retryQuit?: (quit: () => void) => void;
 }
 
 /** Текст вопроса о выходе; `count` null — хост не отвечает. */
@@ -59,7 +64,9 @@ export function guardAppQuit(app: QuitGuardApp, deps: QuitGuardDeps): { systemSh
       deps.log(`quit: ${error instanceof Error ? error.message : String(error)}`);
     }
     allowed = true;
-    app.quit();
+    const quit = (): void => app.quit();
+    if (deps.retryQuit === undefined) quit();
+    else deps.retryQuit(quit);
   };
 
   const onWillQuit = (event: { preventDefault(): void }): void => {

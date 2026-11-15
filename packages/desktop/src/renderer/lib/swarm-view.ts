@@ -28,7 +28,7 @@ export function formatSwarmTimer(ms: number): string {
 
 /**
  * Рой виден на карточке: идущий; законченный `done`/`failed`, пока человек не видел итог; остальные законченные
- * (и просмотренные) — только при раскрытых закрытых («N more closed»).
+ * (и просмотренные) — только в блоке «Closed sessions» (`sort.ts#closedRows`).
  */
 export function isSwarmShown(swarm: WorkSwarm, showClosed: boolean): boolean {
   if (!isSwarmTerminal(swarm.status)) return true;

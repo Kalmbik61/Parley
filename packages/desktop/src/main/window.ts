@@ -91,7 +91,7 @@ export function createMainWindow(input: {
 
 /**
  * Признак «страница окна загружена» (`loadedWindows` в `main/index.ts`): только такому окну main шлёт события, на
- * которые подписан прелоад (`app:focus-target`, `app:update-available`), — раньше прелоад ещё не слушает. Признак
+ * которые подписан прелоад (`app:focus-target`, `app:update-state`), — раньше прелоад ещё не слушает. Признак
  * ставит `did-finish-load`, снимает навигация главного кадра на другой документ, то есть перезагрузка окна.
  *
  * По `did-start-loading` признак не снимается: загрузка `<webview>` (вкладка браузера), подкадра страницы окна и
@@ -144,7 +144,15 @@ export interface QuittableApp {
 export function guardWindowClose(
   window: ClosableWindow,
   app: QuittableApp,
-  options: { askUnresponsive?: () => Promise<'quit' | 'wait'> } = {},
+  options: {
+    askUnresponsive?: () => Promise<'quit' | 'wait'>;
+    /**
+     * Как повторить выход: main передаёт «свой» вызов намерения выхода (`quit-intent.ts`). Применяется в ответе
+     * «закрыть» на вопрос, заданный из-за выхода, и в «Quit anyway», если вопрос тоже был из-за выхода
+     * (`quitting`); без него и в остальных случаях — прямой `app.quit()`.
+     */
+    retryQuit?: (quit: () => void) => void;
+  } = {},
 ): { setDirtyCount(count: number): void; answer(answer: 'close' | 'cancel'): void; reset(): void; dispose(): void } {
   let dirty = 0;
   /** Ответ «закрыть» получен: следующий `close` (и `before-quit`) пропускается без вопроса. */
@@ -162,6 +170,12 @@ export function guardWindowClose(
   /** Нативный вопрос о зависшей странице открыт. */
   let promptingUnresponsive = false;
 
+  const quitAgain = (): void => {
+    const quit = (): void => app.quit();
+    if (options.retryQuit === undefined) quit();
+    else options.retryQuit(quit);
+  };
+
   const promptIfHung = (): void => {
     const ask = options.askUnresponsive;
     if (ask === undefined || !unresponsive || !asking || promptingUnresponsive || window.isDestroyed()) return;
@@ -170,9 +184,13 @@ export function guardWindowClose(
       promptingUnresponsive = false;
       if (answer !== 'quit' || window.isDestroyed()) return;
       allowed = true;
+      // Читаем до destroy: разрушение окна может сбросить отметку (`reset`) раньше повтора.
+      const viaQuit = quitting;
       // destroy, а не close: зависшая страница не ответит и на `beforeunload`.
       window.destroy();
-      app.quit();
+      // Намерение выхода живёт только через повтор того выхода, из-за которого спрашивали.
+      if (viaQuit) quitAgain();
+      else app.quit();
     });
   };
 
@@ -225,7 +243,7 @@ export function guardWindowClose(
       reloading = false;
       if (answer === 'cancel') return;
       allowed = true;
-      if (quit) app.quit();
+      if (quit) quitAgain();
       else if (window.isDestroyed()) return;
       else if (close || !reload) window.close();
       else window.webContents.reload();

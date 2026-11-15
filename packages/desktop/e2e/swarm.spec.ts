@@ -467,8 +467,9 @@ test.describe('рой работы (спека роя v1, раздел 9)', () =
     for (const id of drones) await expect.poll(() => mapOf(opened).sessions.find((session) => session.id === id)?.lifecycle, { timeout: 20_000 }).toBe('closed');
     // Королева остаётся обычной сессией: с ней можно продолжить разговор.
     expect(mapOf(opened).sessions.find((session) => session.id === queen)?.lifecycle).not.toBe('closed');
-    // Отменённый рой с карточки уходит (виден только при «N more closed»), значка нет.
+    // Отменённый рой с основных строк уходит в свёрнутый блок «Closed sessions», значка нет.
     await expect(row).toHaveCount(0, { timeout: 20_000 });
+    await expect(window.locator(`[data-work-key="${workKey}"] [data-closed-sessions]`)).toHaveAttribute('aria-expanded', 'false');
     await expect(window.locator(`[data-work-key="${workKey}"] [data-swarm-badge]`)).toHaveCount(0);
     await shot(window, '4-cancelled');
   });

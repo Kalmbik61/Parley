@@ -30,7 +30,7 @@ import { createFakeBridge } from '../test-utils/fake-bridge.js';
 import { makeRoom, makeSession, makeWork } from '../test-utils/work-fixtures.js';
 import { RoomRow } from './RoomRow.js';
 import { SessionRow } from './SessionRow.js';
-import { cardRows } from './sort.js';
+import { cardRows, closedRows } from './sort.js';
 import { useComposerDropTarget, useFeedDropTarget } from './use-drop-target.js';
 
 const PROJECT = '/tmp/proj';
@@ -72,7 +72,7 @@ function Card({ entry, showClosed = false }: { entry: WindowWorkEntry; showClose
   return (
     <DndContext sensors={sensors} collisionDetection={collisionDetection} {...dragToStore}>
       <CardSource />
-      {cardRows(entry.map, showClosed).map((row) =>
+      {[...cardRows(entry.map), ...(showClosed ? closedRows(entry.map) : [])].map((row) =>
         row.kind === 'session' ? (
           <SessionRow
             key={row.session.id}

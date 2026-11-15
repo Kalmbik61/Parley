@@ -4,13 +4,17 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
-## Unreleased
+## 0.36.0
 
 ### Added
+
+- **Parley updates itself on a click.** When the toast announces a new release, **Update** downloads the archive from GitHub, checks it against the release's `SHA256SUMS.txt`, unpacks it next to the app and offers **Restart now**; the same button is in Settings → Notifications. Restarting is an ordinary quit, so it asks about unsaved files and running sessions and stops the agents, and cancelling any question keeps the old version. A small script then swaps the app and opens the new one; the old app stays next to it as `.Parley.app.old` until the new version has started once, and after a failed swap Parley starts the previous version and says why. Where Parley cannot replace itself (a disk image, a folder you cannot write to) the toast keeps **Download** and the manual steps. macOS asks for the permissions again, as after any manual update. If an update stops half way and Parley is gone, run `mv /Applications/.Parley.app.old /Applications/Parley.app`. Not in this version: no update without a click, no resume of a download, and the release is verified by its published checksum only.
 
 - **Autonomous mode for the assistant.** A new switch in Settings → Assistant, **Autonomous mode**, is off by default. When it is on, an action you ask the assistant for on the island runs at once, without a confirmation card; the card is still recorded, and Settings → Assistant lists the **Recent actions**. Telegram and the phone still ask with a card, as before. The island shows an **Auto** badge, the progress of a multi-step plan and a **Stop** button (in the compact Live view too). The assistant now also reports the answer of a session it gave work to: by voice while Live is on, otherwise as a card on the island that is read aloud as usual. This needs a window and a host that both know the mode; with an older window the island has no badge and no Stop button, and the result is announced like any other result. The host database gets two schema migrations (15 and 16).
 
 ### Changed
+
+- **Closed sessions and archived rooms sit in their own blocks in the sidebar.** A work card now ends with a **Closed sessions** block and an **Archived rooms** block, each under a header with a chevron and a count that opens and closes it. Closed sessions are no longer mixed into the card's tree or into the rooms: newest first, flat, and finished swarms come first. Under a block with more than 10 rows a second **Hide closed** / **Hide archived rooms** button closes it from the bottom. → and ← still open and close both blocks at once.
 
 - **The assistant's voice prompt no longer promises a confirmation card for every action.** The lines about actions in `VOICE_PROMPT` are worded the same whether autonomous mode is on or off.
 
@@ -20,7 +24,7 @@ All notable changes to Parley are documented in this file.
 
 - **The Claude limit follows a reset inside a window.** After the vendor reset the Claude limits in the middle of a window, Parley kept showing the old, higher percentage until the window ended: in the status bar, on the provider card, in the number agents read and in the suggested switch target. It now follows the sessions that saw the new usage, and existing limit files need no cleanup.
 
-- **A collapsed room counts the agents its expanded view shows.** The provider badges under a collapsed room counted every participant, closed ones too, so a room could show six Claude agents while expanding it listed four. Closed participants are now counted only while the card shows closed sessions ("N more closed"), the same rule the expanded room follows.
+- **A collapsed room counts the agents its expanded view shows.** The provider badges under a collapsed room counted every participant, closed ones too, so a room could show six Claude agents while expanding it listed four. Closed participants are no longer counted: the expanded room does not list them either, they are in the **Closed sessions** block of the card.
 
 ## 0.35.0
 

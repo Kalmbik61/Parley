@@ -115,6 +115,36 @@ describe('guardAppQuit', () => {
     expect(deps.ask).not.toHaveBeenCalled();
   });
 
+  it('retryQuit: повтор выхода идёт через него и после остановки хоста; сам quit() зовёт только он', async () => {
+    const retried: string[] = [];
+    const retryQuit = vi.fn((quit: () => void) => {
+      retried.push('retry');
+      quit();
+    });
+    const { app, steps } = setup({ retryQuit });
+    expect(app.willQuit()).toBe(true);
+    await vi.waitFor(() => expect(steps).toEqual(['stop-host', 'quit']));
+    expect(retryQuit).toHaveBeenCalledTimes(1);
+    expect(retried).toEqual(['retry']);
+    expect(app.willQuit()).toBe(false);
+  });
+
+  it('retryQuit, не вызвавший quit, выход не повторяет: прямого quit() в обход него нет', async () => {
+    const retryQuit = vi.fn();
+    const { app, steps } = setup({ retryQuit });
+    expect(app.willQuit()).toBe(true);
+    await vi.waitFor(() => expect(retryQuit).toHaveBeenCalledTimes(1));
+    expect(steps).toEqual(['stop-host']);
+  });
+
+  it('retryQuit не вызывается при отмене вопроса', async () => {
+    const retryQuit = vi.fn();
+    const { app, steps } = setup({ ask: vi.fn(async () => 'cancel' as const), retryQuit });
+    expect(app.willQuit()).toBe(true);
+    await vi.waitFor(() => expect(steps).toEqual(['cancel']));
+    expect(retryQuit).not.toHaveBeenCalled();
+  });
+
   it('повторный will-quit, пока вопрос открыт, — тоже отменён, второго вопроса нет', async () => {
     let answer!: (value: 'stop' | 'cancel') => void;
     const ask = vi.fn(
@@ -246,11 +276,82 @@ describe('main/index.ts: что делается до ответа на вопр
   const index = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'index.ts'), 'utf8');
 
   it('на will-quit и before-quit ничего не вешается: выход может быть отменён, вопрос ещё открыт', () => {
-    expect(index).not.toMatch(/app\.on\('(will-quit|before-quit)'/);
+    // Единственное исключение — сброс намерения «Restart now» (`quit-intent.ts`): он ничего не отменяет и не гасит.
+    const intentListener = "app.on('before-quit', () => quitIntent.onBeforeQuit());";
+    expect(index).toContain(intentListener);
+    expect(index.replace(intentListener, '')).not.toMatch(/app\.on\('(will-quit|before-quit)'/);
   });
 
   it('привязка works и соединение с хостом разбираются на quit', () => {
     expect(index).toMatch(/app\.on\('quit', \(\) => \{[^}]*worksBinding\?\.dispose\(\)[^}]*connection\.close\(\)/);
+  });
+
+  /** Текст вызова от `start` до закрывающей строки `});` с тем же отступом, что у строки начала. */
+  function callBlock(start: number): string {
+    const lineStart = index.lastIndexOf('\n', start) + 1;
+    const indent = /^ */.exec(index.slice(lineStart))![0];
+    const end = index.indexOf(`\n${indent}});`, start);
+    expect(end).toBeGreaterThan(start);
+    return index.slice(start, end);
+  }
+
+  const RETRY = 'retryQuit: (quit) => quitIntent.ownQuit(quit),';
+
+  it("powerMonitor 'shutdown': намерение «Restart now» сбрасывается раньше app.quit()", () => {
+    const start = index.indexOf("powerMonitor.on('shutdown'");
+    expect(start).toBeGreaterThan(-1);
+    const handler = callBlock(start);
+    const clear = handler.indexOf('quitIntent.clear();');
+    const quit = handler.indexOf('app.quit();');
+    expect(clear).toBeGreaterThan(-1);
+    expect(quit).toBeGreaterThan(-1);
+    expect(clear).toBeLessThan(quit);
+  });
+
+  it('повторы выхода сторожами идут через quitIntent.ownQuit: guardAppQuit и каждый guardWindowClose', () => {
+    const appStart = index.indexOf('guardAppQuit(app, {');
+    expect(appStart).toBeGreaterThan(-1);
+    expect(callBlock(appStart)).toContain(RETRY);
+
+    const calls = [...index.matchAll(/guardWindowClose\(/g)];
+    expect(calls.length).toBeGreaterThan(0);
+    for (const call of calls) expect(callBlock(call.index!)).toContain(RETRY);
+  });
+
+  it('шаг stopHost сторожа сперва ждёт updateInstaller.stopForQuit(), потом гасит хост', () => {
+    const start = index.indexOf('guardAppQuit(app, {');
+    expect(start).toBeGreaterThan(-1);
+    const block = callBlock(start);
+    const step = block.indexOf('stopHost: async () => {');
+    expect(step).toBeGreaterThan(-1);
+    const body = block.slice(step);
+    const stopForQuit = body.indexOf('await updateInstaller.stopForQuit();');
+    const stopHost = body.indexOf('await connection.stopHost();');
+    expect(stopForQuit).toBeGreaterThan(-1);
+    expect(stopHost).toBeGreaterThan(-1);
+    expect(stopForQuit).toBeLessThan(stopHost);
+  });
+
+  it('переключатель «Check for updates» доходит до установщика: при старте до проверки и при каждом сохранении настроек', () => {
+    const start = index.indexOf('updates.start();');
+    expect(start).toBeGreaterThan(-1);
+    const initial = index.indexOf('if (ui.checkForUpdates) updateInstaller.checksEnabled();');
+    expect(initial).toBeGreaterThan(-1);
+    expect(initial).toBeLessThan(start);
+    expect(index).toContain('if (current.checkForUpdates) updateInstaller.checksEnabled();');
+    expect(index).toContain('else void updateInstaller.checksDisabled();');
+  });
+
+  it("app.once('quit') зовёт updateInstaller.onQuit()", () => {
+    expect(index).toContain("app.once('quit', () => updateInstaller.onQuit());");
+  });
+
+  it('runUpdateStartup зовётся раньше, чем создано первое окно', () => {
+    const startup = index.indexOf('runUpdateStartup({');
+    const firstWindow = index.indexOf('mainWindow = openWindow();');
+    expect(startup).toBeGreaterThan(-1);
+    expect(firstWindow).toBeGreaterThan(-1);
+    expect(startup).toBeLessThan(firstWindow);
   });
 });
 

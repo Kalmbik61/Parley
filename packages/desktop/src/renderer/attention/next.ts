@@ -22,7 +22,7 @@ import { tabId } from '../layout/ids.js';
 import { selectedSessionOf, useLayoutStore } from '../layout/store.js';
 import { groups, openTab } from '../layout/tree.js';
 import { workKey } from '../lib/tree-order.js';
-import { cardRows, type SidebarSection } from '../sidebar/sort.js';
+import { cardRows, closedRows, type SidebarSection } from '../sidebar/sort.js';
 import { useSidebarSectionsStore } from '../sidebar/use-sidebar-sections.js';
 import { useActivityStore, type ActivityEntry } from '../store/activity.js';
 import { useWorksStore } from '../store/works.js';
@@ -82,8 +82,8 @@ export function nextAttentionTarget(
         const level = sessionAttention(session, activity[refKey(ref)]?.activity ?? null);
         visit({ kind: 'session', ref }, level === 'needs-you' ? 0 : level === 'unseen' ? 2 : null);
       };
-      // Порядок строк карточки (`WorkCard`), закрытые тоже: текущей может быть вкладка закрытой сессии.
-      for (const row of cardRows(entry.map, true)) {
+      // Порядок строк карточки (`WorkCard`), затем блок «Closed sessions»: текущей может быть вкладка закрытой сессии.
+      for (const row of [...cardRows(entry.map), ...closedRows(entry.map)]) {
         if (row.kind === 'session') {
           visitSession(row.session);
           continue;

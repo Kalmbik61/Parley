@@ -375,6 +375,60 @@ describe('guardWindowClose (тест 11 куска 7.3a)', () => {
     expect(t.quits()).toBe(1);
   });
 
+  it('retryQuit: ответ close на вопрос из-за ⌘Q повторяет выход через него; на вопрос из-за крестика — не использует', () => {
+    const t = fakeCloseTargets();
+    const retryQuit = vi.fn((quit: () => void) => quit());
+    const guard = guardWindowClose(t.window, t.app, { retryQuit });
+    guard.setDirtyCount(1);
+    t.quitApp();
+    guard.answer('close');
+    expect(retryQuit).toHaveBeenCalledTimes(1);
+    expect(t.quits()).toBe(1);
+
+    const closing = fakeCloseTargets();
+    const closingRetry = vi.fn((quit: () => void) => quit());
+    const closingGuard = guardWindowClose(closing.window, closing.app, { retryQuit: closingRetry });
+    closingGuard.setDirtyCount(1);
+    closing.closeWindow();
+    closingGuard.answer('close');
+    expect(closingRetry).not.toHaveBeenCalled();
+    expect(closing.closed()).toBe(1);
+    expect(closing.quits()).toBe(0);
+  });
+
+  it('retryQuit, не вызвавший quit, оставляет выход неповторённым: прямого app.quit() в обход него нет', () => {
+    const t = fakeCloseTargets();
+    const retryQuit = vi.fn();
+    const guard = guardWindowClose(t.window, t.app, { retryQuit });
+    guard.setDirtyCount(1);
+    t.quitApp();
+    guard.answer('close');
+    expect(retryQuit).toHaveBeenCalledTimes(1);
+    expect(t.quits()).toBe(0);
+  });
+
+  it('retryQuit: «Quit anyway» при вопросе из-за выхода идёт через него, при вопросе из-за крестика — прямой app.quit()', async () => {
+    const viaQuit = fakeCloseTargets();
+    const retryQuit = vi.fn((quit: () => void) => quit());
+    const guard = guardWindowClose(viaQuit.window, viaQuit.app, { askUnresponsive: async () => 'quit', retryQuit });
+    guard.setDirtyCount(1);
+    viaQuit.quitApp();
+    viaQuit.contents('unresponsive');
+    await vi.waitFor(() => expect(viaQuit.destroyed()).toBe(1));
+    expect(retryQuit).toHaveBeenCalledTimes(1);
+    expect(viaQuit.quits()).toBe(1);
+
+    const viaClose = fakeCloseTargets();
+    const closeRetry = vi.fn((quit: () => void) => quit());
+    const closeGuard = guardWindowClose(viaClose.window, viaClose.app, { askUnresponsive: async () => 'quit', retryQuit: closeRetry });
+    closeGuard.setDirtyCount(1);
+    viaClose.closeWindow();
+    viaClose.contents('unresponsive');
+    await vi.waitFor(() => expect(viaClose.destroyed()).toBe(1));
+    expect(closeRetry).not.toHaveBeenCalled();
+    expect(viaClose.quits()).toBe(1);
+  });
+
   it('ответ без вопроса ничего не делает; dispose снимает слушатель before-quit', () => {
     const t = fakeCloseTargets();
     const guard = guardWindowClose(t.window, t.app);

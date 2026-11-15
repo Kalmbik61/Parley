@@ -125,7 +125,7 @@ Parley.app (window)  ◀── unix socket ──▶  parley-host  ◀── PTY
   to the Anthropic or OpenAI APIs for the agents (only the optional assistant voice calls OpenAI).
 - **Local only.** The host runs the agents' terminals and outlives the window. No server, no
   telemetry. Parley's own requests are a once-a-day release check on GitHub (you can turn it
-  off), a daily check of the latest CLI versions (npm registry, GitHub, the Homebrew cask API),
+  off), the download of a release archive and its `SHA256SUMS.txt` from GitHub when you press Update, a daily check of the latest CLI versions (npm registry, GitHub, the Homebrew cask API),
   the installer downloads from the vendors' URLs when you press Install, and, for GLM, a quota
   query to Z.ai. With **Remote access** on, the separate bridge
   process also connects out to the relay you chose (and, when push works, to the push gateway);
@@ -238,9 +238,28 @@ Parley (the button appears after the first attempt to open the app).
 ### Updates
 
 Once a day Parley checks GitHub for a new release and shows a toast when one is out (turn it
-off in Settings → Notifications); it does not update itself. Quit Parley with ⌘Q (this also stops its agents), download the new `.dmg`, replace the
-app in Applications and run the `xattr` command again: macOS treats every unsigned build as a
-new app. Your data lives outside the app and stays.
+off in Settings → Notifications). Press **Update** in the toast (or in the same place in
+Settings → Notifications): Parley downloads the release archive, checks it against the
+release's `SHA256SUMS.txt`, unpacks it next to the app and shows **Restart now**. Nothing is
+replaced before that click, and **Cancel** stops the download. Restarting is an ordinary quit:
+it asks about unsaved files and running sessions, stops the agents, and a **Cancel** in any of
+those questions keeps the old version running. After the restart the new version opens, and the
+old app stays next to it as the hidden `.Parley.app.old`; the new version removes it in the
+background on its first start once the swap result confirms it is running, and if that
+confirmation did not happen (an interrupted swap), `.Parley.app.old` stays until the next update.
+
+The toast shows **Download** instead of **Update** when Parley cannot replace itself: it runs
+from a disk image or from a place you cannot write to, or an update failed (the toast then names the reason).
+Then update by hand. Quit Parley with ⌘Q (this also stops its agents), download the new `.dmg`, replace the
+app in Applications and run the `xattr` command again. Either way macOS asks for the
+permissions again: it treats every unsigned build as a new
+app. Your data lives outside the app and stays.
+
+If an update stops half way and Parley is gone from Applications, put the old one back:
+
+```bash
+mv /Applications/.Parley.app.old /Applications/Parley.app
+```
 
 ## Remote access (mobile)
 

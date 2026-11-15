@@ -43,6 +43,7 @@ import { ToggleGroup, ToggleGroupItem } from '../../ui/toggle-group.js';
 import { VoiceSettings } from '../../voice/VoiceSettings.js';
 import { hostMethods } from '../../lib/capabilities.js';
 import { useHostStore } from '../../store/host.js';
+import { UpdateSettingsRow } from '../../update/UpdateSettingsRow.js';
 import { AssistantSettings } from './AssistantSettings.js';
 import { ProjectsSettings } from './ProjectsSettings.js';
 import { ProvidersSettings } from './ProvidersSettings.js';
@@ -702,6 +703,8 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
                   onCheckedChange={(checked) => patchUi({ checkForUpdates: checked })}
                 />
                 <p className="text-xs text-muted-foreground">{S.settings.checkForUpdatesHint}</p>
+                {/* Самообновление (спека self-update §4.2): строки нет, пока проверка выключена или нового нет. */}
+                {ui.checkForUpdates ? <UpdateSettingsRow bridge={bridge} /> : null}
               </>
             ) : null}
             {config !== null ? (

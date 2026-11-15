@@ -18,6 +18,7 @@ import { STATE_WORDS } from '@parley/core/session-state';
 import { providerLabel } from '@parley/core/stuck';
 import { CODEX_FEED_MIN_VERSION, FEED_MIN_VERSION, HOST_ERROR_REASONS, type FolderTrustCard, type HostNotice, type MailWait, type NoticeKind, type ProviderCheckReason } from '@parley/protocol';
 import type { ContextKind } from './context-markdown.js';
+import type { UpdateFailure, UpdateResultFailure } from './bridge.js';
 import type { IpcErrorInfo } from './ipc-error.js';
 
 /** Что за файл-контекст — для строки в ввод CLI (`S.contextFile.terminalLine`). */
@@ -570,11 +571,11 @@ export const S = {
     /** `aria-label` и тултип «+» заголовка проекта: проект называется (спека окна 2026-09-29, 1.2). */
     newWorkspaceInProject: (project: string): string => `New workspace in ${project}`,
     sessionCount: (n: number): string => (n === 1 ? '1 session' : `${n} sessions`),
-    /** Строка под сессиями карточки: сколько закрытых спрятано; «Hide closed» — прячет раскрытые. */
-    moreClosed: (n: number): string => `${n} more closed`,
+    /** Заголовок-переключатель блока закрытых сессий карточки (план 2026-11-15); текст один в обоих состояниях. «Hide closed» — вторая кнопка под длинным раскрытым блоком. */
+    closedSessions: 'Closed sessions',
     hideClosed: 'Hide closed',
-    /** Ссылка под строками карточки: архивные комнаты работы спрятаны под ней; «Hide archived rooms» прячет раскрытые. */
-    archivedRooms: (n: number): string => (n === 1 ? '1 archived room' : `${n} archived rooms`),
+    /** Заголовок-переключатель блока архивных комнат карточки; «Hide archived rooms» — вторая кнопка под длинным блоком. */
+    archivedRooms: 'Archived rooms',
     hideArchivedRooms: 'Hide archived rooms',
     /** Ссылка внизу группы проекта: архивные работы проекта спрятаны под ней; «Hide archived» прячет раскрытые. */
     archivedWorks: (n: number): string => `${n} archived`,
@@ -1755,6 +1756,50 @@ export const S = {
     /** Открывает страницу релиза в браузере: без подписи Apple окно само не обновляется. */
     download: 'Download',
     later: 'Later',
+    /** «Update» — скачать и подготовить версию (самообновление, спека §4.1); версию закрытой не записывает. */
+    update: 'Update',
+    cancel: 'Cancel',
+    restartNow: 'Restart now',
+    restartToUpdate: 'Restart to update',
+    tryAgain: 'Try again',
+    /** Процент пропускается, если размер файла неизвестен. */
+    downloading: (version: string, percent: number | null): string =>
+      percent === null ? `Downloading Parley ${version}…` : `Downloading Parley ${version}… ${percent}%`,
+    checking: (version: string): string => `Checking Parley ${version}…`,
+    ready: (version: string): string => `Parley ${version} is ready`,
+    readyHint: 'Restarting stops running agents',
+    failed: (version: string, reason: string): string => `Couldn't update to ${version}: ${reason}`,
+    /** Тост после перезапуска (спека §4.3). */
+    updated: (version: string): string => `Parley updated to ${version}`,
+    failedAfterRestart: (version: string, reason: string): string =>
+      `Couldn't update to ${version}: ${reason}. The previous version is still installed.`,
+    /** Строка в Settings → Notifications (спека §4.2). */
+    row: {
+      available: (version: string): string => `Parley ${version} is available`,
+      downloading: (version: string, percent: number | null): string =>
+        percent === null ? `Downloading ${version}…` : `Downloading ${version} — ${percent}%`,
+      checking: (version: string): string => `Checking ${version}…`,
+      ready: (version: string): string => `${version} is ready to install`,
+      failed: (reason: string): string => `Couldn't update: ${reason}`,
+    },
+    /** Причина отказа попытки — одна строка на каждый код `UpdateFailure`. */
+    failure: {
+      network: 'GitHub did not answer, check your connection',
+      too_large: 'the download is larger than a Parley release should be',
+      checksum: 'the download does not match its checksum',
+      bad_archive: 'the download is not a valid Parley release',
+      disk: 'Parley could not write the update next to the app',
+      cannot_replace: 'Parley can no longer replace itself where it is installed',
+    } satisfies Record<UpdateFailure, string>,
+    /** Причина отказа замены после перезапуска — одна строка на каждый код `UpdateResultFailure`. */
+    resultFailure: {
+      still_running: 'the old Parley did not quit in time',
+      no_app: 'the installed app could not be found',
+      swap_failed: 'the new version could not be put in place',
+      restore_failed: 'the new version could not be put in place and the old one was not restored',
+      launch_failed: 'the new version did not start',
+      helper: 'the update helper could not be started',
+    } satisfies Record<UpdateResultFailure, string>,
   },
 
   /**

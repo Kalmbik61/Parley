@@ -579,14 +579,14 @@ describe('App — тост о новой версии (V6 плана релиз�
     render(<App />);
     await settle();
 
-    act(() => bridge.emitUpdate(update));
+    act(() => bridge.emitUpdateState({ phase: 'available', ...update, canInstall: false }));
 
     expect(toast).toHaveBeenCalledTimes(1);
     expect(toast).toHaveBeenCalledWith('Parley 0.2.0 is available', expect.objectContaining({ id: 'update-available' }));
   });
 
   it('релиз, найденный до подключения, показывается после него — а пока хост не подключён, подписки нет', async () => {
-    bridge.setPendingUpdate(update);
+    bridge.setUpdateState({ phase: 'available', ...update, canInstall: false });
     bridge.emitStatus({ state: 'connecting' });
     render(<App />);
     await settle();
@@ -603,7 +603,7 @@ describe('App — тост о новой версии (V6 плана релиз�
     render(<App />);
     await settle();
 
-    act(() => bridge.emitUpdate(update));
+    act(() => bridge.emitUpdateState({ phase: 'available', ...update, canInstall: false }));
 
     expect(toast).not.toHaveBeenCalled();
   });
@@ -611,7 +611,7 @@ describe('App — тост о новой версии (V6 плана релиз�
   it('смахнутый тост записывает версию в ui.json; новое подключение её уже не показывает', async () => {
     render(<App />);
     await settle();
-    act(() => bridge.emitUpdate(update));
+    act(() => bridge.emitUpdateState({ phase: 'available', ...update, canInstall: false }));
     const options = vi.mocked(toast).mock.calls[0]?.[1] as unknown as { onDismiss: () => void };
 
     act(() => options.onDismiss());
@@ -619,7 +619,7 @@ describe('App — тост о новой версии (V6 плана релиз�
     expect((await bridge.app.loadUi()).dismissedUpdate).toBe('0.2.0');
 
     vi.mocked(toast).mockClear();
-    bridge.setPendingUpdate(update);
+    bridge.setUpdateState({ phase: 'available', ...update, canInstall: false });
     act(() => bridge.emitStatus({ state: 'disconnected', reason: 'Connection to host closed' }));
     act(() => bridge.emitStatus({ state: 'connected', hostVersion: '0.0.0-test', methods: [...REQUIRED_METHODS] }));
     await settle();
@@ -632,7 +632,7 @@ describe('App — тост о новой версии (V6 плана релиз�
   it('«Later» версию в ui.json не записывает; новое подключение тост показывает снова', async () => {
     render(<App />);
     await settle();
-    act(() => bridge.emitUpdate(update));
+    act(() => bridge.emitUpdateState({ phase: 'available', ...update, canInstall: false }));
     const options = vi.mocked(toast).mock.calls[0]?.[1] as unknown as { cancel: { onClick: () => void } };
 
     act(() => options.cancel.onClick());
@@ -640,7 +640,7 @@ describe('App — тост о новой версии (V6 плана релиз�
     expect((await bridge.app.loadUi()).dismissedUpdate).toBeNull();
 
     vi.mocked(toast).mockClear();
-    bridge.setPendingUpdate(update);
+    bridge.setUpdateState({ phase: 'available', ...update, canInstall: false });
     act(() => bridge.emitStatus({ state: 'disconnected', reason: 'Connection to host closed' }));
     act(() => bridge.emitStatus({ state: 'connected', hostVersion: '0.0.0-test', methods: [...REQUIRED_METHODS] }));
     await settle();
