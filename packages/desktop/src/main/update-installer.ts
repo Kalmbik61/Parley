@@ -37,6 +37,9 @@ import {
 /** Имя сценария в каталоге подготовки (§5.4, п. 2). */
 export const HELPER_FILE = 'helper.sh';
 
+/** Сколько выход ждёт отмены идущей попытки (спека §13, п. 14). */
+export const QUIT_STOP_MS = 5000;
+
 /** Намерение «Restart now» (§5.4, клик, п. 3): всё, что нужно слушателю `quit`. */
 export interface SwapIntent {
   version: string;
@@ -123,8 +126,13 @@ export interface InstallerDeps {
 export interface UpdateInstaller {
   /** Проверка нашла релиз (§5.1, «Проверка нашла релиз»). Не бросает. */
   onFound(info: UpdateInfo): Promise<void>;
-  /** Переключатель «Check for updates» выключили: `idle`, попытка отменяется, готовая удаляется. */
+  /**
+   * Переключатель «Check for updates» выключили: `idle`, попытка отменяется, готовая удаляется. Пока проверка
+   * выключена, находки не принимаются и загрузка не начинается (§13, п. 13).
+   */
   checksDisabled(): Promise<void>;
+  /** Переключатель включён (или так было при старте): находки снова принимаются. */
+  checksEnabled(): void;
   /** Из `available` (с `canInstall`) и `failed` — загрузка. Из прочих — ничего. */
   download(): Promise<void>;
   /** Из `downloading` и `verifying` — отмена, `available` с последней найденной версией. */
@@ -134,7 +142,15 @@ export interface UpdateInstaller {
   state(): UpdateState;
   /** Слушатель каждого изменения состояния (текущее состояние сразу не отдаётся); возвращает отписку. */
   onState(listener: (state: UpdateState) => void): () => void;
-  /** Слушатель события `quit`: синхронный, срабатывает один раз (§5.4, «Событие `quit`»). */
+  /**
+   * Шаг обычного выхода, где гасится хост: идущая загрузка или распаковка отменяется целиком (процесс убит, его конец
+   * дождан, каталоги удалены), но ждёт не дольше `QUIT_STOP_MS`. Не бросает (§13, п. 14).
+   */
+  stopForQuit(): Promise<void>;
+  /**
+   * Слушатель события `quit`: синхронный, срабатывает один раз (§5.4, «Событие `quit`»). Без намерения и при идущей
+   * попытке — страховка для выхода в обход `stopForQuit`: запрос оборван и процесс убит без ожидания.
+   */
   onQuit(): void;
   /** Итог замены для тоста при старте: один раз, потом `null`. */
   takeResult(): UpdateResult | null;
@@ -161,6 +177,8 @@ export function createUpdateInstaller(deps: InstallerDeps): UpdateInstaller {
   let counter = 0;
   let installing = false;
   let started = false;
+  /** Переключатель «Check for updates»: пока выключен, находки не принимаются и загрузка не начинается. */
+  let enabled = true;
   let startupResult = deps.startupResult;
 
   const setState = (next: UpdateState): void => {
@@ -289,15 +307,21 @@ export function createUpdateInstaller(deps: InstallerDeps): UpdateInstaller {
     }
   };
 
-  return {
+  const installer: UpdateInstaller = {
     async onFound(info) {
+      if (!enabled) return;
       if (!isNewerVersion(info.version, deps.version)) return;
       latest = info;
       if (!takesFound(info)) return;
       await toAvailable(info, () => latest?.version === info.version && takesFound(info));
     },
 
+    checksEnabled() {
+      enabled = true;
+    },
+
     async checksDisabled() {
+      enabled = false;
       latest = null;
       const wasReady = current.phase === 'ready';
       const attempt = release();
@@ -308,7 +332,7 @@ export function createUpdateInstaller(deps: InstallerDeps): UpdateInstaller {
     },
 
     async download() {
-      if (selected !== null) return;
+      if (!enabled || selected !== null) return;
       let info: UpdateInfo;
       if (current.phase === 'available' && current.canInstall) {
         info = { version: current.version, url: current.url };
@@ -389,11 +413,31 @@ export function createUpdateInstaller(deps: InstallerDeps): UpdateInstaller {
       return () => void listeners.delete(listener);
     },
 
+    async stopForQuit() {
+      if (current.phase !== 'downloading' && current.phase !== 'verifying') return;
+      let timer: unknown = null;
+      const timeout = new Promise<void>((resolve) => {
+        timer = clock.setTimeout(resolve, QUIT_STOP_MS);
+      });
+      try {
+        await Promise.race([installer.cancel(), timeout]);
+      } catch (error) {
+        deps.log('self-update: cannot stop the attempt on quit', error);
+      } finally {
+        clock.clearTimeout(timer);
+      }
+    },
+
     onQuit() {
       if (started) return;
       started = true;
       const swap = deps.intent.take();
-      if (swap === null) return;
+      if (swap === null) {
+        // Обычный выход в обход `stopForQuit` (тестовый режим): запрос и процесс — без ожидания и без удаления
+        // каталогов; их уберёт следующий старт окна (мёртвый pid, файла `handoff` нет).
+        if (current.phase === 'downloading' || current.phase === 'verifying') release()?.abandon();
+        return;
+      }
       // 1. Каталог подготовки отдан сценарию: с этого мига старт окна его не удаляет (§5.4).
       try {
         deps.fs.createEmpty(path.join(path.dirname(swap.staged), HANDOFF_FILE));
@@ -424,6 +468,7 @@ export function createUpdateInstaller(deps: InstallerDeps): UpdateInstaller {
       return result;
     },
   };
+  return installer;
 }
 
 /** Что нужно, чтобы решить, можно ли заменить себя (§5.2). */

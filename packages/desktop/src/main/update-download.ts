@@ -137,6 +137,11 @@ export interface Attempt {
    * готовой попытки удаляет подготовленное приложение. Повторный вызов — тот же промис. Не бросает.
    */
   cancel(): Promise<void>;
+  /**
+   * Синхронно и без ожидания: обрывает запрос и посылает kill идущему дочернему процессу, больше ничего (каталоги не
+   * трогает). Для выхода в обход шага остановки хоста: каталог тогда убирает следующий старт окна (§13, п. 14).
+   */
+  abandon(): void;
 }
 
 /** Отказ с известной причиной. */
@@ -488,6 +493,10 @@ export function runAttempt(deps: AttemptDeps, input: AttemptInput): Attempt {
         await cleanup();
       })();
       return cancelling;
+    },
+    abandon() {
+      controller.abort();
+      current?.kill();
     },
   };
 }

@@ -4,12 +4,19 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { UpdateResult, UpdateState } from '../shared/bridge.js';
 import { createQuitIntent } from './quit-intent.js';
-import type { Attempt, AttemptDeps, AttemptInput, AttemptOutcome } from './update-download.js';
+import type {
+  Attempt,
+  AttemptClock,
+  AttemptDeps,
+  AttemptInput,
+  AttemptOutcome,
+} from './update-download.js';
 import { helperScript } from './update-helper.js';
 import {
   createReplaceTarget,
   createUpdateInstaller,
   nodeInstallerFs,
+  QUIT_STOP_MS,
   replaceBundle,
   runExitCode,
   type HelperChild,
@@ -33,11 +40,45 @@ interface FakeAttempt {
   attempt: Attempt;
   settle(outcome: AttemptOutcome): void;
   cancelCalls: number;
+  abandonCalls: number;
+  /** Дочерний процесс закончился и каталоги удалены: `cancel()` дошёл до конца. */
+  cleaned: boolean;
+  /** `cancel()` кончается отказом (установщик обязан его проглотить). */
+  failCancel(error: Error): void;
   /** Пока не открыто, `cancel()` не возвращается: каталоги ещё удаляются. */
   holdCancel(): () => void;
 }
 
+/** Часы, которые двигает тест: нужны пределу ожидания выхода. */
+function manualClock() {
+  let now = 0;
+  let next = 1;
+  const timers = new Map<number, { at: number; fn: () => void }>();
+  const clock: AttemptClock = {
+    now: () => now,
+    setTimeout: (fn, ms) => {
+      const id = next++;
+      timers.set(id, { at: now + ms, fn });
+      return id;
+    },
+    clearTimeout: (handle) => void timers.delete(handle as number),
+  };
+  return {
+    clock,
+    pending: () => timers.size,
+    advance(ms: number) {
+      now += ms;
+      for (const [id, timer] of [...timers]) {
+        if (timer.at > now) continue;
+        timers.delete(id);
+        timer.fn();
+      }
+    },
+  };
+}
+
 function setup(options: { startupResult?: UpdateResult | null } = {}) {
+  const time = manualClock();
   let target: Bundle | null = BUNDLE;
   const attempts: FakeAttempt[] = [];
   const dirs = new Set<string>();
@@ -77,10 +118,16 @@ function setup(options: { startupResult?: UpdateResult | null } = {}) {
     });
     let release: (() => void) | null = null;
     let held: Promise<void> | null = null;
+    let cancelError: Error | null = null;
     const fake: FakeAttempt = {
       deps,
       input,
       cancelCalls: 0,
+      abandonCalls: 0,
+      cleaned: false,
+      failCancel: (error) => {
+        cancelError = error;
+      },
       settle: (outcome) => resolve(outcome),
       holdCancel: () => {
         held = new Promise<void>((r) => {
@@ -93,7 +140,12 @@ function setup(options: { startupResult?: UpdateResult | null } = {}) {
         async cancel() {
           fake.cancelCalls += 1;
           await held;
+          if (cancelError) throw cancelError;
+          fake.cleaned = true;
           resolve({ ok: false, reason: 'cancelled' });
+        },
+        abandon() {
+          fake.abandonCalls += 1;
         },
       },
     };
@@ -109,6 +161,7 @@ function setup(options: { startupResult?: UpdateResult | null } = {}) {
     target: async () => target,
     fetch: vi.fn() as never,
     run: vi.fn(() => ({ exited: Promise.resolve({ code: 0, stdout: '' }), kill: () => {} })),
+    clock: time.clock,
     fs: {
       isDir: (p) => dirs.has(p),
       writeScript: (file, text) => {
@@ -159,6 +212,7 @@ function setup(options: { startupResult?: UpdateResult | null } = {}) {
 
   return {
     installer,
+    time,
     intent,
     quit,
     spawn,
@@ -194,6 +248,9 @@ function setup(options: { startupResult?: UpdateResult | null } = {}) {
 
 const phases = (states: UpdateState[]): string[] => states.map((s) => s.phase);
 
+/** Даёт отработать всем уже готовым продолжениям (цепочки промисов установщика). */
+const flushTasks = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+
 describe('SU-01: проверка выключена или новой версии нет', () => {
   it('до находки состояние idle и ни одной попытки', () => {
     const t = setup();
@@ -226,8 +283,56 @@ describe('SU-01: проверка выключена или новой верс�
     await t.installer.checksDisabled();
     await t.installer.cancel();
     expect(t.installer.state()).toEqual({ phase: 'idle' });
+    t.installer.checksEnabled();
     await t.installer.onFound(A);
     expect(t.installer.state()).toMatchObject({ phase: 'available', version: A.version });
+  });
+
+  it('F7: ответ проверки, пришедший после выключения, находки не даёт: idle, «Update» ничего не качает', async () => {
+    const t = setup();
+    await t.installer.onFound(A);
+    await t.installer.checksDisabled();
+    const before = t.states.length;
+    // Запрос начат до выключения, ответ пришёл позже.
+    await t.installer.onFound(A);
+    await t.installer.onFound(B);
+    expect(t.installer.state()).toEqual({ phase: 'idle' });
+    expect(t.states).toHaveLength(before);
+    await t.installer.download();
+    expect(t.attempts).toHaveLength(0);
+    expect(t.installer.state()).toEqual({ phase: 'idle' });
+  });
+
+  it('F7: ответ, начатый до выключения и обрабатываемый в момент выключения, тоже не оставляет available', async () => {
+    const t = setup();
+    // Находка ждёт ответа «можно ли заменить себя»; пока ждёт, проверку выключают.
+    const finding = t.installer.onFound(A);
+    await t.installer.checksDisabled();
+    await finding;
+    expect(t.installer.state()).toEqual({ phase: 'idle' });
+    await t.installer.download();
+    expect(t.attempts).toHaveLength(0);
+  });
+
+  it('F7: после повторного включения та же находка принимается и загрузка идёт', async () => {
+    const t = setup();
+    await t.installer.checksDisabled();
+    await t.installer.onFound(A);
+    expect(t.installer.state()).toEqual({ phase: 'idle' });
+    t.installer.checksEnabled();
+    await t.installer.onFound(A);
+    expect(t.installer.state()).toMatchObject({ phase: 'available', version: A.version });
+    const pending = t.installer.download();
+    await vi.waitFor(() => expect(t.attempts).toHaveLength(1));
+    t.last().settle({ ok: true, stagedApp: '/x' });
+    await pending;
+    expect(t.installer.state().phase).toBe('ready');
+  });
+
+  it('F7: установщик по умолчанию включён (находки принимаются без вызова checksEnabled)', async () => {
+    const t = setup();
+    await t.installer.onFound(A);
+    expect(t.installer.state().phase).toBe('available');
   });
 
   it('выключение посреди загрузки отменяет попытку и забывает её итог', async () => {
@@ -236,11 +341,19 @@ describe('SU-01: проверка выключена или новой верс�
     const pending = t.installer.download();
     await vi.waitFor(() => expect(t.attempts).toHaveLength(1));
     const attempt = t.last();
-    await t.installer.checksDisabled();
+    const open = attempt.holdCancel();
+    const disabling = t.installer.checksDisabled();
     expect(attempt.cancelCalls).toBe(1);
+    // Запоздалый успех приходит, пока отмена ещё убирает каталоги: `done` уже отдал успех, и установщик его получает.
     attempt.settle({ ok: true, stagedApp: '/x' });
+    await flushTasks();
+    expect(attempt.cleaned).toBe(false);
+    expect(t.installer.state()).toEqual({ phase: 'idle' });
+    open();
+    await disabling;
     await pending;
     expect(t.installer.state()).toEqual({ phase: 'idle' });
+    expect(phases(t.states)).toEqual(['available', 'downloading', 'idle']);
   });
 
   it('выключение при готовом: каталоги удалены, намерение сброшено, выход сценария не запускает', async () => {
@@ -445,13 +558,18 @@ describe('SU-07: отмена и сразу новая попытка', () => {
     expect(second.input.downloadDir).not.toBe(first.input.downloadDir);
     expect(second.input.stagingDir).not.toBe(first.input.stagingDir);
 
+    // Запоздалый успех вытесненной попытки приходит, пока её отмена ещё не кончилась: состояния он не трогает.
+    first.settle({ ok: true, stagedApp: '/old' });
+    await flushTasks();
+    expect(first.cleaned).toBe(false);
+    expect(t.installer.state()).toMatchObject({ phase: 'downloading' });
+
     open();
     await cancelling;
     await firstDone;
+    expect(first.cleaned).toBe(true);
     expect(t.installer.state()).toMatchObject({ phase: 'downloading' });
 
-    // Запоздалый успех вытесненной попытки состояния не трогает.
-    first.settle({ ok: true, stagedApp: '/old' });
     second.settle({ ok: true, stagedApp: '/new' });
     await secondDone;
     expect(t.installer.state()).toEqual({ phase: 'ready', version: '1.2.3', url: A.url });
@@ -944,5 +1062,124 @@ describe('настоящая файловая система и запуск', (
     expect(await runExitCode('/bin/sh', ['-c', 'exit 0'])).toBe(0);
     expect(await runExitCode('/bin/sh', ['-c', 'exit 75'])).toBe(75);
     expect(await runExitCode('/nonexistent/program', [])).toBeNull();
+  });
+});
+
+describe('F6: выход во время подготовки (спека §13, п. 14)', () => {
+  /** Попытка запущена и дошла до нужной фазы. */
+  async function running(stage: 'downloading' | 'verifying') {
+    const t = setup();
+    await t.installer.onFound(A);
+    const pending = t.installer.download();
+    await vi.waitFor(() => expect(t.attempts).toHaveLength(1));
+    const attempt = t.last();
+    if (stage === 'verifying') attempt.deps.run('/usr/bin/ditto', []);
+    expect(t.installer.state().phase).toBe(stage);
+    return { t, attempt, pending };
+  }
+
+  for (const stage of ['downloading', 'verifying'] as const) {
+    it(`stopForQuit в ${stage}: полная отмена, возврат только после конца процесса и удаления каталогов`, async () => {
+      const { t, attempt, pending } = await running(stage);
+      const open = attempt.holdCancel();
+      let returned = false;
+      const stopping = t.installer.stopForQuit().then(() => {
+        returned = true;
+      });
+      expect(attempt.cancelCalls).toBe(1);
+      await flushTasks();
+      expect(returned).toBe(false);
+      expect(attempt.cleaned).toBe(false);
+
+      open();
+      await stopping;
+      await pending;
+      expect(attempt.cleaned).toBe(true);
+      expect(returned).toBe(true);
+      expect(attempt.abandonCalls).toBe(0);
+      expect(t.installer.state()).toMatchObject({ phase: 'available', version: A.version });
+    });
+  }
+
+  it('stopForQuit ждёт не дольше предела и возвращается, даже если отмена не кончилась', async () => {
+    const { t, attempt } = await running('verifying');
+    const open = attempt.holdCancel();
+    let returned = false;
+    const stopping = t.installer.stopForQuit().then(() => {
+      returned = true;
+    });
+    expect(QUIT_STOP_MS).toBe(5000);
+    t.time.advance(QUIT_STOP_MS - 1);
+    await flushTasks();
+    expect(returned).toBe(false);
+    t.time.advance(1);
+    await stopping;
+    expect(returned).toBe(true);
+    expect(attempt.cleaned).toBe(false);
+    expect(attempt.cancelCalls).toBe(1);
+    // Таймер предела не висит после возврата.
+    expect(t.time.pending()).toBe(0);
+    open();
+  });
+
+  it('stopForQuit, кончившийся раньше предела, снимает таймер', async () => {
+    const { t, attempt } = await running('downloading');
+    await t.installer.stopForQuit();
+    expect(attempt.cleaned).toBe(true);
+    expect(t.time.pending()).toBe(0);
+  });
+
+  it('stopForQuit не бросает, даже если отмена отказала', async () => {
+    const { t, attempt } = await running('downloading');
+    attempt.failCancel(new Error('EBUSY'));
+    await expect(t.installer.stopForQuit()).resolves.toBeUndefined();
+    expect(attempt.cancelCalls).toBe(1);
+  });
+
+  it('stopForQuit вне downloading и verifying ничего не трогает: готовое приложение остаётся для сценария', async () => {
+    const t = setup();
+    await t.installer.stopForQuit();
+    await t.installer.onFound(A);
+    await t.installer.stopForQuit();
+    expect(t.installer.state().phase).toBe('available');
+    const attempt = await t.readyUp(B);
+    await t.installer.install();
+    await t.installer.stopForQuit();
+    expect(attempt.cancelCalls).toBe(0);
+    expect(t.installer.state().phase).toBe('ready');
+    expect(t.time.pending()).toBe(0);
+  });
+
+  for (const stage of ['downloading', 'verifying'] as const) {
+    it(`onQuit без намерения в ${stage}: abandon() без ожидания, сценарий не запущен, каталоги не трогаются`, async () => {
+      const { t, attempt } = await running(stage);
+      t.installer.onQuit();
+      expect(attempt.abandonCalls).toBe(1);
+      expect(attempt.cancelCalls).toBe(0);
+      expect(t.spawn).not.toHaveBeenCalled();
+      expect(t.calls).toEqual([]);
+      expect(attempt.cleaned).toBe(false);
+      // Слушатель срабатывает один раз.
+      t.installer.onQuit();
+      expect(attempt.abandonCalls).toBe(1);
+    });
+  }
+
+  it('onQuit без намерения, когда попытки нет (idle, available, ready), abandon не зовёт', async () => {
+    const t = setup();
+    const ready = await t.readyUp();
+    t.installer.onQuit();
+    expect(ready.abandonCalls).toBe(0);
+    expect(t.spawn).not.toHaveBeenCalled();
+  });
+
+  it('onQuit с намерением «Restart now» запускает сценарий как прежде и попытку не обрывает', async () => {
+    const t = setup();
+    const attempt = await t.readyUp();
+    await t.installer.install();
+    t.installer.onQuit();
+    expect(attempt.abandonCalls).toBe(0);
+    expect(t.calls).toEqual(['handoff', 'spawn', 'on-error', 'unref']);
+    expect(t.spawn).toHaveBeenCalledTimes(1);
   });
 });

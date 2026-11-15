@@ -964,6 +964,44 @@ describe.skipIf(process.platform !== 'darwin')('runAttempt', () => {
       dirsGone();
     });
 
+    it('abandon() во время распаковки: синхронно убивает процесс и обрывает запрос, каталоги не трогает', async () => {
+      const archive = await makeArchive();
+      const events: string[] = [];
+      const gate = gatedProcess(events);
+      const run: AttemptDeps['run'] = (command, args) => {
+        if (command !== '/usr/bin/ditto') return spawnRun(command, args);
+        events.push('ditto');
+        return gate.process;
+      };
+      const attempt = start(fetchOf({ manifest: ok(manifestFor(archive)), archive: ok(archive) }), {
+        run,
+      });
+      await vi.waitFor(() => expect(events).toContain('ditto'));
+
+      attempt.abandon();
+      // Всё сразу, без ожидания: kill послан, запрос оборван, каталоги на месте.
+      expect(events).toEqual(['ditto', 'kill']);
+      expect(requests[1]?.init.signal.aborted).toBe(true);
+      expect(existsSync(input.stagingDir)).toBe(true);
+      expect(existsSync(input.downloadDir)).toBe(true);
+      gate.finish(null);
+      await attempt.done;
+    });
+
+    it('abandon() во время загрузки: запрос оборван, каталог загрузки на месте до конца попытки', async () => {
+      const body = controlledBody();
+      const attempt = start(
+        fetchOf({ manifest: ok(manifestFor('x')), archive: () => body.response }),
+      );
+      await vi.waitFor(() => expect(progress.length).toBe(1));
+      attempt.abandon();
+      expect(requests[1]?.init.signal.aborted).toBe(true);
+      expect(existsSync(input.downloadDir)).toBe(true);
+      // Подставное тело сигнал не слушает (настоящий `net.fetch` слушает): попытку добивает обычная отмена.
+      await attempt.cancel();
+      dirsGone();
+    });
+
     it.each(['manifest', 'archive'] as const)(
       'ответ %s, пришедший уже после cancel(), оборван и файлов не создаёт',
       async (which) => {

@@ -322,6 +322,14 @@ if (!gotLock) {
         return response === 0 ? 'stop' : 'cancel';
       },
       stopHost: async () => {
+        // Идущая загрузка или распаковка обновления отменяется до конца выхода: дочерний `ditto` не должен пережить
+        // main (спека self-update §13, п. 14). Не бросает и ждёт не дольше 5 с; `try` — только на выход до того, как
+        // установщик создан ниже: он не должен оставить хост живым.
+        try {
+          await updateInstaller.stopForQuit();
+        } catch {
+          // Установщика ещё нет: отменять нечего.
+        }
         await connection.stopHost();
       },
       onCancel: focusMainWindow,
@@ -863,6 +871,9 @@ if (!gotLock) {
       startupResult,
       log: (message, error) => console.warn(`[parley] ${message}`, error ?? ''),
     });
+    // Переключатель «Check for updates» из сохранённых настроек: до запуска проверки, чтобы запоздалый ответ не принялся.
+    if (ui.checkForUpdates) updateInstaller.checksEnabled();
+    else void updateInstaller.checksDisabled();
     // Слушатель синхронный и срабатывает один раз: сценарий запускается, только если намерение дожило до конца выхода.
     app.once('quit', () => updateInstaller.onQuit());
     // Состояние — окну, чья страница загружена: до этого прелоад не подписан, и окно спросит само (`app:get-update-state`).
@@ -965,7 +976,8 @@ if (!gotLock) {
       // Окна об изменениях ui.json не узнают — main перечитывает файл сам (спека 2026-10-12, 5.1).
       void uiStore.load().then((current) => {
         // Выключенный переключатель «Check for updates»: идущая попытка отменяется, готовая удаляется.
-        if (!current.checkForUpdates) void updateInstaller.checksDisabled();
+        if (current.checkForUpdates) updateInstaller.checksEnabled();
+        else void updateInstaller.checksDisabled();
         ops.accessChanged(current.browser.agentsAllowed);
         void pushAssistantSettings(current).catch((error: unknown) => console.warn('[parley] assistant mirror', error));
         // Сбой острова не должен ломать сохранение настроек.

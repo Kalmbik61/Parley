@@ -318,6 +318,30 @@ describe('main/index.ts: что делается до ответа на вопр
     for (const call of calls) expect(callBlock(call.index!)).toContain(RETRY);
   });
 
+  it('шаг stopHost сторожа сперва ждёт updateInstaller.stopForQuit(), потом гасит хост', () => {
+    const start = index.indexOf('guardAppQuit(app, {');
+    expect(start).toBeGreaterThan(-1);
+    const block = callBlock(start);
+    const step = block.indexOf('stopHost: async () => {');
+    expect(step).toBeGreaterThan(-1);
+    const body = block.slice(step);
+    const stopForQuit = body.indexOf('await updateInstaller.stopForQuit();');
+    const stopHost = body.indexOf('await connection.stopHost();');
+    expect(stopForQuit).toBeGreaterThan(-1);
+    expect(stopHost).toBeGreaterThan(-1);
+    expect(stopForQuit).toBeLessThan(stopHost);
+  });
+
+  it('переключатель «Check for updates» доходит до установщика: при старте до проверки и при каждом сохранении настроек', () => {
+    const start = index.indexOf('updates.start();');
+    expect(start).toBeGreaterThan(-1);
+    const initial = index.indexOf('if (ui.checkForUpdates) updateInstaller.checksEnabled();');
+    expect(initial).toBeGreaterThan(-1);
+    expect(initial).toBeLessThan(start);
+    expect(index).toContain('if (current.checkForUpdates) updateInstaller.checksEnabled();');
+    expect(index).toContain('else void updateInstaller.checksDisabled();');
+  });
+
   it("app.once('quit') зовёт updateInstaller.onQuit()", () => {
     expect(index).toContain("app.once('quit', () => updateInstaller.onQuit());");
   });
