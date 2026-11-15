@@ -437,9 +437,11 @@ const failure = (text: string): ToolResult => ({ content: [{ type: 'text', text 
 export function createAssistantServer(options: AssistantServerOptions): Server {
   const call = options.fetch ?? fetch;
   const server = new Server({ name: ASSISTANT_MCP_NAME, version: '0.0.0' }, { capabilities: { tools: {} } });
+  // action_status нужен только автономному запуску: без режима модель видит те же инструменты, что и раньше.
+  const offered = options.mode === 'auto' ? ASSISTANT_TOOLS : ASSISTANT_TOOLS.filter((tool) => tool.name !== 'action_status');
   const tools = options.token.startsWith(JOB_TOKEN_PREFIX)
-    ? ASSISTANT_TOOLS.filter((tool) => JOB_TOOL_ALLOWLIST.includes(tool.name))
-    : ASSISTANT_TOOLS.filter((tool) => !JOB_ONLY_TOOLS.includes(tool.name));
+    ? offered.filter((tool) => JOB_TOOL_ALLOWLIST.includes(tool.name))
+    : offered.filter((tool) => !JOB_ONLY_TOOLS.includes(tool.name));
   const listed = options.mode === 'auto' ? tools.map(autoTool) : tools;
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: listed }));
   server.setRequestHandler(CallToolRequestSchema, async (request): Promise<ToolResult> => {
