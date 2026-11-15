@@ -276,7 +276,10 @@ describe('main/index.ts: что делается до ответа на вопр
   const index = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'index.ts'), 'utf8');
 
   it('на will-quit и before-quit ничего не вешается: выход может быть отменён, вопрос ещё открыт', () => {
-    expect(index).not.toMatch(/app\.on\('(will-quit|before-quit)'/);
+    // Единственное исключение — сброс намерения «Restart now» (`quit-intent.ts`): он ничего не отменяет и не гасит.
+    const intentListener = "app.on('before-quit', () => quitIntent.onBeforeQuit());";
+    expect(index).toContain(intentListener);
+    expect(index.replace(intentListener, '')).not.toMatch(/app\.on\('(will-quit|before-quit)'/);
   });
 
   it('привязка works и соединение с хостом разбираются на quit', () => {
