@@ -3,7 +3,7 @@ import type { Message, Proposal, Room, WindowWorkEntry, WindowWorkMap, WorkSessi
 import { workAttention, type Attention, type WorkAttention } from '../attention/derive.js';
 import { workKey } from '../lib/tree-order.js';
 import { activityMap, makeActivity, makeRoom, makeSession, makeSwarm, makeSwarmMember, makeWork } from '../test-utils/work-fixtures.js';
-import { archivedRows, buildSections, cardRows, compareWorks, homeRoomOf, NO_GUIDES, neighborInOrder, treeGuides, visibleWorkOrder, type CardRow, type TreeGuide } from './sort.js';
+import { archivedRows, buildSections, cardRows, closedRows, compareWorks, homeRoomOf, NO_GUIDES, neighborInOrder, treeGuides, visibleWorkOrder, type CardRow, type TreeGuide } from './sort.js';
 
 describe('room ownership layout', () => {
   it('keeps a closed owner anchor, emits each owned room once and connects it to its owner', () => {
@@ -15,7 +15,7 @@ describe('room ownership layout', () => {
       makeRoom('r-root', 'Root'),
     ];
     const map = makeWork('w-01', { sessions: [owner, member], rooms }).map;
-    const rows = cardRows(map, false);
+    const rows = cardRows(map);
     expect(rows.map((row) => row.kind === 'session' ? row.session.id : row.room.id)).toEqual(['s-owner', 'r-a', 'r-b', 'r-root']);
     expect(rows.map((row) => row.depth)).toEqual([0, 1, 1, 0]);
     expect(treeGuides(rows)[1]).toContainEqual({ kind: 'elbow', column: 0 });
@@ -26,7 +26,7 @@ describe('room ownership layout', () => {
     const owner = makeSession('s-owner', 'Coordinator');
     const first = { ...makeRoom('r-a', 'A'), ownerId: owner.id };
     const second = { ...makeRoom('r-b', 'B'), members: [owner.id] };
-    const rows = cardRows(makeWork('w-01', { sessions: [owner], rooms: [first, second] }).map, false);
+    const rows = cardRows(makeWork('w-01', { sessions: [owner], rooms: [first, second] }).map);
     expect(rows.map((row) => [row.kind, row.parent])).toEqual([['session', null], ['room', owner.id], ['room', null]]);
   });
 });
@@ -423,26 +423,26 @@ describe('cardRows — состав строк карточки (1.2)', () => {
   const shape = (rows: CardRow[]): string[] =>
     rows.map((row) => (row.kind === 'session' ? row.session.id : `${row.room.id}[${row.members.map((member) => member.id).join(',')}]`));
 
-  it('комнат нет — строки сессий по treeOrder с глубиной; закрытые спрятаны, при showClosed стоят на своих местах', () => {
+  it('комнат нет — строки сессий по treeOrder с глубиной; закрытая сессия вне комнат строки не имеет (она в closedRows)', () => {
     const list = [makeSession('s-01', 'a'), makeSession('s-02', 'b', { lifecycle: 'closed' }), makeSession('s-03', 'c', { parent: 's-01' })];
-    const rows = cardRows(map(list), false);
+    const rows = cardRows(map(list));
     expect(shape(rows)).toEqual(['s-01', 's-03']);
     expect(rows.map((row) => (row.kind === 'session' ? row.depth : -1))).toEqual([0, 1]);
-    expect(shape(cardRows(map(list), true))).toEqual(['s-01', 's-03', 's-02']);
+    expect(shape(closedRows(map(list)))).toEqual(['s-02']);
   });
 
   it('участник комнаты отдельной строкой не выводится: на месте первого участника стоит строка его комнаты', () => {
-    const rows = cardRows(map(sessions('s-01', 's-02', 's-03', 's-04'), [room('r-01', ['s-02', 's-03'])]), false);
+    const rows = cardRows(map(sessions('s-01', 's-02', 's-03', 's-04'), [room('r-01', ['s-02', 's-03'])]));
     expect(shape(rows)).toEqual(['s-01', 's-04', 'r-01[s-02,s-03]']);
   });
 
   it('место комнаты — первый её участник в порядке treeOrder, а не в порядке записи members', () => {
-    const rows = cardRows(map(sessions('s-01', 's-02', 's-03', 's-04'), [room('r-01', ['s-04', 's-02'])]), false);
+    const rows = cardRows(map(sessions('s-01', 's-02', 's-03', 's-04'), [room('r-01', ['s-04', 's-02'])]));
     expect(shape(rows)).toEqual(['s-01', 's-03', 'r-01[s-04,s-02]']);
   });
 
   it('участники в строке комнаты — в порядке записи: создатель-сессия, затем members', () => {
-    const rows = cardRows(map(sessions('s-01', 's-02', 's-03'), [room('r-01', ['s-03', 's-01'], { creator: 's-02' })]), false);
+    const rows = cardRows(map(sessions('s-01', 's-02', 's-03'), [room('r-01', ['s-03', 's-01'], { creator: 's-02' })]));
     expect(shape(rows)).toEqual(['s-02', 'r-01[s-03,s-01]']);
     expect(rows[1]).toMatchObject({ kind: 'room', sessions: expect.arrayContaining([expect.objectContaining({ id: 's-03' })]) });
   });
@@ -450,30 +450,29 @@ describe('cardRows — состав строк карточки (1.2)', () => {
   it('комнаты без живых участников — в конце, в порядке карты: все участники закрыты или участников нет вовсе', () => {
     const list = [makeSession('s-01', 'a'), makeSession('s-02', 'b', { lifecycle: 'closed' }), makeSession('s-03', 'c')];
     const rooms = [room('r-01', ['s-02']), room('r-02', []), room('r-03', ['s-03'])];
-    expect(shape(cardRows(map(list, rooms), false))).toEqual(['s-01', 'r-01[]', 'r-02[]', 'r-03[s-03]']);
+    expect(shape(cardRows(map(list, rooms)))).toEqual(['s-01', 'r-01[]', 'r-02[]', 'r-03[s-03]']);
   });
 
-  it('закрытые участники: не в строках развёрнутой комнаты (members), но в sessions — значки-счётчики считают всех; при showClosed — и в members', () => {
+  it('закрытые участники: не в строках развёрнутой комнаты (members), но в sessions — значки-счётчики считают всех; закрытый участник входит в closedRows', () => {
     const list = [makeSession('s-01', 'a'), makeSession('s-02', 'b', { lifecycle: 'closed' })];
-    const [row] = cardRows(map(list, [room('r-01', ['s-01', 's-02'])]), false);
+    const [row] = cardRows(map(list, [room('r-01', ['s-01', 's-02'])]));
     expect(row).toMatchObject({ kind: 'room' });
     if (row?.kind !== 'room') throw new Error('строки комнаты нет');
     expect(row.members.map((member) => member.id)).toEqual(['s-01']);
     expect(row.sessions.map((member) => member.id)).toEqual(['s-01', 's-02']);
-    const [shown] = cardRows(map(list, [room('r-01', ['s-01', 's-02'])]), true);
-    expect(shown?.kind === 'room' ? shown.members.map((member) => member.id) : []).toEqual(['s-01', 's-02']);
+    expect(shape(closedRows(map(list, [room('r-01', ['s-01', 's-02'])])))).toEqual(['s-02']);
   });
 
-  it('место комнаты не прыгает от «N more closed»: первый по порядку участник закрыт — комната всё равно на месте первого живого', () => {
+  it('место комнаты не зависит от закрытых: первый по порядку участник закрыт — комната на месте первого живого', () => {
     const list = [makeSession('s-01', 'a', { lifecycle: 'closed' }), makeSession('s-02', 'b'), makeSession('s-03', 'c')];
     const rooms = [room('r-01', ['s-01', 's-03'])];
-    expect(shape(cardRows(map(list, rooms), false))).toEqual(['s-02', 'r-01[s-03]']);
-    expect(shape(cardRows(map(list, rooms), true))).toEqual(['s-02', 'r-01[s-01,s-03]']);
+    expect(shape(cardRows(map(list, rooms)))).toEqual(['s-02', 'r-01[s-03]']);
+    expect(shape(closedRows(map(list, rooms)))).toEqual(['s-01']);
   });
 
   it('глубина строки комнаты — глубина её первого живого участника; комната в конце — 0', () => {
     const list = [makeSession('s-01', 'a'), makeSession('s-02', 'b', { parent: 's-01' }), makeSession('s-03', 'c', { lifecycle: 'closed' })];
-    const rows = cardRows(map(list, [room('r-01', ['s-02']), room('r-02', ['s-03'])]), false);
+    const rows = cardRows(map(list, [room('r-01', ['s-02']), room('r-02', ['s-03'])]));
     expect(shape(rows)).toEqual(['s-01', 'r-01[s-02]', 'r-02[]']);
     expect(rows.map((row) => (row.kind === 'room' ? row.depth : -1))).toEqual([-1, 0, 0]);
   });
@@ -485,10 +484,10 @@ describe('cardRows — состав строк карточки (1.2)', () => {
       const late = room('r-02', ['s-02', 's-03'], { createdAt: '2026-09-29T09:00:00.000Z' });
       const early = room('r-01', ['s-01', 's-02'], { createdAt: '2026-09-29T08:00:00.000Z' });
       // Поздняя комната лежит в массиве первой — порядок массива на выбор не влияет: s-02 стоит в ранней.
-      const rows = cardRows(map(list, [late, early]), false);
+      const rows = cardRows(map(list, [late, early]));
       expect(shape(rows)).toEqual(['r-02[s-03]', 'r-01[s-01,s-02]']);
       // Без ранней комнаты в массиве s-02 стоял бы в поздней.
-      expect(shape(cardRows(map(list, [late]), false))).toEqual(['s-01', 'r-02[s-02,s-03]']);
+      expect(shape(cardRows(map(list, [late])))).toEqual(['s-01', 'r-02[s-02,s-03]']);
     });
 
     // Значки-счётчики свёрнутой комнаты, её тултип и правило развёртывания читают `sessions`: агент, что стоит в самой
@@ -496,7 +495,7 @@ describe('cardRows — состав строк карточки (1.2)', () => {
     it('sessions — только те, что стоят в этой комнате: сессия из двух комнат числится лишь в самой ранней', () => {
       const late = room('r-02', ['s-02', 's-03'], { createdAt: '2026-09-29T09:00:00.000Z' });
       const early = room('r-01', ['s-01', 's-02'], { createdAt: '2026-09-29T08:00:00.000Z' });
-      const rows = cardRows(map(list, [late, early]), false);
+      const rows = cardRows(map(list, [late, early]));
       const ids = (row: CardRow | undefined): string[] => (row?.kind === 'room' ? row.sessions.map((member) => member.id) : []);
       expect(ids(rows.find((row) => row.kind === 'room' && row.room.id === 'r-01'))).toEqual(['s-01', 's-02']);
       expect(ids(rows.find((row) => row.kind === 'room' && row.room.id === 'r-02'))).toEqual(['s-03']);
@@ -506,7 +505,7 @@ describe('cardRows — состав строк карточки (1.2)', () => {
       const closed = [makeSession('s-01', 'a'), makeSession('s-02', 'b', { lifecycle: 'closed' }), makeSession('s-03', 'c')];
       const early = room('r-01', ['s-01', 's-02'], { createdAt: '2026-09-29T08:00:00.000Z' });
       const late = room('r-02', ['s-02', 's-03'], { createdAt: '2026-09-29T09:00:00.000Z' });
-      const rows = cardRows(map(closed, [early, late]), false);
+      const rows = cardRows(map(closed, [early, late]));
       const byId = (id: string) => rows.find((row): row is Extract<CardRow, { kind: 'room' }> => row.kind === 'room' && row.room.id === id);
       expect(byId('r-01')?.sessions.map((member) => member.id)).toEqual(['s-01', 's-02']);
       expect(byId('r-01')?.members.map((member) => member.id)).toEqual(['s-01']);
@@ -516,7 +515,7 @@ describe('cardRows — состав строк карточки (1.2)', () => {
     it('комната, где не осталось «своих» участников, стоит в конце; её значков и тултипа участников нет — сессия стоит в ранней', () => {
       const first = room('r-01', ['s-01', 's-02'], { createdAt: '2026-09-29T08:00:00.000Z' });
       const second = room('r-02', ['s-02'], { createdAt: '2026-09-29T09:00:00.000Z' });
-      const rows = cardRows(map(list, [first, second]), false);
+      const rows = cardRows(map(list, [first, second]));
       expect(shape(rows)).toEqual(['s-03', 'r-01[s-01,s-02]', 'r-02[]']);
       const last = rows[2];
       expect(last?.kind === 'room' ? last.sessions.map((member) => member.id) : ['нет строки комнаты']).toEqual([]);
@@ -525,23 +524,23 @@ describe('cardRows — состав строк карточки (1.2)', () => {
     it('равные createdAt — первая в массиве; битая дата проигрывает настоящей', () => {
       const a = room('r-01', ['s-01'], { createdAt: '2026-09-29T08:00:00.000Z' });
       const b = room('r-02', ['s-01'], { createdAt: '2026-09-29T08:00:00.000Z' });
-      expect(shape(cardRows(map(list, [b, a]), false))).toEqual(['s-02', 's-03', 'r-02[s-01]', 'r-01[]']);
+      expect(shape(cardRows(map(list, [b, a])))).toEqual(['s-02', 's-03', 'r-02[s-01]', 'r-01[]']);
       const bad = room('r-03', ['s-01'], { createdAt: 'garbage' });
       const good = room('r-04', ['s-01'], { createdAt: '2026-09-30T00:00:00.000Z' });
-      expect(shape(cardRows(map(list, [bad, good]), false))).toEqual(['s-02', 's-03', 'r-03[]', 'r-04[s-01]']);
+      expect(shape(cardRows(map(list, [bad, good])))).toEqual(['s-02', 's-03', 'r-03[]', 'r-04[s-01]']);
     });
 
     it('создатель-сессия одной комнаты и участник другой — тоже в одной', () => {
       const created = room('r-01', ['s-02'], { creator: 's-01', createdAt: '2026-09-29T08:00:00.000Z' });
       const other = room('r-02', ['s-01', 's-03'], { createdAt: '2026-09-29T09:00:00.000Z' });
-      expect(shape(cardRows(map(list, [created, other]), false))).toEqual(['r-01[s-02]', 'r-02[s-01,s-03]']);
+      expect(shape(cardRows(map(list, [created, other])))).toEqual(['r-01[s-02]', 'r-02[s-01,s-03]']);
     });
   });
 
   it('ведущий — roomLiveLead: назначенный, пока жив; закрытого подменяет первый живой; у старой карты без lead — первый из members', () => {
     const list = [makeSession('s-01', 'a', { lifecycle: 'closed' }), makeSession('s-02', 'b'), makeSession('s-03', 'c')];
     const lead = (rooms: Room[]) => {
-      const [row] = cardRows(map(list, rooms), false);
+      const [row] = cardRows(map(list, rooms));
       return row?.kind === 'room' ? row.lead : 'нет строки комнаты';
     };
     expect(lead([room('r-01', ['s-01', 's-02', 's-03'], { lead: 's-03' })])).toBe('s-03');
@@ -552,7 +551,7 @@ describe('cardRows — состав строк карточки (1.2)', () => {
   it('время строки — время последнего события комнаты (сообщение или решение); решение и lead у старой карты не обязательны', () => {
     const message: Message = { id: 'm-1', roomId: 'r-01', from: 's-01', to: [], at: NOW, text: 't', kind: 'note', readBy: {} };
     const old = { id: 'r-01', title: 'Старая', creator: 'human', members: ['s-01'], createdAt: '2026-01-01T00:00:00.000Z' } as unknown as Room;
-    const [row] = cardRows(map(sessions('s-01'), [old], [message]), false);
+    const [row] = cardRows(map(sessions('s-01'), [old], [message]));
     expect(row).toMatchObject({ kind: 'room', lastAt: NOW });
     expect(row?.kind === 'room' ? row.lead : 'нет строки комнаты').toBe('s-01');
   });
@@ -571,14 +570,14 @@ describe('cardRows и archivedRows — архивные комнаты (5.1)', (
   it('архивная комната в основных строках не выводится, а её спящие и закрытые участники уходят вместе с ней', () => {
     const list = [makeSession('s-01', 'a'), makeSession('s-02', 'b', { lifecycle: 'sleeping' }), makeSession('s-03', 'c', { lifecycle: 'closed' })];
     const state = map(list, [archivedRoom('r-01', ['s-02', 's-03'])]);
-    // Закрытая сессия не появляется строкой и при showClosed: её домашняя комната в архиве.
-    expect(shape(cardRows(state, false))).toEqual(['s-01']);
-    expect(shape(cardRows(state, true))).toEqual(['s-01']);
+    // Закрытая сессия не появляется основной строкой: её домашняя комната в архиве; она стоит в блоке «Closed sessions».
+    expect(shape(cardRows(state))).toEqual(['s-01']);
+    expect(shape(closedRows(state))).toEqual(['s-03']);
   });
 
   it('участник архивной комнаты с процессом (active, pending) остаётся обычной строкой сессии на своём месте', () => {
     const list = [makeSession('s-01', 'a'), makeSession('s-02', 'b'), makeSession('s-03', 'c', { lifecycle: 'pending' }), makeSession('s-04', 'd', { lifecycle: 'sleeping' })];
-    const rows = cardRows(map(list, [archivedRoom('r-01', ['s-02', 's-03', 's-04'])]), false);
+    const rows = cardRows(map(list, [archivedRoom('r-01', ['s-02', 's-03', 's-04'])]));
     expect(shape(rows)).toEqual(['s-01', 's-02', 's-03']);
     expect(rows.every((row) => row.kind === 'session')).toBe(true);
   });
@@ -592,27 +591,25 @@ describe('cardRows и archivedRows — архивные комнаты (5.1)', (
     expect(homeRoomOf(state, 's-02')?.id).toBe('r-01');
     expect(homeRoomOf(state, 's-03')).toBeNull();
     // s-01 стоит в открытой комнате строкой комнаты; s-02 (active) — обычной строкой; в архивной остаётся пусто.
-    expect(shape(cardRows(state, false))).toEqual(['s-02', 's-03', 'r-02[s-01]']);
+    expect(shape(cardRows(state))).toEqual(['s-02', 's-03', 'r-02[s-01]']);
   });
 
   it('archivedRows: строки архивных комнат в порядке карты, у каждой archived и без archiveStops; открытые не входят', () => {
     const list = [makeSession('s-01', 'a'), makeSession('s-02', 'b', { lifecycle: 'sleeping' }), makeSession('s-03', 'c')];
     const state = map(list, [archivedRoom('r-01', ['s-02']), room('r-02', ['s-03']), archivedRoom('r-03', [])]);
-    const rows = archivedRows(state, false);
+    const rows = archivedRows(state);
     expect(rows.map((row) => row.room.id)).toEqual(['r-01', 'r-03']);
     expect(rows.every((row) => row.archived && row.archiveStops.length === 0)).toBe(true);
     expect(rows[0]?.members.map((member) => member.id)).toEqual(['s-02']);
-    expect(cardRows(state, false).every((row) => row.kind === 'session' || !row.archived)).toBe(true);
+    expect(cardRows(state).every((row) => row.kind === 'session' || !row.archived)).toBe(true);
   });
 
-  it('в строке архивной комнаты нет работающих участников (они уже строки карточки); закрытые — только при showClosed', () => {
+  it('в строке архивной комнаты нет работающих участников (они уже строки карточки); закрытых среди members нет', () => {
     const list = [makeSession('s-01', 'a'), makeSession('s-02', 'b', { lifecycle: 'sleeping' }), makeSession('s-03', 'c', { lifecycle: 'closed' })];
     const state = map(list, [archivedRoom('r-01', ['s-01', 's-02', 's-03'])]);
-    const [hidden] = archivedRows(state, false);
+    const [hidden] = archivedRows(state);
     expect(hidden?.sessions.map((member) => member.id)).toEqual(['s-02', 's-03']);
     expect(hidden?.members.map((member) => member.id)).toEqual(['s-02']);
-    const [shown] = archivedRows(state, true);
-    expect(shown?.members.map((member) => member.id)).toEqual(['s-02', 's-03']);
   });
 
   it('archiveStops открытой комнаты — участники без другой открытой комнаты; архивная соседка в счёт не идёт', () => {
@@ -620,7 +617,7 @@ describe('cardRows и archivedRows — архивные комнаты (5.1)', (
     const target = room('r-01', ['s-01', 's-02'], { createdAt: '2026-09-29T08:00:00.000Z' });
     const other = room('r-02', ['s-02', 's-03'], { createdAt: '2026-09-29T09:00:00.000Z' });
     const byId = (rooms: Room[]) => {
-      const rows = cardRows(map(list, rooms), false);
+      const rows = cardRows(map(list, rooms));
       return rows.find((row): row is Extract<CardRow, { kind: 'room' }> => row.kind === 'room' && row.room.id === 'r-01');
     };
     // s-02 числится и в открытой r-02: остановка её не коснётся, так что при архивации r-01 остаётся только s-01.
@@ -641,7 +638,7 @@ describe('cardRows — сессия под создателем (createdBy)', ()
 
   it('созданная сессия стоит под создателем после его комнат, с линией; вложенность многоуровневая', () => {
     const lead = s('s-01');
-    const rows = cardRows(map([lead, s('s-02'), s('s-03', 's-01'), s('s-04', 's-03'), s('s-05')], [{ ...makeRoom('r-01', 'Team'), ownerId: lead.id }]), false);
+    const rows = cardRows(map([lead, s('s-02'), s('s-03', 's-01'), s('s-04', 's-03'), s('s-05')], [{ ...makeRoom('r-01', 'Team'), ownerId: lead.id }]));
     expect(rows.map(rowId)).toEqual(['s-01', 'r-01', 's-03', 's-04', 's-02', 's-05']);
     expect(rows.map((row) => row.depth)).toEqual([0, 1, 1, 2, 0, 0]);
     expect(rows.map((row) => row.parent)).toEqual([null, 's-01', 's-01', 's-03', null, null]);
@@ -650,20 +647,20 @@ describe('cardRows — сессия под создателем (createdBy)', ()
   });
 
   it('создатель удалён, закрыт и спрятан или стоит участником комнаты — сессия на верхнем уровне без линии', () => {
-    expect(cardRows(map([s('s-02', 's-01')]), false).map((row) => [rowId(row), row.depth, row.parent])).toEqual([['s-02', 0, null]]);
+    expect(cardRows(map([s('s-02', 's-01')])).map((row) => [rowId(row), row.depth, row.parent])).toEqual([['s-02', 0, null]]);
 
     const closed = [s('s-01', null, { lifecycle: 'closed' }), s('s-02', 's-01')];
-    const hidden = cardRows(map(closed), false);
+    const hidden = cardRows(map(closed));
     expect(hidden.map((row) => [rowId(row), row.depth, row.parent])).toEqual([['s-02', 0, null]]);
     expect(treeGuides(hidden).map(marks)).toEqual([[]]);
-    expect(cardRows(map(closed), true).map((row) => [rowId(row), row.depth])).toEqual([['s-01', 0], ['s-02', 1]]);
+    expect(closedRows(map(closed)).map(rowId)).toEqual(['s-01']);
 
-    const member = cardRows(map([s('s-01'), s('s-02', 's-01')], [{ ...makeRoom('r-01', 'Team'), members: ['s-01'] }]), false);
+    const member = cardRows(map([s('s-01'), s('s-02', 's-01')], [{ ...makeRoom('r-01', 'Team'), members: ['s-01'] }]));
     expect(member.map((row) => [rowId(row), row.depth, row.parent])).toEqual([['s-02', 0, null], ['r-01', 0, null]]);
   });
 
   it('цикл создателей не вешает обход и не прячет строки: сессии цикла на верхнем уровне, хвост — под своим создателем', () => {
-    const rows = cardRows(map([s('s-01', 's-02'), s('s-02', 's-01'), s('s-03', 's-03'), s('s-04', 's-01')]), false);
+    const rows = cardRows(map([s('s-01', 's-02'), s('s-02', 's-01'), s('s-03', 's-03'), s('s-04', 's-01')]));
     expect(rows.map((row) => [rowId(row), row.depth])).toEqual([['s-01', 0], ['s-04', 1], ['s-02', 0], ['s-03', 0]]);
   });
 });
@@ -677,7 +674,7 @@ describe('treeGuides — линии дерева в карточке', () => {
   const rowId = (row: CardRow): string => (row.kind === 'session' ? row.session.id : row.room.id);
 
   it('родитель, два ребёнка и внук у первого: ствол родителя идёт сквозь внука к младшему ребёнку, у каждого ребёнка свой изгиб', () => {
-    const rows = cardRows(map([s('s-01'), s('s-02', 's-01'), s('s-03', 's-01'), s('s-04', 's-02')]), false);
+    const rows = cardRows(map([s('s-01'), s('s-02', 's-01'), s('s-03', 's-01'), s('s-04', 's-02')]));
     expect(rows.map(rowId)).toEqual(['s-01', 's-02', 's-04', 's-03']);
     const guides = treeGuides(rows);
     expect(guides.map(marks)).toEqual([
@@ -703,59 +700,58 @@ describe('treeGuides — линии дерева в карточке', () => {
   });
 
   it('одинаковые метки схлопнуты: два брата — один ствол родителя сквозь строку первого, а не два', () => {
-    const rows = cardRows(map([s('s-01'), s('s-02', 's-01'), s('s-03', 's-01'), s('s-04', 's-01')]), false);
+    const rows = cardRows(map([s('s-01'), s('s-02', 's-01'), s('s-03', 's-01'), s('s-04', 's-01')]));
     const [, second, third] = treeGuides(rows);
     expect(marks(second ?? [])).toEqual(['elbow0', 'pass0']);
     expect(marks(third ?? [])).toEqual(['elbow0', 'pass0']);
     expect(treeGuides(rows).every((list) => list.filter((guide) => guide.kind === 'pass').length <= 1)).toBe(true);
   });
 
-  it('родитель закрыт и спрятан (showClosed = false) — к ребёнку линии нет, ребёнок остаётся с отступом своей глубины; линия внука к ребёнку цела', () => {
+  it('родитель закрыт и спрятан (он в closedRows) — к ребёнку линии нет, ребёнок остаётся с отступом своей глубины; линия внука к ребёнку цела', () => {
     const list = [s('s-01', null, { lifecycle: 'closed' }), s('s-02', 's-01'), s('s-03', 's-02')];
-    const hidden = cardRows(map(list), false);
+    const hidden = cardRows(map(list));
     expect(hidden.map(rowId)).toEqual(['s-02', 's-03']);
     expect(hidden.map((row) => row.depth)).toEqual([1, 2]);
     // У s-02 нет изгиба (строки s-01 выше нет), ни у кого нет меток колонки 0; ребро s-03 → s-02 цело.
     expect(treeGuides(hidden).map(marks)).toEqual([['start1'], ['elbow1']]);
-    // С раскрытым «N more closed» строка родителя на месте — и линия к ребёнку тоже.
-    expect(treeGuides(cardRows(map(list), true)).map(marks)).toEqual([['start0'], ['elbow0', 'start1'], ['elbow1']]);
+    expect(closedRows(map(list)).map(rowId)).toEqual(['s-01']);
   });
 
   it('ребёнок в комнате: изгиб у строки комнаты, если её поставил он; родитель в комнате — ствол начинается у строки комнаты', () => {
-    const child = cardRows(map([s('s-01'), s('s-02', 's-01')], [room('r-01', ['s-02'])]), false);
+    const child = cardRows(map([s('s-01'), s('s-02', 's-01')], [room('r-01', ['s-02'])]));
     expect(child.map(rowId)).toEqual(['s-01', 'r-01']);
     expect(child[1]).toMatchObject({ kind: 'room', depth: 0, parent: null });
     expect(treeGuides(child).map(marks)).toEqual([[], []]);
 
-    const parent = cardRows(map([s('s-01'), s('s-02', 's-01')], [room('r-01', ['s-01'])]), false);
+    const parent = cardRows(map([s('s-01'), s('s-02', 's-01')], [room('r-01', ['s-01'])]));
     expect(parent.map(rowId)).toEqual(['s-02', 'r-01']);
     expect(treeGuides(parent).map(marks)).toEqual([[], []]);
   });
 
   it('ребёнок и родитель в одной комнате: строка одна, линии нет; комната в конце без участников и архивная — без меток', () => {
-    const same = cardRows(map([s('s-01'), s('s-02', 's-01')], [room('r-01', ['s-01', 's-02'])]), false);
+    const same = cardRows(map([s('s-01'), s('s-02', 's-01')], [room('r-01', ['s-01', 's-02'])]));
     expect(same.map(rowId)).toEqual(['r-01']);
     expect(treeGuides(same).map(marks)).toEqual([[]]);
 
-    const tail = cardRows(map([s('s-01')], [room('r-01', [])]), false);
+    const tail = cardRows(map([s('s-01')], [room('r-01', [])]));
     expect(tail.map(rowId)).toEqual(['s-01', 'r-01']);
     expect(tail[1]).toMatchObject({ kind: 'room', parent: null });
     expect(treeGuides(tail).map(marks)).toEqual([[], []]);
 
-    const archived = archivedRows(map([s('s-01')], [room('r-02', ['s-01'], { archivedAt: '2026-10-08T12:00:00.000Z' })]), false);
+    const archived = archivedRows(map([s('s-01')], [room('r-02', ['s-01'], { archivedAt: '2026-10-08T12:00:00.000Z' })]));
     expect(archived.every((row) => row.parent === null)).toBe(true);
   });
 
   it('ребёнок не правее колонки строки родителя (родитель — неведущий участник комнаты на другой глубине) — ребра нет, линия не уходит назад', () => {
     // R1 стоит на s-03 (глубина 2) и держит ещё корень s-04; его ребёнок s-05 (глубина 1) оказывается левее колонки R1.
-    const rows = cardRows(map([s('s-01'), s('s-02', 's-01'), s('s-03', 's-02'), s('s-04'), s('s-05', 's-04')], [room('r-01', ['s-03', 's-04'])]), false);
+    const rows = cardRows(map([s('s-01'), s('s-02', 's-01'), s('s-03', 's-02'), s('s-04'), s('s-05', 's-04')], [room('r-01', ['s-03', 's-04'])]));
     expect(rows.map(rowId)).toEqual(['s-01', 's-02', 's-05', 'r-01']);
     expect(rows.map((row) => row.depth)).toEqual([0, 1, 1, 0]);
     expect(treeGuides(rows).map(marks)).toEqual([['start0'], ['elbow0'], [], []]);
   });
 
   it('сессии без родителей и родитель, которого нет в карте, — без меток, строки делят общую пустую константу', () => {
-    const rows = cardRows(map([s('s-01'), s('s-02'), s('s-03', 's-missing')]), false);
+    const rows = cardRows(map([s('s-01'), s('s-02'), s('s-03', 's-missing')]));
     const guides = treeGuides(rows);
     expect(guides).toHaveLength(3);
     expect(guides.every((list) => list === NO_GUIDES)).toBe(true);
@@ -772,7 +768,7 @@ describe('cardRows — рой отпочковывается от создате
     const child = makeSession('s-child', 'child', { createdBy: 's-lead' });
     const room = { ...makeRoom('r-own', 'Own'), ownerId: lead.id };
     const swarm = makeSwarm('sw-01', 's-q', { creator: { kind: 'session', sessionId: 's-lead' }, members });
-    const rows = cardRows(makeWork('w-01', { sessions: [lead, child, ...hive], rooms: [room], swarms: [swarm] }).map, false);
+    const rows = cardRows(makeWork('w-01', { sessions: [lead, child, ...hive], rooms: [room], swarms: [swarm] }).map);
     expect(rows.map(label)).toEqual(['s-lead', 'r-own', 'sw-01', 's-child']);
     expect(rows.map((row) => row.depth)).toEqual([0, 1, 1, 1]);
     expect(rows[2]?.parent).toBe('s-lead');
@@ -782,7 +778,7 @@ describe('cardRows — рой отпочковывается от создате
   it('рой комнаты стоит сразу под строкой комнаты, линия идёт к ней', () => {
     const room = makeRoom('r-01', 'Review');
     const swarm = makeSwarm('sw-01', 's-q', { creator: { kind: 'room', roomId: 'r-01' }, members });
-    const rows = cardRows(makeWork('w-01', { sessions: hive, rooms: [room, makeRoom('r-02', 'Other')], swarms: [swarm] }).map, false);
+    const rows = cardRows(makeWork('w-01', { sessions: hive, rooms: [room, makeRoom('r-02', 'Other')], swarms: [swarm] }).map);
     expect(rows.map(label)).toEqual(['r-01', 'sw-01', 'r-02']);
     expect(rows[1]).toMatchObject({ depth: 1, parent: 'r-01' });
     expect(treeGuides(rows)[1]).toContainEqual({ kind: 'elbow', column: 0 });
@@ -798,20 +794,20 @@ describe('cardRows — рой отпочковывается от создате
       makeSwarm('sw-03', 's-q3', { creator: { kind: 'room', roomId: 'r-arch' }, members: [makeSwarmMember('s-q3', 'queen')] }),
     ];
     const sessions = [makeSession('s-top', 'top'), closed, ...hive, makeSession('s-q2', 'q2'), makeSession('s-q3', 'q3')];
-    const rows = cardRows(makeWork('w-01', { sessions, rooms: [archived], swarms }).map, false);
+    const rows = cardRows(makeWork('w-01', { sessions, rooms: [archived], swarms }).map);
     expect(rows.map(label)).toEqual(['s-top', 'sw-01', 'sw-02', 'sw-03']);
     expect(rows.slice(1).map((row) => [row.depth, row.parent])).toEqual([[0, null], [0, null], [0, null]]);
   });
 
   it('сессии роя обычными строками не выводятся — ни королева, ни трутни, ни проверяющие', () => {
     const swarm = makeSwarm('sw-01', 's-q', { creator: { kind: 'session', sessionId: 's-lead' }, members });
-    const rows = cardRows(makeWork('w-01', { sessions: [makeSession('s-lead', 'lead'), ...hive], swarms: [swarm] }).map, true);
+    const rows = cardRows(makeWork('w-01', { sessions: [makeSession('s-lead', 'lead'), ...hive], swarms: [swarm] }).map);
     expect(rows.filter((row) => row.kind === 'session').map(label)).toEqual(['s-lead']);
     const swarmRow = rows.find((row) => row.kind === 'swarm');
     expect(swarmRow?.kind === 'swarm' ? swarmRow.members.map((view) => view.member.sessionId) : []).toEqual(['s-q', 's-d1', 's-v']);
   });
 
-  it('просмотренные и отменённые рои — только при раскрытых закрытых', () => {
+  it('просмотренные и отменённые рои в основных строках не выводятся — они первыми в closedRows', () => {
     const swarms = [
       makeSwarm('sw-01', 's-q', { members }),
       makeSwarm('sw-02', 's-q2', { status: 'cancelled', members: [makeSwarmMember('s-q2', 'queen')] }),
@@ -820,12 +816,80 @@ describe('cardRows — рой отпочковывается от создате
     ];
     const sessions = [...hive, makeSession('s-q2', 'q2'), makeSession('s-q3', 'q3'), makeSession('s-q4', 'q4')];
     const map = makeWork('w-01', { sessions, swarms }).map;
-    expect(cardRows(map, false).map(label)).toEqual(['sw-01', 'sw-04']);
-    expect(cardRows(map, true).map(label)).toEqual(['sw-01', 'sw-02', 'sw-03', 'sw-04']);
+    expect(cardRows(map).map(label)).toEqual(['sw-01', 'sw-04']);
+    expect(closedRows(map).map(label)).toEqual(['sw-02', 'sw-03']);
   });
 
   it('карта без роёв даёт прежние строки', () => {
-    const rows = cardRows(makeWork('w-01', { sessions: [makeSession('s-01', 'a')] }).map, false);
+    const rows = cardRows(makeWork('w-01', { sessions: [makeSession('s-01', 'a')] }).map);
     expect(rows.map(label)).toEqual(['s-01']);
+  });
+});
+
+// Блок «Closed sessions» (план 2026-11-15, 3.2): закрытые сессии без основной строки, свежие сверху; скрытые рои — первыми.
+describe('closedRows — блок закрытых сессий', () => {
+  const ids = (rows: CardRow[]): string[] =>
+    rows.map((row) => (row.kind === 'session' ? row.session.id : row.kind === 'room' ? row.room.id : row.swarm.id));
+  const closed = (id: string, patch: Partial<WorkSession> = {}): WorkSession => makeSession(id, id, { lifecycle: 'closed', ...patch });
+  const map = (list: WorkSession[], rooms: Room[] = [], swarms: ReturnType<typeof makeSwarm>[] = []): WindowWorkMap =>
+    makeWork('w-01', { sessions: list, rooms, swarms }).map;
+
+  it('пустая карта и карта без закрытых — пусто', () => {
+    expect(closedRows(map([]))).toEqual([]);
+    expect(closedRows(map([makeSession('s-01', 'a')]))).toEqual([]);
+  });
+
+  it('свежие сверху по closedAt; плоско, глубина 0 и без родителя', () => {
+    const rows = closedRows(
+      map([
+        closed('s-01', { closedAt: '2026-11-10T10:00:00.000Z', parent: 's-02' }),
+        closed('s-02', { closedAt: '2026-11-12T10:00:00.000Z' }),
+        closed('s-03', { closedAt: '2026-11-11T10:00:00.000Z' }),
+      ]),
+    );
+    expect(ids(rows)).toEqual(['s-02', 's-03', 's-01']);
+    expect(rows.map((row) => [row.depth, row.parent])).toEqual([[0, null], [0, null], [0, null]]);
+  });
+
+  it('нет closedAt — порядок по endedAt, затем resultAt, затем startedAt; без единой даты — в конце, в порядке карты', () => {
+    const none = { closedAt: null, endedAt: null, resultAt: null, startedAt: null };
+    const rows = closedRows(
+      map([
+        closed('s-01', none),
+        closed('s-02', { ...none, startedAt: '2026-11-01T10:00:00.000Z' }),
+        closed('s-03', { ...none, resultAt: '2026-11-02T10:00:00.000Z' }),
+        closed('s-04', { ...none, endedAt: '2026-11-03T10:00:00.000Z' }),
+        closed('s-05', { ...none, closedAt: '2026-11-04T10:00:00.000Z', endedAt: '2026-11-01T00:00:00.000Z' }),
+        closed('s-06', none),
+      ]),
+    );
+    expect(ids(rows)).toEqual(['s-05', 's-04', 's-03', 's-02', 's-01', 's-06']);
+  });
+
+  it('закрытые участники открытой и архивной комнаты входят; закрытый владелец открытой комнаты (якорь) — нет', () => {
+    const owner = closed('s-owner');
+    const open = closed('s-open');
+    const archived = closed('s-arch');
+    const rooms: Room[] = [
+      { ...makeRoom('r-01', 'Open'), ownerId: owner.id, members: [open.id] },
+      { ...makeRoom('r-02', 'Old'), members: [archived.id], archivedAt: '2026-10-08T12:00:00.000Z' },
+    ];
+    const state = map([owner, open, archived], rooms);
+    expect(ids(cardRows(state)).includes('s-owner')).toBe(true);
+    expect(ids(closedRows(state)).sort()).toEqual(['s-arch', 's-open']);
+  });
+
+  it('участники роя не входят; скрытые рои стоят первыми, в порядке карты', () => {
+    const queen = closed('s-q');
+    const lone = closed('s-lone', { closedAt: '2026-11-12T10:00:00.000Z' });
+    const swarms = [
+      makeSwarm('sw-01', 's-q', { status: 'cancelled', members: [makeSwarmMember('s-q', 'queen')] }),
+      makeSwarm('sw-02', 's-run', { members: [makeSwarmMember('s-run', 'queen')] }),
+      makeSwarm('sw-03', 's-q3', { status: 'done', seenAt: '2026-09-27T09:00:00.000Z', members: [makeSwarmMember('s-q3', 'queen')] }),
+    ];
+    const state = map([queen, lone, makeSession('s-run', 'run'), makeSession('s-q3', 'q3')], [], swarms);
+    const rows = closedRows(state);
+    expect(ids(rows)).toEqual(['sw-01', 'sw-03', 's-lone']);
+    expect(rows[0]).toMatchObject({ kind: 'swarm', depth: 0, parent: null });
   });
 });

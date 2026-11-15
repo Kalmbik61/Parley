@@ -570,11 +570,11 @@ export const S = {
     /** `aria-label` и тултип «+» заголовка проекта: проект называется (спека окна 2026-09-29, 1.2). */
     newWorkspaceInProject: (project: string): string => `New workspace in ${project}`,
     sessionCount: (n: number): string => (n === 1 ? '1 session' : `${n} sessions`),
-    /** Строка под сессиями карточки: сколько закрытых спрятано; «Hide closed» — прячет раскрытые. */
-    moreClosed: (n: number): string => `${n} more closed`,
+    /** Заголовок-переключатель блока закрытых сессий карточки (план 2026-11-15); текст один в обоих состояниях. «Hide closed» — вторая кнопка под длинным раскрытым блоком. */
+    closedSessions: 'Closed sessions',
     hideClosed: 'Hide closed',
-    /** Ссылка под строками карточки: архивные комнаты работы спрятаны под ней; «Hide archived rooms» прячет раскрытые. */
-    archivedRooms: (n: number): string => (n === 1 ? '1 archived room' : `${n} archived rooms`),
+    /** Заголовок-переключатель блока архивных комнат карточки; «Hide archived rooms» — вторая кнопка под длинным блоком. */
+    archivedRooms: 'Archived rooms',
     hideArchivedRooms: 'Hide archived rooms',
     /** Ссылка внизу группы проекта: архивные работы проекта спрятаны под ней; «Hide archived» прячет раскрытые. */
     archivedWorks: (n: number): string => `${n} archived`,

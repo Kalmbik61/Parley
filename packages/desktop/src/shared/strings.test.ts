@@ -90,10 +90,12 @@ describe('S.sidebar — тексты карточки и строк (Organic, 1.
     expect(S.sidebar.roomsWithUnread(2)).toBe('2 rooms with unread messages');
   });
 
-  it('тултип ветки своего worktree, «N more closed» и «Hide closed»', () => {
+  it('тултип ветки своего worktree, заголовки блоков «Closed sessions» и «Archived rooms», кнопки «Hide …»', () => {
     expect(S.sidebar.ownWorktree('harnas/s-01')).toBe('Own worktree · harnas/s-01');
-    expect(S.sidebar.moreClosed(2)).toBe('2 more closed');
+    expect(S.sidebar.closedSessions).toBe('Closed sessions');
+    expect(S.sidebar.archivedRooms).toBe('Archived rooms');
     expect(S.sidebar.hideClosed).toBe('Hide closed');
+    expect(S.sidebar.hideArchivedRooms).toBe('Hide archived rooms');
   });
 
   // Спека архива комнат и проектов, 6, 6.2 и 6.3: ссылка группы проекта, текст архивации работы, «Remove from list…».

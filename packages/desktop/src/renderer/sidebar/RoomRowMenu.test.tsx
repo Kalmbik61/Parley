@@ -34,14 +34,14 @@ const work = (room: Partial<Room> = {}): WindowWorkEntry =>
   });
 
 function rowOf(entry: WindowWorkEntry): CardRoomRow {
-  const row = cardRows(entry.map, false).find((candidate): candidate is CardRoomRow => candidate.kind === 'room');
+  const row = cardRows(entry.map).find((candidate): candidate is CardRoomRow => candidate.kind === 'room');
   if (row === undefined) throw new Error('строки комнаты нет');
   return row;
 }
 
 /** Строка архивной комнаты (`archivedRows`): в основных строках карточки её нет. */
 function archivedRowOf(entry: WindowWorkEntry): CardRoomRow {
-  const row = archivedRows(entry.map, false)[0];
+  const row = archivedRows(entry.map)[0];
   if (row === undefined) throw new Error('строки архивной комнаты нет');
   return row;
 }
