@@ -7,7 +7,7 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, open, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -23,6 +23,7 @@ import {
   type AttemptClock,
   type AttemptDeps,
   type AttemptInput,
+  type ArchiveFile,
   type AttemptOutcome,
   type RunningProcess,
 } from './update-download.js';
@@ -76,24 +77,45 @@ function manualClock(step = 0): AttemptClock & { advance(ms: number): void; pend
   };
 }
 
-/** Тело, которым управляет тест: куски, конец, обрыв. */
-function controlledBody(headers: Record<string, string> = {}): {
+/**
+ * Тело, которым управляет тест: куски, конец, обрыв. `pulls` — сколько раз у источника просили данные (при
+ * `highWaterMark: 0` — только по чтению), `cancelled` — оборвал ли тело получатель.
+ */
+function controlledBody(
+  headers: Record<string, string> = {},
+  highWaterMark = 1,
+): {
   response: Response;
   push(chunk: Buffer | string): void;
   end(): void;
   fail(error: Error): void;
+  pulls(): number;
+  cancelled(): boolean;
 } {
   let controller!: ReadableStreamDefaultController<Uint8Array>;
-  const stream = new ReadableStream<Uint8Array>({
-    start(c) {
-      controller = c;
+  let pulls = 0;
+  let cancelled = false;
+  const stream = new ReadableStream<Uint8Array>(
+    {
+      start(c) {
+        controller = c;
+      },
+      pull() {
+        pulls += 1;
+      },
+      cancel() {
+        cancelled = true;
+      },
     },
-  });
+    { highWaterMark },
+  );
   return {
     response: new Response(stream, { status: 200, headers }),
     push: (chunk) => controller.enqueue(typeof chunk === 'string' ? Buffer.from(chunk) : chunk),
     end: () => controller.close(),
     fail: (error) => controller.error(error),
+    pulls: () => pulls,
+    cancelled: () => cancelled,
   };
 }
 
@@ -531,13 +553,41 @@ describe.skipIf(process.platform !== 'darwin')('runAttempt', () => {
       ).done;
       expect(big).toEqual({ ok: false, reason: 'too_large' });
       dirsGone();
-      // 64 КиБ комментариев и одна верная строка: предел не нарушен, и до разбора доходит весь манифест.
-      const padding = `${'#'.repeat(MANIFEST_MAX_BYTES - 200)}\n`;
-      const manifest = padding + manifestFor(archive);
-      expect(Buffer.byteLength(manifest)).toBeLessThanOrEqual(MANIFEST_MAX_BYTES);
-      expect((await start(fetchOf({ manifest: ok(manifest), archive: ok(archive) })).done).ok).toBe(
-        true,
-      );
+      // Ровно 64 КиБ — комментарии и одна верная строка: предел не нарушен, и до разбора доходит весь манифест.
+      const line = manifestFor(archive);
+      const exact = `${'#'.repeat(MANIFEST_MAX_BYTES - Buffer.byteLength(line) - 1)}\n${line}`;
+      expect(Buffer.byteLength(exact)).toBe(MANIFEST_MAX_BYTES);
+      const passed = start(fetchOf({ manifest: ok(exact), archive: ok(archive) }));
+      expect((await passed.done).ok).toBe(true);
+      // Готовое приложение убирает отмена: каталоги нужны следующей попытке.
+      await passed.cancel();
+      dirsGone();
+      // На байт больше (и всё ещё верная строка в конце) — уже too_large.
+      const over = `#${exact}`;
+      expect(Buffer.byteLength(over)).toBe(MANIFEST_MAX_BYTES + 1);
+      expect(await start(fetchOf({ manifest: ok(over), archive: ok(archive) })).done).toEqual({
+        ok: false,
+        reason: 'too_large',
+      });
+      dirsGone();
+    });
+
+    it('манифест: предел считается по сумме кусков, а не по каждому', async () => {
+      const archive = await makeArchive();
+      const body = controlledBody();
+      const attempt = start(fetchOf({ manifest: () => body.response, archive: ok(archive) }));
+      await vi.waitFor(() => expect(existsSync(input.stagingDir)).toBe(true));
+      body.push(Buffer.alloc(40 * 1024, '#'));
+      await flush();
+      expect(await stillPending(attempt.done)).toBe(true);
+      body.push(Buffer.alloc(MANIFEST_MAX_BYTES - 40 * 1024, '#'));
+      await flush();
+      expect(await stillPending(attempt.done)).toBe(true);
+      body.push('#');
+      expect(await attempt.done).toEqual({ ok: false, reason: 'too_large' });
+      expect(body.cancelled()).toBe(true);
+      expect(requests.length).toBe(1);
+      dirsGone();
     });
 
     it('архив: нет заголовков 60 с → network; сброса от заголовков нет', async () => {
@@ -611,18 +661,23 @@ describe.skipIf(process.platform !== 'darwin')('runAttempt', () => {
       await attempt.cancel();
     });
 
-    it('архив: заявленный размер больше 1 ГиБ → too_large без чтения тела', async () => {
+    it('архив: заявленный размер больше 1 ГиБ → too_large без чтения тела, тело оборвано', async () => {
+      // Источник с `highWaterMark: 0` просят о данных только по чтению: ноль обращений — тело не читали.
+      const body = controlledBody({ 'content-length': String(ARCHIVE_MAX_BYTES + 1) }, 0);
+      const opened: string[] = [];
       const outcome = await start(
-        fetchOf({
-          manifest: ok(manifestFor('x')),
-          archive: () =>
-            new Response('abc', {
-              status: 200,
-              headers: { 'content-length': String(ARCHIVE_MAX_BYTES + 1) },
-            }),
-        }),
+        fetchOf({ manifest: ok(manifestFor('x')), archive: () => body.response }),
+        {
+          openFile: async (file) => {
+            opened.push(file);
+            return open(file, 'wx', 0o600);
+          },
+        },
       ).done;
       expect(outcome).toEqual({ ok: false, reason: 'too_large' });
+      expect(body.pulls()).toBe(0);
+      expect(body.cancelled()).toBe(true);
+      expect(opened).toEqual([]);
       expect(progress).toEqual([]);
       dirsGone();
     });
@@ -643,6 +698,176 @@ describe.skipIf(process.platform !== 'darwin')('runAttempt', () => {
         },
       ).done;
       expect(exact.ok).toBe(true);
+    });
+
+    it.each([
+      ['без заголовка', {}],
+      ['заявлено меньше, чем есть на деле', { 'content-length': '5' }],
+    ])(
+      'архив: предел считается по сумме кусков (%s) → too_large, тело оборвано',
+      async (_title, headers) => {
+        const body = controlledBody(headers);
+        const attempt = start(
+          fetchOf({ manifest: ok(manifestFor('x')), archive: () => body.response }),
+          { limits: { archiveBytes: 10 } },
+        );
+        await vi.waitFor(() => expect(progress.length).toBe(1));
+        body.push('aaaa');
+        body.push('aaaa');
+        body.push('aa');
+        await flush();
+        // Ровно предел (4 + 4 + 2): ещё не отказ.
+        expect(await stillPending(attempt.done)).toBe(true);
+        body.push('a');
+        expect(await attempt.done).toEqual({ ok: false, reason: 'too_large' });
+        expect(body.cancelled()).toBe(true);
+        dirsGone();
+      },
+    );
+
+    it('архив: пустой кусок в 59 с отсчёт простоя не сбрасывает → network ровно на 60 с', async () => {
+      const clock = manualClock();
+      const body = controlledBody();
+      const attempt = start(
+        fetchOf({ manifest: ok(manifestFor('x')), archive: () => body.response }),
+        { clock },
+      );
+      await vi.waitFor(() => expect(progress.length).toBe(1));
+      clock.advance(ARCHIVE_IDLE_MS - 1_000);
+      body.push(Buffer.alloc(0));
+      await flush();
+      expect(await stillPending(attempt.done)).toBe(true);
+      clock.advance(1_000);
+      expect(await attempt.done).toEqual({ ok: false, reason: 'network' });
+      dirsGone();
+    });
+
+    describe('запись архива в файл', () => {
+      const enospc = (): Error =>
+        Object.assign(new Error('no space left on device'), { code: 'ENOSPC' });
+
+      it('короткая запись дописывается: в файл и в сумму идут одни и те же байты', async () => {
+        const archive = await makeArchive();
+        let calls = 0;
+        const openFile = async (file: string): Promise<ArchiveFile> => {
+          const real = await open(file, 'wx', 0o600);
+          return {
+            // Не больше 7 байт за вызов: успешная, но короткая запись.
+            write: (buffer, offset, length) => {
+              calls += 1;
+              return real.write(buffer, offset, Math.min(length, 7));
+            },
+            close: () => real.close(),
+          };
+        };
+        const outcome = await start(
+          fetchOf({ manifest: ok(manifestFor(archive)), archive: ok(archive) }),
+          { openFile },
+        ).done;
+        // Если бы хвост кусков терялся, сумма сошлась бы всё равно, а распаковка упала бы: `ok` значит, что файл цел.
+        expect(outcome.ok).toBe(true);
+        expect(calls).toBeGreaterThanOrEqual(Math.ceil(archive.length / 7));
+      });
+
+      it('запись без единого байта прогресса → disk, каталоги удалены, ответ оборван', async () => {
+        const body = controlledBody();
+        let writes = 0;
+        const openFile = async (): Promise<ArchiveFile> => ({
+          write: async () => {
+            writes += 1;
+            return { bytesWritten: 0 };
+          },
+          close: async () => {},
+        });
+        const attempt = start(
+          fetchOf({ manifest: ok(manifestFor('x')), archive: () => body.response }),
+          { openFile },
+        );
+        await vi.waitFor(() => expect(progress.length).toBe(1));
+        body.push('abc');
+        expect(await attempt.done).toEqual({ ok: false, reason: 'disk' });
+        // Бесконечного цикла нет: нулевой прогресс отказывает сразу.
+        expect(writes).toBe(1);
+        expect(body.cancelled()).toBe(true);
+        dirsGone();
+      });
+
+      it('ошибка записи → disk, файл закрыт, ответ оборван, запрос прерван, каталоги удалены', async () => {
+        const body = controlledBody();
+        let closed = false;
+        const openFile = async (): Promise<ArchiveFile> => ({
+          write: async () => {
+            throw enospc();
+          },
+          close: async () => {
+            closed = true;
+          },
+        });
+        const attempt = start(
+          fetchOf({ manifest: ok(manifestFor('x')), archive: () => body.response }),
+          { openFile },
+        );
+        await vi.waitFor(() => expect(progress.length).toBe(1));
+        body.push('abc');
+        expect(await attempt.done).toEqual({ ok: false, reason: 'disk' });
+        expect(closed).toBe(true);
+        expect(body.cancelled()).toBe(true);
+        expect(requests[1]?.init.signal.aborted).toBe(true);
+        dirsGone();
+      });
+
+      it('файл архива не открылся (нет места) после ответа → disk, ответ оборван, запрос прерван, каталоги удалены', async () => {
+        const body = controlledBody({}, 0);
+        const attempt = start(
+          fetchOf({ manifest: ok(manifestFor('x')), archive: () => body.response }),
+          {
+            openFile: async () => {
+              throw enospc();
+            },
+          },
+        );
+        expect(await attempt.done).toEqual({ ok: false, reason: 'disk' });
+        expect(body.pulls()).toBe(0);
+        expect(body.cancelled()).toBe(true);
+        expect(requests[1]?.init.signal.aborted).toBe(true);
+        dirsGone();
+      });
+    });
+
+    it('память: чтение тела не копит обработчиков на общем промисе — на каждый кусок их не больше нескольких', async () => {
+      // Прежний код гонял каждое чтение с одним вечным промисом прерывания: обработчики (а с ними и уже прочитанные
+      // куски) копились до конца попытки. Считаем вызовы `then` по получателю: ни на одном промисе их не должно быть много.
+      const chunkCount = 3_000;
+      const content = Buffer.alloc(chunkCount, 'a');
+      const stream = new ReadableStream<Uint8Array>({
+        start(c) {
+          for (let i = 0; i < chunkCount; i += 1) c.enqueue(content.subarray(i, i + 1));
+          c.close();
+        },
+      });
+      const perReceiver = new WeakMap<object, number>();
+      let maxPerReceiver = 0;
+      const realThen = Promise.prototype.then;
+      Promise.prototype.then = function patchedThen(this: Promise<unknown>, ...args: never[]) {
+        const count = (perReceiver.get(this) ?? 0) + 1;
+        perReceiver.set(this, count);
+        if (count > maxPerReceiver) maxPerReceiver = count;
+        return (realThen as (...a: unknown[]) => unknown).apply(this, args) as never;
+      } as typeof Promise.prototype.then;
+      let outcome: AttemptOutcome;
+      try {
+        outcome = await start(
+          fetchOf({
+            manifest: ok(manifestFor(content)),
+            archive: () => new Response(stream, { status: 200 }),
+          }),
+        ).done;
+      } finally {
+        Promise.prototype.then = realThen;
+      }
+      // Содержимое — не архив, но весь поток дочитан и сумма сошлась: дело дошло до распаковки.
+      expect(outcome).toEqual({ ok: false, reason: 'bad_archive' });
+      expect(maxPerReceiver).toBeLessThan(20);
     });
 
     it('диск: каталог загрузки уже есть → disk, чужой каталог не тронут и не удалён', async () => {
@@ -738,6 +963,73 @@ describe.skipIf(process.platform !== 'darwin')('runAttempt', () => {
       expect(spawned).toEqual(['/usr/bin/ditto']);
       dirsGone();
     });
+
+    it.each(['manifest', 'archive'] as const)(
+      'ответ %s, пришедший уже после cancel(), оборван и файлов не создаёт',
+      async (which) => {
+        const body = controlledBody({}, 0);
+        let release!: (response: Response) => void;
+        const late = (): Promise<Response> =>
+          new Promise<Response>((resolve) => (release = resolve));
+        const opened: string[] = [];
+        const attempt = start(
+          fetchOf({
+            manifest: which === 'manifest' ? late : ok(manifestFor('x')),
+            archive: which === 'archive' ? late : ok(''),
+          }),
+          {
+            openFile: async (file) => {
+              opened.push(file);
+              return open(file, 'wx', 0o600);
+            },
+          },
+        );
+        await vi.waitFor(() => expect(requests.length).toBe(which === 'manifest' ? 1 : 2));
+        await attempt.cancel();
+        expect(await attempt.done).toEqual({ ok: false, reason: 'cancelled' });
+        dirsGone();
+
+        release(body.response);
+        await flush();
+        expect(body.cancelled()).toBe(true);
+        expect(body.pulls()).toBe(0);
+        expect(opened).toEqual([]);
+        expect(requests.length).toBe(which === 'manifest' ? 1 : 2);
+        dirsGone();
+      },
+    );
+
+    it.each(['/usr/bin/defaults', '/usr/bin/xattr'])(
+      'во время %s: процесс убит, каталоги удалены только после его конца',
+      async (target) => {
+        const archive = await makeArchive();
+        const events: string[] = [];
+        const gate = gatedProcess(events);
+        const run: AttemptDeps['run'] = (command, args) => {
+          if (command !== target) return spawnRun(command, args);
+          events.push(command);
+          return gate.process;
+        };
+        const attempt = start(
+          fetchOf({ manifest: ok(manifestFor(archive)), archive: ok(archive) }),
+          { run },
+        );
+        await vi.waitFor(() => expect(events).toContain(target));
+
+        const cancelling = attempt.cancel();
+        await vi.waitFor(() => expect(events).toContain('kill'));
+        // Процесс ещё не закончился: каталоги на месте, отмена и `done` не завершились.
+        await flush(80);
+        expect(existsSync(input.stagingDir)).toBe(true);
+        expect(existsSync(input.downloadDir)).toBe(true);
+        expect(await stillPending(attempt.done)).toBe(true);
+
+        gate.finish(null);
+        await cancelling;
+        dirsGone();
+        expect(await attempt.done).toEqual({ ok: false, reason: 'cancelled' });
+      },
+    );
 
     it('новая попытка той же версии, начатая сразу, идёт в своих каталогах и доходит до готовности', async () => {
       const archive = await makeArchive();
