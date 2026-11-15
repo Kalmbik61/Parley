@@ -244,7 +244,9 @@ release's `SHA256SUMS.txt`, unpacks it next to the app and shows **Restart now**
 replaced before that click, and **Cancel** stops the download. Restarting is an ordinary quit:
 it asks about unsaved files and running sessions, stops the agents, and a **Cancel** in any of
 those questions keeps the old version running. After the restart the new version opens, and the
-old app stays next to it as the hidden `.Parley.app.old` until the next update.
+old app stays next to it as the hidden `.Parley.app.old`; the new version removes it in the
+background on its first start once the swap result confirms it is running, and if that
+confirmation did not happen (an interrupted swap), `.Parley.app.old` stays until the next update.
 
 The toast shows **Download** instead of **Update** when Parley cannot replace itself: it runs
 from a disk image or from a place you cannot write to, or an update failed (the toast then names the reason).
