@@ -107,7 +107,7 @@ export function cardOutcomeOf(kind: string, status: ActionOutcome['status']): st
 }
 
 /** Строки шагов автономной карточки для итога: шаги плана или одно действие. */
-function stepLinesOf(row: CardRow): string[] {
+export function stepLinesOf(row: CardRow): string[] {
   const view = row.view as AssistantProposal;
   if (view.action === 'actions') return view.steps.map((step) => step.line);
   if (view.action === 'room') return [`room "${view.title}"`];

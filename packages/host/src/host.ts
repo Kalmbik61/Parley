@@ -133,7 +133,7 @@ import { createRequests } from './assistant/requests.js';
 import { createRequestLinker, type RequestLinker } from './assistant/request-link.js';
 import { createRequestStatus, type RequestStatusReader } from './assistant/request-status.js';
 import { createJobPrompt } from './assistant/job-context.js';
-import { createServiceMessages, type ServiceMessages } from './assistant/service-messages.js';
+import { createServiceMessages, startServiceQueue, type ServiceMessages } from './assistant/service-messages.js';
 import { createJobExecutor } from './assistant/job-executor.js';
 import { createLiveClient } from './voice/live-client.js';
 import { createVoiceSessionService } from './voice/voice-session-service.js';
@@ -1007,7 +1007,6 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   const watchingAssistant = assistantService;
   activityService.onChange((ref) => watchingAssistant.watchActivity(ref));
   worksService.onChange(() => watchingAssistant.watchWorks());
-  void assistantService.refreshAutonomy().catch((error: Error) => log.info(`assistant: autonomy flag was not read: ${error.message}`));
 
   // Вход job голосового Request (текст, контекст, открытые Request): Request создаётся после jobs, поэтому поздняя привязка.
   // eslint-disable-next-line prefer-const -- поздняя привязка: замыкание executor читает её раньше присваивания
@@ -1033,6 +1032,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     defaultProvider: () => assistantService?.settings()?.provider ?? ASSISTANT_PROVIDER_ORDER[0] ?? 'claude',
     // Job, что шёл при остановке: исходы его автономных карточек — в его резюме (спека автономии §5.3).
     restartNote: (job, room) => assistantService.claimRestartOutcome(job.jobId, room),
+    // Событие слежения, вернувшееся после лимита, прошло политику очереди: Request снятых неактуальны (спека автономии §6.3).
+    onServiceDrop: (drops) => serviceMessages?.dropped(drops),
     log: (line) => log.info(line),
   });
   // Request голосовых поручений: durable в той же базе, связан с job по ключу; закрытие голоса job не отменяет.
@@ -1089,10 +1090,9 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   assistantJobs.onJobChanged((job) => notificationIngest.onJob(job));
   assistantService.onCardChanged((change) => notificationIngest.onCard(change));
   // После сверки job: исходы автономных карточек, что не забрал ни один job, уходят в доставку (спека автономии §5.3).
-  void assistantJobs
-    .recover()
-    .catch((error: unknown) => log.info(`assistant jobs: recover failed: ${(error as Error).message}`))
-    .finally(() => assistantService.deliverRestartOutcomes());
+  // Начальный флаг режима (и снятие ждущих событий слежения при выключенном) — до сверки и разбора очереди job (спека
+  // автономии §6.2); затем исходы автономных карточек, что не забрал ни один job, уходят в доставку (§5.3).
+  void startServiceQueue({ assistant: assistantService, messages: serviceMessages, jobs: assistantJobs, log: (line) => log.info(line) });
   handle.context.onShutdown(async () => assistantJobs.stop());
 
   // Канал Telegram (план B): опрос бота, карточки и письма; остановка раньше помощника, чтобы мост отписался первым.

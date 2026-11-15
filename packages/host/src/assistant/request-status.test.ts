@@ -100,19 +100,20 @@ describe('request_status', () => {
 });
 
 describe('request_status: служебных нет (автономия, W2)', () => {
-  it('RW-10: служебные Request не входят в статус, даже когда их больше восьми', () => {
+  it('RW-10: девять невытесненных служебных не входят в статус и не вытесняют более старое поручение из предела списка', () => {
     const h = setup();
     h.submit('d1', { text: 'human question' });
     for (let index = 0; index < 9; index += 1) {
       h.requests.submit({
         conversationId: 'conv-1',
         voiceSessionId: 'host',
-        delegationId: `watch:/p:w-1:s-0${index}:turn:1`,
+        delegationId: `outcome:p${index}`,
         text: `Reply from S0${index}`,
         origin: 'system',
-        service: { kind: 'watch', group: `g${index}`, fallback: 'x' },
+        service: { kind: 'outcome', group: null, fallback: 'x' },
       });
     }
+    expect(h.requests.list('conv-1', 'live').filter((request) => request.origin === 'system' && !request.stale)).toHaveLength(9);
     const asker = h.submit('asker', { text: 'status?' });
     const outcome = h.status.status(asker.jobId);
     if (!outcome.ok) throw new Error('refused');

@@ -119,12 +119,14 @@ describe('вход job: служебных нет (автономия, W2)', () 
         requests.submit({
           conversationId: 'island',
           voiceSessionId: 'host',
-          delegationId: `watch:/p:w-1:s-0${index}:turn:1`,
+          delegationId: `outcome:p${index}`,
           text: `Reply from S0${index}`,
           origin: 'system',
-          service: { kind: 'watch', group: `g${index}`, fallback: 'x' },
+          service: { kind: 'outcome', group: null, fallback: 'x' },
         }).request,
     );
+    // Итоги действий не снимаются: девять открытых служебных новее человеческого поручения — больше предела в восемь.
+    expect(services.filter((request) => !requests.get(request.requestId)?.stale)).toHaveLength(9);
     const asker = requests.submit({ conversationId: 'island', voiceSessionId: 'live_1', delegationId: 'd2', text: 'next question' }).request;
     const text = prompt(jobs.getJob(asker.jobId) as Job);
     expect(text).toContain(`requestId ${human.requestId}`);

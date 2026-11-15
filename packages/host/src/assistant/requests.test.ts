@@ -4,7 +4,7 @@ import { createIngest } from '../notifications/ingest.js';
 import { createNotificationStore } from '../notifications/store.js';
 import { createRequestHandlers } from '../methods/requests.js';
 import { createJobs, type Job, type JobEnd, type JobResult, type JobRun } from './jobs.js';
-import { createRequests, originKeyOf, REQUEST_CONTEXT_LIMIT, type SubmitRequestInput } from './requests.js';
+import { createRequests, LIVE_CONSUMER, originKeyOf, REQUEST_CONTEXT_LIMIT, type SubmitRequestInput } from './requests.js';
 import type { RequestInfo } from '../context.js';
 import { assistantMethodSchemas } from '@parley/protocol';
 
@@ -340,11 +340,14 @@ describe('служебный Request (автономия, W2)', () => {
     expect(requests.get(older.requestId)).toMatchObject({ gate: 'open', heldBy: null });
   });
 
-  it('RW-10: девять служебных не вытесняют человеческое поручение из openBefore', () => {
+  it('RW-10: девять невытесненных служебных не вытесняют более старое человеческое поручение из openBefore (отсечка до LIMIT)', () => {
     const { requests } = setup();
     const human = requests.submit(input('d1')).request;
-    for (let index = 0; index < 9; index += 1) requests.submit(service(`watch:/p:w-1:s-0${index}:turn:1`, { service: tag(`g${index}`) }));
+    // Итоги действий не заменяются и не снимаются переполнением: все девять остаются открытыми и новее человеческого.
+    for (let index = 0; index < 9; index += 1) requests.submit(service(`outcome:p${index}`, { service: { kind: 'outcome', group: null, fallback: 'x' } }));
     const newer = requests.submit(input('d2')).request;
+    const open = requests.list('conv-1', LIVE_CONSUMER).filter((request) => request.origin === 'system' && !request.stale && request.seq > human.seq && request.seq < newer.seq);
+    expect(open).toHaveLength(9);
     expect(requests.openBefore('conv-1', newer.seq, 8).map((request) => request.requestId)).toEqual([human.requestId]);
   });
 
@@ -392,6 +395,22 @@ describe('служебный Request (автономия, W2)', () => {
     expect(() => requests.submitService(service('outcome:p1'), guard)).toThrow(/taken/);
     expect(count(db, 'marks')).toBe(0);
     expect(count(db, 'assistant_requests')).toBe(0);
+  });
+
+  it('dropService (возврат после limit): снятые неактуальны, их считает более новое событие той же сессии; снятые переполнением — для заметки', () => {
+    const { requests, jobs } = setup();
+    const old = requests.submit(service('watch:/p:w-1:s-01:turn:1')).request;
+    const newer = requests.submit(service('watch:/p:w-1:s-01:turn:2')).request;
+    const other = requests.submit(service('watch:/p:w-1:s-02:turn:1', { service: tag('g2') })).request;
+    expect(jobs.getJob(old.jobId)?.state).toBe('running');
+    const overflow = requests.dropService([
+      { jobId: old.jobId, reason: 'replaced', by: newer.jobId },
+      { jobId: other.jobId, reason: 'overflow', by: newer.jobId },
+    ]);
+    expect(requests.get(old.requestId)).toMatchObject({ stale: true, supersededBy: newer.requestId });
+    expect(requests.get(newer.requestId)?.context).toMatchObject({ earlierReplies: 1 });
+    expect(overflow.map((request) => request.requestId)).toEqual([other.requestId]);
+    expect(requests.dropService([{ jobId: other.jobId, reason: 'overflow', by: newer.jobId }])).toEqual([]);
   });
 
   it('submitService: guard в той же транзакции; false — ничего не создано; сбой вставки откатывает и guard', () => {

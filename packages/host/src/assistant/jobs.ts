@@ -44,8 +44,11 @@ export interface ServiceTag {
   fallback: string;
 }
 
-/** Почему служебный job снят из очереди: заменён новым событием той же сессии или вытеснен переполнением. */
-export type ServiceDrop = { jobId: string; reason: 'replaced' | 'overflow' };
+/**
+ * Служебный job снят из очереди: `replaced` — ждёт более новое событие той же сессии (`by` — его job), `overflow` —
+ * событий слежения больше предела (`by` — самое новое из оставшихся).
+ */
+export type ServiceDrop = { jobId: string; reason: 'replaced' | 'overflow'; by: string };
 
 export interface Job {
   jobId: string;
@@ -99,6 +102,11 @@ export interface JobsDeps {
    * пометила взятым, откатывается вместе с ней. `null` — нечего.
    */
   restartNote?(job: Job, room: number): string | null;
+  /**
+   * Служебный job, вернувшийся в очередь после `limit`, прошёл политику очереди и снял job (свой или чужой): их Request
+   * помечаются неактуальными, о снятых переполнением — заметка человеку. При вставке то же делает `requests.submitService`.
+   */
+  onServiceDrop?(drops: ServiceDrop[]): void;
   now?(): number;
   log?(line: string): void;
   /** Пауза перед повтором job после `limit`. */
@@ -371,7 +379,18 @@ export function createJobs(deps: JobsDeps): Jobs {
       move(jobId, ['running'], 'cancelled', end.message);
     } else if (end.kind === 'limit') {
       // Лимит подписки — не провал: job возвращается в очередь и повторяется позже.
-      if (move(jobId, ['running'], 'queued', `Waiting for the provider limit: ${end.message}`.slice(0, 2000)) !== null) {
+      const back = move(jobId, ['running'], 'queued', `Waiting for the provider limit: ${end.message}`.slice(0, 2000));
+      // Событие слежения возвращается по тем же правилам, что при вставке: замена по сессии и предел очереди.
+      const drops = back?.service?.kind === 'watch' ? admitWatch() : [];
+      for (const drop of drops) emit(get(drop.jobId) as Job);
+      if (drops.length > 0) {
+        try {
+          deps.onServiceDrop?.(drops);
+        } catch (error) {
+          deps.log?.(`assistant jobs: service drop was not recorded: ${(error as Error).message}`);
+        }
+      }
+      if (back !== null && !drops.some((drop) => drop.jobId === jobId)) {
         notBefore.set(jobId, now() + retryMs);
         const timer = setTimeout(() => {
           timers.delete(timer);
@@ -400,23 +419,38 @@ export function createJobs(deps: JobsDeps): Jobs {
     const row = db.prepare('SELECT * FROM assistant_jobs WHERE idempotency_key = ?').get(input.idempotencyKey) as unknown as Raw;
     const job = fromRaw(row);
     const created = job.jobId === jobId;
-    const dropped: ServiceDrop[] = [];
-    if (created && service?.kind === 'watch') {
-      // Ждущие события слежения, старые первыми: той же сессии заменяются, сверх предела снимаются старейшие.
-      const waiting = (db.prepare(`SELECT * FROM assistant_jobs WHERE state = 'queued' AND origin = 'system' AND job_id <> ? ORDER BY created_at, rowid`).all(jobId) as unknown as Raw[])
-        .map(fromRaw)
-        .filter((other) => other.service?.kind === 'watch');
-      const kept: Job[] = [];
-      for (const other of waiting) {
-        if (service.group !== null && other.service?.group === service.group && write(other.jobId, ['queued'], 'cancelled', 'Replaced by a newer event of the same session', null)) dropped.push({ jobId: other.jobId, reason: 'replaced' });
-        else kept.push(other);
-      }
-      while (kept.length + 1 > SERVICE_QUEUE_WATCH) {
-        const oldest = kept.shift() as Job;
-        if (write(oldest.jobId, ['queued'], 'cancelled', 'Dropped: too many service messages waiting', null)) dropped.push({ jobId: oldest.jobId, reason: 'overflow' });
-      }
-    }
+    const dropped = created && service?.kind === 'watch' ? admitWatch() : [];
     return { job, created, dropped };
+  }
+
+  /**
+   * Политика ждущих событий слежения (только запись, без событий): в группе (сессии) остаётся самое новое, сверх предела
+   * снимаются старейшие. Зовётся при вставке и при возврате после `limit`.
+   */
+  function admitWatch(): ServiceDrop[] {
+    const waiting = (db.prepare(`SELECT * FROM assistant_jobs WHERE state = 'queued' AND origin = 'system' ORDER BY created_at, rowid`).all() as unknown as Raw[])
+      .map(fromRaw)
+      .filter((job) => job.service?.kind === 'watch');
+    const groupOf = (job: Job): string | null => job.service?.group ?? null;
+    const newest = new Map<string, Job>();
+    for (const job of waiting) {
+      const group = groupOf(job);
+      if (group !== null) newest.set(group, job);
+    }
+    const drops: ServiceDrop[] = [];
+    const kept: Job[] = [];
+    for (const job of waiting) {
+      const group = groupOf(job);
+      const top = group === null ? job : (newest.get(group) as Job);
+      if (top !== job && write(job.jobId, ['queued'], 'cancelled', 'Replaced by a newer event of the same session', null)) drops.push({ jobId: job.jobId, reason: 'replaced', by: top.jobId });
+      else kept.push(job);
+    }
+    const last = kept.at(-1);
+    while (kept.length > SERVICE_QUEUE_WATCH && last !== undefined) {
+      const oldest = kept.shift() as Job;
+      if (write(oldest.jobId, ['queued'], 'cancelled', 'Dropped: too many service messages waiting', null)) drops.push({ jobId: oldest.jobId, reason: 'overflow', by: last.jobId });
+    }
+    return drops;
   }
 
   /** События нового job и снятых им служебных, затем очередь; повтор ключа ничего не оповещает. */
@@ -447,9 +481,8 @@ export function createJobs(deps: JobsDeps): Jobs {
     },
     cancelQueuedService(kind) {
       const waiting = (db.prepare(`SELECT * FROM assistant_jobs WHERE state = 'queued' AND origin = 'system' ORDER BY created_at, rowid`).all() as unknown as Raw[]).map(fromRaw);
-      const cancelled = waiting.filter((job) => job.service?.kind === kind).flatMap((job) => move(job.jobId, ['queued'], 'cancelled', 'Cancelled: the autonomous mode was turned off') ?? []);
-      if (cancelled.length > 0) pump();
-      return cancelled;
+      // Снятие ждущих слотов не освобождает: очередь не разбирается (на старте хоста это идёт до `recover`).
+      return waiting.filter((job) => job.service?.kind === kind).flatMap((job) => move(job.jobId, ['queued'], 'cancelled', 'Cancelled: the autonomous mode was turned off') ?? []);
     },
     getJob: get,
     earlierMobile(jobId, query) {

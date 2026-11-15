@@ -11,9 +11,9 @@
  */
 
 import type { SessionRef } from '@parley/protocol';
-import { outcomeText, type WatchDelivery } from './assistant-service.js';
+import { stepLinesOf, type AssistantService, type WatchDelivery } from './assistant-service.js';
 import type { CardRow } from './cards.js';
-import type { Jobs, ServiceTag } from './jobs.js';
+import type { Jobs, ServiceDrop, ServiceTag } from './jobs.js';
 import { SERVICE_VOICE_SESSION, type Requests, type RequestView } from './requests.js';
 import type { ActionOutcome } from './run-plan.js';
 
@@ -21,7 +21,7 @@ import type { ActionOutcome } from './run-plan.js';
 export const SERVICE_CONVERSATION = 'island';
 
 export interface ServiceMessagesDeps {
-  requests: Pick<Requests, 'submitService'>;
+  requests: Pick<Requests, 'submitService' | 'dropService'>;
   jobs: Pick<Jobs, 'cancelQueuedService'>;
   /** Переход итога карточки `pending → sent_as_message`; зовётся внутри транзакции создания Request. */
   takeResult(proposalId: string): boolean;
@@ -41,6 +41,8 @@ export interface ServiceMessages {
   outcome(card: CardRow, outcome: ActionOutcome): RequestView | null;
   /** Режим выключен: ждущие сообщения о событиях слежения отменяются без доставки. Возвращает, сколько отменено. */
   autonomyOff(): number;
+  /** Очередь сняла служебные job при возврате после `limit` (`jobs` `onServiceDrop`): Request неактуальны, заметка о снятых переполнением. */
+  dropped(drops: ServiceDrop[]): void;
 }
 
 /** Группа замены: одна сессия (номер сессии уникален внутри работы, а не хоста). */
@@ -52,7 +54,44 @@ export const watchKeyOf = (event: Pick<WatchDelivery, 'ref' | 'key'>): string =>
 /** Ключ итога действия: id карточки. */
 export const outcomeKeyOf = (proposalId: string): string => `outcome:${proposalId}`;
 
+const sentence = (text: string): string => `${text.charAt(0).toUpperCase()}${text.slice(1)}${/[.!?]$/.test(text) ? '' : '.'}`;
+
+/**
+ * Готовый текст итога действия для человека (job закрыт без пересказа): что сделано, что неизвестно, можно ли повторять —
+ * словами, по именам из карточки, без её id и без указаний модели.
+ */
+export function outcomeSpeech(card: CardRow, outcome: ActionOutcome): string {
+  const what = stepLinesOf(card).join('; ');
+  const done = outcome.effects.join('; ');
+  const reason = outcome.reason === null ? null : sentence(outcome.reason);
+  const parts: Array<string | null> =
+    outcome.status === 'done'
+      ? [`Done: ${done === '' ? what : done}.`, outcome.reason === null ? null : `Note: ${outcome.reason}${/[.!?]$/.test(outcome.reason) ? '' : '.'}`]
+      : outcome.status === 'partial'
+        ? [`Only part of it was done: ${done}.`, reason]
+        : outcome.status === 'not_done'
+          ? [`Not done: ${what}.`, reason]
+          : [`Not sure whether this went through: ${what}.`, done === '' ? null : `Done for sure: ${done}.`, reason];
+  if (outcome.status !== 'done') {
+    parts.push(
+      outcome.retry === 'safe'
+        ? 'Nothing was changed, so it is safe to try again.'
+        : outcome.status === 'partial'
+          ? 'Check what is missing before trying again, so nothing happens twice.'
+          : 'Check before trying again: it may already have happened.',
+    );
+  }
+  return parts.filter((part) => part !== null).join(' ');
+}
+
 export function createServiceMessages(deps: ServiceMessagesDeps): ServiceMessages {
+  /** Заметка человеку о сообщениях, снятых переполнением очереди. */
+  const noteOverflow = (dropped: readonly RequestView[]): void => {
+    for (const request of dropped) {
+      const name = typeof request.context?.['name'] === 'string' ? request.context['name'] : 'a session';
+      deps.note(`Skipped the reply from ${name}: too many messages were waiting`);
+    }
+  };
   return {
     watchEvent(event) {
       // Флаг и создание — один синхронный участок: событие после выключения Request не создаёт.
@@ -72,14 +111,11 @@ export function createServiceMessages(deps: ServiceMessagesDeps): ServiceMessage
         origin: 'system',
         service,
       });
-      for (const dropped of done?.overflow ?? []) {
-        const name = typeof dropped.context?.['name'] === 'string' ? dropped.context['name'] : 'a session';
-        deps.note(`Skipped the reply from ${name}: too many messages were waiting`);
-      }
+      noteOverflow(done?.overflow ?? []);
       return done?.request ?? null;
     },
     outcome(card, outcome) {
-      const text = outcomeText(card.proposalId, outcome);
+      const text = outcomeSpeech(card, outcome);
       const done = deps.requests.submitService(
         {
           conversationId: SERVICE_CONVERSATION,
@@ -97,5 +133,34 @@ export function createServiceMessages(deps: ServiceMessagesDeps): ServiceMessage
     autonomyOff() {
       return deps.jobs.cancelQueuedService('watch').length;
     },
+    dropped(drops) {
+      noteOverflow(deps.requests.dropService(drops));
+    },
   };
+}
+
+/**
+ * Старт хоста (спека автономии §6.2): сначала применяется начальное значение флага и при выключенном режиме снимаются
+ * ждущие события слежения, оставшиеся с прошлого запуска; только потом очередь job восстанавливается и разбирается
+ * (`recover`), затем невыданные итоги действий уходят служебными сообщениями. Флаг не прочитан — режим считается выключенным.
+ */
+export async function startServiceQueue(deps: {
+  assistant: Pick<AssistantService, 'refreshAutonomy' | 'state' | 'deliverRestartOutcomes'>;
+  messages: Pick<ServiceMessages, 'autonomyOff'>;
+  jobs: Pick<Jobs, 'recover'>;
+  log(line: string): void;
+}): Promise<void> {
+  try {
+    await deps.assistant.refreshAutonomy();
+  } catch (error) {
+    deps.log(`assistant: autonomy flag was not read: ${(error as Error).message}`);
+  }
+  // `refreshAutonomy` зовёт `onAutonomyOff` только при смене значения; на старте снимаем явно.
+  if (deps.assistant.state().autonomous !== true) deps.messages.autonomyOff();
+  try {
+    await deps.jobs.recover();
+  } catch (error) {
+    deps.log(`assistant jobs: recover failed: ${(error as Error).message}`);
+  }
+  deps.assistant.deliverRestartOutcomes();
 }

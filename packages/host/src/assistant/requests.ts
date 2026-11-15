@@ -18,7 +18,7 @@ import { randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import type { AssistantRequestAck, AssistantRequestView } from '@parley/protocol';
 import { HostError } from '../errors.js';
-import type { Jobs, ServiceTag } from './jobs.js';
+import type { Jobs, ServiceDrop, ServiceTag } from './jobs.js';
 
 export type RequestView = AssistantRequestView;
 
@@ -59,6 +59,12 @@ export interface Requests {
    * переполнением очереди (о них человеку — заметка); заменённые событием той же сессии в него не входят.
    */
   submitService(input: ServiceRequestInput, guard?: () => boolean): { request: RequestView; created: boolean; overflow: RequestView[] } | null;
+  /**
+   * Служебные job сняты очередью (`jobs` `onServiceDrop`, возврат после `limit`): их Request становятся неактуальными
+   * (`supersededBy` — Request job `by`), заменённые добавляются к `earlierReplies` более нового. Возвращает Request,
+   * снятые переполнением сейчас (для заметки человеку); уже помеченные — не повторяет.
+   */
+  dropService(drops: readonly ServiceDrop[]): RequestView[];
   get(requestId: string): RequestView | null;
   /** Открытые Request разговора и терминальные, чьё финальное состояние потребитель ещё не получил. По возрастанию `seq`. */
   list(conversationId: string, consumer: string): RequestView[];
@@ -185,23 +191,14 @@ export function createRequests(deps: RequestsDeps): Requests {
         settle = job.settle;
         // Ключ занят job не служебного происхождения (например, телефон прислал тот же idempotencyKey): итог к нему не привязывается.
         if (!job.created && jobs.getJob(job.jobId)?.origin !== 'system') throw new Error(`the key of service message ${input.delegationId} is taken`);
-        const dropped = job.dropped.map((drop) => ({ ...drop, row: db.prepare('SELECT * FROM assistant_requests WHERE job_id = ?').get(drop.jobId) as unknown as Raw | undefined }));
-        // Заменённое событие той же сессии: новый снимок называет, сколько ответов было до него.
-        const earlier = dropped
-          .filter((drop) => drop.reason === 'replaced' && drop.row !== undefined)
-          .reduce((sum, drop) => sum + 1 + Number((JSON.parse(drop.row?.context_json ?? '{}') as { earlierReplies?: number }).earlierReplies ?? 0), 0);
-        const context = earlier === 0 ? (input.context ?? null) : { ...input.context, earlierReplies: earlier };
+        const context = input.context ?? null;
         const stamp = now();
         const requestId = `req-${randomUUID()}`;
         db.prepare(
           `INSERT INTO assistant_requests (request_id, origin_key, conversation_id, seq, version, text, context_json, job_id, transcript_partial, link_kind, link_supersedes_json, link_reason, linked_at, created_at, updated_at)
            SELECT ?, ?, ?, COALESCE(MAX(seq), 0) + 1, 1, ?, ?, ?, 0, 'independent', '[]', 'service message', ?, ?, ? FROM assistant_requests WHERE conversation_id = ?`,
         ).run(requestId, originKey, input.conversationId, input.text, context === null ? null : JSON.stringify(context), job.jobId, stamp, stamp, stamp, input.conversationId);
-        for (const drop of dropped) {
-          if (drop.row === undefined) continue;
-          db.prepare('UPDATE assistant_requests SET superseded_by = ?, version = version + 1, updated_at = ? WHERE request_id = ? AND superseded_by IS NULL').run(requestId, stamp, drop.row.request_id);
-        }
-        overflow = dropped.filter((drop) => drop.reason === 'overflow' && drop.row !== undefined).map((drop) => drop.row?.request_id as string);
+        overflow = markDrops(job.dropped);
         created = true;
       }
       db.exec('COMMIT');
@@ -213,12 +210,57 @@ export function createRequests(deps: RequestsDeps): Requests {
     settle();
     const request = view(byOrigin(originKey) as Raw);
     if (request === null) throw new Error('request job missing');
-    const dropped = overflow.map((requestId) => db.prepare('SELECT * FROM assistant_requests WHERE request_id = ?').get(requestId) as unknown as Raw);
-    return { request, created, overflow: dropped.map(view).filter((item): item is RequestView => item !== null) };
+    return { request, created, overflow: viewsOf(overflow) };
+  }
+
+  const byJobRow = (jobId: string): Raw | undefined => db.prepare('SELECT * FROM assistant_requests WHERE job_id = ?').get(jobId) as unknown as Raw | undefined;
+  const viewsOf = (requestIds: readonly string[]): RequestView[] =>
+    requestIds
+      .map((requestId) => db.prepare('SELECT * FROM assistant_requests WHERE request_id = ?').get(requestId) as unknown as Raw)
+      .map(view)
+      .filter((item): item is RequestView => item !== null);
+
+  /**
+   * Пометка Request снятых служебных job (внутри транзакции вызывающего): неактуален, вытеснен Request job `by`;
+   * заменённый добавляется к `earlierReplies` более нового события той же сессии. Возвращает id снятых переполнением.
+   */
+  function markDrops(drops: readonly ServiceDrop[]): string[] {
+    const overflow: string[] = [];
+    const stamp = now();
+    for (const drop of drops) {
+      const row = byJobRow(drop.jobId);
+      const by = byJobRow(drop.by);
+      if (row === undefined || by === undefined) continue;
+      const changed = db.prepare('UPDATE assistant_requests SET superseded_by = ?, version = version + 1, updated_at = ? WHERE request_id = ? AND superseded_by IS NULL').run(by.request_id, stamp, row.request_id).changes;
+      if (Number(changed) !== 1) continue;
+      if (drop.reason === 'overflow') {
+        overflow.push(row.request_id);
+        continue;
+      }
+      // Новый снимок называет, сколько ответов сессии было до него.
+      const earlier = (JSON.parse(row.context_json ?? '{}') as { earlierReplies?: number }).earlierReplies ?? 0;
+      const current = byJobRow(drop.by) as Raw;
+      const context = (current.context_json === null ? {} : JSON.parse(current.context_json)) as Record<string, unknown>;
+      const total = Number(context['earlierReplies'] ?? 0) + 1 + Number(earlier);
+      db.prepare('UPDATE assistant_requests SET context_json = ?, updated_at = ? WHERE request_id = ?').run(JSON.stringify({ ...context, earlierReplies: total }), stamp, current.request_id);
+    }
+    return overflow;
   }
 
   return {
     submitService,
+    dropService(drops) {
+      db.exec('BEGIN IMMEDIATE');
+      let overflow: string[];
+      try {
+        overflow = markDrops(drops);
+        db.exec('COMMIT');
+      } catch (error) {
+        db.exec('ROLLBACK');
+        throw error;
+      }
+      return viewsOf(overflow);
+    },
     submit(input) {
       if (input.origin === 'system') {
         // Без `guard` служебный submit всегда отвечает Request.

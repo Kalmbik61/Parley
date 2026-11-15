@@ -368,7 +368,7 @@ describe('служебные job (автономия, W2): очередь и п�
     const seventh = jobs.beginSubmit({ origin: 'system', text: 'w6', idempotencyKey: 'w6', correlation: { mode: 'text' }, service: tag('watch', 'g6') });
     db.exec('COMMIT');
     seventh.settle();
-    expect(seventh.dropped).toEqual([{ jobId: watches[1]!.jobId, reason: 'overflow' }]);
+    expect(seventh.dropped).toEqual([{ jobId: watches[1]!.jobId, reason: 'overflow', by: seventh.jobId }]);
     expect(jobs.getJob(watches[1]!.jobId)).toMatchObject({ state: 'cancelled', result: null });
     expect(jobs.getJob(outcome.jobId)?.state).toBe('queued');
   });
@@ -380,7 +380,7 @@ describe('служебные job (автономия, W2): очередь и п�
     const other = service(jobs, 'w2', tag('watch', 'g2'));
     const next = jobs.beginSubmit({ origin: 'system', text: 'w3', idempotencyKey: 'w3', correlation: { mode: 'text' }, service: tag('watch', 'g1') });
     next.settle();
-    expect(next.dropped).toEqual([{ jobId: first.jobId, reason: 'replaced' }]);
+    expect(next.dropped).toEqual([{ jobId: first.jobId, reason: 'replaced', by: next.jobId }]);
     expect(stateOf(jobs, [running, first, other, next])).toEqual(['running', 'cancelled', 'queued', 'queued']);
   });
 
@@ -433,12 +433,12 @@ describe('служебные job (автономия, W2): очередь и п�
     let at = 1_000;
     const first = setup({ now: () => at, capPerProvider: 1 }, db);
     first.submit('h1');
-    const own = service(first.jobs, 's1', tag('outcome', null, 'Done (action p1). Do not repeat it.'));
+    const own = service(first.jobs, 's1', tag('outcome', null, 'Done: message to Auth.'));
     first.jobs.stop();
     at += SERVICE_TTL_MS;
     const next = setup({ now: () => at, capPerProvider: 1 }, db);
     await next.jobs.recover();
-    expect(next.jobs.getJob(own.jobId)).toMatchObject({ state: 'completed', resultSummary: 'Done (action p1). Do not repeat it.' });
+    expect(next.jobs.getJob(own.jobId)).toMatchObject({ state: 'completed', resultSummary: 'Done: message to Auth.' });
     expect(next.execute).not.toHaveBeenCalled();
     next.jobs.stop();
   });
@@ -463,6 +463,46 @@ describe('служебные job (автономия, W2): очередь и п�
       await vi.advanceTimersByTimeAsync(SERVICE_TTL_MS + 1000);
       expect(vi.getTimerCount()).toBe(0);
       expect(jobs.getJob(bare.jobId)?.state).toBe('queued');
+      jobs.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('limit служебного job при полной очереди и ждущем человеке: возврат проходит предел пяти, снят старейший, о снятом сообщено', async () => {
+    vi.useFakeTimers();
+    try {
+      const onServiceDrop = vi.fn();
+      const { jobs, runs } = setup({ capPerProvider: 1, onServiceDrop, limitRetryMs: 1000 });
+      const first = service(jobs, 'w0', tag('watch', 'g0'));
+      const waiting = Array.from({ length: 5 }, (_, index) => service(jobs, `w${index + 1}`, tag('watch', `g${index + 1}`)));
+      const human = submit2(jobs, 'h1');
+      expect(stateOf(jobs, [first, human])).toEqual(['running', 'queued']);
+      runs[0]!.end({ ok: false, kind: 'limit', message: 'usage limit' });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(onServiceDrop).toHaveBeenCalledWith([{ jobId: first.jobId, reason: 'overflow', by: waiting[4]!.jobId }]);
+      expect(stateOf(jobs, [first, human])).toEqual(['cancelled', 'running']);
+      expect(stateOf(jobs, waiting)).toEqual(['queued', 'queued', 'queued', 'queued', 'queued']);
+      jobs.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('limit служебного job, когда уже ждёт более новое событие той же сессии: старое не возвращается', async () => {
+    vi.useFakeTimers();
+    try {
+      const onServiceDrop = vi.fn();
+      const { jobs, runs } = setup({ capPerProvider: 50, onServiceDrop, limitRetryMs: 1000 });
+      const old = service(jobs, 'w0', tag('watch', 'g1'));
+      const newer = service(jobs, 'w1', tag('watch', 'g1'));
+      expect(stateOf(jobs, [old, newer])).toEqual(['running', 'queued']);
+      runs[0]!.end({ ok: false, kind: 'limit', message: 'usage limit' });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(onServiceDrop).toHaveBeenCalledWith([{ jobId: old.jobId, reason: 'replaced', by: newer.jobId }]);
+      expect(stateOf(jobs, [old, newer])).toEqual(['cancelled', 'running']);
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(runs.map((run) => run.job.jobId)).toEqual([old.jobId, newer.jobId]);
       jobs.stop();
     } finally {
       vi.useRealTimers();

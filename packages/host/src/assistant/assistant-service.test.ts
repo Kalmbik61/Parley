@@ -15,7 +15,7 @@ import { createJobs, type Job, type JobEnd, type JobRun } from './jobs.js';
 import { createRequestLinker } from './request-link.js';
 import { createRequestStatus } from './request-status.js';
 import { createRequests, originKeyOf } from './requests.js';
-import { createServiceMessages, type ServiceMessages } from './service-messages.js';
+import { createServiceMessages, startServiceQueue, type ServiceMessages } from './service-messages.js';
 import { JOB_CANCEL_SAFE_TOOLS } from '@parley/core';
 import { createAssistantService, restartOutcome, type AssistantServiceDeps } from './assistant-service.js';
 import { STEP_CLASSES } from './run-plan.js';
@@ -3404,7 +3404,7 @@ describe('assistant-service: служебные сообщения (автоно
       link: { kind: 'independent' },
       context: { service: 'outcome', cardId: 'p1', kind: 'message', outcome: { status: 'done', effects: ['message to Auth'] } },
     });
-    expect(h.jobs.getJob(message!.jobId)).toMatchObject({ origin: 'system', service: { kind: 'outcome', group: null, fallback: 'Done (action p1). Done: message to Auth. Do not repeat it.' } });
+    expect(h.jobs.getJob(message!.jobId)).toMatchObject({ origin: 'system', service: { kind: 'outcome', group: null, fallback: 'Done: message to Auth.' } });
     expect(h.store.get('p1')?.resultState).toBe('sent_as_message');
     // Повторы: конец того же job, доставка после рестарта, прямой повтор доставки и action_status — второго нет.
     h.service.jobEnded('job-1');
@@ -3527,6 +3527,69 @@ describe('assistant-service: служебные сообщения (автоно
     expect(h.messages.watchEvent(delivery('s-01', 'turn:1'))).toBeNull();
     await pending;
     expect(autonomy).not.toHaveBeenCalled();
+  });
+
+  it('старт хоста с выключенным режимом: флаг применяется и ждущие события слежения снимаются до recover и разбора очереди', async () => {
+    const db = openMemoryDb();
+    // Прежний хост: пересказ шёл, второе событие и итог действия ждали; затем хост остановился.
+    const before = createJobs({ db, capPerProvider: 50, defaultProvider: () => 'claude', execute: (): JobRun => ({ cancel: () => {}, done: new Promise<JobEnd>(() => {}) }) });
+    const beforeRequests = createRequests({ db, jobs: before });
+    const watch = (sessionId: string) =>
+      beforeRequests.submit({ conversationId: 'island', voiceSessionId: 'host', delegationId: `watch:/p:w-1:${sessionId}:turn:1`, text: `Reply from ${sessionId}`, origin: 'system', service: { kind: 'watch', group: sessionId, fallback: `${sessionId} replied; the summary is not ready.` } }).request;
+    const narrating = watch('s-01');
+    const waiting = watch('s-02');
+    const outcome = beforeRequests.submit({ conversationId: 'island', voiceSessionId: 'host', delegationId: 'outcome:p1', text: 'Outcome of action p1', origin: 'system', service: { kind: 'outcome', group: null, fallback: 'Done: message to Auth.' } }).request;
+    before.stop();
+
+    // Новый хост в порядке host.ts: сервис, jobs, Request, сообщения; флаг читается медленно.
+    let answer: (value: boolean) => void = () => {};
+    const flag = new Promise<boolean>((resolve) => {
+      answer = resolve;
+    });
+    const started: string[] = [];
+    const jobs = createJobs({
+      db,
+      capPerProvider: 50,
+      defaultProvider: () => 'claude',
+      execute: (job): JobRun => {
+        started.push(job.jobId);
+        return { cancel: () => {}, done: new Promise<JobEnd>(() => {}) };
+      },
+    });
+    const requests = createRequests({ db, jobs });
+    const recover = vi.spyOn(jobs, 'recover');
+    // eslint-disable-next-line prefer-const -- поздняя привязка, как в host.ts
+    let messages: ServiceMessages | undefined;
+    const service = createAssistantService({ ...deps, cards: createCardStore(db), autonomy: () => flag, onAutonomyOff: () => void messages?.autonomyOff() });
+    messages = createServiceMessages({ requests, jobs, takeResult: () => false, autonomous: () => service.state().autonomous === true, note: () => {} });
+    const deliver = vi.spyOn(service, 'deliverRestartOutcomes');
+    const startup = startServiceQueue({ assistant: service, messages, jobs, log: () => {} });
+    await flush();
+    expect(recover).not.toHaveBeenCalled();
+    expect(started).toEqual([]);
+    expect(jobs.getJob(waiting.jobId)?.state).toBe('queued');
+    answer(false);
+    await startup;
+    expect(recover).toHaveBeenCalledTimes(1);
+    expect(deliver).toHaveBeenCalledTimes(1);
+    // Ждущее событие снято без доставки и не запускалось; шедший пересказ закрыт готовым текстом; итог действия пошёл.
+    expect(jobs.getJob(waiting.jobId)?.state).toBe('cancelled');
+    expect(jobs.getJob(narrating.jobId)).toMatchObject({ state: 'completed', resultSummary: 's-01 replied; the summary is not ready.' });
+    expect(started).toEqual([outcome.jobId]);
+    service.stop();
+    jobs.stop();
+  });
+
+  it('старт хоста с включённым режимом: ждущие события слежения остаются и идут после recover', async () => {
+    const db = openMemoryDb();
+    const before = createJobs({ db, capPerProvider: 50, defaultProvider: () => 'claude', execute: (): JobRun => ({ cancel: () => {}, done: new Promise<JobEnd>(() => {}) }) });
+    const queued = createRequests({ db, jobs: before });
+    queued.submit({ conversationId: 'island', voiceSessionId: 'host', delegationId: 'outcome:p0', text: 'busy', origin: 'system', service: { kind: 'outcome', group: null, fallback: 'x' } });
+    const waiting = queued.submit({ conversationId: 'island', voiceSessionId: 'host', delegationId: 'watch:/p:w-1:s-02:turn:1', text: 'Reply from s-02', origin: 'system', service: { kind: 'watch', group: 's-02', fallback: 'x' } }).request;
+    before.stop();
+    const h = await wired({}, db);
+    await startServiceQueue({ assistant: h.service, messages: h.messages, jobs: h.jobs, log: () => {} });
+    expect(h.jobs.getJob(waiting.jobId)?.state).toBe('running');
   });
 
   it('watchNote: переполнение очереди — заметка человеку; следующий ход разговора её сбрасывает', async () => {
