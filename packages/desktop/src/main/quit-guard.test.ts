@@ -285,6 +285,50 @@ describe('main/index.ts: что делается до ответа на вопр
   it('привязка works и соединение с хостом разбираются на quit', () => {
     expect(index).toMatch(/app\.on\('quit', \(\) => \{[^}]*worksBinding\?\.dispose\(\)[^}]*connection\.close\(\)/);
   });
+
+  /** Текст вызова от `start` до закрывающей строки `});` с тем же отступом, что у строки начала. */
+  function callBlock(start: number): string {
+    const lineStart = index.lastIndexOf('\n', start) + 1;
+    const indent = /^ */.exec(index.slice(lineStart))![0];
+    const end = index.indexOf(`\n${indent}});`, start);
+    expect(end).toBeGreaterThan(start);
+    return index.slice(start, end);
+  }
+
+  const RETRY = 'retryQuit: (quit) => quitIntent.ownQuit(quit),';
+
+  it("powerMonitor 'shutdown': намерение «Restart now» сбрасывается раньше app.quit()", () => {
+    const start = index.indexOf("powerMonitor.on('shutdown'");
+    expect(start).toBeGreaterThan(-1);
+    const handler = callBlock(start);
+    const clear = handler.indexOf('quitIntent.clear();');
+    const quit = handler.indexOf('app.quit();');
+    expect(clear).toBeGreaterThan(-1);
+    expect(quit).toBeGreaterThan(-1);
+    expect(clear).toBeLessThan(quit);
+  });
+
+  it('повторы выхода сторожами идут через quitIntent.ownQuit: guardAppQuit и каждый guardWindowClose', () => {
+    const appStart = index.indexOf('guardAppQuit(app, {');
+    expect(appStart).toBeGreaterThan(-1);
+    expect(callBlock(appStart)).toContain(RETRY);
+
+    const calls = [...index.matchAll(/guardWindowClose\(/g)];
+    expect(calls.length).toBeGreaterThan(0);
+    for (const call of calls) expect(callBlock(call.index!)).toContain(RETRY);
+  });
+
+  it("app.once('quit') зовёт updateInstaller.onQuit()", () => {
+    expect(index).toContain("app.once('quit', () => updateInstaller.onQuit());");
+  });
+
+  it('runUpdateStartup зовётся раньше, чем создано первое окно', () => {
+    const startup = index.indexOf('runUpdateStartup({');
+    const firstWindow = index.indexOf('mainWindow = openWindow();');
+    expect(startup).toBeGreaterThan(-1);
+    expect(firstWindow).toBeGreaterThan(-1);
+    expect(startup).toBeLessThan(firstWindow);
+  });
 });
 
 describe('quitQuestion', () => {
