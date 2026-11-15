@@ -110,7 +110,11 @@ interface Harness {
   settle(): Promise<void>;
 }
 
-function harness(place: Place, over: Partial<StartupDeps> = {}, fs: StartupFs = nodeStartupFs): Harness {
+function harness(
+  place: Place,
+  over: Partial<StartupDeps> = {},
+  fs: StartupFs = nodeStartupFs,
+): Harness {
   const pending: Promise<unknown>[] = [];
   const logs: Harness['logs'] = [];
   const tracked: StartupFs = {
@@ -262,15 +266,19 @@ describe('SU-20: старт окна, итог замены', () => {
     await makeOld(place);
     await writeFile(place.result, swapped);
     const boom = new Error('boom');
-    const h = harness(place, {}, {
-      ...nodeStartupFs,
-      removeFile() {
-        throw boom;
+    const h = harness(
+      place,
+      {},
+      {
+        ...nodeStartupFs,
+        removeFile() {
+          throw boom;
+        },
+        removeTree() {
+          return Promise.reject(boom);
+        },
       },
-      removeTree() {
-        return Promise.reject(boom);
-      },
-    });
+    );
     expect(runUpdateStartup(h.deps)).toEqual({ kind: 'updated', version: VERSION });
     await h.settle();
     expect(h.logs.map((l) => l.error)).toEqual([boom, boom]);
@@ -282,12 +290,16 @@ describe('SU-20: старт окна, итог замены', () => {
     const place = await makePlace();
     await writeFile(place.result, swapped);
     const boom = new Error('sync boom');
-    const h = harness(place, {}, {
-      ...nodeStartupFs,
-      removeTree() {
-        throw boom;
+    const h = harness(
+      place,
+      {},
+      {
+        ...nodeStartupFs,
+        removeTree() {
+          throw boom;
+        },
       },
-    });
+    );
     expect(runUpdateStartup(h.deps)).toEqual({ kind: 'updated', version: VERSION });
     expect(h.logs.map((l) => l.error)).toEqual([boom]);
   });
@@ -298,12 +310,16 @@ describe('SU-20: старт окна, итог замены', () => {
     const stale = stagingDir(place.bundle, deadPid, 1);
     await mkdir(stale, { recursive: true });
     const boom = new Error('read boom');
-    const h = harness(place, {}, {
-      ...nodeStartupFs,
-      readText() {
-        throw boom;
+    const h = harness(
+      place,
+      {},
+      {
+        ...nodeStartupFs,
+        readText() {
+          throw boom;
+        },
       },
-    });
+    );
     expect(runUpdateStartup(h.deps)).toBeNull();
     await h.settle();
     expect(h.logs.map((l) => l.error)).toEqual([boom]);
@@ -444,16 +460,20 @@ describe('SU-21: старт окна, каталоги подготовки и �
     const stale = stagingDir(place.bundle, deadPid, 8);
     await mkdir(stale, { recursive: true });
     const boom = new Error('list boom');
-    const h = harness(place, {}, {
-      ...nodeStartupFs,
-      list(dir) {
-        if (dir === place.downloads) throw boom;
-        return nodeStartupFs.list(dir);
+    const h = harness(
+      place,
+      {},
+      {
+        ...nodeStartupFs,
+        list(dir) {
+          if (dir === place.downloads) throw boom;
+          return nodeStartupFs.list(dir);
+        },
+        kind(target) {
+          return target === place.downloads ? 'dir' : nodeStartupFs.kind(target);
+        },
       },
-      kind(target) {
-        return target === place.downloads ? 'dir' : nodeStartupFs.kind(target);
-      },
-    });
+    );
     runUpdateStartup(h.deps);
     await h.settle();
     expect(h.logs.map((l) => l.error)).toEqual([boom]);
@@ -490,7 +510,9 @@ interface Rig extends Place {
  * Поддельное приложение (`old`), подготовленное (`new`) с файлом `handoff`, подставные утилиты. `mv` ждёт файла
  * `release` на каждом вызове, пока тест его не создаст; `held` получает pid ждущего `mv`.
  */
-async function makeRig(opts: { holdMv?: boolean; openCode?: number; psLines?: string[] } = {}): Promise<Rig> {
+async function makeRig(
+  opts: { holdMv?: boolean; openCode?: number; psLines?: string[] } = {},
+): Promise<Rig> {
   const place = await makePlace();
   await writeFile(path.join(place.bundle.app, 'Contents', 'MacOS', 'Parley'), 'old');
   const stageDir = stagingDir(place.bundle, deadPid, 1);
@@ -508,7 +530,9 @@ async function makeRig(opts: { holdMv?: boolean; openCode?: number; psLines?: st
   const open = path.join(tools, 'open');
   await writeFile(
     open,
-    ['#!/bin/sh', `printf '%s\\n' "$*" >> ${q(openLog)}`, `exit ${opts.openCode ?? 0}`, ''].join('\n'),
+    ['#!/bin/sh', `printf '%s\\n' "$*" >> ${q(openLog)}`, `exit ${opts.openCode ?? 0}`, ''].join(
+      '\n',
+    ),
   );
   const ps = path.join(tools, 'ps');
   await writeFile(psOut, (opts.psLines ?? []).map((l) => `${l}\n`).join(''));
@@ -519,10 +543,7 @@ async function makeRig(opts: { holdMv?: boolean; openCode?: number; psLines?: st
     [
       '#!/bin/sh',
       ...(opts.holdMv
-        ? [
-            `echo $$ > ${q(held)}`,
-            `while [ ! -e ${q(release)} ]; do /bin/sleep 0.1; done`,
-          ]
+        ? [`echo $$ > ${q(held)}`, `while [ ! -e ${q(release)} ]; do /bin/sleep 0.1; done`]
         : []),
       'exec /bin/mv "$@"',
       '',
@@ -536,7 +557,10 @@ async function makeRig(opts: { holdMv?: boolean; openCode?: number; psLines?: st
 }
 
 /** Запуск сценария, как у main: `/bin/sh <сценарий> <пять аргументов>`, окно (pid) уже мёртво. */
-function startHelper(rig: Rig, version = VERSION): { child: ChildProcess; done: Promise<number | null> } {
+function startHelper(
+  rig: Rig,
+  version = VERSION,
+): { child: ChildProcess; done: Promise<number | null> } {
   const child = spawn(
     '/bin/sh',
     [rig.helper, String(deadPid), rig.bundle.app, rig.staged, version, rig.result],
@@ -550,139 +574,142 @@ async function marker(app: string): Promise<string | null> {
   return readText(path.join(app, 'Contents', 'MacOS', 'Parley'));
 }
 
-describe.skipIf(process.platform !== 'darwin')('связка со сценарием замены на настоящем /bin/sh', () => {
-  describe('SU-22: итог сценария -> старт окна', () => {
-    it(
-      'swapped: старт окна с версией из итога даёт «обновлено» и убирает .old',
-      async () => {
-        const rig = await makeRig();
-        expect(await startHelper(rig).done).toBe(0);
-        expect(await marker(rig.bundle.app)).toBe('new');
-        expect(await marker(rig.old)).toBe('old');
-        expect(await readText(rig.result)).toBe(`swapped ${VERSION}\n`);
+describe.skipIf(process.platform !== 'darwin')(
+  'связка со сценарием замены на настоящем /bin/sh',
+  () => {
+    describe('SU-22: итог сценария -> старт окна', () => {
+      it(
+        'swapped: старт окна с версией из итога даёт «обновлено» и убирает .old',
+        async () => {
+          const rig = await makeRig();
+          expect(await startHelper(rig).done).toBe(0);
+          expect(await marker(rig.bundle.app)).toBe('new');
+          expect(await marker(rig.old)).toBe('old');
+          expect(await readText(rig.result)).toBe(`swapped ${VERSION}\n`);
 
-        const h = harness(rig);
-        expect(runUpdateStartup(h.deps)).toEqual({ kind: 'updated', version: VERSION });
-        await h.settle();
-        expect(await exists(rig.old)).toBe(false);
-        expect(await exists(rig.result)).toBe(false);
-        expect(await marker(rig.bundle.app)).toBe('new');
-        expect(h.logs).toEqual([]);
-      },
-      T,
-    );
+          const h = harness(rig);
+          expect(runUpdateStartup(h.deps)).toEqual({ kind: 'updated', version: VERSION });
+          await h.settle();
+          expect(await exists(rig.old)).toBe(false);
+          expect(await exists(rig.result)).toBe(false);
+          expect(await marker(rig.bundle.app)).toBe('new');
+          expect(h.logs).toEqual([]);
+        },
+        T,
+      );
 
-    it(
-      'launch_failed: open вернул ошибку, но запущена версия из итога -> «обновлено», .old убран',
-      async () => {
-        const rig = await makeRig({ openCode: 1 });
-        expect(await startHelper(rig).done).toBe(0);
-        expect(await readText(rig.result)).toBe(`failed ${VERSION} launch_failed\n`);
+      it(
+        'launch_failed: open вернул ошибку, но запущена версия из итога -> «обновлено», .old убран',
+        async () => {
+          const rig = await makeRig({ openCode: 1 });
+          expect(await startHelper(rig).done).toBe(0);
+          expect(await readText(rig.result)).toBe(`failed ${VERSION} launch_failed\n`);
 
-        const h = harness(rig);
-        expect(runUpdateStartup(h.deps)).toEqual({ kind: 'updated', version: VERSION });
-        await h.settle();
-        expect(await exists(rig.old)).toBe(false);
-        expect(await exists(rig.result)).toBe(false);
-      },
-      T,
-    );
+          const h = harness(rig);
+          expect(runUpdateStartup(h.deps)).toEqual({ kind: 'updated', version: VERSION });
+          await h.settle();
+          expect(await exists(rig.old)).toBe(false);
+          expect(await exists(rig.result)).toBe(false);
+        },
+        T,
+      );
 
-    it(
-      'still_running: прежнее приложение на месте, запущена прежняя версия -> тост отказа; каталог убрал сценарий',
-      async () => {
-        const rig = await makeRig();
-        // Другой экземпляр того же приложения: его исполняемый файл лежит в <приложение>/Contents/MacOS/.
-        await writeFile(rig.psOut, `${rig.bundle.app}/Contents/MacOS/Parley\n`);
-        expect(await startHelper(rig).done).toBe(0);
-        expect(await readText(rig.result)).toBe(`failed ${VERSION} still_running\n`);
-        expect(await marker(rig.bundle.app)).toBe('old');
-        expect(await exists(rig.stageDir)).toBe(false);
+      it(
+        'still_running: прежнее приложение на месте, запущена прежняя версия -> тост отказа; каталог убрал сценарий',
+        async () => {
+          const rig = await makeRig();
+          // Другой экземпляр того же приложения: его исполняемый файл лежит в <приложение>/Contents/MacOS/.
+          await writeFile(rig.psOut, `${rig.bundle.app}/Contents/MacOS/Parley\n`);
+          expect(await startHelper(rig).done).toBe(0);
+          expect(await readText(rig.result)).toBe(`failed ${VERSION} still_running\n`);
+          expect(await marker(rig.bundle.app)).toBe('old');
+          expect(await exists(rig.stageDir)).toBe(false);
 
-        const h = harness(rig, { version: '9.9.8' });
-        expect(runUpdateStartup(h.deps)).toEqual({
-          kind: 'failed',
-          version: VERSION,
-          reason: 'still_running',
-        });
-        await h.settle();
-        expect(await exists(rig.result)).toBe(false);
-        expect(await marker(rig.bundle.app)).toBe('old');
-      },
-      T,
-    );
-  });
+          const h = harness(rig, { version: '9.9.8' });
+          expect(runUpdateStartup(h.deps)).toEqual({
+            kind: 'failed',
+            version: VERSION,
+            reason: 'still_running',
+          });
+          await h.settle();
+          expect(await exists(rig.result)).toBe(false);
+          expect(await marker(rig.bundle.app)).toBe('old');
+        },
+        T,
+      );
+    });
 
-  describe('SU-30: старт окна внахлёст со сценарием', () => {
-    it(
-      'сценарий стоит между шагами 3 и 6 (mv ждёт): старт окна каталог не трогает, замена доходит до конца',
-      async () => {
-        const rig = await makeRig({ holdMv: true });
-        const { done } = startHelper(rig);
-        await waitFor(() => exists(rig.held), 'mv сценария остановился');
+    describe('SU-30: старт окна внахлёст со сценарием', () => {
+      it(
+        'сценарий стоит между шагами 3 и 6 (mv ждёт): старт окна каталог не трогает, замена доходит до конца',
+        async () => {
+          const rig = await makeRig({ holdMv: true });
+          const { done } = startHelper(rig);
+          await waitFor(() => exists(rig.held), 'mv сценария остановился');
 
-        const h = harness(rig, { version: '9.9.8' });
-        expect(runUpdateStartup(h.deps)).toBeNull();
-        await h.settle();
-        // Каталог подготовки передан сценарию: цел вместе с подготовленным приложением, сценарием и handoff.
-        expect(await marker(rig.staged)).toBe('new');
-        expect(await exists(rig.helper)).toBe(true);
-        expect(await exists(path.join(rig.stageDir, HANDOFF_FILE))).toBe(true);
-        expect(await marker(rig.bundle.app)).toBe('old');
-        expect(await exists(rig.old)).toBe(false);
+          const h = harness(rig, { version: '9.9.8' });
+          expect(runUpdateStartup(h.deps)).toBeNull();
+          await h.settle();
+          // Каталог подготовки передан сценарию: цел вместе с подготовленным приложением, сценарием и handoff.
+          expect(await marker(rig.staged)).toBe('new');
+          expect(await exists(rig.helper)).toBe(true);
+          expect(await exists(path.join(rig.stageDir, HANDOFF_FILE))).toBe(true);
+          expect(await marker(rig.bundle.app)).toBe('old');
+          expect(await exists(rig.old)).toBe(false);
 
-        await writeFile(rig.release, '');
-        expect(await done).toBe(0);
-        expect(await marker(rig.bundle.app)).toBe('new');
-        expect(await marker(rig.old)).toBe('old');
-        expect(await exists(rig.stageDir)).toBe(false);
-        expect(await readText(rig.result)).toBe(`swapped ${VERSION}\n`);
+          await writeFile(rig.release, '');
+          expect(await done).toBe(0);
+          expect(await marker(rig.bundle.app)).toBe('new');
+          expect(await marker(rig.old)).toBe('old');
+          expect(await exists(rig.stageDir)).toBe(false);
+          expect(await readText(rig.result)).toBe(`swapped ${VERSION}\n`);
 
-        // Окно новой версии: итог прочитан, .old убран.
-        const after = harness(rig);
-        expect(runUpdateStartup(after.deps)).toEqual({ kind: 'updated', version: VERSION });
-        await after.settle();
-        expect(await exists(rig.old)).toBe(false);
-      },
-      T,
-    );
+          // Окно новой версии: итог прочитан, .old убран.
+          const after = harness(rig);
+          expect(runUpdateStartup(after.deps)).toEqual({ kind: 'updated', version: VERSION });
+          await after.settle();
+          expect(await exists(rig.old)).toBe(false);
+        },
+        T,
+      );
 
-    it(
-      'убита только оболочка сценария, дочерний mv жив: старт окна каталог не трогает, ни до, ни после конца mv',
-      async () => {
-        const rig = await makeRig({ holdMv: true });
-        const { child, done } = startHelper(rig);
-        await waitFor(() => exists(rig.held), 'mv сценария остановился');
-        const mvPid = Number((await readText(rig.held))!.trim());
-        expect(isProcessAlive(mvPid)).toBe(true);
+      it(
+        'убита только оболочка сценария, дочерний mv жив: старт окна каталог не трогает, ни до, ни после конца mv',
+        async () => {
+          const rig = await makeRig({ holdMv: true });
+          const { child, done } = startHelper(rig);
+          await waitFor(() => exists(rig.held), 'mv сценария остановился');
+          const mvPid = Number((await readText(rig.held))!.trim());
+          expect(isProcessAlive(mvPid)).toBe(true);
 
-        process.kill(child.pid!, 'SIGKILL');
-        await done;
-        expect(isProcessAlive(mvPid)).toBe(true);
+          process.kill(child.pid!, 'SIGKILL');
+          await done;
+          expect(isProcessAlive(mvPid)).toBe(true);
 
-        const during = harness(rig, { version: '9.9.8' });
-        expect(runUpdateStartup(during.deps)).toBeNull();
-        await during.settle();
-        expect(await marker(rig.staged)).toBe('new');
-        expect(await exists(path.join(rig.stageDir, HANDOFF_FILE))).toBe(true);
-        expect(await marker(rig.bundle.app)).toBe('old');
+          const during = harness(rig, { version: '9.9.8' });
+          expect(runUpdateStartup(during.deps)).toBeNull();
+          await during.settle();
+          expect(await marker(rig.staged)).toBe('new');
+          expect(await exists(path.join(rig.stageDir, HANDOFF_FILE))).toBe(true);
+          expect(await marker(rig.bundle.app)).toBe('old');
 
-        // Живой mv доделывает своё переименование: приложения нет, прежнее — в .old.
-        await writeFile(rig.release, '');
-        await waitFor(() => !isProcessAlive(mvPid), 'конец mv');
-        await waitFor(() => exists(rig.old), 'mv переименовал приложение');
-        expect(await exists(rig.bundle.app)).toBe(false);
+          // Живой mv доделывает своё переименование: приложения нет, прежнее — в .old.
+          await writeFile(rig.release, '');
+          await waitFor(() => !isProcessAlive(mvPid), 'конец mv');
+          await waitFor(() => exists(rig.old), 'mv переименовал приложение');
+          expect(await exists(rig.bundle.app)).toBe(false);
 
-        // Старт окна после этого: тот же каталог, по-прежнему цел, .old цел (итога нет).
-        const after = harness(rig, { version: '9.9.8' });
-        expect(runUpdateStartup(after.deps)).toBeNull();
-        await after.settle();
-        expect(await marker(rig.staged)).toBe('new');
-        expect(await exists(path.join(rig.stageDir, HANDOFF_FILE))).toBe(true);
-        expect(await marker(rig.old)).toBe('old');
-        expect(await exists(rig.result)).toBe(false);
-      },
-      T,
-    );
-  });
-});
+          // Старт окна после этого: тот же каталог, по-прежнему цел, .old цел (итога нет).
+          const after = harness(rig, { version: '9.9.8' });
+          expect(runUpdateStartup(after.deps)).toBeNull();
+          await after.settle();
+          expect(await marker(rig.staged)).toBe('new');
+          expect(await exists(path.join(rig.stageDir, HANDOFF_FILE))).toBe(true);
+          expect(await marker(rig.old)).toBe('old');
+          expect(await exists(rig.result)).toBe(false);
+        },
+        T,
+      );
+    });
+  },
+);

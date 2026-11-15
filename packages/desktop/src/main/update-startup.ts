@@ -1,9 +1,4 @@
-import {
-  lstatSync,
-  readFileSync,
-  readdirSync,
-  unlinkSync,
-} from 'node:fs';
+import { lstatSync, readFileSync, readdirSync, unlinkSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import path from 'node:path';
 import type { UpdateResult } from '../shared/bridge.js';
