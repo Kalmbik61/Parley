@@ -45,13 +45,32 @@ describe('README, «Updates» и первый запуск: обещания с�
     expect(updates).toContain(`Settings → ${S.settings.sections.notifications}`);
   });
 
-  it('само не обновляется — в коде нет автоустановки', () => {
-    expect(updates).toContain('it does not update itself');
+  it('обновление кнопкой: «Update», затем «Restart now», обычный выход, ручное восстановление', () => {
+    expect(updates).toContain(`**${S.update.update}**`);
+    expect(updates).toContain(`**${S.update.restartNow}**`);
+    expect(updates).toContain('SHA256SUMS.txt');
+    expect(updates).toContain('ordinary quit');
+    expect(updates).toContain('`.Parley.app.old`');
+    expect(updates).toContain('mv /Applications/.Parley.app.old /Applications/Parley.app');
+    expect(updates).not.toContain('it does not update itself');
+  });
+
+  it('когда «Download» стоит вместо «Update», README говорит, что делать вручную', () => {
+    expect(updates).toContain('**Download** instead of **Update**');
+    expect(updates).toContain('replace the app in Applications');
+  });
+
+  it('перечень собственных запросов называет загрузку архива и SHA256SUMS.txt', () => {
+    expect(flat(readme)).toContain('release archive and its `SHA256SUMS.txt` from GitHub when you press Update');
+  });
+
+  it('в коде нет Electron autoUpdater: обновление идёт своим установщиком', () => {
     const main = readFileSync(
       path.join(repoRoot, 'packages', 'desktop', 'src', 'main', 'index.ts'),
       'utf8',
     );
     expect(main).not.toMatch(/autoUpdater/);
+    expect(main).toContain('createUpdateInstaller');
   });
 
   it('⌘Q останавливает и агентов: выход идёт через сторож will-quit, который гасит хост', () => {
