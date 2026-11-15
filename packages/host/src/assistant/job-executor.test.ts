@@ -5,7 +5,13 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { HumanOverviewV1 } from '@parley/protocol';
 import { JOB_TOKEN_PREFIX, type ProviderEntry } from '@parley/core';
-import { claimsDoneAction, createJobExecutor, JOB_PROMPT, JOB_PROMPT_AUTO, type JobExecutorDeps } from './job-executor.js';
+import { openMemoryDb } from '@parley/core';
+import { claimsDoneAction, createJobExecutor, JOB_PROMPT, JOB_PROMPT_AUTO, SUMMARY_PROMPT, SUMMARY_TURN_MS, type JobExecutorDeps } from './job-executor.js';
+import { createJobPrompt } from './job-context.js';
+import { createJobs } from './jobs.js';
+import { createRequests } from './requests.js';
+import { createServiceMessages } from './service-messages.js';
+import type { ReplySnapshot } from './reply-snapshot.js';
 import { createJobTokens, type JobTokens } from './job-tokens.js';
 import type { Job } from './jobs.js';
 import type { TurnEnd, TurnHandle, TurnSpec } from './turn.js';
@@ -30,7 +36,8 @@ function setup(end: TurnEnd, extra: Partial<JobExecutorDeps> & { text?: string; 
   const run = vi.fn((spec: TurnSpec, onEvent: (event: never) => void): TurnHandle => {
     specs.push(spec);
     // Здесь же идёт «работа» job: токен действует, инструменты вызываются через хост.
-    const file = spec.args[spec.args.indexOf('--mcp-config') + 1];
+    const at = spec.args.indexOf('--mcp-config');
+    const file = at < 0 ? undefined : spec.args[at + 1];
     const config = file === undefined ? spec.args.join(' ') : readFileSync(file, 'utf8');
     const token = config.match(/job_[0-9a-f]+/)?.[0] ?? '';
     during?.(tokens, token);
@@ -343,7 +350,6 @@ it('uses the permitted overview names for S01, mentions and full refs, preservin
 
 describe('запись допуска job (автономия, A2)', () => {
   it.each([
-    ['system', true, false],
     ['island', true, true],
     ['island', false, false],
     ['telegram', true, false],
@@ -403,5 +409,143 @@ describe('режим job в промпте и конфиге MCP (автоном
     await execute({ ...job, provider: 'codex', origin } as Job).done;
     const args = specs[0]!.args;
     expect(args.some((arg) => arg.includes('PARLEY_ASSISTANT_MODE="auto"'))).toBe(auto);
+  });
+});
+
+describe('пересказчик: job происхождения system (спека автономии §6.3)', () => {
+  const system = { ...job, origin: 'system', requestText: 'Reply from Anna' } as unknown as Job;
+  const claudeArgs = ['-p', '{prompt}', '--output-format', 'stream-json', '--mcp-config', '{mcpConfig}', '--strict-mcp-config', '--system-prompt', '{systemPrompt}', '--tools', ''];
+  const claudeFull = { ...entry, runner: { ...entry.runner, assistantArgs: claudeArgs } } as unknown as ProviderEntry;
+
+  it('RW-15: Claude — ни токена, ни --mcp-config, ни файла MCP; срок 90 секунд; промпт SUMMARY_PROMPT', async () => {
+    const { execute, specs, tokens } = setup({ ok: true }, { provider: claudeFull, text: 'Anna says it is ready.' });
+    const issue = vi.spyOn(tokens, 'issue');
+    await expect(execute(system).done).resolves.toMatchObject({ ok: true, outcome: 'completed', summary: 'Anna says it is ready.', result: { cards: [], toolRefs: [] } });
+    const spec = specs[0]!;
+    expect(issue).not.toHaveBeenCalled();
+    expect(spec.args).not.toContain('--mcp-config');
+    expect(spec.args).toContain('--strict-mcp-config');
+    expect(spec.args.join(' ')).not.toMatch(/job_[0-9a-f]+|parley-assistant|link_request/);
+    expect(spec.args[spec.args.indexOf('--system-prompt') + 1]).toBe(SUMMARY_PROMPT);
+    expect(spec.timeoutMs).toBe(90_000);
+    expect(SUMMARY_TURN_MS).toBe(90_000);
+    expect(JSON.stringify(spec.env)).not.toMatch(/job_[0-9a-f]+/);
+  });
+
+  it('RW-15: Codex — нет -c mcp_servers и токена; инструкции — SUMMARY_PROMPT', async () => {
+    let instructions = '';
+    const run = vi.fn((spec: TurnSpec): TurnHandle => {
+      const arg = spec.args.find((item) => item.startsWith('model_instructions_file='))!;
+      instructions = readFileSync(JSON.parse(arg.slice('model_instructions_file='.length)) as string, 'utf8');
+      return { cancel: vi.fn(), done: Promise.resolve({ ok: true } as TurnEnd) };
+    });
+    const { execute, specs } = setup({ ok: true }, { provider: codexEntry, text: 'Done.', run: run as unknown as JobExecutorDeps['run'] });
+    await execute({ ...system, provider: 'codex' } as Job).done;
+    const args = run.mock.calls[0]![0].args;
+    void specs;
+    expect(args.some((arg) => arg.includes('mcp_servers') || /job_[0-9a-f]+/.test(arg))).toBe(false);
+    expect(args.filter((arg) => arg === '-c')).toHaveLength(1);
+    expect(instructions).toBe(SUMMARY_PROMPT);
+    expect(instructions).toContain('You tell the person what one of their agents has just answered');
+    expect(instructions).not.toContain('link_request');
+    expect(run.mock.calls[0]![0].timeoutMs).toBe(90_000);
+  });
+
+  it('SUMMARY_PROMPT: без строк JOB_PROMPT и link_request; есть строка про итог действия', () => {
+    expect(SUMMARY_PROMPT).not.toContain('link_request');
+    for (const line of JOB_PROMPT.split('\n')) expect(SUMMARY_PROMPT.split('\n')).not.toContain(line);
+    expect(SUMMARY_PROMPT).toContain('whether it is safe to try again');
+  });
+
+  it('«I sent the report» у пересказчика — completed, а не needs_confirmation', async () => {
+    const { execute } = setup({ ok: true }, { text: 'Anna says I sent the report.' });
+    await expect(execute(system).done).resolves.toMatchObject({ ok: true, outcome: 'completed' });
+  });
+
+  it('пустой ответ — failed', async () => {
+    const { execute } = setup({ ok: true }, { text: '' });
+    await expect(execute(system).done).resolves.toMatchObject({ ok: false });
+  });
+
+  it('обычный job по-прежнему с токеном и MCP', async () => {
+    const { execute, specs } = setup({ ok: true });
+    await execute(job).done;
+    expect(specs[0]!.args).toContain('--mcp-config');
+  });
+
+  const snapshot = (extra: Partial<ReplySnapshot>): ReplySnapshot => ({ event: 'turn-end', key: 'k1', session: 'S02 Anna', reply: null, replyNote: null, waiting: null, lastLetter: null, ...extra });
+
+  /** Настоящие jobs и Request; выполнение подставное: вход прогона записывается. */
+  function chain() {
+    const db = openMemoryDb();
+    const inputs: string[] = [];
+    const ref = { projectPath: '/p', workId: 'w-1', sessionId: 's-2' };
+    const holder: { prompt?: (j: Job) => string } = {};
+    const tokens = createJobTokens(() => 1);
+    const run = vi.fn((spec: TurnSpec, onEvent: (event: never) => void): TurnHandle => {
+      inputs.push(spec.args[spec.args.indexOf('-p') + 1]!);
+      (onEvent as (event: { type: 'text'; delta: string }) => void)({ type: 'text', delta: 'Anna finished the report.' });
+      return { cancel: vi.fn(), done: Promise.resolve({ ok: true } as TurnEnd) };
+    });
+    const jobs = createJobs({
+      db,
+      defaultProvider: () => 'claude',
+      capPerProvider: 50,
+      execute: createJobExecutor({
+        providers: async () => ({ claude: claudeFull }),
+        ready: async () => null,
+        launchEnv: async () => ({}),
+        binary: async (command) => `/bin/${command}`,
+        cwd,
+        endpointUrl: () => 'http://127.0.0.1:9/assistant',
+        tokens,
+        promptOf: (j) => holder.prompt?.(j) ?? j.requestText,
+        run: run as unknown as JobExecutorDeps['run'],
+      }),
+    });
+    const requests = createRequests({ db, jobs });
+    holder.prompt = createJobPrompt({ requests, jobs });
+    const messages = createServiceMessages({ requests, jobs, takeResult: () => true, autonomous: () => true, note: () => undefined });
+    return { messages, requests, inputs, ref, jobs };
+  }
+  const settled = async (): Promise<void> => {
+    for (let i = 0; i < 20; i += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+  };
+
+  it('RW-19 + RW-08/09: событие слежения → Request → job → вход со снимком → completed; закреплённый текст, пропуск и отметка в конце', async () => {
+    const h = chain();
+    const reply = `${'a'.repeat(1500)}\n[… 14000 characters omitted …]\nConclusion: the report is ready.`;
+    const view = h.messages.watchEvent({ event: 'turn-end', key: 'k1', ref: h.ref, name: 'S02 Anna', snapshot: snapshot({ reply, lastLetter: 'Please prepare the report' }) } as never);
+    expect(view).not.toBeNull();
+    await settled();
+    expect(h.inputs).toHaveLength(1);
+    const input = h.inputs[0]!;
+    expect(input).toContain('Agent: S02 Anna. Its turn ended.');
+    expect(input.endsWith('Please prepare the report')).toBe(true);
+    expect(input).toContain('[… 14000 characters omitted …]\nConclusion: the report is ready.');
+    expect(input).not.toMatch(/link_request|s-2|w-1|requestId/);
+    expect(h.jobs.getJob(view!.job.jobId)).toMatchObject({ state: 'completed', resultSummary: 'Anna finished the report.' });
+  });
+
+  it('RW-09: «прочитать не удалось» и ожидание человека доходят до входа', () => {
+    const prompt = createJobPrompt({ requests: { byJob: () => ({ origin: 'system', context: { service: 'watch', event: 'turn-end', name: 'S02 Anna', snapshot: snapshot({ replyNote: 'the reply could not be read' }) } }), openBefore: () => [] } as never, jobs: {} as never });
+    expect(prompt(system)).toContain('Note: the reply could not be read.');
+    const waiting = createJobPrompt({
+      requests: { byJob: () => ({ origin: 'system', context: { service: 'watch', event: 'needs-human', name: 'S02 Anna', earlierReplies: 1, snapshot: snapshot({ event: 'needs-human', waiting: { kind: 'permission', detail: null, card: { type: 'permission', text: 'Bash npm test' } } }) } }), openBefore: () => [] } as never,
+      jobs: {} as never,
+    })(system);
+    expect(waiting).toContain('waiting for the person: permission');
+    expect(waiting).toContain('Bash npm test');
+    expect(waiting).toContain('replaces 1 earlier reply');
+  });
+
+  it('итог действия: статус, сделанное, причина, можно ли повторять; без id карточки', () => {
+    const outcome = { status: 'partial', effects: ['message to Auth'], retry: 'unsafe', reason: 'stopped at step 2 of 2' };
+    const text = createJobPrompt({ requests: { byJob: () => ({ origin: 'system', context: { service: 'outcome', cardId: 'p1', kind: 'actions', outcome } }), openBefore: () => [] } as never, jobs: {} as never })(system);
+    expect(text).toContain('Outcome of an action: partial.');
+    expect(text).toContain('Done: message to Auth.');
+    expect(text).toContain('Reason: stopped at step 2 of 2');
+    expect(text).toContain('not safe');
+    expect(text).not.toMatch(/\bp1\b/);
   });
 });
