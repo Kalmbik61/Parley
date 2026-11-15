@@ -1061,6 +1061,42 @@ describe.skipIf(process.platform !== 'darwin')('runAttempt', () => {
       dirsGone();
     });
 
+    it('abandon() между концом загрузки и распаковкой: после него ни один дочерний процесс не запускается', async () => {
+      const archive = await makeArchive();
+      const started: string[] = [];
+      const run: AttemptDeps['run'] = (command, args) => {
+        started.push(command);
+        return spawnRun(command, args);
+      };
+      // Закрытие файла архива после конца тела висит до команды теста: попытка стоит ровно перед распаковкой.
+      let releaseClose!: () => void;
+      const closeGate = new Promise<void>((resolve) => (releaseClose = resolve));
+      let closing = false;
+      const openFile = async (file: string): Promise<ArchiveFile> => {
+        const real = await open(file, 'wx', 0o600);
+        return {
+          write: (buffer, offset, length) => real.write(buffer, offset, length),
+          close: async () => {
+            if (!closing) {
+              closing = true;
+              await closeGate;
+            }
+            await real.close().catch(() => {});
+          },
+        };
+      };
+      const attempt = start(fetchOf({ manifest: ok(manifestFor(archive)), archive: ok(archive) }), {
+        run,
+        openFile,
+      });
+      await vi.waitFor(() => expect(closing).toBe(true));
+
+      attempt.abandon();
+      releaseClose();
+      expect(await attempt.done).toEqual({ ok: false, reason: 'cancelled' });
+      expect(started).toEqual([]);
+    });
+
     it.each(['manifest', 'archive'] as const)(
       'ответ %s, пришедший уже после cancel(), оборван и файлов не создаёт',
       async (which) => {

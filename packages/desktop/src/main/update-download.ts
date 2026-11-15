@@ -497,7 +497,8 @@ export function runAttempt(deps: AttemptDeps, input: AttemptInput): Attempt {
       return cancelling;
     },
     abandon() {
-      controller.abort();
+      // Сначала прерывание: попытка, стоящая между шагами, не должна после этого запустить новый дочерний процесс.
+      stop('cancel');
       current?.kill();
     },
   };
