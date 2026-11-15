@@ -133,6 +133,7 @@ import { createRequests } from './assistant/requests.js';
 import { createRequestLinker, type RequestLinker } from './assistant/request-link.js';
 import { createRequestStatus, type RequestStatusReader } from './assistant/request-status.js';
 import { createJobPrompt } from './assistant/job-context.js';
+import { createServiceMessages, startServiceQueue, type ServiceMessages } from './assistant/service-messages.js';
 import { createJobExecutor } from './assistant/job-executor.js';
 import { createLiveClient } from './voice/live-client.js';
 import { createVoiceSessionService } from './voice/voice-session-service.js';
@@ -530,6 +531,9 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   let assistantLinker: RequestLinker | undefined;
   // eslint-disable-next-line prefer-const -- поздняя привязка: Request создаются после сервиса помощника
   let assistantStatus: RequestStatusReader | undefined;
+  // Служебные сообщения в разговор острова (спека автономии §6.3): строятся после jobs и Request, сервис зовёт их позже.
+  // eslint-disable-next-line prefer-const -- поздняя привязка: Request создаются после сервиса помощника
+  let serviceMessages: ServiceMessages | undefined;
   // Токены job помощника (план голоса, T1): у каждого job свой токен MCP, токен разговора ему не отдаётся.
   const assistantJobTokens = createJobTokens();
   const assistantEndpoint = createAssistantEndpoint({
@@ -940,7 +944,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     sendLetter: (input) => sendHumanLetter(input, { via: 'assistant' }),
     createRoom: (input) => createHumanRoom(input),
     resolveRoomProposal: (input) => resolveRoomProposal(input),
-    endpoint: { origin: () => hookServer.origin(), setToken: (token) => assistantEndpoint.setToken(token) },
+    endpoint: { origin: () => hookServer.origin(), setToken: (run) => assistantEndpoint.setToken(run) },
     // Шаги плана карточки `actions` (спека 2026-10-28, 6.1): те же функции хоста, что зовёт окно.
     createWork: async (input) => (await createWork(input.projectPath, { title: input.title, goal: input.goal })).work.id,
     // `exactOptionalPropertyTypes`: zod даёт `role?: … | undefined`, а `CreateSessionInput` явного `undefined` ключом не принимает —
@@ -964,6 +968,15 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     addRoomMember: (input) => addRoomMember(input),
     roles: async (projectPath) => roleSummaries(await roleCatalog(projectPath, { codex: true })).roles,
     leanAgents: async () => (await loadConfig()).config.leanAgents,
+    // Флаг автономии — для записи допуска попытки хода; читается без кэша, при выпуске её токена (A2).
+    autonomy: async () => (await loadConfig()).config.assistantAutonomy,
+    startedAt: (ref) => ptyManager.get(ref)?.startedAt,
+    // Итог автономного действия без получателя и событие слежения — служебным Request (спека автономии §5.3, §6.3).
+    deliverOutcome: (card, outcome) => void serviceMessages?.outcome(card, outcome),
+    onWatchEvent: (event) => void serviceMessages?.watchEvent(event),
+    onAutonomyOff: () => void serviceMessages?.autonomyOff(),
+    // Прогон job действителен для автономного действия (спека автономии §5.2, правило 3): токен этого прогона жив и job `running`.
+    jobLive: (admission) => assistantJobTokens.current(admission.jobId)?.runId === admission.runId && assistantJobs.getJob(admission.jobId)?.state === 'running',
     providerReady: sessionReady,
     // `telegram` создаётся ниже, но зовётся уже после запуска, как `onReminderWhileOff`.
     actionsShown: () =>
@@ -989,6 +1002,11 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     onReminderWhileOff: (reminder) => telegram.reminderWhileOff(reminder),
   });
   const reminderTarget = assistantService;
+  // Окно узнаёт о режиме при старте; смену флага подхватывает обёртка `settings.set`.
+  // Слежение за ответом сессий, которым помощник дал работу без подтверждения (спека автономии §6.2).
+  const watchingAssistant = assistantService;
+  activityService.onChange((ref) => watchingAssistant.watchActivity(ref));
+  worksService.onChange(() => watchingAssistant.watchWorks());
 
   // Вход job голосового Request (текст, контекст, открытые Request): Request создаётся после jobs, поэтому поздняя привязка.
   // eslint-disable-next-line prefer-const -- поздняя привязка: замыкание executor читает её раньше присваивания
@@ -1003,6 +1021,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       binary: (command) => findRunnerBinary(command, process.env),
       cwd: assistantCwd(parleyHome()),
       tokens: assistantJobTokens,
+      // Флаг автономии — для записи допуска прогона job; читается при выпуске его токена (A2).
+      autonomy: async () => (await loadConfig()).config.assistantAutonomy,
       promptOf: (job) => jobPrompt?.(job) ?? job.requestText,
       endpointUrl: () => {
         const origin = hookServer.origin();
@@ -1010,11 +1030,33 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       },
     }),
     defaultProvider: () => assistantService?.settings()?.provider ?? ASSISTANT_PROVIDER_ORDER[0] ?? 'claude',
+    // Job, что шёл при остановке: исходы его автономных карточек — в его резюме (спека автономии §5.3).
+    restartNote: (job, room) => assistantService.claimRestartOutcome(job.jobId, room),
+    // Событие слежения, вернувшееся после лимита, прошло политику очереди: Request снятых неактуальны (спека автономии §6.3).
+    onServiceDrop: (drops) => serviceMessages?.dropped(drops),
     log: (line) => log.info(line),
   });
   // Request голосовых поручений: durable в той же базе, связан с job по ключу; закрытие голоса job не отменяет.
   const assistantRequests = createRequests({ db: sideDb, jobs: assistantJobs });
-  jobPrompt = createJobPrompt({ requests: assistantRequests, jobs: assistantJobs });
+  jobPrompt = createJobPrompt({
+    requests: assistantRequests,
+    jobs: assistantJobs,
+    // Название работы — из снимка работ по ref: в записи слежения его нет (W5).
+    recentSessions: () =>
+      assistantService.recentSessions().map((item) => ({
+        name: item.name,
+        work: worksService.snapshot().entries.find((entry) => entry.projectPath === item.ref.projectPath && entry.map.work.id === item.ref.workId)?.map.work.title ?? item.ref.workId,
+      })),
+    language: () => assistantService.settings()?.language ?? null,
+  });
+  serviceMessages = createServiceMessages({
+    requests: assistantRequests,
+    jobs: assistantJobs,
+    takeResult: (proposalId) => assistantCards.takeResult(proposalId, 'sent_as_message'),
+    // Флаг из состояния сервиса — синхронно, в одном участке с созданием Request; его ведёт `refreshAutonomy`.
+    autonomous: () => assistantService.state().autonomous === true,
+    note: (text) => assistantService.noteWatch(text),
+  });
   assistantStatus = createRequestStatus({ requests: assistantRequests });
   assistantLinker = createRequestLinker({
     db: sideDb,
@@ -1025,6 +1067,10 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     safeTools: JOB_CANCEL_SAFE_TOOLS,
   });
   assistantJobs.onJobChanged((job) => handle.context.broadcast('assistant.job.changed', { jobId: job.jobId, state: job.state, revision: job.revision }));
+  // Прогон job кончился: итоги его автономных действий, что он не забрал, уходят дальше (спека автономии §5.3).
+  assistantJobs.onJobChanged((job) => {
+    if (job.state !== 'queued' && job.state !== 'running') assistantService.jobEnded(job.jobId);
+  });
   assistantService.onCardChanged((change) => handle.context.broadcast('assistant.card.changed', change));
   // Телефону — проекция job без логов и argv (план голоса, B3); граница `remote` пропускает событие по REMOTE_EVENTS.
   assistantJobs.onJobChanged((job) => {
@@ -1053,7 +1099,10 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   });
   assistantJobs.onJobChanged((job) => notificationIngest.onJob(job));
   assistantService.onCardChanged((change) => notificationIngest.onCard(change));
-  void assistantJobs.recover().catch((error: unknown) => log.info(`assistant jobs: recover failed: ${(error as Error).message}`));
+  // После сверки job: исходы автономных карточек, что не забрал ни один job, уходят в доставку (спека автономии §5.3).
+  // Начальный флаг режима (и снятие ждущих событий слежения при выключенном) — до сверки и разбора очереди job (спека
+  // автономии §6.2); затем исходы автономных карточек, что не забрал ни один job, уходят в доставку (§5.3).
+  void startServiceQueue({ assistant: assistantService, messages: serviceMessages, jobs: assistantJobs, log: (line) => log.info(line) });
   handle.context.onShutdown(async () => assistantJobs.stop());
 
   // Канал Telegram (план B): опрос бота, карточки и письма; остановка раньше помощника, чтобы мост отписался первым.
@@ -1286,6 +1335,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
         for (const client of handle.context.clients()) if (client.role === 'remote') client.close();
       }
       voiceDailyMinutes = result.config.voiceDailyMinutes;
+      // Флаг автономии меняется без перезапуска: сервис применяет новое значение сразу и переиздаёт состояние.
+      void assistantService.refreshAutonomy(result.config.assistantAutonomy);
       return result;
     };
   }

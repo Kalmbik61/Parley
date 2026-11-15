@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { S } from '../../../shared/strings.js';
 import { OPENAI_VOICES } from '../../../shared/tts-types.js';
 import { DEFAULT_UI } from '../../../shared/ui-types.js';
@@ -13,6 +13,7 @@ installRadixSelectPolyfills();
 let bridge: FakeBridge;
 const saved: unknown[] = [];
 const text = S.assistant.settings;
+const hostProps = { bridge: undefined as never, config: null, locked: {}, save: async () => undefined };
 
 beforeEach(() => {
   bridge = createFakeBridge();
@@ -39,13 +40,13 @@ afterEach(() => cleanup());
 
 describe('AssistantSettings (спека 2026-10-14, 6.1)', () => {
   it('переключатель включает помощника через patchUi', () => {
-    render(<AssistantSettings />);
+    render(<AssistantSettings {...hostProps} />);
     fireEvent.click(screen.getByRole('switch', { name: text.enabled }));
     expect(saved).toEqual([{ assistant: { enabled: true } }]);
   });
 
   it('в списке провайдеров только подключённые, первым — «First connected»', async () => {
-    render(<AssistantSettings />);
+    render(<AssistantSettings {...hostProps} />);
     const trigger = screen.getByRole('combobox', { name: text.provider });
     await waitFor(() => expect(bridge.calls.some((call) => call.method === 'providers.list')).toBe(true));
     fireEvent.keyDown(trigger, { key: 'ArrowDown' });
@@ -54,7 +55,7 @@ describe('AssistantSettings (спека 2026-10-14, 6.1)', () => {
   });
 
   it('выбор провайдера сбрасывает модель', async () => {
-    render(<AssistantSettings />);
+    render(<AssistantSettings {...hostProps} />);
     await waitFor(() => expect(bridge.calls.some((call) => call.method === 'providers.list')).toBe(true));
     await chooseOption(screen.getByRole('combobox', { name: text.provider }), 'Codex');
     expect(saved).toEqual([{ assistant: { provider: 'codex', model: null } }]);
@@ -62,7 +63,7 @@ describe('AssistantSettings (спека 2026-10-14, 6.1)', () => {
 
   it('список моделей — из выбранного провайдера, первым «Fast default»', async () => {
     useUiStore.setState({ ui: { ...DEFAULT_UI, assistant: { ...DEFAULT_UI.assistant, provider: 'codex' } } });
-    render(<AssistantSettings />);
+    render(<AssistantSettings {...hostProps} />);
     await waitFor(() => expect(bridge.calls.some((call) => call.method === 'providers.list')).toBe(true));
     const trigger = screen.getByRole('combobox', { name: text.model });
     await waitFor(() => expect(trigger).toBeTruthy());
@@ -74,7 +75,7 @@ describe('AssistantSettings (спека 2026-10-14, 6.1)', () => {
   });
 
   it('язык: System первым, за ним English и Russian; выбор пишет код или null', async () => {
-    render(<AssistantSettings />);
+    render(<AssistantSettings {...hostProps} />);
     const trigger = screen.getByRole('combobox', { name: text.language });
     fireEvent.keyDown(trigger, { key: 'ArrowDown' });
     const names = (await screen.findAllByRole('option')).map((option) => option.textContent);
@@ -87,12 +88,12 @@ describe('AssistantSettings (спека 2026-10-14, 6.1)', () => {
 
   it('сочетание занято — видна причина', async () => {
     bridge.app.assistantShortcut = async () => ({ accelerator: 'Alt+Space', ok: false });
-    render(<AssistantSettings />);
+    render(<AssistantSettings {...hostProps} />);
     await waitFor(() => expect(screen.getByText(text.shortcutTaken)).toBeTruthy());
   });
 
   it('сочетание: клик по полю и ⌥J пишут Alt+J через patchUi', () => {
-    render(<AssistantSettings />);
+    render(<AssistantSettings {...hostProps} />);
     const field = screen.getByTestId('shortcut-field');
     fireEvent.click(field);
     expect(screen.getByText(text.shortcutRecording)).toBeTruthy();
@@ -102,7 +103,7 @@ describe('AssistantSettings (спека 2026-10-14, 6.1)', () => {
   });
 
   it('запись сочетания снимает глобальный хоткей и возвращает его: мост получает true, затем false', () => {
-    render(<AssistantSettings />);
+    render(<AssistantSettings {...hostProps} />);
     const field = screen.getByTestId('shortcut-field');
     fireEvent.click(field);
     expect(bridge.assistantShortcutSuspended).toEqual([true]);
@@ -112,7 +113,7 @@ describe('AssistantSettings (спека 2026-10-14, 6.1)', () => {
 
   it('у GLM видна подсказка про 13 секунд', () => {
     useUiStore.setState({ ui: { ...DEFAULT_UI, assistant: { ...DEFAULT_UI.assistant, provider: 'glm' } } });
-    render(<AssistantSettings />);
+    render(<AssistantSettings {...hostProps} />);
     expect(screen.getByText(text.glmSlow)).toBeTruthy();
   });
 
@@ -120,32 +121,63 @@ describe('AssistantSettings (спека 2026-10-14, 6.1)', () => {
     const withHotkey = (hotkey: string): void =>
       useUiStore.setState({ ui: { ...DEFAULT_UI, assistant: { ...DEFAULT_UI.assistant, hotkey } } });
     withHotkey('alt + SPACE');
-    const first = render(<AssistantSettings />);
+    const first = render(<AssistantSettings {...hostProps} />);
     expect(screen.getByText(text.shortcutClaudeDesktop)).toBeTruthy();
     first.unmount();
     withHotkey('Option+Space');
-    const second = render(<AssistantSettings />);
+    const second = render(<AssistantSettings {...hostProps} />);
     expect(screen.getByText(text.shortcutClaudeDesktop)).toBeTruthy();
     second.unmount();
     withHotkey('Ctrl+Shift+J');
-    render(<AssistantSettings />);
+    render(<AssistantSettings {...hostProps} />);
     expect(screen.queryByText(text.shortcutClaudeDesktop)).toBeNull();
   });
 });
 
 describe('AssistantSettings: голос (S-del)', () => {
   it('«Speak answers» пишет assistant.speak через patchUi', () => {
-    render(<AssistantSettings />);
+    render(<AssistantSettings {...hostProps} />);
     fireEvent.click(screen.getByRole('switch', { name: text.speak }));
     expect(saved).toEqual([{ assistant: { speak: true } }]);
   });
 
   it('голоса OpenAI: радио по списку, выбор пишет assistant.apiVoice; ни Download, ни Delete', () => {
-    render(<AssistantSettings />);
+    render(<AssistantSettings {...hostProps} />);
     expect(screen.queryAllByRole('radio')).toHaveLength(OPENAI_VOICES.length);
     fireEvent.click(screen.getByTestId('assistant-api-voice-nova'));
     expect(saved).toEqual([{ assistant: { apiVoice: 'nova' } }]);
     expect(screen.queryByText(S.voice.settings.download)).toBeNull();
     expect(document.querySelector('[data-assistant-voice], [data-assistant-voice-model]')).toBeNull();
+  });
+});
+
+describe('AssistantSettings: Autonomous mode', () => {
+  const props = (config: unknown, locked: Record<string, string>, save = vi.fn(async () => undefined)) => ({
+    bridge: undefined as never,
+    config: config as never,
+    locked,
+    save,
+  });
+
+  it('переключателя нет, когда ключа нет в config', () => {
+    render(<AssistantSettings {...props({}, {})} />);
+    expect(screen.queryByRole('switch', { name: text.autonomy })).toBeNull();
+  });
+
+  it('ключ в locked: переключатель выключен для правки, есть подпись', () => {
+    render(<AssistantSettings {...props({ assistantAutonomy: false }, { assistantAutonomy: 'env' })} />);
+    expect(screen.getByRole('switch', { name: text.autonomy }).hasAttribute('disabled')).toBe(true);
+    expect(screen.getByText(S.settings.lockedBy('env'))).toBeTruthy();
+  });
+
+  it('клик зовёт save(assistantAutonomy, true); включённый режим показывает checked', () => {
+    const save = vi.fn(async () => undefined);
+    const { rerender } = render(<AssistantSettings {...props({ assistantAutonomy: false }, {}, save)} />);
+    const toggle = screen.getByRole('switch', { name: text.autonomy });
+    expect(toggle.getAttribute('aria-checked')).toBe('false');
+    fireEvent.click(toggle);
+    expect(save).toHaveBeenCalledWith('assistantAutonomy', 'true');
+    rerender(<AssistantSettings {...props({ assistantAutonomy: true }, {}, save)} />);
+    expect(screen.getByRole('switch', { name: text.autonomy }).getAttribute('aria-checked')).toBe('true');
   });
 });

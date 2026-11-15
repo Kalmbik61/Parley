@@ -80,3 +80,28 @@ it('keeps overview aliases private to the job and removes them with take', () =>
   tokens.recordOverview('a', overview);
   expect(tokens.peek('a').humanRefs).toBeUndefined();
 });
+
+describe('запись допуска job (автономия, A2)', () => {
+  it('issue хранит запись допуска; admissionOf по токену возвращает её; новый токен — новая запись, revoke снимает', () => {
+    const tokens = createJobTokens();
+    const first = tokens.issue('job-a', { origin: 'system', autoAtStart: false });
+    const admission = tokens.admissionOf(first);
+    expect(admission).toEqual({ kind: 'job', runId: expect.any(String), jobId: 'job-a', origin: 'system', autoAtStart: false });
+    expect(Object.isFrozen(admission)).toBe(true);
+    const second = tokens.issue('job-a', { origin: 'island', autoAtStart: true });
+    expect(tokens.admissionOf(first)).toBeNull();
+    expect(tokens.admissionOf(second)).toMatchObject({ jobId: 'job-a', origin: 'island', autoAtStart: true });
+    expect(tokens.admissionOf(second)!.runId).not.toBe(admission!.runId);
+    tokens.revoke('job-a');
+    expect(tokens.admissionOf(second)).toBeNull();
+    expect(tokens.admissionOf('')).toBeNull();
+  });
+  it('current: запись действующего прогона job по jobId; после revoke и до issue — null', () => {
+    const tokens = createJobTokens();
+    expect(tokens.current('job-a')).toBeNull();
+    const token = tokens.issue('job-a', { origin: 'island', autoAtStart: true });
+    expect(tokens.current('job-a')).toBe(tokens.admissionOf(token));
+    tokens.revoke('job-a');
+    expect(tokens.current('job-a')).toBeNull();
+  });
+});

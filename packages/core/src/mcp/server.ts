@@ -16,7 +16,7 @@ async function main(): Promise<number> {
     const assistantUrl = envValue(process.env, 'ASSISTANT_URL');
     if (assistantUrl !== undefined) {
       // Режим помощника (спека 2026-10-14, 7.1): своя пара инструментов, карта работ не нужна.
-      server = createAssistantServer({ url: assistantUrl, token: envValue(process.env, 'ASSISTANT_TOKEN') ?? '' });
+      server = createAssistantServer({ url: assistantUrl, token: envValue(process.env, 'ASSISTANT_TOKEN') ?? '', ...(envValue(process.env, 'ASSISTANT_MODE') === 'auto' ? { mode: 'auto' as const } : {}) });
     } else {
       // Потолок писем живёт в настройках, а не в окружении: сервер читает их сам
       // при старте, на время жизни процесса значение не меняется (4.7).

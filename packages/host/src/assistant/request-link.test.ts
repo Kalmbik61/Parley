@@ -409,3 +409,22 @@ describe('вход job: контекст Request', () => {
     expect(prompt({ jobId: partial.jobId, requestText: 'q' } as Job)).toContain('no complete transcript');
   });
 });
+
+describe('link_request: служебный Request (автономия, W2)', () => {
+  it('RW-10: вытеснение служебного Request — отказ, ничего не изменилось', () => {
+    const h = setup();
+    const service = h.requests.submit({
+      conversationId: 'conv-1',
+      voiceSessionId: 'host',
+      delegationId: 'watch:/p:w-1:s-01:turn:1',
+      text: 'Reply from S03',
+      origin: 'system',
+      service: { kind: 'watch', group: 'g1', fallback: 'x' },
+    }).request;
+    const own = h.submit('d1');
+    expect(h.link(own, [ref(service)])).toEqual({ ok: false, status: 409, error: `Nothing was changed: ${service.requestId} is a service message, not a request of the person` });
+    expect(h.get(service)).toMatchObject({ version: 1, supersededBy: null });
+    expect(h.jobs.getJob(service.jobId)?.state).toBe('running');
+    expect(h.get(own).link).toBeNull();
+  });
+});

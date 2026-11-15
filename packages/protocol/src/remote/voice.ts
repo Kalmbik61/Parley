@@ -89,10 +89,14 @@ export const phoneJobSchema = z.object({
 });
 export type PhoneJob = z.infer<typeof phoneJobSchema>;
 
-/** Проекция job для телефона по явному списку полей; не job — `null`. */
+/**
+ * Проекция job для телефона по явному списку полей; не job — `null`. Служебный job (`origin: 'system'`, спека автономии
+ * §6.3) — сообщение хоста острову: телефону он не проецируется (`null`).
+ */
 export function projectPhoneJob(raw: unknown): PhoneJob | null {
   if (typeof raw !== 'object' || raw === null) return null;
   const j = raw as Record<string, unknown>;
+  if (j.origin === 'system') return null;
   const parsed = phoneJobSchema.safeParse({
     jobId: j.jobId,
     origin: j.origin,

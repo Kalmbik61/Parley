@@ -52,6 +52,8 @@ export interface LiveDelegationDeps {
   phrases: SpeechPhrases;
   fallbackText: string;
   conversationId?: string;
+  /** Второй путь служебного итога (Live не активен): остров открывается, текст уходит в обычную озвучку. */
+  deliverCard?(text: string): void;
 }
 
 /** Что показывает остров: итог, который вышел на экран, или удержанный (held) итог. */
@@ -86,12 +88,13 @@ export function toResultInput(view: AssistantRequestView, delegationId: string |
     stale: view.stale,
     delegationId,
     deliveredLive: terminal && (view.delivery[LIVE_CONSUMER_ID] ?? -1) >= view.job.revision,
+    origin: view.origin ?? 'island',
   };
 }
 
 /** Вид Request хоста → вход уведомителя статуса. */
 export function toStatusInput(view: AssistantRequestView, delegationId: string | null): StatusInput {
-  return { requestId: view.requestId, text: view.text, state: view.job.state, stale: view.stale, createdAt: view.createdAt, delegationId };
+  return { requestId: view.requestId, text: view.text, state: view.job.state, stale: view.stale, createdAt: view.createdAt, delegationId, origin: view.origin ?? 'island' };
 }
 
 interface Session {
@@ -109,6 +112,8 @@ export function createLiveDelegation(deps: LiveDelegationDeps): LiveDelegation {
   const sessionRequests = new Map<string, boolean>();
   let session: Session | null = null;
   let openRequests: OpenRequestSummary[] = [];
+  /** Служебный пересказ идёт (job `running`): занятость для автозакрытия; ждущий в очереди job — нет. */
+  let serviceRunning = false;
   let refreshing = false;
   let refreshAgain = false;
   let ticks = 0;
@@ -130,10 +135,12 @@ export function createLiveDelegation(deps: LiveDelegationDeps): LiveDelegation {
     now: deps.now,
     phrases: deps.phrases,
     canAppend: (delegationId, purpose) => (session?.ack ?? idleAck).canAppend(delegationId, purpose),
+    liveActive: () => deps.controller.snapshot().phase !== 'idle',
     effects: {
       send: ({ delegationId, content }) => deps.controller.sendAppend({ kind: 'commentary', delegationId, content }),
       ack: (requestId, revision) => void deps.call('requests.ack', { requestId, consumer: LIVE_CONSUMER_ID, revision }).catch(() => {}),
       cardShown: (item) => void deps.call('jobs.ackInline', { jobId: item.jobId, revision: item.revision }).catch(() => {}),
+      shown: (item) => deps.deliverCard?.(item.text),
       changed: notify,
     },
   });
@@ -168,7 +175,7 @@ export function createLiveDelegation(deps: LiveDelegationDeps): LiveDelegation {
   const idle: IdleCloser = createIdleCloser({
     now: deps.now,
     busy: () =>
-      openRequests.length > 0 || queue.items().some((item) => item.speech === 'queued' || item.speech === 'submitted') || (session?.ack.awaiting().length ?? 0) > 0,
+      openRequests.length > 0 || serviceRunning || queue.items().some((item) => item.speech === 'queued' || item.speech === 'submitted') || (session?.ack.awaiting().length ?? 0) > 0,
     onIdle: () => void deps.controller.stop('idle_timeout').catch(() => {}),
   });
 
@@ -189,16 +196,19 @@ export function createLiveDelegation(deps: LiveDelegationDeps): LiveDelegation {
           return;
         }
         if (disposed) return;
-        openRequests = requests
+        // Служебные Request не входят ни в статусы Live, ни в контекст моста, ни в «проверяю» (спека §6.3).
+        const human = requests.filter((request) => request.origin !== 'system');
+        serviceRunning = requests.some((request) => request.origin === 'system' && request.job.state === 'running');
+        openRequests = human
           .filter((request) => request.job.state === 'queued' || request.job.state === 'running')
           .map((request) => ({ requestId: request.requestId, text: request.text, state: request.job.state }));
-        for (const request of requests) {
+        for (const request of human) {
           if (sessionRequests.has(request.requestId)) sessionRequests.set(request.requestId, request.job.state === 'queued' || request.job.state === 'running');
         }
         queue.observe(requests.map((request) => toResultInput(request, delegationByRequest.get(request.requestId) ?? null)));
         queue.step();
         notify();
-        status.observe(requests.map((request) => toStatusInput(request, delegationByRequest.get(request.requestId) ?? null)));
+        status.observe(human.map((request) => toStatusInput(request, delegationByRequest.get(request.requestId) ?? null)));
         status.step();
         telemetry.observeQueue(queue.items());
       } while (refreshAgain);
@@ -264,6 +274,8 @@ export function createLiveDelegation(deps: LiveDelegationDeps): LiveDelegation {
     status.reset();
     telemetry.sessionEnded();
     queue.sessionEnded();
+    // Итог служебного Request, не дошедший до played, идёт вторым путём сразу, а не на следующем тике.
+    queue.step();
     telemetry.observeQueue(queue.items());
     void refresh();
   };

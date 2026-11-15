@@ -1,8 +1,9 @@
 /**
  * Приёмник инструментов помощника (спека 2026-10-14, 7.1): `POST /assistant/<tool>` на том же сервере 127.0.0.1, что
  * принимает хуки (`hooks/hook-server.ts`, параметр `routes`) — по одному точному пути на инструмент, как у
- * `/agent/browser`. Токен разговора один (`setToken`); у каждого job свой токен (`jobTokens`), привязанный к `jobId`
- * (план голоса, T1). Сравнение в постоянное время; `null` — маршруты разговора закрыты. Токен job вызывает только
+ * `/agent/browser`. Токен хода — один на попытку хода (`setToken`, спека автономии §5.2); у каждого job свой токен
+ * (`jobTokens`), привязанный к `jobId` (план голоса, T1). Каждый токен приводит к неизменяемой записи допуска своего
+ * запуска (`RunAdmission`), её получает обработчик. Сравнение в постоянное время; `null` — маршруты хода закрыты. Токен job вызывает только
  * инструменты из `JOB_TOOL_ALLOWLIST`, остальное — 403 без вызова сервиса: токен разговора job не получает; `link_request` и `request_status` — наоборот, только для токена job. Отказы доступа — без тела, как у хуков: токен — 401, тело больше 1 МиБ — 413, не JSON-объект — 400.
  * Ответ обработчика уходит как есть: `200 {text}` или не-200 `{error}` (режим помощника `parley-mcp` читает оба).
  *
@@ -11,6 +12,7 @@
 import { timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { JOB_ONLY_TOOLS, JOB_TOOL_ALLOWLIST } from '@parley/core';
+import type { AssistantJobOrigin, AssistantOrigin } from '@parley/protocol';
 import type { Log } from '../log.js';
 import type { JobTokens } from './job-tokens.js';
 
@@ -28,6 +30,7 @@ export const ASSISTANT_TOOL_NAMES = [
   'propose_decision',
   'propose_room_decision',
   'propose_actions',
+  'action_status',
   'schedule_check',
   'list_reminders',
   'cancel_reminder',
@@ -38,8 +41,29 @@ export const ASSISTANT_TOOL_NAMES = [
 /** Предел тела вызова: аргументы инструментов — короткие строки. */
 export const ASSISTANT_BODY_LIMIT = 1024 * 1024;
 
-/** Кто вызывает: разговор помощника или фоновый job (его `jobId` хост знает по токену, не со слов модели). */
-export type AssistantCaller = { kind: 'conversation' } | { kind: 'job'; jobId: string };
+/**
+ * Запись допуска запуска (спека автономии §5.2): кто вызывает — попытка хода разговора или прогон job. Хост создаёт её
+ * вместе с токеном запуска и не меняет; модель её не видит. `jobId` хост знает по токену, не со слов модели.
+ */
+export interface TurnAdmission {
+  readonly kind: 'turn';
+  readonly runId: string;
+  /** Происхождение хода (`Ask.origin`). */
+  readonly origin: AssistantOrigin;
+  /** `assistantAutonomy` был включён при выпуске токена и `origin === 'island'`; исполнение без клика — по правилу §5.2 (A3). */
+  readonly autoAtStart: boolean;
+}
+export interface JobAdmission {
+  readonly kind: 'job';
+  readonly runId: string;
+  readonly jobId: string;
+  readonly origin: AssistantJobOrigin;
+  readonly autoAtStart: boolean;
+}
+export type RunAdmission = TurnAdmission | JobAdmission;
+
+/** `autoAtStart` запуска: флаг на старте запуска и происхождение `island` (спека автономии §5.2). */
+export const autoAtStartOf = (origin: AssistantOrigin | AssistantJobOrigin, autonomy: boolean): boolean => autonomy && origin === 'island';
 
 /** Ответ инструмента: статус и тело для MCP-сервера помощника. */
 export interface AssistantReply {
@@ -49,17 +73,17 @@ export interface AssistantReply {
 
 export interface AssistantEndpointOptions {
   log: Log;
-  /** Вызов инструмента (`assistant-service.tool`) от разговора или от job. */
-  tool(name: string, args: unknown, caller: AssistantCaller): Promise<AssistantReply>;
-  /** Токены job; без них маршруты принимают только токен разговора. */
-  jobTokens?: Pick<JobTokens, 'jobOf'>;
+  /** Вызов инструмента (`assistant-service.tool`) с записью допуска вызывающего запуска. */
+  tool(name: string, args: unknown, caller: RunAdmission): Promise<AssistantReply>;
+  /** Токены job; без них маршруты принимают только токен хода. */
+  jobTokens?: Pick<JobTokens, 'admissionOf'>;
 }
 
 export interface AssistantEndpoint {
   /** Маршруты для `routes` сервера хуков: `/assistant/<tool>` → обработчик. */
   routes(): Record<string, (req: IncomingMessage, res: ServerResponse) => void>;
-  /** Токен текущего разговора; `null` — маршруты закрыты (разговора нет). */
-  setToken(token: string | null): void;
+  /** Токен идущей попытки хода и её запись допуска; прежний токен перестаёт действовать сразу. `null` — хода нет. */
+  setToken(run: { token: string; admission: TurnAdmission } | null): void;
 }
 
 const headerOf = (req: IncomingMessage, name: string): string | undefined => {
@@ -72,15 +96,14 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 export function createAssistantEndpoint(options: AssistantEndpointOptions): AssistantEndpoint {
   const { log } = options;
-  let token: Buffer | null = null;
+  let turn: { token: Buffer; admission: TurnAdmission } | null = null;
 
-  /** Чей это токен; `null` — ничей. */
-  const authenticate = (header: string | undefined): AssistantCaller | null => {
+  /** Запись допуска владельца токена; `null` — токен ничей или его запуск кончился. */
+  const authenticate = (header: string | undefined): RunAdmission | null => {
     const bearer = header?.startsWith('Bearer ') === true ? header.slice('Bearer '.length).trim() : '';
     const given = Buffer.from(bearer);
-    if (token !== null && given.length === token.length && timingSafeEqual(given, token)) return { kind: 'conversation' };
-    const jobId = bearer === '' ? null : (options.jobTokens?.jobOf(bearer) ?? null);
-    return jobId === null ? null : { kind: 'job', jobId };
+    if (turn !== null && given.length === turn.token.length && timingSafeEqual(given, turn.token)) return turn.admission;
+    return bearer === '' ? null : (options.jobTokens?.admissionOf(bearer) ?? null);
   };
 
   /** Отказ без тела; соединение закрывается — недочитанное тело дальше не читается. */
@@ -109,8 +132,8 @@ export function createAssistantEndpoint(options: AssistantEndpointOptions): Assi
       refuse(req, res, 403, 'job-tool');
       return;
     }
-    // `link_request` и `request_status` принадлежат job: токен разговора их не вызывает.
-    if (caller.kind === 'conversation' && JOB_ONLY_TOOLS.includes(name)) {
+    // `link_request` и `request_status` принадлежат job: токен хода их не вызывает.
+    if (caller.kind === 'turn' && JOB_ONLY_TOOLS.includes(name)) {
       refuse(req, res, 403, 'job-only-tool');
       return;
     }
@@ -167,7 +190,7 @@ export function createAssistantEndpoint(options: AssistantEndpointOptions): Assi
         ASSISTANT_TOOL_NAMES.map((name) => [`${ASSISTANT_PATH}/${name}`, (req: IncomingMessage, res: ServerResponse) => handle(name, req, res)]),
       ),
     setToken: (next) => {
-      token = next === null ? null : Buffer.from(next);
+      turn = next === null ? null : { token: Buffer.from(next.token), admission: next.admission };
     },
   };
 }

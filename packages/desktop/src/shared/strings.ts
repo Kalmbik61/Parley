@@ -3095,6 +3095,11 @@ export const S = {
   /** Помощник на острове (спека 2026-10-14, раздел 6): тексты вида, настроек и подтверждения. */
   assistant: {
     ask: 'Ask the assistant',
+    /** Значок автономного режима на острове и кнопка остановки плана. */
+    autoBadge: 'Auto',
+    autoBadgeHint: 'Autonomous mode: actions run without confirmation',
+    stopPlan: 'Stop',
+    stopping: 'Stopping after the current step',
     placeholder: 'Ask the assistant…',
     ready: 'Ask about your agents, or tell a room something',
     escToClose: 'Esc to close',
@@ -3228,6 +3233,12 @@ export const S = {
       glmSlow: 'GLM answers in about 13 seconds.',
       /** «Speak answers» (план 3b, B20). */
       speak: 'Speak answers',
+      autonomy: 'Autonomous mode',
+      autonomyHint:
+        'The assistant does what you ask at once, without confirmation cards. Works from the island on this Mac only; Telegram and the phone still ask.',
+      journalTitle: 'Recent actions',
+      journalEmpty: 'No actions yet',
+      journalAuto: 'auto',
     },
   },
 

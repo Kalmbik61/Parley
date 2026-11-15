@@ -4,8 +4,8 @@ import { describe, expect, it, vi } from 'vitest';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import { ASSISTANT_TOOLS, JOB_CANCEL_SAFE_TOOLS, JOB_ONLY_TOOLS, JOB_TOKEN_PREFIX, JOB_TOOL_ALLOWLIST, createAssistantServer } from './assistant.js';
 
-async function connect(fetch: typeof globalThis.fetch, token = 't0k'): Promise<Client> {
-  const server = createAssistantServer({ url: 'http://127.0.0.1:1/assistant', token, fetch });
+async function connect(fetch: typeof globalThis.fetch, token = 't0k', mode?: 'auto'): Promise<Client> {
+  const server = createAssistantServer({ url: 'http://127.0.0.1:1/assistant', token, fetch, ...(mode === undefined ? {} : { mode }) });
   const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
   await server.connect(serverSide);
   const client = new Client({ name: 'test', version: '0' });
@@ -15,7 +15,7 @@ async function connect(fetch: typeof globalThis.fetch, token = 't0k'): Promise<C
 const reply = (status: number, body: unknown): Response => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
 describe('parley-mcp в режиме помощника', () => {
-  it('отдаёт четырнадцать инструментов в заданном порядке', async () => {
+  it('без режима отдаёт четырнадцать инструментов в заданном порядке, как на базе', async () => {
     const client = await connect(vi.fn());
     const { tools } = await client.listTools();
     expect(tools.map((tool) => tool.name)).toEqual([
@@ -124,14 +124,43 @@ describe('parley-mcp в режиме помощника', () => {
       const job = await connect(fetch, `${JOB_TOKEN_PREFIX}abc`);
       expect((await job.listTools()).tools.map((candidate) => candidate.name)).toContain('request_status');
     });
+    it('action_status (автономия, A3): только чтение, у разговора и у job, безопасен для отмены', async () => {
+      const tool = ASSISTANT_TOOLS.find((candidate) => candidate.name === 'action_status')!;
+      expect(tool.annotations?.readOnlyHint).toBe(true);
+      expect(tool.inputSchema).toMatchObject({ required: ['id'], additionalProperties: false });
+      expect(JOB_TOOL_ALLOWLIST).toContain('action_status');
+      expect(JOB_CANCEL_SAFE_TOOLS).toContain('action_status');
+      expect(JOB_ONLY_TOOLS).not.toContain('action_status');
+      const fetch = vi.fn(async () => reply(200, { text: 'Done (action p1).' }));
+      const client = await connect(fetch, 't0k', 'auto');
+      expect((await client.callTool({ name: 'action_status', arguments: { id: 'p1' } })).content).toEqual([{ type: 'text', text: 'Done (action p1).' }]);
+      expect(fetch).toHaveBeenCalledWith(expect.stringMatching(/\/action_status$/), expect.objectContaining({ body: JSON.stringify({ id: 'p1' }) }));
+    });
+    it('action_status скрыт без режима: нет в списке разговора и job, вызов — unknown tool', async () => {
+      const fetch = vi.fn(async () => reply(200, { text: 'ok' }));
+      const client = await connect(fetch);
+      expect((await client.listTools()).tools.map((tool) => tool.name)).not.toContain('action_status');
+      const result = await client.callTool({ name: 'action_status', arguments: { id: 'p1' } });
+      expect(result.isError).toBe(true);
+      expect(result.content).toEqual([{ type: 'text', text: 'unknown tool action_status' }]);
+      expect(fetch).not.toHaveBeenCalled();
+      const job = await connect(fetch, `${JOB_TOKEN_PREFIX}abc`);
+      expect((await job.listTools()).tools.map((tool) => tool.name)).not.toContain('action_status');
+    });
+    it("в режиме 'auto' action_status есть и у разговора, и у job", async () => {
+      expect((await (await connect(vi.fn(), 't0k', 'auto')).listTools()).tools.map((tool) => tool.name)).toContain('action_status');
+      expect((await (await connect(vi.fn(), `${JOB_TOKEN_PREFIX}abc`, 'auto')).listTools()).tools.map((tool) => tool.name)).toContain('action_status');
+    });
     it('список безопасных для отмены инструментов явный: чтение, propose_* и link_request', () => {
       expect([...JOB_CANCEL_SAFE_TOOLS].sort()).toEqual([...JOB_TOOL_ALLOWLIST].sort());
       for (const name of ['schedule_check', 'cancel_reminder', 'end_conversation', 'list_reminders']) expect(JOB_CANCEL_SAFE_TOOLS).not.toContain(name);
     });
-    it('с токеном job модель видит только allowlist', async () => {
+    it('с токеном job модель видит только allowlist (без action_status вне режима)', async () => {
       const client = await connect(vi.fn(), `${JOB_TOKEN_PREFIX}abc`);
       const { tools } = await client.listTools();
-      expect(tools.map((tool) => tool.name)).toEqual([...JOB_TOOL_ALLOWLIST]);
+      expect(tools.map((tool) => tool.name)).toEqual(JOB_TOOL_ALLOWLIST.filter((name) => name !== 'action_status'));
+      const auto = await connect(vi.fn(), `${JOB_TOKEN_PREFIX}abc`, 'auto');
+      expect((await auto.listTools()).tools.map((tool) => tool.name)).toEqual([...JOB_TOOL_ALLOWLIST]);
     });
     it('инструмент вне allowlist не доходит до хоста', async () => {
       const fetch = vi.fn(async () => reply(200, { text: 'ok' }));
@@ -160,5 +189,35 @@ describe('human overview transport (H8)', () => {
     ]);
     expect(fetch).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ headers: expect.objectContaining({ authorization: `Bearer ${token}` }), body: '{"detailed":true}' }));
     await client.close();
+  });
+});
+
+describe('описания propose_* в автономном режиме (A4)', () => {
+  const PROPOSE = ['propose_message', 'propose_room', 'propose_decision', 'propose_room_decision', 'propose_actions'];
+  async function listed(mode?: 'auto'): Promise<Tool[]> {
+    const server = createAssistantServer({ url: 'http://127.0.0.1:1/assistant', token: 't0k', fetch: vi.fn(), ...(mode === undefined ? {} : { mode }) });
+    const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverSide);
+    const client = new Client({ name: 'test', version: '0' });
+    await client.connect(clientSide);
+    return (await client.listTools()).tools;
+  }
+  it('без режима описания равны ASSISTANT_TOOLS', async () => {
+    const tools = await listed();
+    for (const name of PROPOSE) expect(tools.find((tool) => tool.name === name)?.description).toBe(ASSISTANT_TOOLS.find((tool) => tool.name === name)?.description);
+  });
+  it('с режимом нет слов про карточку; хвост замещён; прочие инструменты те же', async () => {
+    const tools = await listed('auto');
+    for (const name of PROPOSE) {
+      const description = tools.find((tool) => tool.name === name)?.description ?? '';
+      expect(description).not.toContain('the person sees a card');
+      expect(description).not.toContain('Nothing is sent');
+      expect(description).not.toContain('Nothing happens until the person clicks');
+      expect(description).toContain('Autonomous mode is on: Parley does this at once, without a card. The reply says what happened and whether a retry is allowed.');
+    }
+    const plain = await listed();
+    // в режиме 'auto' добавляется только action_status; остальные инструменты и порядок те же
+    expect(tools.map((tool) => tool.name).filter((name) => name !== 'action_status')).toEqual(plain.map((tool) => tool.name));
+    for (const tool of tools.filter((item) => !PROPOSE.includes(item.name) && item.name !== 'action_status')) expect(tool).toEqual(plain.find((item) => item.name === tool.name));
   });
 });

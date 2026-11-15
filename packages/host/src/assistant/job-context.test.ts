@@ -104,3 +104,109 @@ describe('вход job телефона: контекст разговора', (
     expect(h.jobs.getJob(a.jobId)).not.toBeNull();
   });
 });
+
+describe('вход job: служебных нет (автономия, W2)', () => {
+  it('RW-10: служебные Request не попадают в «Earlier open requests», даже когда их больше восьми; вход служебного job — без link_request', () => {
+    const db = openMemoryDb();
+    const execute = (): JobRun => ({ cancel: () => {}, done: new Promise<JobEnd>(() => {}) });
+    const jobs = createJobs({ db, execute, defaultProvider: () => 'claude', capPerProvider: 50 });
+    const requests = createRequests({ db, jobs });
+    const prompt = createJobPrompt({ requests, jobs });
+    const human = requests.submit({ conversationId: 'island', voiceSessionId: 'live_1', delegationId: 'd1', text: 'human question' }).request;
+    const services = Array.from(
+      { length: 9 },
+      (_, index) =>
+        requests.submit({
+          conversationId: 'island',
+          voiceSessionId: 'host',
+          delegationId: `outcome:p${index}`,
+          text: `Reply from S0${index}`,
+          origin: 'system',
+          service: { kind: 'outcome', group: null, fallback: 'x' },
+        }).request,
+    );
+    // Итоги действий не снимаются: девять открытых служебных новее человеческого поручения — больше предела в восемь.
+    expect(services.filter((request) => !requests.get(request.requestId)?.stale)).toHaveLength(9);
+    const asker = requests.submit({ conversationId: 'island', voiceSessionId: 'live_1', delegationId: 'd2', text: 'next question' }).request;
+    const text = prompt(jobs.getJob(asker.jobId) as Job);
+    expect(text).toContain(`requestId ${human.requestId}`);
+    expect(text).not.toContain('Reply from');
+    const own = prompt(jobs.getJob(services[8]!.jobId) as Job);
+    expect(own).toBe('Reply from S08');
+  });
+});
+
+describe('вход job: недавние сессии и язык пересказа (автономия, W5)', () => {
+  function build(recent: Array<{ name: string; work: string }>, language?: string | null) {
+    const db = openMemoryDb();
+    const execute = (): JobRun => ({ cancel: () => {}, done: new Promise<JobEnd>(() => {}) });
+    const jobs = createJobs({ db, execute, defaultProvider: () => 'claude', capPerProvider: 50 });
+    const requests = createRequests({ db, jobs });
+    const prompt = createJobPrompt({ requests, jobs, recentSessions: () => recent, ...(language === undefined ? {} : { language: () => language }) });
+    const island = (): Job => {
+      const { request } = requests.submit({ conversationId: 'island', voiceSessionId: 'live_1', delegationId: 'd1', text: 'tell him to stop' });
+      return jobs.getJob(request.jobId) as Job;
+    };
+    const system = (): Job => {
+      const { request } = requests.submit({
+        conversationId: 'island',
+        voiceSessionId: 'host',
+        delegationId: 'watch:1',
+        text: 'Reply from S01',
+        origin: 'system',
+        service: { kind: 'outcome', group: null, fallback: 'x' },
+        context: { service: 'outcome', outcome: { status: 'done', effects: ['sent a message'], reason: null, retry: 'safe' } },
+      });
+      return jobs.getJob(request.jobId) as Job;
+    };
+    const mobile = (): Job => jobs.getJob(jobs.submitJob({ origin: 'mobile', text: 'ping', idempotencyKey: 'k', correlation: { mode: 'text' } }).jobId) as Job;
+    return { prompt, island, system, mobile };
+  }
+
+  it('список пуст — вход не меняется', () => {
+    const h = build([]);
+    expect(h.prompt(h.island())).not.toContain('recently gave work');
+    expect(h.prompt(h.mobile())).toBe('ping');
+  });
+
+  it('две сессии — две строки, новая первой, с именем и работой', () => {
+    const h = build([
+      { name: 'Alice', work: 'Alpha' },
+      { name: 'Bob', work: 'Beta' },
+    ]);
+    const text = h.prompt(h.island());
+    expect(text).toContain('Agents you recently gave work to (most recent first):\n- Alice in work "Alpha"\n- Bob in work "Beta"');
+    expect(h.prompt(h.mobile())).toContain('- Alice in work "Alpha"');
+  });
+
+  it('пять сессий — три строки', () => {
+    const h = build(Array.from({ length: 5 }, (_, i) => ({ name: `A${i}`, work: 'W' })));
+    const text = h.prompt(h.island());
+    expect(text.match(/^- A\d in work/gm)).toHaveLength(3);
+    expect(text).not.toContain('A3');
+  });
+
+  it('в блоке нет идентификаторов', () => {
+    const h = build([{ name: 'Alice', work: 'Alpha' }]);
+    const block = h.prompt(h.island()).split('Agents you recently gave work to')[1] ?? '';
+    expect(block).not.toMatch(/s-|session:|work:/);
+  });
+
+  it('вход служебного job блока не содержит', () => {
+    const h = build([{ name: 'Alice', work: 'Alpha' }], 'ru');
+    expect(h.prompt(h.system())).not.toContain('recently gave work');
+  });
+
+  it('язык ru — во входе пересказчика строка «Reply in Russian.»; обычный job её не получает', () => {
+    const h = build([], 'ru');
+    expect(h.prompt(h.system())).toContain('\nReply in Russian.');
+    expect(h.prompt(h.island())).not.toContain('Reply in');
+  });
+
+  it('языка нет — строки нет', () => {
+    const g = build([], null);
+    expect(g.prompt(g.system())).not.toContain('Reply in');
+    const h = build([]);
+    expect(h.prompt(h.system())).not.toContain('Reply in');
+  });
+});

@@ -19,6 +19,8 @@ export function createAssistantHandlers(service: AssistantService, jobs?: Jobs):
   // Телефону — только проекция активных карточек, без payload (T4a).
   const listCards: Handler<'cards.list'> = async () => ({ cards: service.phoneCards() });
   const reissue: Handler<'assistant.reissue'> = async (params) => service.reissue(params.proposalId);
+  const stopPlan: Handler<'assistant.stopPlan'> = async (params) => ({ stopped: service.stopPlan(params.proposalId) });
+  const journal: Handler<'assistant.journal'> = async (params) => ({ items: service.journal(params.limit) });
   const reset: Handler<'assistant.reset'> = async () => {
     service.reset();
     return { ok: true };
@@ -41,6 +43,8 @@ export function createAssistantHandlers(service: AssistantService, jobs?: Jobs):
     'assistant.cancel': cancel as AnyHandler,
     'assistant.decide': decide as AnyHandler,
     'assistant.reissue': reissue as AnyHandler,
+    'assistant.stopPlan': stopPlan as AnyHandler,
+    'assistant.journal': journal as AnyHandler,
     'assistant.reset': reset as AnyHandler,
     'assistant.state': state as AnyHandler,
     'assistant.sent': sent as AnyHandler,

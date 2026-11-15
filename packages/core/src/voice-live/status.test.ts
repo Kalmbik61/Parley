@@ -169,3 +169,13 @@ describe('StatusNotifier', () => {
     expect(sent).toHaveLength(2);
   });
 });
+
+describe('StatusNotifier — служебный Request (RW-10)', () => {
+  it('Request с происхождением system статуса не получает', () => {
+    const sent: string[] = [];
+    const notifier = createStatusNotifier({ now: () => 0, canAppend: () => true, send: ({ content }) => (sent.push(content), true) });
+    notifier.observe([{ requestId: 's1', text: 'summarise', state: 'running', stale: false, createdAt: 0, delegationId: null, origin: 'system' }]);
+    notifier.step();
+    expect(sent).toEqual([]);
+  });
+});

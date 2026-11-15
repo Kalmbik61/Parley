@@ -27,6 +27,8 @@ export function createIngest(deps: IngestDeps): Ingest {
   const now = deps.now ?? Date.now;
   return {
     onJob(job) {
+      // Служебный job (спека автономии §6.3) — сообщение острову: ни строки, ни push, ни Telegram.
+      if (job.origin === 'system') return;
       if (job.state !== 'completed' && job.state !== 'failed' && job.state !== 'cancelled') return;
       const { row, created } = deps.store.write(
         {
@@ -42,6 +44,8 @@ export function createIngest(deps: IngestDeps): Ingest {
       if (created) deps.dispatch?.(row, job.deliveredInline);
     },
     onCard(change) {
+      // Автономная карточка (спека автономии §5.3) клика не ждёт: ни эскалации, ни строки, ни доставки.
+      if (change.decidedVia === 'auto') return;
       const key = needsConfirmationKey(change.cardId);
       if (change.state === 'needs_confirmation') {
         const { row, created } = deps.store.write(

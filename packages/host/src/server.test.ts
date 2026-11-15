@@ -621,6 +621,18 @@ describe('роль remote: белый список этапа A (спека мо
     client.close();
   });
 
+  it('assistant.stopPlan, assistant.journal и settings.set от remote — unknown_method', async () => {
+    const { home, token } = await boot();
+    const { client } = await connectAs(home, token, 'remote');
+    let id = 3000;
+    for (const [method, params] of [['assistant.stopPlan', { proposalId: 'p1' }], ['assistant.journal', {}], ['settings.set', { key: 'assistantAutonomy', value: 'true' }]] as const) {
+      id += 1;
+      client.send({ id, method, params });
+      expect((await collectUntil(client, id)).at(-1)?.error, method).toMatchObject({ code: 'unknown_method' });
+    }
+    client.close();
+  });
+
   it('voiceProvider.* от remote — unknown_method, значение параметра в ответ не попадает', async () => {
     const { home, token } = await boot();
     const { client } = await connectAs(home, token, 'remote');

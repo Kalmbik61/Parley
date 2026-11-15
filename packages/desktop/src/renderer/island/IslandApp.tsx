@@ -480,6 +480,7 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
       },
       phrases: { detailsOnScreen: S.assistant.live.detailsOnScreen, clarifying: S.assistant.live.clarifying },
       fallbackText: S.assistant.live.untranscribed,
+      deliverCard: (text) => useAssistantStore.getState().deliverService(text),
     });
     const detach = useLiveStore.getState().attachDelegation(delegation);
     return () => {
@@ -875,6 +876,7 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
           onSubmit: (text) => void useAssistantStore.getState().submit(text),
           onMic: () => useAssistantStore.getState().toggleListening(),
           onDecide: (decision) => void useAssistantStore.getState().decide(decision),
+          ...(progressConnection.methods?.includes('assistant.stopPlan') === true ? { onStopPlan: (proposalId: string) => void useAssistantStore.getState().stopPlan(proposalId) } : {}),
           onTakeKeyboard: () => useAssistantStore.getState().takeKeyboard(),
           onUnqueue: (id) => useAssistantStore.getState().unqueue(id),
           onShowRequests: () => useAssistantStore.getState().close(),

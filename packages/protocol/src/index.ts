@@ -237,6 +237,7 @@ export type {
   AssistantJobChanged,
   AssistantJobCorrelation,
   AssistantJobOrigin,
+  AssistantJournalItem,
   AssistantMethodResults,
   AssistantOrigin,
   AssistantPhase,

@@ -732,7 +732,9 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
 
           <TabsContent value="providers" className="mt-0"><ProvidersSettings /></TabsContent>
 
-          <TabsContent value="assistant" className="mt-0">{uiLoaded ? <AssistantSettings /> : null}</TabsContent>
+          <TabsContent value="assistant" className="mt-0">{uiLoaded ? (
+              <AssistantSettings bridge={bridge} config={config} locked={locked} save={save} error={errors.assistantAutonomy} />
+            ) : null}</TabsContent>
 
           <TabsContent value="remote" className="mt-0">
             <RemoteSettings bridge={bridge} config={config} locked={locked} save={save} error={errors.remoteCreate} />

@@ -4,7 +4,7 @@
  * и отправка от имени человека. Состояние для окна — событием `assistant.changed`.
  */
 
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { chmod, mkdir, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
@@ -26,6 +26,7 @@ import {
   parseCodexLine,
   participantLabel,
   pendingCards,
+  silentTurnEnd,
   planRefOf,
   readLetters,
   sessionMention,
@@ -42,7 +43,7 @@ import {
   presentedActivity,
 } from '@parley/core';
 import { createMoodStripper, matchConfirm, type AssistantGender, type AssistantMood, type MoodMark, type MoodStrip } from '@parley/core/assistant';
-import { feedDecision, type ActionsReport, type AssistantCardChanged, type AssistantDetail, type AssistantProposal, type AssistantOrigin, type HumanOverviewV1, type AssistantSettings, type AssistantState, type EventData, type CardDecideResult, type EventName, type Params, type SendResult, type SessionRef } from '@parley/protocol';
+import { feedDecision, type ActionsReport, type AssistantCardChanged, type AssistantDetail, type AssistantJournalItem, type AssistantProposal, type AssistantOrigin, type HumanOverviewV1, type AssistantSettings, type AssistantState, type EventData, type CardDecideResult, type EventName, type Params, type SendResult, type SessionRef } from '@parley/protocol';
 import { projectPhoneCard, type PhoneCard } from '@parley/protocol/remote';
 import { HostError } from '../errors.js';
 import { createCardStore, type CardRow, type CardStore, type CardVia } from './cards.js';
@@ -50,7 +51,7 @@ import { createConversationStore, type ConversationStore } from './conversation-
 import type { ActivityService } from '../activity/activity-service.js';
 import type { FeedService } from '../feed/feed-service.js';
 import { memberOf, preparePlan, type PreparedPlan } from './actions.js';
-import { ASSISTANT_PATH, type AssistantCaller, type AssistantReply } from './assistant-endpoint.js';
+import { ASSISTANT_PATH, autoAtStartOf, type AssistantReply, type JobAdmission, type RunAdmission, type TurnAdmission } from './assistant-endpoint.js';
 import type { JobTokens } from './job-tokens.js';
 import type { RequestLinker } from './request-link.js';
 import type { RequestStatusReader } from './request-status.js';
@@ -61,7 +62,9 @@ import { humanOverview } from './human-overview.js';
 import { isLastCheck, type Reminder, type ReminderStore } from './reminders.js';
 import { roomPageText, type LetterPage } from './room-page.js';
 import { appendSent, readSent } from './sent-log.js';
-import { runPlan, type PlanExecutors } from './run-plan.js';
+import { planClick, planOutcome, runPlan, type ActionOutcome, type PlanExecutors } from './run-plan.js';
+import { createReplyWatch, type RecentSession, type WatchEvent, type WatchKind } from './reply-watch.js';
+import { buildReplySnapshot, type ReplySnapshot } from './reply-snapshot.js';
 import { historyText } from './session-history.js';
 import { runTurn, type TurnEnd, type TurnHandle, type TurnSpec } from './turn.js';
 
@@ -78,6 +81,60 @@ const CARD_SHOWN = 'Shown to the person as a card; they will confirm or cancel i
 const ACTIONS_SHOWN = 'Shown to the person as a card with the plan; they confirm it with its button only. Tell them in one short sentence what you prepared.';
 /** Ход получает эту строку, когда человек пишет «да» словами, пока ждёт карточка `actions`: она подтверждается только кнопкой. */
 const ACTIONS_BUTTON_NOTE = '[system: a card with actions is waiting; it is confirmed only by its button]';
+/** Срок вызова инструмента в автономном режиме (спека автономии §5.3): у MCP помощника в Codex `tool_timeout_sec=60`. */
+export const AUTO_CALL_MS = 40_000;
+const NOT_STARTED: AssistantReply = { status: 409, body: { error: 'Not started: Parley is busy. Nothing was done; you may try again.' } };
+const STOPPED_BY_PERSON = 'Stopped by the person';
+const OUTCOME_HEAD: Record<ActionOutcome['status'], string> = { done: 'Done', partial: 'Partly done', not_done: 'Not done', unknown: 'Outcome unknown, it may have taken effect' };
+
+/** Ответ модели об итоге автономного действия: статус, что сделано, причина и можно ли повторять. */
+export function outcomeText(id: string, outcome: ActionOutcome): string {
+  return [
+    `${OUTCOME_HEAD[outcome.status]} (action ${id}).`,
+    outcome.effects.length === 0 ? null : `Done: ${outcome.effects.join('; ')}.`,
+    outcome.reason === null ? null : `Reason: ${outcome.reason}.`,
+    outcome.retry === 'safe' ? 'Nothing was changed; you may try again.' : 'Do not repeat it.',
+  ]
+    .filter((part) => part !== null)
+    .join(' ');
+}
+
+/** Исход карточки по итогу автономного действия: у плана, как у клика, `done` и `stopped`, плюс `unknown`. */
+export function cardOutcomeOf(kind: string, status: ActionOutcome['status']): string {
+  if (status === 'done' || status === 'unknown') return status;
+  if (kind === 'actions') return 'stopped';
+  return status === 'partial' ? 'partial' : 'failed';
+}
+
+/** Строки шагов автономной карточки для итога: шаги плана или одно действие. */
+export function stepLinesOf(row: CardRow): string[] {
+  const view = row.view as AssistantProposal;
+  if (view.action === 'actions') return view.steps.map((step) => step.line);
+  if (view.action === 'room') return [`room "${view.title}"`];
+  if (view.action === 'message' || view.action === undefined) return [`message to ${view.target}`];
+  return [view.text.split('\n')[0]?.trim() ?? ''];
+}
+
+/**
+ * Исход автономной карточки после рестарта хоста по её ходу исполнения (спека автономии §5.3): ни одного `started` —
+ * `not_done`, повтор разрешён; `started: k` без `confirmed: k` — `unknown`, шаги до k сделаны; все `confirmed` — `done`.
+ */
+export function restartOutcome(row: CardRow): ActionOutcome {
+  const progress = row.progress ?? { steps: 1, started: [], confirmed: [] };
+  const lines = stepLinesOf(row);
+  const confirmed = lines.filter((_, index) => progress.confirmed.includes(index + 1));
+  const open = progress.started.filter((step) => !progress.confirmed.includes(step)).sort((a, b) => a - b)[0];
+  if (open !== undefined) {
+    const reason = progress.steps === 1 ? 'Parley restarted while the action was running' : `Parley restarted during step ${open} of ${progress.steps}; later steps did not start`;
+    return { status: 'unknown', effects: confirmed, retry: 'unsafe', reason };
+  }
+  if (progress.confirmed.length >= progress.steps) return { status: 'done', effects: lines, retry: 'unsafe', reason: null };
+  if (progress.started.length === 0) return { status: 'not_done', effects: [], retry: 'safe', reason: 'Parley restarted before the action started' };
+  return { status: 'partial', effects: confirmed, retry: 'unsafe', reason: `Parley restarted after step ${Math.max(...progress.confirmed)} of ${progress.steps}; later steps did not start` };
+}
+
+/** Событие слежения вместе со снимком, закреплённым в момент события. */
+export type WatchDelivery = WatchEvent & { snapshot: ReplySnapshot };
 
 export interface AssistantServiceDeps {
   broadcast<E extends EventName>(event: E, data: EventData<E>): void;
@@ -107,12 +164,38 @@ export interface AssistantServiceDeps {
   addRoomMember(input: Params<'rooms.addMember'>): Promise<string>;
   roles(projectPath: string): Promise<readonly RoleSummary[]>;
   leanAgents(): Promise<boolean>;
+  /**
+   * Флаг `assistantAutonomy` (спека автономии §5.1): для записи допуска — один раз на попытку хода, при выпуске её токена;
+   * для правила §5.2 — ещё раз последним ожиданием перед точкой исполнения. Без него — выключен.
+   */
+  autonomy?(): Promise<boolean>;
+  /** Прогон job действителен для автономного действия: токен этого прогона не отозван и job `running`. Без неё job без клика не исполняет. */
+  jobLive?(admission: JobAdmission): boolean;
+  /**
+   * Итог автономного действия, что не достался создавшему запуску (спека автономии §5.3): действие кончилось, когда
+   * запуск уже не жив, или запуск кончился при готовом итоге `pending`. Реализацию — служебное сообщение — даёт W2.
+   */
+  deliverOutcome?(card: CardRow, outcome: ActionOutcome): void;
+  /**
+   * Событие слежения за ответом сессии (спека автономии §6.2) с закреплённым снимком (§6.3): сессия закончила свой ход
+   * или ждёт человека. Реализацию — служебное сообщение — даёт W2; без неё события не выдаются.
+   */
+  onWatchEvent?(event: WatchDelivery): void;
+  /**
+   * Режим выключен (спека автономии §6.2): зовётся синхронно вместе со снятием слежений, чтобы ждущие служебные
+   * сообщения о событиях слежения отменились без доставки (W2). Идущий пересказ и итоги действий не трогаются.
+   */
+  onAutonomyOff?(): void;
+  /** Время запуска процесса сессии (мс) для `silentTurnEnd`; `undefined` — процесса нет. */
+  startedAt?(ref: SessionRef): number | undefined;
+  /** Срок вызова инструмента в автономном режиме; по умолчанию `AUTO_CALL_MS`. */
+  autoCallMs?: number;
   /** Готовность провайдера к запуску агента, без проверки версии для помощника. */
   providerReady(entry: ProviderEntry): Promise<string | null>;
   /** Карточку `actions` есть кому показать: окно с `assistant-actions` или привязанный Telegram. */
   actionsShown(): boolean;
-  /** Сервер хуков (`origin`) и приёмник помощника (`setToken`, задача 8). */
-  endpoint: { origin(): string | null; setToken(token: string | null): void };
+  /** Сервер хуков (`origin`) и приёмник помощника (`setToken`: токен попытки хода и её запись допуска, задача 8 и A2). */
+  endpoint: { origin(): string | null; setToken(run: TurnRun | null): void };
   providers(): Promise<Record<string, ProviderEntry>>;
   /** `null` — провайдер готов; иначе причина по-английски. */
   ready(entry: ProviderEntry): Promise<string | null>;
@@ -172,8 +255,44 @@ export interface AssistantService {
   reset(): void;
   state(): AssistantState;
   sent(ref: SessionRef): Promise<Array<{ text: string; at: string }>>;
-  /** `caller` — разговор по умолчанию; job вызывает только инструменты из `JOB_TOOL_ALLOWLIST`. */
-  tool(name: string, args: unknown, caller?: AssistantCaller): Promise<AssistantReply>;
+  /**
+   * `caller` — запись допуска с границы HTTP; без неё — идущая попытка хода. Запись хода, чья попытка кончилась,
+   * отменена или вытеснена, — 401. Job вызывает только инструменты из `JOB_TOOL_ALLOWLIST`.
+   */
+  tool(name: string, args: unknown, caller?: RunAdmission): Promise<AssistantReply>;
+  /**
+   * «Stop» плана (спека автономии §5.6): следующие шаги не начинаются, идущий шаг доводится, причина — «Stopped by the
+   * person». Для плана клика и автономного. `false` — такой план сейчас не идёт. Метод окна — A6.
+   */
+  stopPlan(proposalId: string): boolean;
+  /** Активность сессии изменилась (`activity.onChange`): слежение сверяется с ней и с лентой. Без слежения — ничего. */
+  watchActivity(ref: SessionRef): void;
+  /** Работы изменились: сессия, что была активна и закрыта или усыплена, закрывает слежение за ней. */
+  watchWorks(): void;
+  /** Сессии под слежением. */
+  watchedSessions(): SessionRef[];
+  /** Последние сессии, которым помощник давал работу без подтверждения (до трёх). */
+  recentSessions(): RecentSession[];
+  /** Заметка человеку о служебных сообщениях (`watchNote`): сообщение о событии слежения снято переполнением очереди. */
+  noteWatch(note: string): void;
+  /**
+   * Перечитывает флаг автономии и публикует `autonomous` в `assistant.changed`: зовётся при смене `assistantAutonomy`.
+   * `known` — значение, которое вызывающий уже знает (`settings.set`): применяется сразу, без чтения конфигурации, чтобы
+   * событие слежения сразу после выключения не успело создать служебный Request.
+   */
+  refreshAutonomy(known?: boolean): Promise<void>;
+  /** Журнал решённых карточек (`assistant.journal`), новые первыми. */
+  journal(limit: number): AssistantJournalItem[];
+  /** Прогон job кончился: итоги его автономных действий, что никому не достались, уходят в `deliverOutcome`. */
+  jobEnded(jobId: string): void;
+  /**
+   * Рестарт (спека автономии §5.3): исходы закрытых автономных карточек job, что был `running`, с невыданным итогом — для
+   * его резюме, не длиннее `room` знаков; вошедшие становятся `taken_by_run`, не вошедшие остаются `pending`. Зовётся
+   * внутри транзакции записи job: её откат возвращает итоги в `pending`. `null` — нечего добавить.
+   */
+  claimRestartOutcome(jobId: string, room: number): string | null;
+  /** Рестарт: невыданные итоги автономных карточек (`result_state = 'pending'`), не взятые job, уходят в `deliverOutcome`. */
+  deliverRestartOutcomes(): void;
   /** Срок напоминания (его отдаёт хост в `reminders.start`): ждёт конца идущего хода и сам запускает новый. */
   onReminder(reminder: Reminder, late: boolean): Promise<'fired' | 'skipped' | 'later' | 'retry'>;
   stop(): void;
@@ -185,11 +304,18 @@ interface Conversation {
   language: AssistantLanguage;
   /** Род, с которым идёт разговор: сменился в зеркале — следующий ход несёт строку `[system: voice changed …]`. */
   gender: AssistantGender;
-  token: string;
+  /** Идентичность разговора для заметок исхода (`Pending.token`); учётные данные хода — отдельно, у попытки (`TurnRun`). */
+  id: string;
   sessionId: string | null;
   endAfterTurn: boolean;
   /** Диалог CLI только что начат (рестарт, idle, смена провайдера): первый ход получит выжимку истории. */
   recapPending: boolean;
+}
+
+/** Учётные данные попытки хода (спека автономии §5.2): свой токен на каждый запуск CLI и неизменяемая запись допуска. */
+interface TurnRun {
+  token: string;
+  admission: TurnAdmission;
 }
 
 type RoomTarget = Extract<AssistantTarget, { kind: 'room' }>;
@@ -197,19 +323,39 @@ type SessionTarget = Extract<AssistantTarget, { kind: 'session' }>;
 type WorkTarget = Extract<AssistantTarget, { kind: 'work' }>;
 
 /**
- * Кто создаёт карточку. Разговор — его токен и источник карточек канала; job (план голоса, T1) — своя метка вместо
- * токена разговора и свой источник `job:<id>`, чтобы его карточка не вытесняла карточку острова и наоборот.
+ * Кто создаёт карточку. Разговор — его `id` (в поле `token`) и источник карточек канала; job (план голоса, T1) — своя
+ * метка вместо id разговора и свой источник `job:<id>`, чтобы его карточка не вытесняла карточку острова и наоборот.
+ * `admission` — запись допуска вызывающего запуска; по ней пока ничто не ветвится (A3).
  */
 /** Job нельзя готовить карточки: его Request частичный или вытеснен. Для job это отказ 409, не сбой хоста. */
 class JobRefusal extends Error {}
+/** Попытка хода кончилась, отменена или вытеснена, пока шёл вызов: её запись допуска больше не действует. */
+class TurnEnded extends Error {}
+const TURN_ENDED: AssistantReply = { status: 401, body: { error: 'This assistant turn has ended' } };
+/** Прогон job с допуском автономии кончился или отменён, пока шёл вызов: ни карточки, ни действия. */
+class RunEnded extends Error {}
+/** Срок автономного вызова вышел до точки исполнения (подготовка или чтение флага): ничего не создано. */
+class CallLate extends Error {}
+const RUN_ENDED: AssistantReply = { status: 409, body: { error: 'This background task has ended; nothing was done' } };
 
 interface Owner {
   token: string;
   source?: string;
   jobId?: string;
+  admission: RunAdmission;
+  /** Срок вызова инструмента (`AUTO_CALL_MS` от его прихода): все ожидания автономного вызова получают остаток. */
+  deadline: number;
 }
 
-/** Ждущая карточка. Вид (`kind`) совпадает с `view.action` и сужает остальные поля; `token` — разговор, что её создал. */
+/** Автономное действие, что исполняется или исполнено в этом процессе хоста: итог отдаётся только создавшему запуску. */
+interface AutoRun {
+  id: string;
+  admission: RunAdmission;
+  done: Promise<ActionOutcome>;
+  outcome: ActionOutcome | null;
+}
+
+/** Ждущая карточка. Вид (`kind`) совпадает с `view.action` и сужает остальные поля; `token` — id разговора, что её создал. */
 type Pending = PendingBody & { token: string; /** Откуда пришло решение; ставится в `decide`. */ via?: CardVia };
 type PendingBody =
   | {
@@ -349,6 +495,8 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
   let state: AssistantState = { ...EMPTY, instance };
   let conversation: Conversation | null = null;
   let turn: TurnHandle | null = null;
+  /** Учётные данные идущей попытки хода; `null` — токен хода снят и приёмник ему отвечает 401. */
+  let attempt: TurnRun | null = null;
   const cards = deps.cards ?? createCardStore(openMemoryDb());
   const cardTtl = deps.cardTtlMs ?? ASSISTANT_CARD_TTL_MS;
   const history = deps.conversations ?? createConversationStore(openMemoryDb());
@@ -358,8 +506,18 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
   let resets = 0;
   /** Один таймер проверки сроков: он всегда стоит на ближайшем `expiresAt` среди активных карточек. */
   let sweepTimer: NodeJS.Timeout | null = null;
-  /** Id карточки `actions`, чей план выполняется сейчас; пока он не `null`, второй план не предлагается и не стартует. */
+  /**
+   * Слот плана: id карточки `actions`, чей план выполняется сейчас. Один владелец: захватывается в точке исполнения и в
+   * `decide` до `claim`, освобождается в `finally` плана (`freeSlot`); пока он занят, второй план не стартует.
+   */
   let running: string | null = null;
+  /** Ждущие слот плана автономные вызовы: будятся, когда он освобождается. */
+  const slotWaiters = new Set<() => void>();
+  /** План, которому человек нажал «Stop»: следующий шаг не начнётся. */
+  let stopRequested: string | null = null;
+  const autoCallMs = deps.autoCallMs ?? AUTO_CALL_MS;
+  /** Автономные действия этого процесса по id карточки: `action_status` и доставка итога, что не достался запуску. */
+  const autoRuns = new Map<string, AutoRun>();
   let outcomeNote: string | null = null;
   let proposals = cards.lastNumber();
   let idleTimer: NodeJS.Timeout | null = null;
@@ -382,6 +540,63 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     deps.broadcast('assistant.changed', state);
     for (const listener of [...stateListeners]) listener(state);
   };
+  // --- слежение за ответом сессии (спека автономии §6.2) ---
+
+  const watch = createReplyWatch({
+    now,
+    setTimer: (fn, ms) => {
+      const timer = setTimeout(fn, ms);
+      timer.unref?.();
+      return () => clearTimeout(timer);
+    },
+    onEvent: (event) => void deliverWatch(event),
+    onNote: (note) => publish({ watchNote: note }),
+  });
+  /** Сессии, что видели `active` после постановки слежения: закрытие и сон считаются только после этого. */
+  const seenActive = new Set<string>();
+  const watchKey = (ref: SessionRef): string => `${ref.projectPath}\u0000${ref.workId}\u0000${ref.sessionId}`;
+  const lifecycleOf = (ref: SessionRef): SessionLifecycle | undefined =>
+    deps.works.snapshot().entries.find((entry) => entry.projectPath === ref.projectPath && entry.map.work.id === ref.workId)?.map.sessions.find((candidate) => candidate.id === ref.sessionId)?.lifecycle;
+
+  /** Снимок на момент события и передача его наружу: лента и журнал читаются здесь, чтобы закрепить содержимое. */
+  async function deliverWatch(event: WatchEvent): Promise<void> {
+    if (deps.onWatchEvent === undefined) return;
+    try {
+      let items: readonly FeedItem[] | null = null;
+      try {
+        items = deps.feed === undefined ? null : (await deps.feed.snapshot(event.ref)).items;
+      } catch {
+        // ленты у сессии нет — снимок с отметкой «ответ прочитать не удалось»
+      }
+      const sent = await readSent(deps.home, event.ref).catch(() => []);
+      deps.onWatchEvent({ ...event, snapshot: buildReplySnapshot({ event, items, sent }) });
+    } catch (error) {
+      deps.log(`assistant: watch event ${event.key} was not delivered: ${(error as Error).message}`);
+    }
+  }
+
+  /** Сверка слежения с лентой (записи `prompt` после постановки) и текущей активностью. */
+  async function syncWatch(ref: SessionRef): Promise<void> {
+    if (!watch.watching(ref)) return;
+    if (watch.awaitingPrompt(ref) && deps.feed !== undefined) {
+      try {
+        for (const item of (await deps.feed.snapshot(ref)).items) if (item.kind === 'prompt') watch.onPrompt(ref, Date.parse(item.at));
+      } catch {
+        // ленты нет — свой ход не определить, слежение дождётся срока
+      }
+    }
+    const live = deps.activity.get(ref);
+    const started = deps.startedAt?.(ref);
+    watch.onActivity(ref, { need: live?.activity.need ?? null }, live === undefined || started === undefined ? null : silentTurnEnd(live.activity, started));
+  }
+
+  /** Слежение ставится только действием, исполненным без подтверждения; сразу после постановки активность перечитывается. */
+  function armWatch(ref: SessionRef, name: string, kind: WatchKind, since: number): void {
+    watch.arm({ ref, name, kind, since });
+    if (lifecycleOf(ref) === 'active') seenActive.add(watchKey(ref));
+    void syncWatch(ref).catch((error: unknown) => deps.log(`assistant: watch of ${name} was not synced: ${(error as Error).message}`));
+  }
+
   /** Изменение карточки ядра уходит слушателям по одной: каждый канал закрывает именно ту карточку, что решена. */
   const changeOf = (row: CardRow): AssistantCardChanged => ({
     cardId: row.proposalId,
@@ -392,9 +607,11 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     decidedVia: row.decidedVia,
     outcome: row.outcome,
   });
-  /** Карточка для телефона: явный список полей; `jobId` — только если хост уже связал карточку с job (источник `job:<id>`). */
+  /** Карточка для телефона: явный список полей; `jobId` — только если хост уже связал карточку с job (источник `job:<id>`). Автономная карточка телефону не проецируется. */
   const phoneOf = (row: CardRow): PhoneCard | null =>
-    projectPhoneCard({
+    row.decidedVia === 'auto'
+      ? null
+      : projectPhoneCard({
       cardId: row.proposalId,
       revision: row.revision,
       kind: row.kind,
@@ -452,11 +669,18 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     const last = rows[rows.length - 1];
     return last === undefined ? null : pendingOf(last);
   };
-  function setPending(card: Pending, owner: Owner): void {
+  /** Запуск всё ещё вправе готовить карточку или действие: проверка после всех ожиданий, в точке исполнения. */
+  function checkOwner(owner: Owner): void {
     // Request job вытеснили или он частичный, пока шёл `await`: карточка уже не нужна, а вытесненный её отзыв не пережил бы.
     const refused = owner.jobId === undefined ? null : (deps.requestLink?.proposeRefusal(owner.jobId) ?? null);
     if (refused !== null) throw new JobRefusal(refused);
-    const { view, kind, ...payload } = card; // `token` остаётся в payload: заметка исхода уходит только в тот разговор, что создал карточку
+    // Попытка хода кончилась, пока шёл `await`: её запись допуска уже не действует, карточки нет.
+    if (owner.admission.kind === 'turn' && attempt?.admission.runId !== owner.admission.runId) throw new TurnEnded();
+    // Job с допуском автономии: отменённый или законченный прогон не создаёт ни карточки, ни действия (правило 3 §5.2).
+    if (owner.admission.kind === 'job' && owner.admission.autoAtStart && !(deps.jobLive?.(owner.admission) ?? false)) throw new RunEnded();
+  }
+  function setPending(card: Pending, owner: Owner): void {
+    const { view, kind, ...payload } = card; // `token` (id разговора) остаётся в payload: заметка исхода уходит только в тот разговор, что создал карточку
     const before = cards.active();
     const row = cards.put({ proposalId: view.id, kind, view, payload, source: owner.source ?? cardSource, expiresAt: now() + cardTtl }, now());
     // Карточки job записывает хост, а не модель: они попадают в `JobResult.cards`.
@@ -497,9 +721,48 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
   };
   const restPhase = (): AssistantState['phase'] => (shown() === null ? 'idle' : 'awaiting-confirm');
 
+  /** Новая попытка хода — новый токен и запись допуска; прежний токен перестаёт действовать сразу. */
+  function issueRun(origin: AssistantOrigin, autonomy: boolean): TurnRun {
+    const next: TurnRun = { token: randomBytes(32).toString('hex'), admission: Object.freeze({ kind: 'turn', runId: randomUUID(), origin, autoAtStart: autoAtStartOf(origin, autonomy) }) };
+    attempt = next;
+    deps.endpoint.setToken(next);
+    return next;
+  }
+
+  /** Снимает токен попытки; с `only` — только если действует именно она (новую попытку не трогает). */
+  function revokeRun(only?: TurnRun): void {
+    if (attempt === null || (only !== undefined && attempt !== only)) return;
+    const ended = attempt.admission.runId;
+    attempt = null;
+    deps.endpoint.setToken(null);
+    runEnded((admission) => admission.runId === ended);
+  }
+
+  /** Жив ли запуск, создавший автономную карточку: ему ещё можно отдать итог в ответ вызова. */
+  function runAlive(admission: RunAdmission): boolean {
+    return admission.kind === 'turn' ? attempt?.admission.runId === admission.runId : (deps.jobLive?.(admission) ?? false);
+  }
+
+  /** Итог, что не достался создавшему запуску, — в `deliverOutcome`, один раз и только пока `result_state` — `pending`. */
+  function offer(run: AutoRun): void {
+    if (run.outcome === null || !autoRuns.delete(run.id)) return;
+    const row = cards.get(run.id);
+    if (row?.resultState !== 'pending') return;
+    try {
+      deps.deliverOutcome?.(row, run.outcome);
+    } catch (error) {
+      deps.log(`assistant: outcome of ${run.id} was not delivered: ${(error as Error).message}`);
+    }
+  }
+
+  /** Запуск кончился: готовые итоги его действий, что он не забрал, уходят дальше; идущие уйдут, когда кончатся. */
+  function runEnded(match: (admission: RunAdmission) => boolean): void {
+    for (const run of [...autoRuns.values()]) if (match(run.admission)) offer(run);
+  }
+
   function endConversation(): void {
     conversation = null;
-    deps.endpoint.setToken(null);
+    revokeRun();
     outcomeNote = null;
     // Карточки durable и разговор переживают: конец диалога CLI их не снимает.
   }
@@ -507,7 +770,8 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
   function touch(): void {
     if (idleTimer !== null) clearTimeout(idleTimer);
     idleTimer = setTimeout(() => {
-      if (turn === null) endConversation();
+      // Попытка, что ещё запускается (`turn` пока `null`), разговор держит: иначе тишина сняла бы её свежий токен.
+      if (turn === null && attempt === null && inflight === 0) endConversation();
     }, idleMs);
     idleTimer.unref?.();
   }
@@ -537,19 +801,22 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       endConversation();
     }
     if (conversation === null) {
-      conversation = { provider: entry.id, model, language, gender: voiceGender(), token: randomBytes(32).toString('hex'), sessionId: null, endAfterTurn: false, recapPending: true };
-      deps.endpoint.setToken(conversation.token);
+      conversation = { provider: entry.id, model, language, gender: voiceGender(), id: randomBytes(32).toString('hex'), sessionId: null, endAfterTurn: false, recapPending: true };
     }
     return conversation;
   }
 
-  async function files(current: Conversation, url: string, gender: AssistantGender): Promise<{ mcpFile: string; promptFile: string }> {
+  /** Режим хода — из записи допуска его попытки. */
+  const modeOf = (credentials: TurnRun) => (credentials.admission.autoAtStart ? ({ mode: 'auto' } as const) : {});
+  const promptOptions = (credentials: TurnRun) => (credentials.admission.autoAtStart ? { autonomy: true } : undefined);
+
+  async function files(current: Conversation, url: string, gender: AssistantGender, credentials: TurnRun): Promise<{ mcpFile: string; promptFile: string }> {
     await mkdir(dir, { recursive: true, mode: 0o700 });
     const mcpFile = path.join(dir, 'mcp.json');
     const promptFile = path.join(dir, `prompt-${current.language}.md`);
-    await writeFile(mcpFile, assistantMcpJson({ url, token: current.token }), { mode: 0o600 });
+    await writeFile(mcpFile, assistantMcpJson({ url, token: credentials.token, ...modeOf(credentials) }), { mode: 0o600 });
     await chmod(mcpFile, 0o600);
-    await writeFile(promptFile, assistantPrompt(current.language, gender), { mode: 0o600 });
+    await writeFile(promptFile, assistantPrompt(current.language, gender, promptOptions(credentials)), { mode: 0o600 });
     return { mcpFile, promptFile };
   }
 
@@ -564,22 +831,41 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
   function stopTurn(): void {
     const old = turn;
     turn = null;
+    revokeRun();
     old?.cancel();
     releaseWaiters();
   }
 
+  /** Попытка хода со своими учётными данными: не дошла до запуска CLI или упала — её токен снимается. */
   async function start(entry: ProviderEntry, model: string | null, language: AssistantLanguage, text: string, retried: boolean, ask: Ask): Promise<StartReason> {
+    // Перебитый вопрос не трогает разговор: `ensure` с другим провайдером или языком сняла бы токен новой попытки.
+    if (ask.ticket !== asks || stopped) return 'evicted';
     const current = await ensure(entry, model, language);
-    const next = state.turn + 1;
-    const askId = ask.id;
     const base = deps.endpoint.origin();
     if (base === null) {
-      publish({ ...EMPTY, proposal: state.proposal, phase: 'error', mood: 'error', question: text, error: 'Parley is still starting — try again', turn: next, askId, origin: ask.origin });
+      publish({ ...EMPTY, proposal: state.proposal, phase: 'error', mood: 'error', question: text, error: 'Parley is still starting — try again', turn: state.turn + 1, askId: ask.id, origin: ask.origin });
       return 'not-ready';
     }
-    const url = `${base}${ASSISTANT_PATH}`;
+    // Флаг читается один раз, при выпуске токена (спека автономии §5.2). Пока его ждали, вопрос перебили: новая
+    // попытка уже могла выпустить свой токен, и эта его не заменяет.
+    const autonomy = (await deps.autonomy?.()) ?? false;
+    if (ask.ticket !== asks || stopped) return 'evicted';
+    const credentials = issueRun(ask.origin, autonomy);
+    try {
+      const reason = await launch(entry, model, language, text, retried, ask, current, `${base}${ASSISTANT_PATH}`, credentials);
+      if (reason !== 'started') revokeRun(credentials);
+      return reason;
+    } catch (error) {
+      revokeRun(credentials);
+      throw error;
+    }
+  }
+
+  async function launch(entry: ProviderEntry, model: string | null, language: AssistantLanguage, text: string, retried: boolean, ask: Ask, current: Conversation, url: string, credentials: TurnRun): Promise<StartReason> {
+    const next = state.turn + 1;
+    const askId = ask.id;
     const gender = voiceGender();
-    const { mcpFile, promptFile } = await files(current, url, gender);
+    const { mcpFile, promptFile } = await files(current, url, gender, credentials);
     const codex = entry.runner.mcpConfig === 'codex-override';
     // Сессия CLI живёт дольше хода, а род в зеркале сменился: новый род — со следующего ответа, разговор тот же (Р3).
     const voiceNote = current.sessionId !== null && current.gender !== gender ? `[system: voice changed — speak as ${gender}]` : null;
@@ -593,8 +879,8 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       entry,
       {
         prompt,
-        mcpConfig: codex ? assistantCodexMcp({ url, token: current.token }) : mcpFile,
-        systemPrompt: assistantPrompt(language, gender),
+        mcpConfig: codex ? assistantCodexMcp({ url, token: credentials.token, ...modeOf(credentials) }) : mcpFile,
+        systemPrompt: assistantPrompt(language, gender, promptOptions(credentials)),
         developerInstructions: codexInstructionsFile(promptFile),
         ...(model === null ? {} : { model }),
         ...(current.sessionId === null ? {} : { providerSessionId: current.sessionId }),
@@ -620,7 +906,8 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     current.recapPending = false;
     if (!retried) remember(() => history.write({ turnKey: ask.key, role: 'user', channel: ask.origin, text }, now()));
     // Отчёт идущего плана переживает новый ход; законченный убирается.
-    publish({ phase: 'thinking', detail: null, question: text, answer: '', mood: 'calm', moods: [], outcome: null, error: null, turn: next, askId, origin: ask.origin, ...(state.report?.status === 'running' ? {} : { report: null }) });
+    // Заметка о слежении относится к прошлому: новый ход её сбрасывает.
+    publish({ phase: 'thinking', detail: null, question: text, answer: '', mood: 'calm', moods: [], outcome: null, error: null, watchNote: null, turn: next, askId, origin: ask.origin, ...(state.report?.status === 'running' ? {} : { report: null }) });
 
     // Метки эмоций срезаются все, по предложениям (#9 §6.7 L3). Эмоцию решает первый текст после последнего
     // инструмента: GLM ставит метку до инструмента отдельным блоком.
@@ -679,6 +966,8 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       .then(async (end) => {
         if (turn !== handle) return;
         turn = null;
+        // Попытка кончилась: её токен больше не действует, повтор (если будет) получит новый.
+        revokeRun(credentials);
         if (take(stripper.end())) publish({ mood: firstMood(moods), answer, moods });
         if (end.ok && answer !== '') remember(() => history.write({ turnKey: ask.key, role: 'assistant', channel: ask.origin, text: answer }, now()));
         await finish(end, entry, model, language, text, retried, current, ask);
@@ -760,7 +1049,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
   const hiddenRefusal = (target: AssistantTarget): AssistantReply | null =>
     target.hidden === undefined ? null : { status: 409, body: { error: `${target.name} is ${target.hidden}; reopen it in Parley first` } };
 
-  function propose(owner: Owner, input: Record<string, unknown>, src: OverviewSource, targets: readonly AssistantTarget[], hidden: readonly AssistantTarget[]): AssistantReply {
+  async function propose(owner: Owner, input: Record<string, unknown>, src: OverviewSource, targets: readonly AssistantTarget[], hidden: readonly AssistantTarget[]): Promise<AssistantReply> {
     const text = stringArg(input, 'text').trim();
     if (text === '') return { status: 400, body: { error: 'text is empty' } };
     if (text.length > MAX_TEXT) return { status: 400, body: { error: `text is longer than ${MAX_TEXT} characters` } };
@@ -799,15 +1088,13 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       target,
       to: mentioned.map((session) => session.ref.sessionId),
     };
-    setPending(fresh, owner);
-    publish({ proposal: fresh.view, outcome: null });
-    return { status: 200, body: { text: CARD_SHOWN } };
+    return place(fresh, owner, CARD_SHOWN);
   }
 
   const workMap = (src: OverviewSource, target: { projectPath: string; workId: string }): WorkMap | undefined =>
     src.entries.find((entry) => entry.projectPath === target.projectPath && entry.map.work.id === target.workId)?.map;
 
-  function proposeRoom(owner: Owner, input: Record<string, unknown>, src: OverviewSource, targets: readonly AssistantTarget[], hidden: readonly AssistantTarget[]): AssistantReply {
+  async function proposeRoom(owner: Owner, input: Record<string, unknown>, src: OverviewSource, targets: readonly AssistantTarget[], hidden: readonly AssistantTarget[]): Promise<AssistantReply> {
     const found = resolveTarget(targets, stringArg(input, 'work'), { hidden });
     if ('error' in found) return { status: 404, body: { error: found.error } };
     const work = found.target;
@@ -862,12 +1149,10 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       members: members.map((member) => member.id),
       lead: lead.id,
     };
-    setPending(fresh, owner);
-    publish({ proposal: fresh.view, outcome: null });
-    return { status: 200, body: { text: CARD_SHOWN } };
+    return place(fresh, owner, CARD_SHOWN);
   }
 
-  function proposeRoomDecision(owner: Owner, input: Record<string, unknown>, src: OverviewSource, targets: readonly AssistantTarget[], hidden: readonly AssistantTarget[]): AssistantReply {
+  async function proposeRoomDecision(owner: Owner, input: Record<string, unknown>, src: OverviewSource, targets: readonly AssistantTarget[], hidden: readonly AssistantTarget[]): Promise<AssistantReply> {
     const found = resolveTarget(targets, stringArg(input, 'target'), { hidden });
     if ('error' in found) return { status: 404, body: { error: found.error } };
     const room = found.target;
@@ -905,9 +1190,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       },
       room,
     };
-    setPending(fresh, owner);
-    publish({ proposal: fresh.view, outcome: null });
-    return { status: 200, body: { text: CARD_SHOWN } };
+    return place(fresh, owner, CARD_SHOWN);
   }
 
   /**
@@ -950,8 +1233,9 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     if (deps.feed === undefined) return { status: 409, body: { error: `${session.name} has no feed to answer` } };
     let snapshot: Awaited<ReturnType<NonNullable<typeof deps.feed>['snapshot']>>;
     try {
-      snapshot = await deps.feed.snapshot(session.ref, undefined, 'attention');
-    } catch {
+      snapshot = await bounded(owner, deps.feed.snapshot(session.ref, undefined, 'attention'));
+    } catch (error) {
+      if (error instanceof CallLate) throw error;
       return { status: 409, body: { error: `${session.name} has no feed to answer` } };
     }
     if (snapshot.decisions === 'terminal') return { status: 409, body: { error: `${session.name} answers at your Mac only` } };
@@ -998,9 +1282,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       },
       ref: session.ref,
     };
-    setPending(fresh, owner);
-    publish({ proposal: fresh.view, outcome: null });
-    return { status: 200, body: { text: CARD_SHOWN + note } };
+    return place(fresh, owner, CARD_SHOWN + note);
   }
 
   /** One collection for tools, conversation channels and jobs; projection itself is synchronous. */
@@ -1038,7 +1320,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
   function settle(current: Pending, outcome: 'sent' | 'done' | 'cancelled', reason?: string, error?: string): { applied: true; error: string | null } {
     // Карточку `decide` уже забрал; новую, что предложили за время ожидания, не трогаем. Заметку пишем только
     // в тот разговор, что создал карточку: после `reset` она ушла бы в чужой.
-    if (conversation?.token === current.token) outcomeNote = `[system: proposal ${current.view.id} was ${outcome}${reason === undefined ? '' : `: ${reason}`}]`;
+    if (conversation?.id === current.token) outcomeNote = `[system: proposal ${current.view.id} was ${outcome}${reason === undefined ? '' : `: ${reason}`}]`;
     touch();
     settleCard(current.view.id, current.via ?? 'island', outcome);
     publish({ proposal: shown()?.view ?? null, outcome, phase: turn === null ? restPhase() : state.phase });
@@ -1050,6 +1332,14 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
    * отправленного. `string` — отказ (причина по-английски), `null` — ушло. Общая для карточки письма и шага плана.
    */
   async function sendToSession(ref: SessionRef, name: string, text: string): Promise<string | null> {
+    const refusal = await deliverToSession(ref, name, text);
+    if (refusal !== null) return refusal;
+    await appendSent(deps.home, ref, text, new Date(now()).toISOString());
+    return null;
+  }
+
+  /** Сама доставка письма сессии без записи в журнал отправленного; `begin` зовётся перед эффектом. */
+  async function deliverToSession(ref: SessionRef, name: string, text: string, begin?: () => void): Promise<string | null> {
     // Решает состояние сессии сейчас, а не в момент предложения: за время ожидания карточки она могла проснуться или закрыться.
     const session = deps.works
       .snapshot()
@@ -1057,13 +1347,13 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       ?.map.sessions.find((candidate) => candidate.id === ref.sessionId);
     const refusal = unreachable(name, session?.lifecycle);
     if (refusal !== null) return refusal;
+    begin?.();
     if (session?.lifecycle === 'sleeping') {
       await deps.launch(ref, 'resume', { by: 'human', prompt: text });
     } else {
       const result = await deps.send({ ref, text, submit: true });
       if (!result.inserted) return `${name} can't take a message now (${result.reason ?? 'busy'})`;
     }
-    await appendSent(deps.home, ref, text, new Date(now()).toISOString());
     return null;
   }
 
@@ -1094,20 +1384,27 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     return settle(current, 'done', `room "${title}" created`);
   }
 
-  async function applyRoomDecision(current: Extract<Pending, { kind: 'room-decision' }>): Promise<{ applied: boolean; error: string | null }> {
+  /** Вход `rooms.resolveProposal` по карточке решения ведущего: общий для клика и автономного действия. */
+  function resolveInputOf(current: Extract<Pending, { kind: 'room-decision' }>): Params<'rooms.resolveProposal'> {
     const { projectPath, workId, roomId } = current.room;
     const { proposal, choice, note } = current.view;
+    return {
+      projectPath,
+      workId,
+      roomId,
+      proposalId: proposal.proposalId,
+      action: choice,
+      ...(note === null ? {} : { note }),
+      rev: proposal.rev,
+      ...(proposal.planId === undefined || proposal.planRev === undefined ? {} : { planId: proposal.planId, planRev: proposal.planRev }),
+    };
+  }
+
+  async function applyRoomDecision(current: Extract<Pending, { kind: 'room-decision' }>): Promise<{ applied: boolean; error: string | null }> {
+    const { roomId } = current.room;
+    const { proposal } = current.view;
     try {
-      await deps.resolveRoomProposal({
-        projectPath,
-        workId,
-        roomId,
-        proposalId: proposal.proposalId,
-        action: choice,
-        ...(note === null ? {} : { note }),
-        rev: proposal.rev,
-        ...(proposal.planId === undefined || proposal.planRev === undefined ? {} : { planId: proposal.planId, planRev: proposal.planRev }),
-      });
+      await deps.resolveRoomProposal(resolveInputOf(current));
     } catch (error) {
       // Ведущий успел переделать решение: ответ на старую версию не принимается, карточка устарела.
       if (error instanceof HostError && error.code === 'conflict') {
@@ -1135,15 +1432,20 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
   }
 
   async function proposeActions(owner: Owner, input: Record<string, unknown>, src: OverviewSource): Promise<AssistantReply> {
-    if (running !== null) return { status: 409, body: { error: 'A plan is still running; wait until it ends' } };
+    // Запуск с допуском автономии не отказывает сразу: в точке исполнения он ждёт слот в пределах срока вызова.
+    if (running !== null && !owner.admission.autoAtStart) return { status: 409, body: { error: 'A plan is still running; wait until it ends' } };
     if (!deps.actionsShown()) return { status: 409, body: { error: 'No Parley window can show this card; ask the person to open or update Parley' } };
-    const prepared = await preparePlan(input, {
-      source: src,
-      roles: deps.roles,
-      registry: await deps.providers(),
-      ready: deps.providerReady,
-      fallbackProvider: mirror?.defaultProvider ?? null,
-    });
+    const registry = await bounded(owner, deps.providers());
+    const prepared = await bounded(
+      owner,
+      preparePlan(input, {
+        source: src,
+        roles: deps.roles,
+        registry,
+        ready: deps.providerReady,
+        fallbackProvider: mirror?.defaultProvider ?? null,
+      }),
+    );
     if ('error' in prepared) return { status: 400, body: { error: prepared.error } };
     const { plan } = prepared;
     proposals += 1;
@@ -1153,9 +1455,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       view: { action: 'actions', id: `p${proposals}`, target: plan.target, where: plan.where, text: plan.text, steps: plan.view },
       plan,
     };
-    setPending(fresh, owner);
-    publish({ proposal: fresh.view, outcome: null });
-    return { status: 200, body: { text: ACTIONS_SHOWN } };
+    return place(fresh, owner, ACTIONS_SHOWN);
   }
 
   /** Функции хоста, которыми `runPlan` исполняет шаги: те же, что зовёт окно, от имени человека. */
@@ -1198,34 +1498,397 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
   function startPlan(current: Extract<Pending, { kind: 'actions' }>): { applied: true; error: null } {
     const id = current.view.id;
     running = id;
-    publish({
-      proposal: shown()?.view ?? null,
-      outcome: null,
-      phase: turn === null ? restPhase() : state.phase,
-      report: { proposalId: id, status: 'running', steps: current.plan.view.map((step) => ({ line: step.line, status: 'waiting' })), failedStep: null, reason: null, notes: [] },
-    });
-    void runPlan(id, current.plan, executors, (report) => publish({ report }), () => stopped)
-      .catch(
-        (error: unknown): ActionsReport => ({
-          proposalId: id,
-          status: 'stopped',
-          steps: current.plan.view.map((step) => ({ line: step.line, status: 'skipped' as const })),
-          failedStep: 1,
-          reason: (error as Error).message,
-          notes: [],
-        }),
-      )
-      .then((final) => {
-        running = null;
+    // Всё после захвата слота — внутри одного обещания с `finally`: сбой публикации или записи слот не держит.
+    void (async () => {
+      let settled = false;
+      try {
+        publish({
+          proposal: shown()?.view ?? null,
+          outcome: null,
+          phase: turn === null ? restPhase() : state.phase,
+          report: waitingReport(id, current.plan),
+        });
+        const final = await runPlan(id, current.plan, executors, (report) => publish({ report }), stopOf(id)).catch((error: unknown): ActionsReport => failedReport(id, current.plan, error));
+        freeSlot(id);
         settleCard(id, current.via ?? 'island', final.status === 'stopped' ? 'stopped' : 'done');
+        settled = true;
         touch();
-        if (conversation?.token === current.token) outcomeNote = planNote(id, final);
+        if (conversation?.id === current.token) outcomeNote = planNote(id, final);
         publish({ report: final, outcome: 'done', phase: turn === null ? restPhase() : state.phase });
-      })
-      .catch((error: unknown) => {
+      } catch (error) {
         deps.log(`assistant: plan ${id} report failed: ${(error as Error).message}`);
-      });
+        // Захваченная карточка без исхода не остаётся: план не дошёл до итога.
+        if (!settled && cards.get(id)?.outcome === null) settleCard(id, current.via ?? 'island', 'failed');
+      } finally {
+        freeSlot(id);
+      }
+    })().catch((error: unknown) => deps.log(`assistant: plan ${id} was not closed: ${(error as Error).message}`));
     return { applied: true, error: null };
+  }
+
+  const waitingReport = (id: string, plan: PreparedPlan): ActionsReport => ({
+    proposalId: id,
+    status: 'running',
+    steps: plan.view.map((step) => ({ line: step.line, status: 'waiting' })),
+    failedStep: null,
+    reason: null,
+    notes: [],
+  });
+  const failedReport = (id: string, plan: PreparedPlan, error: unknown): ActionsReport => ({
+    proposalId: id,
+    status: 'stopped',
+    steps: plan.view.map((step) => ({ line: step.line, status: 'skipped' as const })),
+    failedStep: 1,
+    reason: (error as Error).message,
+    notes: [],
+  });
+
+  /** Проверка перед шагом плана: хост закрывается — `true`; человек нажал «Stop» — причина. */
+  const stopOf =
+    (id: string) =>
+    (): boolean | string =>
+      stopped ? true : stopRequested === id ? STOPPED_BY_PERSON : false;
+
+  /** Освобождает слот плана, если он у этого плана, и будит ждущие автономные вызовы. */
+  function freeSlot(id: string): void {
+    if (running !== id) return;
+    running = null;
+    if (stopRequested === id) stopRequested = null;
+    for (const wake of [...slotWaiters]) wake();
+  }
+
+  /** Ждёт освобождения слота плана не дольше `ms`; `false` — срок вышел, а слот так и не освободился. */
+  function waitSlot(ms: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      const finish = (freed: boolean): void => {
+        clearTimeout(timer);
+        slotWaiters.delete(wake);
+        resolve(freed);
+      };
+      const wake = (): void => finish(true);
+      const timer = setTimeout(() => finish(false), Math.max(0, ms));
+      timer.unref?.();
+      slotWaiters.add(wake);
+    });
+  }
+
+  /** Обещание или `null`, если оно не успело за `ms`. */
+  function within<T>(promise: Promise<T>, ms: number): Promise<T | null> {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => resolve(null), Math.max(0, ms));
+      timer.unref?.();
+      void promise.then((value) => {
+        clearTimeout(timer);
+        resolve(value);
+      });
+    });
+  }
+
+  // --- автономное исполнение (спека автономии §5.3) ---
+
+  type Point = { kind: 'card'; note: string | null } | { kind: 'busy' } | { kind: 'late' } | { kind: 'auto'; run: AutoRun } | { kind: 'failed'; reason: string };
+
+  /**
+   * Точка исполнения (спека автономии §5.3, участок 2): один синхронный участок без `await`, после всей подготовки.
+   * Проверяет правило §5.2 (`autonomy` — флаг, прочитанный последним ожиданием перед ней) и политику плана; не прошло —
+   * обычная карточка (`setPending`). Прошло — захват слота плана, карточка сразу решённая (`putDecided`), запись job
+   * (`recordCard`) и запуск действия. Срок вызова вышел — `late`, слот занят — `busy`: ничего не создано.
+   */
+  function executionPoint(card: Pending, owner: Owner, autonomy: boolean): Point {
+    checkOwner(owner);
+    // Запуск с допуском автономии после срока ничего не пишет — ни действия, ни обычной карточки.
+    if (owner.admission.autoAtStart && now() >= owner.deadline) return { kind: 'late' };
+    if (!owner.admission.autoAtStart || !autonomy) {
+      setPending(card, owner);
+      return { kind: 'card', note: null };
+    }
+    const click = card.kind === 'actions' ? planClick(card.plan.steps) : null;
+    if (click !== null) {
+      setPending(card, owner);
+      return { kind: 'card', note: `It was not run without the click: ${click}.` };
+    }
+    if (card.kind === 'actions') {
+      if (running !== null) return { kind: 'busy' };
+      running = card.view.id;
+    }
+    const { view, kind, ...payload } = card;
+    let written = false;
+    try {
+      const before = cards.active();
+      // `runId` — чей это итог: `action_status` отдаёт его только создавшему запуску.
+      cards.putDecided(
+        { proposalId: view.id, kind, view, payload: { ...payload, runId: owner.admission.runId }, source: owner.source ?? cardSource, expiresAt: now() + cardTtl, steps: card.kind === 'actions' ? card.plan.steps.length : 1 },
+        'auto',
+        now(),
+      );
+      written = true;
+      if (owner.jobId !== undefined) deps.jobTools?.recordCard(owner.jobId, { cardId: view.id, kind });
+      armSweep();
+      emitSuperseded(before);
+      if (before.some((row) => row.proposalId === state.proposal?.id)) publish({ proposal: shown()?.view ?? null, phase: turn === null ? restPhase() : state.phase });
+    } catch (error) {
+      // Действие ещё не начато: слот свободен, записанная карточка закрывается достоверным `not_done` и в active не идёт.
+      if (card.kind === 'actions') freeSlot(view.id);
+      const reason = `Parley could not start it: ${(error as Error).message}`;
+      if (written) closeNotStarted(view.id, card.kind, reason);
+      return { kind: 'failed', reason };
+    }
+    const run: AutoRun = { id: view.id, admission: owner.admission, outcome: null, done: Promise.resolve(null as unknown as ActionOutcome) };
+    autoRuns.set(view.id, run);
+    run.done = perform(card)
+      .catch((error: unknown): ActionOutcome => ({ status: 'unknown', effects: [], retry: 'unsafe', reason: (error as Error).message }))
+      .then((outcome) => finishAuto(run, card, outcome));
+    return { kind: 'auto', run };
+  }
+
+  /** Автономная карточка записана, а действие не начато: исход `failed`, итог `not_done` отдан этому же вызову. */
+  function closeNotStarted(id: string, kind: string, reason: string): void {
+    try {
+      cards.settleAuto(id, cardOutcomeOf(kind, 'not_done'), notDone(reason), now());
+      cards.takeResult(id, 'taken_by_run');
+      emitCard(cards.get(id));
+    } catch (error) {
+      // Не закрылась — после рестарта её закроет ход исполнения: ни одного `started`, исход `not_done`.
+      deps.log(`assistant: action ${id} was not closed: ${(error as Error).message}`);
+    }
+  }
+
+  /**
+   * Ожидание подготовки автономного вызова в пределах его срока (спека автономии §5.3): срок вышел — `CallLate`, и
+   * поздно завершившаяся подготовка уже ничего не запишет. Вызову без допуска автономии срок не ставится.
+   */
+  function bounded<T>(owner: Owner, promise: Promise<T>): Promise<T> {
+    if (!owner.admission.autoAtStart) return promise;
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new CallLate()), Math.max(0, owner.deadline - now()));
+      timer.unref?.();
+      promise.then(
+        (value) => {
+          clearTimeout(timer);
+          // Ожидание кончилось после срока, а таймер ещё не успел: тоже поздно.
+          if (now() >= owner.deadline) reject(new CallLate());
+          else resolve(value);
+        },
+        (error: unknown) => {
+          clearTimeout(timer);
+          reject(error as Error);
+        },
+      );
+    });
+  }
+
+  /** Вызов `propose_*` после подготовки: точка исполнения, при занятом слоте — ожидание в пределах срока и повтор. */
+  async function place(card: Pending, owner: Owner, shownText: string): Promise<AssistantReply> {
+    for (;;) {
+      if (owner.admission.autoAtStart && now() >= owner.deadline) return NOT_STARTED;
+      // Флаг — последнее ожидание перед точкой исполнения: выключение действует на этот же вызов.
+      const autonomy = owner.admission.autoAtStart ? ((await bounded(owner, deps.autonomy?.() ?? Promise.resolve(false))) ?? false) : false;
+      const point = executionPoint(card, owner, autonomy);
+      if (point.kind === 'card') {
+        publish({ proposal: card.view, outcome: null });
+        return { status: 200, body: { text: point.note === null ? shownText : `${shownText} ${point.note}` } };
+      }
+      if (point.kind === 'late') return NOT_STARTED;
+      if (point.kind === 'failed') return { status: 409, body: { error: `Not started: ${point.reason}. Nothing was done; you may try again.` } };
+      if (point.kind === 'auto') return awaitOutcome(point.run, owner);
+      // Слот не освободился до срока: Not started, без чтения флага и без обычной карточки.
+      if (!(await waitSlot(owner.deadline - now()))) return NOT_STARTED;
+    }
+  }
+
+  /** Итог действия в пределах срока вызова; не успело — `Still running` с id карточки для `action_status`. */
+  async function awaitOutcome(run: AutoRun, owner: Owner): Promise<AssistantReply> {
+    const outcome = run.outcome ?? (await within(run.done, owner.deadline - now()));
+    if (outcome === null) return { status: 200, body: { text: `Still running (action ${run.id}). Call action_status with id "${run.id}" to get the outcome.` } };
+    // Запуск кончился, пока ждал: итог ему не отдаётся, его доставит `offer`.
+    if (!runAlive(owner.admission)) return owner.admission.kind === 'turn' ? TURN_ENDED : RUN_ENDED;
+    cards.takeResult(run.id, 'taken_by_run');
+    return { status: 200, body: { text: outcomeText(run.id, outcome) } };
+  }
+
+  /** `action_status { id }`: итог автономного действия — только запуску, что его создал. Повтор отдаёт тот же итог. */
+  async function actionStatus(owner: Owner, input: Record<string, unknown>): Promise<AssistantReply> {
+    const id = stringArg(input, 'id').trim();
+    if (id === '') return { status: 400, body: { error: 'id is empty' } };
+    const run = autoRuns.get(id);
+    if (run === undefined || run.admission.runId !== owner.admission.runId) return { status: 404, body: { error: `No action ${id} was run by you` } };
+    return awaitOutcome(run, owner);
+  }
+
+  /** Закончившееся автономное действие: исход карточки (одно событие `decided`), слот плана, итог тому, кто его ждёт. */
+  function finishAuto(run: AutoRun, card: Pending, outcome: ActionOutcome): ActionOutcome {
+    try {
+      // Исход и структурный итог — durable вместе: после рестарта невыданный итог восстанавливается из строки.
+      cards.settleAuto(run.id, cardOutcomeOf(card.kind, outcome.status), outcome, now());
+      emitCard(cards.get(run.id));
+    } catch (error) {
+      deps.log(`assistant: action ${run.id} outcome was not recorded: ${(error as Error).message}`);
+    } finally {
+      if (card.kind === 'actions') freeSlot(run.id);
+    }
+    run.outcome = outcome;
+    try {
+      if (!runAlive(run.admission)) offer(run);
+    } catch (error) {
+      deps.log(`assistant: action ${run.id} outcome was not offered: ${(error as Error).message}`);
+    }
+    return outcome;
+  }
+
+  /** Действие (участок 3): тем же кодом, что после клика; итог — структура для модели. Ход исполнения пишется по шагам. */
+  async function perform(card: Pending): Promise<ActionOutcome> {
+    const id = card.view.id;
+    if (card.kind === 'actions') return performPlan(card);
+    let begun = false;
+    const begin = (): void => {
+      if (begun) return;
+      begun = true;
+      cards.recordStep(id, 'started', 1);
+    };
+    try {
+      const outcome =
+        card.kind === 'message' ? await autoMessage(card, begin) : card.kind === 'room' ? await autoRoom(card, begin) : card.kind === 'room-decision' ? await autoRoomDecision(card, begin) : await autoDecision(card, begin);
+      if (outcome.status === 'done') cards.recordStep(id, 'confirmed', 1);
+      return outcome;
+    } catch (error) {
+      const reason = (error as Error).message;
+      // Сбой до эффекта — отказ без последствий; после — эффект мог случиться.
+      return begun ? { status: 'unknown', effects: [], retry: 'unsafe', reason } : { status: 'not_done', effects: [], retry: 'safe', reason };
+    }
+  }
+
+  const doneWith = (effects: string[], reason: string | null = null): ActionOutcome => ({ status: 'done', effects, retry: 'unsafe', reason });
+  const notDone = (reason: string): ActionOutcome => ({ status: 'not_done', effects: [], retry: 'safe', reason });
+
+  async function autoMessage(current: Extract<Pending, { kind: 'message' }>, begin: () => void): Promise<ActionOutcome> {
+    const effect = `message to ${current.target.name}`;
+    if (current.target.kind === 'room') {
+      const { projectPath, workId, roomId } = current.target;
+      begin();
+      await deps.sendLetter({ projectPath, workId, roomId, to: current.to, text: withMentions(current.to, current.view.text), kind: current.view.kind ?? 'note' });
+      return doneWith([effect]);
+    }
+    const since = now();
+    const refusal = await deliverToSession(current.target.ref, current.target.name, current.view.text, begin);
+    if (refusal !== null) return notDone(refusal);
+    let unlogged: string | null = null;
+    try {
+      await appendSent(deps.home, current.target.ref, current.view.text, new Date(now()).toISOString());
+    } catch (error) {
+      unlogged = `the message was sent, but it was not written to the sent log: ${(error as Error).message}`;
+    }
+    // Слежение — после записи в журнал: снимок события берёт последнее письмо помощника оттуда.
+    armWatch(current.target.ref, current.target.name, 'prompt', since);
+    return unlogged === null ? doneWith([effect]) : doneWith([effect], unlogged);
+  }
+
+  async function autoRoom(current: Extract<Pending, { kind: 'room' }>, begin: () => void): Promise<ActionOutcome> {
+    const { projectPath, workId } = current.work;
+    const { title, task } = current.view;
+    begin();
+    const roomId = await deps.createRoom({ projectPath, workId, title, members: current.members, lead: current.lead });
+    const created = `room "${title}" created`;
+    if (task === null) return doneWith([created]);
+    try {
+      await deps.sendLetter({ projectPath, workId, roomId, to: [], text: task, kind: 'note' });
+    } catch (error) {
+      return { status: 'partial', effects: [created], retry: 'unsafe', reason: `its task was not sent: ${(error as Error).message}` };
+    }
+    return doneWith([created, 'its task sent']);
+  }
+
+  async function autoRoomDecision(current: Extract<Pending, { kind: 'room-decision' }>, begin: () => void): Promise<ActionOutcome> {
+    const { proposal, choice } = current.view;
+    begin();
+    try {
+      await deps.resolveRoomProposal(resolveInputOf(current));
+    } catch (error) {
+      // Ведущий успел ответить или переделать решение: ответ на старую версию не принят, ничего не изменилось.
+      if (error instanceof HostError && error.code === 'conflict') {
+        const slot = workMap(source(), current.room)?.rooms.find((candidate) => candidate.id === current.room.roomId)?.proposal ?? null;
+        return notDone(slot === null || slot.id !== proposal.proposalId ? 'it was already answered' : 'the lead revised the decision; look again');
+      }
+      throw error;
+    }
+    return doneWith([`${choice === 'accept' ? 'accepted' : 'returned'} the decision in ${current.room.name}`]);
+  }
+
+  async function autoDecision(current: Extract<Pending, { kind: 'decision' }>, begin: () => void): Promise<ActionOutcome> {
+    if (deps.feed === undefined) return notDone('the agent feed is not available');
+    begin();
+    const since = now();
+    const result = await deps.feed.decide(current.ref, current.view.card.cardId, current.view.decision);
+    if (!result.applied) {
+      if (result.state === 'pending') return notDone('the agent is not ready for the answer yet');
+      if (result.state === 'stale') return notDone('the request is no longer open');
+      return notDone('it was already answered');
+    }
+    armWatch(current.ref, current.view.target, 'resume', since);
+    return doneWith([`answered ${current.view.target}: ${current.view.card.summary}`]);
+  }
+
+  /** План без клика: тот же `runPlan`, ход виден окну; ход исполнения durable по шагам. */
+  async function performPlan(current: Extract<Pending, { kind: 'actions' }>): Promise<ActionOutcome> {
+    const id = current.view.id;
+    const started = new Set<number>();
+    const partial = new Map<number, string[]>();
+    /** Письма сессиям, что ушли, но не записались в журнал отправленного: шаг сделан, причина — в итог. */
+    const unlogged: string[] = [];
+    let last: ActionsReport = waitingReport(id, current.plan);
+    let report: ActionsReport;
+    try {
+      publish({ report: last });
+      report = await runPlan(
+        id,
+        current.plan,
+        {
+          ...executors,
+          now,
+          gave: ({ ref, name, kind, since }) => armWatch(ref, name, kind, since),
+          sessionMessage: async (ref, name, text) => {
+            const refusal = await deliverToSession(ref, name, text);
+            if (refusal !== null) return refusal;
+            try {
+              await appendSent(deps.home, ref, text, new Date(now()).toISOString());
+            } catch (error) {
+              unlogged.push(`the message to ${name} was sent, but it was not written to the sent log: ${(error as Error).message}`);
+            }
+            return null;
+          },
+        },
+        (next) => {
+          last = next;
+          publish({ report: next });
+        },
+        stopOf(id),
+        {
+          started: (step) => {
+            started.add(step);
+            cards.recordStep(id, 'started', step);
+          },
+          confirmed: (step) => cards.recordStep(id, 'confirmed', step),
+          effect: (step, what) => partial.set(step, [...(partial.get(step) ?? []), what]),
+        },
+      );
+    } catch (error) {
+      // Сбой вне шага (публикация отчёта): сделанное по последнему отчёту сохраняется, идущий шаг — неизвестен.
+      report = stoppedFrom(last, error);
+    }
+    try {
+      publish({ report });
+    } catch (error) {
+      deps.log(`assistant: plan ${id} report failed: ${(error as Error).message}`);
+    }
+    const outcome = planOutcome(report, started, partial);
+    if (unlogged.length === 0) return outcome;
+    return { ...outcome, reason: [outcome.reason, ...unlogged].filter((part) => part !== null).join('; ') };
+  }
+
+  /** Отчёт остановленного плана из последнего известного: сделанные шаги остаются, идущий — `failed`, ждущие — `skipped`. */
+  function stoppedFrom(last: ActionsReport, error: unknown): ActionsReport {
+    const at = last.steps.findIndex((step) => step.status !== 'done');
+    const steps = last.steps.map((step, index) => ({ ...step, status: step.status === 'done' ? ('done' as const) : index === at ? ('failed' as const) : ('skipped' as const) }));
+    return { ...last, status: 'stopped', steps, failedStep: at === -1 ? last.steps.length : at + 1, reason: (error as Error).message, notes: [...last.notes] };
   }
 
   /** Запускает ход по вопросу человека (`island`) или по напоминанию (`reminder`). */
@@ -1292,8 +1955,18 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     return { status: 200, body: { text: `Scheduled ${added.id} for ${clock(Date.parse(added.at))} (${when})` } };
   }
 
-  // Рестарт хоста: просроченное гаснет, нетерминальная карточка снова показывается окну и подтверждается как прежде.
-  startupChanged = [...cards.closeUnsettled(now()), ...cards.expireDue(now())].map((card) => card.proposalId);
+  // Рестарт хоста: автономная карточка без итога закрывается по ходу исполнения и не исполняется снова (спека автономии
+  // §5.3). Её итог, как и итог карточек, закрытых до рестарта и никем не взятых (`result_state = 'pending'`), лежит в базе:
+  // его забирает job (`claimRestartOutcome`) или доставка (`deliverRestartOutcomes`).
+  const autoClosed = cards.unsettledAuto().map((row) => {
+    const outcome = restartOutcome(row);
+    cards.settleAuto(row.proposalId, cardOutcomeOf(row.kind, outcome.status), outcome, now());
+    return row;
+  });
+  /** Структурный итог закрытой автономной карточки; у строки без него — по ходу исполнения. */
+  const resultOf = (row: CardRow): ActionOutcome => row.result ?? restartOutcome(row);
+  // Просроченное гаснет, нетерминальная карточка снова показывается окну и подтверждается как прежде.
+  startupChanged = [...autoClosed, ...cards.closeUnsettled(now()), ...cards.expireDue(now())].map((card) => card.proposalId);
   const resumed = shown();
   if (resumed !== null) {
     state = { ...state, proposal: resumed.view, phase: 'awaiting-confirm' };
@@ -1372,6 +2045,8 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       case 'list_reminders':
       case 'cancel_reminder':
         return reminderTool(name, input);
+      case 'action_status':
+        return actionStatus(owner, input);
       case 'end_conversation':
         if (current === undefined) return { status: 403, body: { error: 'Only the conversation can end itself' } };
         current.endAfterTurn = true;
@@ -1390,7 +2065,8 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
   }
 
   /** Инструмент job: `link_request` решает связь, `propose_*` не доходит до карточки у частичного и вытесненного Request. */
-  async function jobTool(name: string, args: unknown, jobId: string): Promise<AssistantReply> {
+  async function jobTool(name: string, args: unknown, caller: Extract<RunAdmission, { kind: 'job' }>, deadline: number): Promise<AssistantReply> {
+    const { jobId } = caller;
     if (name === 'link_request') {
       if (deps.requestLink === undefined) return { status: 409, body: { error: 'link_request is not available' } };
       const outcome = deps.requestLink.link(jobId, args);
@@ -1408,14 +2084,15 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       if (refused !== null) return { status: 409, body: { error: refused } };
     }
     try {
-      return await dispatch(name, args, { token: `job:${jobId}`, source: `job:${jobId}`, jobId });
+      return await dispatch(name, args, { token: `job:${jobId}`, source: `job:${jobId}`, jobId, admission: caller, deadline });
     } catch (error) {
       if (error instanceof JobRefusal) return { status: 409, body: { error: error.message } };
+      if (error instanceof RunEnded) return RUN_ENDED;
+      if (error instanceof CallLate) return NOT_STARTED;
       throw error;
     }
   }
 
-  const CONVERSATION_CALLER: AssistantCaller = { kind: 'conversation' };
   const api: AssistantService = {
     async ask(params, origin = 'island') {
       lastAsk = { provider: params.provider, model: params.model, language: params.language };
@@ -1433,6 +2110,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     settings: () => mirror,
     cancel() {
       asks += 1;
+      revokeRun(); // и попытка, что ещё запускается: токен снимается сразу, а не после её проверки билета
       if (turn === null) return;
       stopTurn();
       publish({ phase: restPhase(), detail: null });
@@ -1442,12 +2120,23 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       const peek = cards.get(proposalId);
       if (peek === null) return { applied: false, error: 'This card is no longer current' };
       // План выполняется только по кнопке карточки нового окна: клиент без поля `action` его не подтверждает.
+      let slot = false;
       if (peek.state === 'active' && peek.kind === 'actions' && decision === 'send') {
         if (action !== 'actions') return { applied: false, error: 'Update Parley to confirm this card' };
         if (running !== null) return { applied: false, error: 'Another plan is still running' };
+        // Слот плана захватывается до `claim`: автономный план не займёт его между захватом карточки и стартом.
+        running = proposalId;
+        slot = true;
       }
       // Карточка забирается до первого await и персистентно: второй `decide` с тем же id не выполнит действие повторно.
-      const claimed = cards.claim(proposalId, now());
+      let claimed: ReturnType<CardStore['claim']>;
+      try {
+        claimed = cards.claim(proposalId, now());
+      } catch (error) {
+        if (slot) freeSlot(proposalId);
+        throw error;
+      }
+      if (!claimed.ok && slot) freeSlot(proposalId);
       // Срок вышел внутри claim (sweep его не успел): переход виден каналам так же, как погашение по таймеру.
       if (!claimed.ok && claimed.reason === 'expired' && peek.state === 'active') emitCard(cards.get(proposalId));
       if (!claimed.ok) return { applied: false, error: claimed.reason === 'expired' ? 'This card has already expired' : 'This card is no longer current' };
@@ -1455,6 +2144,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       const epoch = resets;
       if (current.kind === 'actions') {
         if (decision === 'send') return startPlan(current);
+        if (slot) freeSlot(proposalId);
         return settle(current, 'cancelled');
       }
       if (decision === 'cancel') return settle(current, 'cancelled');
@@ -1557,19 +2247,107 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       return state;
     },
     sent: (ref) => readSent(deps.home, ref),
-    async tool(name, args, caller = CONVERSATION_CALLER) {
-      if (caller.kind === 'job') {
+    async tool(name, args, caller) {
+      // Срок автономного вызова считается от его прихода (спека автономии §5.3).
+      const deadline = now() + autoCallMs;
+      if (caller?.kind === 'job') {
         // Токен job уже отсёк приёмник; список проверяется ещё раз здесь, чтобы сервис не зависел от приёмника.
         if (!JOB_TOOL_ALLOWLIST.includes(name)) return { status: 403, body: { error: `${name} is not available to background jobs` } };
-        const reply = await jobTool(name, args, caller.jobId);
+        const reply = await jobTool(name, args, caller, deadline);
         deps.jobTools?.recordTool(caller.jobId, name, reply.status >= 200 && reply.status < 300);
         return reply;
       }
       // Токен разговора `link_request` не вызывает: приёмник его уже отсёк, здесь то же правило для сервиса.
       if (JOB_ONLY_TOOLS.includes(name)) return { status: 403, body: { error: `${name} is only available to background jobs` } };
       const current = conversation;
-      if (current === null) return { status: 409, body: { error: 'No assistant conversation is active' } };
-      return dispatch(name, args, { token: current.token }, current);
+      const admission = caller ?? attempt?.admission;
+      if (current === null || admission === undefined) return { status: 409, body: { error: 'No assistant conversation is active' } };
+      // Запись с границы HTTP сверяется с идущей попыткой: попытка могла кончиться, пока читалось тело вызова.
+      if (attempt?.admission.runId !== admission.runId) return TURN_ENDED;
+      try {
+        return await dispatch(name, args, { token: current.id, admission, deadline }, current);
+      } catch (error) {
+        if (error instanceof TurnEnded) return TURN_ENDED;
+        if (error instanceof CallLate) return NOT_STARTED;
+        throw error;
+      }
+    },
+    async refreshAutonomy(known) {
+      const autonomous = known ?? (await deps.autonomy?.()) ?? false;
+      if (stopped || state.autonomous === autonomous) return;
+      // Режим выключен — стоявшие слежения снимаются; повторное включение их не возвращает.
+      if (!autonomous) {
+        watch.clear();
+        seenActive.clear();
+        // Ждущие служебные сообщения о событиях слежения отменяются без доставки (спека автономии §6.2).
+        try {
+          deps.onAutonomyOff?.();
+        } catch (error) {
+          deps.log(`assistant: service messages were not cancelled: ${(error as Error).message}`);
+        }
+      }
+      publish({ autonomous });
+    },
+    watchActivity(ref) {
+      if (stopped) return;
+      void syncWatch(ref).catch((error: unknown) => deps.log(`assistant: watch sync failed: ${(error as Error).message}`));
+    },
+    watchWorks() {
+      if (stopped) return;
+      for (const ref of watch.refs()) {
+        const lifecycle = lifecycleOf(ref);
+        if (lifecycle === 'active') seenActive.add(watchKey(ref));
+        else if ((lifecycle === 'closed' || lifecycle === 'sleeping') && seenActive.has(watchKey(ref))) {
+          seenActive.delete(watchKey(ref));
+          watch.onClosing(ref);
+        }
+      }
+    },
+    watchedSessions: () => watch.refs(),
+    recentSessions: () => watch.recent(),
+    noteWatch(note) {
+      if (!stopped) publish({ watchNote: note });
+    },
+    journal(limit) {
+      return cards.recent(limit).map((row) => {
+        const view = row.view as AssistantProposal;
+        const lines = view.action === 'actions' ? view.steps.map((step) => step.line) : [view.target, view.text.slice(0, 200)];
+        return { id: row.proposalId, kind: row.kind, lines, decidedAt: row.decidedAt, via: row.decidedVia, outcome: row.outcome };
+      });
+    },
+    stopPlan(proposalId) {
+      if (running !== proposalId) return false;
+      stopRequested = proposalId;
+      return true;
+    },
+    jobEnded(jobId) {
+      runEnded((admission) => admission.kind === 'job' && admission.jobId === jobId);
+    },
+    claimRestartOutcome(jobId, room) {
+      const texts: string[] = [];
+      let used = 0;
+      for (const row of cards.pendingResults(`job:${jobId}`)) {
+        if (autoRuns.has(row.proposalId)) continue;
+        const text = outcomeText(row.proposalId, resultOf(row));
+        const size = text.length + (texts.length === 0 ? 0 : 1);
+        // Не влезает в резюме — остаётся `pending` и уйдёт через `deliverOutcome`: исход не теряется.
+        if (used + size > room) continue;
+        if (!cards.takeResult(row.proposalId, 'taken_by_run')) continue;
+        texts.push(text);
+        used += size;
+      }
+      return texts.length === 0 ? null : texts.join(' ');
+    },
+    deliverRestartOutcomes() {
+      for (const row of cards.pendingResults()) {
+        // Итог действия этого процесса ждёт свой запуск (`action_status`) или уйдёт через `offer`.
+        if (autoRuns.has(row.proposalId)) continue;
+        try {
+          deps.deliverOutcome?.(row, resultOf(row));
+        } catch (error) {
+          deps.log(`assistant: outcome of ${row.proposalId} was not delivered: ${(error as Error).message}`);
+        }
+      }
     },
     async onReminder(reminder, late) {
       // Идущий ход не перебиваем: ждём, пока он закончится и никакой вопрос человека не запускается. Параметры
@@ -1602,15 +2380,17 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     },
     stop() {
       stopped = true;
+      watch.clear();
       asks += 1; // запуск, что ещё в пути, не стартует
       stopTurn();
       const waiters = idleWaiters;
       idleWaiters = [];
       for (const wake of waiters) wake(); // ждущие напоминания узнают, что хост останавливается
+      for (const wake of [...slotWaiters]) wake();
       if (idleTimer !== null) clearTimeout(idleTimer);
       if (sweepTimer !== null) clearTimeout(sweepTimer);
       sweepTimer = null;
-      deps.endpoint.setToken(null);
+      revokeRun();
     },
   };
   return api;
