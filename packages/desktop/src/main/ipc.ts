@@ -5,7 +5,7 @@ import { DECISION_FILE_NAME, METHODS, NOTIFICATIONS, SHARED_FILE_PATH, progressR
 import type { MethodName, NotificationName, Result } from '@parley/protocol';
 import type { BrowserWindow, IpcMain, NativeTheme, Session, WebContents } from 'electron';
 import { clampNoteText } from '../shared/app-note.js';
-import type { AppNote, CloseAnswer, DiagnosticsSaveResult, FocusTarget, UpdateInfo } from '../shared/bridge.js';
+import type { AppNote, CloseAnswer, DiagnosticsSaveResult, FocusTarget, UpdateResult, UpdateState } from '../shared/bridge.js';
 import { splitUrlCredentials } from '../shared/basic-auth.js';
 import { encodeIpcError } from '../shared/ipc-error.js';
 import { DEVTOOLS_LIMITS, isViewportSpec, type DevtoolsSnapshot } from '../shared/browser-devtools.js';
@@ -232,8 +232,16 @@ export interface RegisterIpcOptions {
   showNotification: (note: AppNote) => void;
   /** Отложенная цель клика для окна, которое ещё грузилось (`app:take-focus-target`, кусок 4.3). */
   takeFocusTarget: () => FocusTarget | null;
-  /** Релиз новее запущенной версии, найденный проверкой main (`app:get-update`, V6 плана релиза 0.1.0); `null` — нет или проверка выключена. */
-  getUpdate: () => Promise<UpdateInfo | null>;
+  /** Состояние самообновления (`app:get-update-state`, спека self-update §5.1); `idle` — ничего не найдено или проверка выключена. */
+  getUpdateState: () => UpdateState;
+  /** Клик «Download»/«Retry» (`app:download-update`); из состояний, где скачивать нечего, установщик ничего не делает. */
+  downloadUpdate: () => Promise<void>;
+  /** Клик «Cancel» (`app:cancel-update-download`). */
+  cancelUpdateDownload: () => Promise<void>;
+  /** Клик «Restart now» (`app:install-update`). */
+  installUpdate: () => Promise<void>;
+  /** Итог прошлой замены, прочитанный при старте (`app:take-update-result`): один раз, дальше `null`. */
+  takeUpdateResult: () => UpdateResult | null;
   /**
    * Версия окна (`app.getVersion()`): страница сверяет с ней версию хоста (`app:version`, 0.2.0). `null` —
    * окно не собрано (`pnpm dev`, E2E): Electron, запущенный файлом `out/main/index.js`, не находит
@@ -407,7 +415,11 @@ export function registerIpc(options: RegisterIpcOptions): void {
     chooseFiles,
     showNotification,
     takeFocusTarget,
-    getUpdate,
+    getUpdateState,
+    downloadUpdate,
+    cancelUpdateDownload,
+    installUpdate,
+    takeUpdateResult,
     appVersion,
     onUiSaved,
     setBadge,
@@ -557,7 +569,12 @@ export function registerIpc(options: RegisterIpcOptions): void {
 
   ipcMain.handle('app:take-focus-target', withIpcError(() => takeFocusTarget()));
 
-  ipcMain.handle('app:get-update', withIpcError(() => getUpdate()));
+  // Обработчики не берут аргументов окна (спека self-update §5.1): версию, адрес и путь выбирает main.
+  ipcMain.handle('app:get-update-state', withIpcError(() => getUpdateState()));
+  ipcMain.handle('app:download-update', withIpcError(() => downloadUpdate()));
+  ipcMain.handle('app:cancel-update-download', withIpcError(() => cancelUpdateDownload()));
+  ipcMain.handle('app:install-update', withIpcError(() => installUpdate()));
+  ipcMain.handle('app:take-update-result', withIpcError(() => takeUpdateResult()));
   ipcMain.handle('app:version', withIpcError(async () => appVersion));
 
   ipcMain.on('app:set-badge', (_event, count: number) => {

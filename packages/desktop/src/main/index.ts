@@ -838,15 +838,15 @@ if (!gotLock) {
     }
 
     // Проверка новой версии (V6 плана релиза 0.1.0): при старте и раз в сутки main спрашивает GitHub о последнем
-    // релизе (`main/update-check.ts`). Окно получает найденное событием `app:update-available`, а то, что найдено до
-    // его подписки (окно ещё грузилось или показывало «Connecting…»), — по запросу `app:get-update`. Сеть — стеком
+    // релизе (`main/update-check.ts`). Окно получает состояние самообновления событием `app:update-state`, а то, что
+    // найдено до его подписки (окно ещё грузилось или показывало «Connecting…»), — по запросу `app:get-update-state`. Сеть — стеком
     // Chromium (`net.fetch`: системный прокси), без токенов и куки. Идёт только у собранного окна: в разработке
     // `app.getVersion()` — версия `package.json` ветки, и `pnpm dev:desktop` ходил бы на GitHub зря. Выключена
     // `PARLEY_UPDATE_CHECK=off` (E2E: `playwright.config.ts`; значение — из окружения login-shell, как прочие
     // `PARLEY_*`; не снялось окружение оболочки — из окружения окна) или переключателем в настройках (`ui.json`);
     // оба читаются перед каждой проверкой. Включённый переключатель проверяет сразу: `onUiSaved` ниже.
     // Установщик (`update-installer.ts`): состояние самообновления, загрузка по клику и запуск сценария замены на
-    // событии `quit`. Мост окна (`state`, `onState`, `download`, `cancel`, `install`, `takeResult`) подключит U7.
+    // событии `quit`.
     const updateInstaller = createUpdateInstaller({
       version: app.getVersion(),
       arch: process.arch,
@@ -865,19 +865,21 @@ if (!gotLock) {
     });
     // Слушатель синхронный и срабатывает один раз: сценарий запускается, только если намерение дожило до конца выхода.
     app.once('quit', () => updateInstaller.onQuit());
+    // Состояние — окну, чья страница загружена: до этого прелоад не подписан, и окно спросит само (`app:get-update-state`).
+    updateInstaller.onState((state) => {
+      const window = mainWindow;
+      if (window !== null && !window.isDestroyed() && loadedWindows.has(window)) {
+        window.webContents.send('app:update-state', state);
+      }
+    });
     const updates = createUpdateChecker({
       currentVersion: app.getVersion(),
       fetch: (url, init) => net.fetch(url, init),
       isEnabled: async () =>
         updateCheckAllowed(shellEnv.env, app.isPackaged) && (await uiStore.load()).checkForUpdates,
       onUpdate: (info) => {
-        // Установщик узнаёт о каждом найденном релизе; окно пока получает его прежним событием.
+        // Установщик узнаёт о каждом найденном релизе; окно получает его состоянием (`onState` выше).
         void updateInstaller.onFound(info);
-        const window = mainWindow;
-        // Окно ещё грузится — событие ушло бы в пустоту (прелоад не подписан): оно спросит само, `app:get-update`.
-        if (window !== null && !window.isDestroyed() && loadedWindows.has(window)) {
-          window.webContents.send('app:update-available', info);
-        }
       },
     });
 
@@ -1169,7 +1171,11 @@ if (!gotLock) {
       },
       showNotification: (note) => notifier.notify(note),
       takeFocusTarget: () => pendingFocusTarget.take(),
-      getUpdate: () => updates.latest(),
+      getUpdateState: () => updateInstaller.state(),
+      downloadUpdate: () => updateInstaller.download(),
+      cancelUpdateDownload: () => updateInstaller.cancel(),
+      installUpdate: () => updateInstaller.install(),
+      takeUpdateResult: () => updateInstaller.takeResult(),
       // Только у собранного окна: несобранное (E2E, `pnpm dev`) отдало бы версию Electron, и любой хост
       // показался бы хостом другой сборки — с тостом поверх окна.
       appVersion,

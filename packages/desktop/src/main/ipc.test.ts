@@ -152,7 +152,11 @@ function setup(
   showItemInFolder: ReturnType<typeof vi.fn>;
   showNotification: ReturnType<typeof vi.fn>;
   takeFocusTarget: ReturnType<typeof vi.fn>;
-  getUpdate: ReturnType<typeof vi.fn>;
+  getUpdateState: ReturnType<typeof vi.fn>;
+  downloadUpdate: ReturnType<typeof vi.fn>;
+  cancelUpdateDownload: ReturnType<typeof vi.fn>;
+  installUpdate: ReturnType<typeof vi.fn>;
+  takeUpdateResult: ReturnType<typeof vi.fn>;
   openPath: ReturnType<typeof vi.fn>;
   saveDropImage: ReturnType<typeof vi.fn>;
   saveDiagnostics: ReturnType<typeof vi.fn>;
@@ -197,7 +201,11 @@ function setup(
   const showItemInFolder = vi.fn();
   const showNotification = vi.fn();
   const takeFocusTarget = vi.fn().mockReturnValue(null);
-  const getUpdate = vi.fn().mockResolvedValue(null);
+  const getUpdateState = vi.fn().mockReturnValue({ phase: 'idle' });
+  const downloadUpdate = vi.fn().mockResolvedValue(undefined);
+  const cancelUpdateDownload = vi.fn().mockResolvedValue(undefined);
+  const installUpdate = vi.fn().mockResolvedValue(undefined);
+  const takeUpdateResult = vi.fn().mockReturnValue(null);
   // Настоящие shell.openPath/showItemInFolder тесты не зовут никогда: открыли бы приложения
   // и Finder на экране человека (решение контролёра 5.2).
   const openPath = vi.fn().mockResolvedValue('');
@@ -239,7 +247,11 @@ function setup(
     chooseFiles,
     showNotification,
     takeFocusTarget,
-    getUpdate,
+    getUpdateState,
+    downloadUpdate,
+    cancelUpdateDownload,
+    installUpdate,
+    takeUpdateResult,
     appVersion: overrides.appVersion === undefined ? '0.2.0-test' : overrides.appVersion,
     ...(overrides.onUiSaved === undefined ? {} : { onUiSaved: overrides.onUiSaved }),
     ...(overrides.isIslandSender === undefined ? {} : { isIslandSender: overrides.isIslandSender }),
@@ -282,7 +294,11 @@ function setup(
     showItemInFolder,
     showNotification,
     takeFocusTarget,
-    getUpdate,
+    getUpdateState,
+    downloadUpdate,
+    cancelUpdateDownload,
+    installUpdate,
+    takeUpdateResult,
     openPath,
     saveDropImage,
     saveDiagnostics,
@@ -1189,23 +1205,53 @@ describe('registerIpc — app:version (хост другой сборки, 0.2.0
   });
 });
 
-describe('registerIpc — app:get-update (V6 плана релиза 0.1.0)', () => {
-  const update = { version: '0.2.0', url: 'https://github.com/Kalmbik61/Parley/releases/tag/v0.2.0' };
+describe('registerIpc — самообновление (спека self-update §5.1)', () => {
+  const available = {
+    phase: 'available',
+    version: '0.2.0',
+    url: 'https://github.com/Kalmbik61/Parley/releases/tag/v0.2.0',
+    canInstall: true,
+  };
 
-  it('отдаёт то, что нашла проверка main; ничего не нашла или выключена — null', async () => {
-    const { ipcMain, getUpdate } = setup();
-    getUpdate.mockResolvedValueOnce(update).mockResolvedValueOnce(null);
+  it('app:get-update-state отдаёт текущее состояние установщика', async () => {
+    const { ipcMain, getUpdateState } = setup();
+    getUpdateState.mockReturnValueOnce(available).mockReturnValueOnce({ phase: 'idle' });
 
-    await expect(ipcMain.invoke('app:get-update')).resolves.toEqual(update);
-    await expect(ipcMain.invoke('app:get-update')).resolves.toBeNull();
-    expect(getUpdate).toHaveBeenCalledTimes(2);
+    await expect(ipcMain.invoke('app:get-update-state')).resolves.toEqual(available);
+    await expect(ipcMain.invoke('app:get-update-state')).resolves.toEqual({ phase: 'idle' });
+    expect(getUpdateState).toHaveBeenCalledTimes(2);
   });
 
-  it('отказ проверки — код failed, как у прочих каналов', async () => {
-    const { ipcMain, getUpdate } = setup();
-    getUpdate.mockRejectedValueOnce(new Error('boom'));
+  it('SU-08: download, cancel и install зовут установщик без параметров, что бы ни прислало окно', async () => {
+    const { ipcMain, downloadUpdate, cancelUpdateDownload, installUpdate } = setup();
 
-    expect(await codeOf(ipcMain.invoke('app:get-update'))).toBe('failed');
+    await ipcMain.invoke('app:download-update', '9.9.9', '/etc/passwd');
+    await ipcMain.invoke('app:cancel-update-download', { version: '9.9.9' });
+    await ipcMain.invoke('app:install-update', 'https://evil.example/a.zip');
+
+    expect(downloadUpdate).toHaveBeenCalledTimes(1);
+    expect(downloadUpdate).toHaveBeenCalledWith();
+    expect(cancelUpdateDownload).toHaveBeenCalledTimes(1);
+    expect(cancelUpdateDownload).toHaveBeenCalledWith();
+    expect(installUpdate).toHaveBeenCalledTimes(1);
+    expect(installUpdate).toHaveBeenCalledWith();
+  });
+
+  it('app:take-update-result отдаёт итог из main без параметров; пусто — null', async () => {
+    const { ipcMain, takeUpdateResult } = setup();
+    takeUpdateResult.mockReturnValueOnce({ kind: 'updated', version: '0.2.0' }).mockReturnValueOnce(null);
+
+    await expect(ipcMain.invoke('app:take-update-result', 'x')).resolves.toEqual({ kind: 'updated', version: '0.2.0' });
+    await expect(ipcMain.invoke('app:take-update-result')).resolves.toBeNull();
+    expect(takeUpdateResult).toHaveBeenNthCalledWith(1);
+    expect(takeUpdateResult).toHaveBeenNthCalledWith(2);
+  });
+
+  it('отказ установщика — код failed, как у прочих каналов', async () => {
+    const { ipcMain, downloadUpdate } = setup();
+    downloadUpdate.mockRejectedValueOnce(new Error('boom'));
+
+    expect(await codeOf(ipcMain.invoke('app:download-update'))).toBe('failed');
   });
 
   it('app:save-ui после записи зовёт onUiSaved (включённая проверка версии идёт сразу); без записи — не зовёт', async () => {

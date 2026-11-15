@@ -277,12 +277,21 @@ export interface ParleyBridge {
     /** Ответ на `app:confirm-close` (`app:close-answer`). */
     answerClose(answer: CloseAnswer): void;
     /**
-     * Новая версия на GitHub (V6 плана релиза 0.1.0). При подписке отдаёт слушателю уже найденное (`app:get-update`:
-     * main мог найти релиз, пока окно грузилось или показывало «Connecting…»), дальше — каждое событие
-     * `app:update-available` от проверки main; одна и та же версия может прийти не раз (проверка — раз в сутки).
-     * Проверка выключена переключателем или `PARLEY_UPDATE_CHECK=off` — не приходит ничего.
+     * Самообновление (спека self-update §5.1). Состояние живёт в main (`app:get-update-state`): окно получает его
+     * событием `app:update-state` и по запросу. Подписчик получает текущее состояние сразу, как прежде получал
+     * найденное, дальше — каждое изменение (`idle`, если проверка выключена или ничего не найдено). Ни один вызов
+     * ниже не принимает версию, адрес или путь: выбранный релиз держит main.
      */
-    onUpdateAvailable(listener: (info: UpdateInfo) => void): () => void;
+    getUpdateState(): Promise<UpdateState>;
+    onUpdateState(listener: (state: UpdateState) => void): () => void;
+    /** `available` (с `canInstall`) или `failed` → `downloading`; из прочих состояний — ничего. */
+    downloadUpdate(): Promise<void>;
+    /** `downloading` и `verifying` → `available` с последней найденной версией. */
+    cancelUpdateDownload(): Promise<void>;
+    /** `ready` → намерение замены и обычный выход («Restart now»); из прочих состояний — ничего. */
+    installUpdate(): Promise<void>;
+    /** Итог прошлой замены, прочитанный при старте: отдаётся один раз, дальше `null`. */
+    takeUpdateResult(): Promise<UpdateResult | null>;
   };
   /**
    * Settings → Remote access (mobile spec 12): the local control socket of the bridge, through main. The window

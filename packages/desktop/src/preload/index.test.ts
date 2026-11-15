@@ -245,4 +245,59 @@ describe('preload: последний статус и тема', () => {
     emit('browser:agent-activity', { webContentsId: 7, session: 'S02', op: 'tabs', phase: 'end' });
     expect(listener).toHaveBeenCalledTimes(1);
   });
+
+  it('app.onUpdateState: подписчик получает состояние main сразу, событие app:update-state — дальше; отписка снимает его', async () => {
+    const bridge = await loadPreload();
+    const { ipcRenderer } = await import('electron');
+    const available = { phase: 'available', version: '0.2.0', url: 'https://github.com/x', canInstall: true } as const;
+    vi.mocked(ipcRenderer.invoke).mockResolvedValueOnce(available);
+    const listener = vi.fn();
+
+    const off = bridge.app.onUpdateState(listener);
+    await vi.waitFor(() => expect(listener).toHaveBeenCalledWith(available));
+    expect(ipcRenderer.invoke).toHaveBeenCalledWith('app:get-update-state');
+    emit('app:update-state', { phase: 'ready', version: '0.2.0', url: 'https://github.com/x' });
+    off();
+    emit('app:update-state', { phase: 'idle' });
+
+    expect(listener).toHaveBeenCalledTimes(2);
+    expect(listener).toHaveBeenLastCalledWith({ phase: 'ready', version: '0.2.0', url: 'https://github.com/x' });
+  });
+
+  it('app.onUpdateState: событие, пришедшее раньше ответа на запрос, ответ не затирает', async () => {
+    const bridge = await loadPreload();
+    const { ipcRenderer } = await import('electron');
+    let reply!: (state: unknown) => void;
+    vi.mocked(ipcRenderer.invoke).mockReturnValueOnce(new Promise((resolve) => { reply = resolve; }));
+    const listener = vi.fn();
+
+    bridge.app.onUpdateState(listener);
+    emit('app:update-state', { phase: 'verifying', version: '0.2.0', url: 'https://github.com/x' });
+    reply({ phase: 'idle' });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledWith({ phase: 'verifying', version: '0.2.0', url: 'https://github.com/x' });
+  });
+
+  it('SU-08: downloadUpdate, cancelUpdateDownload, installUpdate, takeUpdateResult идут в main без параметров', async () => {
+    const bridge = await loadPreload();
+    const { ipcRenderer } = await import('electron');
+    vi.mocked(ipcRenderer.invoke).mockClear();
+
+    await bridge.app.downloadUpdate();
+    await bridge.app.cancelUpdateDownload();
+    await bridge.app.installUpdate();
+    await bridge.app.takeUpdateResult();
+    await bridge.app.getUpdateState();
+
+    expect(vi.mocked(ipcRenderer.invoke).mock.calls).toEqual([
+      ['app:download-update'],
+      ['app:cancel-update-download'],
+      ['app:install-update'],
+      ['app:take-update-result'],
+      ['app:get-update-state'],
+    ]);
+  });
 });

@@ -60,8 +60,10 @@ export function wireUpdateNotice(bridge: ParleyBridge): () => void {
     });
   };
 
-  const off = bridge.app.onUpdateAvailable((next) => {
-    info = next;
+  const off = bridge.app.onUpdateState((state) => {
+    // Тост — только для найденного релиза; прочие состояния (скачивание, готово, отказ) покажет следующая задача.
+    if (state.phase !== 'available') return;
+    info = { version: state.version, url: state.url };
     show();
   });
   // `ui.json` приходит после подписки: версия, найденная раньше, показывается, когда решать уже есть чем.

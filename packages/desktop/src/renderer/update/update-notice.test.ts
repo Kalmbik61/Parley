@@ -7,7 +7,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { toast } from 'sonner';
-import type { UpdateInfo } from '../../shared/bridge.js';
+import type { UpdateInfo, UpdateState } from '../../shared/bridge.js';
 import { DEFAULT_UI } from '../../shared/ui-types.js';
 import { useUiStore } from '../store/ui.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
@@ -23,6 +23,9 @@ const NEWER: UpdateInfo = {
   version: '0.3.0',
   url: 'https://github.com/Kalmbik61/Parley/releases/tag/v0.3.0',
 };
+
+/** Состояние «найден релиз» для моста: тост показывается только в нём. */
+const avail = (info: UpdateInfo): UpdateState => ({ phase: 'available', ...info, canInstall: false });
 
 interface ToastOptions {
   id: string;
@@ -71,7 +74,7 @@ describe('wireUpdateNotice — тост', () => {
   it('найденный релиз: «Parley X.Y.Z is available» с кнопками Download и Later; у тоста нет таймера', () => {
     wire();
 
-    bridge.emitUpdate(INFO);
+    bridge.emitUpdateState(avail(INFO));
 
     expect(toast).toHaveBeenCalledTimes(1);
     const { message, options } = lastToast();
@@ -84,7 +87,7 @@ describe('wireUpdateNotice — тост', () => {
   });
 
   it('найденное до подписки (окно грузилось или показывало «Connecting…») показывается сразу', () => {
-    bridge.setPendingUpdate(INFO);
+    bridge.setUpdateState(avail(INFO));
 
     wire();
 
@@ -95,8 +98,8 @@ describe('wireUpdateNotice — тост', () => {
   it('та же версия снова (проверка раз в сутки, переподключение) — тот же тост на месте, а не второй', () => {
     wire();
 
-    bridge.emitUpdate(INFO);
-    bridge.emitUpdate({ ...INFO });
+    bridge.emitUpdateState(avail(INFO));
+    bridge.emitUpdateState(avail({ ...INFO }));
 
     expect(toast).toHaveBeenCalledTimes(2);
     const ids = vi.mocked(toast).mock.calls.map((call) => (call[1] as unknown as ToastOptions).id);
@@ -106,10 +109,10 @@ describe('wireUpdateNotice — тост', () => {
   it('после отписки события и загрузка ui.json больше ничего не показывают', () => {
     useUiStore.setState({ uiLoaded: false });
     const off = wire();
-    bridge.emitUpdate(INFO);
+    bridge.emitUpdateState(avail(INFO));
     off();
 
-    bridge.emitUpdate(NEWER);
+    bridge.emitUpdateState(avail(NEWER));
     useUiStore.setState({ uiLoaded: true });
 
     expect(toast).not.toHaveBeenCalled();
@@ -120,7 +123,7 @@ describe('wireUpdateNotice — кнопки и закрытая версия', (
   it('Download открывает страницу релиза в браузере и закрывает версию в ui.json', () => {
     const saveUi = vi.spyOn(bridge.app, 'saveUi');
     wire();
-    bridge.emitUpdate(INFO);
+    bridge.emitUpdateState(avail(INFO));
 
     lastToast().options.action.onClick();
 
@@ -134,7 +137,7 @@ describe('wireUpdateNotice — кнопки и закрытая версия', (
   it('Later только закрывает тост: версия в ui.json не записывается, ничего не открывается, а следующая проверка снова скажет', () => {
     const saveUi = vi.spyOn(bridge.app, 'saveUi');
     wire();
-    bridge.emitUpdate(INFO);
+    bridge.emitUpdateState(avail(INFO));
 
     lastToast().options.cancel.onClick();
 
@@ -143,7 +146,7 @@ describe('wireUpdateNotice — кнопки и закрытая версия', (
     expect(useUiStore.getState().ui.dismissedUpdate).toBeNull();
     // Проверка раз в сутки (или новый запуск) находит тот же релиз — тост на месте.
     vi.mocked(toast).mockClear();
-    bridge.emitUpdate({ ...INFO });
+    bridge.emitUpdateState(avail({ ...INFO }));
     expect(toast).toHaveBeenCalledTimes(1);
     expect(lastToast().message).toBe('Parley 0.2.0 is available');
   });
@@ -151,7 +154,7 @@ describe('wireUpdateNotice — кнопки и закрытая версия', (
   it('смахивание тоста (onDismiss) закрывает версию так же', () => {
     const saveUi = vi.spyOn(bridge.app, 'saveUi');
     wire();
-    bridge.emitUpdate(INFO);
+    bridge.emitUpdateState(avail(INFO));
 
     lastToast().options.onDismiss();
 
@@ -163,7 +166,7 @@ describe('wireUpdateNotice — кнопки и закрытая версия', (
   it('версия, уже записанная закрытой, второй раз не пишется', () => {
     const saveUi = vi.spyOn(bridge.app, 'saveUi');
     wire();
-    bridge.emitUpdate(INFO);
+    bridge.emitUpdateState(avail(INFO));
     const { options } = lastToast();
 
     options.onDismiss();
@@ -176,21 +179,21 @@ describe('wireUpdateNotice — кнопки и закрытая версия', (
 
   it('закрытая версия больше не показывается — ни тем же событием, ни при новой подписке; более новая показывается', () => {
     wire();
-    bridge.emitUpdate(INFO);
+    bridge.emitUpdateState(avail(INFO));
     // Закрыть насовсем — смахнуть тост; «Later» версию не закрывает.
     lastToast().options.onDismiss();
     vi.mocked(toast).mockClear();
 
-    bridge.emitUpdate(INFO);
+    bridge.emitUpdateState(avail(INFO));
     expect(toast).not.toHaveBeenCalled();
 
     // Обрыв связи и возврат: подписка заводится заново и снова получает найденное от main.
     unwire.pop()?.();
-    bridge.setPendingUpdate(INFO);
+    bridge.setUpdateState(avail(INFO));
     wire();
     expect(toast).not.toHaveBeenCalled();
 
-    bridge.emitUpdate(NEWER);
+    bridge.emitUpdateState(avail(NEWER));
     expect(toast).toHaveBeenCalledTimes(1);
     expect(lastToast().message).toBe('Parley 0.3.0 is available');
   });
@@ -199,7 +202,7 @@ describe('wireUpdateNotice — кнопки и закрытая версия', (
     useUiStore.setState({ ui: { ...DEFAULT_UI, dismissedUpdate: '0.2.0' } });
     wire();
 
-    bridge.emitUpdate(INFO);
+    bridge.emitUpdateState(avail(INFO));
 
     expect(toast).not.toHaveBeenCalled();
   });
@@ -208,7 +211,7 @@ describe('wireUpdateNotice — кнопки и закрытая версия', (
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     vi.spyOn(bridge.app, 'openExternal').mockRejectedValue(new Error('no browser'));
     wire();
-    bridge.emitUpdate(INFO);
+    bridge.emitUpdateState(avail(INFO));
 
     lastToast().options.action.onClick();
     await vi.waitFor(() =>
@@ -224,7 +227,7 @@ describe('wireUpdateNotice — переключатель и загрузка ui
     useUiStore.setState({ ui: { ...DEFAULT_UI, checkForUpdates: false } });
     wire();
 
-    bridge.emitUpdate(INFO);
+    bridge.emitUpdateState(avail(INFO));
     expect(toast).not.toHaveBeenCalled();
 
     // Без нового сообщения от main: оно придёт, когда main проверит (`settingsChanged`), а найденное уже на виду.
@@ -236,7 +239,7 @@ describe('wireUpdateNotice — переключатель и загрузка ui
   it('выключили переключатель при стоящем тосте — тост снимается, а `onDismiss` этого снятия версию не закрывает', () => {
     const saveUi = vi.spyOn(bridge.app, 'saveUi');
     wire();
-    bridge.emitUpdate(INFO);
+    bridge.emitUpdateState(avail(INFO));
     const { options } = lastToast();
 
     useUiStore.setState({ ui: { ...DEFAULT_UI, checkForUpdates: false } });
@@ -256,7 +259,7 @@ describe('wireUpdateNotice — переключатель и загрузка ui
 
   it('переключатель, не менявшийся, тост не трогает: чужие правки ui.json его не снимают', () => {
     wire();
-    bridge.emitUpdate(INFO);
+    bridge.emitUpdateState(avail(INFO));
 
     useUiStore.setState({ ui: { ...DEFAULT_UI, appearance: 'dark' } });
 
@@ -277,7 +280,7 @@ describe('wireUpdateNotice — переключатель и загрузка ui
     useUiStore.setState({ uiLoaded: false });
     wire();
 
-    bridge.emitUpdate(INFO);
+    bridge.emitUpdateState(avail(INFO));
     expect(toast).not.toHaveBeenCalled();
 
     useUiStore.setState({ uiLoaded: true });
@@ -288,7 +291,7 @@ describe('wireUpdateNotice — переключатель и загрузка ui
   it('загрузилось зеркало с уже закрытой версией — тоста не будет: до ответа app.loadUi() он не мелькнул', () => {
     useUiStore.setState({ uiLoaded: false });
     wire();
-    bridge.emitUpdate(INFO);
+    bridge.emitUpdateState(avail(INFO));
 
     useUiStore.setState({ ui: { ...DEFAULT_UI, dismissedUpdate: '0.2.0' }, uiLoaded: true });
 
@@ -298,7 +301,7 @@ describe('wireUpdateNotice — переключатель и загрузка ui
   it('загрузилось зеркало с выключенным переключателем — тоста не будет', () => {
     useUiStore.setState({ uiLoaded: false });
     wire();
-    bridge.emitUpdate(INFO);
+    bridge.emitUpdateState(avail(INFO));
 
     useUiStore.setState({ ui: { ...DEFAULT_UI, checkForUpdates: false }, uiLoaded: true });
 

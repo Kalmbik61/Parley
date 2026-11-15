@@ -17,7 +17,7 @@ import type {
   Result,
   TrustRecord,
 } from '@parley/protocol';
-import type { AppNote, CloseAnswer, DiagnosticsSaveResult, FocusTarget, ParleyBridge, HostStatus, UpdateInfo } from '../../shared/bridge.js';
+import type { AppNote, CloseAnswer, DiagnosticsSaveResult, FocusTarget, ParleyBridge, HostStatus, UpdateResult, UpdateState } from '../../shared/bridge.js';
 import type { DevtoolsBatch, DevtoolsSnapshot, ResponseBody } from '../../shared/browser-devtools.js';
 import type {
   AgentActivity,
@@ -98,12 +98,16 @@ export interface FakeBridge extends ParleyBridge {
   emitFocusTarget(target: FocusTarget): void;
   /** Отложенная цель main: первый подписчик onFocusTarget получает её сразу, как через app:take-focus-target. */
   setPendingFocusTarget(target: FocusTarget | null): void;
-  /** Проверка main нашла релиз новее: событие `app:update-available` слушателям `onUpdateAvailable` (V6 плана релиза 0.1.0). */
-  emitUpdate(info: UpdateInfo): void;
+  /** Состояние самообновления изменилось: событие `app:update-state` слушателям `onUpdateState`; оно же — текущее состояние. */
+  emitUpdateState(state: UpdateState): void;
   /** Версия окна, которую отдаёт `app.version` (0.2.0); по умолчанию — та же, что у хоста моста: `0.0.0-test`; `null` — несобранное окно. */
   setAppVersion(version: string | null): void;
-  /** Найденное до подписки (`app:get-update`): каждый новый подписчик `onUpdateAvailable` получает его сразу; `null` — ничего. */
-  setPendingUpdate(info: UpdateInfo | null): void;
+  /** Текущее состояние без события (`app:get-update-state`): каждый новый подписчик `onUpdateState` получает его сразу. */
+  setUpdateState(state: UpdateState): void;
+  /** Итог прошлой замены: `takeUpdateResult` отдаёт его один раз, дальше `null`. */
+  setUpdateResult(result: UpdateResult | null): void;
+  /** Вызовы `downloadUpdate`, `cancelUpdateDownload`, `installUpdate`, `takeUpdateResult` по порядку (все без параметров). */
+  readonly updateCalls: Array<'download' | 'cancel' | 'install' | 'takeResult'>;
   readonly badges: number[];
   /** Вызовы `app.reconnect` и `app.restartHost` по порядку (экран «No connection to host», fix-final-b). */
   readonly hostActions: Array<'reconnect' | 'restartHost'>;
@@ -324,9 +328,11 @@ export function createFakeBridge(): FakeBridge {
   const appNotified: AppNote[] = [];
   const focusTargetListeners = new Set<(target: FocusTarget) => void>();
   let pendingFocusTarget: FocusTarget | null = null;
-  const updateListeners = new Set<(info: UpdateInfo) => void>();
+  const updateListeners = new Set<(state: UpdateState) => void>();
+  const updateCalls: Array<'download' | 'cancel' | 'install' | 'takeResult'> = [];
+  let updateState: UpdateState = { phase: 'idle' };
+  let updateResult: UpdateResult | null = null;
   let appVersion: string | null = '0.0.0-test';
-  let pendingUpdate: UpdateInfo | null = null;
   const badges: number[] = [];
   const hostActions: Array<'reconnect' | 'restartHost'> = [];
   const layoutSaves: Array<{ workKey: string; layout: WorkLayout }> = [];
@@ -1106,10 +1112,26 @@ export function createFakeBridge(): FakeBridge {
       answerClose: (answer) => {
         closeAnswers.push(answer);
       },
-      onUpdateAvailable: (listener) => {
+      getUpdateState: async () => updateState,
+      onUpdateState: (listener) => {
         updateListeners.add(listener);
-        if (pendingUpdate !== null) listener(pendingUpdate);
+        listener(updateState);
         return () => updateListeners.delete(listener);
+      },
+      downloadUpdate: async () => {
+        updateCalls.push('download');
+      },
+      cancelUpdateDownload: async () => {
+        updateCalls.push('cancel');
+      },
+      installUpdate: async () => {
+        updateCalls.push('install');
+      },
+      takeUpdateResult: async () => {
+        updateCalls.push('takeResult');
+        const result = updateResult;
+        updateResult = null;
+        return result;
       },
     },
 
@@ -1132,15 +1154,20 @@ export function createFakeBridge(): FakeBridge {
     setPendingFocusTarget: (target) => {
       pendingFocusTarget = target;
     },
-    emitUpdate: (info) => {
-      for (const listener of updateListeners) listener(info);
+    emitUpdateState: (state) => {
+      updateState = state;
+      for (const listener of updateListeners) listener(state);
     },
     setAppVersion: (version) => {
       appVersion = version;
     },
-    setPendingUpdate: (info) => {
-      pendingUpdate = info;
+    setUpdateState: (state) => {
+      updateState = state;
     },
+    setUpdateResult: (result) => {
+      updateResult = result;
+    },
+    updateCalls,
     emitAppearance: (next) => {
       for (const listener of appearanceListeners) listener(next);
     },

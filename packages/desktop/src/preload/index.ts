@@ -3,7 +3,7 @@ import type { WorksSyncSurfaceBatch, WorksSyncSurfaceStatus } from '@parley/prot
 import type { WorksSyncBridge } from '../shared/bridge.js';
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { EventMessage, EventName, MethodName, NotificationName } from '@parley/protocol';
-import type { AppNote, CloseAnswer, DiagnosticsSaveResult, FocusTarget, ParleyBridge, HostStatus, UpdateInfo } from '../shared/bridge.js';
+import type { AppNote, CloseAnswer, DiagnosticsSaveResult, FocusTarget, ParleyBridge, HostStatus, UpdateResult, UpdateState } from '../shared/bridge.js';
 import type { BrowserAuthCancel, BrowserAuthRequest } from '../shared/basic-auth.js';
 import type { DevtoolsBatch, DevtoolsSnapshot, ResponseBody, ViewportSpec } from '../shared/browser-devtools.js';
 import type {
@@ -71,7 +71,7 @@ const browserAgentResizeListeners = new Set<(e: AgentResize) => void>();
 const browserAuthRequestListeners = new Set<(e: BrowserAuthRequest) => void>();
 const browserAuthCancelListeners = new Set<(e: BrowserAuthCancel) => void>();
 const windowFocusListeners = new Set<(focused: boolean) => void>();
-const updateListeners = new Set<(info: UpdateInfo) => void>();
+const updateListeners = new Set<(state: UpdateState) => void>();
 const voiceProgressListeners = new Set<(progress: DownloadProgress) => void>();
 const assistantVoiceStateListeners = new Set<(state: TtsEngineState) => void>();
 /** Цель клика, пришедшая, пока у `onFocusTarget` не было слушателей (кусок 4.3). */
@@ -183,8 +183,8 @@ ipcRenderer.on('remote:event', (_event, payload: RemoteEvent) => {
   for (const listener of remoteListeners) listener(payload);
 });
 
-ipcRenderer.on('app:update-available', (_event, info: UpdateInfo) => {
-  for (const listener of updateListeners) listener(info);
+ipcRenderer.on('app:update-state', (_event, state: UpdateState) => {
+  for (const listener of updateListeners) listener(state);
 });
 
 ipcRenderer.on('voice:progress', (_event, progress: DownloadProgress) => {
@@ -386,16 +386,27 @@ const bridge = {
     answerClose: (answer: CloseAnswer) => {
       ipcRenderer.send('app:close-answer', answer);
     },
-    onUpdateAvailable: (listener: (info: UpdateInfo) => void) => {
-      updateListeners.add(listener);
-      // Найденное до подписки (окно ещё грузилось или показывало «Connecting…»); отписавшемуся ответ не нужен.
-      void (ipcRenderer.invoke('app:get-update') as Promise<UpdateInfo | null>)
-        .then((info) => {
-          if (info !== null && updateListeners.has(listener)) listener(info);
+    getUpdateState: () => ipcRenderer.invoke('app:get-update-state') as Promise<UpdateState>,
+    onUpdateState: (listener: (state: UpdateState) => void) => {
+      // Событие, пришедшее раньше ответа на запрос, новее ответа: ответ его не затирает.
+      let fresh = false;
+      const wrapped = (state: UpdateState): void => {
+        fresh = true;
+        listener(state);
+      };
+      updateListeners.add(wrapped);
+      // Состояние до подписки (окно ещё грузилось или показывало «Connecting…»); отписавшемуся ответ не нужен.
+      void (ipcRenderer.invoke('app:get-update-state') as Promise<UpdateState>)
+        .then((state) => {
+          if (!fresh && updateListeners.has(wrapped)) listener(state);
         })
         .catch(() => {});
-      return () => updateListeners.delete(listener);
+      return () => updateListeners.delete(wrapped);
     },
+    downloadUpdate: () => ipcRenderer.invoke('app:download-update') as Promise<void>,
+    cancelUpdateDownload: () => ipcRenderer.invoke('app:cancel-update-download') as Promise<void>,
+    installUpdate: () => ipcRenderer.invoke('app:install-update') as Promise<void>,
+    takeUpdateResult: () => ipcRenderer.invoke('app:take-update-result') as Promise<UpdateResult | null>,
   },
   remote: {
     call: <N extends RemoteCallName>(name: N, params: RemoteCalls[N]['params']) =>
