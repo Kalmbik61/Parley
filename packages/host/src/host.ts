@@ -1038,7 +1038,17 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   });
   // Request голосовых поручений: durable в той же базе, связан с job по ключу; закрытие голоса job не отменяет.
   const assistantRequests = createRequests({ db: sideDb, jobs: assistantJobs });
-  jobPrompt = createJobPrompt({ requests: assistantRequests, jobs: assistantJobs });
+  jobPrompt = createJobPrompt({
+    requests: assistantRequests,
+    jobs: assistantJobs,
+    // Название работы — из снимка работ по ref: в записи слежения его нет (W5).
+    recentSessions: () =>
+      assistantService.recentSessions().map((item) => ({
+        name: item.name,
+        work: worksService.snapshot().entries.find((entry) => entry.projectPath === item.ref.projectPath && entry.map.work.id === item.ref.workId)?.map.work.title ?? item.ref.workId,
+      })),
+    language: () => assistantService.settings()?.language ?? null,
+  });
   serviceMessages = createServiceMessages({
     requests: assistantRequests,
     jobs: assistantJobs,
