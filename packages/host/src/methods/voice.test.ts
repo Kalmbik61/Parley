@@ -6,6 +6,7 @@ import { createJobs, type JobRun } from '../assistant/jobs.js';
 import type { RequestInfo } from '../context.js';
 import type { VoiceSessionService } from '../voice/voice-session-service.js';
 import { createVoiceHandlers } from './voice.js';
+import { createRequests } from '../assistant/requests.js';
 
 const requestFrom = (role?: 'remote'): RequestInfo => ({ client: { id: 'c', name: 'c', features: new Set(), ...(role === undefined ? {} : { role }) } }) as unknown as RequestInfo;
 const request = requestFrom();
@@ -40,6 +41,26 @@ describe('методы телефона: jobs', () => {
     expect(got.job).toMatchObject({ jobId: 'j-1', origin: 'mobile', state: 'running' });
     expect(JSON.stringify(got)).not.toMatch(/argv|LOG|secret-key|--token/);
     expect(await call(handlers, 'jobs.cancel', { jobId: 'nope' })).toEqual({ job: null });
+  });
+
+  it('jobs.cancel служебного job (идущего и ждущего) — отказ без изменений: job и Request те же; job телефона отменяется', async () => {
+    const db = openMemoryDb();
+    const jobs = createJobs({ db, execute: (): JobRun => ({ cancel: () => {}, done: new Promise(() => {}) }), defaultProvider: () => 'claude' });
+    const requests = createRequests({ db, jobs });
+    const outcome = (id: string) =>
+      requests.submit({ conversationId: 'island', voiceSessionId: 'host', delegationId: `outcome:${id}`, text: `Outcome of ${id}`, origin: 'system', service: { kind: 'outcome', group: null, fallback: 'x' } }).request;
+    const running = outcome('p1');
+    const queued = outcome('p2');
+    const before = [requests.get(running.requestId), requests.get(queued.requestId)];
+    expect(before.map((request) => request?.job.state)).toEqual(['running', 'queued']);
+    const handlers = createVoiceHandlers(jobs, undefined);
+    for (const request of [running, queued]) {
+      const params = METHODS['jobs.cancel'].parse({ jobId: request.jobId });
+      expect(await call(handlers, 'jobs.cancel', params, requestFrom('remote'))).toEqual({ job: null });
+    }
+    expect([requests.get(running.requestId), requests.get(queued.requestId)]).toEqual(before);
+    const phone = await call(handlers, 'jobs.submit', METHODS['jobs.submit'].parse({ text: 'x', idempotencyKey: 'k-9', correlation: { mode: 'text' } }));
+    expect((await call(handlers, 'jobs.cancel', { jobId: phone.jobId })).job).toMatchObject({ state: 'cancelled' });
   });
 
   it('без jobs методов jobs.* нет, без голоса — voice.*', () => {
