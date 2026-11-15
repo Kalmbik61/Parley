@@ -228,7 +228,7 @@ export interface CardRoomRow {
   parent: string | null;
   /** Ведущий (`roomLiveLead`), `★` — у него; `null` — живых участников нет, комната закрыта. */
   lead: string | null;
-  /** Участники, что стоят в этой комнате и показаны строками развёрнутой комнаты: закрытые — при `showClosed`. Значки-счётчики свёрнутой комнаты считают их же. */
+  /** Незакрытые участники, что стоят в этой комнате и показаны строками развёрнутой комнаты; закрытые — в блоке «Closed sessions» (`closedRows`). Значки-счётчики свёрнутой комнаты считают их же. */
   members: WorkSession[];
   /**
    * Все участники-сессии, что стоят в этой комнате, закрытые тоже: тултип и правило развёртывания считают всех (значки-счётчики
@@ -309,7 +309,7 @@ export function homeRoomOf(map: WindowWorkMap, sessionId: string): Room | null {
 const staysOnCard = (session: WorkSession): boolean => session.lifecycle === 'active' || session.lifecycle === 'pending';
 
 /** Строка комнаты (`cardRows`, `archivedRows`): состав участников зависит от `home` и от того, в архиве ли комната. */
-function buildRoomRow(map: WindowWorkMap, home: Map<string, Room>, showClosed: boolean, room: Room, depth: number, parent: string | null): CardRoomRow {
+function buildRoomRow(map: WindowWorkMap, home: Map<string, Room>, room: Room, depth: number, parent: string | null): CardRoomRow {
   const archived = isRoomArchived(room);
   // Только те, кого сайдбар поставил в эту комнату: запись `room.members` старой карты может числить сессию и в другой.
   // Работающие участники архивной комнаты стоят на карточке своими строками (`staysOnCard`), второй раз их не выводим.
@@ -322,7 +322,7 @@ function buildRoomRow(map: WindowWorkMap, home: Map<string, Room>, showClosed: b
     depth,
     parent,
     lead: roomLiveLead(map, room),
-    members: sessions.filter((session) => showClosed || session.lifecycle !== 'closed'),
+    members: sessions.filter((session) => session.lifecycle !== 'closed'),
     sessions,
     lastAt: roomLastAt(map, room),
     archived,
@@ -368,8 +368,11 @@ function createdUnder(shown: readonly WorkSession[]): { children: Map<string, Wo
  * Архивные комнаты (спека архива комнат, 5.1) в основных строках не выводятся — их даёт `archivedRows`, под ссылкой
  * «N archived rooms». Сессия, чья домашняя комната архивная, стоит обычной строкой, если она работает (`staysOnCard`),
  * а спящая и закрытая уходят под ссылку вместе с комнатой.
+ *
+ * Закрытых сессий в основных строках нет (план 2026-11-15, 3.1): их даёт `closedRows`. Исключение — закрытый владелец
+ * открытой комнаты: он остаётся якорем своей комнаты. Законченные рои, скрытые `isSwarmShown`, тоже уходят в `closedRows`.
  */
-export function cardRows(map: WindowWorkMap, showClosed: boolean): CardRow[] {
+export function cardRows(map: WindowWorkMap): CardRow[] {
   const home = homeRooms(map);
   const rows: CardRow[] = [];
   // Владелец — отдельный якорь даже внутри рабочей комнаты. Его ссылка среди участников
@@ -383,12 +386,12 @@ export function cardRows(map: WindowWorkMap, showClosed: boolean): CardRow[] {
     const room = home.get(session.id);
     const anchor = owners.has(session.id);
     return (anchor || room === undefined || (isRoomArchived(room) && staysOnCard(session))) &&
-      (anchor || showClosed || session.lifecycle !== 'closed');
+      (anchor || session.lifecycle !== 'closed');
   });
   const created = createdUnder(own.map(({ session }) => session));
   // Рои: видимые стоят под создателем (сессия — после его комнат, комната — сразу под строкой), остальные — на верхнем
   // уровне в конце, как комнаты без владельца.
-  const swarms = (map.swarms ?? []).filter((swarm) => isSwarmShown(swarm, showClosed));
+  const swarms = (map.swarms ?? []).filter((swarm) => isSwarmShown(swarm, false));
   const placed = new Set<string>();
   const pushSwarms = (matches: (swarm: WorkSwarm) => boolean, depth: number, parent: string | null): void => {
     for (const swarm of swarms) {
@@ -398,7 +401,7 @@ export function cardRows(map: WindowWorkMap, showClosed: boolean): CardRow[] {
     }
   };
   const pushRoom = (room: Room, depth: number, parent: string | null): void => {
-    rows.push(buildRoomRow(map, home, showClosed, room, depth, parent));
+    rows.push(buildRoomRow(map, home, room, depth, parent));
     pushSwarms((swarm) => swarm.creator.kind === 'room' && swarm.creator.roomId === room.id, depth + 1, room.id);
   };
   const push = (session: WorkSession, depth: number, parent: string | null): void => {
@@ -418,12 +421,44 @@ export function cardRows(map: WindowWorkMap, showClosed: boolean): CardRow[] {
 }
 
 /**
- * Строки архивных комнат карточки (спека архива комнат, 5.1) — под ссылкой «N archived rooms», в порядке карты. Их
+ * Строки архивных комнат карточки (спека архива комнат, 5.1) — под заголовком «Archived rooms», в порядке карты. Их
  * число — число в ссылке, даже у комнаты без единого участника под ссылкой.
  */
-export function archivedRows(map: WindowWorkMap, showClosed: boolean): CardRoomRow[] {
+export function archivedRows(map: WindowWorkMap): CardRoomRow[] {
   const home = homeRooms(map);
-  return map.rooms.filter(isRoomArchived).map((room) => buildRoomRow(map, home, showClosed, room, 0, null));
+  return map.rooms.filter(isRoomArchived).map((room) => buildRoomRow(map, home, room, 0, null));
+}
+
+/** Время закрытия для порядка блока: `closedAt`, затем `endedAt`, `resultAt`, `startedAt`; даты нет — `null`. */
+function closedMs(session: WorkSession): number | null {
+  for (const value of [session.closedAt, session.endedAt, session.resultAt, session.startedAt]) {
+    const ms = value === null || value === undefined ? null : isoMs(value);
+    if (ms !== null) return ms;
+  }
+  return null;
+}
+
+/**
+ * Строки блока «Closed sessions» (план 2026-11-15, 3.2): сначала рои, скрытые из основных строк, затем закрытые сессии
+ * без своей строки в `cardRows` и не участники роя — плоско, глубина 0, свежие сверху (`closedMs`); без даты — в конце,
+ * в порядке карты. Число в заголовке блока — число строк.
+ */
+export function closedRows(map: WindowWorkMap): CardRow[] {
+  const rows: CardRow[] = (map.swarms ?? [])
+    .filter((swarm) => !isSwarmShown(swarm, false))
+    .map((swarm) => ({ kind: 'swarm', swarm, depth: 0, parent: null, members: swarmMemberViews(swarm, map.sessions) }));
+  const main = new Set<string>();
+  for (const row of cardRows(map)) if (row.kind === 'session') main.add(row.session.id);
+  const swarmSessions = swarmMemberIds(map);
+  const closed = map.sessions
+    .map((session, index) => ({ session, index, ms: closedMs(session) }))
+    .filter(({ session }) => session.lifecycle === 'closed' && !main.has(session.id) && !swarmSessions.has(session.id));
+  closed.sort((a, b) => {
+    if (a.ms === null || b.ms === null) return a.ms === b.ms ? a.index - b.index : a.ms === null ? 1 : -1;
+    return b.ms - a.ms || a.index - b.index;
+  });
+  for (const { session } of closed) rows.push({ kind: 'session', session, depth: 0, parent: null });
+  return rows;
 }
 
 /**
@@ -452,7 +487,7 @@ const rowHolds = (row: CardRow, id: string): boolean =>
  * Метки линий дерева по строкам карточки (`cardRows`), по массиву на строку. Ребро — от строки ребёнка `i` к ближайшей
  * выше строке `j`, что показывает его родителя (`CardRow.parent`): `start` у `j`, `pass` у строк строго между ними,
  * `elbow` у `i`; ответвление к старшему из детей и ствол к младшим получаются сами — у строки две метки. Ребра нет,
- * если строки родителя выше не видно (закрыт и спрятан под «N more closed», архив) или ребёнок стоит не правее колонки
+ * если строки родителя выше не видно (закрыт и спрятан в блоке «Closed sessions», архив) или ребёнок стоит не правее колонки
  * родителя (строка комнаты, поставленная участником с другой глубиной): линия вела бы к чужой строке или назад.
  */
 export function treeGuides(rows: readonly CardRow[]): Array<readonly TreeGuide[]> {
