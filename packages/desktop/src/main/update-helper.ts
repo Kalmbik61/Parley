@@ -20,6 +20,7 @@ export const HELPER_TOOLS = {
   lockf: '/usr/bin/lockf',
   open: '/usr/bin/open',
   ps: '/bin/ps',
+  date: '/bin/date',
 } as const;
 
 export interface HelperOptions {
@@ -30,6 +31,7 @@ export interface HelperOptions {
   lockf?: string;
   open?: string;
   ps?: string;
+  date?: string;
 }
 
 /** Строка в одинарных кавычках для sh; путь с `'`, пробелом, `$` или `*` остаётся одним словом без раскрытия. */
@@ -48,6 +50,11 @@ export function helperScript(options: HelperOptions = {}): string {
   const waitMs = options.waitMs ?? HELPER_WAIT_MS;
   if (!Number.isFinite(waitMs) || waitMs < 0) throw new Error(`bad waitMs: ${waitMs}`);
   const ticks = Math.ceil(waitMs / HELPER_POLL_MS);
+  // Предел по часам: `/bin/date +%s` знает только целые секунды, поэтому предел округляется вверх до секунды.
+  const waitSecs = Math.ceil(waitMs / 1000);
+  // Своя граница одного списка процессов, в шагах опроса: не меньше 1 с (иначе при пределе 0 любой ps «не успевает»)
+  // и не больше 10 с.
+  const psTicks = Math.min(Math.max(ticks, 10), 100);
   const tool = (key: keyof typeof HELPER_TOOLS): string =>
     shellQuote(options[key] ?? HELPER_TOOLS[key], key);
 
@@ -62,8 +69,18 @@ RM=${tool('rm')}
 LOCKF=${tool('lockf')}
 OPEN=${tool('open')}
 PS=${tool('ps')}
+DATE=${tool('date')}
 SLEEP='/bin/sleep'
+# Wait limit. Two bounds, whichever comes first, neither can fire early:
+#  - TICKS: number of 0.1 s sleeps (fine, but it does not count the time of the checks themselves);
+#  - WAIT_SECS: elapsed wall-clock time, counting the checks too. /bin/date +%s has whole-second granularity, so the
+#    wait ends when now - start > WAIT_SECS: not before WAIT_SECS and not later than WAIT_SECS + 1 s (plus one check).
+# PS_TICKS: bound of one process listing, in 0.1 s steps; a listing that did not finish is killed and counts as
+# "a process is still running".
 TICKS=${ticks}
+WAIT_SECS=${waitSecs}
+PS_TICKS=${psTicks}
+DEADLINE=
 
 PID=
 APP=
@@ -134,11 +151,33 @@ remove_staging() {
   return 0
 }
 
+# Clock: whole seconds. If the clock cannot be read the time bound is off and only TICKS (and PS_TICKS) apply.
+now() {
+  _now=$("$DATE" +%s 2>/dev/null) || return 1
+  case $_now in ''|*[!0-9]*) return 1 ;; esac
+}
+
+start_deadline() {
+  DEADLINE=
+  if now; then
+    DEADLINE=$((_now + WAIT_SECS))
+  fi
+  return 0
+}
+
+expired() {
+  [ -n "$DEADLINE" ] || return 1
+  now || return 1
+  [ "$_now" -gt "$DEADLINE" ]
+}
+
 # Step 1: wait for the window process to end.
 wait_window() {
+  start_deadline
   _n=0
   while kill -0 "$PID" 2>/dev/null; do
     [ "$_n" -lt "$TICKS" ] || return 1
+    expired && return 1
     "$SLEEP" 0.1
     _n=$((_n + 1))
   done
@@ -154,22 +193,39 @@ take_lock() {
 }
 
 # Step 2: is there a process whose executable lies in <app>/Contents/MacOS/ (exact start of the string).
-# If the list could not be obtained, assume a process exists.
+# The listing runs in the background into a file in the staging directory (it is removed with it); it is polled and
+# killed when it does not finish within PS_TICKS or the deadline. The lock descriptor is closed for it.
+# If the list could not be obtained in time, assume a process exists.
 others_running() {
-  _out=$("$PS" -axo comm= 2>/dev/null) || return 0
+  _list="$STAGEDIR/.ps-list"
+  "$PS" -axo comm= >"$_list" 2>/dev/null 9>&- &
+  _ps_pid=$!
+  _k=0
+  while kill -0 "$_ps_pid" 2>/dev/null; do
+    if [ "$_k" -ge "$PS_TICKS" ] || expired; then
+      kill -9 "$_ps_pid" 2>/dev/null
+      { wait "$_ps_pid"; } 2>/dev/null
+      return 0
+    fi
+    "$SLEEP" 0.1
+    _k=$((_k + 1))
+  done
+  { wait "$_ps_pid"; } 2>/dev/null || return 0
+  expired && return 0
+  [ -f "$_list" ] || return 0
   _prefix="$APP/Contents/MacOS/"
-  printf '%s\\n' "$_out" | {
-    while IFS= read -r _line; do
-      case $_line in "$_prefix"*) exit 0 ;; esac
-    done
-    exit 1
-  }
+  while IFS= read -r _line || [ -n "$_line" ]; do
+    case $_line in "$_prefix"*) return 0 ;; esac
+  done <"$_list"
+  return 1
 }
 
 wait_others() {
+  start_deadline
   _n=0
   while others_running; do
     [ "$_n" -lt "$TICKS" ] || return 1
+    expired && return 1
     "$SLEEP" 0.1
     _n=$((_n + 1))
   done

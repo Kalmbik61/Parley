@@ -96,13 +96,24 @@ describe('helperScript', () => {
       lockf: '/usr/bin/lockf',
       open: '/usr/bin/open',
       ps: '/bin/ps',
+      date: '/bin/date',
     });
     expect(text).toContain("MV='/bin/mv'");
     expect(text).toContain("RM='/bin/rm'");
     expect(text).toContain("LOCKF='/usr/bin/lockf'");
     expect(text).toContain("OPEN='/usr/bin/open'");
     expect(text).toContain("PS='/bin/ps'");
+    expect(text).toContain("DATE='/bin/date'");
     expect(text).toContain(`TICKS=${HELPER_WAIT_MS / HELPER_POLL_MS}`);
+    // Предел по часам — целые секунды (granularity `date +%s`), округление вверх.
+    expect(text).toContain(`WAIT_SECS=${HELPER_WAIT_MS / 1000}`);
+    expect(helperScript({ waitMs: 300 })).toContain('WAIT_SECS=1');
+    expect(helperScript({ waitMs: 1001 })).toContain('WAIT_SECS=2');
+  });
+
+  it('сценарий остаётся константным текстом: путь date берётся как у остальных утилит', () => {
+    expect(helperScript({ date: "/tmp/it's/date" })).toContain(`DATE='/tmp/it'\\''s/date'`);
+    expect(() => helperScript({ date: '' })).toThrow();
   });
 
   it('замок — дескриптор 9 и lockf -s -t 0 9; open с закрытым дескриптором', () => {
@@ -216,6 +227,10 @@ interface RigOptions {
   openCode?: number;
   psLines?: string[];
   psExit?: number;
+  /** Свой текст подставного ps (после `#!/bin/sh`) вместо печати `psLines`. */
+  psBody?: string[];
+  /** Свой текст подставного date (после `#!/bin/sh`) вместо настоящего. */
+  dateBody?: string[];
   /** open после записи в журнал ждёт файла `release` (замок при этом держит сценарий). */
   openHold?: boolean;
   mv?: WrapperOptions;
@@ -322,7 +337,10 @@ async function makeRig(opts: RigOptions = {}): Promise<Rig> {
   await writeFile(rig.psOut, (opts.psLines ?? []).map((l) => `${l}\n`).join(''));
   await writeFile(
     ps,
-    ['#!/bin/sh', `/bin/cat ${q(rig.psOut)}`, `exit ${opts.psExit ?? 0}`, ''].join('\n'),
+    (opts.psBody
+      ? ['#!/bin/sh', ...opts.psBody, '']
+      : ['#!/bin/sh', `/bin/cat ${q(rig.psOut)}`, `exit ${opts.psExit ?? 0}`, '']
+    ).join('\n'),
   );
   const mv = path.join(tools, 'mv');
   const rmTool = path.join(tools, 'rm');
@@ -332,6 +350,12 @@ async function makeRig(opts: RigOptions = {}): Promise<Rig> {
   await chmod(ps, 0o755);
 
   rig.options = { waitMs: opts.waitMs ?? 300, mv, rm: rmTool, open, ps };
+  if (opts.dateBody) {
+    const date = path.join(tools, 'date');
+    await writeFile(date, ['#!/bin/sh', ...opts.dateBody, ''].join('\n'));
+    await chmod(date, 0o755);
+    rig.options.date = date;
+  }
   await writeFile(rig.helper, helperScript(rig.options), { mode: 0o700 });
   return rig;
 }
@@ -823,6 +847,127 @@ describe.skipIf(process.platform !== 'darwin')('сценарий замены н
           mvCalls: [`${rig.app} ${rig.old}`, `${rig.staged} ${rig.app}`],
           rmCalls: [`-rf -- ${rig.stageDir}`],
         });
+      },
+      T,
+    );
+  });
+
+  // R4: предел ожидания по прошедшему времени, включая сами проверки (спека §5.5 шаги 1 и 2, §13 п. 10)
+  describe('R4: предел ожидания по часам', () => {
+    // Предел 1 с; часы знают целые секунды, значит сценарий кончает не раньше 1 с и не позже ~2 с плюс одна проверка.
+    const LIMIT = 1000;
+    const UPPER = 3500;
+
+    it(
+      'процесс окна не кончается: quit_timeout укладывается в верхнюю границу, ничего не тронуто',
+      async () => {
+        const rig = await makeRig({ waitMs: LIMIT });
+        const t0 = Date.now();
+        expect(await run(rig, defaultArgs(rig, process.pid))).toBe(0);
+        const elapsed = Date.now() - t0;
+        expect(elapsed).toBeGreaterThanOrEqual(LIMIT - 100);
+        expect(elapsed).toBeLessThan(UPPER);
+        const s = await state(rig);
+        expect(s.app).toBe('old');
+        expect(s.result).toBeNull();
+        expect(s.lockFile).toBe(false);
+      },
+      T,
+    );
+
+    it(
+      'часы не читаются (date отказал): работает счёт шагов, ожидание всё равно конечно',
+      async () => {
+        const rig = await makeRig({ waitMs: LIMIT, dateBody: ['exit 1'] });
+        const t0 = Date.now();
+        expect(await run(rig, defaultArgs(rig, process.pid))).toBe(0);
+        const elapsed = Date.now() - t0;
+        expect(elapsed).toBeGreaterThanOrEqual(LIMIT - 100);
+        expect(elapsed).toBeLessThan(UPPER);
+        expect((await state(rig)).result).toBeNull();
+      },
+      T,
+    );
+
+    it(
+      'другой экземпляр не кончается, а проверка идёт 0,5 с: still_running в верхней границе',
+      async () => {
+        const rig = await makeRig({ waitMs: LIMIT });
+        // Путь приложения известен только после makeRig: пишем подставной ps с ним.
+        await writeFile(
+          rig.options.ps!,
+          [
+            '#!/bin/sh',
+            '/bin/sleep 0.5',
+            `printf '%s\\n' ${q(`${rig.app}/Contents/MacOS/Parley`)}`,
+            '',
+          ].join('\n'),
+        );
+        const t0 = Date.now();
+        expect(await run(rig)).toBe(0);
+        const elapsed = Date.now() - t0;
+        expect(elapsed).toBeLessThan(UPPER);
+        const s = await state(rig);
+        expect(s.result).toBe(`failed ${VERSION} still_running\n`);
+        expect(s.app).toBe('old');
+        expect(s.mvCalls).toEqual([]);
+      },
+      T,
+    );
+
+    it(
+      'ps дольше предела (пустой список через 3 с): список не успел — считаем, что процесс есть',
+      async () => {
+        const rig = await makeRig({ waitMs: LIMIT, psBody: ['/bin/sleep 3', 'exit 0'] });
+        const t0 = Date.now();
+        expect(await run(rig)).toBe(0);
+        expect(Date.now() - t0).toBeLessThan(UPPER);
+        const s = await state(rig);
+        expect(s.result).toBe(`failed ${VERSION} still_running\n`);
+        expect(s.app).toBe('old');
+        expect(s.old).toBeNull();
+        expect(s.mvCalls).toEqual([]);
+      },
+      T,
+    );
+
+    it(
+      'ps завис: оборван, процесс ps кончен, дескриптор замка ему не передан, итог still_running',
+      async () => {
+        const rig = await makeRig({ waitMs: LIMIT });
+        const pidFile = path.join(rig.tools, 'ps.pid');
+        const fdFile = path.join(rig.tools, 'ps.fd');
+        await writeFile(
+          rig.options.ps!,
+          [
+            '#!/bin/sh',
+            `echo $$ > ${q(pidFile)}`,
+            `if ( : >&9 ) 2>/dev/null; then echo open > ${q(fdFile)}; else echo closed > ${q(fdFile)}; fi`,
+            'exec /bin/sleep 20',
+            '',
+          ].join('\n'),
+        );
+        const t0 = Date.now();
+        expect(await run(rig)).toBe(0);
+        expect(Date.now() - t0).toBeLessThan(UPPER);
+        const s = await state(rig);
+        expect(s.result).toBe(`failed ${VERSION} still_running\n`);
+        expect(s.app).toBe('old');
+        expect(s.mvCalls).toEqual([]);
+        expect((await readText(fdFile))?.trim()).toBe('closed');
+        await waitDead(Number((await readText(pidFile))!.trim()));
+      },
+      T,
+    );
+
+    it(
+      'ps завис и держит дочерний процесс: ожидание всё равно конечно',
+      async () => {
+        const rig = await makeRig({ waitMs: LIMIT, psBody: ['/bin/sleep 20', 'exit 0'] });
+        const t0 = Date.now();
+        expect(await run(rig)).toBe(0);
+        expect(Date.now() - t0).toBeLessThan(UPPER);
+        expect((await state(rig)).result).toBe(`failed ${VERSION} still_running\n`);
       },
       T,
     );
