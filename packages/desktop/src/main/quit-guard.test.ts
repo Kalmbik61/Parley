@@ -115,6 +115,36 @@ describe('guardAppQuit', () => {
     expect(deps.ask).not.toHaveBeenCalled();
   });
 
+  it('retryQuit: повтор выхода идёт через него и после остановки хоста; сам quit() зовёт только он', async () => {
+    const retried: string[] = [];
+    const retryQuit = vi.fn((quit: () => void) => {
+      retried.push('retry');
+      quit();
+    });
+    const { app, steps } = setup({ retryQuit });
+    expect(app.willQuit()).toBe(true);
+    await vi.waitFor(() => expect(steps).toEqual(['stop-host', 'quit']));
+    expect(retryQuit).toHaveBeenCalledTimes(1);
+    expect(retried).toEqual(['retry']);
+    expect(app.willQuit()).toBe(false);
+  });
+
+  it('retryQuit, не вызвавший quit, выход не повторяет: прямого quit() в обход него нет', async () => {
+    const retryQuit = vi.fn();
+    const { app, steps } = setup({ retryQuit });
+    expect(app.willQuit()).toBe(true);
+    await vi.waitFor(() => expect(retryQuit).toHaveBeenCalledTimes(1));
+    expect(steps).toEqual(['stop-host']);
+  });
+
+  it('retryQuit не вызывается при отмене вопроса', async () => {
+    const retryQuit = vi.fn();
+    const { app, steps } = setup({ ask: vi.fn(async () => 'cancel' as const), retryQuit });
+    expect(app.willQuit()).toBe(true);
+    await vi.waitFor(() => expect(steps).toEqual(['cancel']));
+    expect(retryQuit).not.toHaveBeenCalled();
+  });
+
   it('повторный will-quit, пока вопрос открыт, — тоже отменён, второго вопроса нет', async () => {
     let answer!: (value: 'stop' | 'cancel') => void;
     const ask = vi.fn(
