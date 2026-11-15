@@ -1975,9 +1975,7 @@ describe('assistant-service: durable-история разговора', () => {
     await flush();
     await service.ask({ ...ASK, text: 'ещё' });
     turns[1]?.end({ ok: false, kind: 'resume', message: 'no session' });
-    await flush();
-    await flush();
-    expect(turns).toHaveLength(3);
+    await vi.waitFor(() => expect(turns).toHaveLength(3));
     turns[2]?.emit({ type: 'text', delta: '[[calm]] готово' });
     turns[2]?.end({ ok: true });
     await flush();
