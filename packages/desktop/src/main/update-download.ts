@@ -340,6 +340,8 @@ export function runAttempt(deps: AttemptDeps, input: AttemptInput): Attempt {
   const writeAll = async (archive: ArchiveFile, chunk: Uint8Array): Promise<void> => {
     let offset = 0;
     while (offset < chunk.byteLength) {
+      // Запись, начатая до прерывания, могла ответить после него и неполно: дописывать кусок уже нельзя.
+      throwIfStopped();
       const { bytesWritten } = await onDisk(
         archive.write(chunk, offset, chunk.byteLength - offset),
       );

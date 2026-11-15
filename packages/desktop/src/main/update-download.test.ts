@@ -816,6 +816,65 @@ describe.skipIf(process.platform !== 'darwin')('runAttempt', () => {
         dirsGone();
       });
 
+      // Запись, начатая до прерывания, отвечает после него и неполно: дописывать кусок попытка уже не должна.
+      const gatedShortWrite = (): {
+        openFile: () => Promise<ArchiveFile>;
+        writes: () => number;
+        release: () => void;
+      } => {
+        let writes = 0;
+        let release!: () => void;
+        return {
+          openFile: async () => ({
+            write: () => {
+              writes += 1;
+              return new Promise((resolve) => {
+                release = () => resolve({ bytesWritten: 3 });
+              });
+            },
+            close: async () => {},
+          }),
+          writes: () => writes,
+          release: () => release(),
+        };
+      };
+
+      it('отмена во время короткой записи: вторая запись куска не начинается', async () => {
+        const body = controlledBody();
+        const file = gatedShortWrite();
+        const attempt = start(
+          fetchOf({ manifest: ok(manifestFor('x')), archive: () => body.response }),
+          { openFile: file.openFile },
+        );
+        await vi.waitFor(() => expect(progress.length).toBe(1));
+        body.push('abcdefghij');
+        await vi.waitFor(() => expect(file.writes()).toBe(1));
+        const cancelled = attempt.cancel();
+        file.release();
+        await cancelled;
+        expect(await attempt.done).toEqual({ ok: false, reason: 'cancelled' });
+        expect(file.writes()).toBe(1);
+        dirsGone();
+      });
+
+      it('предел простоя во время короткой записи: вторая запись куска не начинается', async () => {
+        const clock = manualClock();
+        const body = controlledBody();
+        const file = gatedShortWrite();
+        const attempt = start(
+          fetchOf({ manifest: ok(manifestFor('x')), archive: () => body.response }),
+          { openFile: file.openFile, clock },
+        );
+        await vi.waitFor(() => expect(progress.length).toBe(1));
+        body.push('abcdefghij');
+        await vi.waitFor(() => expect(file.writes()).toBe(1));
+        clock.advance(ARCHIVE_IDLE_MS);
+        file.release();
+        expect(await attempt.done).toEqual({ ok: false, reason: 'network' });
+        expect(file.writes()).toBe(1);
+        dirsGone();
+      });
+
       it('файл архива не открылся (нет места) после ответа → disk, ответ оборван, запрос прерван, каталоги удалены', async () => {
         const body = controlledBody({}, 0);
         const attempt = start(
