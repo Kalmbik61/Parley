@@ -80,6 +80,38 @@ export interface UpdateInfo {
   url: string;
 }
 
+/** Почему попытка самообновления отказала (спека self-update §5.1). */
+export type UpdateFailure =
+  | 'network' // нет ответа, не 2xx, обрыв, вышло время ожидания
+  | 'too_large' // файл больше предела
+  | 'checksum' // архива нет в SHA256SUMS.txt или хэш не совпал
+  | 'bad_archive' // не распаковался, нет Parley.app, чужая версия или идентификатор, не снялся карантин
+  | 'disk' // ошибка записи: каталог загрузки, каталог рядом с приложением, файл сценария
+  | 'cannot_replace'; // к моменту установки заменить себя уже нельзя
+
+/** Состояние самообновления; живёт в main, окно получает его событием (спека self-update §5.1). */
+export type UpdateState =
+  | { phase: 'idle' }
+  | { phase: 'available'; version: string; url: string; canInstall: boolean }
+  | { phase: 'downloading'; version: string; url: string; received: number; total: number | null }
+  | { phase: 'verifying'; version: string; url: string }
+  | { phase: 'ready'; version: string; url: string }
+  | { phase: 'failed'; version: string; url: string; reason: UpdateFailure };
+
+/** Код отказа в файле итога замены: пять от сценария и `helper` от main (спека self-update §5.5). */
+export type UpdateResultFailure =
+  | 'still_running'
+  | 'no_app'
+  | 'swap_failed'
+  | 'restore_failed'
+  | 'launch_failed'
+  | 'helper';
+
+/** Итог замены, прочитанный новым окном при старте. */
+export type UpdateResult =
+  | { kind: 'updated'; version: string }
+  | { kind: 'failed'; version: string; reason: UpdateResultFailure };
+
 /**
  * Ответ окна на `app:confirm-close` (кусок 7.3a): `close` — «Don't save» или «Save all», у
  * которого удались все записи; `cancel` — «Cancel» или ошибка записи, окно остаётся.
