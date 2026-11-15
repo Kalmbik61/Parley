@@ -480,6 +480,7 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
       },
       phrases: { detailsOnScreen: S.assistant.live.detailsOnScreen, clarifying: S.assistant.live.clarifying },
       fallbackText: S.assistant.live.untranscribed,
+      deliverCard: (text) => useAssistantStore.getState().deliverService(text),
     });
     const detach = useLiveStore.getState().attachDelegation(delegation);
     return () => {

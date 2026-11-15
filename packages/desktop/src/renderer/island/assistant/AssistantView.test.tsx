@@ -865,3 +865,20 @@ describe('A8: значок автономного режима и стоп пл�
     expect(screen.queryByTestId('assistant-stop-plan')).toBeNull();
   });
 });
+
+describe('W4: watchNote', () => {
+  it('заметка слежения показана строкой уведомления и пропадает, когда хост её сбросил', () => {
+    const { rerender } = render(<AssistantView {...props({}, { watchNote: 'Two follow-up messages were dropped.' })} />);
+    expect(screen.getByTestId('assistant-notice').textContent).toBe('Two follow-up messages were dropped.');
+    rerender(<AssistantView {...props({}, { watchNote: null })} />);
+    expect(screen.queryByTestId('assistant-notice')).toBeNull();
+  });
+
+  it('собственное уведомление острова важнее заметки; в компактном виде заметка тоже видна', () => {
+    const live = { phase: 'live', humanSpeaking: false, modelPlaying: false, checking: false, emotion: 'calm', notice: null, onToggle: vi.fn() } as const;
+    const { rerender } = render(<AssistantView {...props({ notice: 'Island notice' }, { watchNote: 'Dropped.' })} />);
+    expect(screen.getByTestId('assistant-notice').textContent).toBe('Island notice');
+    rerender(<AssistantView {...props({ live }, { watchNote: 'Dropped.' })} />);
+    expect(screen.getByTestId('assistant-notice').textContent).toBe('Dropped.');
+  });
+});

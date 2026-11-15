@@ -363,7 +363,7 @@ export function AssistantView(props: AssistantViewProps): JSX.Element {
     const element = scrollRef.current;
     if ((proposalId === null && queue.length === 0 && history.length === 0) || element === null) return;
     element.scrollTop = element.scrollHeight;
-  }, [proposalId, queue.length, history.length, sending, host.turn, host.answer, props.cardError, props.notice]);
+  }, [proposalId, queue.length, history.length, sending, host.turn, host.answer, props.cardError, props.notice, host.watchNote]);
   // Отчёт плана живёт, пока нет карточки; он заменяет «Done ✓». Карточку `actions` Enter не подтверждает — только кнопка.
   const report = proposal === null ? (host.report ?? null) : null;
   // «Stop» плана: после нажатия, пока план идёт, вместо кнопки — подпись «Stopping…».
@@ -394,7 +394,9 @@ export function AssistantView(props: AssistantViewProps): JSX.Element {
   const question = sending ?? host.question;
   const compact = props.live !== undefined && props.live.phase !== 'idle';
   // Компактный вид показывает одну строку: отказ Live, затем уведомление острова, затем причину закрытой карточки.
-  const compactNotice = props.live?.notice ?? props.notice ?? (proposal === null ? props.cardError : null);
+  // Заметка слежения хоста (`watchNote`) показывается как уведомление острова и пропадает со следующим ходом.
+  const notice = props.notice ?? host.watchNote ?? null;
+  const compactNotice = props.live?.notice ?? notice ?? (proposal === null ? props.cardError : null);
   return (
     <div data-testid="assistant-view" data-compact={compact || undefined} onPointerDownCapture={props.onTakeKeyboard} className="island-reveal flex w-[420px] flex-col gap-2 px-3 pb-3 pt-1.5 text-sm" style={{ maxHeight: props.maxHeight }}>
       {compact || pending === null ? null : (
@@ -527,7 +529,7 @@ export function AssistantView(props: AssistantViewProps): JSX.Element {
           )
         ) : (
           <>
-            {props.notice === null ? null : <div data-testid="assistant-notice" className="text-[13px] text-muted-foreground">{props.notice}</div>}
+            {notice === null ? null : <div data-testid="assistant-notice" className="text-[13px] text-muted-foreground">{notice}</div>}
             {props.live?.notice == null ? null : (
               <div data-testid="assistant-live-notice" className="text-[13px] text-muted-foreground">
                 {props.live.notice}
