@@ -6,7 +6,13 @@ All notable changes to Parley are documented in this file.
 
 ## Unreleased
 
+### Added
+
+- **Autonomous mode for the assistant.** A new switch in Settings → Assistant, **Autonomous mode**, is off by default. When it is on, an action you ask the assistant for on the island runs at once, without a confirmation card; the card is still recorded, and Settings → Assistant lists the **Recent actions**. Telegram and the phone still ask with a card, as before. The island shows an **Auto** badge, the progress of a multi-step plan and a **Stop** button (in the compact Live view too). The assistant now also reports the answer of a session it gave work to: by voice while Live is on, otherwise as a card on the island that is read aloud as usual. This needs a window and a host that both know the mode; with an older window the island has no badge and no Stop button, and the result is announced like any other result. The host database gets two schema migrations (15 and 16).
+
 ### Changed
+
+- **The assistant's voice prompt no longer promises a confirmation card for every action.** The lines about actions in `VOICE_PROMPT` are worded the same whether autonomous mode is on or off.
 
 - **Continuing a session on a provider where its role cannot run no longer leaves it stuck.** A switch used to write the new provider into the session and then every launch failed with `role-permissions-unavailable` (for example a read-only Architect moved to Qwen Code). Now a built-in role the target does not accept becomes "no role", and Parley says so before it switches: the "Continue on another provider" dialog shows one sentence about the role change above the button, and an agent's `request_agent_switch` card shows the same sentence in the window, the island and Telegram (the phone shows it too). When the change lifts a read-only restriction, the switch needs that confirmation: a request without it is refused with the same sentence and nothing is changed. After a confirmed switch with a role change you get one notice instead of the dialog's own toast. A session already stuck by an earlier version is refused at launch with a message that names the provider to continue it on again. Not in this version: the phone's "Continue on another provider" sheet does not show the role change (a read-only loss is refused there with the sentence), and switching back does not restore the earlier role.
 
