@@ -64,6 +64,13 @@ export function spawnRun(command: string, args: string[]): RunningProcess {
   return { exited, kill: () => void child.kill('SIGKILL') };
 }
 
+/** Файл архива: то, что нужно загрузке от `FileHandle`; тест подставляет свой (короткая запись, нет места). */
+export interface ArchiveFile {
+  /** Пишет `length` байт `buffer` с `offset`; возвращает, сколько записано на самом деле. */
+  write(buffer: Uint8Array, offset: number, length: number): Promise<{ bytesWritten: number }>;
+  close(): Promise<void>;
+}
+
 export interface AttemptClock {
   now(): number;
   setTimeout(fn: () => void, ms: number): unknown;
@@ -99,6 +106,8 @@ export interface AttemptDeps {
   clock: AttemptClock;
   /** Пределы спеки; подменяются только в тестах. */
   limits?: Partial<AttemptLimits>;
+  /** Создание файла архива (новый, права 0600); подменяется только в тестах. */
+  openFile?(file: string): Promise<ArchiveFile>;
 }
 
 export interface AttemptInput {
@@ -185,26 +194,43 @@ export function runAttempt(deps: AttemptDeps, input: AttemptInput): Attempt {
   const stagedApp = path.join(input.stagingDir, APP_FILE);
 
   let stopped: Stop | null = null;
-  let rejectInterrupt: (error: Stop) => void = () => {};
-  // Прерывание гоняется с каждым ожиданием: `fetch`, не слушающий сигнал, и подвисшее чтение тела не держат попытку.
-  const interrupt = new Promise<never>((_, reject) => {
-    rejectInterrupt = reject;
-  });
-  interrupt.catch(() => {});
+  // Подписки на прерывание: `fetch`, не слушающий сигнал, и подвисшее чтение тела не держат попытку. Подписка живёт
+  // только пока длится одно ожидание и снимается, когда оно кончилось: общий вечный промис копил бы по обработчику
+  // (а с ним и по уже прочитанному куску архива) на каждое чтение.
+  const waiters = new Set<(error: Stop) => void>();
 
   const stop = (kind: Stop['kind']): void => {
     if (stopped !== null) return;
-    stopped = new Stop(kind);
+    const error = new Stop(kind);
+    stopped = error;
     controller.abort();
-    rejectInterrupt(stopped);
+    const pending = [...waiters];
+    waiters.clear();
+    for (const reject of pending) reject(error);
   };
   const throwIfStopped = (): void => {
     if (stopped !== null) throw stopped;
   };
-  const guard = <T>(promise: Promise<T>): Promise<T> => {
-    promise.catch(() => {});
-    return Promise.race([interrupt, promise]);
-  };
+  const guard = <T>(promise: Promise<T>): Promise<T> =>
+    new Promise<T>((resolve, reject) => {
+      if (stopped !== null) {
+        promise.catch(() => {});
+        reject(stopped);
+        return;
+      }
+      const onStop = (error: Stop): void => reject(error);
+      waiters.add(onStop);
+      promise.then(
+        (value) => {
+          waiters.delete(onStop);
+          resolve(value);
+        },
+        (error: unknown) => {
+          waiters.delete(onStop);
+          reject(error);
+        },
+      );
+    });
 
   // Один таймер на попытку: сперва манифест (30 с на весь запрос), потом архив (60 с без байта).
   let timer: unknown = null;
@@ -249,12 +275,33 @@ export function runAttempt(deps: AttemptDeps, input: AttemptInput): Attempt {
     }
   };
 
+  /** Ответ больше не нужен: тело обрывается (у занятого читателем — через читателя). */
+  const release = (
+    response: Response,
+    reader: ReadableStreamDefaultReader<Uint8Array> | null,
+  ): void => {
+    void (reader ?? response.body)?.cancel().catch(() => {});
+  };
+
   const fetchFile = async (url: string): Promise<Response> => {
-    const response = await guard(
-      deps.fetch(url, { headers: { ...HEADERS }, signal: controller.signal, credentials: 'omit' }),
-    );
+    const request = deps.fetch(url, {
+      headers: { ...HEADERS },
+      signal: controller.signal,
+      credentials: 'omit',
+    });
+    let response: Response;
+    try {
+      response = await guard(request);
+    } catch (error) {
+      // Попытку прервали раньше ответа: ответ, пришедший позже, никому не нужен, но тело за ним надо оборвать.
+      request.then(
+        (late) => release(late, null),
+        () => {},
+      );
+      throw error;
+    }
     if (!response.ok) {
-      void response.body?.cancel().catch(() => {});
+      release(response, null);
       throw new Fail('network');
     }
     return response;
@@ -263,11 +310,12 @@ export function runAttempt(deps: AttemptDeps, input: AttemptInput): Attempt {
   /** Манифест: тело потоком до предела; больше — `too_large`. */
   const readManifest = async (url: string): Promise<string> => {
     const response = await fetchFile(url);
-    if (response.body === null) throw new Fail('network');
-    const reader = response.body.getReader();
+    let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
     const chunks: Uint8Array[] = [];
     let total = 0;
     try {
+      if (response.body === null) throw new Fail('network');
+      reader = response.body.getReader();
       for (;;) {
         const { done, value } = await guard(reader.read());
         if (done) break;
@@ -276,9 +324,23 @@ export function runAttempt(deps: AttemptDeps, input: AttemptInput): Attempt {
         chunks.push(value);
       }
     } finally {
-      void reader.cancel().catch(() => {});
+      release(response, reader);
     }
     return Buffer.concat(chunks).toString('utf8');
+  };
+
+  const openArchive = deps.openFile ?? ((file: string) => open(file, 'wx', 0o600));
+
+  /** Кусок целиком в файл: короткая запись дописывается, ни одного байта за вызов или ошибка записи — `disk`. */
+  const writeAll = async (archive: ArchiveFile, chunk: Uint8Array): Promise<void> => {
+    let offset = 0;
+    while (offset < chunk.byteLength) {
+      const { bytesWritten } = await onDisk(
+        archive.write(chunk, offset, chunk.byteLength - offset),
+      );
+      if (!(bytesWritten > 0)) throw new Fail('disk');
+      offset += bytesWritten;
+    }
   };
 
   /** Архив потоком в файл; SHA-256 считается по ходу. Возвращает хэш. */
@@ -286,27 +348,29 @@ export function runAttempt(deps: AttemptDeps, input: AttemptInput): Attempt {
     // Отсчёт простоя — от начала запроса: покрывает заголовки и перенаправления; сбрасывают его только байты.
     arm(limits.archiveIdleMs);
     const response = await fetchFile(url);
-    if (response.body === null) throw new Fail('network');
-    const total = declaredLength(response);
-    if (total !== null && total > limits.archiveBytes) {
-      void response.body.cancel().catch(() => {});
-      throw new Fail('too_large');
-    }
-    const hash = createHash('sha256');
-    const handle = await onDisk(open(file, 'wx', 0o600));
-    const reader = response.body.getReader();
+    let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+    let archive: ArchiveFile | null = null;
     try {
+      if (response.body === null) throw new Fail('network');
+      const total = declaredLength(response);
+      if (total !== null && total > limits.archiveBytes) throw new Fail('too_large');
+      const hash = createHash('sha256');
+      archive = await onDisk(openArchive(file));
+      reader = response.body.getReader();
       let received = 0;
       let lastProgress = clock.now();
       deps.onProgress(0, total);
       for (;;) {
         const { done, value } = await guard(reader.read());
         if (done) break;
+        // Пустой кусок — не байт: отсчёт простоя он не сбрасывает.
+        if (value.byteLength === 0) continue;
         received += value.byteLength;
         if (received > limits.archiveBytes) throw new Fail('too_large');
         arm(limits.archiveIdleMs);
+        await writeAll(archive, value);
+        // Сумма считается по тому, что дошло до файла, а не по тому, что пришло.
         hash.update(value);
-        await onDisk(handle.write(value));
         const now = clock.now();
         if (now - lastProgress >= PROGRESS_INTERVAL_MS) {
           lastProgress = now;
@@ -316,8 +380,8 @@ export function runAttempt(deps: AttemptDeps, input: AttemptInput): Attempt {
       disarm();
       return hash.digest('hex');
     } finally {
-      void reader.cancel().catch(() => {});
-      await handle.close().catch(() => {});
+      release(response, reader);
+      await archive?.close().catch(() => {});
     }
   };
 
@@ -394,6 +458,8 @@ export function runAttempt(deps: AttemptDeps, input: AttemptInput): Attempt {
   let cancelled = false;
   const pipeline: Promise<AttemptOutcome> = attempt()
     .catch((error: unknown): AttemptOutcome => {
+      // Любой отказ обрывает и сам запрос: тело, которое никто не дочитает, не должно висеть на соединении.
+      controller.abort();
       if (error instanceof Fail) return { ok: false, reason: error.reason };
       if (error instanceof Stop && error.kind === 'cancel')
         return { ok: false, reason: 'cancelled' };
