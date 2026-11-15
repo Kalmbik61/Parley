@@ -8,6 +8,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { toast } from 'sonner';
 import type { UpdateInfo, UpdateState } from '../../shared/bridge.js';
+import { S } from '../../shared/strings.js';
 import { DEFAULT_UI } from '../../shared/ui-types.js';
 import { useUiStore } from '../store/ui.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
@@ -25,7 +26,11 @@ const NEWER: UpdateInfo = {
 };
 
 /** Состояние «найден релиз» для моста: тост показывается только в нём. */
-const avail = (info: UpdateInfo): UpdateState => ({ phase: 'available', ...info, canInstall: false });
+const avail = (info: UpdateInfo): UpdateState => ({
+  phase: 'available',
+  ...info,
+  canInstall: false,
+});
 
 interface ToastOptions {
   id: string;
@@ -314,6 +319,232 @@ describe('wireUpdateNotice — переключатель и загрузка ui
 
     useUiStore.setState({ uiLoaded: true });
 
+    expect(toast).not.toHaveBeenCalled();
+  });
+});
+
+const URL_ = INFO.url;
+const can = (info: UpdateInfo): UpdateState => ({ phase: 'available', ...info, canInstall: true });
+
+/** Событие кнопки sonner: проверяется, отменил ли обработчик закрытие тоста. */
+function click(button: { onClick: (event?: { preventDefault(): void }) => void }): boolean {
+  let prevented = false;
+  button.onClick({ preventDefault: () => (prevented = true) });
+  return prevented;
+}
+
+describe('wireUpdateNotice — самообновление (спека §4.1)', () => {
+  it('SU-02: заменить себя можно — «Update» и «Later»; «Update» зовёт downloadUpdate, версию не закрывает, тост не закрывает', () => {
+    const saveUi = vi.spyOn(bridge.app, 'saveUi');
+    wire();
+
+    bridge.emitUpdateState(can(INFO));
+
+    const { message, options } = lastToast();
+    expect(message).toBe('Parley 0.2.0 is available');
+    expect(options.action.label).toBe('Update');
+    expect(options.cancel.label).toBe('Later');
+    expect(click(options.action)).toBe(true);
+    expect(bridge.updateCalls).toContain('download');
+    expect(bridge.externalOpened).toEqual([]);
+    expect(saveUi).not.toHaveBeenCalled();
+    expect(useUiStore.getState().ui.dismissedUpdate).toBeNull();
+  });
+
+  it('SU-02: заменить себя нельзя — «Download» (страница релиза) и «Later», как на master', () => {
+    wire();
+
+    bridge.emitUpdateState(avail(INFO));
+
+    const { options } = lastToast();
+    expect(options.action.label).toBe('Download');
+    options.action.onClick();
+    expect(bridge.externalOpened).toEqual([URL_]);
+    expect(bridge.updateCalls).not.toContain('download');
+  });
+
+  it('загрузка: «Downloading Parley X… N%» с одной кнопкой «Cancel», тот же id; «Cancel» зовёт cancelUpdateDownload и тост не закрывает', () => {
+    wire();
+    bridge.emitUpdateState(can(INFO));
+
+    bridge.emitUpdateState({ phase: 'downloading', ...INFO, received: 250, total: 1000 });
+
+    const { message, options } = lastToast();
+    expect(message).toBe('Downloading Parley 0.2.0… 25%');
+    expect(options.id).toBe(UPDATE_TOAST_ID);
+    expect(options.duration).toBe(Infinity);
+    expect(options.action.label).toBe('Cancel');
+    // Кнопка «Later» прежнего состояния не должна остаться: sonner сливает параметры одного id.
+    expect(options.cancel).toBeUndefined();
+    expect(click(options.action)).toBe(true);
+    expect(bridge.updateCalls).toContain('cancel');
+  });
+
+  it('загрузка без известного размера — без процента', () => {
+    wire();
+
+    bridge.emitUpdateState({ phase: 'downloading', ...INFO, received: 250, total: null });
+
+    expect(lastToast().message).toBe('Downloading Parley 0.2.0…');
+  });
+
+  it('проверка и распаковка: «Checking Parley X…» и «Cancel»', () => {
+    wire();
+
+    bridge.emitUpdateState({ phase: 'verifying', ...INFO });
+
+    const { message, options } = lastToast();
+    expect(message).toBe('Checking Parley 0.2.0…');
+    expect(options.action.label).toBe('Cancel');
+    click(options.action);
+    expect(bridge.updateCalls).toContain('cancel');
+  });
+
+  it('готово: «Parley X is ready», строка про остановку агентов, «Restart now» (не закрывает тост, зовёт installUpdate) и «Later»', () => {
+    wire();
+
+    bridge.emitUpdateState({ phase: 'ready', ...INFO });
+
+    const { message, options } = lastToast();
+    expect(message).toBe('Parley 0.2.0 is ready');
+    expect((options as unknown as { description: string }).description).toBe(
+      'Restarting stops running agents',
+    );
+    expect(options.action.label).toBe('Restart now');
+    expect(options.cancel.label).toBe('Later');
+    expect(click(options.action)).toBe(true);
+    expect(bridge.updateCalls).toContain('install');
+    // «Later» версию закрытой не записывает.
+    options.cancel.onClick();
+    expect(useUiStore.getState().ui.dismissedUpdate).toBeNull();
+  });
+
+  it("не удалось: «Couldn't update to X: <причина>», «Download» (страница релиза) и «Later»", () => {
+    wire();
+
+    bridge.emitUpdateState({ phase: 'failed', ...INFO, reason: 'checksum' });
+
+    const { message, options } = lastToast();
+    expect(message).toBe("Couldn't update to 0.2.0: the download does not match its checksum");
+    expect(options.action.label).toBe('Download');
+    expect(options.cancel.label).toBe('Later');
+    options.action.onClick();
+    expect(bridge.externalOpened).toEqual([URL_]);
+  });
+
+  it('у каждого кода отказа своя причина, непустая и английская', () => {
+    const failures = [
+      'network',
+      'too_large',
+      'checksum',
+      'bad_archive',
+      'disk',
+      'cannot_replace',
+    ] as const;
+    const results = [
+      'still_running',
+      'no_app',
+      'swap_failed',
+      'restore_failed',
+      'launch_failed',
+      'helper',
+    ] as const;
+    const all = [
+      ...failures.map((c) => S.update.failure[c]),
+      ...results.map((c) => S.update.resultFailure[c]),
+    ];
+    expect(new Set(all).size).toBe(all.length);
+    for (const text of all) expect(text).toMatch(/^[\x20-\x7e]+$/);
+  });
+
+  it('состояния сменяют друг друга на месте: у всех один id', () => {
+    wire();
+    const states: UpdateState[] = [
+      can(INFO),
+      { phase: 'downloading', ...INFO, received: 1, total: 2 },
+      { phase: 'verifying', ...INFO },
+      { phase: 'ready', ...INFO },
+      { phase: 'failed', ...INFO, reason: 'disk' },
+    ];
+    for (const state of states) bridge.emitUpdateState(state);
+
+    const ids = vi.mocked(toast).mock.calls.map((call) => (call[1] as unknown as ToastOptions).id);
+    expect(ids).toHaveLength(5);
+    expect(new Set(ids)).toEqual(new Set([UPDATE_TOAST_ID]));
+  });
+
+  it('смахнутый тост о версии больше не появляется, пока загрузка идёт', () => {
+    wire();
+    bridge.emitUpdateState(can(INFO));
+    lastToast().options.onDismiss();
+    vi.mocked(toast).mockClear();
+
+    bridge.emitUpdateState({ phase: 'downloading', ...INFO, received: 1, total: 2 });
+    bridge.emitUpdateState({ phase: 'ready', ...INFO });
+
+    expect(toast).not.toHaveBeenCalled();
+  });
+
+  it('SU-01: состояние idle (проверку выключили, новой версии нет) тоста не создаёт; стоящий тост снимается', () => {
+    wire();
+    bridge.emitUpdateState({ phase: 'idle' });
+    expect(toast).not.toHaveBeenCalled();
+    expect(toast.dismiss).not.toHaveBeenCalled();
+
+    bridge.emitUpdateState(can(INFO));
+    bridge.emitUpdateState({ phase: 'idle' });
+    expect(toast.dismiss).toHaveBeenCalledWith(UPDATE_TOAST_ID);
+  });
+
+  it('отмена возвращает «available» на месте', () => {
+    wire();
+    bridge.emitUpdateState({ phase: 'verifying', ...INFO });
+
+    bridge.emitUpdateState(can(INFO));
+
+    expect(lastToast().message).toBe('Parley 0.2.0 is available');
+    expect(lastToast().options.action.label).toBe('Update');
+  });
+});
+
+describe('wireUpdateNotice — итог после перезапуска (спека §4.3)', () => {
+  it('«обновлено»: один тост «Parley updated to X»; итог берётся один раз', async () => {
+    bridge.setUpdateResult({ kind: 'updated', version: '0.2.0' });
+
+    wire();
+
+    await vi.waitFor(() =>
+      expect(toast).toHaveBeenCalledWith('Parley updated to 0.2.0', expect.anything()),
+    );
+    expect(toast).toHaveBeenCalledTimes(1);
+    expect(bridge.updateCalls.filter((c) => c === 'takeResult')).toHaveLength(1);
+  });
+
+  it('отказ: причина и «The previous version is still installed.»', async () => {
+    bridge.setUpdateResult({ kind: 'failed', version: '0.2.0', reason: 'swap_failed' });
+
+    wire();
+
+    await vi.waitFor(() =>
+      expect(toast).toHaveBeenCalledWith(
+        "Couldn't update to 0.2.0: the new version could not be put in place. The previous version is still installed.",
+        expect.anything(),
+      ),
+    );
+  });
+
+  it('итога нет — тоста нет', async () => {
+    wire();
+    await vi.waitFor(() => expect(bridge.updateCalls).toContain('takeResult'));
+    await Promise.resolve();
+    expect(toast).not.toHaveBeenCalled();
+  });
+
+  it('после отписки до ответа тост не показывается', async () => {
+    bridge.setUpdateResult({ kind: 'updated', version: '0.2.0' });
+    wire()();
+    await vi.waitFor(() => expect(bridge.updateCalls).toContain('takeResult'));
+    await Promise.resolve();
     expect(toast).not.toHaveBeenCalled();
   });
 });

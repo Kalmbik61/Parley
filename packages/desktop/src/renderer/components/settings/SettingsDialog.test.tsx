@@ -1171,3 +1171,29 @@ describe('SettingsDialog — навигация слева (живая пров�
     expect(await within(pane).findByRole('button', { name: S.settings.clearBrowserData })).toBeTruthy();
   });
 });
+
+// Самообновление (спека self-update §4.2): строка состояния под переключателем.
+describe('SettingsDialog — строка самообновления', () => {
+  it('стоит под переключателем «Check for updates»; пока проверка включена и есть версия — видна, выключили — нет', async () => {
+    const bridge = createFakeBridge();
+    bridge.setUpdateState({ phase: 'ready', version: '0.2.0', url: 'https://github.com/Kalmbik61/Parley/releases/tag/v0.2.0' });
+    openSettings(bridge);
+
+    switchTo('Notifications');
+    expect(await screen.findByText('0.2.0 is ready to install')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Restart to update' })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('switch', { name: 'Check for updates' }));
+    await waitFor(() => expect(screen.queryByText('0.2.0 is ready to install')).toBeNull());
+  });
+
+  it('SU-01: нет новой версии — строки нет', async () => {
+    const bridge = createFakeBridge();
+    openSettings(bridge);
+
+    switchTo('Notifications');
+    await screen.findByRole('switch', { name: 'Check for updates' });
+    expect(screen.queryByRole('button', { name: 'Restart to update' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Update' })).toBeNull();
+  });
+});
