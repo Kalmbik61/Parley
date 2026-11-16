@@ -78,11 +78,11 @@ export const SWARM_SLICE_MAX = 60;
 export const isSwarmTag = (value: unknown): value is string =>
   typeof value === 'string' && value.length >= 1 && value.length <= SWARM_TAG_MAX && !/[\r\n]/.test(value);
 
-/** Имя среза годится: строка, после `trim` не пустая и не длиннее 60 знаков, без переводов строки. */
+/** Имя среза годится: строка без `\r` и `\n` в любом месте (проверка до `trim`), после `trim` не пустая и не длиннее 60 знаков. */
 export const isSwarmSlice = (value: unknown): value is string => {
-  if (typeof value !== 'string') return false;
+  if (typeof value !== 'string' || /[\r\n]/.test(value)) return false;
   const trimmed = value.trim();
-  return trimmed.length >= 1 && trimmed.length <= SWARM_SLICE_MAX && !/[\r\n]/.test(trimmed);
+  return trimmed.length >= 1 && trimmed.length <= SWARM_SLICE_MAX;
 };
 
 /** Рой закончил: `endedAt` стоит, таймер встал, живых трутней и проверяющих закрывает хост. */

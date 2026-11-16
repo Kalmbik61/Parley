@@ -1707,6 +1707,9 @@ describe('рои в карте (спека роя v1, 2.1–2.2)', () => {
       ['срез не строка', { slice: 7, coverage: 'ok' }],
       ['пустой срез, покрытие вне перечня', { slice: '   ', coverage: 'full' }],
       ['срез с переводом строки', { slice: 'a\nb', coverage: null }],
+      ['срез с CR/LF по краям', { slice: '\r\nhost\r\n', coverage: null }],
+      ['срез с LF в конце', { slice: 'host\n', coverage: null }],
+      ['срез с CR в начале', { slice: '\rhost', coverage: null }],
       ['срез длиннее 60', { slice: 'x'.repeat(61), coverage: 3 }],
     ])('неверное и отсутствующее (%s) читается как null и null', (_name, patch) => {
       const parsed = readSwarm({ members: [queen(), drone(patch)] });

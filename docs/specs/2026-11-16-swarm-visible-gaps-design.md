@@ -52,7 +52,7 @@ interface WorkSwarm {
 
 Версия схемы карты не меняется. Строгих проверок записи участника в путях карты нет (`map.ts:742` смотрит базовую форму и роль), поэтому новые поля переживают запись и повторное чтение.
 
-`isSwarmSlice(value)` — рядом с `isSwarmTag`, по тому же образцу: строка, после `trim` не пустая и не длиннее `SWARM_SLICE_MAX`, без `\r` и `\n`. Эндпойнт и нормализация применяют одно и то же правило и один и тот же `trim`.
+`isSwarmSlice(value)` — рядом с `isSwarmTag`, по тому же образцу: строка без `\r` и `\n` в любом месте, включая края (проверка идёт по исходной строке, до `trim`); после `trim` не пустая и не длиннее `SWARM_SLICE_MAX`. Эндпойнт и нормализация применяют одно и то же правило и один и тот же `trim`.
 
 Граница волны — счётчик, а не время: массив `members` только растёт (удалённый участник остаётся записью, спека роя v1, 2), а сравнение `addedAt` ломается на одинаковой миллисекунде и на откате часов. Новые функции, константы и типы добавляются в явный список экспортов `packages/core/src/index.ts`.
 
@@ -121,6 +121,8 @@ export function memberOutcome(member: WorkSwarmMember, session: SessionAxes | un
    Сессии: `swarmSessions − members.length`, не меньше нуля. Минуты: до срока жизни, округление вверх; при `swarmMinutes = 0` — `no time limit`. Лимиты не прочитаны — строки нет.
 5. Всегда:
    `Coverage is the member's own estimate. Check the hand-ins against the objective, then either add members with swarm_add (a drone for a gap, verifiers for the claims) or call report with the combined result and name what stays uncovered.`
+
+Единственное число: при одном участнике пишется `1 member`, а не `1 members` — `Wave finished in swarm sw-03: 1 member handed in and declared full coverage.`, `Wave finished in swarm sw-03: 1 member — 1 partial.`, `Earlier waves: 1 member not closed; …`. Других склонений нет.
 
 Письмо о сроке жизни и остальные переходы не меняются. `reconcileSwarm` получает лимиты с `swarmSessions` (сейчас только `swarmMinutes`).
 

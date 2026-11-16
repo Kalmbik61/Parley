@@ -150,6 +150,7 @@ describe('isSwarmSlice', () => {
     expect(isSwarmSlice('   ')).toBe(false);
     expect(isSwarmSlice('a\nb')).toBe(false);
     expect(isSwarmSlice('a\rb')).toBe(false);
+    for (const edge of ['\nhost', 'host\n', 'host\r', '\rhost', '\r\nhost\r\n', '  host\n  ']) expect(isSwarmSlice(edge), JSON.stringify(edge)).toBe(false);
     expect(isSwarmSlice(42)).toBe(false);
     expect(isSwarmSlice(null)).toBe(false);
   });

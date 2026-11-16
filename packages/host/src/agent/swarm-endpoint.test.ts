@@ -91,7 +91,7 @@ describe('agent swarm endpoint', () => {
     expect(spawn).toHaveBeenLastCalledWith(expect.objectContaining({ swarm: { kind: 'add', role: 'drone', slice: 'host/sessions' } }));
     expect(JSON.parse((await post({ ...add, slice: 'x'.repeat(60) })).body).ok).toBe(true);
     spawn.mockClear();
-    for (const slice of ['', '   ', 'a\nb', 'x'.repeat(61), 7, null]) {
+    for (const slice of ['', '   ', 'a\nb', '\nhost', 'host\r', '\r\nhost\r\n', 'x'.repeat(61), 7, null]) {
       expect(JSON.parse((await post({ ...add, slice })).body), JSON.stringify(slice)).toEqual({
         ok: false, error: { code: 'bad_request', message: 'slice must be 1-60 characters without line breaks.' },
       });
