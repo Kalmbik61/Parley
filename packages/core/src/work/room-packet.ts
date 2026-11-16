@@ -1,12 +1,11 @@
 import { PACKET_LIMITS, PACKET_MAX_BYTES, PACKET_MAX_DECISIONS, contextBytes, inlineOrRef, textHash } from './context-budget.js';
 import type { DecisionJournalIntent, DecisionJournalMap } from './decision-journal.js';
 import type { LetterReads } from './letter-store.js';
-import { letterSeq } from './letter-tables.js';
 import { recipientsOf } from './letters.js';
 import { activeRoomPlan } from './plans.js';
 import { isRoomClosed, liveLead } from './rooms.js';
 import { exportTitle } from './stored-texts.js';
-import type { Message, PlanItem, Room, RoomPlan } from './types.js';
+import type { PlanItem, Room, RoomPlan } from './types.js';
 
 /**
  * Пакет состояния комнаты (спека 2026-11-16, 3.1–3.3): выжимка того, что сейчас действует в комнате, из хранилища.
@@ -23,12 +22,15 @@ export type RoomPacketResult =
   | { ok: false; reason: PacketRefusalReason; message: string };
 
 const FIRST_LINE_SUFFIX = 'Data from the Parley store; verify with get_map before acting on it.';
-const LETTER_PAGE = 200;
+/** Сколько последних писем комнаты просматривается в поиске вопросов; письма старше в раздел не попадают и называются в нём. */
+export const QUESTION_SCAN_LETTERS = 1000;
 
 /** Раздел: обязательная голова и список, который может не влезть целиком. */
 interface Section {
   head: string[];
   items: string[];
+  /** Строки после списка, обязательные как голова: например, что просмотрена не вся комната. */
+  tail?: string[];
   /** Разделитель элементов: `\n` — строка на элемент, `, ` — все в одной строке. */
   join: '\n' | ', ';
   /** Строка о непоказанных элементах и способе прочитать остальные. */
@@ -65,25 +67,19 @@ function roomDecisions(map: DecisionJournalMap, roomId: string): DecisionJournal
   return [...byProposal.values()].sort((a, b) => b.acceptedAt.localeCompare(a.acceptedAt) || b.file.localeCompare(a.file));
 }
 
-/** Все письма выборки страницами: молчаливого предела числа писем нет. */
-function allLetters(letters: LetterReads, query: { roomId: string; kind?: Message['kind']; from?: string }): Message[] {
-  const found: Message[] = [];
-  let before: number | undefined;
-  for (;;) {
-    const page = letters.query({ ...query, newestFirst: true, limit: LETTER_PAGE, ...(before === undefined ? {} : { beforeSeq: before }) });
-    found.push(...page);
-    if (page.length < LETTER_PAGE) return found;
-    before = Math.min(...page.map((message) => letterSeq(message.id)));
-  }
-}
-
-/** Вопросы комнаты, адресованные сессии, без её собственного сообщения с `replyTo` на них; id, новые первыми. */
-function openQuestions(map: DecisionJournalMap, letters: LetterReads, roomId: string, sessionId: string): string[] {
+/**
+ * Вопросы комнаты, адресованные сессии, без её собственного сообщения с `replyTo` на них; id, новые первыми. Просматриваются
+ * последние `QUESTION_SCAN_LETTERS` писем комнаты: ответ старше вопроса его не снимает, поэтому и вопросов старше окна
+ * пакет не ищет. `truncated` — в комнате писем больше, чем просмотрено.
+ */
+function openQuestions(map: DecisionJournalMap, letters: LetterReads, roomId: string, sessionId: string): { ids: string[]; truncated: boolean } {
+  const window = letters.query({ roomId, newestFirst: true, limit: QUESTION_SCAN_LETTERS });
   const answered = new Set<string>();
-  for (const message of allLetters(letters, { roomId, from: sessionId })) if (message.replyTo !== undefined) answered.add(message.replyTo);
-  return allLetters(letters, { roomId, kind: 'question' })
-    .filter((message) => message.deleted !== true && message.from !== sessionId && !answered.has(message.id) && recipientsOf(message, map).includes(sessionId))
+  for (const message of window) if (message.from === sessionId && message.replyTo !== undefined) answered.add(message.replyTo);
+  const ids = window
+    .filter((message) => message.kind === 'question' && message.deleted !== true && message.from !== sessionId && !answered.has(message.id) && recipientsOf(message, map).includes(sessionId))
     .map((message) => message.id);
+  return { ids, truncated: window.length === QUESTION_SCAN_LETTERS && letters.count({ roomId }) > QUESTION_SCAN_LETTERS };
 }
 
 /** План: голова с целью и числом остальных пунктов по статусам; пункты сессии — списком (у владельца вне состава их нет). */
@@ -148,22 +144,25 @@ export function buildRoomPacket(
   const proposal = room.proposal === null ? undefined
     : none(['## Waiting for the human', `${room.proposal.kind ?? 'decision'} ${room.proposal.id} rev ${room.proposal.rev} from ${room.proposal.from}; read it: ${roomWhere}`]);
 
-  // Раздел 5. История принятых решений.
+  // Раздел 5. История принятых решений. Читаются письмами-решениями комнаты через `get_map`, а не файлами: каталог журнала
+  // лежит в корне проекта, сессия может работать в worktree, а номер комнаты повторяется в разных рабочих областях.
   const decisions = roomDecisions(map, room.id);
+  const decisionsWhere = `get_map {room: "${room.id}", field: "messages", kind: "decision"}`;
   const shown = decisions.slice(0, PACKET_MAX_DECISIONS);
   const decisionsPart: Section | undefined = decisions.length === 0 ? undefined : {
     head: ['## Accepted decisions', `Newest first; a later decision may have changed an earlier one. ${decisions.length} accepted in this room.`],
-    items: shown.map((intent) => `- ${intent.proposalId} rev ${intent.rev}${intent.kind === 'completion' ? ' (completion)' : ''}, ${intent.acceptedAt.slice(0, 10)}: ${field('decision title', decisionTitle(intent), PACKET_LIMITS.decisionTitle, `.parley/decisions/${intent.file}`)}`),
+    items: shown.map((intent) => `- ${intent.proposalId} rev ${intent.rev}${intent.kind === 'completion' ? ' (completion)' : ''}, ${intent.acceptedAt.slice(0, 10)}: ${field('decision title', decisionTitle(intent), PACKET_LIMITS.decisionTitle, decisionsWhere)}`),
     join: '\n',
-    more: (hidden) => `… and ${hidden} more: files .parley/decisions/*-${room.id}-*.md`,
+    more: (hidden) => `… and ${hidden} more: ${decisionsWhere}`,
     extra: decisions.length - shown.length,
   };
 
   // Раздел 6. Вопросы сессии без её ответа по `replyTo`.
-  const questions = member ? openQuestions(map, letters, room.id, viewer.sessionId) : [];
-  const questionsPart: Section | undefined = questions.length === 0 ? undefined : {
+  const questions = member ? openQuestions(map, letters, room.id, viewer.sessionId) : { ids: [], truncated: false };
+  const questionsPart: Section | undefined = questions.ids.length === 0 && !questions.truncated ? undefined : {
     head: ['## Open questions', 'Questions in this room addressed to you with no reply from you carrying replyTo; an answer without replyTo is not visible here. Read one: get_map {field: "message", id: "<id>"}.'],
-    items: questions,
+    items: questions.ids,
+    tail: questions.truncated ? [`Only the last ${QUESTION_SCAN_LETTERS} letters of this room were scanned; earlier letters were not: get_map {room: "${room.id}", field: "messages", kind: "question"}.`] : [],
     join: ', ',
     more: (hidden) => `… and ${hidden} more: get_map {room: "${room.id}", field: "messages", kind: "question"}`,
   };
@@ -186,7 +185,7 @@ export function buildRoomPacket(
   const moreCost = (section: Section, shown: number): number => NEWLINE + contextBytes(section.more(hiddenOf(section, shown)));
   const reserve = (section: Section): number => (hiddenOf(section, 0) > 0 ? moreCost(section, 0) : 0);
   let used = contextBytes(first) + NEWLINE + (ordered.length - 1) * 2 * NEWLINE + NEWLINE
-    + ordered.reduce((sum, section) => sum + contextBytes(section.head.join('\n')) + reserve(section), 0);
+    + ordered.reduce((sum, section) => sum + contextBytes([...section.head, ...(section.tail ?? [])].join('\n')) + reserve(section), 0);
   const taken = new Map<Section, number>();
   for (const section of fillOrder) {
     used -= reserve(section);
@@ -210,6 +209,7 @@ export function buildRoomPacket(
     const lines = [...section.head];
     if (count > 0) lines.push(section.items.slice(0, count).join(section.join));
     if (hiddenOf(section, count) > 0) lines.push(section.more(hiddenOf(section, count)));
+    lines.push(...(section.tail ?? []));
     return lines.join('\n');
   };
   // Ревизия — хеш содержимого без первой строки: время сборки и сама отметка в хеш не входят, работа, комната и смотрящий — входят.

@@ -42,15 +42,28 @@ afterEach(async () => {
   await rm(root, { recursive: true, force: true });
 });
 
-async function getMap(sessionId: string | null, args: Record<string, unknown>) {
-  const server = createParleyServer({ ...context, sessionId });
+async function connect(sessionId: string | null, extra: Partial<McpContext> = {}): Promise<Client> {
+  const server = createParleyServer({ ...context, ...extra, sessionId });
   const client = new Client({ name: 'fixture', version: '0' });
   const [a, b] = InMemoryTransport.createLinkedPair();
   await Promise.all([client.connect(a), server.connect(b)]);
   clients.push(client);
+  return client;
+}
+
+async function getMap(sessionId: string | null, args: Record<string, unknown>, extra: Partial<McpContext> = {}) {
+  const client = await connect(sessionId, extra);
   const result = await client.callTool({ name: 'get_map', arguments: args });
   return { failed: result.isError === true, text: (result.content as { text: string }[])[0]!.text };
 }
+
+/** Имена из раздела «Tools» пакета: строка после двух строк головы. */
+const packetTools = (text: string): string[] => {
+  const lines = text.split('\n');
+  return lines[lines.indexOf('## Tools') + 2]!.split(', ');
+};
+
+const AGENT = { url: 'http://127.0.0.1:1/agent/browser', token: 'a'.repeat(64) };
 
 describe('get_map {field: "packet"}', () => {
   it('участнику отдаёт пакет его комнаты целиком, параметр room не нужен', async () => {
@@ -125,6 +138,47 @@ describe('get_map {field: "packet"}', () => {
     const extra = await getMap('s-01', { field: 'packet', session: 's-02' });
     expect(extra.failed).toBe(true);
     expect(extra.text).toContain('accepts only room');
+  });
+
+  it('имена инструментов в пакете — тот же список, что отдаёт сервер: с каналом агента, без него и в профиле short', async () => {
+    const cases: Array<Partial<McpContext>> = [{}, { agent: AGENT }, { toolProfile: 'short' }, { agent: AGENT, toolProfile: 'short', skillNavigator: true }];
+    for (const extra of cases) {
+      const listed = (await (await connect('s-01', extra)).listTools()).tools.map((tool) => tool.name);
+      const result = await getMap('s-01', { field: 'packet' }, extra);
+      expect(packetTools(result.text)).toEqual(listed);
+    }
+    const withChannel = packetTools((await getMap('s-01', { field: 'packet' }, { agent: AGENT })).text);
+    const without = packetTools((await getMap('s-01', { field: 'packet' })).text);
+    for (const name of ['create_session', 'request_agent_switch', 'create_swarm', 'swarm_add', 'browser_open']) {
+      expect(withChannel).toContain(name);
+      expect(without).not.toContain(name);
+    }
+  });
+
+  it('maxBytes не усекает пакет: не хватает — отказ с нужным размером, хватает — весь текст', async () => {
+    // Пункты плана у s-01 растят пакет выше 2 КиБ.
+    await updateMap(project, context.workId, (map) => {
+      map.plans = [{
+        id: 'pl-01', roomId: 'r-01', mode: 'checklist', status: 'active', rev: 1, goal: 'Grow the packet', backlog: [],
+        items: Array.from({ length: 12 }, (_, index) => ({
+          id: index + 1, title: `Item number ${index + 1} ${'t'.repeat(120)}`, owner: 's-01', scope: 'scope', after: [], criteria: [], verifier: null,
+          status: 'ready' as const, evidence: null, note: null, log: [],
+        })),
+        acceptedAt: null, completedAt: null, cancelledAt: null, completionSummary: null,
+      }];
+    });
+    const full = await getMap('s-01', { field: 'packet' });
+    const bytes = Buffer.byteLength(JSON.stringify(full.text)) - 2;
+    expect(bytes).toBeGreaterThan(2048);
+    const small = await getMap('s-01', { field: 'packet', maxBytes: 2048 });
+    expect(small.failed).toBe(true);
+    expect(small.text).toContain(`is ${bytes} bytes`);
+    expect(small.text).toContain(`maxBytes of at least ${bytes}`);
+    expect(small.text).not.toContain('Room state packet');
+    const enough = await getMap('s-01', { field: 'packet', maxBytes: bytes });
+    expect(enough.failed).toBe(false);
+    // Первая строка несёт время сборки; остальное совпадает.
+    expect(enough.text.split('\n').slice(1)).toEqual(full.text.split('\n').slice(1));
   });
 
   it('прежние поля get_map отвечают как раньше', async () => {

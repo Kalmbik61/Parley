@@ -104,7 +104,7 @@ import {
   type WorkMap,
   type WorkSession,
 } from '../work/types.js';
-import { BROWSER_UNAVAILABLE, createBrowserTools } from './browser-tools.js';
+import { BROWSER_TOOLS, BROWSER_UNAVAILABLE, createBrowserTools } from './browser-tools.js';
 import type { McpContext } from './context.js';
 import { inboxPage, type InboxCharLimit, type InboxExtras } from './inbox-page.js';
 import { watchInbox, type Ring } from './inbox-watch.js';
@@ -775,10 +775,20 @@ function packetTarget(map: WorkMap, sessionId: string, roomId: string | undefine
   throw new PageError('unknown-target', 'This session is in no room: there is no room state packet.');
 }
 
-/** Имена инструментов, которые сервер объявляет этой сессии: каталог, профиль и навигатор навыков, как у `list`. */
+/**
+ * Инструменты, которые сервер добавляет к каталогу `ToolRunner.list` при канале агента: браузер окна и создание сессий.
+ * Один источник для `ListTools` и для имён в пакете состояния, чтобы пакет не разошёлся со списком сервера.
+ */
+function agentChannelTools(browser: readonly Tool[], sessionAgent: boolean): Tool[] {
+  return [...browser, ...(sessionAgent ? [CREATE_SESSION_TOOL, REQUEST_AGENT_SWITCH_TOOL, CREATE_SWARM_TOOL, SWARM_ADD_TOOL] : [])];
+}
+
+/** Имена инструментов, которые сервер объявляет этой сессии: каталог, профиль, навигатор навыков и канал агента — как у `ListTools`. */
 function declaredToolNames(context: McpContext): string[] {
   const names = TOOLS.filter((tool) => toolDeclaredInProfile(context, tool)).map((tool) => tool.name);
-  return context.skillNavigator === true ? [...names, FIND_SKILL.name] : names;
+  if (context.skillNavigator === true) names.push(FIND_SKILL.name);
+  const channel = context.agent === undefined ? [] : agentChannelTools(BROWSER_TOOLS, context.sessionId !== null);
+  return [...names, ...channel.map((tool) => tool.name)];
 }
 
 /** Ограниченные страницы `get_map`: поле, список или письма — по параметрам; без параметров карту отдаёт `getMap`. */
@@ -801,6 +811,8 @@ async function mapPage(context: McpContext, map: WorkMap, args: Record<string, u
       if (context.sessionId === null) throw new Error(NO_SESSION);
       const built = buildRoomPacket(map, packetTarget(map, context.sessionId, roomId), storeLetterReads(context.projectPath, context.workId), declaredToolNames(context), new Date().toISOString());
       if (!built.ok) throw new PageError('unknown-target', built.message);
+      // Пакет не режется: если запрошенного предела не хватает, отказ называет нужный размер.
+      if (built.bytes > maxBytes) throw new Error(`The room state packet is ${built.bytes} bytes, more than maxBytes ${maxBytes}; it is never cut. Call again with maxBytes of at least ${built.bytes}.`);
       return built.text;
     }
     if (field === 'plan') {
@@ -2282,7 +2294,7 @@ export function createParleyServer(context: McpContext, runner?: ToolRunner): Se
   const browser = context.agent === undefined ? null : createBrowserTools(context.agent, { clientName: () => server.getClientVersion()?.name });
   const sessionAgent = sessionId === null ? undefined : context.agent;
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: [...await tools.list(), ...(browser?.tools ?? []), ...(sessionAgent ? [CREATE_SESSION_TOOL, REQUEST_AGENT_SWITCH_TOOL, CREATE_SWARM_TOOL, SWARM_ADD_TOOL] : [])],
+    tools: [...await tools.list(), ...agentChannelTools(browser?.tools ?? [], sessionAgent !== undefined)],
   }));
   server.setRequestHandler(
     CallToolRequestSchema,

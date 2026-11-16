@@ -115,7 +115,29 @@ describe('пакет состояния комнаты: разделы', () => {
     expect(listed).toHaveLength(12);
     expect(listed[0]).toContain('p-30');
     expect(listed[11]).toContain('p-19');
-    expect(text).toContain('… and 18 more: files .parley/decisions/*-r-01-*.md');
+    expect(text).toContain('… and 18 more: get_map {room: "r-01", field: "messages", kind: "decision"}');
+  });
+
+  it('ссылки на решения — чтение через get_map, без путей файловой системы: сессия в worktree, комната r-01 в двух рабочих областях', () => {
+    const decisionsRead = 'get_map {room: "r-01", field: "messages", kind: "decision"}';
+    const build = (workId: string, worktreePath: string | null): string => {
+      const map = fixture();
+      map.work.id = workId;
+      if (worktreePath !== null) map.sessions[1]!.worktree = { path: worktreePath, branch: 'parley/x', base: 'master', createdAt: AT };
+      // Решение 9 — самое новое по дате и с длинным заголовком, поэтому в числе показанных.
+      map.decisionExports = Array.from({ length: 16 }, (_, index) => decision(index + 1, { workId, ...(index + 1 === 9 ? { title: 'я'.repeat(300) } : {}) }));
+      return packet(map, member('s-02'));
+    };
+    const inWorktree = build('w-0054', '/work/trees/w-0054-s-02');
+    const otherWork = build('w-0099', null);
+    for (const text of [inWorktree, otherWork]) {
+      expect(text).toContain(`[decision title is`);
+      expect(text).toContain(`read the full text via ${decisionsRead}`);
+      expect(text).toMatch(new RegExp(`… and 4 more: ${decisionsRead.replace(/[{}[\]()*+?.\\^$|]/g, '\\$&')}`));
+      expect(text).not.toContain('.parley');
+      expect(text).not.toContain('decisions/');
+      expect(text).not.toContain('/work/trees');
+    }
   });
 
   it('решения других комнат в пакет не входят', () => {
@@ -225,7 +247,7 @@ describe('пакет состояния комнаты: бюджет', () => {
     expect(result.bytes).toBe(contextBytes(result.text));
     expect(result.bytes).toBeLessThanOrEqual(PACKET_MAX_BYTES);
     expect(result.text).toContain('## Accepted decisions');
-    expect(result.text).toMatch(/… and \d+ more: files/);
+    expect(result.text).toMatch(/… and \d+ more: get_map \{room: "r-01", field: "messages", kind: "decision"\}/);
   });
 
   it('когда решения не помещаются ни одним, раздел называет все как непоказанные', () => {
@@ -235,6 +257,42 @@ describe('пакет состояния комнаты: бюджет', () => {
     const text = packet(map, member('s-02'));
     expect(contextBytes(text)).toBeLessThanOrEqual(PACKET_MAX_BYTES);
     expect(text).toContain('5 accepted in this room.');
+  });
+});
+
+describe('пакет состояния комнаты: окно просмотра вопросов', () => {
+  const NOTE = 'Only the last 1000 letters of this room were scanned; earlier letters were not: get_map {room: "r-01", field: "messages", kind: "question"}.';
+  const notes = (map: DecisionJournalMap & WindowWorkMap, count: number): void => {
+    for (let index = 0; index < count; index += 1) addMessage(map, { from: 's-03', to: [], text: `note ${index}`, kind: 'note', roomId: 'r-01' }, AT);
+  };
+
+  it('вопрос старше последней тысячи писем не ищется, и раздел говорит об этом', () => {
+    const map = fixture();
+    const old = addMessage(map, { from: 'human', to: ['s-02'], text: 'old question', kind: 'question', roomId: 'r-01' }, AT);
+    notes(map, 1000);
+    const text = packet(map, member('s-02'));
+    expect(text).not.toContain(`${old.id},`);
+    expect(text).toContain('## Open questions');
+    expect(text).toContain(NOTE);
+    expect(contextBytes(text)).toBeLessThanOrEqual(PACKET_MAX_BYTES);
+  });
+
+  it('вопрос внутри окна показан вместе со строкой о непросмотренных письмах', () => {
+    const map = fixture();
+    notes(map, 1000);
+    const fresh = addMessage(map, { from: 'human', to: ['s-02'], text: 'fresh', kind: 'question', roomId: 'r-01' }, AT);
+    const text = packet(map, member('s-02'));
+    expect(text).toContain(fresh.id);
+    expect(text).toContain(NOTE);
+  });
+
+  it('ровно тысяча писем в комнате — просмотрены все, строки нет', () => {
+    const map = fixture();
+    const first = addMessage(map, { from: 'human', to: ['s-02'], text: 'q', kind: 'question', roomId: 'r-01' }, AT);
+    notes(map, 999);
+    const text = packet(map, member('s-02'));
+    expect(text).toContain(first.id);
+    expect(text).not.toContain('letters of this room were scanned');
   });
 });
 
