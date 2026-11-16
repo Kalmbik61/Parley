@@ -7,11 +7,12 @@
  * ждут хост. Сжатие — запрос хосту, ответ не дольше `BRIDGE_WAIT_MS`. Печатается только
  * `{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"<пакет>"}}`, иначе — пустота. Код выхода всегда 0.
  *
- * Своя запись моста в `events/<сессия>.jsonl` — одна строка на событие сжатия: исход и время работы. Она не доказывает
- * получение пакета сессией: его подтверждает только транскрипт.
+ * Своя запись моста в `events/<сессия>.jsonl` — одна строка на событие сжатия: исход и время запроса к хосту (`requestMs`, не
+ * вся длительность хука). Ответ печатается первым, запись идёт после и ждёт не дольше `JOURNAL_GRACE_MS`: зависшая запись не
+ * задерживает ни вывод, ни выход с кодом 0. Запись не доказывает получение пакета сессией: его подтверждает только транскрипт.
  */
 
-import { appendFile } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -27,9 +28,36 @@ export type BridgeOutcome = 'printed' | 'empty' | 'timeout' | 'refused' | 'unrea
 export interface BridgeDeps {
   fetchImpl?: typeof fetch;
   now?: () => number;
-  /** Дописывает строку в файл журнала; по умолчанию `appendFile`. */
+  /** Дописывает строку в файл журнала; по умолчанию — отдельный процесс (`appendDetached`). */
   append?: (file: string, line: string) => Promise<void>;
   waitMs?: number;
+}
+
+/** Предел жизни процесса-писателя: зависшая запись (том не отвечает, канал без читателя) не оставляет его навсегда. */
+const WRITER_LIFETIME_MS = 3000;
+
+/** Код писателя: дописать строку и выйти; не успел за срок — убить себя (заблокированный вызов ОС иначе не прервать). */
+const WRITER_SOURCE =
+  `setTimeout(()=>process.kill(process.pid,'SIGKILL'),${WRITER_LIFETIME_MS});` +
+  `require('node:fs').appendFile(process.argv[1],process.argv[2],()=>process.exit(0));`;
+
+/**
+ * Запись в журнал отдельным отсоединённым процессом. Запись в этом же процессе вешала бы и выход: `process.exit` ждёт
+ * заблокированный вызов ОС в пуле потоков (проверено на именованном канале без читателя), а выход с кодом 0 после печати
+ * ответа — условие моста. Процесс-писатель ни с чем связан не остаётся: без каналов ввода-вывода, не удерживает мост.
+ */
+export function appendDetached(file: string, line: string): Promise<void> {
+  return new Promise<void>((resolve) => {
+    try {
+      const child = spawn(process.execPath, ['-e', WRITER_SOURCE, file, line], { detached: true, stdio: 'ignore' });
+      child.on('error', () => resolve());
+      child.unref();
+      // Запущен — запись дальше идёт без нас.
+      child.on('spawn', () => resolve());
+    } catch {
+      resolve();
+    }
+  });
 }
 
 /** Окружение: новое имя, а нет его — прежнее `HARNAS_*`, как у журнального хука. */
@@ -73,24 +101,36 @@ async function ask(
   }
 }
 
-/** Что печатать в stdout. Ничего не бросает. */
+/**
+ * Итог запуска: `out` — что печатать в stdout; `journal` — запись моста, уже начатая и не ждущая никого: вызывающий печатает
+ * `out` первым и ограничивает ожидание записи сам (`finish`). Никогда не отклоняется.
+ */
+export interface BridgeResult {
+  out: string;
+  journal: Promise<void>;
+}
+
+/** Не сжатие: ни запроса, ни записи. */
+const IDLE: BridgeResult = { out: '', journal: Promise.resolve() };
+
+/** Ничего не бросает; запись журнала начинается, но здесь не ожидается. */
 export async function runPacketBridge(
   input: string,
   args: readonly string[],
   env: NodeJS.ProcessEnv,
   deps: BridgeDeps = {},
-): Promise<string> {
+): Promise<BridgeResult> {
   let event: unknown;
   try {
     event = JSON.parse(input);
   } catch {
-    return '';
+    return IDLE;
   }
   if (
     typeof event !== 'object' || event === null ||
     (event as Record<string, unknown>)['hook_event_name'] !== 'SessionStart' ||
     (event as Record<string, unknown>)['source'] !== 'compact'
-  ) return '';
+  ) return IDLE;
 
   const now = deps.now ?? Date.now;
   const startedAt = now();
@@ -105,30 +145,55 @@ export async function runPacketBridge(
     deps.waitMs ?? BRIDGE_WAIT_MS,
   );
 
-  // Запись моста: каталога `events/` нет — не создаём; сбой записи ничего не меняет.
+  // Запись моста: каталога `events/` нет — не создаём; сбой записи ничего не меняет. `requestMs` — время запроса к хосту, а не
+  // всего хука: оно взято до записи, которая начинается здесь, но никем не ожидается.
   const workDir = fromEnv(env, 'WORK_DIR');
+  let journal: Promise<void> = Promise.resolve();
   if (workDir !== undefined && session !== undefined) {
-    const line = `${JSON.stringify({ hook_event_name: BRIDGE_EVENT, outcome, ms: now() - startedAt })}\n`;
+    const line = `${JSON.stringify({ hook_event_name: BRIDGE_EVENT, outcome, requestMs: now() - startedAt })}\n`;
+    const file = path.join(workDir, 'events', `${session}.jsonl`);
     try {
-      await (deps.append ?? ((file, text) => appendFile(file, text, 'utf8')))(path.join(workDir, 'events', `${session}.jsonl`), line);
+      journal = Promise.resolve((deps.append ?? appendDetached)(file, line)).catch(() => {});
     } catch {
       /* журнал — подсказка, не условие */
     }
   }
-  return out;
+  return { out, journal };
+}
+
+/** Сколько после вывода мост ещё ждёт запись журнала: дальше — выход с кодом 0, как бы ни шла запись. */
+export const JOURNAL_GRACE_MS = 300;
+
+/**
+ * Печатает ответ, и только затем ждёт запись журнала не дольше `JOURNAL_GRACE_MS`. Печать — первая и от записи не зависит;
+ * зависшая запись (медленный или недоступный том) ни задерживает вывод, ни мешает выходу.
+ */
+export async function finish(result: BridgeResult, write: (out: string, done: () => void) => void, graceMs = JOURNAL_GRACE_MS): Promise<void> {
+  await new Promise<void>((printed) => write(result.out, printed));
+  let timer: NodeJS.Timeout | undefined;
+  await Promise.race([
+    result.journal,
+    new Promise<void>((resolve) => { timer = setTimeout(resolve, graceMs); }),
+  ]);
+  clearTimeout(timer);
 }
 
 async function main(): Promise<void> {
-  let out = '';
+  // Предохранитель выхода: на любой путь завершения не больше срока ожидания хоста плюс льготы записи; сам по себе таймер
+  // выход не откладывает.
+  let result: BridgeResult = IDLE;
   try {
     const chunks: Buffer[] = [];
     for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
-    out = await runPacketBridge(Buffer.concat(chunks).toString('utf8'), process.argv.slice(2), process.env);
+    result = await runPacketBridge(Buffer.concat(chunks).toString('utf8'), process.argv.slice(2), process.env);
   } catch {
-    out = '';
+    result = IDLE;
   }
-  // Код 0 в любом исходе; выход явный, чтобы соединение в пуле не держало процесс.
-  process.stdout.write(out, () => process.exit(0));
+  // Печать первая; код 0 в любом исходе. Явный выход: ни соединение в пуле, ни зависшая запись не держат процесс.
+  const hardStop = setTimeout(() => process.exit(0), JOURNAL_GRACE_MS * 2);
+  hardStop.unref();
+  await finish(result, (out, done) => (out === '' ? done() : void process.stdout.write(out, () => done())));
+  process.exit(0);
 }
 
 // Запускается как файл; при импорте из теста ничего не делает (сравнение по realpath, как у моста Codex).

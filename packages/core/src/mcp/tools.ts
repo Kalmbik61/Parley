@@ -787,7 +787,7 @@ function agentChannelTools(browser: readonly Tool[], sessionAgent: boolean): Too
 function declaredToolNames(context: McpContext): string[] {
   const names = TOOLS.filter((tool) => toolDeclaredInProfile(context, tool)).map((tool) => tool.name);
   if (context.skillNavigator === true) names.push(FIND_SKILL.name);
-  const channel = context.agent === undefined ? [] : agentChannelTools(BROWSER_TOOLS, context.sessionId !== null);
+  const channel = context.agent === undefined && context.hasAgentChannel !== true ? [] : agentChannelTools(BROWSER_TOOLS, context.sessionId !== null);
   return [...names, ...channel.map((tool) => tool.name)];
 }
 

@@ -17,7 +17,7 @@
 import { appendFile } from 'node:fs/promises';
 import path from 'node:path';
 import { ROOM_PACKET_EVENT, loadConfig, sessionRoomPacket, workPaths } from '@parley/core';
-import type { McpContext } from '@parley/core';
+import type { McpContext, ToolLaunch } from '@parley/core';
 import type { SessionRef } from '@parley/protocol';
 import type { Log } from '../log.js';
 import { EMPTY_HOOK_RESPONSE } from './decisions.js';
@@ -38,6 +38,15 @@ export function parsePacketFault(value: string | undefined): PacketFault | null 
   if (value === 'drop') return { kind: 'drop' };
   if (value === `delay:${FAULT_DELAY_MS}`) return { kind: 'delay', ms: FAULT_DELAY_MS };
   return null;
+}
+
+/**
+ * Снимок запуска для сборки пакета: возможности (навигатор, профиль, ревизия контекста) — последний снимок процесса MCP этой
+ * сессии, пришедший по её токену; ревизия агента из регистрации хуков сильнее. Запрос моста ничего из этого не называет, и без
+ * снимка остаются только данные регистрации.
+ */
+export function packetLaunch(known: ToolLaunch | undefined, registered: { agentRevision?: string }): ToolLaunch {
+  return { ...(known ?? {}), ...(registered.agentRevision === undefined ? {} : { agentRevision: registered.agentRevision }) };
 }
 
 export interface PacketEndpointDeps {

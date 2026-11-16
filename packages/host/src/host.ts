@@ -141,7 +141,7 @@ import { createVoiceTelemetry, LIVE_USD_PER_MINUTE } from './voice/telemetry.js'
 import { dailyBudget } from './voice/budget.js';
 import { AGENT_BROWSER_PATH, createBrowserEndpoint } from './agent/browser-endpoint.js';
 import { createHookServer, type HookRequest } from './hooks/hook-server.js';
-import { createPacketEndpoint, PACKET_PATH } from './hooks/packet-endpoint.js';
+import { createPacketEndpoint, PACKET_PATH, packetLaunch } from './hooks/packet-endpoint.js';
 import { ensurePacketHookLauncher } from './hooks/packet-hook-launcher.js';
 import { createInlineMail, hookWithInlineMail } from './hooks/inline-mail.js';
 import { appendMailJournal } from './feed/mail-journal.js';
@@ -599,6 +599,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   // тот же, что у остальных маршрутов агента.
   const toolContextFor = (ref: SessionRef, launch: ToolLaunch): Promise<McpContext> =>
     hostToolContext(ref, launch, {
+      // Канал агента — по регистрации хоста: от него зависят имена инструментов канала, которые пакет комнаты называет сессии.
+      agentChannel: (agentRef) => browserEndpoint.isRegistered(agentRef),
       providerRows: listProviderRows,
       onWorksChange: mapChangeSignal(worksService),
       roleCatalog: (cwd) => roleCatalog(cwd, { codex: true }),
@@ -659,7 +661,12 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       hookWithInlineMail(inlineMail, (hook) => feedService.onHook(hook))(request);
   };
   // Путь пакета состояния комнаты (спека 2026-11-16, 3.5): доступ проверяет приёмник общей с `/hooks` точкой, сессия — из регистрации.
-  const packetEndpoint = createPacketEndpoint({ log, context: toolContextFor });
+  // Возможности запуска (навигатор, профиль, канал агента) — из состояния хоста: снимок запуска, который процесс MCP этой сессии
+  // прислал по своему токену (`launchOf`), и регистрация хуков; запрос моста их не называет.
+  const packetEndpoint = createPacketEndpoint({
+    log,
+    context: (ref, registered) => toolContextFor(ref, packetLaunch(toolsEndpoint.launchOf(ref), registered)),
+  });
   const hookServer = createHookServer({
     log,
     onHook: dispatchHook,
