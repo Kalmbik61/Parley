@@ -1,0 +1,24 @@
+<!-- drone 6 s-415 model=haiku addedAt=2026-11-16T17:28:32.341Z handedAt=2026-11-16T17:30:12.416Z result=done -->
+Q08 (commit 9eabc014, copy /Users/kalmbik61/parley/pilot3-subject). Read whole: packages/host/src/sleep/auto-sleep-service.ts, packages/core/src/work/auto-sleep.ts. Read in ranges: packages/host/src/wake/wake-service.ts 600-690, 802-860, 1520-1766, 1830-2069; packages/core/src/work/map.ts 268-312, delivery.ts 230-299, liveness.ts 186-250, metrics.ts 255-310, mcp/tools.ts 1120-1140, 1240-1290, 1420-1434, host/src/sessions/interrupted.ts whole, works/works-service.ts 590-625, 1229-1262. Not read: wake-service 1-600, 690-800, 860-1520, 1766-1830.
+
+ANSWER. Mechanism: the host sleep sets a mark autoSleepPending (sleep/auto-sleep-service.ts:330) that is turned into autoSleep at exit (core/work/map.ts:296-299). The wake side reads that state at exit (wake-service.ts:2040) and at startup (wake-service.ts:668). A human Stop writes no mark, so its unread letters are recorded as already pointed at exit (wake-service.ts:2041, 630-638).
+
+(1) Letters between mark and exit. Confirmed: during the mark, check_inbox and wait_for do not hand letters out (core/work/auto-sleep.ts:172-173; mcp/tools.ts:1431 check_inbox, 1243 and 1279 wait_for answer running; fenced() defined at 1127-1133). Sleep takes letters under the map lock first: unread or delivered-since → cancel (auto-sleep-service.ts:327-328). Guard in wake-service against pointing into a marked session: NONE on the live path. recompute() (wake-service.ts:1533-1766) with a live pty only checks paused, switching, hasDraft, inFlight, settle and activity; deliveryAction (core/work/delivery.ts:237-298) for lifecycle active does not read autoSleepPending. So a letter arriving in the window can get a pointer typed (beginAttempt, wake-service.ts:1084 adds pointed). At exit, hostSleeps (645-654) is true, so pointed.clear() (2040). After the transition to sleeping, the works onChange recomputes; with no pty and lifecycle sleeping, the resume path runs (1626-1632): hostSlept skips the hourly slot limit (1629-1630). Step 4 then calls wake.retry (auto-sleep-service.ts:359; wake-service.ts:1906-1916), which clears pointed for handle-less sessions (1914) and recomputes. So the letters wake the session. Ordering caveat: if exit runs after the sleeping write, the live path can still run once; retry covers it.
+
+(2) Restart, session with autoSleepPending and no autoSleep. Startup order: worksService.start() awaits the refresh that calls reconcileLiveness (works-service.ts:1206, 598-625, 1484); wakeService.start() comes later (host.ts:1542), and ensureKnown runs there (wake-service.ts:1956). reconcileMap (core/work/liveness.ts:195-233) turns a dead active session into sleeping through sleepSessions → transitionSession (metrics.ts:301), which copies the mark into autoSleep (map.ts:296-299). So if the process is dead, the mark becomes autoSleep at startup and is not cleared. If ensureKnown saw it before reconcile (not verified; I rely on the awaited refresh), the condition at wake-service.ts:668 is pty undefined AND autoSleep == null, which is true for pending-only, so its unread letters are marked pointed (human-stop treatment, not woken). Interrupted list: sessions/interrupted.ts skips autoSleep != null only (66).
+
+Corrections of predecessor claims:
+- map.ts:296-303 marker to autoSleep and clear on active/closed: CONFIRMED (clear at 301-305).
+- auto-sleep.ts:172-174 inboxFenced: CONFIRMED.
+- tools.ts:1429-1431 check_inbox: CONFIRMED.
+- wait_for answers running "1127-1133": CORRECTED: 1127-1133 is only the fenced() helper; the running answers are at tools.ts:1243 and 1279.
+- delivery.ts:262-270 ignores the marker: CONFIRMED for sleeping; CORRECTED: the same holds for active (no autoSleepPending read in delivery.ts 237-298).
+- WS:2023-2041 exit, hostSleeps 645-654, pointed.clear 2040, markUnreadPointed 2041: CONFIRMED.
+- auto-sleep-service.ts:359 retry and WS:1906-1916, 1914: CONFIRMED. wake not limited 1629-1630: CONFIRMED.
+- ensureKnown 662-676, "does not mark if autoSleep set (668)": CONFIRMED condition, CORRECTED: pending-only (no autoSleep) IS marked pointed at startup (668 tests autoSleep == null).
+- Letters before mark cancelled 327-328: CONFIRMED.
+- sessions-service.ts:713-747 stop cause: NOT VERIFIED (not opened).
+- Mapping normalization: no startup code turns autoSleepPending into autoSleep or clears it except reconcileMap (above) and consider() (auto-sleep-service.ts:448-451, live pty only). Note: dropMark runs only from consider(), which needs a pty, so after a restart a surviving-but-active session with a pending mark would keep it. Inferred from code, not run.
+
+Open: (a) whether ensureKnown runs before or after reconcile at restart (ordering inferred); (b) the pending-mark survivor edge above; (c) sessions-service 713-747 not checked; (d) wake-service 1-600, 690-800, 860-1520, 1766-1830 not read.
+Coverage: partial.

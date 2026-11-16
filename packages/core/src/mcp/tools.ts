@@ -87,7 +87,8 @@ import { CREATE_SWARM_TOOL, SWARM_ADD_TOOL, SWARM_UNAVAILABLE, createSwarm, swar
 import { fetchProviderRows } from './provider-rows.js';
 import { addMemberByLead, addRoom, canReadRoom, isCreatedDescendant, isMember, isRoomArchived, joinNotice, leaveOtherRooms, liveLead, requireOpenRoom } from '../work/rooms.js';
 import { agentStatus, asleepHint } from '../work/session-state.js';
-import { swarmOfSession } from '../work/swarms.js';
+import { SWARM_COVERAGES, swarmOfSession } from '../work/swarms.js';
+import type { SwarmCoverage } from '../work/swarms.js';
 import { stuckHint, stuckWarning } from '../work/stuck.js';
 import { SharedStateError, inspectSharedIgnore, readMap, readWorksIndex, sharedProjectPaths, updateMap, viewMap, workVersionKey } from '../work/store.js';
 import { participantLabel, sessionMention, agentLetterAudience, agentLetterVisible } from '../work/thread.js';
@@ -506,6 +507,8 @@ export const TOOLS: Tool[] = [
         },
         backlog: { type: 'array', maxItems: 30, uniqueItems: true, items: { type: 'string', pattern: '^b-\\d{3,}$' },
           description: 'Board cards this done result finishes; they move to Review.' },
+        coverage: { type: 'string', enum: ['covered', 'partial'],
+          description: 'Swarm members only: covered if the whole slice is read and its questions answered, else partial.' },
       },
       required: ['status', 'summary'],
     },
@@ -878,6 +881,7 @@ async function report(
   const summary = stringArg(args, 'summary');
   const artifacts = artifactsArg(args);
   const backlogIds = backlogIdsArg(args);
+  const coverage = coverageArg(args);
 
   // Резюме пишем до смены статуса: ждущий `wait_for` просыпается на статусе и
   // должен увидеть уже готовое резюме, а не пустое поле.
@@ -894,6 +898,12 @@ async function report(
     session.summary = summary;
     session.summarySource = 'agent';
     session.artifacts = artifacts;
+    // Покрытие (спека «видимые дыры», 3.4) пишется в этой же записи, раньше смены `result` (`finishSession` ниже): хост,
+    // увидев `done`, уже видит покрытие. Записывает только сдающий трутень или проверяющий; поле без значения прежнее не стирает.
+    if (coverage !== null && status === 'done') {
+      const member = swarmOfSession(current, sessionId)?.member;
+      if (member !== undefined && member.role !== 'queen') member.coverage = coverage;
+    }
   });
   let notice: string | null = null;
   let notified: string[] | undefined;
@@ -1011,6 +1021,11 @@ function reportLetterWarning(map: WorkMap, sessionId: string): string {
     ? `send_message {to: "${recipient.id}", text: "<result>"}`
     : `send_message {room: "${recipient.roomId}", to: ["${recipient.id}"], text: "<result>"}`);
   return `${base} Tell them yourself: ${calls.join('; ')}.`;
+}
+
+/** `coverage` отчёта: необязательное, одно из двух слов; другое значение — ошибка аргумента до любой записи. */
+function coverageArg(args: Record<string, unknown>): SwarmCoverage | null {
+  return args['coverage'] === undefined ? null : enumArg(args, 'coverage', SWARM_COVERAGES);
 }
 
 function backlogIdsArg(args: Record<string, unknown>): string[] {

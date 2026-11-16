@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_RESOURCE_LIMITS } from './resource-policy.js';
 import {
+  SWARM_SLICE_MAX,
   SWARM_TAG_MAX,
   isSwarmExpired,
+  isSwarmSlice,
   isSwarmTag,
   isSwarmTerminal,
+  memberOutcome,
   memberState,
   swarmDeadline,
   swarmMemberIds,
@@ -133,5 +136,47 @@ describe('срок жизни роя', () => {
     for (const status of ['done', 'failed', 'cancelled'] as const) {
       expect(isSwarmExpired(swarm({ status }), limits, deadline + 1)).toBe(false);
     }
+  });
+});
+
+describe('isSwarmSlice', () => {
+  it('имя среза: 1–60 знаков после trim, без перевода строки', () => {
+    expect(isSwarmSlice('host/sessions')).toBe(true);
+    expect(isSwarmSlice('x')).toBe(true);
+    expect(isSwarmSlice('x'.repeat(SWARM_SLICE_MAX))).toBe(true);
+    expect(isSwarmSlice('x'.repeat(SWARM_SLICE_MAX + 1))).toBe(false);
+    expect(isSwarmSlice(`  ${'x'.repeat(SWARM_SLICE_MAX)}  `)).toBe(true);
+    expect(isSwarmSlice('')).toBe(false);
+    expect(isSwarmSlice('   ')).toBe(false);
+    expect(isSwarmSlice('a\nb')).toBe(false);
+    expect(isSwarmSlice('a\rb')).toBe(false);
+    for (const edge of ['\nhost', 'host\n', 'host\r', '\rhost', '\r\nhost\r\n', '  host\n  ']) expect(isSwarmSlice(edge), JSON.stringify(edge)).toBe(false);
+    expect(isSwarmSlice(42)).toBe(false);
+    expect(isSwarmSlice(null)).toBe(false);
+  });
+});
+
+describe('memberOutcome', () => {
+  const handed = (coverage?: WorkSwarmMember['coverage']): WorkSwarmMember => ({ ...member('s-02', 'drone', 1, AT), ...(coverage === undefined ? {} : { coverage }) });
+  const open = member('s-03', 'drone', 2);
+
+  it('сдавший: покрытие по самооценке, без неё — unstated', () => {
+    expect(memberOutcome(handed('covered'), { lifecycle: 'closed', result: 'done' })).toBe('covered');
+    expect(memberOutcome(handed('partial'), { lifecycle: 'closed', result: 'done' })).toBe('partial');
+    expect(memberOutcome(handed(null), { lifecycle: 'closed', result: 'done' })).toBe('unstated');
+    expect(memberOutcome(handed(), undefined)).toBe('unstated');
+  });
+
+  it('не сдавший: failed, missing, open', () => {
+    expect(memberOutcome(open, { lifecycle: 'active', result: 'failed' })).toBe('failed');
+    expect(memberOutcome(open, { lifecycle: 'closed', result: 'failed' })).toBe('failed');
+    expect(memberOutcome(open, undefined)).toBe('missing');
+    expect(memberOutcome(open, { lifecycle: 'closed', result: null })).toBe('missing');
+    expect(memberOutcome(open, { lifecycle: 'active', result: null })).toBe('open');
+    expect(memberOutcome(open, { lifecycle: 'pending', result: null })).toBe('open');
+  });
+
+  it('заснувший без итога участник — open: порога молчания функция не знает', () => {
+    expect(memberOutcome(open, { lifecycle: 'sleeping', result: null })).toBe('open');
   });
 });

@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { isSwarmTag, loadConfig, roleFromId, SWARM_OBJECTIVE_MAX } from '@parley/core';
+import { isSwarmSlice, isSwarmTag, loadConfig, roleFromId, SWARM_OBJECTIVE_MAX } from '@parley/core';
 import type { SwarmRole } from '@parley/core';
 import { AGENT_LIMITS, type SessionRef } from '@parley/protocol';
 import type { CreatedSession, CreateSessionInput } from '../sessions/sessions-service.js';
@@ -9,7 +9,7 @@ export const AGENT_SWARMS_PATH = '/agent/swarms';
 
 /**
  * Канал агента к рою (спека роя v1, 4): `{op: 'create', tag, objective, provider, role?, model?, effort?}` заводит рой и
- * королеву, `{op: 'add', role, task, provider, label?, agentRole?, model?, effort?}` — трутня или проверяющего в рой
+ * королеву, `{op: 'add', role, task, provider, label?, slice?, agentRole?, model?, effort?}` — трутня или проверяющего в рой
  * королевы-вызывающего. Работу и вызывающего хост берёт из токена, рой — из карты; `swarm` в `CreateSessionInput` ставит
  * только этот маршрут.
  */
@@ -51,7 +51,7 @@ export function createSwarmEndpoint(options: {
             if (op !== 'create' && op !== 'add') throw new Error('op must be "create" or "add".');
             const allowed = op === 'create'
               ? ['op', 'tag', 'objective', 'provider', 'role', 'model', 'effort']
-              : ['op', 'role', 'task', 'provider', 'label', 'agentRole', 'model', 'effort'];
+              : ['op', 'role', 'task', 'provider', 'label', 'slice', 'agentRole', 'model', 'effort'];
             if (Object.keys(args).some(key => !allowed.includes(key))) throw new Error('Unknown swarm argument.');
             const text = op === 'create' ? ['provider', 'objective'] : ['provider', 'task'];
             for (const key of text) if (typeof args[key] !== 'string' || !args[key].trim()) throw new Error(`${key} must be a nonempty string.`);
@@ -60,7 +60,10 @@ export function createSwarmEndpoint(options: {
             if (op === 'create') {
               if (!isSwarmTag(args['tag'])) throw new Error('tag must be 1-24 characters without line breaks.');
               if ((args['objective'] as string).length > SWARM_OBJECTIVE_MAX) throw new Error(`objective must be at most ${SWARM_OBJECTIVE_MAX} characters.`);
-            } else if (args['role'] !== 'drone' && args['role'] !== 'verifier') throw new Error('role must be "drone" or "verifier".');
+            } else {
+              if (args['role'] !== 'drone' && args['role'] !== 'verifier') throw new Error('role must be "drone" or "verifier".');
+              if (args['slice'] !== undefined && !isSwarmSlice(args['slice'])) throw new Error('slice must be 1-60 characters without line breaks.');
+            }
             const { config } = await loadConfig();
             // Роль участника по умолчанию — исследователь для трутня и проверяющий для проверяющего (спека роя, 4).
             const roleOf = op === 'create' ? args['role'] : args['agentRole'] ?? (args['role'] === 'verifier' ? 'builtin:verifier' : 'builtin:researcher');
@@ -71,7 +74,7 @@ export function createSwarmEndpoint(options: {
               // Королева всегда облегчённая: она только координирует, MCP человека ей не нужны, а диалог «new MCP servers found»
               // держал её до ответа человека (b-013). Участники из `swarm_add` — по настройке `leanAgents`.
               lean: op === 'create' ? true : config.leanAgents,
-              swarm: op === 'create' ? { kind: 'create', tag: args['tag'] as string, objective: args['objective'] as string } : { kind: 'add', role: args['role'] as 'drone' | 'verifier' },
+              swarm: op === 'create' ? { kind: 'create', tag: args['tag'] as string, objective: args['objective'] as string } : { kind: 'add', role: args['role'] as 'drone' | 'verifier', slice: args['slice'] === undefined ? null : (args['slice'] as string).trim() },
               ...(roleOf === undefined ? {} : { role: roleFromId(roleOf as string) }),
               ...(args['model'] === undefined ? {} : { model: args['model'] as string | null }),
               ...(args['effort'] === undefined ? {} : { effort: args['effort'] as string | null }),

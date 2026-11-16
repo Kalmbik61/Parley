@@ -16,9 +16,11 @@ import { CREATE_SWARM_TOOL, SWARM_ADD_TOOL } from './swarm-tools.js';
  * Ещё подняты ровно на `backlog_take` и поле `backlog` в схеме `report` (доска задач, план 1, задача 4): строки description —
  * 147 байт (88 + 59), JSON инструмента с запятой и свойства с ключом и запятой — 539; запас прежний. Нужны они, чтобы
  * агент брал карточку по просьбе человека и сдавал её в Review отчётом.
+ * Ещё подняты ровно на поле `coverage` в схеме `report` (спека «видимые дыры», 3.4): строка description — 96 байт, JSON
+ * свойства с ключом и запятой — 171; запас прежний. Нужно оно, чтобы участник роя называл покрытие среза, а хост — дыры.
  */
-const DESCRIPTIONS_MAX_BYTES = 5600 + 232 + 357 + 147;
-const SCHEMAS_MAX_BYTES = 21000 + 386 + 1421 + 539;
+const DESCRIPTIONS_MAX_BYTES = 5600 + 232 + 357 + 147 + 96;
+const SCHEMAS_MAX_BYTES = 21000 + 386 + 1421 + 539 + 171;
 
 /** Сумма байт всех строк `description` на любой глубине схемы (описания свойств включены). */
 function descriptionBytes(node: unknown): number {
@@ -55,9 +57,11 @@ describe('размер описаний инструментов MCP', () => {
 /**
  * Инструменты роя (спека роя v1, 4) уходят модели вместе с `create_session`, но их потолок отдельный: общие потолки выше
  * держат прежний набор и не раздвинуты.
+ * Потолки подняты ровно на параметр `slice` у `swarm_add` (спека «видимые дыры», 3.3): строка description — 60 байт, JSON
+ * свойства с ключом и запятой — 132; запас прежний.
  */
-const SWARM_DESCRIPTIONS_MAX_BYTES = 700;
-const SWARM_SCHEMAS_MAX_BYTES = 2200;
+const SWARM_DESCRIPTIONS_MAX_BYTES = 700 + 60;
+const SWARM_SCHEMAS_MAX_BYTES = 2200 + 132;
 const SWARM_TOOLS = [CREATE_SWARM_TOOL, SWARM_ADD_TOOL];
 
 describe('размер описаний инструментов роя', () => {

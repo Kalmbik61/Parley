@@ -22,7 +22,7 @@ import { memberBrief, queenBrief } from './briefs.js';
 /** Внутреннее поле `CreateSessionInput.swarm`: агентский эндпоинт сессий его не принимает, ставит его только путь роя. */
 export type SwarmSpawn =
   | { kind: 'create'; tag: string; objective: string }
-  | { kind: 'add'; role: 'drone' | 'verifier' };
+  | { kind: 'add'; role: 'drone' | 'verifier'; /** Имя среза из `swarm_add` (без пробелов по краям); `null` — не дано. */ slice: string | null };
 
 const ROLE_LABEL = { drone: 'Drone', verifier: 'Verifier' } as const;
 
@@ -107,7 +107,7 @@ export function admitSwarmSession(map: WorkMap, session: WorkSession, admission:
       creator: creatorOf(map, caller),
       objective: admission.task,
       queen: session.id,
-      members: [{ sessionId: session.id, role: 'queen', n: 1, addedAt: at, handedAt: null }],
+      members: [{ sessionId: session.id, role: 'queen', n: 1, addedAt: at, handedAt: null, slice: null, coverage: null }],
       status: 'running',
       createdAt: at,
       endedAt: null,
@@ -115,6 +115,7 @@ export function admitSwarmSession(map: WorkMap, session: WorkSession, admission:
       failure: null,
       seenAt: null,
       expiredAt: null,
+      announced: 0,
     };
     (map.swarms ??= []).push(swarm);
     if (byAgent) {
@@ -139,7 +140,7 @@ export function admitSwarmSession(map: WorkMap, session: WorkSession, admission:
   const n = Math.max(0, ...swarm.members.filter((member) => member.role === spawn.role).map((member) => member.n)) + 1;
   if (admission.label.trim() === '') session.label = memberName(spawn.role, n);
   session.task = memberBrief(spawn.role, admission.task);
-  swarm.members.push({ sessionId: session.id, role: spawn.role, n, addedAt: at, handedAt: null });
+  swarm.members.push({ sessionId: session.id, role: spawn.role, n, addedAt: at, handedAt: null, slice: spawn.slice, coverage: null });
   // Вторая волна (спека, 3): королева добавила участника, пока рой собирал итоги, — рой снова работает.
   if (swarm.status === 'collecting') swarm.status = 'running';
   resources().swarmSpawned = (resources().swarmSpawned ?? 0) + 1;

@@ -24,6 +24,9 @@ import { useSwarmIconTheme } from '../lib/use-swarm-icon-theme.js';
 import { useNow } from '../lib/use-now.js';
 import {
   formatSwarmTimer,
+  memberAria,
+  memberName,
+  memberSlice,
   memberTitle,
   memberWord,
   swarmCounter,
@@ -73,6 +76,8 @@ function Dots({ views }: { views: readonly SwarmMemberView[] }): JSX.Element | n
           className={cn(
             'inline-block size-[5px] rounded-full border',
             dot === 'handed' && 'border-work-sidebar-foreground bg-work-sidebar-foreground',
+            // Частичная сдача: наполовину залитая точка — отличима и от залитой (сдал), и от пустой (идёт).
+            dot === 'partial' && 'border-work-sidebar-foreground bg-linear-to-r from-work-sidebar-foreground from-50% to-transparent to-50%',
             dot === 'failed' && 'border-accent-700 bg-accent-700',
             dot === 'open' && 'border-work-sidebar-muted-foreground',
           )}
@@ -167,6 +172,9 @@ export const SwarmRow = memo(function SwarmRow({ workKey, projectPath, workId, b
 function MemberLine({ swarm, view, selected, openerFor }: { swarm: WorkSwarm; view: SwarmMemberView; selected: boolean; openerFor(sessionId: string): () => void }): JSX.Element {
   const { member, session, state } = view;
   const word = memberWord(swarm, view);
+  const slice = memberSlice(member);
+  const partial = state === 'handed' && member.coverage === 'partial';
+  const marker = partial ? 'partial' : state;
   const open = session === null ? undefined : openerFor(session.id);
   return (
     <div
@@ -174,7 +182,7 @@ function MemberLine({ swarm, view, selected, openerFor }: { swarm: WorkSwarm; vi
       tabIndex={open === undefined ? -1 : 0}
       data-swarm-member={member.sessionId}
       data-member-state={state}
-      aria-label={`${memberTitle(member)}: ${word}`}
+      aria-label={memberAria(swarm, view)}
       onClick={(event) => {
         event.stopPropagation();
         open?.();
@@ -193,9 +201,17 @@ function MemberLine({ swarm, view, selected, openerFor }: { swarm: WorkSwarm; vi
       )}
     >
       <span aria-hidden="true" className="inline-flex size-3 shrink-0 items-center justify-center text-[11px] leading-none">
-        {member.role === 'queen' ? '👑' : <i className={cn('inline-block size-[6px] rounded-full border', state === 'working' ? 'animate-pulse border-work-sidebar-foreground bg-work-sidebar-foreground motion-reduce:animate-none' : state === 'handed' ? 'border-work-sidebar-muted-foreground bg-work-sidebar-muted-foreground' : state === 'failed' ? 'border-accent-700 bg-accent-700' : 'border-work-sidebar-muted-foreground')} />}
+        {member.role === 'queen' ? '👑' : <i data-marker={marker} className={cn('inline-block size-[6px] rounded-full border', state === 'working' ? 'animate-pulse border-work-sidebar-foreground bg-work-sidebar-foreground motion-reduce:animate-none' : partial ? 'border-work-sidebar-muted-foreground bg-linear-to-r from-work-sidebar-muted-foreground from-50% to-transparent to-50%' : state === 'handed' ? 'border-work-sidebar-muted-foreground bg-work-sidebar-muted-foreground' : state === 'failed' ? 'border-accent-700 bg-accent-700' : 'border-work-sidebar-muted-foreground')} />}
       </span>
-      <span className="min-w-0 flex-1 truncate">{memberTitle(member)}</span>
+      <span data-swarm-name="" title={slice === null ? undefined : memberName(member)} className="flex min-w-0 flex-1 items-baseline">
+        <span className="shrink-0">{memberTitle(member)}</span>
+        {slice === null ? null : (
+          <>
+            <span aria-hidden="true" className="shrink-0 whitespace-pre text-work-sidebar-muted-foreground"> · </span>
+            <span data-swarm-slice="" className="min-w-0 truncate text-work-sidebar-muted-foreground">{slice}</span>
+          </>
+        )}
+      </span>
       <span className={cn('shrink-0 text-[11px]', state === 'failed' ? 'font-semibold text-accent-800' : 'text-work-sidebar-muted-foreground')}>{word}</span>
     </div>
   );
