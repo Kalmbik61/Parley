@@ -528,7 +528,10 @@ export const S = {
     /** Текст королевы выводится из роя: режет задачу, ждёт сдачи, сводит, сдала. */
     queen: { cutting: 'cutting the task…', waiting: 'waiting for hand-ins…', collecting: 'collecting…', handed: 'handed in ✓' },
     /** Состояние трутня и проверяющего. */
-    member: { drone: 'reading…', verifier: 'verifying…', waiting: 'waiting', handed: 'handed in ✓', failed: 'failed', closed: 'closed' },
+    member: { drone: 'reading…', verifier: 'verifying…', waiting: 'waiting', handed: 'handed in ✓', partial: 'partial', failed: 'failed', closed: 'closed' },
+    /** Имя участника со срезом в раскрытой строке: `Drone 2 · host/sessions`; `aria-label`: `Drone 2, host/sessions: partial`. */
+    memberName: (title: string, slice: string | null): string => (slice === null ? title : `${title} · ${slice}`),
+    memberAria: (title: string, slice: string | null, word: string): string => (slice === null ? `${title}: ${word}` : `${title}, ${slice}: ${word}`),
     /** Счётчик `3/5` (сдавшие / все трутни и проверяющие); до первого трутня — многоточие. */
     counter: (handed: number, total: number): string => (total === 0 ? '…' : `${handed}/${total}`),
     counterLabel: (handed: number, total: number): string => `${handed} of ${total} handed in`,

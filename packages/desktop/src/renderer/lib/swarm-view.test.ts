@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { makeSession, makeSwarm, makeSwarmMember } from '../test-utils/work-fixtures.js';
-import { nominalSwarm, formatSwarmTimer, isSwarmShown, memberTitle, memberWord, swarmBadge, swarmBadgeView, swarmCounter, swarmDots, swarmElapsedMs, swarmMemberViews } from './swarm-view.js';
+import { nominalSwarm, formatSwarmTimer, isSwarmShown, memberAria, memberName, memberTitle, memberWord, swarmBadge, swarmBadgeView, swarmCounter, swarmDots, swarmElapsedMs, swarmMemberViews } from './swarm-view.js';
 
 const T0 = Date.parse('2026-09-27T08:00:00.000Z');
 
@@ -130,5 +130,54 @@ describe('nominalSwarm — условный рой для значков кар�
 
   it('сбой и отмена — три полные серые ячейки', () => {
     for (const status of ['failed', 'cancelled'] as const) expect(nominalSwarm(status)).toEqual({ handed: 3, total: 3 });
+  });
+});
+
+describe('частичная сдача и срез (спека «видимые дыры», 3.8)', () => {
+  const sessions = [makeSession('s-01', 'queen'), makeSession('s-02', 'covered'), makeSession('s-03', 'partial'), makeSession('s-04', 'old'), makeSession('s-05', 'failed', { result: 'failed' }), makeSession('s-06', 'busy')];
+  const swarm = makeSwarm('sw-01', 's-01', {
+    members: [
+      makeSwarmMember('s-01', 'queen'),
+      makeSwarmMember('s-02', 'drone', 1, true, { slice: 'core', coverage: 'covered' }),
+      makeSwarmMember('s-03', 'drone', 2, true, { slice: 'host/sessions', coverage: 'partial' }),
+      makeSwarmMember('s-04', 'drone', 3, true),
+      makeSwarmMember('s-05', 'verifier', 1, false, { slice: 'claims' }),
+      makeSwarmMember('s-06', 'drone', 4),
+    ],
+  });
+  const viewOf = (sw: typeof swarm, id: string, list = sessions) => swarmMemberViews(sw, list).find((view) => view.member.sessionId === id)!;
+
+  it('слово: partial у сдавшего с покрытием partial; covered и сдача без поля — handed in ✓', () => {
+    expect(memberWord(swarm, viewOf(swarm, 's-03'))).toBe('partial');
+    expect(memberWord(swarm, viewOf(swarm, 's-02'))).toBe('handed in ✓');
+    expect(memberWord(swarm, viewOf(swarm, 's-04'))).toBe('handed in ✓');
+    expect(memberWord(swarm, viewOf(swarm, 's-05'))).toBe('failed');
+  });
+
+  it('частичная сдача остаётся partial после закрытия участника, удаления сессии и отмены роя', () => {
+    const closed = sessions.map((session) => (session.id === 's-03' ? { ...session, lifecycle: 'closed' as const } : session));
+    expect(memberWord(swarm, viewOf(swarm, 's-03', closed))).toBe('partial');
+    expect(memberWord(swarm, viewOf(swarm, 's-03', sessions.filter((session) => session.id !== 's-03')))).toBe('partial');
+    const cancelled = { ...swarm, status: 'cancelled' as const };
+    expect(memberWord(cancelled, viewOf(cancelled, 's-03'))).toBe('partial');
+    expect(memberWord(cancelled, viewOf(cancelled, 's-06'))).toBe('closed');
+    expect(swarmDots(swarmMemberViews(cancelled, sessions))[1]).toBe('partial');
+  });
+
+  it('точки (трутни по номеру, затем проверяющий): handed, partial, handed (без поля), open, failed — partial отличается от handed и open', () => {
+    expect(swarmDots(swarmMemberViews(swarm, sessions))).toEqual(['handed', 'partial', 'handed', 'open', 'failed']);
+  });
+
+  it('счётчик не меняется: частичная сдача — сдача', () => {
+    expect(swarmCounter(swarm)).toBe('3/5');
+  });
+
+  it('название участника: со срезом «Drone 2 · host/sessions», без среза — как прежде; aria-label по 3.8', () => {
+    expect(memberName(swarm.members[2]!)).toBe('Drone 2 · host/sessions');
+    expect(memberName(swarm.members[3]!)).toBe('Drone 3');
+    expect(memberName(swarm.members[0]!)).toBe('Queen');
+    expect(memberAria(swarm, viewOf(swarm, 's-03'))).toBe('Drone 2, host/sessions: partial');
+    expect(memberAria(swarm, viewOf(swarm, 's-06'))).toBe('Drone 4: reading…');
+    expect(memberAria(swarm, viewOf(swarm, 's-05'))).toBe('Verifier, claims: failed');
   });
 });

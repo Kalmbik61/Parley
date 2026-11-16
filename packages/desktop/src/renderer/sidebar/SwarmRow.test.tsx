@@ -105,6 +105,57 @@ describe('SwarmRow', () => {
     expect(document.querySelector('[data-swarm-member]')).toBeNull();
   });
 
+  describe('срез и частичная сдача (спека «видимые дыры», 3.8)', () => {
+    const LONG = 'packages/host/src/sessions/session-lifecycle and the whole of its tests';
+    const sliced = [
+      makeSwarmMember('s-q', 'queen'),
+      makeSwarmMember('s-d1', 'drone', 1, true, { slice: 'core', coverage: 'covered' }),
+      makeSwarmMember('s-d2', 'drone', 2, true, { slice: 'host/sessions', coverage: 'partial' }),
+      makeSwarmMember('s-v', 'verifier', 1, false, { slice: LONG }),
+    ];
+    const memberLine = (id: string): HTMLElement => document.querySelector(`[data-swarm-member="${id}"]`) as HTMLElement;
+
+    it('раскрытая строка: «Drone 2 · host/sessions», aria-label, слово partial и маркер, отличный от сдавшей и от открытой', () => {
+      renderCard(entryWith(makeSwarm('sw-01', 's-q', { members: sliced })));
+      fireEvent.click(swarmRow());
+      const partial = memberLine('s-d2');
+      expect(partial.getAttribute('aria-label')).toBe('Drone 2, host/sessions: partial');
+      expect(partial.querySelector('[data-swarm-name]')?.textContent).toBe('Drone 2 · host/sessions');
+      expect(partial.textContent).toContain('partial');
+      expect(partial.getAttribute('data-member-state')).toBe('handed');
+      const markers = ['s-d1', 's-d2', 's-v'].map((id) => memberLine(id).querySelector('[data-marker]')?.getAttribute('data-marker'));
+      expect(markers).toEqual(['handed', 'partial', 'working']);
+      expect(memberLine('s-d1').getAttribute('aria-label')).toBe('Drone 1, core: handed in ✓');
+    });
+
+    it('точки свёрнутой строки: data-dot="partial" рядом с handed и open', () => {
+      renderCard(entryWith(makeSwarm('sw-01', 's-q', { members: sliced })));
+      expect([...swarmRow().querySelectorAll('[data-dot]')].map((dot) => dot.getAttribute('data-dot'))).toEqual(['handed', 'partial', 'open']);
+      // Счётчик не меняется: частичная сдача — сдача.
+      expect(swarmRow().querySelector('[data-swarm-counter]')?.textContent).toBe('2/3');
+    });
+
+    it('длинный срез обрезается многоточием (truncate), полное имя стоит в title', () => {
+      renderCard(entryWith(makeSwarm('sw-01', 's-q', { members: sliced })));
+      fireEvent.click(swarmRow());
+      const name = memberLine('s-v').querySelector('[data-swarm-name]') as HTMLElement;
+      expect(name.getAttribute('title')).toBe(`Verifier · ${LONG}`);
+      expect(name.querySelector('[data-swarm-slice]')?.className).toContain('truncate');
+      expect(name.querySelector('[data-swarm-slice]')?.textContent).toBe(LONG);
+    });
+
+    it('участник без среза выглядит как прежде: имя, aria-label без запятой, без срезного элемента', () => {
+      renderCard(entryWith(makeSwarm('sw-01', 's-q', { members })));
+      fireEvent.click(swarmRow());
+      const line = memberLine('s-d2');
+      expect(line.getAttribute('aria-label')).toBe('Drone 2: reading…');
+      expect(line.querySelector('[data-swarm-name]')?.textContent).toBe('Drone 2');
+      expect(line.querySelector('[data-swarm-name]')?.hasAttribute('title')).toBe(false);
+      expect(line.querySelector('[data-swarm-slice]')).toBeNull();
+      expect(memberLine('s-d1').querySelector('[data-marker]')?.getAttribute('data-marker')).toBe('handed');
+    });
+  });
+
   it('клик по участнику открывает его сессию и не сворачивает рой', () => {
     const open = vi.fn();
     renderCard(entryWith(makeSwarm('sw-01', 's-q', { members })), open);
