@@ -65,23 +65,44 @@ describe('agent swarm endpoint', () => {
     memberOf.mockResolvedValue({ swarmId: 'sw-01', role: 'drone', n: 1 });
     await saveConfig({ leanAgents: true });
     await post(add);
-    expect(spawn).toHaveBeenLastCalledWith(expect.objectContaining({ lean: true, swarm: { kind: 'add', role: 'drone' } }));
+    expect(spawn).toHaveBeenLastCalledWith(expect.objectContaining({ lean: true, swarm: { kind: 'add', role: 'drone', slice: null } }));
     await saveConfig({ leanAgents: false });
     await post(add);
-    expect(spawn).toHaveBeenLastCalledWith(expect.objectContaining({ lean: false, swarm: { kind: 'add', role: 'drone' } }));
+    expect(spawn).toHaveBeenLastCalledWith(expect.objectContaining({ lean: false, swarm: { kind: 'add', role: 'drone', slice: null } }));
   });
 
   it('add: трутень получает роль researcher, проверяющий — verifier; ответ называет участника', async () => {
     const { post, create: spawn, memberOf } = await setup();
     memberOf.mockResolvedValueOnce({ swarmId: 'sw-01', role: 'drone', n: 3 });
     expect(JSON.parse((await post(add)).body)).toEqual({ ok: true, result: { sessionId: 's-02', member: 'Drone 3' } });
-    expect(spawn).toHaveBeenLastCalledWith(expect.objectContaining({ task: 'Read core', label: '', swarm: { kind: 'add', role: 'drone' }, role: { source: 'builtin', name: 'researcher' } }));
+    expect(spawn).toHaveBeenLastCalledWith(expect.objectContaining({ task: 'Read core', label: '', swarm: { kind: 'add', role: 'drone', slice: null }, role: { source: 'builtin', name: 'researcher' } }));
     memberOf.mockResolvedValueOnce({ swarmId: 'sw-01', role: 'verifier', n: 1 });
     expect(JSON.parse((await post({ ...add, role: 'verifier', label: 'Check', agentRole: 'builtin:critic' })).body).result.member).toBe('Verifier 1');
-    expect(spawn).toHaveBeenLastCalledWith(expect.objectContaining({ label: 'Check', swarm: { kind: 'add', role: 'verifier' }, role: { source: 'builtin', name: 'critic' } }));
+    expect(spawn).toHaveBeenLastCalledWith(expect.objectContaining({ label: 'Check', swarm: { kind: 'add', role: 'verifier', slice: null }, role: { source: 'builtin', name: 'critic' } }));
     memberOf.mockResolvedValueOnce({ swarmId: 'sw-01', role: 'verifier', n: 2 });
     await post({ ...add, role: 'verifier' });
     expect(spawn).toHaveBeenLastCalledWith(expect.objectContaining({ role: { source: 'builtin', name: 'verifier' } }));
+  });
+
+  it('add: slice доходит обрезанным; неверный отвергается, create не вызывается', async () => {
+    const { post, create: spawn, memberOf } = await setup();
+    memberOf.mockResolvedValue({ swarmId: 'sw-01', role: 'drone', n: 1 });
+    expect(JSON.parse((await post({ ...add, slice: '  host/sessions ' })).body).ok).toBe(true);
+    expect(spawn).toHaveBeenLastCalledWith(expect.objectContaining({ swarm: { kind: 'add', role: 'drone', slice: 'host/sessions' } }));
+    expect(JSON.parse((await post({ ...add, slice: 'x'.repeat(60) })).body).ok).toBe(true);
+    spawn.mockClear();
+    for (const slice of ['', '   ', 'a\nb', 'x'.repeat(61), 7, null]) {
+      expect(JSON.parse((await post({ ...add, slice })).body), JSON.stringify(slice)).toEqual({
+        ok: false, error: { code: 'bad_request', message: 'slice must be 1-60 characters without line breaks.' },
+      });
+    }
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('create: slice — лишний аргумент', async () => {
+    const { post, create: spawn } = await setup();
+    expect(JSON.parse((await post({ ...create, slice: 'host' })).body)).toEqual({ ok: false, error: { code: 'bad_request', message: 'Unknown swarm argument.' } });
+    expect(spawn).not.toHaveBeenCalled();
   });
 
   it('участник в очереди машины: queued в ответе — у королевы при create и у участника при add', async () => {
