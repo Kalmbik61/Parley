@@ -887,21 +887,25 @@ export type {
 } from './work/capacity-report.js';
 
 export {
+  SWARM_COVERAGES,
   SWARM_OBJECTIVE_MAX,
   SWARM_ROLES,
+  SWARM_SLICE_MAX,
   SWARM_STATUSES,
   SWARM_SUMMARY_MAX,
   SWARM_TAG_MAX,
+  isSwarmSlice,
   isSwarmTag,
   isSwarmExpired,
   isSwarmTerminal,
+  memberOutcome,
   memberState,
   swarmDeadline,
   swarmMemberIds,
   swarmOfSession,
   swarmProgress,
 } from './work/swarms.js';
-export type { SwarmCreator, SwarmMemberState, SwarmRole, SwarmStatus, WorkSwarm, WorkSwarmMember } from './work/swarms.js';
+export type { SwarmCoverage, SwarmCreator, SwarmMemberOutcome, SwarmMemberState, SwarmRole, SwarmStatus, WorkSwarm, WorkSwarmMember } from './work/swarms.js';
 
 export { captureDecisionJournal, flushDecisionJournal, validateDecisionJournalStorage, DecisionJournalError, readDecisionJournalFiles, classifyDecisionFile, DECISION_LIST_MAX_FILES } from './work/decision-journal.js';
 export type { DecisionJournalIntent, DecisionJournalCode, DecisionJournalFlushResult, DecisionJournalFile, DecisionJournalListing, DecisionFileState } from './work/decision-journal.js';

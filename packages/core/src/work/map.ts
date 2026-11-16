@@ -4,7 +4,7 @@ import { validatePlanStorage } from './plans.js';
 import { validatePlanEffects } from './plan-effects.js';
 import { compactStoredTexts } from './stored-texts.js';
 import { validateResources } from './resource-policy.js';
-import { SWARM_ROLES, SWARM_STATUSES, isSwarmTag, isSwarmTerminal } from './swarms.js';
+import { SWARM_COVERAGES, SWARM_ROLES, SWARM_STATUSES, isSwarmSlice, isSwarmTag, isSwarmTerminal } from './swarms.js';
 import { EFFORT_TOKEN, type EffortLevel } from '../providers.js';
 import type { LetterTx } from './letter-store.js';
 import { defaultSessionName, NEW_LABEL } from './names.js';
@@ -747,8 +747,14 @@ function migrateSwarm(swarm: unknown, map: WorkMap): boolean {
     if (!Number.isInteger(member['n'])) member['n'] = 1;
     if (typeof member['addedAt'] !== 'string') member['addedAt'] = createdAt;
     if (typeof member['handedAt'] !== 'string') member['handedAt'] = null;
+    // Срез и покрытие участника (спека «видимые дыры», 3.1): битое и отсутствующее — `null`; у королевы всегда `null`.
+    const slice = member['slice'];
+    member['slice'] = member['role'] !== 'queen' && isSwarmSlice(slice) ? slice.trim() : null;
+    member['coverage'] = member['role'] !== 'queen' && (SWARM_COVERAGES as readonly unknown[]).includes(member['coverage']) ? member['coverage'] : null;
   }
   swarm['members'] = members;
+  const announced = swarm['announced'];
+  swarm['announced'] = typeof announced === 'number' && Number.isInteger(announced) && announced >= 0 && announced <= members.length ? announced : 0;
   if (!members.some((member) => member['sessionId'] === swarm['queen'] && member['role'] === 'queen')) return false;
 
   const creator = swarm['creator'];

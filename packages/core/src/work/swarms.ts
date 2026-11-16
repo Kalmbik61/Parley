@@ -31,6 +31,10 @@ export interface WorkSwarmMember {
   addedAt: string;
   /** Сдал (done-report принят хостом); трутни и проверяющие. */
   handedAt: string | null;
+  /** Имя среза из `swarm_add`; `null` — не дано. У королевы всегда `null`. */
+  slice?: string | null;
+  /** Самооценка покрытия из `report done` участника; `null` — не указана. У королевы всегда `null`. */
+  coverage?: SwarmCoverage | null;
 }
 
 export interface WorkSwarm {
@@ -54,17 +58,32 @@ export interface WorkSwarm {
   seenAt: string | null;
   /** Когда хост закрыл рой по сроку жизни (`swarmMinutes`); `null` — по сроку не закрывался. */
   expiredAt: string | null;
+  /** Сколько записей `members` (с начала массива, королева включена) уже вошло в письма конца волны; 0 — писем не было. */
+  announced?: number;
 }
+
+/** Самооценка покрытия среза, которую участник пишет в `report done`. */
+export const SWARM_COVERAGES = ['covered', 'partial'] as const;
+export type SwarmCoverage = (typeof SWARM_COVERAGES)[number];
 
 /** Пределы текстов роя: задача (`objective`) и итог (`result.summary`). */
 export const SWARM_OBJECTIVE_MAX = 4096;
 export const SWARM_SUMMARY_MAX = 4096;
 /** Длина тега: 1–24 знака. */
 export const SWARM_TAG_MAX = 24;
+/** Длина имени среза: 1–60 знаков. */
+export const SWARM_SLICE_MAX = 60;
 
 /** Тег роя годится: строка 1–24 знака без переводов строки. */
 export const isSwarmTag = (value: unknown): value is string =>
   typeof value === 'string' && value.length >= 1 && value.length <= SWARM_TAG_MAX && !/[\r\n]/.test(value);
+
+/** Имя среза годится: строка, после `trim` не пустая и не длиннее 60 знаков, без переводов строки. */
+export const isSwarmSlice = (value: unknown): value is string => {
+  if (typeof value !== 'string') return false;
+  const trimmed = value.trim();
+  return trimmed.length >= 1 && trimmed.length <= SWARM_SLICE_MAX && !/[\r\n]/.test(trimmed);
+};
 
 /** Рой закончил: `endedAt` стоит, таймер встал, живых трутней и проверяющих закрывает хост. */
 export const isSwarmTerminal = (status: SwarmStatus): boolean =>
@@ -93,6 +112,22 @@ export function memberState(swarm: WorkSwarm, member: WorkSwarmMember, session: 
   if (session === undefined || session.result === 'failed' || session.lifecycle === 'closed') return 'failed';
   if (session.lifecycle === 'pending') return 'waiting';
   return 'working';
+}
+
+export type SwarmMemberOutcome = 'covered' | 'partial' | 'unstated' | 'failed' | 'missing' | 'open';
+
+/**
+ * Исход участника для письма конца волны и итога. Сдавший: покрытие по его самооценке, а без неё — `unstated`
+ * (неизвестное покрытие, не `covered`). Не сдавший: `failed` — сессия сообщила о неудаче, `missing` — сессии нет или она
+ * закрыта, `open` — ещё работает или ждёт (порога молчания хоста функция не знает).
+ */
+export function memberOutcome(member: WorkSwarmMember, session: SessionAxes | undefined): SwarmMemberOutcome {
+  if (member.handedAt !== null) {
+    return member.coverage === 'covered' ? 'covered' : member.coverage === 'partial' ? 'partial' : 'unstated';
+  }
+  if (session?.result === 'failed') return 'failed';
+  if (session === undefined || session.lifecycle === 'closed') return 'missing';
+  return 'open';
 }
 
 /** Все сессии роёв работы, королев включая: их сайдбар и остров не выводят обычными строками. */

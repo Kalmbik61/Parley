@@ -1611,10 +1611,10 @@ describe('рои в карте (спека роя v1, 2.1–2.2)', () => {
   const swarmOf = (patch: Partial<WorkSwarm> = {}): WorkSwarm => ({
     id: 'sw-01', tag: 'Research', creator: { kind: 'human' }, objective: 'Audit', queen: 's-01',
     members: [
-      { sessionId: 's-01', role: 'queen', n: 1, addedAt: AT, handedAt: null },
-      { sessionId: 's-02', role: 'drone', n: 1, addedAt: AT, handedAt: null },
+      { sessionId: 's-01', role: 'queen', n: 1, addedAt: AT, handedAt: null, slice: null, coverage: null },
+      { sessionId: 's-02', role: 'drone', n: 1, addedAt: AT, handedAt: null, slice: null, coverage: null },
     ],
-    status: 'running', createdAt: AT, endedAt: null, result: null, failure: null, seenAt: null, expiredAt: null,
+    status: 'running', createdAt: AT, endedAt: null, result: null, failure: null, seenAt: null, expiredAt: null, announced: 0,
     ...patch,
   });
   /** Карта с тремя сессиями, комнатой r-01 и роем в сыром виде, как он лежит в файле. */
@@ -1688,6 +1688,49 @@ describe('рои в карте (спека роя v1, 2.1–2.2)', () => {
     for (const key of ['endedAt', 'result', 'failure', 'seenAt', 'expiredAt']) delete raw[key];
     const parsed = read(withSwarms(raw));
     expect(parsed.swarms?.[0]).toMatchObject({ endedAt: null, result: null, failure: null, seenAt: null, expiredAt: null });
+  });
+
+  describe('срез, покрытие и announced (спека «видимые дыры», 3.1)', () => {
+    const drone = (patch: Record<string, unknown>): never => ({ sessionId: 's-02', role: 'drone', n: 1, addedAt: AT, handedAt: AT, ...patch }) as never;
+    const queen = (patch: Record<string, unknown> = {}): never => ({ sessionId: 's-01', role: 'queen', n: 1, addedAt: AT, handedAt: null, ...patch }) as never;
+    const readSwarm = (patch: Record<string, unknown>) => read(withSwarms({ ...swarmOf(), ...patch })).swarms![0]!;
+
+    it('верные значения сохраняются, срез без пробелов по краям', () => {
+      const parsed = readSwarm({ members: [queen(), drone({ slice: '  host/sessions ', coverage: 'partial' })], announced: 1 });
+      expect(parsed.members[1]).toMatchObject({ slice: 'host/sessions', coverage: 'partial' });
+      expect(parsed.announced).toBe(1);
+      expect(readSwarm({ members: [queen(), drone({ coverage: 'covered' })] }).members[1]?.coverage).toBe('covered');
+    });
+
+    it.each([
+      ['нет полей', {}],
+      ['срез не строка', { slice: 7, coverage: 'ok' }],
+      ['пустой срез, покрытие вне перечня', { slice: '   ', coverage: 'full' }],
+      ['срез с переводом строки', { slice: 'a\nb', coverage: null }],
+      ['срез длиннее 60', { slice: 'x'.repeat(61), coverage: 3 }],
+    ])('неверное и отсутствующее (%s) читается как null и null', (_name, patch) => {
+      const parsed = readSwarm({ members: [queen(), drone(patch)] });
+      expect(parsed.members[1]).toMatchObject({ slice: null, coverage: null });
+      expect(parsed.announced).toBe(0);
+    });
+
+    it('у королевы срез и покрытие всегда null', () => {
+      const parsed = readSwarm({ members: [queen({ slice: 'x', coverage: 'covered' }), drone({})] });
+      expect(parsed.members[0]).toMatchObject({ slice: null, coverage: null });
+    });
+
+    it.each([[3], [-1], [0.5], ['1'], [null], [undefined]])('announced = %j читается как 0, если он не целое от 0 до длины массива', (announced) => {
+      expect(readSwarm({ members: [queen(), drone({})], announced }).announced).toBe(0);
+    });
+
+    it('announced равный длине массива сохраняется', () => {
+      expect(readSwarm({ members: [queen(), drone({})], announced: 2 }).announced).toBe(2);
+    });
+
+    it('значения переживают запись и повторное чтение', () => {
+      const parsed = readSwarm({ members: [queen(), drone({ slice: 'host', coverage: 'partial' })], announced: 2 });
+      expect(read(withSwarms(parsed)).swarms![0]).toEqual(parsed);
+    });
   });
 
   describe('removeSession', () => {
