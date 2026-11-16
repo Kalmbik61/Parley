@@ -28,6 +28,32 @@ import type { SwarmsService, SwarmsServiceOptions } from './swarms-service.js';
 const START = '2026-10-28T12:00:00.000Z';
 const MIN = 60_000;
 
+/**
+ * Журнал записей карты: после каждого `updateMap` (и теста, и службы) снимок роя из базы — статус, `announced`, число
+ * участников и число писем `parley` королеве. Так тест видит границы записей, а не только итог (3.5: одна запись).
+ */
+const commits = vi.hoisted(() => ({ log: [] as Array<{ status: string; announced: number; members: number; letters: number }> }));
+vi.mock('@parley/core', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@parley/core')>();
+  return {
+    ...original,
+    updateMap: async (...args: Parameters<typeof original.updateMap>) => {
+      const result = await original.updateMap(...args);
+      const map = original.readStoredMap(args[0], args[1]);
+      const swarm = map.swarms?.[0];
+      if (swarm !== undefined) {
+        commits.log.push({
+          status: swarm.status,
+          announced: swarm.announced ?? 0,
+          members: swarm.members.length,
+          letters: map.messages.filter((message) => message.from === original.PARLEY && message.to.includes(swarm.queen)).length,
+        });
+      }
+      return result;
+    },
+  };
+});
+
 let home = '';
 let project = '';
 let workId = '';
@@ -45,6 +71,7 @@ beforeEach(async () => {
   home = await mkdtemp(path.join(tmpdir(), 'parley-swarms-home-'));
   project = await mkdtemp(path.join(tmpdir(), 'parley-swarms-project-'));
   process.env['PARLEY_HOME'] = home;
+  commits.log = [];
   listeners = [];
   stoppers = [];
   booted = [];
@@ -373,7 +400,7 @@ describe('переходы', () => {
       } else {
         expect(swarmOf().status, `${age}`).toBe('collecting');
         expect(lettersTo(queen).map((letter) => letter.text.split('\n').slice(0, 3)), `${age}`).toEqual([[
-          'Wave finished in swarm sw-01: 1 members — 1 did not hand in.',
+          'Wave finished in swarm sw-01: 1 member — 1 did not hand in.',
           'Not closed:',
           `- Drone 1 (${drones[0]}): did not hand in`,
         ]]);
@@ -568,6 +595,24 @@ describe('письмо конца волны', () => {
     expect(lettersTo(queen)[0]!.text).toContain('Left: 13 of 16 swarm sessions, 90 min.');
   });
 
+  it('граница записи: ни одна запись карты не несёт collecting, announced и письмо порознь', async () => {
+    const { drones } = await makeSwarm({ drones: 2 });
+    boot({ limits: async () => FULL });
+    await handIn(drones[0]!, 'partial');
+    await handIn(drones[1]!, 'covered');
+    await emit();
+
+    const states = commits.log.map((entry) => `${entry.status}/${entry.announced === entry.members ? 'announced' : 'open'}/${entry.letters}`);
+    // Каждая записанная версия карты — либо «ещё не собрали» (running, announced не равен числу участников, писем нет),
+    // либо «собрали» (collecting, announced равен числу участников, ровно одно письмо): третьего состояния нет.
+    for (const state of states) expect(['running/open/0', 'collecting/announced/1'], state).toContain(state);
+    // Переход произошёл ровно один раз и целиком в одной записи: до него running/open/0, после — только collecting/announced/1.
+    const first = states.indexOf('collecting/announced/1');
+    expect(first).toBeGreaterThan(0);
+    expect(states.slice(0, first).every((state) => state === 'running/open/0')).toBe(true);
+    expect(states.slice(first).every((state) => state === 'collecting/announced/1')).toBe(true);
+  });
+
   it.each([
     ['в ту же миллисекунду', START],
     ['при откате часов', '2026-10-28T11:00:00.000Z'],
@@ -595,8 +640,8 @@ describe('письмо конца волны', () => {
     const letters = lettersTo(queen);
     expect(letters).toHaveLength(2);
     expect(letters[1]!.text.split('\n')).toEqual([
-      'Wave finished in swarm sw-01: all 1 members handed in and declared full coverage.',
-      'Earlier waves: 1 members not closed; your register says which of those gaps are closed since.',
+      'Wave finished in swarm sw-01: 1 member handed in and declared full coverage.',
+      'Earlier waves: 1 member not closed; your register says which of those gaps are closed since.',
       'Left: 12 of 16 swarm sessions, 90 min.',
       expect.stringContaining("Coverage is the member's own estimate."),
     ]);
@@ -662,7 +707,7 @@ describe('письмо конца волны', () => {
     await emit();
 
     const [letter] = lettersTo(queen);
-    expect(letter?.text).toContain('Wave finished in swarm sw-01: 1 members — 1 partial.');
+    expect(letter?.text).toContain('Wave finished in swarm sw-01: 1 member — 1 partial.');
     expect(letter?.text).not.toContain('Left:');
   });
 
