@@ -102,18 +102,19 @@ async function ask(
 }
 
 /**
- * Итог запуска: `out` — что печатать в stdout; `journal` — запись моста, уже начатая и не ждущая никого: вызывающий печатает
- * `out` первым и ограничивает ожидание записи сам (`finish`). Никогда не отклоняется.
+ * Итог запуска: `out` — что печатать в stdout; `journal` — отложенная запись моста: пока её не вызвали, ничего не начато, в том
+ * числе и сам запуск писателя. Вызывающий печатает `out`, и только когда вывод записан, запускает `journal` и ограничивает
+ * ожидание им (`finish`). Возвращаемое обещание не отклоняется.
  */
 export interface BridgeResult {
   out: string;
-  journal: Promise<void>;
+  journal: () => Promise<void>;
 }
 
 /** Не сжатие: ни запроса, ни записи. */
-const IDLE: BridgeResult = { out: '', journal: Promise.resolve() };
+const IDLE: BridgeResult = { out: '', journal: async () => {} };
 
-/** Ничего не бросает; запись журнала начинается, но здесь не ожидается. */
+/** Ничего не бросает; записи журнала здесь не начинается — её запускает вызывающий после вывода. */
 export async function runPacketBridge(
   input: string,
   args: readonly string[],
@@ -146,33 +147,36 @@ export async function runPacketBridge(
   );
 
   // Запись моста: каталога `events/` нет — не создаём; сбой записи ничего не меняет. `requestMs` — время запроса к хосту, а не
-  // всего хука: оно взято до записи, которая начинается здесь, но никем не ожидается.
+  // всего хука: строка собирается здесь, сама запись откладывается до конца вывода.
   const workDir = fromEnv(env, 'WORK_DIR');
-  let journal: Promise<void> = Promise.resolve();
-  if (workDir !== undefined && session !== undefined) {
-    const line = `${JSON.stringify({ hook_event_name: BRIDGE_EVENT, outcome, requestMs: now() - startedAt })}\n`;
-    const file = path.join(workDir, 'events', `${session}.jsonl`);
-    try {
-      journal = Promise.resolve((deps.append ?? appendDetached)(file, line)).catch(() => {});
-    } catch {
-      /* журнал — подсказка, не условие */
-    }
-  }
-  return { out, journal };
+  if (workDir === undefined || session === undefined) return { out, journal: async () => {} };
+  const line = `${JSON.stringify({ hook_event_name: BRIDGE_EVENT, outcome, requestMs: now() - startedAt })}\n`;
+  const file = path.join(workDir, 'events', `${session}.jsonl`);
+  const append = deps.append ?? appendDetached;
+  return {
+    out,
+    journal: async () => {
+      try {
+        await append(file, line);
+      } catch {
+        /* журнал — подсказка, не условие */
+      }
+    },
+  };
 }
 
 /** Сколько после вывода мост ещё ждёт запись журнала: дальше — выход с кодом 0, как бы ни шла запись. */
 export const JOURNAL_GRACE_MS = 300;
 
 /**
- * Печатает ответ, и только затем ждёт запись журнала не дольше `JOURNAL_GRACE_MS`. Печать — первая и от записи не зависит;
- * зависшая запись (медленный или недоступный том) ни задерживает вывод, ни мешает выходу.
+ * Печатает ответ; когда вывод записан, запускает запись журнала (и сам запуск писателя) и ждёт её не дольше `JOURNAL_GRACE_MS`.
+ * Печать — первая и от записи не зависит; зависшая запись (медленный или недоступный том) ни задерживает вывод, ни мешает выходу.
  */
 export async function finish(result: BridgeResult, write: (out: string, done: () => void) => void, graceMs = JOURNAL_GRACE_MS): Promise<void> {
   await new Promise<void>((printed) => write(result.out, printed));
   let timer: NodeJS.Timeout | undefined;
   await Promise.race([
-    result.journal,
+    result.journal().catch(() => {}),
     new Promise<void>((resolve) => { timer = setTimeout(resolve, graceMs); }),
   ]);
   clearTimeout(timer);

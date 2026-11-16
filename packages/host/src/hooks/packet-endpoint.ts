@@ -42,19 +42,34 @@ export function parsePacketFault(value: string | undefined): PacketFault | null 
 
 /**
  * Снимок запуска для сборки пакета: возможности (навигатор, профиль, ревизия контекста) — последний снимок процесса MCP этой
- * сессии, пришедший по её токену; ревизия агента из регистрации хуков сильнее. Запрос моста ничего из этого не называет, и без
- * снимка остаются только данные регистрации.
+ * сессии, пришедший по её токену; ревизия агента из регистрации хуков сильнее. Запрос моста ничего из этого не называет.
+ * Снимка нет — возможности неизвестны, и ничего не подставляется: `null`, хук отвечает пусто (`unknown-catalog`).
  */
-export function packetLaunch(known: ToolLaunch | undefined, registered: { agentRevision?: string }): ToolLaunch {
-  return { ...(known ?? {}), ...(registered.agentRevision === undefined ? {} : { agentRevision: registered.agentRevision }) };
+export function packetLaunch(known: ToolLaunch | undefined, registered: { agentRevision?: string }): ToolLaunch | null {
+  if (known === undefined) return null;
+  return { ...known, ...(registered.agentRevision === undefined ? {} : { agentRevision: registered.agentRevision }) };
+}
+
+/**
+ * Контекст пакета из состояния хоста: снимок запуска у маршрута инструментов (`launchOf`) и регистрация хуков. Снимка нет —
+ * `null`: каталог инструментов неизвестен, пакета нет. Одна функция для хоста и для тестов.
+ */
+export function packetContext(
+  tools: { launchOf(ref: SessionRef): ToolLaunch | undefined },
+  toolContextFor: (ref: SessionRef, launch: ToolLaunch) => Promise<McpContext>,
+): (ref: SessionRef, registered: { agentRevision?: string }) => Promise<McpContext | null> {
+  return async (ref, registered) => {
+    const launch = packetLaunch(tools.launchOf(ref), registered);
+    return launch === null ? null : toolContextFor(ref, launch);
+  };
 }
 
 export interface PacketEndpointDeps {
   log: Log;
   /** Настройка `roomPacket`; зовётся на каждом запросе. */
   enabled?(): Promise<boolean>;
-  /** Контекст исполнителя инструментов сессии (тот же, что у `/agent/tools`). */
-  context(ref: SessionRef, launch: { agentRevision?: string }): Promise<McpContext>;
+  /** Контекст исполнителя инструментов сессии (тот же, что у `/agent/tools`); `null` — возможности запуска неизвестны (`packetContext`). */
+  context(ref: SessionRef, registered: { agentRevision?: string }): Promise<McpContext | null>;
   /** Запись хоста в `events/<сессия>.jsonl`; сбой не меняет ответ. */
   journal?(ref: SessionRef, record: Record<string, unknown>): void;
   /** Испытательная переменная; по умолчанию — окружение хоста. */
@@ -91,6 +106,14 @@ export function createPacketEndpoint(deps: PacketEndpointDeps): PacketEndpoint {
     let packet: Awaited<ReturnType<typeof sessionRoomPacket>>;
     try {
       const context = await deps.context(ref, request.agentRevision === undefined ? {} : { agentRevision: request.agentRevision });
+      if (context === null) {
+        // Возможности запуска неизвестны (процесс MCP ещё не спрашивал инструменты, либо запись потеряна): каталог инструментов
+        // в пакете был бы угадан, поэтому ответ пустой.
+        if (request.answered()) return;
+        write(ref, null, 0, 'unknown-catalog');
+        request.respond(EMPTY_HOOK_RESPONSE);
+        return;
+      }
       packet = await sessionRoomPacket(context);
     } catch (error) {
       deps.log.warn('пакет комнаты: сборка не удалась', { error: String(error) });

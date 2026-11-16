@@ -141,7 +141,7 @@ import { createVoiceTelemetry, LIVE_USD_PER_MINUTE } from './voice/telemetry.js'
 import { dailyBudget } from './voice/budget.js';
 import { AGENT_BROWSER_PATH, createBrowserEndpoint } from './agent/browser-endpoint.js';
 import { createHookServer, type HookRequest } from './hooks/hook-server.js';
-import { createPacketEndpoint, PACKET_PATH, packetLaunch } from './hooks/packet-endpoint.js';
+import { createPacketEndpoint, PACKET_PATH, packetContext } from './hooks/packet-endpoint.js';
 import { ensurePacketHookLauncher } from './hooks/packet-hook-launcher.js';
 import { createInlineMail, hookWithInlineMail } from './hooks/inline-mail.js';
 import { appendMailJournal } from './feed/mail-journal.js';
@@ -662,10 +662,10 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   };
   // Путь пакета состояния комнаты (спека 2026-11-16, 3.5): доступ проверяет приёмник общей с `/hooks` точкой, сессия — из регистрации.
   // Возможности запуска (навигатор, профиль, канал агента) — из состояния хоста: снимок запуска, который процесс MCP этой сессии
-  // прислал по своему токену (`launchOf`), и регистрация хуков; запрос моста их не называет.
+  // прислал по своему токену (`launchOf`), и регистрация хуков; запрос моста их не называет. Снимка нет — пакета нет.
   const packetEndpoint = createPacketEndpoint({
     log,
-    context: (ref, registered) => toolContextFor(ref, packetLaunch(toolsEndpoint.launchOf(ref), registered)),
+    context: packetContext(toolsEndpoint, toolContextFor),
   });
   const hookServer = createHookServer({
     log,

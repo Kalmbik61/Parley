@@ -35,7 +35,7 @@ const env = (): NodeJS.ProcessEnv => ({
 const bridge = async (input: string, args: readonly string[], environment: NodeJS.ProcessEnv, deps: BridgeDeps = {}): Promise<string> => {
   // Запись — в этом же процессе: тест читает журнал сразу. Отдельный процесс-писатель проверяется ниже.
   const result = await runPacketBridge(input, args, environment, { append: (file, text) => appendFile(file, text, 'utf8'), ...deps });
-  await result.journal;
+  await result.journal();
   return result.out;
 };
 const journal = async (): Promise<Record<string, unknown>[]> =>
@@ -173,22 +173,50 @@ describe('мост: ответ печатается раньше записи ж
     let line = '';
     const startedAt = Date.now();
     const result = await runPacketBridge(COMPACT, [url(), 'PARLEY_HOOK_TOKEN'], env(), { append: (_file, text) => { appended += 1; line = text; return never(); } });
-    // Результат вернулся, хотя запись не кончилась: вывод не ждёт её.
+    // Результат вернулся, запись ещё не начата: вывод её не ждёт, а запускает её только вызывающий после вывода.
     expect(JSON.parse(result.out).hookSpecificOutput.additionalContext).toBe(PACKET);
     expect(Date.now() - startedAt).toBeLessThan(1000);
-    expect(appended).toBe(1);
-    const record = JSON.parse(line) as { requestMs: number; ms?: number };
-    expect(record.requestMs).toBeLessThan(1000);
-    expect(record).not.toHaveProperty('ms');
+    expect(appended).toBe(0);
 
     const printedAt: number[] = [];
     const finishing = Date.now();
     await finish(result, (out, done) => { printedAt.push(Date.now()); expect(out).toBe(result.out); done(); }, 120);
     expect(printedAt).toHaveLength(1);
+    expect(appended).toBe(1);
+    const record = JSON.parse(line) as { requestMs: number; ms?: number };
+    expect(record.requestMs).toBeLessThan(1000);
+    expect(record).not.toHaveProperty('ms');
     // Вывод — до ожидания записи, выход — не позже льготы (с запасом на планировщик).
     expect(printedAt[0]! - finishing).toBeLessThan(100);
     expect(Date.now() - finishing).toBeGreaterThanOrEqual(110);
     expect(Date.now() - finishing).toBeLessThan(1000);
+  });
+
+  it('порядок: вывод записан раньше, чем начата запись журнала, включая запуск писателя', async () => {
+    const events: string[] = [];
+    const result = await runPacketBridge(COMPACT, [url(), 'PARLEY_HOOK_TOKEN'], env(), {
+      append: async () => { events.push('journal-started'); },
+    });
+    expect(events).toEqual([]);
+    // Вывод записывается не мгновенно: запись журнала не должна начаться, пока он не записан.
+    await finish(result, (out, done) => {
+      events.push('print-begun');
+      setTimeout(() => { events.push('printed'); expect(out).not.toBe(''); done(); }, 60);
+    }, 200);
+    expect(events).toEqual(['print-begun', 'printed', 'journal-started']);
+  });
+
+  it('собранный процесс: ответ напечатан, код 0, строка журнала дописана отдельным писателем уже после выхода моста', async () => {
+    const built = fileURLToPath(new URL('../../dist/hooks/packet-hook-bin.js', import.meta.url));
+    if (!existsSync(built)) return;
+    const child = spawn(process.execPath, [built, url(), 'PARLEY_HOOK_TOKEN'], { env: { ...env(), PATH: process.env['PATH'] } });
+    let stdout = '';
+    child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString('utf8'); });
+    child.stdin.end(COMPACT);
+    const status = await new Promise((resolve) => child.on('close', resolve));
+    expect(status).toBe(0);
+    expect(JSON.parse(stdout).hookSpecificOutput.additionalContext).toBe(PACKET);
+    await vi.waitFor(async () => expect((await journal())[0]?.['outcome']).toBe('printed'), { timeout: 3000 });
   });
 
   it('запись, которая завершается медленно (в пределах льготы): finish ждёт её и не дольше, вывод тот же', async () => {

@@ -5,7 +5,7 @@
  * (снимок процесса MCP, регистрация канала), а не из своего запроса.
  */
 
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { request as httpRequest } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -19,7 +19,7 @@ import { silentLog } from '../../test/feed-fakes.js';
 import { hostToolContext } from '../agent/tool-context.js';
 import { createToolsEndpoint } from '../agent/tools-endpoint.js';
 import { createHookServer, type HookServer } from './hook-server.js';
-import { createPacketEndpoint, PACKET_PATH, packetLaunch } from './packet-endpoint.js';
+import { createPacketEndpoint, PACKET_PATH, packetContext, packetLaunch } from './packet-endpoint.js';
 
 let home = '';
 let project = '';
@@ -61,7 +61,7 @@ async function boot(options: { channel: boolean }) {
     log: silentLog(),
     enabled: async () => true,
     fault: () => undefined,
-    context: (sessionRef, registered) => toolContextFor(sessionRef, packetLaunch(tools.launchOf(sessionRef), registered)),
+    context: packetContext(tools, toolContextFor),
   });
   hooks = createHookServer({
     log: silentLog(),
@@ -111,6 +111,47 @@ function parsePacket(text: string): { names: string[]; revision: string } {
 }
 
 const textOf = (result: Awaited<ReturnType<ToolRunner['call']>>): string => (result.content as { text: string }[])[0]!.text;
+
+const reasons = async (): Promise<unknown[]> =>
+  (await readFile(path.join(workPaths(ref.projectPath, ref.workId).events, `${ref.sessionId}.jsonl`), 'utf8').catch(() => ''))
+    .split('\n').filter(Boolean).map((line) => (JSON.parse(line) as { reason?: unknown }).reason);
+
+describe('возможности запуска неизвестны — ничего не подставляется', () => {
+  it('packetLaunch: нет снимка — null, снимок {} — известный пустой запуск, ревизия регистрации сильнее', () => {
+    expect(packetLaunch(undefined, { agentRevision: 'r' })).toBeNull();
+    expect(packetLaunch({}, {})).toEqual({});
+    expect(packetLaunch({ agentRevision: 'old', skillNavigator: true }, { agentRevision: 'new' })).toEqual({ agentRevision: 'new', skillNavigator: true });
+  });
+
+  it('хук до первого запроса инструментов — пусто и unknown-catalog; после запроса — пакет; потеря записи — снова пусто; новый запрос — снова пакет', async () => {
+    const { origin, token, agent, tools } = await boot({ channel: true });
+    expect(tools.launchOf(ref)).toBeUndefined();
+    expect(await postPacket(origin, token)).toBe('{}');
+    expect(await reasons()).toEqual(['unknown-catalog']);
+
+    const remote = createRemoteToolRunner(agent, { skillNavigator: true, agentRevision: 'rev-1' });
+    await remote.list();
+    const first = JSON.parse(await postPacket(origin, token)).hookSpecificOutput.additionalContext as string;
+    expect(parsePacket(first).names).toContain('find_skill');
+
+    // Запись потеряна (токен снят и выдан заново, исполнитель сброшен): каталог снова неизвестен.
+    tools.forget(ref);
+    expect(await postPacket(origin, token)).toBe('{}');
+
+    // Процесс MCP спросил снова — запись восстановлена, пакет тот же.
+    await createRemoteToolRunner(agent, { skillNavigator: true, agentRevision: 'rev-1' }).list();
+    const again = JSON.parse(await postPacket(origin, token)).hookSpecificOutput.additionalContext as string;
+    expect(parsePacket(again)).toEqual(parsePacket(first));
+    expect(await reasons()).toEqual(['unknown-catalog', 'sent', 'unknown-catalog', 'sent']);
+  });
+
+  it('пустой снимок {} известен: пакет собирается с каталогом по умолчанию, не пусто', async () => {
+    const { origin, token, agent } = await boot({ channel: false });
+    await createRemoteToolRunner(agent, {}).list();
+    const text = JSON.parse(await postPacket(origin, token)).hookSpecificOutput.additionalContext as string;
+    expect(parsePacket(text).names).not.toContain('find_skill');
+  });
+});
 
 describe('пакет хука = get_map = список сервера', () => {
   it('канал агента и навигатор включены: те же инструменты канала и find_skill, та же ревизия', async () => {
