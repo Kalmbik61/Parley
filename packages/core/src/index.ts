@@ -572,6 +572,8 @@ export {
   PARLEY_STARTUP_NOTIFICATION,
   PERMISSION_ANSWERED_EVENT,
   INLINE_MAIL_EVENT,
+  ROOM_PACKET_EVENT,
+  PACKET_BRIDGE_EVENT,
   TERMINAL_WORKING_EVENT,
   bareEvent,
   eventRecordOf,
@@ -654,6 +656,8 @@ export {
   FEED_HOOK_EVENTS,
   HOOK_COMMAND,
   HOOK_EVENTS,
+  PACKET_BRIDGE_TIMEOUT_SEC,
+  packetBridgeCommand,
   workSettings,
   workSettingsJson,
   writeWorkSettings,
@@ -728,8 +732,10 @@ export {
   createToolRunner,
   finishedState,
   takeInlineMail,
+  sessionRoomPacket,
   INLINE_MAIL_MAX_CHARS,
 } from './mcp/tools.js';
+export type { RoomPacketResult } from './work/room-packet.js';
 export type { ToolRunner } from './mcp/tools.js';
 export type { MapChanges } from './mcp/watch-map.js';
 export { HUMAN, MESSAGE_KINDS, SYSTEM, PARLEY, ENGINE } from './work/types.js';

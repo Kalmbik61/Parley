@@ -410,6 +410,11 @@ export interface SessionsFeedOptions {
    */
   codexHookCommand?: () => Promise<string | undefined>;
   /**
+   * Мост пакета состояния комнаты (спека 2026-11-16, 3.5): запускатель и адрес пути пакета. Зовётся только для `claude` с
+   * адресом приёмника; `undefined` — настройка `roomPacket` выключена или запускатель не записан, моста в файле нет.
+   */
+  packetHook?: () => Promise<{ launcher: string; url: string } | undefined>;
+  /**
    * Согласия человека на папку (спека 2026-10-21, 4.2): запуск Codex в проекте без записи в `trust.json` останавливается
    * и заводит карточку. Без сервиса (изолированные тесты) такой запуск не удерживается.
    */
@@ -1257,11 +1262,13 @@ export function createSessionsService(
         }
       }
 
-      const { hookUrl, codexHookCommand } = await timer.step('hooks', async () => {
+      const { hookUrl, codexHookCommand, packetBridge } = await timer.step('hooks', async () => {
         const url = await feedHookUrl(session.provider);
         const codexCommand = url !== undefined && byFamily(session.provider, { claude: false, codex: true, qwen: false, opencode: false, neutral: false })
           ? await feed.codexHookCommand?.() : undefined;
-        return { hookUrl: url, codexHookCommand: codexCommand };
+        // Мост пакета — только провайдер `claude` и только при действующей регистрации хуков (есть адрес приёмника).
+        const bridge = url !== undefined && session.provider === 'claude' ? await feed.packetHook?.() : undefined;
+        return { hookUrl: url, codexHookCommand: codexCommand, packetBridge: bridge };
       });
       const roleCatalog = feed.roleCatalog
         ? await timer.step('roles', () => feed.roleCatalog!(session.workspace?.path ?? session.worktree?.path ?? ref.projectPath))
@@ -1306,6 +1313,7 @@ export function createSessionsService(
         ...(roleCatalog === undefined ? {} : { roleCatalog }),
         ...(hookUrl === undefined ? {} : { hookUrl }),
         ...(codexHookCommand === undefined ? {} : { codexHookCommand }),
+        ...(packetBridge === undefined ? {} : { packetBridge }),
         ...(agentChannel === undefined ? {} : { agent: agentChannel }),
         ...(options.prompt === undefined ? {} : { prompt: options.prompt }),
         ...(options.handover === undefined ? {} : { handover: options.handover }),

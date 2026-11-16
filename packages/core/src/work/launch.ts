@@ -57,7 +57,7 @@ import { addSession, isCodexThreadBinding, removeSession, transitionSession, typ
 import { NEW_LABEL } from './names.js';
 import { CLAUDE_MCP_AUTO_BACKGROUND_MS, mcpConfigValue, writeMcpConfig, type AgentChannel } from './mcp-config.js';
 import { finishSession, linkProviderSession, type FinishOptions, type MetricsRoots } from './metrics.js';
-import { writeSessionSettings, writeWorkSettings } from './settings-file.js';
+import { packetBridgeCommand, writeSessionSettings, writeWorkSettings } from './settings-file.js';
 import { ensureStateDir } from './state-dir.js';
 import { QWEN_SYSTEM_SETTINGS_ENV, writeQwenSettings } from './qwen-settings-file.js';
 import { OPENCODE_SERVER_URL_SLOT, opencodeServerEnv } from './opencode-config.js';
@@ -115,6 +115,12 @@ export interface LaunchOptions {
    * настройки `codexWriteApprovals` даёт `-c hooks.…` в аргументах запуска Codex (спека 2026-10-07, 5.6; 2026-10-21, 5.2).
    */
   codexHookCommand?: string;
+  /**
+   * Мост пакета состояния комнаты (спека 2026-11-16, 3.5): запускатель `PARLEY_HOME/bin/parley-packet-hook` и адрес пути
+   * пакета приёмника хуков. Хост передаёт его при включённой настройке `roomPacket`; в файл настроек он попадает только у
+   * провайдера `claude` и только вместе с `hookUrl`. Нет поля — файл настроек как раньше.
+   */
+  packetBridge?: { launcher: string; url: string };
   /**
    * Доверие к папке, которое хост выдал запуску Codex: `realpath` папки проекта и cwd сессии (спека 2026-10-21, 4.3).
    * С ним в шаблон ложится `{trust}` — `-c projects={…}` из `trustArgs`, и Codex не показывает экран доверия. Нет поля —
@@ -507,6 +513,7 @@ async function plan(
   }
   if (template.includes('{settingsFile}')) {
     const hasProjectMcp = options.projectMcp !== undefined && (options.projectMcp.enabled.length > 0 || options.projectMcp.disabled.length > 0);
+    const packetBridge = entry.id === 'claude' && options.hookUrl !== undefined && options.packetBridge !== undefined ? options.packetBridge : undefined;
     // Плагины пользователя lean выключает вместе с модом jev одним списком. Файл — свой у сессии: в общем файле работы
     // список лёг бы и на сессии без lean.
     if (lean && isClaudeCode(entry)) {
@@ -514,8 +521,11 @@ async function plan(
     }
     subs.settingsFile = await writeWorkSettings(projectPath, workId, {
       ...(options.hookUrl === undefined ? {} : { hookUrl: options.hookUrl }),
-      ...(skillNavigator || lean || workspace || hasProjectMcp ? { sessionId: session.id } : {}),
+      // Файл с мостом пакета — свой у сессии: общий файл работы отдал бы мост сессиям, которым он не положен.
+      ...(skillNavigator || lean || workspace || hasProjectMcp || packetBridge !== undefined ? { sessionId: session.id } : {}),
       ...(hasProjectMcp ? { projectMcp: options.projectMcp } : {}),
+      // Только провайдер `claude`: GLM и прочие аккаунты на том же CLI срез не затрагивает.
+      ...(packetBridge === undefined ? {} : { packetBridge: packetBridgeCommand(packetBridge.launcher, packetBridge.url, 'PARLEY_HOOK_TOKEN') }),
       ...(workspace ? { autonomous: true } : {}),
       ...(disablePlugins.length > 0 ? { disablePlugins } : {}),
       // Инструменты `browser_*` у сессии есть, только когда канал агента лёг в конфиг MCP (спека браузера, 5.1).

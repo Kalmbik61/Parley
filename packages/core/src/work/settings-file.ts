@@ -193,6 +193,25 @@ export interface WorkSettingsOptions {
    * работы мог бы отдать включённый список сессии из другого репозитория.
    */
   projectMcp?: { enabled: readonly string[]; disabled: readonly string[] };
+  /**
+   * Команда моста пакета состояния комнаты (`packetBridgeCommand`): второй командный хук группы `SessionStart` с пределом
+   * `PACKET_BRIDGE_TIMEOUT_SEC`. Только при `hookUrl`: у запуска без регистрации хуков нет адреса приёмника, и моста нет.
+   * Нет поля — файл побайтно прежний.
+   */
+  packetBridge?: string;
+}
+
+/** Предел командного хука моста пакета: опоздавший ответ стоит сессии весь предел (стенд: около 10 с при пределе 10). */
+export const PACKET_BRIDGE_TIMEOUT_SEC = 2;
+
+const quoteArg = (value: string): string => `"${value.replace(/(["\\$`])/g, '\\$1')}"`;
+
+/**
+ * Команда хука-моста: запускатель, адрес пути пакета и имя переменной с токеном запуска. В окружении процесса Claude Code адреса
+ * приёмника нет, поэтому он едет аргументом команды в файле настроек.
+ */
+export function packetBridgeCommand(launcher: string, url: string, tokenEnv: string): string {
+  return `${quoteArg(launcher)} ${quoteArg(url)} ${tokenEnv}`;
 }
 
 export function feedHook(url: string, event: string, tokenEnv: string): HookHttp {
@@ -229,6 +248,7 @@ export function workSettings({
   allowBrowser = false,
   autonomous = false,
   projectMcp,
+  packetBridge,
 }: WorkSettingsOptions = {}): SettingsFile {
   const hooks: Record<string, HookMatcher[]> = {};
   for (const event of HOOK_EVENTS) {
@@ -250,6 +270,10 @@ export function workSettings({
         hooks[event] = [{ hooks: [http] }];
       }
     }
+  }
+  // Мост пакета — второй командный хук `SessionStart`, сразу после журнального `cat >>`; без регистрации хуков моста нет.
+  if (packetBridge !== undefined && hookUrl !== undefined) {
+    hooks['SessionStart']?.[0]?.hooks.splice(1, 0, { type: 'command', command: packetBridge, timeout: PACKET_BRIDGE_TIMEOUT_SEC });
   }
   const allow = [
     ...(autonomous ? [`mcp__${MCP_SERVER_NAME}`] : []),

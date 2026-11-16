@@ -85,7 +85,7 @@ import { PLAN_TASKS_TOOL, planTasks } from './plan-tasks.js';
 import { AGENT_SWITCH_UNAVAILABLE, CREATE_SESSION_TOOL, REQUEST_AGENT_SWITCH_TOOL, SESSION_CREATION_UNAVAILABLE, createSession, requestAgentSwitch } from './session-tools.js';
 import { CREATE_SWARM_TOOL, SWARM_ADD_TOOL, SWARM_UNAVAILABLE, createSwarm, swarmAdd } from './swarm-tools.js';
 import { fetchProviderRows } from './provider-rows.js';
-import { buildRoomPacket, type PacketTarget } from '../work/room-packet.js';
+import { buildRoomPacket, type PacketTarget, type RoomPacketResult } from '../work/room-packet.js';
 import { addMemberByLead, addRoom, canReadRoom, isCreatedDescendant, isMember, isRoomArchived, joinNotice, leaveOtherRooms, liveLead, requireOpenRoom } from '../work/rooms.js';
 import { agentStatus, asleepHint } from '../work/session-state.js';
 import { SWARM_COVERAGES, swarmOfSession } from '../work/swarms.js';
@@ -1522,6 +1522,23 @@ export function takeInlineMail(
   const { messages, extras } = takeInbox(context, sessionId, { chars: INLINE_MAIL_MAX_CHARS - INLINE_MAIL_LINE.length - 1 }, lockTimeoutMs);
   if (messages.length === 0) return null;
   return { text: `${INLINE_MAIL_LINE}\n${JSON.stringify({ messages, ...extras })}`, letters: messages.length };
+}
+
+/**
+ * Пакет состояния комнаты для сессии контекста (мост после сжатия, спека 2026-11-16, 3.5): та же сборка, что у
+ * `get_map {field: "packet"}` без параметра `room`. `null` — пакета нет: сессия без комнаты или в нескольких комнатах
+ * (мосту некого выбирать), комната закрыта, сбой сборки. Ничего не пишет.
+ */
+export async function sessionRoomPacket(context: McpContext, at: string = new Date().toISOString()): Promise<RoomPacketResult | null> {
+  if (context.sessionId === null) return null;
+  const map = await readMap(context.projectPath, context.workId);
+  let target: PacketTarget;
+  try {
+    target = packetTarget(map, context.sessionId, undefined);
+  } catch {
+    return null;
+  }
+  return buildRoomPacket(map, target, storeLetterReads(context.projectPath, context.workId), declaredToolNames(context), at);
 }
 
 async function checkInbox(context: McpContext, sessionId: string): Promise<unknown> {

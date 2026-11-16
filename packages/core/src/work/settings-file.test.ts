@@ -18,6 +18,8 @@ import {
   FEED_HOOK_EVENTS,
   HOOK_COMMAND,
   HOOK_EVENTS,
+  PACKET_BRIDGE_TIMEOUT_SEC,
+  packetBridgeCommand,
   workSettings,
   workSettingsJson,
   writeWorkSettings,
@@ -64,6 +66,46 @@ describe('workSettings', () => {
     for (const event of HOOK_EVENTS.filter((name) => name !== 'SessionEnd')) {
       expect(hooks[event]?.[0]?.hooks[0]?.timeout).toBeUndefined();
     }
+  });
+});
+
+describe('мост пакета состояния комнаты на SessionStart (спека 2026-11-16, 3.5)', () => {
+  const url = 'http://127.0.0.1:4242/hooks';
+  const bridge = packetBridgeCommand('/home/me/.parley/bin/parley-packet-hook', 'http://127.0.0.1:4242/hooks/packet', 'PARLEY_HOOK_TOKEN');
+
+  it('без моста файл побайтно прежний: поле packetBridge ничего не меняет, когда его нет', () => {
+    const before = workSettingsJson({ hookUrl: url });
+    expect(workSettingsJson({ hookUrl: url, packetBridge: undefined })).toBe(before);
+    expect(workSettingsJson()).toBe(workSettingsJson({ packetBridge: undefined }));
+    const group = workSettings({ hookUrl: url }).hooks['SessionStart']?.[0]?.hooks ?? [];
+    expect(group.map((hook) => hook.type)).toEqual(['command', 'http']);
+  });
+
+  it('с мостом в группе SessionStart два командных хука, второй с пределом 2 секунды; остальные события и группы не тронуты', () => {
+    const plain = workSettings({ hookUrl: url });
+    const withBridge = workSettings({ hookUrl: url, packetBridge: bridge });
+    const hooks = withBridge.hooks['SessionStart']?.[0]?.hooks ?? [];
+    expect(hooks.filter((hook) => hook.type === 'command')).toEqual([
+      { type: 'command', command: HOOK_COMMAND },
+      { type: 'command', command: bridge, timeout: PACKET_BRIDGE_TIMEOUT_SEC },
+    ]);
+    expect(PACKET_BRIDGE_TIMEOUT_SEC).toBe(2);
+    expect(hooks).toHaveLength(3);
+    expect(withBridge.hooks['SessionStart']).toHaveLength(1);
+    // Всё, кроме этой одной записи, совпадает с файлом без моста.
+    const stripped = structuredClone(withBridge);
+    stripped.hooks['SessionStart']?.[0]?.hooks.splice(1, 1);
+    expect(stripped).toEqual(plain);
+  });
+
+  it('без регистрации хуков (нет hookUrl) моста в файле нет', () => {
+    expect(workSettingsJson({ packetBridge: bridge })).toBe(workSettingsJson());
+    expect(workSettings({ packetBridge: bridge }).hooks['SessionStart']?.[0]?.hooks).toHaveLength(1);
+  });
+
+  it('команда: запускатель, адрес и имя переменной с токеном; путь с кавычкой и долларом экранируется', () => {
+    expect(bridge).toBe('"/home/me/.parley/bin/parley-packet-hook" "http://127.0.0.1:4242/hooks/packet" PARLEY_HOOK_TOKEN');
+    expect(packetBridgeCommand('/a "b"/$x/hook', 'http://h/p', 'PARLEY_HOOK_CAPABILITY')).toBe('"/a \\"b\\"/\\$x/hook" "http://h/p" PARLEY_HOOK_CAPABILITY');
   });
 });
 
