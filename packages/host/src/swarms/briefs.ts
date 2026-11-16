@@ -69,26 +69,30 @@ const OUTCOME_WORDS = [
   ['failed', 'reported failure'],
   ['missing', 'did not hand in'],
 ] as const;
+/** Единственное число (3.5): `1 member`, иначе `N members`. */
+const members = (n: number): string => `${n} ${n === 1 ? 'member' : 'members'}`;
 const wordOf = (outcome: SwarmMemberOutcome): string => OUTCOME_WORDS.find(([key]) => key === (outcome === 'open' ? 'missing' : outcome))![1];
 
 /** Письмо королеве о конце волны (3.5): счёт исходов, незакрытое, остаток роя и просьба проверить самооценки. */
 export function waveLetter({ swarmId, wave, earlierNotClosed, left }: WaveLetterInput): string {
   const lines: string[] = [];
   if (wave.every((entry) => entry.outcome === 'covered')) {
-    lines.push(`Wave finished in swarm ${swarmId}: all ${wave.length} members handed in and declared full coverage.`);
+    lines.push(
+      `Wave finished in swarm ${swarmId}: ${wave.length === 1 ? '1 member' : `all ${wave.length} members`} handed in and declared full coverage.`,
+    );
   } else {
     const counts = OUTCOME_WORDS
       .map(([key, word]) => ({ word, n: wave.filter((entry) => (entry.outcome === 'open' ? 'missing' : entry.outcome) === key).length }))
       .filter(({ n }) => n > 0)
       .map(({ word, n }) => `${n} ${word}`);
-    lines.push(`Wave finished in swarm ${swarmId}: ${wave.length} members — ${counts.join(', ')}.`);
+    lines.push(`Wave finished in swarm ${swarmId}: ${members(wave.length)} — ${counts.join(', ')}.`);
     lines.push('Not closed:');
     for (const entry of wave.filter((candidate) => candidate.outcome !== 'covered')) {
       lines.push(`- ${entry.name} (${entry.sessionId})${entry.slice === null ? '' : ` "${entry.slice}"`}: ${wordOf(entry.outcome)}`);
     }
   }
   if (earlierNotClosed > 0) {
-    lines.push(`Earlier waves: ${earlierNotClosed} members not closed; your register says which of those gaps are closed since.`);
+    lines.push(`Earlier waves: ${members(earlierNotClosed)} not closed; your register says which of those gaps are closed since.`);
   }
   if (left !== null) {
     lines.push(`Left: ${left.sessions} of ${left.swarmSessions} swarm sessions, ${left.minutes === null ? 'no time limit' : `${left.minutes} min`}.`);

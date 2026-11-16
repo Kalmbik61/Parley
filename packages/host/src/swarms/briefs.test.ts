@@ -57,7 +57,7 @@ describe('waveLetter (спека «видимые дыры», 3.5)', () => {
     const wave = [entry('Drone 3', 's-04', 'covered')];
     const earlier = waveLetter({ swarmId: 'sw-01', wave, earlierNotClosed: 2, left: null });
     expect(earlier).toBe([
-      'Wave finished in swarm sw-01: all 1 members handed in and declared full coverage.',
+      'Wave finished in swarm sw-01: 1 member handed in and declared full coverage.',
       'Earlier waves: 2 members not closed; your register says which of those gaps are closed since.',
       CLOSING,
     ].join('\n'));
@@ -69,10 +69,10 @@ describe('waveLetter (спека «видимые дыры», 3.5)', () => {
       swarmId: 'sw-01', wave: [entry('Drone 3', 's-04', 'partial')], earlierNotClosed: 1, left: { sessions: 9, swarmSessions: 16, minutes: 71 },
     }).split('\n');
     expect(lines).toEqual([
-      'Wave finished in swarm sw-01: 1 members — 1 partial.',
+      'Wave finished in swarm sw-01: 1 member — 1 partial.',
       'Not closed:',
       '- Drone 3 (s-04): partial',
-      'Earlier waves: 1 members not closed; your register says which of those gaps are closed since.',
+      'Earlier waves: 1 member not closed; your register says which of those gaps are closed since.',
       'Left: 9 of 16 swarm sessions, 71 min.',
       CLOSING,
     ]);
@@ -85,6 +85,22 @@ describe('waveLetter (спека «видимые дыры», 3.5)', () => {
     const noTime = waveLetter({ swarmId: 'sw-01', wave, earlierNotClosed: 0, left: { sessions: 0, swarmSessions: 16, minutes: null } });
     expect(noTime).toContain('\nLeft: 0 of 16 swarm sessions, no time limit.\n');
     expect(waveLetter({ swarmId: 'sw-01', wave, earlierNotClosed: 0, left: null })).not.toContain('Left:');
+  });
+});
+
+describe('единственное число (3.5)', () => {
+  it('один участник — «1 member», несколько — «N members», «all N members»', () => {
+    const one = entry('Drone 1', 's-02', 'covered');
+    expect(waveLetter({ swarmId: 'sw-03', wave: [one], earlierNotClosed: 0, left: null }).split('\n')[0])
+      .toBe('Wave finished in swarm sw-03: 1 member handed in and declared full coverage.');
+    expect(waveLetter({ swarmId: 'sw-03', wave: [entry('Drone 1', 's-02', 'partial')], earlierNotClosed: 1, left: null }).split('\n'))
+      .toContain('Earlier waves: 1 member not closed; your register says which of those gaps are closed since.');
+    expect(waveLetter({ swarmId: 'sw-03', wave: [entry('Drone 1', 's-02', 'partial')], earlierNotClosed: 0, left: null }).split('\n')[0])
+      .toBe('Wave finished in swarm sw-03: 1 member — 1 partial.');
+    expect(waveLetter({ swarmId: 'sw-03', wave: [one, entry('Drone 2', 's-03', 'covered')], earlierNotClosed: 2, left: null }).split('\n').slice(0, 2)).toEqual([
+      'Wave finished in swarm sw-03: all 2 members handed in and declared full coverage.',
+      'Earlier waves: 2 members not closed; your register says which of those gaps are closed since.',
+    ]);
   });
 });
 
