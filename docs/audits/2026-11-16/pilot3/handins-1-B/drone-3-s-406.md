@@ -1,0 +1,50 @@
+<!-- drone 3 s-406 model=haiku addedAt=2026-11-16T17:23:11.100Z handedAt=2026-11-16T17:24:29.316Z result=done -->
+Drone C, слайс rooms/ + swarms/, коммит 9eabc014 (копия pilot3-subject, только чтение). Все пути относительно корня копии.
+
+Q09. Что должно быть, чтобы рой перешёл в collecting; когда трутень «закончил»; что возвращает collecting в running.
+1. Переход running→collecting делается в reconcileSwarm: рой не терминальный, не сдала королева, нет срока, status === 'running', есть хотя бы один не-королевский участник (workers.length > 0) и КАЖДЫЙ такой участник isSettled. swarms/swarms-service.ts:256-261 (проверка и `swarm.status = 'collecting'` на :261).
+2. Перед этим сдача: для трутня/проверяющего с session.result === 'done' выставляется handedAt = resultAt (или at), без согласия человека; progress не сдаёт. swarms/swarms-service.ts:227-231.
+3. Трутень «закончил» (isSettled, swarms-service.ts:99-104), если выполнено любое: handedAt !== null; сессии нет в карте; lifecycle === 'closed'; result === 'failed'; либо lifecycle === 'sleeping', result === null, endedAt задан и now − endedAt ≥ DRONE_SILENT_MS (2 мин, swarms-service.ts:48, :102-103).
+4. Королеве при переходе уходит письмо (noteQueen, :263-271): «All members … have handed in» или список невдавших.
+5. Обратно в running: при добавлении участника (swarm_add) в рой со статусом collecting статус ставится running — swarms/spawn.ts:142-144 («вторая волна»). Проверка допуска для добавления: spawn.ts:129-138 (только королева, рой не терминальный).
+6. Проверка needsReconcile (swarms-service.ts:114-120) и pass (:360-376) решают, когда сверка вообще запускается; сверка также идёт по таймеру SWARM_TICK_MS = 30 000 (swarms-service.ts:44, :408).
+7. Terminal-переход для королевы: done → status done (:235-237), failed → failed (:238-240), закрыта без сдачи → cancelled если закрыл человек (closedByHuman, :241-243; humanClosed :422-428) иначе failed (:244); срок жизни → failed с expiredAt (:245-255).
+
+Q10. Создатель роя; доставка итога; когда уведомление вместо письма; когда deliveredAt.
+1. Создатель определяется при создании королевы: creatorOf (swarms/spawn.ts:69-73): caller не задан → human; иначе, если есть не архивная комната, где caller — живой ведущий (liveLead), → room с roomId; иначе → session с caller.id. Записывается в swarm.creator при создании роя: spawn.ts:107; путь создания spawn.ts:97-127.
+2. Итог — swarm.result (summary = queenSummary, обрезанная до SWARM_SUMMARY_MAX; :216, :237, :240, :286, :301). Полный отчёт королевы — путь get_map {session: queen, field: summary} в тексте (deliveryText, :175).
+3. Текст итога: deliveryText, swarms-service.ts:169-178.
+4. Письмо: deliverByLetter (:184-201). Для creator.kind === 'session' — письмо живой сессии (:186-190). Для 'room' — parleyNote ведущему живой не архивной комнаты (:192-198). Иначе false.
+5. Уведомление вместо письма: deliverByLetter вернул false → effects.notices (:308-313) с kind 'swarm-done' (done) или 'swarm-failed', ref = королева. Это случается, когда creator — human (:200), сессия-создатель закрыта/не живая (:188), комната архивна/удалена (:194) или без живого ведущего (:196).
+6. deliveredAt: при письме — в той же записи карты (swarms-service.ts:303-306). При уведомлении — не сразу: host.broadcast('host.notice') (:354), затем markDelivered (:329-344, вызов :356) пишет deliveredAt = now внутри updateMap; до этого итог «недоставлен» и пересылается при следующей сверке/перезапуске (шапка файла :8-10, needsReconcile :115).
+7. Ожидание итога: терминальный рой без deliveredAt ждёт сводку королевы не дольше SWARM_EXPIRY_GRACE_MS (10 мин) только если рой просрочен и королева ещё не сдала (swarms-service.ts:46, :292-300); иначе итог уходит сразу после терминального статуса.
+8. Королева после доставки просится уснуть (queenAwaitsSleep, :126-135; sleepQueen :223-225; requestSleep :352, :356). Королеву хост не закрывает (шапка :12-13).
+
+Q11. Several problems at once in a sandboxed check; какой проблеме отдаётся recorded outcome; какие исходы останавливают весь план.
+1. Итог проверки (rooms/check-runner.ts) выбирается цепочкой else-if, первый сработавший определяет summary/verdict: (a) нарушение записи вне корня (outsideWrites) → summary `write-outside-root …` (:221); (b) orphanScanUnavailable → 'orphan-scan-unavailable' (:222); (c) orphaned → 'orphan-descendants' (:223); (d) timedOut → 'timeout' (:224); (e) launchError → 'launch-failed: …' (:225); (f) signal → 'killed-by-signal' (:226); (g) иначе verdict = pass при exitCode 0, иначе fail (:227).
+2. Внутри (a): при наличии сработки verdict остаётся 'error' по умолчанию (:67) — итог в :221 не меняет verdict, verdict меняется только в :227 (т.е. нарушение записи даёт verdict 'error' с summary, без pass/fail). Атрибуция «attributed/unattributed» только пишется в текст (:221, :51-58).
+3. Но finally перезаписывает итог: при сбое записи output.tail → verdict 'error', summary `output-tail-failed` (:232-233); при сбое очистки checkout/tmp → verdict 'error', summary `cleanup-failed` (:235-237). Эти запись/очистка идут после выбора выше, так что они побеждают выбранный ранее summary.
+4. Ранние выходы до запуска: отменено → 'cancelled' (:77, :83, :105, :129 и др.); песочница недоступна (проба sandbox-exec и журнал) → 'confinement-unavailable' (:82-84, :216-217); ENV с секретами → 'env-not-allowed' (:85-87); невалидный ввод → 'invalid-check' (:88-93); корень в временной папке → 'check-directory-in-temporary-root' (:97); 'result-already-exists' (:105); 'frozen-inputs-changed' (:129); 'launch-failed: executable-unavailable' (:139). Отменённая проверка журнал не читает и summary 'cancelled' (:207-208).
+5. Запись итога: record (autonomous-engine.ts:582-587) сначала пишет settled и recordCheck, затем halt(reason 'confinement') ТОЛЬКО если verdict === 'error' и summary содержит 'confinement-unavailable' (:585-586). Все прочие не-pass исходы (fail, error с другими summary, timeout и т.д.) только записываются, план не останавливают в этом месте.
+6. Исключение раннера (не отмена) в checkAttempt: settled 'failed', затем halt(reason 'human', detail `check: …`) и rethrow (autonomous-engine.ts:606 и строки 31-33 того же блока, см. checkAttempt :588-621). Отмена (signal.aborted) этого не делает (:29-30).
+7. Остановка плана при ошибке эффекта (не проверки): effect (autonomous-engine.ts:275-297) — halt с reason confinement/budget/human по тексту ошибки (:292).
+
+Q12. Попытка сверх срока, при которой в работе ничего не пишется: как engine замечает, точное условие, что делается с сессиями и планом.
+1. Проверка срока не зависит от записей карты: cycle (autonomous-engine.ts:1050) вызывается из processWork (:1142-1157) через schedule (:1161). Запуск без изменения версии даёт поллинг poll() (:1185) с scan(force=true) каждые ENGINE_SAFETY_TICK_MS = 30 000 (autonomous-engine.ts:48, :1185). Флаг force обходит проверку версии (:1164), поэтому цикл выполняется даже без новых записей.
+2. Учитываются только планы, активные по active(): mode autonomous, acceptedAt задан, status active/completing (autonomous-engine.ts:64); в cycle — работа должна быть active (:1051 `if (map.work.status !== 'active') return`) — строка 55 в файле: `if (map.work.status !== 'active') return;`.
+3. Условие просрочки попытки (autonomous-engine.ts:1083): attempt.status ∈ {'starting','running','checking'} И now − Date.parse(attempt.startedAt) > budget.limits.minutesPerAttempt × 60 000 мс. Считается от startedAt, не от последней записи.
+4. Для интеграционного верификатора отдельная ветка (:1074): ops launch purpose 'integration-verifier', done, без stop/close; now − (settledAt ?? at) > minutesPerAttempt × 60 000 → stop-session, halt 'stuck' (:1076-1082).
+5. Действия с сессиями: для worker и verifier попытки (если не null) создаётся op stop-session (intend) и выполняется sessionOperation (:1086-1089; sessionOperation autonomous-engine.ts:299-310 вызывает io.sessions.stop, если сессия active/pending/closing). Затем drainSessions (:1098) закрывает оставшиеся intended stop/close ops (:311-317).
+6. Действия с планом: halt(reason 'stuck', detail `<attemptId>: stuck <kind> since <since>` если session.stuck, иначе `<attemptId>: minutesPerAttempt exceeded`) (:1091-1092). Живому ведущему комнаты пишется parleyNote с тем же текстом (:1093-1095). Попытка сама в этом блоке статус не меняет (:1083-1101) — см. Open.
+7. Выполняется только если план не halted уже раньше в cycle: при halted цикл пропускает план (:60-64).
+
+Open:
+- Q09: определения isSwarmTerminal, isSwarmExpired, swarmProgress, swarmOfSession, liveLead, parleyNote, updateMap в @parley/core (импорт в swarms-service.ts:21-34) не читались (вне слайса); поэтому точный expiry (isSwarmExpired) и set терминальных статусов не проверены.
+- Q09: как сессия получает result 'done'/'failed' (report) и resultAt — код sessions/ не читался.
+- Q10: контракт host.notice на стороне окна (broadcast) и уведомления не читались.
+- Q11: halt, recordCheck, settled, coverageVerdict из @parley/core не читались; содержимое scripts/gates/runner-profile-kill.sb не читалось (check-runner.ts:141); поведение attempt status при halt не проверено.
+- Q11: сам вызов run() в цепочке — check-runner.ts:62 — читан полностью; но lsof/log поведение внешних утилит не проверялось.
+- Q12: halt() из core не читался — не установлено, меняет ли он статус попытки или только plan.autonomous.halted; ветка 'stuck' session.stuck поле — из core/sessions не читалась.
+- Q12: sessionOperation → io.sessions.stop: реализация sessions-service не читалась.
+
+Coverage: partial — прочитаны полностью: swarms/swarms-service.ts, swarms/spawn.ts, swarms/briefs.ts, rooms/check-runner.ts, rooms/autonomous-engine.ts (ключевые диапазоны 1-420 не читались целиком: читаны функции record/checkAttempt/cycle/effect/sessionOperation/drainSessions/startReady/processWork/schedule/start; оставшиеся участки 420-575, 625-1050, 1212-1292 не читались, кроме совпадений поиском). rooms/plan-effects.ts, rooms/rooms-service.ts, rooms/history-service.ts, rooms/room-usage.ts не читались (не относятся к Q09–Q12 напрямую, кроме возможного использования в рой-путях). Тесты вне области.
