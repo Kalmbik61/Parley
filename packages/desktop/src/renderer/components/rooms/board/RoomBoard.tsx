@@ -3,7 +3,7 @@
  * Модель собирает `buildRoomBoard`; здесь только разметка и выбранный в фильтре агент.
  */
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import type { Room, RoomPlan, WindowWorkEntry } from '@parley/core';
 import { S } from '../../../../shared/strings.js';
 import { BoardColumn } from '../../../board/BoardColumn.js';
@@ -12,9 +12,11 @@ import type { ActivityEntry } from '../../../store/activity.js';
 import { Button } from '../../../ui/button.js';
 import { AgentIcon } from '../../AgentIcon.js';
 import type { ParticipantModel } from '../feed-model.js';
-import { planProgress } from '../PlanPanel.js';
+import { boardEvents } from './room-board-activity.js';
+import { ownerLabel, planProgress } from '../PlanPanel.js';
 import { RoomBoardCard } from './RoomBoardCard.js';
 import { buildRoomBoard } from './room-board-model.js';
+import { useCardMotion } from './use-card-motion.js';
 
 export interface RoomBoardProps {
   plan: RoomPlan;
@@ -31,6 +33,9 @@ export interface RoomBoardProps {
 export function RoomBoard({ plan, room, entry, participants, activity, now, onOpenFeed, onOpenItem }: RoomBoardProps): JSX.Element {
   const [selected, setSelected] = useState<string | null>(null);
   const model = buildRoomBoard({ plan, room, entry, participants, activity, now });
+  const columnsRef = useRef<HTMLDivElement | null>(null);
+  useCardMotion(columnsRef, model);
+  const events = boardEvents(plan);
   const noticeText =
     model.notice === null ? null : model.notice.kind === 'decision' ? S.roomBoard.noticeDecision : S.plans.haltNotice(model.notice.detail);
   return (
@@ -65,7 +70,7 @@ export function RoomBoard({ plan, room, entry, participants, activity, now, onOp
           </Button>
         </div>
       )}
-      <div className="flex min-h-0 flex-1 items-start gap-3 overflow-auto px-9 pb-3">
+      <div ref={columnsRef} className="flex min-h-0 flex-1 items-start gap-3 overflow-auto px-9 pb-3">
         {model.columns.map(({ id, cards }) => (
           <div key={id} className="rounded-2xl bg-foreground/[0.06] p-2" data-board-column={id}>
             <BoardColumn title={S.roomBoard.columns[id === 'done' && plan.mode !== 'checklist' ? 'verified' : id]} count={cards.length}>
@@ -88,6 +93,33 @@ export function RoomBoard({ plan, room, entry, participants, activity, now, onOp
           </div>
         ))}
       </div>
+      {events.length === 0 ? null : (
+        <ul data-board-events="" aria-label={S.roomBoard.events} className="shrink-0 space-y-0.5 border-t px-9 py-2 text-xs">
+          {events.map((event, index) => (
+            <li
+              key={`${event.at}-${event.itemId}-${event.change.source}-${event.change.status}`}
+              className={cn('flex gap-2', index === 0 ? 'text-foreground' : 'text-muted-foreground')}
+            >
+              <span className="shrink-0 tabular-nums">{clock(event.at)}</span>
+              <span className="min-w-0 [overflow-wrap:anywhere]">
+                {S.roomBoard.event(
+                  ownerLabel(entry, event.by),
+                  event.itemId,
+                  event.change.source === 'item' ? S.plans.itemStatus[event.change.status] : S.plans.attemptStatus[event.change.status],
+                )}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
+}
+
+/** `HH:MM` по местному времени; не разобралось — как есть. */
+function clock(at: string): string {
+  const date = new Date(at);
+  if (Number.isNaN(date.getTime())) return at;
+  const two = (n: number): string => String(n).padStart(2, '0');
+  return `${two(date.getHours())}:${two(date.getMinutes())}`;
 }
