@@ -3107,4 +3107,19 @@ describe('RoomPanel — панель пункта на доске', () => {
     expect(sheet()).toBeNull();
     await waitFor(() => expect(document.activeElement).toBe(boardCard(2)));
   });
+
+  it('две комнаты с одним номером пункта: фокус возвращается на карточку своей комнаты', async () => {
+    const second = boardEntry();
+    second.map.rooms = [{ ...makeRoom('r-02', 'Other'), members: ['s-01'], lead: 's-01' }];
+    second.map.plans = [{ ...second.map.plans![0]!, id: 'pl-02', roomId: 'r-02' }];
+    const first = render(<RoomPanel {...props(boardEntry(), { view: 'board' })} />);
+    const other = render(<RoomPanel {...props(second, { view: 'board', roomId: 'r-02' })} />);
+    const cardIn = (root: HTMLElement): HTMLElement => root.querySelector('[data-board-item="1"]') as HTMLElement;
+    const mine = cardIn(other.container);
+    mine.focus();
+    fireEvent.click(mine);
+    fireEvent.keyDown(document.querySelector('[data-room-item-sheet]') as HTMLElement, { key: 'Escape', code: 'Escape' });
+    await waitFor(() => expect(document.activeElement).toBe(mine));
+    expect(document.activeElement).not.toBe(cardIn(first.container));
+  });
 });

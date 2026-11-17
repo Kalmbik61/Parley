@@ -231,6 +231,8 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
   // Открытый на доске пункт. Номер дублируется в ref: к моменту, когда панель вернёт фокус, состояние уже сброшено.
   const [openItemId, setOpenItemId] = useState<number | null>(null);
   const focusItemRef = useRef<number | null>(null);
+  // Слой доски этой панели: карточку для возврата фокуса ищем только в нём — номера пунктов повторяются между планами.
+  const boardLayerRef = useRef<HTMLDivElement | null>(null);
   // Лента под доской: `inert` ставится через ref, типы React 18 атрибута не знают.
   const feedAreaRef = useRef<HTMLDivElement | null>(null);
   useLayoutEffect(() => {
@@ -712,7 +714,7 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
       </div>
       {/* Слой доски стоит поверх ленты. */}
       {boardOpen && boardPlan !== null && roomRecord !== undefined ? (
-        <div data-room-board-layer="" className="absolute inset-0 z-10 flex min-h-0 flex-col bg-sheet">
+        <div ref={boardLayerRef} data-room-board-layer="" className="absolute inset-0 z-10 flex min-h-0 flex-col bg-sheet">
           <RoomBoard
             plan={boardPlan}
             room={roomRecord}
@@ -741,7 +743,7 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
             onReturnFocus={() => {
               const id = focusItemRef.current;
               if (id === null) return;
-              document.querySelector<HTMLElement>(`[data-room-board-layer] [data-board-item="${id}"]`)?.focus();
+              boardLayerRef.current?.querySelector<HTMLElement>(`[data-board-item="${id}"]`)?.focus();
             }}
             onOpenSession={(sessionId) => onOpenSession(sessionId)}
             onShowInFeed={() => {
