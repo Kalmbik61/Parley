@@ -35,6 +35,7 @@ import {
   type AgentBinding,
   type LaunchClass,
   type LetterTx,
+  type NewSession,
   type LimitAlternative,
   type MachineTicket,
   type ProviderLimits,
@@ -536,7 +537,7 @@ export function createSessionsService(
    * Плечо опыта с пакетом состояния (план опыта 2026-11-17, 1.1, Э-1): только новая сессия `claude`, пока включён
    * `roomPacket` и задано имя `roomPacketTrial`; вероятность 1/2. Остальные — без плеча.
    */
-  async function drawTrial(provider: string): Promise<WorkSession['trial']> {
+  async function drawTrial(provider: string): Promise<NewSession['trial']> {
     if (provider !== 'claude') return undefined;
     const { config } = await loadConfig();
     if (!config.roomPacket || config.roomPacketTrial === '') return undefined;
@@ -1632,7 +1633,6 @@ export function createSessionsService(
     role: SessionRole | null,
     choice: LaunchChoice,
     lean: boolean | undefined,
-    trial: WorkSession['trial'],
   ): Promise<void> {
     const trimmed = label.trim();
     await updateMap(ref.projectPath, ref.workId, (map) => {
@@ -1644,7 +1644,6 @@ export function createSessionsService(
       if (choice.model !== undefined) session.model = choice.model;
       if (choice.effort !== undefined) session.effort = choice.effort;
       if (lean !== undefined) session.lean = lean;
-      if (trial !== undefined) session.trial = trial;
     });
   }
 
@@ -1752,19 +1751,19 @@ export function createSessionsService(
     }
 
     if (workId === null) {
-      const created = await timer.step('record', () => createNewSession(projectPath, null));
+      const created = await timer.step('record', () => createNewSession(projectPath, null, trial));
       const ref = { projectPath, workId: created.workId, sessionId: created.session.id };
       logged.sessionId = ref.sessionId;
-      await timer.step('choice', () => applyChoice(ref, label, provider, role, choice, lean, trial));
+      await timer.step('choice', () => applyChoice(ref, label, provider, role, choice, lean));
       if (worktree === true) await timer.step('worktreePlan', () => attachWorktreePlan(ref, false));
       return timer.step('launch', () => createInteractive(ref, 'new', choice));
     }
 
     if (task === '') {
-      const created = await timer.step('record', () => createNewSession(projectPath, workId));
+      const created = await timer.step('record', () => createNewSession(projectPath, workId, trial));
       const ref = { projectPath, workId, sessionId: created.session.id };
       logged.sessionId = ref.sessionId;
-      await timer.step('choice', () => applyChoice(ref, label, provider, role, choice, lean, trial));
+      await timer.step('choice', () => applyChoice(ref, label, provider, role, choice, lean));
       if (worktree === true) await timer.step('worktreePlan', () => attachWorktreePlan(ref, false));
       return timer.step('launch', () => createInteractive(ref, 'new', choice));
     }

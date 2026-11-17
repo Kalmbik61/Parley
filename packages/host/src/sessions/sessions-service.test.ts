@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   addSession,
   addRoom,
+  applyAgentSwitch,
   buildRoleCatalog,
   codexModelsFile,
   createPendingSession,
@@ -3419,26 +3420,71 @@ describe('опыт с пакетом состояния: розыгрыш и х�
       expect(await trialOf(ref)).toEqual(assigned);
       // Повторное чтение карты.
       expect(await trialOf(ref)).toEqual(assigned);
-      // Смена провайдера туда и обратно: запись сессии переносится целиком.
-      await updateMap(project, workId, (map) => {
-        const session = map.sessions.find((candidate) => candidate.id === ref.sessionId)!;
-        session.provider = 'codex';
+      // Смена провайдера туда и обратно — настоящим `applyAgentSwitch`, как у оркестратора замены (`current.sessions = …`).
+      const binding = (provider: string, endedAt: string) => ({
+        provider, model: null, effort: null, providerSessionId: null, startedAt: null, endedAt,
+        reason: 'manual' as const, requestedBy: 'human', carried: 'handover' as const,
       });
-      expect(await trialOf(ref)).toEqual(assigned);
       await updateMap(project, workId, (map) => {
-        const session = map.sessions.find((candidate) => candidate.id === ref.sessionId)!;
-        session.provider = 'claude';
+        map.sessions = applyAgentSwitch(map, ref.sessionId, { provider: 'codex' }, binding('claude', '2026-11-17T11:00:00.000Z'), 'rev-1').sessions;
       });
-      expect(await trialOf(ref)).toEqual(assigned);
-      // Запись с недопустимым значением отвергается при чтении: поле исчезает.
+      const onCodex = await sessionOf(ref);
+      expect(onCodex.provider).toBe('codex');
+      expect(onCodex.previousAgents).toHaveLength(1);
+      expect(onCodex.trial).toEqual(assigned);
+      await updateMap(project, workId, (map) => {
+        map.sessions = applyAgentSwitch(map, ref.sessionId, { provider: 'claude' }, binding('codex', '2026-11-17T12:00:00.000Z'), 'rev-2').sessions;
+      });
+      const back = await sessionOf(ref);
+      expect(back.provider).toBe('claude');
+      expect(back.previousAgents).toHaveLength(2);
+      expect(back.trial).toEqual(assigned);
+      // Запись с недопустимым значением не стирается при чтении: поле становится состоянием «назначение повреждено».
       await updateMap(project, workId, (map) => {
         Object.assign(map.sessions.find((candidate) => candidate.id === ref.sessionId)!, { trial: { ...assigned, arm: 'both' } });
       });
-      expect(await trialOf(ref)).toBeUndefined();
+      expect(await trialOf(ref)).toEqual({ damaged: true });
     } finally { await service.stopAll(); }
   });
 
   const SETTINGS_PATH = (argv: string[]): string => argv[argv.indexOf('--settings') + 1]!;
+
+  it('сбой шага после создания записи оставляет в карте сессию с плечом на трёх путях; повторное чтение карты его возвращает', async () => {
+    await enable('exp-a');
+    const { random } = draws(1, 0, 1);
+    // Бинаря нет: запись создана, запуск падает после неё.
+    setEnv('PARLEY_CLAUDE_BIN', '/несуществующий/путь/до/claude');
+    const { workId, service } = await setup({ random });
+    const base = { projectPath: project, provider: 'claude', label: '', parent: null };
+    for (const input of [{ workId: null, task: '' }, { workId, task: '' }, { workId, task: 'сделай штуку' }]) {
+      await expect(service.create({ ...base, ...input })).rejects.toThrow();
+    }
+    const maps = await Promise.all((await readdir(path.join(workPaths(project, workId).dir, '..'))).filter((name) => /^w-/.test(name))
+      .map((name) => readMap(project, name)));
+    const arms = maps.flatMap((map) => map.sessions.map((session) => session.trial?.arm)).sort();
+    expect(arms).toEqual(['control', 'control', 'packet']);
+    for (const map of maps) for (const session of map.sessions) expect(session.trial).toMatchObject({ name: 'exp-a' });
+  });
+
+  it('повреждённое назначение: контрольная сессия с испорченным временем, опыт заморожен, roomPacket включён — моста при запуске нет, и после цикла запись-чтение карты тоже', async () => {
+    await saveConfig({ roomPacket: true, roomPacketTrial: '' });
+    const { workId, service } = await setup({ hooks, providerVersions: versions, packetHook: async () => PACKET_BRIDGE });
+    const id = await createPendingSession(project, workId, {
+      provider: 'claude', label: 'Опыт', task: 'сделай штуку', parent: null, contextFrom: [],
+      trial: { name: 'exp-a', arm: 'control', at: 'not-a-time' },
+    });
+    const ref = { projectPath: project, workId, sessionId: id };
+    // Любая запись карты стирать состояние не должна.
+    await updateMap(project, workId, (map) => { map.work.goal = 'touched'; });
+    expect((await sessionOf(ref)).trial).toEqual({ damaged: true });
+    await service.launch(ref, 'new');
+    const args = await readArgs(process.env['STUB_ARGS_FILE']!);
+    const settings = JSON.parse(await readFile(SETTINGS_PATH(args.argv), 'utf8')) as { hooks: Record<string, { hooks: { type: string; command?: string }[] }[]> };
+    expect(settings.hooks['SessionStart']?.[0]?.hooks.filter((hook) => hook.type === 'command')).toHaveLength(1);
+    expect((await sessionOf(ref)).trial).toEqual({ damaged: true });
+    await service.stopAll();
+  });
+
 
   /** Файл настроек запуска `claude` со сценарием: плечо, `roomPacket`, имя опыта. Возвращает число команд в `SessionStart` и сам файл. */
   async function launchedSettings(arm: 'none' | 'packet' | 'control', roomPacket: boolean, trialName: string, packetHook: SessionsFeedOptions['packetHook']) {

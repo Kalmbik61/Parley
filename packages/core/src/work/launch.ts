@@ -855,11 +855,12 @@ export interface NewSessionResult {
 export async function createNewSession(
   projectPath: string,
   workId: string | null,
+  trial?: NewSession['trial'],
 ): Promise<NewSessionResult> {
   const id = workId ?? (await createWork(projectPath, { title: UNTITLED_WORK, goal: '' })).work.id;
   let created: WorkSession | undefined;
   await updateMap(projectPath, id, (map) => {
-    created = addSession(map, { provider: 'claude', label: NEW_LABEL, task: '' });
+    created = addSession(map, { provider: 'claude', label: NEW_LABEL, task: '', ...(trial === undefined ? {} : { trial }) });
   });
   if (created === undefined) throw new Error(`session in workspace ${id} was not created`);
   return { workId: id, session: created };

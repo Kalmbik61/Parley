@@ -198,6 +198,8 @@ describe('плечо опыта не видно агенту (Э-1, критер
       for (const [id, arm] of [['s-01', 'packet'], ['s-02', 'control']] as const) {
         map.sessions.find((session) => session.id === id)!.trial = { name: NAME, arm, at: '2026-11-17T10:00:00.000Z' };
       }
+      // Повреждённое назначение тоже закрыто от агента.
+      map.sessions.find((session) => session.id === 's-04')!.trial = { damaged: true };
     });
   });
 
@@ -205,6 +207,7 @@ describe('плечо опыта не видно агенту (Э-1, критер
     const asks: Array<[string, Record<string, unknown>]> = [
       ['s-01', {}],
       ['s-01', { session: 's-02' }],
+      ['s-01', { session: 's-04' }],
       ['s-02', { session: 's-02' }],
       ['s-01', { field: 'sessions' }],
       ['s-01', { field: 'rooms' }],
@@ -219,7 +222,7 @@ describe('плечо опыта не видно агенту (Э-1, критер
       const label = `${caller} ${JSON.stringify(args)}`;
       expect(result.failed, `${label} ${result.text.slice(0, 120)}`).toBe(false);
       expect(result.text, label).not.toContain(NAME);
-      expect(result.text, label).not.toMatch(/\barm\b|"trial"|\btrial:/);
+      expect(result.text, label).not.toMatch(/\barm\b|"trial"|\btrial:|damaged/i);
     }
   });
 });

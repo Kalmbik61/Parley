@@ -65,16 +65,18 @@ export function packetContext(
 }
 
 /**
- * Правило опыта (план опыта 2026-11-17, 1.1, Э-1): кто получает мост и пакет. Плечо «контроль» — никогда; плечо «пакет» — да;
- * сессия без плеча — только пока опыт не идёт (`roomPacketTrial` пуст). Одно правило для установки моста при запуске и для
- * каждого запроса к пути пакета; причина отказа — в журнале сессии.
+ * Правило опыта (план опыта 2026-11-17, 1.1, Э-1): кто получает мост и пакет. Повреждённое назначение и плечо «контроль» —
+ * никогда, при любых настройках; плечо «пакет» — да; сессия без плеча — только пока опыт не идёт (`roomPacketTrial` пуст).
+ * Одно правило для установки моста при запуске и для каждого запроса к пути пакета; причина отказа — в журнале сессии.
+ * Правило получает запись сессии: «записи нет» — не его случай, путь пакета отвечает на него отдельно (`assignment-unknown`).
  */
-export type PacketGate = { ok: true } | { ok: false; reason: 'control' | 'not-in-trial' };
+export type PacketGate = { ok: true } | { ok: false; reason: 'control' | 'not-in-trial' | 'invalid-assignment' };
 
-export function packetGate(session: Pick<WorkSession, 'trial'> | undefined, trialName: string): PacketGate {
-  const arm = session?.trial?.arm;
-  if (arm === 'control') return { ok: false, reason: 'control' };
-  if (arm === 'packet') return { ok: true };
+export function packetGate(session: Pick<WorkSession, 'trial'>, trialName: string): PacketGate {
+  const trial = session.trial;
+  if (trial !== undefined && 'damaged' in trial) return { ok: false, reason: 'invalid-assignment' };
+  if (trial?.arm === 'control') return { ok: false, reason: 'control' };
+  if (trial?.arm === 'packet') return { ok: true };
   return trialName === '' ? { ok: true } : { ok: false, reason: 'not-in-trial' };
 }
 
@@ -197,8 +199,14 @@ export function createPacketEndpoint(deps: PacketEndpointDeps): PacketEndpoint {
         try {
           held = await sessionOf(request.ref);
         } catch (error) {
-          // Карта не читается — сессия считается без плеча: пока опыт идёт, это отказ `not-in-trial`, а не пакет.
           deps.log.warn('пакет комнаты: плечо опыта не прочитано', { error: String(error) });
+        }
+        if (request.answered()) return;
+        if (held === undefined) {
+          // Записи сессии нет или она не прочиталась: плечо неизвестно, пакет не собирается при любом состоянии опыта.
+          write(request.ref, null, 0, 'assignment-unknown');
+          request.respond(EMPTY_HOOK_RESPONSE);
+          return;
         }
         let name: string;
         try {

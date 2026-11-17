@@ -205,6 +205,14 @@ export const isTrialName = (value: unknown): value is string => typeof value ===
 /** Назначение плеча сессии: имя опыта, плечо и время назначения. Пишет только хост при создании; агент его не видит. */
 export interface SessionTrial { name: string; arm: TrialArm; at: string }
 
+/**
+ * Повреждённое назначение: запись плеча не прошла проверку при чтении. Это явное состояние, а не «плеча нет»: оно
+ * сохраняется при последующих записях карты, и такая сессия не получает ни моста, ни пакета при любых настройках.
+ */
+export interface DamagedTrial { damaged: true }
+export const isDamagedTrial = (value: SessionTrial | DamagedTrial | undefined): value is DamagedTrial =>
+  value !== undefined && 'damaged' in value;
+
 export interface WorkSession {
   id: string;
   /** Explicit personal steps, published by this session; separate from accepted room assignments. */
@@ -330,9 +338,9 @@ export interface WorkSession {
   silentEnding?: SilentEndingMark | null;
   /**
    * Плечо опыта с пакетом состояния (план опыта 2026-11-17, 1.1): разыгрывается один раз при создании сессии Claude и не
-   * меняется. Нет поля — сессия вне опыта. Закрытое поле: в `get_map` и в историю сессии не попадает.
+   * меняется. Нет поля — сессия вне опыта; `{ damaged: true }` — запись была повреждена. Закрытое поле: в `get_map` и в историю сессии не попадает.
    */
-  trial?: SessionTrial;
+  trial?: SessionTrial | DamagedTrial;
 }
 
 /**

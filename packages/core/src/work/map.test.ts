@@ -1811,7 +1811,7 @@ describe('плечо опыта с пакетом состояния (Э-1)', ()
     }
   });
 
-  it('запись с недопустимым значением отвергается при чтении: плечо, имя, время, форма', () => {
+  it('запись с недопустимым значением не стирается: она становится явным состоянием «назначение повреждено», которое переживает запись и чтение карты', () => {
     for (const bad of [
       { ...trial, arm: 'both' },
       { ...trial, arm: undefined },
@@ -1824,7 +1824,15 @@ describe('плечо опыта с пакетом состояния (Э-1)', ()
       null,
       [],
     ]) {
-      expect(roundTrip(bad)).not.toHaveProperty('trial');
+      const read = roundTrip(bad);
+      expect(read.trial, JSON.stringify(bad)).toEqual({ damaged: true });
+      // Цикл запись-чтение: повреждённое состояние читается как оно само, а не как «плеча нет» и не как допустимое плечо.
+      const map = emptyMap();
+      map.sessions.push(read);
+      const again = parseMap(JSON.stringify(parseMap(JSON.stringify(map), 'map.json')), 'map.json').sessions[0]!;
+      expect(again.trial).toEqual({ damaged: true });
     }
+    // Допустимое назначение повреждённым не становится.
+    expect(roundTrip(trial).trial).toEqual(trial);
   });
 });

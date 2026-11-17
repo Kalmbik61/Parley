@@ -857,12 +857,14 @@ function normalizeAgentFields(session: Record<string, unknown>): void {
     Array.isArray(silentEnding['told']) && silentEnding['told'].every((kind) => kind === 'exit' || kind === 'stop' || kind === 'close' || kind === 'turn'))) {
     delete session['silentEnding'];
   }
-  // Плечо опыта: ровно два значения, имя по правилу настройки и корректное время; иная запись отвергается при чтении.
+  // Плечо опыта: ровно два значения, имя по правилу настройки и корректное время. Запись, не прошедшая проверку, не
+  // стирается и не становится «плеча нет»: она заменяется явным состоянием «назначение повреждено», которое переживает
+  // чтение и запись карты (план опыта, 1.1). Само состояние читается обратно как есть.
   const trial = session['trial'];
   if (trial !== undefined) {
     if (isRecord(trial) && isTrialName(trial['name']) && TRIAL_ARMS.includes(trial['arm'] as TrialArm) &&
       typeof trial['at'] === 'string' && Number.isFinite(Date.parse(trial['at']))) {
       session['trial'] = { name: trial['name'], arm: trial['arm'], at: trial['at'] };
-    } else delete session['trial'];
+    } else session['trial'] = { damaged: true };
   }
 }
