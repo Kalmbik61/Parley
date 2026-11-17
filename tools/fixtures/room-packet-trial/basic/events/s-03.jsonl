@@ -1,0 +1,5 @@
+{"hook_event_name":"SessionStart","source":"compact"}
+{"hook_event_name":"ParleyRoomPacketBridge","outcome":"unreachable","requestMs":3}
+{"hook_event_name":"SessionStart","source":"compact"}
+{"hook_event_name":"ParleyRoomPacket","revision":"cccccccccccc","bytes":800,"reason":"sent"}
+{"hook_event_name":"ParleyRoomPacketBridge","outcome":"printed","requestMs":22}

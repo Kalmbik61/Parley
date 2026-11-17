@@ -16,6 +16,7 @@ import type {
   MessageVia,
   SessionLifecycle,
   SessionResult,
+  SessionTrial,
   WindowWorkMap,
   WorkMap,
   WorkProvider,
@@ -23,6 +24,7 @@ import type {
   SessionRole,
   WorksIndex,
 } from './types.js';
+import { normalizeTrial, normalizeTrialTrace, traceDeletedSession } from './trial-trace.js';
 import type { WorkSwarm } from './swarms.js';
 
 /**
@@ -117,6 +119,8 @@ export interface NewSession {
   /** Облегчённый запуск (C2.2): решение при создании; без поля — запись как до этого куска. */
   lean?: boolean;
   workspace?: WorkSession['workspace'];
+  /** Плечо опыта, разыгранное хостом при создании; без поля — сессия вне опыта. */
+  trial?: SessionTrial;
 }
 
 /**
@@ -160,6 +164,7 @@ export function addSession(
     ...(init.model === undefined ? {} : { model: init.model }),
     ...(init.effort === undefined ? {} : { effort: init.effort }),
     ...(init.lean === undefined ? {} : { lean: init.lean }),
+    ...(init.trial === undefined ? {} : { trial: init.trial }),
   };
   map.sessions.push(session);
   return session;
@@ -202,6 +207,8 @@ export function removeSession(
     }
   }
   letters.flagDeleted(sessionId);
+  // Опыт с пакетом состояния: след сессии с назначением — той же записью карты (комнаты ещё на месте).
+  traceDeletedSession(map, letters, removed, now);
 
   const deleted = map.work.deletedSessions ?? [];
   if (!deleted.includes(sessionId)) deleted.push(sessionId);
@@ -616,6 +623,7 @@ export function normalizeMap(data: unknown, source: string): WorkMap {
   validatePlanEffects(map);
   validateDecisionJournalStorage(map);
   validateResources(map);
+  normalizeTrialTrace(map.work as unknown as Record<string, unknown>);
   return map;
 }
 
@@ -851,4 +859,8 @@ function normalizeAgentFields(session: Record<string, unknown>): void {
     Array.isArray(silentEnding['told']) && silentEnding['told'].every((kind) => kind === 'exit' || kind === 'stop' || kind === 'close' || kind === 'turn'))) {
     delete session['silentEnding'];
   }
+  // Плечо опыта: ровно два значения, имя по правилу настройки, корректное время и метка. Запись, не прошедшая проверку, не
+  // стирается и не становится «плеча нет»: она заменяется явным состоянием «назначение повреждено», которое переживает
+  // чтение и запись карты (план опыта, 1.1). Само состояние читается обратно как есть.
+  if (session['trial'] !== undefined) session['trial'] = normalizeTrial(session['trial']);
 }

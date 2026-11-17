@@ -1786,3 +1786,56 @@ describe('рои в карте (спека роя v1, 2.1–2.2)', () => {
     });
   });
 });
+
+describe('плечо опыта с пакетом состояния (Э-1)', () => {
+  const trial = { name: '2026-11', arm: 'control' as const, at: '2026-11-17T10:00:00.000Z', tag: '0123456789abcdef0123456789abcdef' };
+  const roundTrip = (value: unknown) => {
+    const map = emptyMap();
+    const session = addSession(map, { provider: 'claude', label: '', task: '' });
+    Object.assign(session, { trial: value });
+    return parseMap(JSON.stringify(map), 'map.json').sessions[0]!;
+  };
+
+  it('addSession кладёт назначение в запись; без входа поля нет вовсе', () => {
+    const map = emptyMap();
+    const plain = addSession(map, { provider: 'claude', label: '', task: '' });
+    const drawn = addSession(map, { provider: 'claude', label: '', task: '', trial });
+    expect(plain).not.toHaveProperty('trial');
+    expect(drawn.trial).toEqual(trial);
+    expect(drawn.history).toEqual([{ event: 'pending', at: expect.any(String) }]);
+  });
+
+  it('назначение переживает запись и чтение карты, оба плеча', () => {
+    for (const arm of ['packet', 'control'] as const) {
+      expect(roundTrip({ ...trial, arm }).trial).toEqual({ ...trial, arm });
+    }
+  });
+
+  it('запись с недопустимым значением не стирается: она становится явным состоянием «назначение повреждено», которое переживает запись и чтение карты', () => {
+    for (const bad of [
+      { ...trial, arm: 'both' },
+      { ...trial, arm: undefined },
+      { ...trial, name: '' },
+      { ...trial, name: 'Upper' },
+      { ...trial, name: 'a'.repeat(33) },
+      { ...trial, at: 'yesterday' },
+      { ...trial, at: 5 },
+      { ...trial, tag: undefined },
+      { ...trial, tag: 'abc' },
+      { ...trial, tag: '0123456789ABCDEF0123456789ABCDEF' },
+      'control',
+      null,
+      [],
+    ]) {
+      const read = roundTrip(bad);
+      expect(read.trial, JSON.stringify(bad)).toEqual({ damaged: true });
+      // Цикл запись-чтение: повреждённое состояние читается как оно само, а не как «плеча нет» и не как допустимое плечо.
+      const map = emptyMap();
+      map.sessions.push(read);
+      const again = parseMap(JSON.stringify(parseMap(JSON.stringify(map), 'map.json')), 'map.json').sessions[0]!;
+      expect(again.trial).toEqual({ damaged: true });
+    }
+    // Допустимое назначение повреждённым не становится.
+    expect(roundTrip(trial).trial).toEqual(trial);
+  });
+});

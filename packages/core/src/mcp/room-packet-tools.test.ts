@@ -5,8 +5,8 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createParleyServer } from './tools.js';
 import type { McpContext } from './context.js';
-import { addSession } from '../work/map.js';
-import { addRoom } from '../work/rooms.js';
+import { addSession, removeSession } from '../work/map.js';
+import { addRoom, deleteRoom } from '../work/rooms.js';
 import { createWork, updateMap, workPaths } from '../work/store.js';
 import { HUMAN } from '../work/types.js';
 
@@ -187,5 +187,81 @@ describe('get_map {field: "packet"}', () => {
     const room = await getMap('s-01', { room: 'r-01' });
     expect(JSON.parse(room.text).room.id).toBe('r-01');
     expect(JSON.parse((await getMap('s-01', {})).text).map.work.id).toBe(context.workId);
+  });
+});
+
+describe('плечо опыта не видно агенту (Э-1, критерий 5)', () => {
+  const NAME = 'zz-hidden-exp';
+
+  beforeEach(async () => {
+    await updateMap(project, context.workId, (map) => {
+      for (const [id, arm] of [['s-01', 'packet'], ['s-02', 'control']] as const) {
+        map.sessions.find((session) => session.id === id)!.trial = { name: NAME, arm, at: '2026-11-17T10:00:00.000Z', tag: '0123456789abcdef0123456789abcdef' };
+      }
+      // Повреждённое назначение тоже закрыто от агента.
+      map.sessions.find((session) => session.id === 's-04')!.trial = { damaged: true };
+    });
+  });
+
+  it('ответы get_map по сессии, обзору, строкам, истории и комнатам не содержат ни имени опыта, ни плеча', async () => {
+    const asks: Array<[string, Record<string, unknown>]> = [
+      ['s-01', {}],
+      ['s-01', { session: 's-02' }],
+      ['s-01', { session: 's-04' }],
+      ['s-02', { session: 's-02' }],
+      ['s-01', { field: 'sessions' }],
+      ['s-01', { field: 'rooms' }],
+      ['s-01', { field: 'history', session: 's-02' }],
+      ['s-01', { field: 'task', session: 's-02' }],
+      ['s-01', { field: 'summaries' }],
+      ['s-01', { field: 'packet' }],
+      ['s-02', { field: 'packet', room: 'r-01' }],
+    ];
+    for (const [caller, args] of asks) {
+      const result = await getMap(caller, args);
+      const label = `${caller} ${JSON.stringify(args)}`;
+      expect(result.failed, `${label} ${result.text.slice(0, 120)}`).toBe(false);
+      expect(result.text, label).not.toContain(NAME);
+      expect(result.text, label).not.toMatch(/\barm\b|"trial"|\btrial:|damaged/i);
+    }
+  });
+});
+
+describe('след удалённых сессий и комнат опыта не виден агенту (Э-1б, критерий 5)', () => {
+  const TAG = 'fedcba9876543210fedcba9876543210';
+
+  beforeEach(async () => {
+    await updateMap(project, context.workId, (map, letters) => {
+      for (const id of ['s-04', 's-05']) {
+        map.sessions.find((session) => session.id === id)!.trial = { name: 'zz-trace-exp', arm: 'packet', at: '2026-11-17T10:00:00.000Z', tag: TAG };
+      }
+      // s-04 удалена, комната r-03 (где она состояла) удалена: в работе остаются след сессии и строки участия.
+      removeSession(map, letters, 's-04', '2026-11-17T11:00:00.000Z');
+      deleteRoom(map, letters, 'r-03', '2026-11-17T12:00:00.000Z');
+    });
+  });
+
+  it('ответы get_map по работе, сессиям, комнатам и удалённым не содержат ни следа, ни метки, ни имени опыта', async () => {
+    const stored = await updateMap(project, context.workId, () => undefined);
+    expect(stored.work.trialTrace?.sessions).toHaveLength(1);
+    expect(stored.work.trialTrace?.rooms.length).toBeGreaterThan(0);
+    const asks: Array<[string, Record<string, unknown>]> = [
+      ['s-01', {}],
+      ['s-01', { session: 's-05' }],
+      ['s-01', { field: 'sessions' }],
+      ['s-01', { field: 'rooms' }],
+      ['s-01', { field: 'deletedSessions' }],
+      ['s-01', { room: 'r-01' }],
+      ['s-01', { field: 'history', session: 's-05' }],
+      ['s-01', { field: 'summaries' }],
+      ['s-01', { field: 'goal' }],
+      ['s-01', { field: 'title' }],
+    ];
+    for (const [caller, args] of asks) {
+      const result = await getMap(caller, args);
+      const label = `${caller} ${JSON.stringify(args)}`;
+      expect(result.failed, `${label} ${result.text.slice(0, 120)}`).toBe(false);
+      for (const hidden of [TAG, 'zz-trace-exp', 'trialTrace', 'unknownParticipation', 'unjournaledRooms']) expect(result.text, label).not.toContain(hidden);
+    }
   });
 });
