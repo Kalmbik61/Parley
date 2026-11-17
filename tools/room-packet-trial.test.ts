@@ -1,4 +1,4 @@
-import { chmodSync, cpSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -18,7 +18,8 @@ import {
   mergeChain,
   realPathLoose,
   splitSegments,
-  readRetention,
+  describeRetention,
+  parseOptions,
   readTranscriptText,
   ratio,
   summarizeArm,
@@ -59,7 +60,7 @@ interface Run { code: number; out: string; json: Record<string, unknown>; jsonFi
 async function run(built: BuiltHome, mode: '--status' | '--final', extra: string[] = [], root = path.dirname(built.home)): Promise<Run> {
   let out = '';
   const jsonFile = path.join(root, `out-${mode.slice(2)}.json`);
-  const args = [mode, '--trial', 'exp-a', '--home', built.home, '--claude-root', built.claudeRoot, '--claude-settings', path.join(root, 'no-settings.json'), '--out', jsonFile, '--resamples', '300', ...extra];
+  const args = [mode, '--trial', 'exp-a', '--home', built.home, '--claude-root', built.claudeRoot, '--out', jsonFile, '--resamples', '300', ...extra];
   if (!args.includes('--cutoff')) args.push('--cutoff', CUTOFF);
   const code = await main(args, { write: (text) => { out += text; } });
   const json = existsSync(jsonFile) ? (JSON.parse(readFileSync(jsonFile, 'utf8')) as Record<string, unknown>) : {};
@@ -733,34 +734,56 @@ describe('item 17: hook journals are counted for the whole file', () => {
 
 // ---------------------------------------------------------------------------------------------------------------------
 describe('item 23: retention of transcripts by Claude Code', () => {
-  const settings = (content: string | null): string => {
-    const file = path.join(freshRoot(), 'settings.json');
-    if (content !== null) writeFileSync(file, content);
-    return file;
-  };
+  const threshold = 49;
 
-  it('value set (no warning at 49 and above, warning below), not set, no file, unreadable', () => {
-    expect(readRetention(settings('{"cleanupPeriodDays": 60}'))).toEqual({ value: 60, source: 'file', warning: false });
-    expect(readRetention(settings('{"cleanupPeriodDays": 49}'))).toEqual({ value: 49, source: 'file', warning: false });
-    expect(readRetention(settings('{"cleanupPeriodDays": 48}'))).toEqual({ value: 48, source: 'file', warning: true });
-    expect(readRetention(settings('{"cleanupPeriodDays": 7}'))).toEqual({ value: 7, source: 'file', warning: true });
-    expect(readRetention(settings('{"theme": "dark"}'))).toEqual({ value: 30, source: 'default-unset', warning: true });
-    expect(readRetention(settings(null))).toEqual({ value: 30, source: 'default-no-file', warning: true });
-    expect(readRetention(settings('{ not json'))).toEqual({ value: 30, source: 'default-unreadable', warning: true });
+  it('the value given by --cleanup-days: no warning at 49 and above, warning below', () => {
+    expect(describeRetention(60)).toEqual({ value: 60, threshold, warning: false });
+    expect(describeRetention(49)).toEqual({ value: 49, threshold, warning: false });
+    expect(describeRetention(48)).toEqual({ value: 48, threshold, warning: true });
+    expect(describeRetention(7)).toEqual({ value: 7, threshold, warning: true });
+    expect(describeRetention(null)).toEqual({ value: null, threshold, warning: false });
+  });
+
+  it('--cleanup-days is read as a whole number, zero or more; anything else is an argument error', () => {
+    const base = ['--status', '--trial', 'exp-a'];
+    const days = (value: string): unknown => (parseOptions([...base, '--cleanup-days', value]) as { cleanupDays: number | null }).cleanupDays;
+    expect(days('60')).toBe(60);
+    expect(days('0')).toBe(0);
+    expect((parseOptions(base) as { cleanupDays: number | null }).cleanupDays).toBeNull();
+    for (const bad of ['abc', '-1', '1.5', '', '1e2', ' 7']) {
+      expect(() => parseOptions([...base, '--cleanup-days', bad]), bad).toThrow('--cleanup-days');
+    }
   });
 
   it('both modes print the value and the warning', async () => {
     const built = await basicHome();
-    const file = path.join(path.dirname(built.home), 'claude-settings.json');
-    writeFileSync(file, '{"cleanupPeriodDays": 7}');
     for (const mode of ['--status', '--final'] as const) {
-      const result = await run(built, mode, ['--claude-settings', file]);
-      expect(result.out).toContain('cleanupPeriodDays: 7 (file) - WARNING: below 49 days');
+      const result = await run(built, mode, ['--cleanup-days', '7']);
+      expect(result.out).toContain('cleanupPeriodDays (given by --cleanup-days): 7 - WARNING: below 49 days');
+      expect(result.json['retention']).toEqual({ value: 7, threshold, warning: true });
     }
-    writeFileSync(file, '{"cleanupPeriodDays": 90}');
-    const quiet = await run(built, '--status', ['--claude-settings', file]);
-    expect(quiet.out).toContain('cleanupPeriodDays: 90 (file)');
+    const quiet = await run(built, '--status', ['--cleanup-days', '90']);
+    expect(quiet.out).toContain('cleanupPeriodDays (given by --cleanup-days): 90');
     expect(quiet.out).not.toContain('WARNING');
+    expect(quiet.json['retention']).toEqual({ value: 90, threshold, warning: false });
+  });
+
+  it('not given: a reminder in both modes and null in the JSON', async () => {
+    const built = await basicHome();
+    for (const mode of ['--status', '--final'] as const) {
+      const result = await run(built, mode);
+      expect(result.out).toContain('cleanupPeriodDays; this experiment needs 49 or more. Pass the value you set with --cleanup-days <n>.');
+      expect(result.out).not.toContain('WARNING');
+      expect(result.json['retention']).toEqual({ value: null, threshold, warning: false });
+    }
+  });
+
+  it('a wrong value stops the run with exit code 2 and the help', async () => {
+    const built = await basicHome();
+    let out = '';
+    const code = await main(['--status', '--trial', 'exp-a', '--home', built.home, '--claude-root', built.claudeRoot, '--cleanup-days', 'x'], { write: (text) => { out += text; } });
+    expect(code).toBe(2);
+    expect(out).toContain('--cleanup-days');
   });
 });
 
@@ -1293,7 +1316,7 @@ describe('item 33: the output guard takes ".." as a whole link of the path', () 
     }
     const beside = path.join(root, '..report.json');
     let out = '';
-    const code = await main(['--status', '--trial', 'exp-a', '--home', built.home, '--claude-root', built.claudeRoot, '--claude-settings', path.join(root, 'none.json'), '--out', beside], { write: (text) => { out += text; } });
+    const code = await main(['--status', '--trial', 'exp-a', '--home', built.home, '--claude-root', built.claudeRoot, '--out', beside], { write: (text) => { out += text; } });
     expect(code).toBe(0);
     expect(existsSync(beside)).toBe(true);
     expect(out).toContain('JSON:');

@@ -12,7 +12,7 @@
  * the final calculation).
  */
 
-import { cpSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync, mkdirSync } from 'node:fs';
+import { cpSync, existsSync, mkdtempSync, realpathSync, rmSync, statSync, writeFileSync, mkdirSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
@@ -45,7 +45,6 @@ export const DEFAULT_RESAMPLES = 10_000;
 export const BYTES_PER_TOKEN = 3;
 /** Plan 1.4 (six weeks) + a week in reserve, in days: the warning threshold for `cleanupPeriodDays`. */
 export const RETENTION_WARN_DAYS = 49;
-export const RETENTION_DEFAULT_DAYS = 30;
 export const PACKET_MARK = 'Room state packet ';
 
 /** Plan E-2, step 4: exactly this list, case-insensitive. Only `is_error` results are looked at. */
@@ -951,24 +950,11 @@ export function summarizeOutcome(sessions: readonly SessionFacts[]): OutcomeSumm
 // Claude Code retention (plan E-2 item 23)
 // ---------------------------------------------------------------------------------------------------------------------
 
-export interface Retention { value: number; source: 'file' | 'default-unset' | 'default-no-file' | 'default-unreadable'; warning: boolean }
+/** `value` is what the person passed in `--cleanup-days` (null: not passed); `warning` is set only for a passed value below the threshold. */
+export interface Retention { value: number | null; threshold: number; warning: boolean }
 
-export function readRetention(settingsFile: string): Retention {
-  let raw: string;
-  try {
-    raw = readFileSync(settingsFile, 'utf8');
-  } catch {
-    return { value: RETENTION_DEFAULT_DAYS, source: 'default-no-file', warning: RETENTION_DEFAULT_DAYS < RETENTION_WARN_DAYS };
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return { value: RETENTION_DEFAULT_DAYS, source: 'default-unreadable', warning: true };
-  }
-  const value = isObject(parsed) ? parsed['cleanupPeriodDays'] : undefined;
-  if (typeof value === 'number' && Number.isFinite(value) && value > 0) return { value, source: 'file', warning: value < RETENTION_WARN_DAYS };
-  return { value: RETENTION_DEFAULT_DAYS, source: 'default-unset', warning: RETENTION_DEFAULT_DAYS < RETENTION_WARN_DAYS };
+export function describeRetention(cleanupDays: number | null): Retention {
+  return { value: cleanupDays, threshold: RETENTION_WARN_DAYS, warning: cleanupDays !== null && cleanupDays < RETENTION_WARN_DAYS };
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -981,7 +967,7 @@ export interface Options {
   cutoff: string | null;
   home: string;
   claudeRoots: string[];
-  claudeSettings: string;
+  cleanupDays: number | null;
   out: string | null;
   seed: number;
   resamples: number;
@@ -1382,7 +1368,11 @@ export function buildReport(options: Options, cohort: Cohort, retention: Retenti
   lines.push(`Room packet trial "${options.trial}" - ${options.mode}`);
   lines.push(`  cutoff: ${options.cutoff ?? 'none (all records)'}; first assignment: ${cohort.firstAssignment ?? '-'}; last assignment: ${cohort.lastAssignment ?? '-'}`);
   lines.push(`  works read: ${cohort.worksRead}; snapshot attempts: ${cohort.snapshotAttempts}`);
-  lines.push(`  Claude Code cleanupPeriodDays: ${retention.value} (${retention.source})${retention.warning ? ` - WARNING: below ${RETENTION_WARN_DAYS} days, transcripts of the experiment may be deleted before the final count` : ''}`);
+  lines.push(
+    retention.value === null
+      ? `  Claude Code deletes transcripts that sat unused longer than cleanupPeriodDays; this experiment needs ${RETENTION_WARN_DAYS} or more. Pass the value you set with --cleanup-days <n>.`
+      : `  Claude Code cleanupPeriodDays (given by --cleanup-days): ${retention.value}${retention.warning ? ` - WARNING: below ${RETENTION_WARN_DAYS} days, transcripts of the experiment may be deleted before the final count` : ''}`,
+  );
   lines.push(`  sessions with a damaged assignment (whole home, not in the cohort): ${cohort.damagedSessions.length}${cohort.damagedSessions.length > 0 ? ` [${cohort.damagedSessions.join(', ')}]` : ''}`);
   lines.push(`  works that could not be read: ${cohort.unreadableWorks.length}${cohort.unreadableWorks.length > 0 ? ` [${cohort.unreadableWorks.join(', ')}]` : ''}`);
   lines.push(`  works with a damaged trial trace or assignment: ${cohort.damagedWorks.length}${cohort.damagedWorks.length > 0 ? ` [${cohort.damagedWorks.join(', ')}]` : ''}`);
@@ -1526,7 +1516,7 @@ const HELP = `Usage:
   --cutoff <ISO time>     freeze or stop moment; required for --final; records at or after it are not read
   --home <dir>            Parley home to snapshot (default: the real home of this machine)
   --claude-root <dir>     transcript root, repeatable (default: the roots Parley itself searches)
-  --claude-settings <f>   Claude Code settings.json for cleanupPeriodDays (default: ~/.claude/settings.json)
+  --cleanup-days <n>      cleanupPeriodDays that you set in Claude Code, a whole number of days (default: not given; a warning below ${RETENTION_WARN_DAYS})
   --out <file>            JSON result (default: ./room-packet-trial-<name>-<mode>.json)
   --seed <n>              bootstrap seed (default ${DEFAULT_SEED}); --resamples <n> (default ${DEFAULT_RESAMPLES})
 
@@ -1542,7 +1532,7 @@ export function parseOptions(argv: readonly string[], env: NodeJS.ProcessEnv = p
       cutoff: { type: 'string' },
       home: { type: 'string' },
       'claude-root': { type: 'string', multiple: true },
-      'claude-settings': { type: 'string' },
+      'cleanup-days': { type: 'string' },
       out: { type: 'string' },
       seed: { type: 'string' },
       resamples: { type: 'string' },
@@ -1565,12 +1555,16 @@ export function parseOptions(argv: readonly string[], env: NodeJS.ProcessEnv = p
   const home = path.resolve(values.home ?? parleyHome(env, userHome));
   const roots = values['claude-root'];
   const claudeRoots = roots !== undefined && roots.length > 0 ? roots.map((root) => path.resolve(root)) : claudeProjectRoots(env, userHome);
-  const configDir = env['CLAUDE_CONFIG_DIR']?.trim();
-  const claudeSettings = path.resolve(values['claude-settings'] ?? path.join(configDir !== undefined && configDir !== '' ? configDir : path.join(userHome, '.claude'), 'settings.json'));
   const seed = values.seed === undefined ? DEFAULT_SEED : Number(values.seed);
   const resamples = values.resamples === undefined ? DEFAULT_RESAMPLES : Number(values.resamples);
   if (!Number.isInteger(seed) || !Number.isInteger(resamples) || resamples < 1) throw new Error('--seed and --resamples must be integers');
-  return { mode, trial, cutoff, home, claudeRoots, claudeSettings, out: values.out ?? null, seed, resamples };
+  let cleanupDays: number | null = null;
+  if (values['cleanup-days'] !== undefined) {
+    const text = values['cleanup-days'];
+    if (!/^\d+$/.test(text) || !Number.isSafeInteger(Number(text))) throw new Error('--cleanup-days must be a whole number of days, zero or more');
+    cleanupDays = Number(text);
+  }
+  return { mode, trial, cutoff, home, claudeRoots, cleanupDays, out: values.out ?? null, seed, resamples };
 }
 
 /** Real path of a path that may not exist yet: links and directory aliases of its nearest existing ancestor are resolved. */
@@ -1619,7 +1613,7 @@ export async function main(argv: readonly string[], io: Io = { write: (text) => 
   }
   try {
     const cohort = await collectCohort(options);
-    const report = buildReport(options, cohort, readRetention(options.claudeSettings));
+    const report = buildReport(options, cohort, describeRetention(options.cleanupDays));
     io.write(`${report.lines.join('\n')}\n`);
     mkdirSync(path.dirname(out), { recursive: true });
     writeFileSync(out, `${JSON.stringify(report.json, null, 2)}\n`);
