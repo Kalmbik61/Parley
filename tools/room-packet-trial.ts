@@ -1021,8 +1021,6 @@ export interface Cohort {
   blockers: string[];
   /** Sessions known only from the trace of a deleted session. */
   tracedSessions: number;
-  /** Tags found more than once (two works, a record and a trace) with the same data: counted once. */
-  duplicateTags: number;
 }
 
 const readIfExists = async (file: string): Promise<string | null> => {
@@ -1074,7 +1072,7 @@ export interface TagConflict {
 }
 
 export interface Reconciled {
-  /** One record per assignment of the experiment that stands without contradiction (a live record before a trace). */
+  /** The record of each assignment of the experiment that stands without contradiction (there is exactly one). */
   counted: Candidate[];
   conflicts: TagConflict[];
   /** An intent without a cancel whose tag no record or trace has: the session is lost. */
@@ -1083,7 +1081,6 @@ export interface Reconciled {
   /** Tags the list of this experiment names for another experiment. */
   foreignTags: number;
   otherRecords: number;
-  duplicateTags: number;
 }
 
 const sameConfirm = (a: TrialConfirmLine, b: TrialConfirmLine): boolean =>
@@ -1092,7 +1089,8 @@ const sameConfirm = (a: TrialConfirmLine, b: TrialConfirmLine): boolean =>
 /**
  * Everything known about one tag is gathered first — every record and trace of every work, every intent, cancel and confirm
  * line of the list — and checked as a whole before anything is chosen; the order of lines and of works decides nothing:
- * - the intents agree in name, arm and time (equal repeats count once); every record and trace agrees with each intent;
+ * - the intents agree in name, arm and time (equal repeats count once); every record and trace agrees with each intent; a tag in more
+ *   than one record or trace blocks, and none of the copies is counted;
  * - the confirms name one work, one creation number and one session;
  * - a cancel next to a confirm, a record or a trace is a contradiction; a cancel or a confirm without an intent is too.
  * A tag with a contradiction is not counted and blocks the verdict (the same as a damaged assignment).
@@ -1108,7 +1106,7 @@ export function reconcileTags(candidates: readonly Candidate[], lines: readonly 
     else entry.confirms.push(line);
     listed.set(line.tag, entry);
   }
-  const result: Reconciled = { counted: [], conflicts: [], lost: [], missingIntents: [], foreignTags: 0, otherRecords: 0, duplicateTags: 0 };
+  const result: Reconciled = { counted: [], conflicts: [], lost: [], missingIntents: [], foreignTags: 0, otherRecords: 0 };
   for (const tag of new Set([...records.keys(), ...listed.keys()])) {
     const recs = records.get(tag) ?? [];
     const { intents, cancels, confirms } = listed.get(tag) ?? { intents: [], cancels: [], confirms: [] };
@@ -1118,6 +1116,9 @@ export function reconcileTags(candidates: readonly Candidate[], lines: readonly 
     }
     const reasons: string[] = [];
     if (intents.some((intent) => !sameAssignment(intents[0]!, intent))) reasons.push('intents differ');
+    // The product never makes two records with one tag (the assignment is written once, in `addSession`, and moves to a trace in the
+    // record that removes the session): a tag met more than once is a copied or restored map, and no copy can be taken for the real one.
+    if (recs.length > 1) reasons.push('one tag in more than one record or trace');
     if (recs.some((record) => !sameAssignment(recs[0]!.trial, record.trial))) reasons.push('records differ');
     if (recs.some((record) => intents.some((intent) => !sameAssignment(record.trial, intent)))) reasons.push('record differs from an intent');
     if (confirms.some((confirm) => !sameConfirm(confirms[0]!, confirm))) reasons.push('confirms differ');
@@ -1137,9 +1138,7 @@ export function reconcileTags(candidates: readonly Candidate[], lines: readonly 
       continue;
     }
     if (lines !== undefined && intents.length === 0) result.missingIntents.push(recs[0]!.label);
-    if (recs.length > 1) result.duplicateTags += 1;
-    // One assignment is one session of the cohort. The copies are equal in name, arm and time; a live record is taken before a trace.
-    result.counted.push(recs.find((record) => !record.deleted) ?? recs[0]!);
+    result.counted.push(recs[0]!);
   }
   return result;
 }
@@ -1185,7 +1184,6 @@ export async function collectCohort(options: Options): Promise<Cohort> {
     missingIntents: [],
     blockers: [],
     tracedSessions: 0,
-    duplicateTags: 0,
   };
   /** Every assignment of every work, in the order read; nothing is chosen or dropped here (see `reconcileTags`). */
   const found: Candidate[] = [];
@@ -1264,7 +1262,6 @@ export async function collectCohort(options: Options): Promise<Cohort> {
     options.trial,
   );
   cohort.otherTrialSessions += reconciled.otherRecords;
-  cohort.duplicateTags += reconciled.duplicateTags;
   cohort.missingIntents.push(...reconciled.missingIntents);
   cohort.conflicts.push(...reconciled.conflicts);
   for (const conflict of reconciled.conflicts) cohort.ledgerDisagreements.push(...conflict.labels);
@@ -1442,7 +1439,6 @@ export function buildReport(options: Options, cohort: Cohort, retention: Retenti
       missingIntents: cohort.missingIntents,
       blockers: cohort.blockers,
       tracedSessions: cohort.tracedSessions,
-      duplicateTags: cohort.duplicateTags,
       otherTrialSessions: cohort.otherTrialSessions,
       assignedAfterCutoff: cohort.assignedAfterCutoff,
       worksRead: cohort.worksRead,

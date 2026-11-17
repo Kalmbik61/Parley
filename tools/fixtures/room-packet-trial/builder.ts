@@ -211,7 +211,7 @@ export interface HomeSpec {
   /** Intents of sessions that never reached a map: lost sessions; `confirm` adds a confirm line naming a work and a session. */
   lostIntents?: Array<{ arm: 'packet' | 'control'; at?: string; name?: string; confirm?: { workId: string; sessionId: string } }>;
   /** The tag of a session (by index) found again: in a second work, or in the trace of a deleted session, optionally with another arm or time. */
-  duplicates?: Array<{ session: number; as: 'other-work' | 'trace'; arm?: 'packet' | 'control'; at?: string }>;
+  duplicates?: Array<{ session: number; as: 'other-work' | 'trace'; arm?: 'packet' | 'control'; at?: string; claudeId?: string; room?: 'journal' | 'unjournaled' }>;
   /** Raw text appended to the list file (garbage, a torn line). */
   ledgerRaw?: string;
   /** Raw text written to the list file before everything else (a contradicting line that comes first). */
@@ -312,6 +312,14 @@ export async function buildHome(spec: HomeSpec): Promise<BuiltHome> {
         await updateMap(project, second.work.id, (map) => {
           const copy = addSession(map, { provider: 'claude', label: 'dup', task: '', parent: null }, '2026-11-20T09:00:00.000Z');
           copy.trial = trial;
+          if (duplicate.claudeId !== undefined) copy.providerSessionId = duplicate.claudeId;
+          if (duplicate.room !== undefined) {
+            const room = addRoom(map, { title: 'copy room', creator: 'human', members: [] }, '2026-11-20T09:00:00.000Z');
+            room.members = [copy.id];
+            room.lead = null;
+            if (duplicate.room === 'unjournaled') delete room.memberLog;
+            else room.memberLog = [{ session: copy.id, from: '2026-11-20T09:00:00.000Z', to: null }];
+          }
         });
       } else {
         await updateMap(project, work.work.id, (map) => {

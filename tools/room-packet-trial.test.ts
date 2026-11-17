@@ -1122,21 +1122,53 @@ describe('item 24: the cohort is the union of records, traces of deleted session
     expect(arm.result.json['bounds']).toBeNull();
   });
 
-  it('32: one tag is one session: a tag in two works with different arms, or in a record and in a trace, blocks; equal copies count once', async () => {
-    const twoWorks = await pair({ duplicates: [{ session: 0, as: 'other-work', arm: 'control' }] });
-    expect(cohortOf(twoWorks.result).ledgerDisagreements).toHaveLength(2);
-    expect(cohortOf(twoWorks.result).sessions).toBe(1);
-    expect(twoWorks.result.json['verdict']).toBe('undetermined');
-    expect(twoWorks.result.json['bounds']).toBeNull();
-    const recordAndTrace = await pair({ duplicates: [{ session: 0, as: 'trace', arm: 'control' }] });
-    expect(cohortOf(recordAndTrace.result).ledgerDisagreements).toHaveLength(2);
-    expect(recordAndTrace.result.json['bounds']).toBeNull();
-    const sameTime = await pair({ duplicates: [{ session: 0, as: 'trace', at: '2026-11-20T10:00:00.000Z' }] });
-    expect(cohortOf(sameTime.result).ledgerDisagreements.length).toBeGreaterThan(0);
-    // equal copies: counted once, nothing blocks
-    for (const as of ['trace', 'other-work'] as const) {
-      const equal = await pair({ duplicates: [{ session: 0, as }] });
-      expect(cohortOf(equal.result)).toMatchObject({ sessions: 2, duplicateTags: 1, blockers: [], ledgerDisagreements: [] });
+  it('32: a tag met in more than one record or trace blocks and none of the copies is counted — equal or not, in any order', async () => {
+    const reason = 'one tag in more than one record or trace';
+    const cases: Array<Partial<HomeSpec>> = [
+      { duplicates: [{ session: 0, as: 'other-work', arm: 'control' }] },
+      { duplicates: [{ session: 0, as: 'trace', arm: 'control' }] },
+      { duplicates: [{ session: 0, as: 'trace', at: '2026-11-20T10:00:00.000Z' }] },
+      // equal copies are no exception: nothing says which of them is the real one
+      { duplicates: [{ session: 0, as: 'other-work' }] },
+      { duplicates: [{ session: 0, as: 'trace' }] },
+    ];
+    for (const extra of cases) {
+      const { result } = await pair(extra);
+      expect(cohortOf(result).conflicts.flatMap((conflict) => conflict.reasons)).toContain(reason);
+      expect(cohortOf(result).conflicts[0]!.labels).toHaveLength(2);
+      expect(cohortOf(result).ledgerDisagreements).toHaveLength(2);
+      expect(cohortOf(result).sessions).toBe(1);
+      expect(result.json['verdict']).toBe('undetermined');
+      expect(result.json['bounds']).toBeNull();
+      expect(result.out).toContain('contradict each other');
+    }
+  });
+
+  it('32: the copies are never chosen between — exact participation against unknown, a transcript found against none, either way round', async () => {
+    const reason = 'one tag in more than one record or trace';
+    // Home 1: the first work holds the copy with exact participation and a transcript, the second the copy without both.
+    const first = await buildHome({
+      root: freshRoot(),
+      sessions: [{ arm: 'packet', claudeId: 'claude-a' }, { arm: 'control', claudeId: 'claude-b' }],
+      rooms: MEMBERS(),
+      duplicates: [{ session: 0, as: 'other-work', claudeId: 'claude-gone', room: 'unjournaled' }],
+    });
+    // Home 2: the first work holds the copy without them, the second the copy with exact participation and a transcript.
+    const second = await buildHome({
+      root: freshRoot(),
+      sessions: [{ arm: 'packet', claudeId: 'claude-gone' }, { arm: 'control', claudeId: 'claude-b' }],
+      rooms: [{ members: [{ session: 0, from: T09 }, { session: 1, from: T09 }], journal: false }],
+      duplicates: [{ session: 0, as: 'other-work', claudeId: 'claude-a', room: 'journal' }],
+    });
+    for (const built of [first, second]) {
+      for (const id of ['claude-a', 'claude-b']) writeTranscript(built, id, new TranscriptBuilder(id, START).prompt().at(60).boundary().calls(2).text());
+      const result = await run(built, '--final');
+      expect(cohortOf(result).conflicts.flatMap((conflict) => conflict.reasons)).toContain(reason);
+      // neither copy is in the cohort: only the control session is
+      expect(cohortOf(result).sessions).toBe(1);
+      expect(arms(result.json).packet.sessions).toBe(0);
+      expect(result.json['verdict']).toBe('undetermined');
+      expect(result.json['bounds']).toBeNull();
     }
   });
 
