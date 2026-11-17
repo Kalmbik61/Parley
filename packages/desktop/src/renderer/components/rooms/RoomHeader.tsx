@@ -8,9 +8,16 @@
 
 import type { ReactNode } from 'react';
 import { S } from '../../../shared/strings.js';
+import { cn } from '../../lib/cn.js';
 import { Badge } from '../../ui/badge.js';
 import type { ParticipantModel } from './feed-model.js';
 import { ParticipantStrip } from './ParticipantStrip.js';
+
+/**
+ * Низкая панель (ниже 560 px по контейнеру `room-panel` у корня `RoomPanel`): в виде Board шапка сжимается до названия и
+ * подзаголовка, ряд режима и лента участников прячутся (спека доски комнаты 4.1).
+ */
+export const SHORT_PANEL_HIDDEN = '[@container_room-panel_(max-height:559px)]:hidden';
 
 export interface RoomHeaderProps {
   modeControl?: ReactNode;
@@ -26,6 +33,8 @@ export interface RoomHeaderProps {
   contextChip?: ReactNode;
   /** Чип контекста участника на карточке (`ContextChip`, спека 3.2). */
   participantContext?: (participant: ParticipantModel) => ReactNode;
+  /** Открыт вид Board: в низкой панели ряд режима и лента участников прячутся. */
+  boardOpen?: boolean;
   /** Метки пунктов плана у участников (`participantItemTags`). */
   itemTags?: ReadonlyMap<string, number[]>;
   title: string;
@@ -39,7 +48,17 @@ export interface RoomHeaderProps {
   now: Date;
 }
 
-export function RoomHeader({ title, subtitle, archived = false, participants, onOpenSession, onOpenPlan, modeControl, recipeChip, browserToggle, viewSwitch, usageChip, contextChip, participantContext, itemTags, now }: RoomHeaderProps): JSX.Element {
+export function RoomHeader({ title, subtitle, archived = false, participants, onOpenSession, onOpenPlan, modeControl, recipeChip, browserToggle, viewSwitch, usageChip, contextChip, participantContext, itemTags, boardOpen = false, now }: RoomHeaderProps): JSX.Element {
+  const strip = (
+    <ParticipantStrip
+      participants={participants}
+      onOpenSession={onOpenSession}
+      now={now}
+      {...(onOpenPlan === undefined ? {} : { onOpenPlan })}
+      {...(participantContext === undefined ? {} : { contextChip: participantContext })}
+      {...(itemTags === undefined ? {} : { itemTags })}
+    />
+  );
   return (
     <div
       data-room-header=""
@@ -66,17 +85,12 @@ export function RoomHeader({ title, subtitle, archived = false, participants, on
           {subtitle}
         </span>
       </div>
-      {recipeChip === undefined && usageChip === undefined && contextChip === undefined ? modeControl : (
-        <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2">{modeControl}{recipeChip}{usageChip}{contextChip}</div>
+      {recipeChip === undefined && usageChip === undefined && contextChip === undefined ? (
+        boardOpen ? <div className={SHORT_PANEL_HIDDEN}>{modeControl}</div> : modeControl
+      ) : (
+        <div className={cn('flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2', boardOpen && SHORT_PANEL_HIDDEN)}>{modeControl}{recipeChip}{usageChip}{contextChip}</div>
       )}
-      <ParticipantStrip
-        participants={participants}
-        onOpenSession={onOpenSession}
-        now={now}
-        {...(onOpenPlan === undefined ? {} : { onOpenPlan })}
-        {...(participantContext === undefined ? {} : { contextChip: participantContext })}
-        {...(itemTags === undefined ? {} : { itemTags })}
-      />
+      {boardOpen ? <div className={SHORT_PANEL_HIDDEN}>{strip}</div> : strip}
     </div>
   );
 }

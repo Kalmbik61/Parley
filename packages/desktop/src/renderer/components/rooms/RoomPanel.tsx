@@ -548,9 +548,10 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
       onDrop={onDrop}
-      className={cn('flex h-full min-h-0 min-w-0 flex-col', (dropping || cardOver) && 'ring-2 ring-inset ring-ring')}
+      className={cn('flex h-full min-h-0 min-w-0 flex-col [container-type:size] [container-name:room-panel]', (dropping || cardOver) && 'ring-2 ring-inset ring-ring')}
     >
       <RoomHeader
+        {...(boardOpen ? { boardOpen } : {})}
         {...(boardPlan === null || roomRecord === undefined ? {} : { itemTags: participantItemTags(boardPlan, roomRecord, entry) })}
         {...(onViewChange !== undefined && boardAvailable ? { viewSwitch: <RoomViewSwitch view={boardOpen ? 'board' : 'feed'} onChange={onViewChange} /> } : {})}
         browserToggle={archived ? undefined : <PanelToggle workKey={workKey(entry.projectPath, entry.map.work.id)} owner={{ kind: 'room', roomId }} />}

@@ -262,4 +262,20 @@ describe('RoomBoard — лента событий', () => {
     expect(screen.queryByRole('list', { name: S.roomBoard.events })).toBeNull();
     expect(document.querySelector('[data-board-events]')).toBeNull();
   });
+
+  it('строка события — одна строка с полным текстом в подсказке', () => {
+    const at = '2026-11-17T11:00:00.000Z';
+    renderBoard(planOf('verified', [item(1, { status: 'in_progress', log: [entryOf(at, 'in_progress')] })]));
+    const row = within(screen.getByRole('list', { name: S.roomBoard.events })).getByRole('listitem');
+    expect(row.getAttribute('title')).toBe(`${clockOf(at)} ${S.roomBoard.event('S01 back', 1, S.plans.itemStatus.in_progress)}`);
+    expect(row.lastElementChild!.className).toContain('truncate');
+  });
+
+  it('вторая и третья строки несут класс сжатия, первая нет', () => {
+    const log = ['08', '09', '10', '11'].map((hour) => entryOf(`2026-11-17T${hour}:00:00.000Z`, 'in_progress'));
+    renderBoard(planOf('verified', [item(1, { status: 'in_progress', log })]));
+    const rows = within(screen.getByRole('list', { name: S.roomBoard.events })).getAllByRole('listitem');
+    expect(rows).toHaveLength(3);
+    expect(rows.map((row) => row.className.includes('max-height:559px'))).toEqual([false, true, true]);
+  });
 });

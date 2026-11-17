@@ -13,6 +13,7 @@ import { Button } from '../../../ui/button.js';
 import { AgentIcon } from '../../AgentIcon.js';
 import type { ParticipantModel } from '../feed-model.js';
 import { boardEvents } from './room-board-activity.js';
+import { SHORT_PANEL_HIDDEN } from '../RoomHeader.js';
 import { ownerLabel, planProgress } from '../PlanPanel.js';
 import { RoomBoardCard } from './RoomBoardCard.js';
 import { buildRoomBoard } from './room-board-model.js';
@@ -95,21 +96,24 @@ export function RoomBoard({ plan, room, entry, participants, activity, now, onOp
       </div>
       {events.length === 0 ? null : (
         <ul data-board-events="" aria-label={S.roomBoard.events} className="shrink-0 space-y-0.5 border-t px-9 py-2 text-xs">
-          {events.map((event, index) => (
-            <li
-              key={`${event.at}-${event.itemId}-${event.change.source}-${event.change.status}`}
-              className={cn('flex gap-2', index === 0 ? 'text-foreground' : 'text-muted-foreground')}
-            >
-              <span className="shrink-0 tabular-nums">{clock(event.at)}</span>
-              <span className="min-w-0 [overflow-wrap:anywhere]">
-                {S.roomBoard.event(
-                  ownerLabel(entry, event.by),
-                  event.itemId,
-                  event.change.source === 'item' ? S.plans.itemStatus[event.change.status] : S.plans.attemptStatus[event.change.status],
-                )}
-              </span>
-            </li>
-          ))}
+          {events.map((event, index) => {
+            const when = clock(event.at);
+            const what = S.roomBoard.event(
+              ownerLabel(entry, event.by),
+              event.itemId,
+              event.change.source === 'item' ? S.plans.itemStatus[event.change.status] : S.plans.attemptStatus[event.change.status],
+            );
+            return (
+              <li
+                key={`${event.at}-${event.itemId}-${event.change.source}-${event.change.status}`}
+                title={`${when} ${what}`}
+                className={cn('flex gap-2', index === 0 ? 'text-foreground' : 'text-muted-foreground', index > 0 && SHORT_PANEL_HIDDEN)}
+              >
+                <span className="shrink-0 tabular-nums">{when}</span>
+                <span className="min-w-0 truncate">{what}</span>
+              </li>
+            );
+          })}
         </ul>
       )}
     </div>
