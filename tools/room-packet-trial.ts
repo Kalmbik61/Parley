@@ -26,7 +26,7 @@ import { mapLetterTx } from '../packages/core/src/work/letter-store.js';
 import { roomMembership } from '../packages/core/src/work/room-membership.js';
 import { forgetParleyHome, readStoredMap, readWorksIndex, workPaths } from '../packages/core/src/work/store.js';
 import { isDamagedTrace, trialSegments, trialUnknownParticipation, workHasTrialDamage, type TrialSegmentSource } from '../packages/core/src/work/trial-trace.js';
-import { readTrialLedger, unresolvedIntents, type TrialConfirmLine, type TrialIntentLine, type TrialLedger } from '../packages/core/src/work/trial-ledger.js';
+import { readTrialLedger, type TrialConfirmLine, type TrialIntentLine, type TrialLedger, type TrialLedgerLine } from '../packages/core/src/work/trial-ledger.js';
 import { isDamagedTrial, type SessionTrial, type TrialSessionTrace, type WindowWorkMap, type WorkSession } from '../packages/core/src/work/types.js';
 import { PACKET_BRIDGE_EVENT, ROOM_PACKET_EVENT } from '../packages/core/src/work/events.js';
 
@@ -1015,6 +1015,8 @@ export interface Cohort {
   ledgerDisagreements: string[];
   /** Sessions of the experiment with no intent line in an existing list. */
   missingIntents: string[];
+  /** Tags whose sources contradict each other (all sources of one tag are checked together). */
+  conflicts: TagConflict[];
   /** Reasons that stop the final calculation, found while reading the sources. */
   blockers: string[];
   /** Sessions known only from the trace of a deleted session. */
@@ -1064,6 +1066,84 @@ export function membershipOf(map: WindowWorkMap, sessionId: string): Membership 
   return membership;
 }
 
+export interface TagConflict {
+  tag: string;
+  /** Labels of the records of the tag; `tag <tag>` when only the list speaks of it. */
+  labels: string[];
+  reasons: string[];
+}
+
+export interface Reconciled {
+  /** One record per assignment of the experiment that stands without contradiction (a live record before a trace). */
+  counted: Candidate[];
+  conflicts: TagConflict[];
+  /** An intent without a cancel whose tag no record or trace has: the session is lost. */
+  lost: Array<{ intent: TrialIntentLine; confirm: TrialConfirmLine | undefined }>;
+  missingIntents: string[];
+  /** Tags the list of this experiment names for another experiment. */
+  foreignTags: number;
+  otherRecords: number;
+  duplicateTags: number;
+}
+
+const sameConfirm = (a: TrialConfirmLine, b: TrialConfirmLine): boolean =>
+  a.projectPath === b.projectPath && a.workId === b.workId && a.incarnation === b.incarnation && a.sessionId === b.sessionId;
+
+/**
+ * Everything known about one tag is gathered first — every record and trace of every work, every intent, cancel and confirm
+ * line of the list — and checked as a whole before anything is chosen; the order of lines and of works decides nothing:
+ * - the intents agree in name, arm and time (equal repeats count once); every record and trace agrees with each intent;
+ * - the confirms name one work, one creation number and one session;
+ * - a cancel next to a confirm, a record or a trace is a contradiction; a cancel or a confirm without an intent is too.
+ * A tag with a contradiction is not counted and blocks the verdict (the same as a damaged assignment).
+ */
+export function reconcileTags(candidates: readonly Candidate[], lines: readonly TrialLedgerLine[] | undefined, trialName: string): Reconciled {
+  const records = new Map<string, Candidate[]>();
+  for (const candidate of candidates) records.set(candidate.trial.tag, [...(records.get(candidate.trial.tag) ?? []), candidate]);
+  const listed = new Map<string, { intents: TrialIntentLine[]; cancels: TrialLedgerLine[]; confirms: TrialConfirmLine[] }>();
+  for (const line of lines ?? []) {
+    const entry = listed.get(line.tag) ?? { intents: [], cancels: [], confirms: [] };
+    if (line.kind === 'intent') entry.intents.push(line);
+    else if (line.kind === 'cancel') entry.cancels.push(line);
+    else entry.confirms.push(line);
+    listed.set(line.tag, entry);
+  }
+  const result: Reconciled = { counted: [], conflicts: [], lost: [], missingIntents: [], foreignTags: 0, otherRecords: 0, duplicateTags: 0 };
+  for (const tag of new Set([...records.keys(), ...listed.keys()])) {
+    const recs = records.get(tag) ?? [];
+    const { intents, cancels, confirms } = listed.get(tag) ?? { intents: [], cancels: [], confirms: [] };
+    if (cancels.length + confirms.length + intents.length === 0 && recs.every((record) => record.trial.name !== trialName)) {
+      result.otherRecords += recs.length;
+      continue;
+    }
+    const reasons: string[] = [];
+    if (intents.some((intent) => !sameAssignment(intents[0]!, intent))) reasons.push('intents differ');
+    if (recs.some((record) => !sameAssignment(recs[0]!.trial, record.trial))) reasons.push('records differ');
+    if (recs.some((record) => intents.some((intent) => !sameAssignment(record.trial, intent)))) reasons.push('record differs from an intent');
+    if (confirms.some((confirm) => !sameConfirm(confirms[0]!, confirm))) reasons.push('confirms differ');
+    if (cancels.length > 0 && (confirms.length > 0 || recs.length > 0)) reasons.push('cancel next to a confirm, a record or a trace');
+    if (intents.length === 0 && cancels.length + confirms.length > 0) reasons.push('cancel or confirm without an intent');
+    if (reasons.length > 0) {
+      result.conflicts.push({ tag, labels: recs.length > 0 ? recs.map((record) => record.label) : [`tag ${tag}`], reasons });
+      continue;
+    }
+    const name = recs.length > 0 ? recs[0]!.trial.name : intents[0]!.name;
+    if (name !== trialName) {
+      result.foreignTags += 1;
+      continue;
+    }
+    if (recs.length === 0) {
+      if (cancels.length === 0) result.lost.push({ intent: intents[0]!, confirm: confirms[0] });
+      continue;
+    }
+    if (lines !== undefined && intents.length === 0) result.missingIntents.push(recs[0]!.label);
+    if (recs.length > 1) result.duplicateTags += 1;
+    // One assignment is one session of the cohort. The copies are equal in name, arm and time; a live record is taken before a trace.
+    result.counted.push(recs.find((record) => !record.deleted) ?? recs[0]!);
+  }
+  return result;
+}
+
 /** One assignment found in a map: a live record or the trace of a deleted session. */
 interface Candidate {
   workId: string;
@@ -1101,14 +1181,16 @@ export async function collectCohort(options: Options): Promise<Cohort> {
     snapshotAttempts: snapshot.attempts,
     ledger: { status: 'ok', error: null, unreadableLines: [], intents: 0, cancelled: 0, confirmed: 0 },
     ledgerDisagreements: [],
+    conflicts: [],
     missingIntents: [],
     blockers: [],
     tracedSessions: 0,
     duplicateTags: 0,
   };
-  const byTag = new Map<string, Candidate[]>();
+  /** Every assignment of every work, in the order read; nothing is chosen or dropped here (see `reconcileTags`). */
+  const found: Candidate[] = [];
   const add = (candidate: Candidate): void => {
-    byTag.set(candidate.trial.tag, [...(byTag.get(candidate.trial.tag) ?? []), candidate]);
+    found.push(candidate);
   };
   try {
     process.env['PARLEY_HOME'] = snapshot.dir;
@@ -1164,8 +1246,6 @@ export async function collectCohort(options: Options): Promise<Cohort> {
     cohort.ledger = { ...cohort.ledger, status: 'unreadable', error: (error as Error).message };
   }
   if (ledger === undefined && cohort.ledger.status === 'ok') cohort.ledger = { ...cohort.ledger, status: 'missing' };
-  const intents = new Map<string, TrialIntentLine>();
-  const cancelledTags = new Set<string>();
   if (ledger !== undefined) {
     cohort.ledger = {
       ...cohort.ledger,
@@ -1174,40 +1254,21 @@ export async function collectCohort(options: Options): Promise<Cohort> {
       cancelled: ledger.lines.filter((line) => line.kind === 'cancel').length,
       confirmed: ledger.lines.filter((line) => line.kind === 'confirm').length,
     };
-    for (const line of ledger.lines) {
-      if (line.kind === 'intent') intents.set(line.tag, line);
-      if (line.kind === 'cancel') cancelledTags.add(line.tag);
-    }
     if (ledger.unreadable.length > 0) cohort.blockers.push(`the assignment list has ${ledger.unreadable.length} unreadable line(s) (${ledger.unreadable.join(', ')}): a lost session cannot be noticed`);
   }
 
-  // Reconcile by tag, before any cut by the cutoff.
-  const toAnalyze: Candidate[] = [];
-  let foreignIntents = 0;
-  for (const [tag, group] of byTag) {
-    const intent = intents.get(tag);
-    const ours = group.some((candidate) => candidate.trial.name === options.trial) || intent !== undefined;
-    if (!ours) {
-      cohort.otherTrialSessions += group.length;
-      continue;
-    }
-    const sources = [...group.map((candidate) => candidate.trial), ...(intent === undefined ? [] : [intent])];
-    const first = sources[0]!;
-    const consistent = sources.every((source) => sameAssignment(first, source)) && !cancelledTags.has(tag);
-    if (!consistent) {
-      cohort.ledgerDisagreements.push(...group.map((candidate) => candidate.label));
-      continue;
-    }
-    if (first.name !== options.trial) {
-      foreignIntents += 1;
-      continue;
-    }
-    if (ledger !== undefined && intent === undefined) cohort.missingIntents.push(group[0]!.label);
-    if (group.length > 1) cohort.duplicateTags += 1;
-    // One assignment is one session of the cohort: a live record wins over a trace, the first of equals wins.
-    toAnalyze.push(group.find((candidate) => !candidate.deleted) ?? group[0]!);
-  }
-  for (const candidate of toAnalyze) {
+  // Reconcile by tag, before any cut by the cutoff: everything about one tag is gathered and checked as a whole.
+  const reconciled = reconcileTags(
+    found,
+    ledger === undefined ? undefined : ledger.lines,
+    options.trial,
+  );
+  cohort.otherTrialSessions += reconciled.otherRecords;
+  cohort.duplicateTags += reconciled.duplicateTags;
+  cohort.missingIntents.push(...reconciled.missingIntents);
+  cohort.conflicts.push(...reconciled.conflicts);
+  for (const conflict of reconciled.conflicts) cohort.ledgerDisagreements.push(...conflict.labels);
+  for (const candidate of reconciled.counted) {
     const trial = candidate.trial;
     cohort.firstAssignment = cohort.firstAssignment === null || trial.at < cohort.firstAssignment ? trial.at : cohort.firstAssignment;
     cohort.lastAssignment = cohort.lastAssignment === null || trial.at > cohort.lastAssignment ? trial.at : cohort.lastAssignment;
@@ -1218,23 +1279,22 @@ export async function collectCohort(options: Options): Promise<Cohort> {
     if (candidate.deleted) cohort.tracedSessions += 1;
     cohort.sessions.push(await analyzeCandidate(candidate, options, cutoffMs));
   }
+  for (const lost of reconciled.lost) {
+    if (cutoffMs !== null && ms(lost.intent.at) >= cutoffMs) {
+      cohort.assignedAfterCutoff.push(`tag ${lost.intent.tag}`);
+      continue;
+    }
+    cohort.sessions.push(lostSession(lost.intent, lost.confirm));
+  }
 
   if (cohort.ledger.status === 'unreadable') cohort.blockers.push(`the assignment list could not be read (${cohort.ledger.error}): a lost session cannot be noticed`);
-  else if (cohort.ledger.status === 'missing' && toAnalyze.length + cohort.ledgerDisagreements.length > 0) cohort.blockers.push('the assignment list is missing though sessions of the experiment exist: a lost session cannot be noticed');
-  if (ledger !== undefined) {
-    for (const unresolved of unresolvedIntents(ledger.lines)) {
-      if (byTag.has(unresolved.intent.tag) || unresolved.intent.name !== options.trial) continue;
-      if (cutoffMs !== null && ms(unresolved.intent.at) >= cutoffMs) {
-        cohort.assignedAfterCutoff.push(`tag ${unresolved.intent.tag}`);
-        continue;
-      }
-      cohort.sessions.push(lostSession(unresolved.intent, unresolved.confirm));
-    }
-    for (const line of ledger.lines) if (line.kind === 'intent' && line.name !== options.trial) foreignIntents += byTag.has(line.tag) ? 0 : 1;
-  }
-  if (foreignIntents > 0) cohort.blockers.push(`${foreignIntents} intent line(s) in the list of this experiment name another experiment`);
+  else if (cohort.ledger.status === 'missing' && reconciled.counted.length + reconciled.conflicts.length > 0) cohort.blockers.push('the assignment list is missing though sessions of the experiment exist: a lost session cannot be noticed');
+  if (reconciled.foreignTags > 0) cohort.blockers.push(`${reconciled.foreignTags} tag(s) in the list of this experiment name another experiment`);
   if (cohort.missingIntents.length > 0) cohort.blockers.push(`${cohort.missingIntents.length} session(s) of the experiment have no intent line in the assignment list`);
-  if (cohort.ledgerDisagreements.length > 0) cohort.blockers.push(`${cohort.ledgerDisagreements.length} record(s) whose name, arm or time of assignment differ between the record, the trace and the list (treated as a damaged assignment; one tag found in several places is checked the same way)`);
+  if (reconciled.conflicts.length > 0) {
+    const kinds = [...new Set(reconciled.conflicts.flatMap((conflict) => conflict.reasons))].sort();
+    cohort.blockers.push(`${reconciled.conflicts.length} tag(s) whose sources contradict each other (${kinds.join(', ')}); treated as a damaged assignment`);
+  }
   if (cohort.damagedWorks.length > 0) cohort.blockers.push(`${cohort.damagedWorks.length} work(s) with a damaged trial trace or assignment`);
   return cohort;
 }
@@ -1378,6 +1438,7 @@ export function buildReport(options: Options, cohort: Cohort, retention: Retenti
       unreadableWorks: cohort.unreadableWorks,
       ledger: cohort.ledger,
       ledgerDisagreements: cohort.ledgerDisagreements,
+      conflicts: cohort.conflicts,
       missingIntents: cohort.missingIntents,
       blockers: cohort.blockers,
       tracedSessions: cohort.tracedSessions,

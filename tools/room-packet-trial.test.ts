@@ -963,7 +963,7 @@ describe('item 24: the cohort is the union of records, traces of deleted session
     return { built, result };
   }
   interface CohortJson {
-    sessions: number; tracedSessions: number; blockers: string[]; damagedWorks: string[]; ledgerDisagreements: string[]; missingIntents: string[];
+    sessions: number; tracedSessions: number; blockers: string[]; conflicts: Array<{ tag: string; labels: string[]; reasons: string[] }>; damagedWorks: string[]; ledgerDisagreements: string[]; missingIntents: string[];
     ledger: { status: string; error: string | null; unreadableLines: number[]; intents: number; cancelled: number; confirmed: number };
   }
   const cohortOf = (result: Run): CohortJson => result.json['cohort'] as CohortJson;
@@ -1010,7 +1010,7 @@ describe('item 24: the cohort is the union of records, traces of deleted session
   it('a cancelled intent is not a lost session; a confirm line that names other numbers does not matter — the tag decides', async () => {
     const cancelled = JSON.stringify({ kind: 'intent', tag: 'e'.repeat(32), name: 'exp-a', arm: 'packet', at: T09 }) + '\n' + JSON.stringify({ kind: 'cancel', tag: 'e'.repeat(32), at: T09 }) + '\n';
     const renumbered = JSON.stringify({ kind: 'confirm', tag: '1'.padStart(32, '0'), projectPath: '/elsewhere', workId: 'w-9999', incarnation: 7, sessionId: 's-99', at: T09 }) + '\n';
-    const { result } = await pair({ ledgerRaw: cancelled + renumbered });
+    const { result } = await pair({ ledgerUnconfirmed: [0], ledgerRaw: cancelled + renumbered });
     expect(cohortOf(result)).toMatchObject({ sessions: 2, blockers: [] });
     expect(unknownOf(result)).toEqual([]);
   });
@@ -1019,7 +1019,7 @@ describe('item 24: the cohort is the union of records, traces of deleted session
     for (const extra of [{ ledgerOtherArm: [0] }, { ledgerCancelled: [1] }] as Array<Partial<HomeSpec>>) {
       const { result } = await pair(extra);
       expect(cohortOf(result).ledgerDisagreements).toHaveLength(1);
-      expect(cohortOf(result).blockers.join(' ')).toContain('differ between the record, the trace and the list');
+      expect(cohortOf(result).blockers.join(' ')).toContain('contradict each other');
       expect(result.json['verdict']).toBe('undetermined');
       expect(result.json['bounds']).toBeNull();
     }
@@ -1151,6 +1151,100 @@ describe('item 24: the cohort is the union of records, traces of deleted session
     const early = await pair({ lostIntents: [{ arm: 'packet', at: '2026-11-20T12:00:00.000Z' }] });
     expect(cohortOf(early.result).sessions).toBe(3);
     expect(early.result.json['verdict']).toBe('undetermined');
+  });
+
+  describe('31 (class rule): everything about one tag is gathered and checked before anything is chosen', () => {
+    const TAG0 = '1'.padStart(32, '0');
+    const row = (fields: Record<string, unknown>): string => `${JSON.stringify(fields)}\n`;
+    const intent = (arm: 'packet' | 'control', extra: Record<string, unknown> = {}): string => row({ kind: 'intent', tag: TAG0, name: 'exp-a', arm, at: T09, ...extra });
+    const confirm = (extra: Record<string, unknown> = {}): string =>
+      row({ kind: 'confirm', tag: TAG0, projectPath: '/p', workId: 'w-0001', incarnation: 1, sessionId: 's-01', at: T09, ...extra });
+    const blocked = (result: Run, reason: string): void => {
+      expect(cohortOf(result).conflicts.flatMap((conflict) => conflict.reasons)).toContain(reason);
+      expect(result.json['verdict']).toBe('undetermined');
+      expect(result.json['bounds']).toBeNull();
+    };
+
+    it('a contradicting intent first or last gives the same answer: 12 and 12 sessions, the verdict flips to undetermined either way', async () => {
+      const make = async (extra: Partial<HomeSpec>): Promise<Run> => {
+        const sessions: HomeSpec['sessions'] = Array.from({ length: 24 }, (_, i) => ({ arm: i < 12 ? 'packet' : 'control', claudeId: `claude-${i}` }));
+        const built = await buildHome({
+          root: freshRoot(), sessions, rooms: [{ members: sessions.map((_, i) => ({ session: i, from: T09 })) }], ...extra,
+        });
+        sessions.forEach((entry, i) => {
+          const builder = new TranscriptBuilder(`claude-${i}`, START).prompt().at(60).boundary();
+          if (entry.arm === 'packet') builder.packet(900);
+          const error = entry.arm === 'control' ? i - 12 < 9 : i < 3;
+          writeTranscript(built, `claude-${i}`, builder.calls(3).call({ result: error ? 'error' : 'ok' }).text());
+        });
+        return run(built, '--final');
+      };
+      expect((await make({})).json['verdict']).toBe('supports');
+      for (const extra of [{ ledgerPrefix: intent('control') }, { ledgerRaw: intent('control') }]) {
+        const result = await make(extra);
+        blocked(result, 'intents differ');
+      }
+    });
+
+    it('intents of one tag that agree in name, arm and time are one intent however often they repeat', async () => {
+      const { result } = await pair({ ledgerPrefix: intent('packet') + intent('packet'), ledgerRaw: intent('packet') });
+      expect(cohortOf(result)).toMatchObject({ sessions: 2, conflicts: [], blockers: [] });
+    });
+
+    it('intents that differ in the name or the time differ as well; a trace is compared with every intent', async () => {
+      for (const extra of [{ name: 'exp-other' }, { at: '2026-11-19T09:00:00.000Z' }]) {
+        blocked((await pair({ ledgerRaw: intent('packet', extra) })).result, 'intents differ');
+        blocked((await pair({ ledgerPrefix: intent('packet', extra) })).result, 'intents differ');
+      }
+      for (const extra of [{ ledgerPrefix: intent('control') }, { ledgerRaw: intent('control') }]) {
+        const traced = await pair({ deleteSessions: [0], ...extra });
+        blocked(traced.result, 'record differs from an intent');
+      }
+    });
+
+    it('confirms must name one work, one creation number and one session; equal repeats are one confirm', async () => {
+      for (const other of [{ workId: 'w-0002' }, { incarnation: 2 }, { sessionId: 's-02' }, { projectPath: '/elsewhere' }]) {
+        blocked((await pair({ ledgerUnconfirmed: [0], ledgerRaw: confirm() + confirm(other) })).result, 'confirms differ');
+        blocked((await pair({ ledgerUnconfirmed: [0], ledgerPrefix: '', ledgerRaw: confirm(other) + confirm() })).result, 'confirms differ');
+      }
+      const same = await pair({ ledgerUnconfirmed: [0], ledgerRaw: confirm() + confirm() });
+      expect(cohortOf(same.result)).toMatchObject({ sessions: 2, conflicts: [], blockers: [] });
+    });
+
+    it('a cancel next to a confirm, a record or a trace is a contradiction, whichever comes first', async () => {
+      const cancel = row({ kind: 'cancel', tag: TAG0, at: T09 });
+      // the confirm line is already there (written by the fixture)
+      blocked((await pair({ ledgerRaw: cancel })).result, 'cancel next to a confirm, a record or a trace');
+      blocked((await pair({ ledgerPrefix: cancel })).result, 'cancel next to a confirm, a record or a trace');
+      // a cancel next to a record only
+      blocked((await pair({ ledgerCancelled: [0] })).result, 'cancel next to a confirm, a record or a trace');
+      // a cancel next to a trace only
+      blocked((await pair({ deleteSessions: [0], ledgerCancelled: [0] })).result, 'cancel next to a confirm, a record or a trace');
+      // a cancel next to a confirm alone (no record, no trace)
+      const lostTag = `f${'1'.padStart(31, '0')}`;
+      blocked(
+        (await pair({ lostIntents: [{ arm: 'packet', confirm: { workId: 'w-0001', sessionId: 's-77' } }], ledgerRaw: row({ kind: 'cancel', tag: lostTag, at: T09 }) })).result,
+        'cancel next to a confirm, a record or a trace',
+      );
+      // a cancel next to nothing else is fine
+      const clean = await pair({ ledgerRaw: intent('packet', { tag: 'c'.repeat(32) }) + row({ kind: 'cancel', tag: 'c'.repeat(32), at: T09 }) });
+      expect(cohortOf(clean.result)).toMatchObject({ sessions: 2, conflicts: [], blockers: [] });
+    });
+
+    it('a cancel or a confirm without an intent makes the list inconsistent', async () => {
+      const orphanCancel = row({ kind: 'cancel', tag: 'd'.repeat(32), at: T09 });
+      const orphanConfirm = row({ kind: 'confirm', tag: 'd'.repeat(32), projectPath: '/p', workId: 'w-0001', incarnation: 1, sessionId: 's-05', at: T09 });
+      for (const raw of [orphanCancel, orphanConfirm]) {
+        blocked((await pair({ ledgerRaw: raw })).result, 'cancel or confirm without an intent');
+        blocked((await pair({ ledgerPrefix: raw })).result, 'cancel or confirm without an intent');
+      }
+    });
+
+    it('a record is compared with each intent, not with a chosen one', async () => {
+      // the first intent agrees with the record, the second does not, the third agrees again
+      const result = (await pair({ ledgerRaw: intent('control') + intent('packet') })).result;
+      blocked(result, 'record differs from an intent');
+    });
   });
 });
 

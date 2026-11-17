@@ -214,6 +214,8 @@ export interface HomeSpec {
   duplicates?: Array<{ session: number; as: 'other-work' | 'trace'; arm?: 'packet' | 'control'; at?: string }>;
   /** Raw text appended to the list file (garbage, a torn line). */
   ledgerRaw?: string;
+  /** Raw text written to the list file before everything else (a contradicting line that comes first). */
+  ledgerPrefix?: string;
   /** Rooms (by index in `rooms`) and sessions (by index) deleted after creation through core's own functions. */
   deleteRooms?: number[];
   deleteSessions?: number[];
@@ -368,6 +370,10 @@ function writeLedger(spec: HomeSpec, home: string, project: string, workId: stri
     return;
   }
   const at = '2026-11-20T09:00:00.000Z';
+  if (spec.ledgerPrefix !== undefined) {
+    mkdirSync(path.dirname(trialLedgerFile('exp-a', home)), { recursive: true });
+    appendFileSync(trialLedgerFile('exp-a', home), spec.ledgerPrefix);
+  }
   spec.sessions.forEach((entry, index) => {
     if (entry.arm === null || entry.arm === 'damaged' || spec.ledgerSkip?.includes(index) === true) return;
     const name = entry.trialName ?? 'exp-a';
