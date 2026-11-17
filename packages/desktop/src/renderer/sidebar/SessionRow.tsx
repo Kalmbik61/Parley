@@ -334,7 +334,7 @@ export const SessionRow = memo(function SessionRow({
           ) : (
             <AgentStateDot state={state} lifecycle={session.lifecycle} />
           )}
-          <AgentIcon provider={session.provider} size={13} />
+          <AgentIcon provider={session.provider} size={13} sessionId={session.id} />
           {renaming ? (
             <span className="flex min-w-[12ch] flex-1 items-center gap-1.5">
               <span className={cn('shrink-0', selected && 'font-bold')}>{sessionTag(session.id)}</span>

@@ -59,7 +59,7 @@ export function ParticipantStrip({ participants, onOpenSession, onOpenPlan, cont
     const header = (
       <span className="flex w-full min-w-0 items-center gap-1.5 text-xs">
         <AgentStateDot state={participant.state} lifecycle={participant.lifecycle} />
-        <AgentIcon provider={participant.provider} size={14} />
+        <AgentIcon provider={participant.provider} size={14} sessionId={participant.id} />
         <span className="min-w-[5ch] flex-1 truncate font-semibold">{participant.label}</span>
         <RoleChip {...(participant.cwd ? { cwd: participant.cwd } : {})} role={participant.role} {...(participant.sessionRef ? { sessionRef: participant.sessionRef } : {})} />
         {participant.lead ? (
