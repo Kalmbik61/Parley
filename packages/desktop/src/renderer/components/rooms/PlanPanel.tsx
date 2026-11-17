@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import type {
-  CheckResult,
   PlanCheckpoint,
   PlanItem,
   RoomMode,
@@ -28,6 +27,7 @@ import { useHostStore } from "../../store/host.js";
 import { badgeVariants } from "../../ui/badge.js";
 import { Button } from "../../ui/button.js";
 import { Textarea } from "../../ui/textarea.js";
+import { checkLine, lastAttempt, latestAttemptCheck } from "./latest-attempt-check.js";
 import { PlanHaltBadge } from "./PlanChip.js";
 
 const P = S.plans;
@@ -464,16 +464,9 @@ export function PlanSummary({
           const session = entry?.map.sessions.find(
             (session) => session.id === item.owner,
           );
-          const attempt = plan.mode === "autonomous"
-            ? plan.autonomous?.attempts.filter((row) => row.item === item.id).sort((a, b) => b.n - a.n)[0]
-            : undefined;
-          const check = attempt ? plan.autonomous?.ops
-            .filter((op) => op.kind === "check" && op.state === "done")
-            .map((op) => op.result?.checkResult as CheckResult | undefined)
-            .filter((row): row is CheckResult => !!row && row.attemptId === attempt.id && attempt.checks.includes(row.id))
-            .sort((a, b) => a.at.localeCompare(b.at)).at(-1) : undefined;
-          const summary = check?.summary.replace(/\s+/g, " ") ?? "";
-          const verdict = check ? `${check.specId} → ${check.verdict} · ${summary.slice(0, 160)}${summary.length > 160 ? "…" : ""}` : "";
+          const attempt = lastAttempt(plan, item.id);
+          const check = attempt ? latestAttemptCheck(plan, attempt) : undefined;
+          const verdict = checkLine(check);
           const satisfied = planItemSatisfied(plan, item);
           const duties = working ? planItemDuties(plan, item, liveLeadId, entry && room ? roomVerifierUnavailable(entry.map, room, item.verifier) : false) : [];
           const submission = planSubmission(item);
