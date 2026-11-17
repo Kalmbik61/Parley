@@ -4,13 +4,15 @@
  * transcript or a real home.
  */
 
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { addSession } from '../../../packages/core/src/work/map.js';
-import { addRoom } from '../../../packages/core/src/work/rooms.js';
+import { addRoom, deleteRoom } from '../../../packages/core/src/work/rooms.js';
+import { removeSession } from '../../../packages/core/src/work/map.js';
+import { appendTrialLedger, trialLedgerFile } from '../../../packages/core/src/work/trial-ledger.js';
 import { closeWorkDb } from '../../../packages/core/src/work/db.js';
 import { createWork, updateMap, workPaths } from '../../../packages/core/src/work/store.js';
-import type { AgentBinding, SessionTrial, WorkSession } from '../../../packages/core/src/work/types.js';
+import type { AgentBinding, SessionTrial, TrialTrace, WorkSession } from '../../../packages/core/src/work/types.js';
 
 export const CALL_ERROR_TEXT = 'InputValidationError: field "path" is required and must be a string';
 
@@ -193,7 +195,35 @@ export interface HomeSpec {
   root: string;
   sessions: SessionSpec[];
   rooms: RoomSpec[];
+  /** Assignment list: `auto` (default) writes an intent and a confirm line per assigned session; `none` writes no file; `directory` puts a directory where the file should be. */
+  ledger?: 'auto' | 'none' | 'directory';
+  /** Sessions (by index) with no intent line in the list. */
+  ledgerSkip?: number[];
+  /** Sessions whose intent line names the other arm. */
+  ledgerOtherArm?: number[];
+  /** Sessions whose tag the list calls cancelled. */
+  ledgerCancelled?: number[];
+  /** Sessions with an intent but no confirm line. */
+  ledgerUnconfirmed?: number[];
+  /** Intents of sessions that never reached a map: lost sessions; `confirm` adds a confirm line naming a work and a session. */
+  lostIntents?: Array<{ arm: 'packet' | 'control'; confirm?: { workId: string; sessionId: string } }>;
+  /** Raw text appended to the list file (garbage, a torn line). */
+  ledgerRaw?: string;
+  /** Rooms (by index in `rooms`) and sessions (by index) deleted after creation through core's own functions. */
+  deleteRooms?: number[];
+  deleteSessions?: number[];
+  /** Delete sessions first, rooms after (default: rooms first). */
+  sessionsFirst?: boolean;
+  /** Put a damaged record into the trial trace. */
+  traceDamage?: boolean;
 }
+
+/** Time of every deletion in the fixtures: after the fixture transcripts, so closed rows of deleted rooms stay ordered. */
+export const DELETED_AT = '2026-11-22T00:00:00.000Z';
+
+/** Deterministic assignment tag of the session at `index` (32 hex digits). */
+export const tagOf = (index: number): string => (index + 1).toString(16).padStart(32, '0');
+const lostTagOf = (index: number): string => `f${(index + 1).toString(16).padStart(31, '0')}`;
 
 export interface BuiltHome {
   home: string;
@@ -230,6 +260,7 @@ export async function buildHome(spec: HomeSpec): Promise<BuiltHome> {
   try {
     const work = await createWork(project, { title: 'fixture work' });
     const ids: string[] = [];
+    const roomIds: string[] = [];
     await updateMap(project, work.work.id, (map) => {
       for (const [index, entry] of spec.sessions.entries()) {
         const session: WorkSession = addSession(map, { provider: 'claude', label: `s${index}`, task: '', parent: null }, '2026-11-20T09:00:00.000Z');
@@ -246,7 +277,7 @@ export async function buildHome(spec: HomeSpec): Promise<BuiltHome> {
         if (previous.length > 0) session.previousAgents = previous;
         if (entry.arm === 'damaged') session.trial = { damaged: true };
         else if (entry.arm !== null) {
-          const trial: SessionTrial = { name: entry.trialName ?? 'exp-a', arm: entry.arm, at: entry.assignedAt ?? '2026-11-20T09:00:00.000Z' };
+          const trial: SessionTrial = { name: entry.trialName ?? 'exp-a', arm: entry.arm, at: entry.assignedAt ?? '2026-11-20T09:00:00.000Z', tag: tagOf(index) };
           session.trial = trial;
         }
       }
@@ -254,13 +285,27 @@ export async function buildHome(spec: HomeSpec): Promise<BuiltHome> {
         const at = roomSpec.createdAt ?? '2026-11-20T09:00:00.000Z';
         const members = roomSpec.members.map((member) => ids[member.session]!);
         const room = addRoom(map, { title: 'fixture room', creator: 'human', members: [] }, at);
+        roomIds.push(room.id);
         room.members = [...new Set(members)];
         room.lead = null;
         if (roomSpec.journal === false) delete room.memberLog;
         else room.memberLog = roomSpec.members.map((member) => ({ session: ids[member.session]!, from: member.from, to: member.to ?? null }));
       }
     });
+    if ((spec.deleteRooms?.length ?? 0) > 0 || (spec.deleteSessions?.length ?? 0) > 0 || spec.traceDamage === true) {
+      await updateMap(project, work.work.id, (map, letters) => {
+        const rooms = (): void => { for (const index of spec.deleteRooms ?? []) deleteRoom(map, letters, roomIds[index]!, DELETED_AT); };
+        const sessions = (): void => { for (const index of spec.deleteSessions ?? []) removeSession(map, letters, ids[index]!, DELETED_AT); };
+        if (spec.sessionsFirst === true) { sessions(); rooms(); } else { rooms(); sessions(); }
+        if (spec.traceDamage === true) {
+          const trace: TrialTrace = map.work.trialTrace ?? { sessions: [], rooms: [], unknownParticipation: [] };
+          trace.sessions.push({ damaged: true });
+          map.work.trialTrace = trace;
+        }
+      });
+    }
     closeWorkDb();
+    writeLedger(spec, home, project, work.work.id, ids);
     const eventsDir = workPaths(project, work.work.id).events;
     mkdirSync(eventsDir, { recursive: true });
     return { home, project, claudeRoot, workId: work.work.id, ids, eventsDir };
@@ -283,4 +328,32 @@ export function writeTranscript(built: BuiltHome, id: string, text: string): str
 /** Appends hook-journal lines for a session. */
 export function writeJournal(built: BuiltHome, sessionId: string, lines: Array<Record<string, unknown>>): void {
   writeFileSync(path.join(built.eventsDir, `${sessionId}.jsonl`), `${lines.map((line) => JSON.stringify(line)).join('\n')}\n`);
+}
+
+/** The assignment list of the fixture home, written through core's own append function. */
+function writeLedger(spec: HomeSpec, home: string, project: string, workId: string, ids: string[]): void {
+  if (spec.ledger === 'none') return;
+  const names = new Set(spec.sessions.flatMap((entry) => (entry.arm === null || entry.arm === 'damaged' ? [] : [entry.trialName ?? 'exp-a'])));
+  if (spec.ledger === 'directory') {
+    for (const name of names) mkdirSync(trialLedgerFile(name, home), { recursive: true });
+    return;
+  }
+  const at = '2026-11-20T09:00:00.000Z';
+  spec.sessions.forEach((entry, index) => {
+    if (entry.arm === null || entry.arm === 'damaged' || spec.ledgerSkip?.includes(index) === true) return;
+    const name = entry.trialName ?? 'exp-a';
+    const arm = spec.ledgerOtherArm?.includes(index) === true ? (entry.arm === 'packet' ? 'control' : 'packet') : entry.arm;
+    appendTrialLedger(name, { kind: 'intent', tag: tagOf(index), name, arm, at: entry.assignedAt ?? at }, home);
+    if (spec.ledgerCancelled?.includes(index) === true) appendTrialLedger(name, { kind: 'cancel', tag: tagOf(index), at }, home);
+    else if (spec.ledgerUnconfirmed?.includes(index) !== true) {
+      appendTrialLedger(name, { kind: 'confirm', tag: tagOf(index), projectPath: project, workId, incarnation: 1, sessionId: ids[index]!, at }, home);
+    }
+  });
+  (spec.lostIntents ?? []).forEach((lost, index) => {
+    appendTrialLedger('exp-a', { kind: 'intent', tag: lostTagOf(index), name: 'exp-a', arm: lost.arm, at }, home);
+    if (lost.confirm !== undefined) {
+      appendTrialLedger('exp-a', { kind: 'confirm', tag: lostTagOf(index), projectPath: project, workId: lost.confirm.workId, incarnation: 1, sessionId: lost.confirm.sessionId, at }, home);
+    }
+  });
+  if (spec.ledgerRaw !== undefined) appendFileSync(trialLedgerFile('exp-a', home), spec.ledgerRaw);
 }

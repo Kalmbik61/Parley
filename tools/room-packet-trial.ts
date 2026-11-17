@@ -22,11 +22,12 @@ import { pathToFileURL } from 'node:url';
 import { claudeProjectRoots, findClaudeSessionFile } from '../packages/core/src/discover.js';
 import { parleyHome } from '../packages/core/src/home.js';
 import { WORK_DB_FILE, closeWorkDb } from '../packages/core/src/work/db.js';
-import { PREVIOUS_AGENTS_MAX } from '../packages/core/src/work/agent-switch.js';
 import { mapLetterTx } from '../packages/core/src/work/letter-store.js';
 import { roomMembership } from '../packages/core/src/work/room-membership.js';
 import { forgetParleyHome, readStoredMap, readWorksIndex, workPaths } from '../packages/core/src/work/store.js';
-import { isDamagedTrial, type WindowWorkMap, type WorkSession } from '../packages/core/src/work/types.js';
+import { isDamagedTrace, trialSegments, trialUnknownParticipation, workHasTrialDamage, type TrialSegmentSource } from '../packages/core/src/work/trial-trace.js';
+import { readTrialLedger, unresolvedIntents, type TrialConfirmLine, type TrialIntentLine, type TrialLedger } from '../packages/core/src/work/trial-ledger.js';
+import { isDamagedTrial, type SessionTrial, type TrialSessionTrace, type WindowWorkMap, type WorkSession } from '../packages/core/src/work/types.js';
 import { PACKET_BRIDGE_EVENT, ROOM_PACKET_EVENT } from '../packages/core/src/work/events.js';
 
 /** `node:sqlite` through `require`, as core does: Vite 5 under vitest cannot resolve a bare `node:`-only module name. */
@@ -428,7 +429,7 @@ export function parseJournal(text: string | null): JournalFacts {
 // ---------------------------------------------------------------------------------------------------------------------
 
 export type RoomClass = 'in' | 'out' | 'approx';
-export type UnknownReason = 'missing-transcript' | 'truncated-transcript' | 'incomplete-history' | 'approximate-membership' | 'untimed-boundary';
+export type UnknownReason = 'missing-transcript' | 'truncated-transcript' | 'incomplete-history' | 'approximate-membership' | 'untimed-boundary' | 'lost-session';
 
 export interface Period { from: number; to: number }
 
@@ -447,7 +448,11 @@ export interface SessionFacts {
   arm: Arm;
   assignedAt: string;
   /** How the transcript side was settled. */
-  transcript: 'found' | 'not-launched' | 'history-incomplete' | 'no-conversation' | 'missing-not-member' | 'missing';
+  transcript: 'found' | 'not-launched' | 'history-incomplete' | 'no-conversation' | 'missing-not-member' | 'missing' | 'lost';
+  /** Where the session comes from: a live map record, the trace of a deleted session, or only the assignment list (lost). */
+  origin: 'record' | 'trace' | 'ledger';
+  /** Assignment tag: the key the three sources are matched by. */
+  tag: string;
   unknownReasons: UnknownReason[];
   compactions: Array<CompactionFacts & { room: RoomClass }>;
   windows: Array<WindowFacts & { room: RoomClass }>;
@@ -461,8 +466,18 @@ export interface SessionFacts {
   journal: JournalFacts;
 }
 
+/** What the calculation needs of a session: a live record and the trace of a deleted session both fit. */
+export interface SessionSubject extends TrialSegmentSource {
+  id: string;
+  trial?: WorkSession['trial'];
+  result?: unknown;
+  resultAt?: string | null;
+}
+
 export interface SessionInput {
-  session: WorkSession;
+  session: SessionSubject;
+  /** The session was deleted: only its trace is left, its hook journal is not available. */
+  deleted?: boolean;
   workId: string;
   membership: Membership;
   hasMessages: boolean;
@@ -471,25 +486,11 @@ export interface SessionInput {
   cutoffMs: number | null;
 }
 
-/** Claude ids in order and the history-completeness verdict (plan E-2 items 2 and 22). */
-export function claudeIds(session: WorkSession): { ids: string[]; incomplete: boolean } {
-  const ids: string[] = [];
-  let incomplete = (session.previousAgents?.length ?? 0) >= PREVIOUS_AGENTS_MAX;
-  let lastEnded: string | null = null;
-  for (const binding of session.previousAgents ?? []) {
-    if (lastEnded === null || binding.endedAt > lastEnded) lastEnded = binding.endedAt;
-    if (binding.provider !== 'claude') continue;
-    if (binding.providerSessionId !== null) ids.push(binding.providerSessionId);
-    else if (binding.startedAt !== null) incomplete = true;
-  }
-  if (session.provider === 'claude') {
-    if (session.providerSessionId !== null) ids.push(session.providerSessionId);
-    else if (session.history.some((entry) => entry.event === 'active' && (lastEnded === null || entry.at > lastEnded))) {
-      // The current claude segment was started (the session went active after the last switch) but has no id: not "never launched".
-      incomplete = true;
-    }
-  }
-  return { ids: [...new Set(ids)], incomplete };
+/** Claude ids in order and the history-completeness verdict (plan E-2 items 2, 22 and 26): the one segment parser of core. */
+export function claudeIds(session: TrialSegmentSource): { ids: string[]; incomplete: boolean } {
+  const parsed = trialSegments(session);
+  const ids = parsed.segments.flatMap((segment) => (segment.provider === 'claude' && segment.providerSessionId !== null ? [segment.providerSessionId] : []));
+  return { ids: [...new Set(ids)], incomplete: parsed.truncated || parsed.missingId };
 }
 
 /**
@@ -542,6 +543,7 @@ export function analyzeSession(input: SessionInput): SessionFacts {
   const trial = session.trial;
   if (trial === undefined || isDamagedTrial(trial)) throw new Error('analyzeSession needs an assigned session');
   const { ids, incomplete } = claudeIds(session);
+  const deleted = input.deleted === true;
   const unknown = new Set<UnknownReason>();
   if (incomplete) unknown.add('incomplete-history');
 
@@ -551,7 +553,7 @@ export function analyzeSession(input: SessionInput): SessionFacts {
     if (file.text === null) missing = true;
     else files.push(readTranscriptText(file.text, cutoffMs));
   }
-  const trace = input.journal.turnTrace || session.result !== null || session.resultAt !== null || input.hasMessages;
+  const trace = input.journal.turnTrace || (session.result ?? null) !== null || (session.resultAt ?? null) !== null || input.hasMessages;
   // Plan E-2 item 21 (as changed after m-8548): a missing file makes the number of windows unknown only for a session that was
   // ever a room member (a journal entry or a rebuilt entry). A session that was never in a room has no main-calculation window
   // by definition, whether its transcript exists or not; "no conversation" is only a diagnostic line.
@@ -590,6 +592,8 @@ export function analyzeSession(input: SessionInput): SessionFacts {
     arm: trial.arm,
     assignedAt: trial.at,
     transcript,
+    origin: deleted ? 'trace' : 'record',
+    tag: trial.tag,
     unknownReasons: [...unknown],
     compactions,
     windows,
@@ -752,6 +756,8 @@ export interface FinalInput {
   cohort: readonly SessionFacts[];
   damagedSessions: number;
   unreadableWorks: number;
+  /** Other reasons found while reading the sources (assignment list, damaged traces): each one blocks the calculation. */
+  blockers?: readonly string[];
   seed: number;
   resamples: number;
 }
@@ -761,6 +767,7 @@ export function computeFinal(input: FinalInput): FinalResult {
   const reasons: string[] = [];
   if (input.damagedSessions > 0) reasons.push(`${input.damagedSessions} session(s) with a damaged assignment in the home`);
   if (input.unreadableWorks > 0) reasons.push(`${input.unreadableWorks} work(s) of the home could not be read`);
+  reasons.push(...(input.blockers ?? []));
   const unknownSessions = input.cohort.filter((session) => session.unknownReasons.length > 0);
   if (unknownSessions.length > 0) {
     reasons.push(`${unknownSessions.length} session(s) with an unknown number of windows`);
@@ -844,6 +851,8 @@ export interface ArmSummary {
   sessions: number;
   sessionsWithWindow: number;
   notLaunched: number;
+  sessionsFromTrace: number;
+  sessionsLost: number;
   noConversation: number;
   missingNotMember: number;
   transcriptMissing: number;
@@ -897,6 +906,8 @@ export function summarizeArm(sessions: readonly SessionFacts[]): ArmSummary {
     sessions: sessions.length,
     sessionsWithWindow: sessions.filter((session) => session.unknownReasons.length === 0 && session.windows.some((window) => window.room === 'in' && window.outcome !== 'empty')).length,
     notLaunched: sessions.filter((session) => session.transcript === 'not-launched').length,
+    sessionsFromTrace: sessions.filter((session) => session.origin === 'trace').length,
+    sessionsLost: sessions.filter((session) => session.origin === 'ledger').length,
     noConversation: sessions.filter((session) => session.transcript === 'no-conversation').length,
     missingNotMember: sessions.filter((session) => session.transcript === 'missing-not-member').length,
     transcriptMissing: sessions.filter((session) => session.unknownReasons.includes('missing-transcript')).length,
@@ -976,9 +987,22 @@ export interface Options {
   resamples: number;
 }
 
+/** The assignment list of the experiment (plan E-2 item 24), read from the real home, read-only. */
+export interface LedgerState {
+  /** `missing`: no file; `unreadable`: the file could not be read at all; `ok`: read (lines may still be unreadable). */
+  status: 'ok' | 'missing' | 'unreadable';
+  error: string | null;
+  unreadableLines: number[];
+  intents: number;
+  cancelled: number;
+  confirmed: number;
+}
+
 export interface Cohort {
   sessions: SessionFacts[];
   damagedSessions: string[];
+  /** Works whose trial trace or assignments are damaged: the absence of a record cannot be proven there. */
+  damagedWorks: string[];
   unreadableWorks: string[];
   otherTrialSessions: number;
   assignedAfterCutoff: string[];
@@ -986,6 +1010,15 @@ export interface Cohort {
   lastAssignment: string | null;
   worksRead: number;
   snapshotAttempts: number;
+  ledger: LedgerState;
+  /** Sessions whose arm in the list and in the map differ, or whose tag the list calls cancelled: treated like a damaged assignment. */
+  ledgerDisagreements: string[];
+  /** Sessions of the experiment with no intent line in an existing list. */
+  missingIntents: string[];
+  /** Reasons that stop the final calculation, found while reading the sources. */
+  blockers: string[];
+  /** Sessions known only from the trace of a deleted session. */
+  tracedSessions: number;
 }
 
 const readIfExists = async (file: string): Promise<string | null> => {
@@ -996,7 +1029,14 @@ const readIfExists = async (file: string): Promise<string | null> => {
   }
 };
 
-function membershipOf(map: WindowWorkMap, sessionId: string): Membership {
+const WHOLE_TIME: Period = { from: Number.NEGATIVE_INFINITY, to: Number.POSITIVE_INFINITY };
+
+/**
+ * Where a session stood in rooms. Exact: the journal of live rooms and the rows kept when a room was deleted. Not exact (the
+ * whole session becomes unknown): a room without a journal, a "participation unknown" mark of a deleted room or session,
+ * a damaged trace in the work.
+ */
+export function membershipOf(map: WindowWorkMap, sessionId: string): Membership {
   const membership: Membership = { exact: [], approx: [] };
   const period = (from: string, to: string | null): Period => ({ from: ms(from), to: to === null ? Number.POSITIVE_INFINITY : ms(to) });
   const letters = mapLetterTx(map).letters;
@@ -1012,10 +1052,17 @@ function membershipOf(map: WindowWorkMap, sessionId: string): Membership {
       if (room.members.includes(sessionId)) membership.approx.push(period(room.createdAt, null));
     }
   }
+  const trace = map.work.trialTrace;
+  if (trace !== undefined) {
+    for (const row of trace.rooms) if (!isDamagedTrace(row) && row.session === sessionId) membership.exact.push(period(row.from, row.to));
+    if (trialUnknownParticipation(trace).some((pair) => pair.endsWith(`/${sessionId}`))) membership.approx.push(WHOLE_TIME);
+    const damaged = [...trace.rooms, ...trace.unknownParticipation].some(isDamagedTrace) || trace.sessions.some((entry) => isDamagedTrace(entry) || isDamagedTrial(entry.trial));
+    if (damaged) membership.approx.push(WHOLE_TIME);
+  }
   return membership;
 }
 
-/** Reads the cohort of the named experiment from a snapshot of the home. Nothing is written to the home. */
+/** Reads the cohort of the named experiment from a snapshot of the home and the assignment list of the real home. Nothing is written. */
 export async function collectCohort(options: Options): Promise<Cohort> {
   const cutoffMs = options.cutoff === null ? null : ms(options.cutoff);
   const snapshot = makeSnapshot(options.home);
@@ -1023,6 +1070,7 @@ export async function collectCohort(options: Options): Promise<Cohort> {
   const cohort: Cohort = {
     sessions: [],
     damagedSessions: [],
+    damagedWorks: [],
     unreadableWorks: [],
     otherTrialSessions: 0,
     assignedAfterCutoff: [],
@@ -1030,6 +1078,44 @@ export async function collectCohort(options: Options): Promise<Cohort> {
     lastAssignment: null,
     worksRead: 0,
     snapshotAttempts: snapshot.attempts,
+    ledger: { status: 'ok', error: null, unreadableLines: [], intents: 0, cancelled: 0, confirmed: 0 },
+    ledgerDisagreements: [],
+    missingIntents: [],
+    blockers: [],
+    tracedSessions: 0,
+  };
+  /** Every assignment found in the maps (records and traces), by tag. */
+  const found = new Map<string, { arm: Arm; name: string; label: string }>();
+  const seen = (trial: SessionTrial, label: string): void => {
+    cohort.firstAssignment = cohort.firstAssignment === null || trial.at < cohort.firstAssignment ? trial.at : cohort.firstAssignment;
+    cohort.lastAssignment = cohort.lastAssignment === null || trial.at > cohort.lastAssignment ? trial.at : cohort.lastAssignment;
+    found.set(trial.tag, { arm: trial.arm, name: trial.name, label });
+  };
+  const analyzeOne = async (workId: string, projectPath: string, map: WindowWorkMap, subject: SessionSubject & { trial: SessionTrial }, deleted: boolean): Promise<void> => {
+    const label = `${workId}/${subject.id}`;
+    if (cutoffMs !== null && ms(subject.trial.at) >= cutoffMs) {
+      cohort.assignedAfterCutoff.push(label);
+      return;
+    }
+    const transcriptFiles: SessionInput['transcriptFiles'] = [];
+    for (const id of claudeIds(subject).ids) {
+      const file = await findClaudeSessionFile(id, options.claudeRoots);
+      transcriptFiles.push({ id, text: file === null ? null : await readIfExists(file) });
+    }
+    // A deleted session's hook journal is gone with it: it is not looked for, and the output says so (not zero refusals).
+    const journalFile = path.join(workPaths(projectPath, workId).events, `${subject.id}.jsonl`);
+    cohort.sessions.push(
+      analyzeSession({
+        session: subject,
+        deleted,
+        workId,
+        membership: membershipOf(map, subject.id),
+        hasMessages: map.messages.some((message) => message.from === subject.id),
+        journal: deleted ? parseJournal(null) : parseJournal(await readIfExists(journalFile)),
+        transcriptFiles,
+        cutoffMs,
+      }),
+    );
   };
   try {
     process.env['PARLEY_HOME'] = snapshot.dir;
@@ -1045,6 +1131,7 @@ export async function collectCohort(options: Options): Promise<Cohort> {
         continue;
       }
       cohort.worksRead += 1;
+      if (workHasTrialDamage(map)) cohort.damagedWorks.push(entry.id);
       for (const session of map.sessions) {
         const trial = session.trial;
         if (trial === undefined) continue;
@@ -1056,30 +1143,19 @@ export async function collectCohort(options: Options): Promise<Cohort> {
           cohort.otherTrialSessions += 1;
           continue;
         }
-        if (cohort.firstAssignment === null || trial.at < cohort.firstAssignment) cohort.firstAssignment = trial.at;
-        if (cohort.lastAssignment === null || trial.at > cohort.lastAssignment) cohort.lastAssignment = trial.at;
-        if (cutoffMs !== null && ms(trial.at) >= cutoffMs) {
-          cohort.assignedAfterCutoff.push(`${entry.id}/${session.id}`);
+        seen(trial, `${entry.id}/${session.id}`);
+        await analyzeOne(entry.id, entry.projectPath, map, { ...session, trial }, false);
+      }
+      for (const trace of map.work.trialTrace?.sessions ?? []) {
+        if (isDamagedTrace(trace) || isDamagedTrial(trace.trial)) continue;
+        if (trace.trial.name !== options.trial) {
+          cohort.otherTrialSessions += 1;
           continue;
         }
-        const { ids } = claudeIds(session);
-        const transcriptFiles: SessionInput['transcriptFiles'] = [];
-        for (const id of ids) {
-          const file = await findClaudeSessionFile(id, options.claudeRoots);
-          transcriptFiles.push({ id, text: file === null ? null : await readIfExists(file) });
-        }
-        const journalFile = path.join(workPaths(entry.projectPath, entry.id).events, `${session.id}.jsonl`);
-        cohort.sessions.push(
-          analyzeSession({
-            session,
-            workId: entry.id,
-            membership: membershipOf(map, session.id),
-            hasMessages: map.messages.some((message) => message.from === session.id),
-            journal: parseJournal(await readIfExists(journalFile)),
-            transcriptFiles,
-            cutoffMs,
-          }),
-        );
+        const traced: TrialSessionTrace = trace;
+        seen(trace.trial, `${entry.id}/${trace.session} (deleted)`);
+        cohort.tracedSessions += 1;
+        await analyzeOne(entry.id, entry.projectPath, map, { ...traced, id: traced.session, trial: trace.trial }, true);
       }
     }
   } finally {
@@ -1089,7 +1165,72 @@ export async function collectCohort(options: Options): Promise<Cohort> {
     forgetParleyHome();
     snapshot.cleanup();
   }
+
+  // The assignment list (plan E-2 item 24): from the real home, read-only.
+  let ledger: TrialLedger | undefined;
+  try {
+    ledger = readTrialLedger(options.trial, options.home);
+  } catch (error) {
+    cohort.ledger = { ...cohort.ledger, status: 'unreadable', error: (error as Error).message };
+  }
+  if (ledger === undefined && cohort.ledger.status === 'ok') cohort.ledger = { ...cohort.ledger, status: 'missing' };
+  const counted = [...found.keys()].length;
+  if (cohort.ledger.status === 'unreadable') cohort.blockers.push(`the assignment list could not be read (${cohort.ledger.error}): a lost session cannot be noticed`);
+  else if (cohort.ledger.status === 'missing' && counted > 0) cohort.blockers.push('the assignment list is missing though sessions of the experiment exist: a lost session cannot be noticed');
+  if (ledger !== undefined) {
+    cohort.ledger = {
+      ...cohort.ledger,
+      unreadableLines: ledger.unreadable,
+      intents: ledger.lines.filter((line) => line.kind === 'intent').length,
+      cancelled: ledger.lines.filter((line) => line.kind === 'cancel').length,
+      confirmed: ledger.lines.filter((line) => line.kind === 'confirm').length,
+    };
+    if (ledger.unreadable.length > 0) cohort.blockers.push(`the assignment list has ${ledger.unreadable.length} unreadable line(s) (${ledger.unreadable.join(', ')}): a lost session cannot be noticed`);
+    const intentTags = new Map<string, TrialIntentLine>();
+    for (const line of ledger.lines) if (line.kind === 'intent') intentTags.set(line.tag, line);
+    const cancelledTags = new Set(ledger.lines.filter((line) => line.kind === 'cancel').map((line) => line.tag));
+    for (const [tag, record] of found) {
+      if (record.name !== options.trial) continue;
+      const intent = intentTags.get(tag);
+      if (intent === undefined) cohort.missingIntents.push(record.label);
+      else if (intent.arm !== record.arm || cancelledTags.has(tag)) cohort.ledgerDisagreements.push(record.label);
+    }
+    for (const unresolved of unresolvedIntents(ledger.lines)) {
+      if (found.has(unresolved.intent.tag)) continue;
+      if (cutoffMs !== null && ms(unresolved.intent.at) >= cutoffMs) {
+        cohort.assignedAfterCutoff.push(`tag ${unresolved.intent.tag}`);
+        continue;
+      }
+      cohort.sessions.push(lostSession(unresolved.intent, unresolved.confirm));
+    }
+    if (cohort.missingIntents.length > 0) cohort.blockers.push(`${cohort.missingIntents.length} session(s) of the experiment have no intent line in the assignment list`);
+    if (cohort.ledgerDisagreements.length > 0) cohort.blockers.push(`${cohort.ledgerDisagreements.length} session(s) whose arm in the list and in the map differ (treated as a damaged assignment)`);
+  }
+  if (cohort.damagedWorks.length > 0) cohort.blockers.push(`${cohort.damagedWorks.length} work(s) with a damaged trial trace or assignment`);
   return cohort;
+}
+
+/** A session the list names but neither a record nor a trace holds: its number of windows is unknown. */
+export function lostSession(intent: TrialIntentLine, confirm: TrialConfirmLine | undefined): SessionFacts {
+  return {
+    id: confirm?.sessionId ?? `tag:${intent.tag}`,
+    workId: confirm?.workId ?? '-',
+    arm: intent.arm,
+    assignedAt: intent.at,
+    transcript: 'lost',
+    origin: 'ledger',
+    tag: intent.tag,
+    unknownReasons: ['lost-session'],
+    compactions: [],
+    windows: [],
+    getMapPacketRequests: 0,
+    errorResults: 0,
+    matchingErrorResults: 0,
+    duplicatesMerged: 0,
+    filesRead: 0,
+    compactionsWholeFile: 0,
+    journal: parseJournal(null),
+  };
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -1136,12 +1277,19 @@ export function buildReport(options: Options, cohort: Cohort, retention: Retenti
   lines.push(`  Claude Code cleanupPeriodDays: ${retention.value} (${retention.source})${retention.warning ? ` - WARNING: below ${RETENTION_WARN_DAYS} days, transcripts of the experiment may be deleted before the final count` : ''}`);
   lines.push(`  sessions with a damaged assignment (whole home, not in the cohort): ${cohort.damagedSessions.length}${cohort.damagedSessions.length > 0 ? ` [${cohort.damagedSessions.join(', ')}]` : ''}`);
   lines.push(`  works that could not be read: ${cohort.unreadableWorks.length}${cohort.unreadableWorks.length > 0 ? ` [${cohort.unreadableWorks.join(', ')}]` : ''}`);
+  lines.push(`  works with a damaged trial trace or assignment: ${cohort.damagedWorks.length}${cohort.damagedWorks.length > 0 ? ` [${cohort.damagedWorks.join(', ')}]` : ''}`);
+  const ledger = cohort.ledger;
+  lines.push(
+    `  assignment list: ${ledger.status}${ledger.error === null ? '' : ` (${ledger.error})`}; intents ${ledger.intents}, cancelled ${ledger.cancelled}, confirmed ${ledger.confirmed}; unreadable lines ${ledger.unreadableLines.length}; sessions with no intent line ${cohort.missingIntents.length}; arm disagreements ${cohort.ledgerDisagreements.length}`,
+  );
   lines.push(`  sessions of other experiments (ignored): ${cohort.otherTrialSessions}; assigned at or after the cutoff (ignored): ${cohort.assignedAfterCutoff.length}`);
   lines.push('');
   lines.push(row('', 'packet', 'control'));
   const both = (label: string, pick: (summary: ArmSummary) => string | number): void => { lines.push(row(label, pick(summary.packet), pick(summary.control))); };
   both('sessions in the cohort', (s) => s.sessions);
   both('  not launched (no claude id)', (s) => s.notLaunched);
+  both('  from the trace of a deleted session (no hook journal)', (s) => s.sessionsFromTrace);
+  both('  lost: in the assignment list, no record and no trace (unknown)', (s) => s.sessionsLost);
   both('  without a conversation (id, no file, no trace, never in a room)', (s) => s.noConversation);
   both('  file missing, never in a room (zero windows, known)', (s) => s.missingNotMember);
   both('  room member with no transcript file (unknown)', (s) => s.transcriptMissing);
@@ -1175,7 +1323,13 @@ export function buildReport(options: Options, cohort: Cohort, retention: Retenti
     cohort: {
       sessions: cohort.sessions.length,
       damagedSessions: cohort.damagedSessions,
+      damagedWorks: cohort.damagedWorks,
       unreadableWorks: cohort.unreadableWorks,
+      ledger: cohort.ledger,
+      ledgerDisagreements: cohort.ledgerDisagreements,
+      missingIntents: cohort.missingIntents,
+      blockers: cohort.blockers,
+      tracedSessions: cohort.tracedSessions,
       otherTrialSessions: cohort.otherTrialSessions,
       assignedAfterCutoff: cohort.assignedAfterCutoff,
       worksRead: cohort.worksRead,
@@ -1194,6 +1348,7 @@ export function buildReport(options: Options, cohort: Cohort, retention: Retenti
       cohort: cohort.sessions,
       damagedSessions: cohort.damagedSessions.length,
       unreadableWorks: cohort.unreadableWorks.length,
+      blockers: cohort.blockers,
       seed: options.seed,
       resamples: options.resamples,
     });

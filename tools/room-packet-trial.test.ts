@@ -124,7 +124,7 @@ const MEMBER: Membership = { exact: [{ from: 0, to: Number.POSITIVE_INFINITY }],
 const sessionOf = (over: Partial<WorkSession> = {}): WorkSession =>
   ({
     id: 's-x', provider: 'claude', providerSessionId: 'c-x', previousAgents: undefined, history: [], closedAt: null, result: null, resultAt: null,
-    trial: { name: 'exp-a', arm: 'packet', at: T09 }, ...over,
+    trial: { name: 'exp-a', arm: 'packet', at: T09, tag: '1'.repeat(32) }, startedAt: START, endedAt: null, ...over,
   }) as unknown as WorkSession;
 
 const analyze = (text: string | null, over: Partial<WorkSession> = {}, options: { membership?: Membership; cutoff?: string | null; journal?: Parameters<typeof analyzeSession>[0]['journal'] } = {}): SessionFacts =>
@@ -327,7 +327,7 @@ const win = (outcome: WindowFacts['outcome'], over: Partial<WindowFacts> = {}): 
 });
 
 const fake = (arm: Arm, outcomes: Array<WindowFacts['outcome']>, over: Partial<SessionFacts> = {}): SessionFacts => ({
-  id: 's', workId: 'w', arm, assignedAt: T09, transcript: 'found', unknownReasons: [], compactions: [], windows: outcomes.map((o) => win(o)),
+  id: 's', workId: 'w', arm, assignedAt: T09, transcript: 'found', origin: 'record', tag: '0'.repeat(32), unknownReasons: [], compactions: [], windows: outcomes.map((o) => win(o)),
   getMapPacketRequests: 0, errorResults: 0, matchingErrorResults: 0, duplicatesMerged: 0, filesRead: 1, compactionsWholeFile: 0,
   journal: { present: false, sessionStartCompactLines: 0, bridgeOutcomes: {}, hostReasons: {}, turnTrace: false }, ...over,
 });
@@ -804,8 +804,6 @@ describe('command line', () => {
 
 // ---------------------------------------------------------------------------------------------------------------------
 describe('items 25-30: corrections after the first acceptance', () => {
-  const hist = (...events: Array<[string, string]>): WorkSession['history'] => events.map(([event, at]) => ({ event, at })) as unknown as WorkSession['history'];
-
   it('25: the output guard compares real paths — the home and the output named through different names of one directory', async () => {
     const root = freshRoot();
     const built = await buildHome({ root, sessions: [{ arm: 'packet', claudeId: 'claude-a' }], rooms: [] });
@@ -861,20 +859,20 @@ describe('items 25-30: corrections after the first acceptance', () => {
     });
     expect(previous.unknownReasons).toContain('incomplete-history');
     expect(previous.transcript).toBe('history-incomplete');
-    const current = analyze(text, { providerSessionId: null, history: hist(['pending', T09], ['active', START]) });
+    const current = analyze(text, { providerSessionId: null });
     expect(current.unknownReasons).toContain('incomplete-history');
     expect(current.transcript).toBe('history-incomplete');
     // never started: still "not launched"
-    const never = analyze(null, { providerSessionId: null, history: hist(['pending', T09]) });
+    const never = analyze(null, { providerSessionId: null, startedAt: null });
     expect(never.transcript).toBe('not-launched');
     expect(never.unknownReasons).toEqual([]);
-    // switched to claude after another agent had run, claude itself never started
+    // switched to claude after another agent had run, claude itself never started: core's segment parser (`trialSegments`) takes the
+    // session's first start for the current segment, so this is read as incomplete — the conservative side
     const switched = analyze(null, {
       providerSessionId: null,
       previousAgents: [{ provider: 'codex', providerSessionId: 'cx', startedAt: START, endedAt: '2026-11-20T11:00:00.000Z' }] as NonNullable<WorkSession['previousAgents']>,
-      history: hist(['pending', T09], ['active', START], ['sleeping', '2026-11-20T10:59:00.000Z']),
     });
-    expect(switched.transcript).toBe('not-launched');
+    expect(switched.transcript).toBe('history-incomplete');
   });
 
   const approxOutside: Membership = { exact: [], approx: [{ from: Date.parse('2027-01-01T00:00:00Z'), to: Number.POSITIVE_INFINITY }] };
@@ -944,5 +942,154 @@ describe('items 25-30: corrections after the first acceptance', () => {
     expect(facts.errorResults).toBe(0);
     expect(facts.windows[0]).toMatchObject({ calls: 1, outcome: 'ok' });
     expect(summarizeArm([facts]).spendEstimateTokens).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+describe('item 24: the cohort is the union of records, traces of deleted sessions and the assignment list', () => {
+  const MEMBERS = (rooms = 1): HomeSpec['rooms'] =>
+    Array.from({ length: rooms }, () => ({ members: [{ session: 0, from: T09 }, { session: 1, from: T09 }] }));
+
+  /** Two sessions (packet, control) in one room, each with one compaction and two calls in a transcript. */
+  async function pair(extra: Partial<HomeSpec> = {}, rooms: HomeSpec['rooms'] = MEMBERS()): Promise<{ built: BuiltHome; result: Run }> {
+    const built = await buildHome({
+      root: freshRoot(),
+      sessions: [{ arm: 'packet', claudeId: 'claude-a' }, { arm: 'control', claudeId: 'claude-b' }],
+      rooms,
+      ...extra,
+    });
+    for (const id of ['claude-a', 'claude-b']) writeTranscript(built, id, new TranscriptBuilder(id, START).prompt().at(60).boundary().calls(2).text());
+    const result = await run(built, '--final');
+    return { built, result };
+  }
+  interface CohortJson {
+    sessions: number; tracedSessions: number; blockers: string[]; damagedWorks: string[]; ledgerDisagreements: string[]; missingIntents: string[];
+    ledger: { status: string; error: string | null; unreadableLines: number[]; intents: number; cancelled: number; confirmed: number };
+  }
+  const cohortOf = (result: Run): CohortJson => result.json['cohort'] as CohortJson;
+  const unknownOf = (result: Run): Array<{ session: string; reasons: string[] }> => result.json['sessionsByUnknown'] as Array<{ session: string; reasons: string[] }>;
+
+  it('a live record: counted as usual, the list agrees, nothing blocks', async () => {
+    const { result } = await pair();
+    expect(cohortOf(result)).toMatchObject({ sessions: 2, blockers: [], damagedWorks: [] });
+    expect(cohortOf(result).ledger).toMatchObject({ status: 'ok', intents: 2, confirmed: 2, unreadableLines: [] });
+    expect(unknownOf(result)).toEqual([]);
+  });
+
+  it('a deleted session with a trace: counted by the trace — arm and ids from it, its room participation kept; its hook journal is not read', async () => {
+    const built = await buildHome({
+      root: freshRoot(),
+      sessions: [{ arm: 'packet', claudeId: 'claude-a' }, { arm: 'control', claudeId: 'claude-b' }],
+      rooms: MEMBERS(),
+      deleteSessions: [0],
+    });
+    for (const id of ['claude-a', 'claude-b']) writeTranscript(built, id, new TranscriptBuilder(id, START).prompt().at(60).boundary().calls(2).text());
+    writeJournal(built, 's-01', [{ hook_event_name: 'SessionStart', source: 'compact' }, { hook_event_name: 'ParleyRoomPacketBridge', outcome: 'printed' }]);
+    const result = await run(built, '--final');
+    expect(cohortOf(result)).toMatchObject({ sessions: 2, tracedSessions: 1, blockers: [] });
+    expect(arms(result.json).packet).toMatchObject({ sessions: 1, sessionsFromTrace: 1, compactionsInRoom: 1, sessionsWithWindow: 1 });
+    // not "zero refusals": the journal is not available for a deleted session, so it is not counted at all
+    expect(arms(result.json).packet.journal).toMatchObject({ sessionsWithJournal: 0, bridgeOutcomes: {} });
+    expect(result.out).toContain('from the trace of a deleted session (no hook journal)');
+    expect(unknownOf(result)).toEqual([]);
+  });
+
+  it('a session lost: an intent without a cancel, no record, no trace — unknown, named by the confirm line when there is one', async () => {
+    const { result } = await pair({ lostIntents: [{ arm: 'packet', confirm: { workId: 'w-0001', sessionId: 's-77' } }, { arm: 'control' }] });
+    expect(arms(result.json).packet).toMatchObject({ sessions: 2, sessionsLost: 1 });
+    expect(arms(result.json).control).toMatchObject({ sessions: 2, sessionsLost: 1 });
+    const names = unknownOf(result).map((entry) => entry.session).sort();
+    expect(names).toHaveLength(2);
+    expect(names).toContain('w-0001/s-77');
+    expect(names.find((name) => name !== 'w-0001/s-77')).toMatch(/^-\/tag:f0+2$/);
+    expect(unknownOf(result).every((entry) => entry.reasons[0] === 'lost-session')).toBe(true);
+    expect(result.json['verdict']).toBe('undetermined');
+    expect(result.json['bounds']).toBeNull();
+  });
+
+  it('a cancelled intent is not a lost session; a confirm line that names other numbers does not matter — the tag decides', async () => {
+    const cancelled = JSON.stringify({ kind: 'intent', tag: 'e'.repeat(32), name: 'exp-a', arm: 'packet', at: T09 }) + '\n' + JSON.stringify({ kind: 'cancel', tag: 'e'.repeat(32), at: T09 }) + '\n';
+    const renumbered = JSON.stringify({ kind: 'confirm', tag: '1'.padStart(32, '0'), projectPath: '/elsewhere', workId: 'w-9999', incarnation: 7, sessionId: 's-99', at: T09 }) + '\n';
+    const { result } = await pair({ ledgerRaw: cancelled + renumbered });
+    expect(cohortOf(result)).toMatchObject({ sessions: 2, blockers: [] });
+    expect(unknownOf(result)).toEqual([]);
+  });
+
+  it('the arm in the list and in the map differ, or the list calls the tag cancelled: treated as a damaged assignment', async () => {
+    for (const extra of [{ ledgerOtherArm: [0] }, { ledgerCancelled: [1] }] as Array<Partial<HomeSpec>>) {
+      const { result } = await pair(extra);
+      expect(cohortOf(result).ledgerDisagreements).toHaveLength(1);
+      expect(cohortOf(result).blockers.join(' ')).toContain('arm in the list and in the map differ');
+      expect(result.json['verdict']).toBe('undetermined');
+      expect(result.json['bounds']).toBeNull();
+    }
+  });
+
+  it('a session of the experiment with no intent line in an existing list blocks', async () => {
+    const { result } = await pair({ ledgerSkip: [0] });
+    expect(cohortOf(result).missingIntents).toHaveLength(1);
+    expect(result.json['verdict']).toBe('undetermined');
+    expect(result.json['bounds']).toBeNull();
+  });
+
+  it('no list file while sessions of the experiment exist, an unreadable list, a torn line, a garbage line: each blocks', async () => {
+    const missing = await pair({ ledger: 'none' });
+    expect(cohortOf(missing.result).ledger.status).toBe('missing');
+    const directory = await pair({ ledger: 'directory' });
+    expect(cohortOf(directory.result).ledger.status).toBe('unreadable');
+    const torn = await pair({ ledgerRaw: '{"kind":"intent","tag":"abc' });
+    const garbage = await pair({ ledgerRaw: 'not json at all\n' });
+    for (const { result } of [missing, directory, torn, garbage]) {
+      expect(cohortOf(result).blockers.length).toBeGreaterThan(0);
+      expect(result.json['verdict']).toBe('undetermined');
+      expect(result.json['bounds']).toBeNull();
+    }
+    expect(cohortOf(torn.result).ledger.unreadableLines).toHaveLength(1);
+    expect(cohortOf(garbage.result).ledger.unreadableLines).toHaveLength(1);
+  });
+
+  it('no list file and no session of the experiment: nothing to notice, nothing blocks', async () => {
+    const built = await buildHome({ root: freshRoot(), sessions: [{ arm: 'packet', claudeId: 'claude-a', trialName: 'exp-old' }], rooms: [], ledger: 'none' });
+    const result = await run(built, '--status');
+    expect(result.code).toBe(0);
+    expect(cohortOf(result)).toMatchObject({ sessions: 0, blockers: [] });
+    expect(cohortOf(result).ledger.status).toBe('missing');
+  });
+
+  it('a deleted room with a journal: the compaction made in it still counts in the main calculation, whatever the order of the deletions', async () => {
+    for (const sessionsFirst of [false, true]) {
+      const { result } = await pair({ deleteRooms: [0], deleteSessions: [0], sessionsFirst });
+      expect(arms(result.json).packet).toMatchObject({ compactionsInRoom: 1, compactionsApproximate: 0, approximateMembership: 0 });
+      expect(arms(result.json).control).toMatchObject({ compactionsInRoom: 1, approximateMembership: 0 });
+      expect(cohortOf(result).blockers).toEqual([]);
+      expect(unknownOf(result)).toEqual([]);
+      expect((result.json['outcome'] as Record<Arm, Record<string, number>>).packet.windowsInRoom).toBe(1);
+    }
+  });
+
+  it('a deleted room without a journal, or a deleted session that was in such a room, leaves the participation unknown', async () => {
+    const roomGone = await pair({ deleteRooms: [0] }, [{ members: [{ session: 0, from: T09 }, { session: 1, from: T09 }], journal: false }]);
+    expect(arms(roomGone.result.json).packet.approximateMembership).toBe(1);
+    expect(roomGone.result.json['verdict']).toBe('undetermined');
+    expect(roomGone.result.json['bounds']).toBeNull();
+    const sessionGone = await pair({ deleteSessions: [0] }, [{ members: [{ session: 0, from: T09 }, { session: 1, from: T09 }], journal: false }]);
+    expect(arms(sessionGone.result.json).packet).toMatchObject({ sessionsFromTrace: 1, approximateMembership: 1 });
+    expect(sessionGone.result.json['bounds']).toBeNull();
+  });
+
+  it('a damaged trace: the work is named, the verdict is blocked and the participation of its sessions is not exact', async () => {
+    const { result } = await pair({ deleteSessions: [0], traceDamage: true });
+    expect(cohortOf(result).damagedWorks).toHaveLength(1);
+    expect(result.json['verdict']).toBe('undetermined');
+    expect(arms(result.json).control.approximateMembership).toBe(1);
+    expect(result.out).toContain('works with a damaged trial trace or assignment: 1');
+  });
+
+  it('both modes print the state of the list', async () => {
+    const built = await buildHome({ root: freshRoot(), sessions: [{ arm: 'packet', claudeId: 'claude-a' }], rooms: [] });
+    for (const mode of ['--status', '--final'] as const) {
+      const result = await run(built, mode);
+      expect(result.out).toContain('assignment list: ok; intents 1, cancelled 0, confirmed 1; unreadable lines 0');
+    }
   });
 });
