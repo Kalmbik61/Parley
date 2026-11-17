@@ -55,6 +55,7 @@ describe('loadConfig', () => {
       remoteCreate: true,
       assistantAutonomy: false,
       roomPacket: false,
+      roomPacketTrial: '',
       voiceDailyMinutes: 30,
       fontFamily: "'SF Mono', Menlo, monospace",
       fontSize: 14,
@@ -103,6 +104,7 @@ describe('loadConfig', () => {
       remoteCreate: true,
       assistantAutonomy: false,
       roomPacket: false,
+      roomPacketTrial: '',
       voiceDailyMinutes: 30,
       fontFamily: "'SF Mono', Menlo, monospace",
       fontSize: 14,
@@ -136,6 +138,7 @@ describe('loadConfig', () => {
       remoteCreate: true,
       assistantAutonomy: false,
       roomPacket: false,
+      roomPacketTrial: '',
       voiceDailyMinutes: 30,
       fontFamily: "'SF Mono', Menlo, monospace",
       fontSize: 14,
@@ -402,6 +405,7 @@ describe('переменные окружения: PARLEY_* и прежние HA
     ['remoteCreate', 'REMOTE_CREATE', 'off', false],
     ['assistantAutonomy', 'ASSISTANT_AUTONOMY', 'on', true],
     ['roomPacket', 'ROOM_PACKET', 'on', true],
+    ['roomPacketTrial', 'ROOM_PACKET_TRIAL', '2026-11', '2026-11'],
     ['voiceDailyMinutes', 'VOICE_DAILY_MINUTES', '45', 45],
     ['fontFamily', 'FONT_FAMILY', 'Menlo', 'Menlo'],
     ['fontSize', 'FONT_SIZE', '18', 18],
@@ -710,6 +714,35 @@ describe('roomPacket setting', () => {
     const badEnv = await loadConfig(file(), { PARLEY_ROOM_PACKET: 'sometimes' });
     expect(badEnv.config.roomPacket).toBe(false);
     expect(badEnv.warning).toContain('PARLEY_ROOM_PACKET');
+  });
+});
+
+describe('roomPacketTrial setting', () => {
+  it('пустая строка по умолчанию; parseSetting принимает имя опыта и пустую строку, отвергает остальное', () => {
+    expect(DEFAULT_CONFIG.roomPacketTrial).toBe('');
+    expect(parseSetting('roomPacketTrial', '2026-11')).toEqual({ value: '2026-11' });
+    expect(parseSetting('roomPacketTrial', '')).toEqual({ value: '' });
+    expect(parseSetting('roomPacketTrial', 'a'.repeat(32))).toEqual({ value: 'a'.repeat(32) });
+    for (const bad of ['Trial', 'a b', 'a_b', 'a'.repeat(33), 'опыт', ' x']) {
+      expect(parseSetting('roomPacketTrial', bad)).toHaveProperty('error');
+    }
+  });
+  it('читается из файла и окружения; неверное значение — предупреждение, значение по умолчанию', async () => {
+    expect((await loadConfig(file(), {})).config.roomPacketTrial).toBe('');
+    await write({ roomPacketTrial: '2026-11' });
+    expect((await loadConfig(file(), {})).config.roomPacketTrial).toBe('2026-11');
+    const fromEnv = await loadConfig(file(), { PARLEY_ROOM_PACKET_TRIAL: 'next-one' });
+    expect(fromEnv.config.roomPacketTrial).toBe('next-one');
+    expect(fromEnv.fromEnv).toContain('roomPacketTrial');
+    await write({ roomPacketTrial: 'Bad Name' });
+    const badFile = await loadConfig(file(), {});
+    expect(badFile.config.roomPacketTrial).toBe('');
+    expect(badFile.warning).toContain('roomPacketTrial');
+    await write({ roomPacketTrial: true });
+    expect((await loadConfig(file(), {})).warning).toContain('roomPacketTrial');
+    const badEnv = await loadConfig(file(), { PARLEY_ROOM_PACKET_TRIAL: 'UPPER' });
+    expect(badEnv.config.roomPacketTrial).toBe('');
+    expect(badEnv.warning).toContain('PARLEY_ROOM_PACKET_TRIAL');
   });
 });
 

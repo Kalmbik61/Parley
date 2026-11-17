@@ -5,6 +5,7 @@ import { maxNumber } from './map.js';
 import { cancelActiveRoomPlan } from './plans.js';
 import { settleEffectText } from './stored-texts.js';
 import { sessionMention, sessionTag } from './thread.js';
+import { traceDeletedRoom } from './trial-trace.js';
 import { ENGINE, HUMAN, PARLEY, SYSTEM, type RoomMode, type Message, type Room, type WorkMap } from './types.js';
 
 /**
@@ -428,6 +429,8 @@ export function deleteRoom(map: WorkMap, letters: LetterTx, roomId: string, at =
   const room = findRoom(map, roomId);
   const plans = new Set((map.plans ?? []).filter((plan) => plan.roomId === roomId).map((plan) => plan.id));
   const { work } = map;
+  // Опыт с пакетом состояния: участие сессий опыта сохраняется той же записью карты, пока комната и её лента на месте.
+  traceDeletedRoom(map, letters, room, at);
   work.roomSeq = Math.max(work.roomSeq ?? 0, maxNumber([room.id], 'r-'));
   if (room.proposal !== null) work.proposalSeq = Math.max(work.proposalSeq ?? 0, maxNumber([room.proposal.id], 'p-'));
   if (plans.size > 0) work.planSeq = Math.max(work.planSeq ?? 0, maxNumber([...plans], 'pl-'));

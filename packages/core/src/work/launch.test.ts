@@ -224,6 +224,22 @@ const sessionEnv = (workDir: string, sessionId: string): Record<string, string> 
   HARNAS_NATIVE_CONTEXT_REVISION: expect.any(String),
 });
 
+describe('createNewSession: назначение плеча опыта пишется той же записью (Э-1, уточнение 9)', () => {
+  it('назначение ложится в запись сессии при создании, на обоих путях (проект без работ и выбранная работа); без него поля нет', async () => {
+    const trial = { name: 'exp-a', arm: 'control' as const, at: '2026-11-17T10:00:00.000Z', tag: '0123456789abcdef0123456789abcdef' };
+    const fresh = await createNewSession(project, null, trial);
+    expect((await readMap(project, fresh.workId)).sessions[0]?.trial).toEqual(trial);
+    expect(fresh.session.trial).toEqual(trial);
+
+    const { workId } = await pending('claude');
+    const chosen = await createNewSession(project, workId, { ...trial, arm: 'packet' });
+    const plain = await createNewSession(project, workId);
+    const map = await readMap(project, workId);
+    expect(map.sessions.find((session) => session.id === chosen.session.id)?.trial).toEqual({ ...trial, arm: 'packet' });
+    expect(map.sessions.find((session) => session.id === plain.session.id)).not.toHaveProperty('trial');
+  });
+});
+
 describe('метки быстрой сессии и автозаголовок', () => {
   it('быстрая сессия в проекте без работ: работа — английская метка, сессия — имя по номеру', async () => {
     const created = await createNewSession(project, null);

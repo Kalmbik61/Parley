@@ -12,7 +12,7 @@
  * ручной `resume`, а живой PTY закрытой в карте сессии хост гасит сам.
  */
 
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomInt, randomUUID } from 'node:crypto';
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import {
@@ -35,6 +35,7 @@ import {
   type AgentBinding,
   type LaunchClass,
   type LetterTx,
+  type NewSession,
   type LimitAlternative,
   type MachineTicket,
   type ProviderLimits,
@@ -152,6 +153,7 @@ import type { WorksService, WorksView } from '../works/works-service.js';
 import { createDepsSeeder, type DepsSeeder } from '../worktrees/deps-seed.js';
 import { gitFailure } from '../worktrees/worktrees-service.js';
 import { createStepTimer } from '../timing.js';
+import { packetGate } from '../hooks/packet-endpoint.js';
 import { admitSwarmSession, swarmBudgetRefusal, swarmMemberRefusal } from '../swarms/spawn.js';
 import type { SwarmSpawn } from '../swarms/spawn.js';
 import { createSkillInstaller } from './agent-skills.js';
@@ -414,6 +416,8 @@ export interface SessionsFeedOptions {
    * адресом приёмника; `undefined` — настройка `roomPacket` выключена или запускатель не записан, моста в файле нет.
    */
   packetHook?: () => Promise<{ launcher: string; url: string } | undefined>;
+  /** Источник случайности для розыгрыша плеча опыта: целое от 0 до `max - 1`; по умолчанию `crypto.randomInt`. Для тестов. */
+  random?: (max: number) => number;
   /**
    * Согласия человека на папку (спека 2026-10-21, 4.2): запуск Codex в проекте без записи в `trust.json` останавливается
    * и заводит карточку. Без сервиса (изолированные тесты) такой запуск не удерживается.
@@ -527,6 +531,20 @@ export function createSessionsService(
 ): SessionsService {
   const { hooks, providerVersions, capacity, endings, opencode, opencodeEvents } = feed;
   const spawnLimits = feed.spawnLimits ?? querySpawnLimits;
+  const random = feed.random ?? ((max: number): number => randomInt(max));
+
+  /**
+   * Плечо опыта с пакетом состояния (план опыта 2026-11-17, 1.1, Э-1): только новая сессия `claude`, пока включён
+   * `roomPacket` и задано имя `roomPacketTrial`; вероятность 1/2. Остальные — без плеча.
+   */
+  async function drawTrial(provider: string): Promise<NewSession['trial']> {
+    if (provider !== 'claude') return undefined;
+    const { config } = await loadConfig();
+    if (!config.roomPacket || config.roomPacketTrial === '') return undefined;
+    return { name: config.roomPacketTrial, arm: random(2) === 0 ? 'packet' : 'control', at: new Date().toISOString(), tag: randomBytes(16).toString('hex') };
+  }
+  /** Предупреждения протокола списка назначений (намерение, отмена, подтверждение) идут в журнал хоста. */
+  const trialProtocol = { warn: (message: string): void => host.log.warn('room packet trial', { message }) };
   const warned = new Set<string>();
   const creationWarnings = new Set<string>();
   const gitWriteGrants = new Map<string, boolean>();
@@ -1267,7 +1285,10 @@ export function createSessionsService(
         const codexCommand = url !== undefined && byFamily(session.provider, { claude: false, codex: true, qwen: false, opencode: false, neutral: false })
           ? await feed.codexHookCommand?.() : undefined;
         // Мост пакета — только провайдер `claude` и только при действующей регистрации хуков (есть адрес приёмника).
-        const bridge = url !== undefined && session.provider === 'claude' ? await feed.packetHook?.() : undefined;
+        // Опыт: плечо «контроль» моста не получает никогда, сессия без плеча — только пока опыт не идёт (`packetGate`).
+        const bridge = url !== undefined && session.provider === 'claude' && feed.packetHook !== undefined &&
+          packetGate(session, (await loadConfig()).config.roomPacketTrial).ok
+          ? await feed.packetHook() : undefined;
         return { hookUrl: url, codexHookCommand: codexCommand, packetBridge: bridge };
       });
       const roleCatalog = feed.roleCatalog
@@ -1706,6 +1727,9 @@ export function createSessionsService(
     // Own-key: «constructor» и «toString» с провода не должны находить прототипные свойства реестра.
     const entry = Object.hasOwn(registry, provider) ? registry[provider] : undefined;
     if (!entry) throw new HostError('bad_request', `unknown provider ${provider}; see get_map {field: "providers"}`);
+    // Опыт с пакетом состояния: плечо разыгрывается здесь, одним местом для окна, агента, роя и движка, и пишется в запись
+    // сессии при её создании ниже. Пары в записи нет, если опыт не идёт или провайдер не `claude`.
+    const trial = await drawTrial(provider);
     await timer.step('role', async () => {
       await prepareSessionRole(projectPath, entry, { roleId: roleId(role), provider, mode: 'create' }, feed.roleCatalog ? await feed.roleCatalog(projectPath) : undefined);
     });
@@ -1729,7 +1753,7 @@ export function createSessionsService(
     }
 
     if (workId === null) {
-      const created = await timer.step('record', () => createNewSession(projectPath, null));
+      const created = await timer.step('record', () => createNewSession(projectPath, null, trial, trialProtocol));
       const ref = { projectPath, workId: created.workId, sessionId: created.session.id };
       logged.sessionId = ref.sessionId;
       await timer.step('choice', () => applyChoice(ref, label, provider, role, choice, lean));
@@ -1738,7 +1762,7 @@ export function createSessionsService(
     }
 
     if (task === '') {
-      const created = await timer.step('record', () => createNewSession(projectPath, workId));
+      const created = await timer.step('record', () => createNewSession(projectPath, workId, trial, trialProtocol));
       const ref = { projectPath, workId, sessionId: created.session.id };
       logged.sessionId = ref.sessionId;
       await timer.step('choice', () => applyChoice(ref, label, provider, role, choice, lean));
@@ -1764,6 +1788,7 @@ export function createSessionsService(
         role,
         ...choice,
         ...(lean === undefined ? {} : { lean }),
+        ...(trial === undefined ? {} : { trial }),
       }, agentConfig === undefined ? undefined : (map, sessionId) => {
         const limits = limitsFromConfig(agentConfig);
         if (input.swarm !== undefined) {
@@ -1804,7 +1829,7 @@ export function createSessionsService(
         map.resources!.spawned += 1;
         if (room !== null) map.resources!.spawnedByRoom[room] = (map.resources!.spawnedByRoom[room] ?? 0) + 1;
         noteCreation(map, 'session', room, now);
-      }));
+      }, trialProtocol));
       logged.sessionId = sessionId;
       const ref = { projectPath, workId, sessionId };
       if (worktree === true) await timer.step('worktreePlan', () => attachWorktreePlan(ref, true));
