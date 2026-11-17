@@ -1,10 +1,10 @@
 /**
- * Шапка комнаты: в низкой панели в виде Board сжимается (спека доски комнаты 4.1). Размеры jsdom не считает —
- * проверяется только разметка: какие блоки несут вариант `hidden` по контейнеру `room-panel`.
+ * Шапка комнаты в низкой панели вида Board (спека доски комнаты 4.1): `compact` убирает ряд режима и ленту участников.
+ * Высоту меряет `RoomPanel` (его тесты), здесь — только разметка шапки.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render } from '@testing-library/react';
-import { RoomHeader, SHORT_PANEL_HIDDEN, type RoomHeaderProps } from './RoomHeader.js';
+import { RoomHeader, type RoomHeaderProps } from './RoomHeader.js';
 
 afterEach(cleanup);
 
@@ -20,37 +20,37 @@ const props = (patch: Partial<RoomHeaderProps> = {}): RoomHeaderProps => ({
   now: new Date('2026-11-17T12:00:00.000Z'),
   ...patch,
 });
+const q = (selector: string): Element | null => document.querySelector(selector);
 
-const hidden = (el: Element | null): boolean => {
-  for (let node = el; node !== null; node = node.parentElement) if (node.className.includes?.('max-height:559px')) return true;
-  return false;
-};
-const q = (selector: string): Element => document.querySelector(selector) as Element;
-
-describe('RoomHeader — низкая панель', () => {
-  it('без boardOpen у ряда режима и ленты участников нет класса сжатия', () => {
+describe('RoomHeader — compact', () => {
+  it('без compact ряд режима и лента участников на месте', () => {
     render(<RoomHeader {...props()} />);
-    expect(hidden(q('[data-test-mode]'))).toBe(false);
-    expect(hidden(q('[data-participant-strip]'))).toBe(false);
-    expect(document.body.innerHTML.includes('max-height:559px')).toBe(false);
+    expect(q('[data-test-mode]')).toBeTruthy();
+    expect(q('[data-test-usage]')).toBeTruthy();
+    expect(q('[data-participant-strip]')).toBeTruthy();
   });
 
-  it('с boardOpen класс сжатия стоит на обоих, название и переключатель без него', () => {
-    render(<RoomHeader {...props({ boardOpen: true })} />);
-    expect(hidden(q('[data-test-mode]'))).toBe(true);
-    expect(hidden(q('[data-test-usage]'))).toBe(true);
-    expect(hidden(q('[data-participant-strip]'))).toBe(true);
-    expect(hidden(q('h3'))).toBe(false);
-    expect(hidden(q('[data-room-header] span[title]'))).toBe(false);
-    expect(hidden(q('[data-test-switch]'))).toBe(false);
-    expect(hidden(q('[data-test-browser]'))).toBe(false);
-    expect(q('[data-test-mode]').parentElement!.className).toContain(SHORT_PANEL_HIDDEN);
+  it('разметка без compact и с compact: false одна и та же', () => {
+    const plain = render(<RoomHeader {...props()} />).container.innerHTML;
+    cleanup();
+    expect(render(<RoomHeader {...props({ compact: false })} />).container.innerHTML).toBe(plain);
   });
 
-  it('только ряд режима без чипов тоже прячется', () => {
-    const { usageChip: _usage, ...rest } = props({ boardOpen: true });
+  it('с compact их нет, а название, подзаголовок, переключатель вида и кнопка Browser есть', () => {
+    render(<RoomHeader {...props({ compact: true })} />);
+    expect(q('[data-test-mode]')).toBeNull();
+    expect(q('[data-test-usage]')).toBeNull();
+    expect(q('[data-participant-strip]')).toBeNull();
+    expect(q('h3')?.textContent).toBe('Delivery');
+    expect(q('span[title="Created by you · 2 agents"]')).toBeTruthy();
+    expect(q('[data-test-switch]')).toBeTruthy();
+    expect(q('[data-test-browser]')).toBeTruthy();
+  });
+
+  it('ряд режима без чипов тоже уходит', () => {
+    const { usageChip: _usage, ...rest } = props({ compact: true });
     void _usage;
     render(<RoomHeader {...rest} />);
-    expect(hidden(q('[data-test-mode]'))).toBe(true);
+    expect(q('[data-test-mode]')).toBeNull();
   });
 });

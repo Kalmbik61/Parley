@@ -13,7 +13,6 @@ import { Button } from '../../../ui/button.js';
 import { AgentIcon } from '../../AgentIcon.js';
 import type { ParticipantModel } from '../feed-model.js';
 import { boardEvents } from './room-board-activity.js';
-import { SHORT_PANEL_HIDDEN } from '../RoomHeader.js';
 import { ownerLabel, planProgress } from '../PlanPanel.js';
 import { RoomBoardCard } from './RoomBoardCard.js';
 import { buildRoomBoard } from './room-board-model.js';
@@ -29,14 +28,16 @@ export interface RoomBoardProps {
   onOpenFeed: () => void;
   /** Нажатие и Enter на карточке; панель пункта подключает задача 6. */
   onOpenItem?: (itemId: number) => void;
+  /** Низкая панель: лента событий показывает одно, самое свежее событие. */
+  compact?: boolean;
 }
 
-export function RoomBoard({ plan, room, entry, participants, activity, now, onOpenFeed, onOpenItem }: RoomBoardProps): JSX.Element {
+export function RoomBoard({ plan, room, entry, participants, activity, now, onOpenFeed, onOpenItem, compact = false }: RoomBoardProps): JSX.Element {
   const [selected, setSelected] = useState<string | null>(null);
   const model = buildRoomBoard({ plan, room, entry, participants, activity, now });
   const columnsRef = useRef<HTMLDivElement | null>(null);
   useCardMotion(columnsRef, model);
-  const events = boardEvents(plan);
+  const events = boardEvents(plan, compact ? 1 : 3);
   const noticeText =
     model.notice === null ? null : model.notice.kind === 'decision' ? S.roomBoard.noticeDecision : S.plans.haltNotice(model.notice.detail);
   return (
@@ -107,7 +108,7 @@ export function RoomBoard({ plan, room, entry, participants, activity, now, onOp
               <li
                 key={`${event.at}-${event.itemId}-${event.change.source}-${event.change.status}`}
                 title={`${when} ${what}`}
-                className={cn('flex gap-2', index === 0 ? 'text-foreground' : 'text-muted-foreground', index > 0 && SHORT_PANEL_HIDDEN)}
+                className={cn('flex gap-2', index === 0 ? 'text-foreground' : 'text-muted-foreground')}
               >
                 <span className="shrink-0 tabular-nums">{when}</span>
                 <span className="min-w-0 truncate">{what}</span>

@@ -3123,3 +3123,97 @@ describe('RoomPanel — панель пункта на доске', () => {
     expect(document.activeElement).not.toBe(cardIn(first.container));
   });
 });
+
+describe('RoomPanel — низкая панель в виде Board', () => {
+  const log = ['08', '09', '10'].map((hour) => ({ at: `2026-11-17T${hour}:00:00.000Z`, by: 's-01', status: 'in_progress' as const, note: null }));
+  const lowEntry = (): WindowWorkEntry => {
+    const entry = entryOf({ messages: [message('m-1')] });
+    entry.map.plans = [{
+      id: 'pl-01', roomId: 'r-01', rev: 1, mode: 'checklist', status: 'active', goal: 'Goal', backlog: [],
+      items: [{ id: 1, title: 'Recovery', owner: 's-01', scope: 'plain', after: [], criteria: [], verifier: null, status: 'in_progress', evidence: null, note: null, log }],
+      acceptedAt: 'x', completedAt: null, cancelledAt: null, completionSummary: null,
+    }];
+    return entry;
+  };
+  const observers: { callback: ResizeObserverCallback; target: Element | null; disconnected: boolean }[] = [];
+  const original = globalThis.ResizeObserver;
+  beforeEach(() => {
+    observers.length = 0;
+    globalThis.ResizeObserver = class {
+      readonly record: (typeof observers)[number];
+      constructor(callback: ResizeObserverCallback) {
+        this.record = { callback, target: null, disconnected: false };
+        observers.push(this.record);
+      }
+      observe(target: Element): void { this.record.target = target; }
+      unobserve(): void {}
+      disconnect(): void { this.record.disconnected = true; }
+    } as unknown as typeof ResizeObserver;
+  });
+  afterEach(() => { globalThis.ResizeObserver = original; });
+
+  const measure = (height: number): void => {
+    const rootObserver = observers.find((row) => row.target !== null && (row.target as HTMLElement).hasAttribute('data-room-panel'))!;
+    act(() => rootObserver.callback([{ contentRect: { height } } as ResizeObserverEntry], {} as ResizeObserver));
+  };
+  const strip = (): HTMLElement | null => document.querySelector('[data-participant-strip]');
+  const modeRow = (): HTMLElement | null => document.querySelector('[data-room-header] [data-room-mode]');
+  const eventRows = (): number => document.querySelectorAll('[data-board-events] li').length;
+
+  it('вид Board, высота 559 — ленты участников нет, в ленте событий одна строка', () => {
+    renderPanel(lowEntry(), { view: 'board', onViewChange: vi.fn() });
+    expect(strip()).toBeTruthy();
+    expect(modeRow()).toBeTruthy();
+    expect(eventRows()).toBe(3);
+    measure(559);
+    expect(strip()).toBeNull();
+    expect(modeRow()).toBeNull();
+    expect(eventRows()).toBe(1);
+    expect(document.querySelector('[data-room-header] h3')?.textContent).toBeTruthy();
+    expect(document.querySelector(`[aria-label="${S.roomBoard.viewLabel}"]`)).toBeTruthy();
+  });
+
+  it('вид Board, высота 560 — шапка полная', () => {
+    renderPanel(lowEntry(), { view: 'board', onViewChange: vi.fn() });
+    measure(560);
+    expect(strip()).toBeTruthy();
+    expect(modeRow()).toBeTruthy();
+    expect(eventRows()).toBe(3);
+  });
+
+  it('вид Feed, высота 559 — шапка полная', () => {
+    renderPanel(lowEntry(), { view: 'feed', onViewChange: vi.fn() });
+    measure(559);
+    expect(strip()).toBeTruthy();
+  });
+
+  it('порог пересекается в обе стороны', () => {
+    renderPanel(lowEntry(), { view: 'board', onViewChange: vi.fn() });
+    measure(500);
+    expect(strip()).toBeNull();
+    measure(800);
+    expect(strip()).toBeTruthy();
+    expect(eventRows()).toBe(3);
+    measure(100);
+    expect(strip()).toBeNull();
+  });
+
+  it('без ResizeObserver панель считается высокой; при размонтировании наблюдатель отключается', () => {
+    const view = renderPanel(lowEntry(), { view: 'board', onViewChange: vi.fn() });
+    view.unmount();
+    expect(observers.some((row) => row.disconnected)).toBe(true);
+    cleanup();
+    // @ts-expect-error — среда без ResizeObserver
+    delete globalThis.ResizeObserver;
+    renderPanel(lowEntry(), { view: 'board', onViewChange: vi.fn() });
+    expect(strip()).toBeTruthy();
+  });
+
+  it('в разметке панели нет container-type и @container', () => {
+    renderPanel(lowEntry(), { view: 'board', onViewChange: vi.fn() });
+    const html = (document.querySelector('[data-room-panel]') as HTMLElement).outerHTML;
+    expect(html.includes('container-type')).toBe(false);
+    expect(html.includes('@container')).toBe(false);
+    expect(html.includes('container-name')).toBe(false);
+  });
+});

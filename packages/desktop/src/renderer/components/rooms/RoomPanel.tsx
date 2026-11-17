@@ -119,6 +119,8 @@ export interface RoomPanelProps {
 }
 
 /** Относительное время сообщений («2m») обновляется раз в столько же, что и в сайдбаре. */
+/** Панель ниже этой высоты (px) считается низкой: в виде Board шапка сжимается до названия и подзаголовка. */
+const SHORT_PANEL_HEIGHT = 560;
 const NOW_PERIOD_MS = 30_000;
 
 /** Лента «у низа», если до дна не больше стольких px: дочитавший почти до конца историю уже не читает. */
@@ -434,6 +436,25 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
   // Лента — цель броска карточки доски (письмо всей комнате); нативный drop файлов ниже не затронут. Хук — до раннего
   // выхода «комнаты нет»: у смонтированной панели комната может появиться в карте позже, и порядок хуков не должен меняться.
   const { setNodeRef: setFeedRef, over: cardOver } = useFeedDropTarget(workKey(entry.projectPath, entry.map.work.id), { roomId });
+  // Высота корня панели: ниже `SHORT_PANEL_HEIGHT` в виде Board шапка и лента событий сжимаются (`compact`). Замер —
+  // `ResizeObserver`, как у `BrowserChrome`: контейнерного запроса в панели нет (Chromium порой не пересчитывает `:disabled`
+  // у потомков размерного контейнера). Корень — один элемент для замера и для цели броска, поэтому ref составной.
+  const [rootElement, setRootElement] = useState<HTMLDivElement | null>(null);
+  const setRoot = useCallback((node: HTMLDivElement | null): void => {
+    setRootElement(node);
+    setFeedRef(node);
+  }, [setFeedRef]);
+  const [shortPanel, setShortPanel] = useState(false);
+  useLayoutEffect(() => {
+    if (rootElement === null || typeof ResizeObserver === 'undefined') return undefined;
+    const observer = new ResizeObserver((entries) => {
+      const height = entries[entries.length - 1]?.contentRect.height;
+      if (height !== undefined) setShortPanel(height < SHORT_PANEL_HEIGHT);
+    });
+    observer.observe(rootElement);
+    return () => observer.disconnect();
+  }, [rootElement]);
+  const compactBoard = boardOpen && shortPanel;
 
   if (model === null) {
     return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">{S.rooms.notFound}</div>;
@@ -542,16 +563,16 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
 
   return (
     <div
-      ref={setFeedRef}
+      ref={setRoot}
       data-room-panel=""
       {...(dropping ? { 'data-dropping': '' } : {})}
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
       onDrop={onDrop}
-      className={cn('flex h-full min-h-0 min-w-0 flex-col [container-type:size] [container-name:room-panel]', (dropping || cardOver) && 'ring-2 ring-inset ring-ring')}
+      className={cn('flex h-full min-h-0 min-w-0 flex-col', (dropping || cardOver) && 'ring-2 ring-inset ring-ring')}
     >
       <RoomHeader
-        {...(boardOpen ? { boardOpen } : {})}
+        {...(compactBoard ? { compact: true } : {})}
         {...(boardPlan === null || roomRecord === undefined ? {} : { itemTags: participantItemTags(boardPlan, roomRecord, entry) })}
         {...(onViewChange !== undefined && boardAvailable ? { viewSwitch: <RoomViewSwitch view={boardOpen ? 'board' : 'feed'} onChange={onViewChange} /> } : {})}
         browserToggle={archived ? undefined : <PanelToggle workKey={workKey(entry.projectPath, entry.map.work.id)} owner={{ kind: 'room', roomId }} />}
@@ -726,6 +747,7 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
             activity={activity}
             now={now}
             onOpenFeed={() => onViewChange?.('feed')}
+            {...(compactBoard ? { compact: true } : {})}
             onOpenItem={(itemId) => {
               focusItemRef.current = itemId;
               setOpenItemId(itemId);
