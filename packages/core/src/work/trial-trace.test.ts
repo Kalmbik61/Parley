@@ -287,3 +287,50 @@ describe('проверка следа при чтении (Э-1б, критер�
     expect(trace?.sessions[0]).toMatchObject({ session: 's-09', trial: { damaged: true } });
   });
 });
+
+describe('времена в следе проверяются (Э-1б, уточнение 13)', () => {
+  const DAMAGED = { damaged: true };
+  const read = (trace: Partial<TrialTrace> | Record<string, unknown>): TrialTrace | undefined => {
+    const map = world();
+    Object.assign(map.work, { trialTrace: { sessions: [], rooms: [], unknownParticipation: [], ...trace } });
+    return roundTrip(map).work.trialTrace;
+  };
+  const session = {
+    session: 's-09', trial: trialOf('control', TAG_A), provider: 'claude', providerSessionId: null,
+    startedAt: T0, endedAt: T1, closedAt: T2, deletedAt: DELETED,
+    previousAgents: [{ provider: 'claude', providerSessionId: 'x', startedAt: T0, endedAt: T1 }],
+  };
+  const row = { room: 'r-01', session: 's-09', from: T0, to: T1 };
+
+  it('верные времена читаются как есть, null в необязательных временах допустим', () => {
+    expect(read({ sessions: [session], rooms: [row] })).toMatchObject({ sessions: [session], rooms: [row] });
+    const open = { ...session, startedAt: null, endedAt: null, closedAt: null, previousAgents: [{ provider: 'claude', providerSessionId: null, startedAt: null, endedAt: T1 }] };
+    expect(read({ sessions: [open] })?.sessions).toEqual([open]);
+  });
+
+  it.each([
+    ['startedAt', { startedAt: 'вчера' }],
+    ['endedAt', { endedAt: 'not-a-time' }],
+    ['closedAt', { closedAt: '' }],
+    ['deletedAt', { deletedAt: 'yesterday' }],
+    ['deletedAt не строка', { deletedAt: 5 }],
+    ['startedAt прежнего отрезка', { previousAgents: [{ provider: 'claude', providerSessionId: null, startedAt: 'bad', endedAt: T1 }] }],
+    ['endedAt прежнего отрезка', { previousAgents: [{ provider: 'claude', providerSessionId: null, startedAt: T0, endedAt: 'bad' }] }],
+    ['прежний отрезок перевёрнут', { previousAgents: [{ provider: 'claude', providerSessionId: null, startedAt: T1, endedAt: T0 }] }],
+  ])('след сессии: %s неверно — запись «повреждена»', (_name, patch) => {
+    expect(read({ sessions: [{ ...session, ...patch }] })?.sessions).toEqual([DAMAGED]);
+  });
+
+  it.each([
+    ['вход', { from: 'вчера' }],
+    ['выход', { to: 'not-a-time' }],
+    ['выход не строка', { to: null }],
+    ['выход раньше входа', { from: T2, to: T0 }],
+  ])('строка участия: %s неверно — запись «повреждена», а не свидетельство, что окно было вне комнаты', (_name, patch) => {
+    expect(read({ rooms: [{ ...row, ...patch }] })?.rooms).toEqual([DAMAGED]);
+  });
+
+  it('выход, равный входу, допустим', () => {
+    expect(read({ rooms: [{ ...row, to: T0 }] })?.rooms).toEqual([{ ...row, to: T0 }]);
+  });
+});

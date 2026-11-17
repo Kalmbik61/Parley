@@ -8,17 +8,18 @@
  * 2. ошибка записи карты сама ничего не доказывает (хранилище фиксирует запись и может бросить уже после): карта
  *    перечитывается и ищется метка. Метка в живой записи или в следе удалённой сессии — подтверждение. Отмена — только
  *    если всё сразу: номер создания работы тот же, что до записи, карта прочитана, метки нет ни в записях, ни в следах,
- *    и следы не повреждены. Во всех остальных случаях (работа создаётся этой же операцией и её номера до записи нет;
+ *    и в работе нет повреждённых назначений и следов (`workHasTrialDamage`). Во всех остальных случаях (работа создаётся этой же операцией и её номера до записи нет;
  *    пересоздана; карта не читается) ничего не пишется, намерение остаётся без пары и читается как потерянная сессия;
  * 3. запись карты состоялась — подтверждение: метка, путь проекта, работа, её `incarnation`, сессия; не записалось —
  *    предупреждение, сессия остаётся в опыте.
  * Сверка идёт только по метке назначения (`SessionTrial.tag`), не по номерам работы и сессии.
  */
 
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, writeSync } from 'node:fs';
+import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, writeSync } from 'node:fs';
 import path from 'node:path';
 import { parleyHome } from '../home.js';
 import { readMap, workIdentity } from './store.js';
+import { workHasTrialDamage } from './trial-trace.js';
 import { isTrialName, isTrialTag, TRIAL_ARMS, type SessionTrial, type TrialArm, type WorkMap } from './types.js';
 
 /** Намерение: назначение собираются записать в карту. */
@@ -43,40 +44,54 @@ export function trialLedgerFile(name: string, home: string = parleyHome()): stri
   return path.join(home, 'trials', `${name}.jsonl`);
 }
 
-/**
- * Дописывает строку и сбрасывает её на диск до возврата. Каталог и файл создаются при первой строке (файл — 0600);
- * опыт без назначений каталога `trials` не создаёт. Ошибка записи — исключение: решает вызывающий.
- */
-export function appendTrialLedger(name: string, line: TrialLedgerLine, home: string = parleyHome()): void {
-  const file = trialLedgerFile(name, home);
-  const dir = path.dirname(file);
-  const dirCreated = !existsSync(dir);
-  const created = !existsSync(file);
-  mkdirSync(dir, { recursive: true });
-  const fd = openSync(file, 'a', 0o600);
-  try {
-    writeSync(fd, `${JSON.stringify(line)}\n`);
-    fsyncSync(fd);
-  } finally {
-    closeSync(fd);
-  }
-  // Новый файл и новый каталог тоже сбрасываются на диск: запись каталога о них — в самом каталоге и в его родителе.
-  if (created) syncDirectory(dir);
-  if (dirCreated) syncDirectory(path.dirname(dir));
+/** Операции дозаписи; тест подменяет их, чтобы вызвать нулевую и частичную запись или сбой сброса каталога. */
+export interface TrialLedgerIo {
+  /** Записывает не больше `buffer.length - offset` байт с `offset`, возвращает число записанных. */
+  write: (fd: number, buffer: Buffer, offset: number) => number;
+  /** Сбрасывает каталог на диск; ошибка — ошибка записи. */
+  syncDirectory: (dir: string) => void;
 }
 
-/** Запись каталога о новом файле тоже сбрасывается на диск; платформа без этого (Windows) не ошибка. */
-function syncDirectory(dir: string): void {
-  try {
+const realIo: TrialLedgerIo = {
+  write: (fd, buffer, offset) => writeSync(fd, buffer, offset, buffer.length - offset),
+  syncDirectory: (dir) => {
+    // Windows не открывает каталог для `fsync`: там сброса каталога нет, это не ошибка.
+    if (process.platform === 'win32') return;
     const fd = openSync(dir, 'r');
     try {
       fsyncSync(fd);
     } finally {
       closeSync(fd);
     }
-  } catch {
-    // Нужна лишь надёжность первой строки; сам файл уже создан.
+  },
+};
+
+/**
+ * Дописывает строку и сбрасывает её на диск до возврата. Каталог и файл создаются при первой строке (файл — 0600);
+ * опыт без назначений каталога `trials` не создаёт. Строка записана целиком либо это ошибка: ноль записанных байт —
+ * ошибка, частичная запись дописывается до конца. Каталог `trials` и его родитель сбрасываются на диск при каждой
+ * дозаписи — повтор после сбоя не пропускает сброс, потому что файл уже есть; сбой сброса — ошибка, назначение не
+ * состоялось. Исключение решает вызывающий.
+ */
+export function appendTrialLedger(name: string, line: TrialLedgerLine, home: string = parleyHome(), io: TrialLedgerIo = realIo): void {
+  const file = trialLedgerFile(name, home);
+  const dir = path.dirname(file);
+  mkdirSync(dir, { recursive: true });
+  const buffer = Buffer.from(`${JSON.stringify(line)}\n`);
+  const fd = openSync(file, 'a', 0o600);
+  try {
+    let written = 0;
+    while (written < buffer.length) {
+      const count = io.write(fd, buffer, written);
+      if (!(count > 0)) throw new Error(`trial ledger ${file}: wrote ${written} of ${buffer.length} bytes`);
+      written += count;
+    }
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
   }
+  io.syncDirectory(dir);
+  io.syncDirectory(path.dirname(dir));
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -129,13 +144,20 @@ export function parseTrialLedger(text: string): TrialLedger {
 }
 
 /**
- * Читает список назначений опыта (только чтение); `undefined` — файла нет. Другая ошибка чтения — исключение: нечитаемый
- * файл не равен отсутствующему.
+ * Читает список назначений опыта (только чтение) прямым чтением; `undefined` — файла нет (`ENOENT`). Любая другая ошибка,
+ * в том числе недоступный родительский каталог, — исключение: нечитаемый файл не равен отсутствующему.
  */
 export function readTrialLedger(name: string, home: string = parleyHome()): TrialLedger | undefined {
   const file = trialLedgerFile(name, home);
-  if (!existsSync(file)) return undefined;
-  return parseTrialLedger(readFileSync(file, 'utf8'));
+  let text: string;
+  try {
+    text = readFileSync(file, 'utf8');
+  } catch (error) {
+    // «Файла нет» — только подтверждённое отсутствие. Недоступный или не каталог родитель, права, сбой диска — наружу.
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw error;
+  }
+  return parseTrialLedger(text);
 }
 
 export interface UnresolvedIntent {
@@ -224,14 +246,12 @@ export async function withTrialAssignment<T>(
     try {
       const map = await (options.readMap ?? readMap)(target.projectPath, target.workId);
       const live = map.sessions.find((session) => session.trial !== undefined && 'tag' in session.trial && session.trial.tag === trial.tag)?.id;
-      const traces = map.work.trialTrace?.sessions ?? [];
-      const traced = traces.find((entry) => !('damaged' in entry) && 'tag' in entry.trial && entry.trial.tag === trial.tag);
+      const traced = (map.work.trialTrace?.sessions ?? []).find((entry) => !('damaged' in entry) && 'tag' in entry.trial && entry.trial.tag === trial.tag);
       const found = live ?? (traced !== undefined && !('damaged' in traced) ? traced.session : undefined);
       if (found !== undefined) confirm(found);
       else {
         const sameWork = incarnationBefore !== undefined && workIdentity(target.projectPath, target.workId)?.incarnation === incarnationBefore;
-        const tracesIntact = traces.every((entry) => !('damaged' in entry));
-        if (sameWork && tracesIntact) {
+        if (sameWork && !workHasTrialDamage(map)) {
           try {
             append(trial.name, { kind: 'cancel', tag: trial.tag, at: new Date().toISOString() }, home);
           } catch (cancelError) {

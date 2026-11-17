@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
 import { mkdir, mkdtemp, realpath, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -351,5 +351,117 @@ describe('удаление рабочей области (Э-1б, критери
     expect(unresolvedIntents(lines()).map((entry) => entry.intent.tag)).toEqual([TAG, 'd'.repeat(32)]);
     // Содержимое файла списка не изменилось от удаления: только дозапись.
     expect(readFileSync(trialLedgerFile('exp-a', home), 'utf8').split('\n').filter(Boolean)).toHaveLength(4);
+  });
+});
+
+describe('отмена и повреждения в работе (Э-1б, уточнение 10)', () => {
+  const failsAfter = (workId: string, mutate: (current: Parameters<Parameters<typeof updateMap>[2]>[0], assigned: SessionTrial | undefined) => void) =>
+    withTrialAssignment(trial(), { projectPath: project, workId }, async (assigned) => {
+      await updateMap(project, workId, (current) => mutate(current, assigned));
+      throw new Error('boom');
+    }, () => 's-01', options());
+
+  it('живая сессия с повреждённым назначением могла скрыть метку: отмены нет, намерение остаётся без пары', async () => {
+    const map = await createWork(project, { title: 'W' });
+    await expect(failsAfter(map.work.id, (current) => {
+      addSession(current, { provider: 'claude', label: 'x', task: 't' });
+      Object.assign(current.sessions[0]!, { trial: { damaged: true } });
+    })).rejects.toThrow('boom');
+    expect(kinds()).toEqual(['intent']);
+    expect(warnings.join('\n')).toContain('could not be proven');
+  });
+
+  it('след с повреждённым назначением внутри (сама запись следа целая): отмены нет', async () => {
+    const map = await createWork(project, { title: 'W' });
+    await expect(failsAfter(map.work.id, (current) => {
+      Object.assign(current.work, {
+        trialTrace: {
+          sessions: [{
+            session: 's-09', trial: { damaged: true }, provider: 'claude', providerSessionId: null,
+            startedAt: null, endedAt: null, closedAt: null, deletedAt: '2026-11-17T11:00:00.000Z',
+          }],
+          rooms: [],
+          unknownParticipation: [],
+        },
+      });
+    })).rejects.toThrow('boom');
+    expect(kinds()).toEqual(['intent']);
+  });
+
+  it('повреждённая запись в списках строк участия и отметок тоже блокирует отмену', async () => {
+    for (const trace of [{ rooms: [{ room: 'r-01' }] }, { unknownParticipation: [7] }]) {
+      const map = await createWork(project, { title: `W ${Object.keys(trace)[0]}` });
+      await expect(failsAfter(map.work.id, (current) => { Object.assign(current.work, { trialTrace: trace }); })).rejects.toThrow('boom');
+    }
+    expect(kinds().filter((kind) => kind === 'cancel')).toEqual([]);
+  });
+});
+
+describe('дозапись надёжна (Э-1б, уточнение 11)', () => {
+  const line = (): TrialLedgerLine => ({ kind: 'intent', tag: TAG, name: 'exp-a', arm: 'packet', at: '2026-11-17T10:00:00.000Z' });
+  const realWrite = (fd: number, buffer: Buffer, offset: number): number => writeSync(fd, buffer, offset, buffer.length - offset);
+  const noSync = (): void => undefined;
+
+  it('запись нуля байт — ошибка, назначение не состоялось: сессия создаётся вне опыта', async () => {
+    expect(() => appendTrialLedger('exp-a', line(), home, { write: () => 0, syncDirectory: noSync })).toThrow('wrote 0 of');
+    const map = await createWork(project, { title: 'W' });
+    const created = await createNewSession(project, map.work.id, trial(), {
+      ...options(),
+      append: (name, ln, dir) => appendTrialLedger(name, ln, dir, { write: () => 0, syncDirectory: noSync }),
+    });
+    expect(created.session).not.toHaveProperty('trial');
+    expect(warnings.join('\n')).toContain('intent');
+  });
+
+  it('частичная запись дописывается до конца: строка в файле целая и читается', () => {
+    appendTrialLedger('exp-a', line(), home, { write: (fd, buffer, offset) => realWrite(fd, buffer.subarray(0, Math.min(buffer.length, offset + 7)), offset), syncDirectory: noSync });
+    expect(ledger()).toMatchObject({ lines: [{ kind: 'intent', tag: TAG }], unreadable: [] });
+  });
+
+  it('частичная запись, после которой запись встала, — ошибка', () => {
+    let calls = 0;
+    const io = { write: (fd: number, buffer: Buffer, offset: number) => (calls++ === 0 ? realWrite(fd, buffer.subarray(0, 5), offset) : 0), syncDirectory: noSync };
+    expect(() => appendTrialLedger('exp-a', line(), home, io)).toThrow('wrote 5 of');
+  });
+
+  it('сбой сброса каталога — ошибка, назначение не состоялось', async () => {
+    const io = { write: realWrite, syncDirectory: () => { throw new Error('EIO'); } };
+    expect(() => appendTrialLedger('exp-a', line(), home, io)).toThrow('EIO');
+    const map = await createWork(project, { title: 'W' });
+    const created = await createNewSession(project, map.work.id, trial('c'.repeat(32)), { ...options(), append: (name, ln, dir) => appendTrialLedger(name, ln, dir, io) });
+    expect(created.session).not.toHaveProperty('trial');
+    expect(warnings.join('\n')).toContain('EIO');
+  });
+
+  it('повтор после сбоя сбрасывает каталог снова, хотя файл уже существует', () => {
+    const synced: string[] = [];
+    expect(() => appendTrialLedger('exp-a', line(), home, { write: realWrite, syncDirectory: () => { throw new Error('EIO'); } })).toThrow('EIO');
+    expect(existsSync(trialLedgerFile('exp-a', home))).toBe(true);
+    appendTrialLedger('exp-a', line(), home, { write: realWrite, syncDirectory: (dir) => void synced.push(dir) });
+    expect(synced).toEqual([path.join(home, 'trials'), home]);
+  });
+});
+
+describe('отсутствие файла отличается от недоступности (Э-1б, уточнение 12)', () => {
+  it('файла нет — подтверждённое отсутствие: undefined', () => {
+    expect(readTrialLedger('exp-a', home)).toBeUndefined();
+    mkdirSync(path.join(home, 'trials'));
+    expect(readTrialLedger('exp-a', home)).toBeUndefined();
+  });
+
+  it('родитель не каталог: ошибка, а не «файла нет»', () => {
+    writeFileSync(path.join(home, 'trials'), 'not a directory');
+    expect(() => readTrialLedger('exp-a', home)).toThrow();
+  });
+
+  it('родительский каталог недоступен: ошибка, а не «файла нет»', () => {
+    if (process.getuid?.() === 0) return;
+    mkdirSync(path.join(home, 'trials'));
+    chmodSync(path.join(home, 'trials'), 0);
+    try {
+      expect(() => readTrialLedger('exp-a', home)).toThrow();
+    } finally {
+      chmodSync(path.join(home, 'trials'), 0o700);
+    }
   });
 });

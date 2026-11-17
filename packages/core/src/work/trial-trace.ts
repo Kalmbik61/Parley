@@ -26,6 +26,10 @@ import type { LetterReads } from './letter-store.js';
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 const nullableString = (value: unknown): value is string | null => value === null || typeof value === 'string';
+const isTime = (value: unknown): value is string => typeof value === 'string' && Number.isFinite(Date.parse(value));
+const nullableTime = (value: unknown): value is string | null => value === null || isTime(value);
+/** Отрезок не перевёрнут: выход не раньше входа (оба времени уже разобраны). */
+const ordered = (from: string, to: string): boolean => Date.parse(to) >= Date.parse(from);
 const DAMAGED: DamagedTrace = { damaged: true };
 
 /**
@@ -43,7 +47,8 @@ export function normalizeTrial(trial: unknown): SessionTrial | DamagedTrial {
 
 function normalizeSegment(value: unknown): TrialSegment | undefined {
   if (!isRecord(value) || typeof value['provider'] !== 'string' || !nullableString(value['providerSessionId']) ||
-    !nullableString(value['startedAt']) || !nullableString(value['endedAt'])) return undefined;
+    !nullableTime(value['startedAt']) || !nullableTime(value['endedAt'])) return undefined;
+  if (value['startedAt'] !== null && value['endedAt'] !== null && !ordered(value['startedAt'], value['endedAt'])) return undefined;
   return {
     provider: value['provider'],
     providerSessionId: value['providerSessionId'],
@@ -54,8 +59,8 @@ function normalizeSegment(value: unknown): TrialSegment | undefined {
 
 function normalizeSessionTrace(value: unknown): TrialSessionTrace | DamagedTrace {
   if (!isRecord(value) || typeof value['session'] !== 'string' || typeof value['provider'] !== 'string' ||
-    !nullableString(value['providerSessionId']) || !nullableString(value['startedAt']) || !nullableString(value['endedAt']) ||
-    !nullableString(value['closedAt']) || typeof value['deletedAt'] !== 'string' ||
+    !nullableString(value['providerSessionId']) || !nullableTime(value['startedAt']) || !nullableTime(value['endedAt']) ||
+    !nullableTime(value['closedAt']) || !isTime(value['deletedAt']) ||
     !isRecord(value['trial'])) return DAMAGED;
   const previous = value['previousAgents'];
   let previousAgents: TrialSegment[] | undefined;
@@ -86,7 +91,7 @@ function normalizeSessionTrace(value: unknown): TrialSessionTrace | DamagedTrace
 
 function normalizeRoomRow(value: unknown): TrialRoomRow | DamagedTrace {
   if (!isRecord(value) || typeof value['room'] !== 'string' || typeof value['session'] !== 'string' ||
-    typeof value['from'] !== 'string' || typeof value['to'] !== 'string') return DAMAGED;
+    !isTime(value['from']) || !isTime(value['to']) || !ordered(value['from'], value['to'])) return DAMAGED;
   return { room: value['room'], session: value['session'], from: value['from'], to: value['to'] };
 }
 
@@ -225,4 +230,17 @@ export function trialSegments(source: TrialSegmentSource): TrialSegments {
     truncated: previous.length >= PREVIOUS_AGENTS_MAX,
     missingId: segments.some((segment) => segment.provider === 'claude' && segment.startedAt !== null && segment.providerSessionId === null),
   };
+}
+
+/**
+ * В работе есть повреждение, которое могло скрыть метку назначения: живая сессия с повреждённым назначением, повреждённая
+ * запись следа (любой из трёх списков) или след с повреждённым назначением внутри. Пока оно есть, отсутствие записи о
+ * назначении доказать нельзя.
+ */
+export function workHasTrialDamage(map: WorkMap): boolean {
+  if (map.sessions.some((session) => session.trial !== undefined && 'damaged' in session.trial)) return true;
+  const trace = map.work.trialTrace;
+  if (trace === undefined) return false;
+  return [...trace.rooms, ...trace.unknownParticipation].some(isDamagedTrace) ||
+    trace.sessions.some((entry) => isDamagedTrace(entry) || 'damaged' in entry.trial);
 }
