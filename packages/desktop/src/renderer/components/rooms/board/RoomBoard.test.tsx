@@ -224,3 +224,42 @@ describe('RoomBoard — уведомление и фильтр', () => {
     expect([1, 2, 3].map(dimmed)).toEqual([false, false, false]);
   });
 });
+
+describe('RoomBoard — лента событий', () => {
+  const entryOf = (at: string, status: PlanItem['log'][number]['status'], by = 's-01') => ({ at, by, status, note: null });
+  const clockOf = (at: string): string => {
+    const date = new Date(at);
+    return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+  };
+
+  it('лента показывает три последние перемены, новая сверху', () => {
+    const log = [
+      entryOf('2026-11-17T08:00:00.000Z', 'in_progress'),
+      entryOf('2026-11-17T09:00:00.000Z', 'done'),
+      entryOf('2026-11-17T10:00:00.000Z', 'returned', 's-02'),
+      entryOf('2026-11-17T11:00:00.000Z', 'in_progress'),
+    ];
+    renderBoard(planOf('verified', [item(1, { status: 'in_progress', log })]));
+    const list = screen.getByRole('list', { name: S.roomBoard.events });
+    const rows = within(list).getAllByRole('listitem');
+    expect(rows.map((row) => row.textContent)).toEqual([
+      `${clockOf('2026-11-17T11:00:00.000Z')}${S.roomBoard.event('S01 back', 1, S.plans.itemStatus.in_progress)}`,
+      `${clockOf('2026-11-17T10:00:00.000Z')}${S.roomBoard.event('S02 front', 1, S.plans.itemStatus.returned)}`,
+      `${clockOf('2026-11-17T09:00:00.000Z')}${S.roomBoard.event('S01 back', 1, S.plans.itemStatus.done)}`,
+    ]);
+    expect(rows[0]!.className).toContain('text-foreground');
+    expect(rows[1]!.className).toContain('text-muted-foreground');
+  });
+
+  it('перемены попытки подписаны словом состояния попытки', () => {
+    const plan = autoPlan([item(1, { status: 'in_progress' })], [attempt({ item: 1, log: [{ at: '2026-11-17T09:00:00.000Z', by: 'engine', status: 'checking', note: null, op: null }] })]);
+    renderBoard(plan);
+    expect(screen.getByRole('list', { name: S.roomBoard.events }).textContent).toContain(S.roomBoard.event('engine', 1, S.plans.attemptStatus.checking));
+  });
+
+  it('событий нет — ленты нет', () => {
+    renderBoard(planOf('verified', [item(1)]));
+    expect(screen.queryByRole('list', { name: S.roomBoard.events })).toBeNull();
+    expect(document.querySelector('[data-board-events]')).toBeNull();
+  });
+});
