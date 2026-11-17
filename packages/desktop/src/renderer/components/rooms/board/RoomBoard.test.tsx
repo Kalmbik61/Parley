@@ -154,13 +154,28 @@ describe('RoomBoard — карточка', () => {
     expect(card(3).querySelector('[data-board-status]')).toBeNull();
   });
 
-  it('нажатие и Enter на карточке зовут onOpenItem с номером пункта', () => {
+  it('нажатие на карточку зовёт onOpenItem с номером пункта один раз', () => {
     const onOpenItem = vi.fn();
     renderBoard(planOf('verified', [item(1), item(2, { status: 'in_progress' })]), {}, { onOpenItem });
     fireEvent.click(card(2));
+    expect(onOpenItem).toHaveBeenCalledTimes(1);
     expect(onOpenItem).toHaveBeenCalledWith(2);
-    expect(card(2).tagName).toBe('BUTTON');
-    expect(card(2).getAttribute('type')).toBe('button');
+  });
+
+  // jsdom не переводит Enter в click у кнопки (это делает браузер), а user-event в окне не подключён: сам Enter проверяет
+  // сквозной сценарий задачи 9. Здесь — то, что даёт браузеру эту активацию: карточка — родная включённая кнопка с фокусом,
+  // Enter на ней не перехватывается.
+  it('карточка — родная кнопка, берёт фокус, Enter на ней не отменяется', () => {
+    const onOpenItem = vi.fn();
+    renderBoard(planOf('verified', [item(1)]), {}, { onOpenItem });
+    const el = card(1) as HTMLButtonElement;
+    expect(el.tagName).toBe('BUTTON');
+    expect(el.disabled).toBe(false);
+    expect(el.tabIndex).toBeGreaterThanOrEqual(0);
+    el.focus();
+    expect(document.activeElement).toBe(el);
+    const notCancelled = fireEvent.keyDown(el, { key: 'Enter', code: 'Enter' });
+    expect(notCancelled).toBe(true);
   });
 
   it('без onOpenItem нажатие ничего не делает', () => {
