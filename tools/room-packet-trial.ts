@@ -12,7 +12,7 @@
  * the final calculation).
  */
 
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync, mkdirSync } from 'node:fs';
+import { cpSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync, mkdirSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
@@ -297,7 +297,7 @@ export function analyzeChain(records: readonly Json[], closedBeforeCutoff: boole
       continue;
     }
     const message = isObject(record['message']) ? record['message'] : undefined;
-    if (type === 'attachment' && isObject(record['attachment']) && window >= 0 && !modelSeenInWindow) {
+    if (type === 'attachment' && main && isObject(record['attachment']) && window >= 0 && !modelSeenInWindow) {
       const attachment = record['attachment'];
       const kind = str(attachment['type']);
       if (kind === 'hook_cancelled') compactions[window]!.hookCancelledRecords += 1;
@@ -330,7 +330,7 @@ export function analyzeChain(records: readonly Json[], closedBeforeCutoff: boole
         }
       }
     }
-    if (type === 'user' && message !== undefined && Array.isArray(message['content'])) {
+    if (type === 'user' && main && message !== undefined && Array.isArray(message['content'])) {
       for (const block of message['content']) {
         if (!isObject(block) || block['type'] !== 'tool_result') continue;
         const callId = str(block['tool_use_id']);
@@ -428,7 +428,7 @@ export function parseJournal(text: string | null): JournalFacts {
 // ---------------------------------------------------------------------------------------------------------------------
 
 export type RoomClass = 'in' | 'out' | 'approx';
-export type UnknownReason = 'missing-transcript' | 'truncated-transcript' | 'incomplete-history' | 'approximate-membership';
+export type UnknownReason = 'missing-transcript' | 'truncated-transcript' | 'incomplete-history' | 'approximate-membership' | 'untimed-boundary';
 
 export interface Period { from: number; to: number }
 
@@ -447,7 +447,7 @@ export interface SessionFacts {
   arm: Arm;
   assignedAt: string;
   /** How the transcript side was settled. */
-  transcript: 'found' | 'not-launched' | 'no-conversation' | 'missing-not-member' | 'missing';
+  transcript: 'found' | 'not-launched' | 'history-incomplete' | 'no-conversation' | 'missing-not-member' | 'missing';
   unknownReasons: UnknownReason[];
   compactions: Array<CompactionFacts & { room: RoomClass }>;
   windows: Array<WindowFacts & { room: RoomClass }>;
@@ -456,6 +456,8 @@ export interface SessionFacts {
   matchingErrorResults: number;
   duplicatesMerged: number;
   filesRead: number;
+  /** Compactions in the transcripts as a whole, no cutoff (plan E-2 item 29). */
+  compactionsWholeFile: number;
   journal: JournalFacts;
 }
 
@@ -473,13 +475,66 @@ export interface SessionInput {
 export function claudeIds(session: WorkSession): { ids: string[]; incomplete: boolean } {
   const ids: string[] = [];
   let incomplete = (session.previousAgents?.length ?? 0) >= PREVIOUS_AGENTS_MAX;
+  let lastEnded: string | null = null;
   for (const binding of session.previousAgents ?? []) {
+    if (lastEnded === null || binding.endedAt > lastEnded) lastEnded = binding.endedAt;
     if (binding.provider !== 'claude') continue;
     if (binding.providerSessionId !== null) ids.push(binding.providerSessionId);
     else if (binding.startedAt !== null) incomplete = true;
   }
-  if (session.provider === 'claude' && session.providerSessionId !== null) ids.push(session.providerSessionId);
+  if (session.provider === 'claude') {
+    if (session.providerSessionId !== null) ids.push(session.providerSessionId);
+    else if (session.history.some((entry) => entry.event === 'active' && (lastEnded === null || entry.at > lastEnded))) {
+      // The current claude segment was started (the session went active after the last switch) but has no id: not "never launched".
+      incomplete = true;
+    }
+  }
   return { ids: [...new Set(ids)], incomplete };
+}
+
+/**
+ * Files of one session become segments. Files are linked only when they share records (by `uuid`) with the segment before them
+ * (a fork or a transfer copies the history); a file with no shared history starts a new segment: a window never runs across the
+ * seam of unrelated segments.
+ */
+export function splitSegments(files: readonly Json[][]): { segments: Json[][]; duplicates: number } {
+  const groups: Array<{ files: Json[][]; uuids: Set<string> }> = [];
+  for (const records of files) {
+    if (records.length === 0) continue;
+    const uuids = new Set(records.map((record) => str(record['uuid'])).filter((uuid): uuid is string => uuid !== undefined));
+    const last = groups[groups.length - 1];
+    if (last !== undefined && [...uuids].some((uuid) => last.uuids.has(uuid))) {
+      last.files.push(records);
+      for (const uuid of uuids) last.uuids.add(uuid);
+    } else groups.push({ files: [records], uuids });
+  }
+  let duplicates = 0;
+  const segments = groups.map((group) => {
+    const merged = mergeChain(group.files);
+    duplicates += merged.duplicates;
+    return merged.records;
+  });
+  return { segments, duplicates };
+}
+
+const isBoundary = (record: Json): boolean =>
+  record['type'] === 'system' && record['subtype'] === 'compact_boundary' && record['isSidechain'] !== true;
+
+/** Chains analysed one after another: indices of compactions and windows run on across segments, windows do not. */
+function analyzeSegments(segments: readonly Json[][], lastClosed: boolean): ChainFacts {
+  const total: ChainFacts = { compactions: [], windows: [], getMapPacketRequests: 0, errorResults: 0, matchingErrorResults: 0, records: 0 };
+  segments.forEach((records, index) => {
+    // A segment that is not the last one ended with its own end (the next one has no shared history): its last window is finished.
+    const chain = analyzeChain(records, index < segments.length - 1 ? true : lastClosed);
+    const offset = total.compactions.length;
+    total.compactions.push(...chain.compactions);
+    total.windows.push(...chain.windows.map((window) => ({ ...window, compaction: window.compaction + offset })));
+    total.getMapPacketRequests += chain.getMapPacketRequests;
+    total.errorResults += chain.errorResults;
+    total.matchingErrorResults += chain.matchingErrorResults;
+    total.records += chain.records;
+  });
+  return total;
 }
 
 export function analyzeSession(input: SessionInput): SessionFacts {
@@ -502,7 +557,7 @@ export function analyzeSession(input: SessionInput): SessionFacts {
   // by definition, whether its transcript exists or not; "no conversation" is only a diagnostic line.
   const everMember = membership.exact.length > 0 || membership.approx.length > 0;
   let transcript: SessionFacts['transcript'] = 'found';
-  if (ids.length === 0) transcript = 'not-launched';
+  if (ids.length === 0) transcript = incomplete ? 'history-incomplete' : 'not-launched';
   else if (missing) {
     if (everMember) {
       transcript = 'missing';
@@ -511,16 +566,24 @@ export function analyzeSession(input: SessionInput): SessionFacts {
   }
   if (files.some((file) => file.truncated)) unknown.add('truncated-transcript');
 
-  const merged = mergeChain(files.map((file) => file.records));
+  const split = splitSegments(files.map((file) => file.records));
   const closedBeforeCutoff =
     session.closedAt !== null && (cutoffMs === null || ms(session.closedAt) < cutoffMs);
-  const chain = analyzeChain(merged.records, closedBeforeCutoff);
+  const chain = analyzeSegments(split.segments, closedBeforeCutoff);
   const compactions = chain.compactions.map((compaction) => ({
     ...compaction,
     room: classifyCompaction(membership, ms(compaction.at)),
   }));
-  if (compactions.some((compaction) => compaction.room === 'approx')) unknown.add('approximate-membership');
+  // Membership rebuilt without a journal makes the whole session unknown, wherever its boundaries fall: the rebuilt periods
+  // themselves are not exact. A boundary without a time cannot be placed in or out of a room either.
+  if (membership.approx.length > 0 || compactions.some((compaction) => compaction.room === 'approx')) unknown.add('approximate-membership');
+  if (compactions.some((compaction) => Number.isNaN(ms(compaction.at)))) unknown.add('untimed-boundary');
   const windows = chain.windows.map((window) => ({ ...window, room: compactions[window.compaction]!.room }));
+  // Compactions in the whole transcripts, no cutoff: what the journal count is compared with.
+  const whole = splitSegments(
+    input.transcriptFiles.flatMap((file) => (file.text === null ? [] : [readTranscriptText(file.text, null).records])),
+  );
+  const compactionsWholeFile = whole.segments.reduce((count, records) => count + records.filter(isBoundary).length, 0);
   return {
     id: session.id,
     workId: input.workId,
@@ -533,8 +596,9 @@ export function analyzeSession(input: SessionInput): SessionFacts {
     getMapPacketRequests: chain.getMapPacketRequests,
     errorResults: chain.errorResults,
     matchingErrorResults: chain.matchingErrorResults,
-    duplicatesMerged: merged.duplicates,
+    duplicatesMerged: split.duplicates,
     filesRead: files.length,
+    compactionsWholeFile,
     journal: input.journal,
   };
 }
@@ -716,17 +780,23 @@ export function computeFinal(input: FinalInput): FinalResult {
   const verdict: Verdict = bounds === null ? 'undetermined' : combine(bounds);
   if (bounds !== null && bounds.favourable.verdict !== bounds.unfavourable.verdict) reasons.push('the two bounds disagree');
 
+  // "First compaction only" is the session's very first compaction: if its window has no calls, or it was outside a room, the
+  // session gives no window to this check.
   const firstOnly = (arm: Arm): SessionFacts[] =>
     byArm(arm).map((session) => {
-      const first = session.windows.find((window) => window.room === 'in' && window.outcome !== 'empty');
-      return { ...session, windows: first === undefined ? [] : [first] };
+      const first = session.windows[0];
+      return { ...session, windows: first !== undefined && first.room === 'in' && first.outcome !== 'empty' ? [first] : [] };
     });
+  // "All compactions" does not need the membership, so a session whose only unknown part is the membership takes part.
+  const membershipOnly = (session: SessionFacts): boolean =>
+    session.unknownReasons.length > 0 && session.unknownReasons.every((reason) => reason === 'approximate-membership' || reason === 'untimed-boundary');
+  const forAll = (arm: Arm): SessionFacts[] => input.cohort.filter((session) => session.arm === arm && (session.unknownReasons.length === 0 || membershipOnly(session)));
   const everyWindow: WindowSelect = () => true;
   const sensitivity: CheckResult[] = [
     { name: 'equal weight per session', note: 'each session counts once: mean of its own shares', bounds: run(inRoom, 'equal') },
-    { name: 'first compaction of each session only', note: 'first in-room window of each session', bounds: run(inRoom, 'pooled', firstOnly) },
+    { name: 'first compaction of each session only', note: 'the first compaction of each session, when it was in a room and had calls', bounds: run(inRoom, 'pooled', firstOnly) },
     { name: 'without unfinished windows', note: 'windows that were still open at the cutoff are dropped', bounds: run((session, window) => inRoom(session, window) && window.finished, 'pooled') },
-    { name: 'all compactions including those outside a room', note: 'windows outside a room and with approximate membership are counted too', bounds: run(everyWindow, 'pooled') },
+    { name: 'all compactions including those outside a room', note: 'windows outside a room are counted too; sessions whose only unknown part is the membership take part', bounds: run(everyWindow, 'pooled', forAll) },
   ];
   return { verdict, reasons, bounds, sensitivity, unknownOutcomeWindows };
 }
@@ -847,7 +917,7 @@ export function summarizeArm(sessions: readonly SessionFacts[]): ArmSummary {
     journal: {
       sessionsWithJournal: sessions.filter((session) => session.journal.present).length,
       sessionStartCompactLines: sum(sessions.map((session) => session.journal.sessionStartCompactLines)),
-      transcriptCompactionsWholeFile: compactions.length,
+      transcriptCompactionsWholeFile: sum(sessions.map((session) => session.compactionsWholeFile)),
       bridgeOutcomes,
       hostReasons,
     },
@@ -1239,8 +1309,24 @@ export function parseOptions(argv: readonly string[], env: NodeJS.ProcessEnv = p
   return { mode, trial, cutoff, home, claudeRoots, claudeSettings, out: values.out ?? null, seed, resamples };
 }
 
-const inside = (child: string, parent: string): boolean => {
-  const relative = path.relative(parent, child);
+/** Real path of a path that may not exist yet: links and directory aliases of its nearest existing ancestor are resolved. */
+export function realPathLoose(target: string): string {
+  const rest: string[] = [];
+  let current = path.resolve(target);
+  for (;;) {
+    try {
+      return path.join(realpathSync(current), ...rest.reverse());
+    } catch {
+      const parent = path.dirname(current);
+      if (parent === current) return path.resolve(target);
+      rest.push(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
+export const insideReal = (child: string, parent: string): boolean => {
+  const relative = path.relative(realPathLoose(parent), realPathLoose(child));
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
 };
 
@@ -1261,7 +1347,7 @@ export async function main(argv: readonly string[], io: Io = { write: (text) => 
   }
   const out = path.resolve(options.out ?? `room-packet-trial-${options.trial}-${options.mode}.json`);
   for (const protectedDir of [options.home, ...options.claudeRoots]) {
-    if (inside(out, protectedDir)) {
+    if (insideReal(out, protectedDir)) {
       io.write(`room-packet-trial: --out ${out} is inside ${protectedDir}, which is read-only for this script\n`);
       return 2;
     }

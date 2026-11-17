@@ -1,4 +1,4 @@
-import { chmodSync, cpSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,6 +16,8 @@ import {
   main,
   makeSnapshot,
   mergeChain,
+  realPathLoose,
+  splitSegments,
   readRetention,
   readTranscriptText,
   ratio,
@@ -121,7 +123,7 @@ const MEMBER: Membership = { exact: [{ from: 0, to: Number.POSITIVE_INFINITY }],
 
 const sessionOf = (over: Partial<WorkSession> = {}): WorkSession =>
   ({
-    id: 's-x', provider: 'claude', providerSessionId: 'c-x', previousAgents: undefined, closedAt: null, result: null, resultAt: null,
+    id: 's-x', provider: 'claude', providerSessionId: 'c-x', previousAgents: undefined, history: [], closedAt: null, result: null, resultAt: null,
     trial: { name: 'exp-a', arm: 'packet', at: T09 }, ...over,
   }) as unknown as WorkSession;
 
@@ -326,7 +328,7 @@ const win = (outcome: WindowFacts['outcome'], over: Partial<WindowFacts> = {}): 
 
 const fake = (arm: Arm, outcomes: Array<WindowFacts['outcome']>, over: Partial<SessionFacts> = {}): SessionFacts => ({
   id: 's', workId: 'w', arm, assignedAt: T09, transcript: 'found', unknownReasons: [], compactions: [], windows: outcomes.map((o) => win(o)),
-  getMapPacketRequests: 0, errorResults: 0, matchingErrorResults: 0, duplicatesMerged: 0, filesRead: 1,
+  getMapPacketRequests: 0, errorResults: 0, matchingErrorResults: 0, duplicatesMerged: 0, filesRead: 1, compactionsWholeFile: 0,
   journal: { present: false, sessionStartCompactLines: 0, bridgeOutcomes: {}, hostReasons: {}, turnTrace: false }, ...over,
 });
 
@@ -797,5 +799,150 @@ describe('command line', () => {
     builder.call({ messageId: 'same' });
     const chain = analyzeChain(JSON.parse(`[${builder.text().trim().split('\n').join(',')}]`) as Array<Record<string, unknown>>, false);
     expect(chain.compactions[0]!.modelCalls).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+describe('items 25-30: corrections after the first acceptance', () => {
+  const hist = (...events: Array<[string, string]>): WorkSession['history'] => events.map(([event, at]) => ({ event, at })) as unknown as WorkSession['history'];
+
+  it('25: the output guard compares real paths — the home and the output named through different names of one directory', async () => {
+    const root = freshRoot();
+    const built = await buildHome({ root, sessions: [{ arm: 'packet', claudeId: 'claude-a' }], rooms: [] });
+    const alias = path.join(root, 'alias');
+    symlinkSync(built.home, alias);
+    const aliasClaude = path.join(root, 'claude-alias');
+    symlinkSync(built.claudeRoot, aliasClaude);
+    for (const [home, claude, target] of [
+      [built.home, built.claudeRoot, path.join(alias, 'x.json')],
+      [alias, built.claudeRoot, path.join(built.home, 'y.json')],
+      [built.home, built.claudeRoot, path.join(aliasClaude, 'z.json')],
+      [built.home, built.claudeRoot, path.join(alias, 'not-yet', 'deeper', 'w.json')],
+    ] as const) {
+      let out = '';
+      const code = await main(['--status', '--trial', 'exp-a', '--home', home, '--claude-root', claude, '--out', target], { write: (text) => { out += text; } });
+      expect(code).toBe(2);
+      expect(out).toContain('read-only');
+      expect(existsSync(target)).toBe(false);
+    }
+    expect(realPathLoose(path.join(alias, 'a', 'b'))).toBe(path.join(realPathLoose(built.home), 'a', 'b'));
+  });
+
+  it('26: unrelated segments are not stitched: a window ends at the end of its segment', () => {
+    const first = new TranscriptBuilder('claude-1', START).prompt().boundary().calls(2);
+    // the second file has no shared history; its calls before its own boundary must not join the first window
+    const second = new TranscriptBuilder('claude-2', '2026-11-20T12:00:00.000Z').prompt().calls(3, { result: 'error' }).boundary().call();
+    const session = sessionOf({
+      providerSessionId: 'claude-2',
+      previousAgents: [
+        { provider: 'claude', providerSessionId: 'claude-1', startedAt: START, endedAt: '2026-11-20T11:00:00.000Z' },
+        { provider: 'codex', providerSessionId: 'codex-1', startedAt: START, endedAt: '2026-11-20T11:30:00.000Z' },
+      ] as NonNullable<WorkSession['previousAgents']>,
+    });
+    const facts = analyzeSession({
+      session, workId: 'w-1', membership: MEMBER, hasMessages: false,
+      journal: { present: false, sessionStartCompactLines: 0, bridgeOutcomes: {}, hostReasons: {}, turnTrace: false },
+      transcriptFiles: [{ id: 'claude-1', text: first.text() }, { id: 'claude-2', text: second.text() }],
+      cutoffMs: Date.parse(CUTOFF),
+    });
+    expect(facts.compactions).toHaveLength(2);
+    expect(facts.windows.map((window) => [window.calls, window.outcome, window.finished])).toEqual([[2, 'ok', true], [1, 'ok', false]]);
+    expect(facts.errorResults).toBe(3);
+    // while a file that repeats the first file's records is the same segment
+    const copy = new TranscriptBuilder('claude-3', START, 'claude-1').prompt().boundary().calls(2).calls(1);
+    expect(splitSegments([JSON.parse(`[${first.text().trim().split('\n').join(',')}]`), JSON.parse(`[${copy.text().trim().split('\n').join(',')}]`)]).segments).toHaveLength(1);
+  });
+
+  it('26: a started Claude segment without an id is an incomplete history, not "never launched"', () => {
+    const text = new TranscriptBuilder('c-x', START).prompt().boundary().calls(1).text();
+    const previous = analyze(null, {
+      providerSessionId: null,
+      previousAgents: [{ provider: 'claude', providerSessionId: null, startedAt: START, endedAt: '2026-11-20T11:00:00.000Z' }] as NonNullable<WorkSession['previousAgents']>,
+    });
+    expect(previous.unknownReasons).toContain('incomplete-history');
+    expect(previous.transcript).toBe('history-incomplete');
+    const current = analyze(text, { providerSessionId: null, history: hist(['pending', T09], ['active', START]) });
+    expect(current.unknownReasons).toContain('incomplete-history');
+    expect(current.transcript).toBe('history-incomplete');
+    // never started: still "not launched"
+    const never = analyze(null, { providerSessionId: null, history: hist(['pending', T09]) });
+    expect(never.transcript).toBe('not-launched');
+    expect(never.unknownReasons).toEqual([]);
+    // switched to claude after another agent had run, claude itself never started
+    const switched = analyze(null, {
+      providerSessionId: null,
+      previousAgents: [{ provider: 'codex', providerSessionId: 'cx', startedAt: START, endedAt: '2026-11-20T11:00:00.000Z' }] as NonNullable<WorkSession['previousAgents']>,
+      history: hist(['pending', T09], ['active', START], ['sleeping', '2026-11-20T10:59:00.000Z']),
+    });
+    expect(switched.transcript).toBe('not-launched');
+  });
+
+  const approxOutside: Membership = { exact: [], approx: [{ from: Date.parse('2027-01-01T00:00:00Z'), to: Number.POSITIVE_INFINITY }] };
+  const solid = (): SessionFacts[] => [...many(12, (i) => fake('control', [i < 9 ? 'error' : 'ok'])), ...many(11, (i) => fake('packet', [i < 2 ? 'error' : 'ok']))];
+
+  it('27: membership rebuilt without a journal blocks the whole session even if no boundary falls into the rebuilt period (12 and 12)', () => {
+    const blocked = analyze(new TranscriptBuilder('c-x', START).prompt().boundary().calls(2).text(), {}, { membership: approxOutside });
+    expect(blocked.compactions[0]!.room).toBe('out');
+    expect(blocked.unknownReasons).toEqual(['approximate-membership']);
+    const cohort = [...solid(), blocked];
+    expect(cohort.filter((session) => session.arm === 'control')).toHaveLength(12);
+    expect(cohort.filter((session) => session.arm === 'packet')).toHaveLength(12);
+    expect(final(cohort).verdict).toBe('undetermined');
+    expect(final(cohort).bounds).toBeNull();
+    expect(final(solid().concat(fake('packet', ['ok']))).verdict).toBe('supports');
+  });
+
+  it('27: a boundary without a time leaves the participation unknown for the whole session', () => {
+    const untimed = new TranscriptBuilder('c-x', START).prompt().raw(JSON.stringify({ type: 'system', subtype: 'compact_boundary', uuid: 'untimed-1', isSidechain: false })).calls(2).text();
+    const facts = analyze(untimed);
+    expect(facts.unknownReasons).toEqual(['untimed-boundary']);
+    expect(final([...solid(), facts]).verdict).toBe('undetermined');
+  });
+
+  it('28: "first compaction only" is the very first compaction; an empty first window gives no window', () => {
+    const emptyFirst = (arm: Arm): SessionFacts => fake(arm, ['empty', 'error']);
+    const allEmptyFirst = [...many(12, () => emptyFirst('control')), ...many(12, () => emptyFirst('packet'))];
+    const check = final(allEmptyFirst).sensitivity.find((entry) => entry.name.startsWith('first compaction'))!;
+    expect(check.bounds.favourable.interval).toBeNull();
+    expect(check.bounds.favourable.reason).toContain('fewer than 10');
+    const filled = [...many(12, () => fake('control', ['error', 'ok'])), ...many(12, (i) => fake('packet', [i < 2 ? 'error' : 'ok', 'error']))];
+    const second = final(filled).sensitivity.find((entry) => entry.name.startsWith('first compaction'))!;
+    // only the first window of each session: packet 2/12, control 12/12
+    expect(second.bounds.favourable.interval!.r).toBeCloseTo(2 / 12, 6);
+  });
+
+  it('28: "all compactions" takes in a session whose only unknown part is the membership; other unknowns stay out', () => {
+    const packet = [...many(9, (i) => fake('packet', [i < 2 ? 'error' : 'ok'])), fake('packet', ['ok'], { unknownReasons: ['approximate-membership'] })];
+    const control = many(10, (i) => fake('control', [i < 8 ? 'error' : 'ok']));
+    const result = final([...packet, ...control]);
+    const all = result.sensitivity.find((entry) => entry.name.startsWith('all compactions'))!;
+    const equal = result.sensitivity.find((entry) => entry.name.startsWith('equal weight'))!;
+    expect(all.bounds.favourable.interval).not.toBeNull();
+    expect(equal.bounds.favourable.interval).toBeNull();
+    const withOther = final([...packet.slice(0, 9), fake('packet', ['ok'], { unknownReasons: ['missing-transcript'] }), ...control]);
+    expect(withOther.sensitivity.find((entry) => entry.name.startsWith('all compactions'))!.bounds.favourable.interval).toBeNull();
+  });
+
+  it('29: compactions in the whole file are counted without the cutoff: two boundaries on either side of it give 2', async () => {
+    const root = freshRoot();
+    const built = await buildHome({ root, sessions: [{ arm: 'packet', claudeId: 'claude-a' }], rooms: [{ members: [{ session: 0, from: T09 }] }] });
+    writeTranscript(built, 'claude-a', new TranscriptBuilder('claude-a', START).prompt().at(60).boundary().calls(1).at(7200).boundary().calls(1).text());
+    writeJournal(built, 's-01', [{ hook_event_name: 'SessionStart', source: 'compact' }, { hook_event_name: 'SessionStart', source: 'compact' }]);
+    const result = await run(built, '--status', ['--cutoff', '2026-11-20T11:00:00.000Z']);
+    expect(arms(result.json).packet.compactions).toBe(1);
+    expect(arms(result.json).packet.journal).toMatchObject({ sessionStartCompactLines: 2, transcriptCompactionsWholeFile: 2 });
+    expect(result.out).toContain('2/2');
+  });
+
+  it('30: only the main chain counts: a packet insert, an error result and model calls of a side chain are ignored', () => {
+    const builder = new TranscriptBuilder('c-x', START).prompt().boundary();
+    builder.push({ type: 'attachment', isSidechain: true, attachment: { type: 'hook_additional_context', hookName: 'SessionStart', hookEvent: 'SessionStart', content: ['Room state packet side chain text'] } });
+    builder.push({ type: 'attachment', isSidechain: true, attachment: { type: 'hook_cancelled', hookEvent: 'SessionStart' } });
+    builder.call({ sidechain: true, result: 'error' }).model({ sidechain: true }).call();
+    const facts = analyze(builder.text());
+    expect(facts.compactions[0]).toMatchObject({ received: false, packetBytes: 0, modelCalls: 1, hookCancelledRecords: 0 });
+    expect(facts.errorResults).toBe(0);
+    expect(facts.windows[0]).toMatchObject({ calls: 1, outcome: 'ok' });
+    expect(summarizeArm([facts]).spendEstimateTokens).toBe(0);
   });
 });
