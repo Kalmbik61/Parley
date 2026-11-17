@@ -282,6 +282,15 @@
      форма. Приглушённые значки (.5 у закрытой строки, .6 у done-карточки) — исключение, см. тест. */
   --state-inactive: var(--color-neutral-700);
   --state-done: var(--color-accent-2-700);
+  /* Кольцо цвета агента (спека доски комнаты 5.1): indigo, teal, rose, gold, violet, sky, plum, slate; не ниже 3:1 к фонам, где стоит значок. */
+  --agent-colour-0: #5364c5;
+  --agent-colour-1: #1a7871;
+  --agent-colour-2: #b34762;
+  --agent-colour-3: #836914;
+  --agent-colour-4: #7a52c7;
+  --agent-colour-5: #2771a7;
+  --agent-colour-6: #9a5193;
+  --agent-colour-7: #5f6b7a;
   /* Заливка и значок успеха. Цветом текста он даёт 3.14:1 на фоне окна светлой темы — для текста есть
      `--status-success-text` (ревью куска 1). */
   --status-success: var(--color-accent-2-600);
@@ -446,6 +455,15 @@
   /* Значки состояний, тёмная тема: рампы перевёрнуты, ступени 600 держат 3:1 ко всем фонам сайдбара (3.4–7.5:1). */
   --state-inactive: var(--color-neutral-600);
   --state-done: var(--color-accent-2-600);
+  /* Кольцо цвета агента, тёмная тема. */
+  --agent-colour-0: #8b97da;
+  --agent-colour-1: #67b3ad;
+  --agent-colour-2: #da889c;
+  --agent-colour-3: #c4ad63;
+  --agent-colour-4: #a589d9;
+  --agent-colour-5: #72add9;
+  --agent-colour-6: #c08bbb;
+  --agent-colour-7: #929aa5;
   --terminal-pane-locate: var(--color-blue-400);
   --ai-action-accent: var(--color-violet-400);
   --workspace-status-done: #c7a594;

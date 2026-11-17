@@ -27,6 +27,7 @@ import openrouterLightUrl from '../assets/providers/openrouter-light.svg';
 import openrouterUrl from '../assets/providers/openrouter.svg';
 import parleyUrl from '../assets/providers/parley.svg';
 import qwenUrl from '../assets/providers/qwen.svg';
+import { agentColourIndex, agentColourVar } from '../lib/agent-colour.js';
 import { useProvidersStore, type ProviderInfo } from '../store/providers.js';
 import { useUiStore } from '../store/ui.js';
 import { kindOf } from './providers/custom-provider-draft.js';
@@ -99,9 +100,39 @@ export interface AgentIconProps {
   size?: number;
   /** Подпись значка для скринридера — только когда рядом нет названия провайдера. */
   label?: string;
+  /** Сессия агента: у `s-<N>` значок получает кольцо цвета агента (спека доски комнаты 5.1). */
+  sessionId?: string | null;
 }
 
-export function AgentIcon({ provider, size = 12, label }: AgentIconProps): JSX.Element {
+export function AgentIcon({ provider, size = 12, label, sessionId }: AgentIconProps): JSX.Element {
+  const colourIndex = agentColourIndex(sessionId);
+  const colour = agentColourVar(sessionId);
+  const icon = <AgentIconBody provider={provider} size={size} {...(label === undefined ? {} : { label })} ring={colour !== null} />;
+  if (colour === null) return icon;
+  // Кольцо — контур обёртки: размер элемента не меняется, раскладка строк тоже. `data-agent-icon` переезжает на
+  // обёртку, чтобы `dimmed.css` приглушил кольцо и значок один раз.
+  return (
+    <span
+      data-agent-icon=""
+      data-agent-colour={colourIndex}
+      className="inline-flex shrink-0 rounded-full"
+      style={{ width: size, height: size, outline: `1.5px solid ${colour}`, outlineOffset: 2 }}
+    >
+      {icon}
+    </span>
+  );
+}
+
+interface AgentIconBodyProps {
+  provider: string;
+  size: number;
+  label?: string;
+  /** Значок внутри кольца: атрибут приглушения стоит на обёртке. */
+  ring: boolean;
+}
+
+function AgentIconBody({ provider, size, label, ring }: AgentIconBodyProps): JSX.Element {
+  const marker = ring ? {} : { 'data-agent-icon': '' };
   const dark = useUiStore((state) => state.dark);
   // Селектор отдаёт строку или `null`: значок перерисовывается только при смене бренда.
   const brand = useProvidersStore((state) => providerBrand(state.providers.find((row) => row.id === provider)));
@@ -114,7 +145,7 @@ export function AgentIcon({ provider, size = 12, label }: AgentIconProps): JSX.E
         width={size}
         height={size}
         draggable={false}
-        data-agent-icon=""
+        {...marker}
         className="block shrink-0"
         style={{ width: size, height: size }}
       />
@@ -122,7 +153,7 @@ export function AgentIcon({ provider, size = 12, label }: AgentIconProps): JSX.E
   }
   return (
     <span
-      data-agent-icon=""
+      {...marker}
       className="inline-flex shrink-0 items-center justify-center rounded-[4px] bg-muted font-medium leading-none text-muted-foreground"
       style={{ width: size, height: size, fontSize: Math.round(size * 0.6) }}
     >

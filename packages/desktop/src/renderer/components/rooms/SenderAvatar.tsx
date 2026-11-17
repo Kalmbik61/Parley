@@ -19,11 +19,13 @@ export interface SenderAvatarProps {
   size?: number;
   /** Письмо человека через помощника — вместо значка человека знак помощника. */
   via?: MessageVia | null;
+  /** Сессия отправителя: кольцо цвета агента — только у агента с известным провайдером. */
+  sessionId?: string | null;
 }
 
-export function SenderAvatar({ kind, provider, size = 18, via }: SenderAvatarProps): JSX.Element {
+export function SenderAvatar({ kind, provider, size = 18, via, sessionId }: SenderAvatarProps): JSX.Element {
   if (kind === 'human' && via === 'assistant') return <AssistantMark size={size} />;
-  if (kind === 'agent') return <AgentIcon provider={provider ?? '?'} size={size} />;
+  if (kind === 'agent') return <AgentIcon provider={provider ?? '?'} size={size} {...(provider !== null && sessionId != null ? { sessionId } : {})} />;
   const human = kind === 'human';
   const Icon = human ? User : Hash;
   return (
