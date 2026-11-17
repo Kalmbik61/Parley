@@ -86,6 +86,7 @@ import { Composer, type ComposerSubmission } from './Composer.js';
 import { useHostStore } from '../../store/host.js';
 import { currentRoomPlan, PlanPanel, RoomModeControl } from './PlanPanel.js';
 import { roomBoardAvailable } from './board/room-board-model.js';
+import { RoomBoard } from './board/RoomBoard.js';
 import { RoomViewSwitch } from './board/RoomViewSwitch.js';
 import { HaltCard } from './HaltCard.js';
 import { CompletionCard } from './CompletionCard.js';
@@ -142,7 +143,8 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
     .map((participant) => `${participant.id}\u0000${participant.doing}`)
     .join('\n');
   // Доска плана: вид Board открывается, только пока доска доступна (план active, completing или completed).
-  const boardAvailable = roomBoardAvailable(currentRoomPlan(entry, roomId));
+  const boardPlan = currentRoomPlan(entry, roomId);
+  const boardAvailable = roomBoardAvailable(boardPlan);
   const boardOpen = view === 'board' && boardAvailable;
   // Хуки — до раннего выхода «комнаты нет»: порядок хуков не должен зависеть от данных.
   // Под доской лента остаётся в дереве, но письма в ней не читаются: как у неактивной работы.
@@ -704,8 +706,20 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
         </>
       )}
       </div>
-      {/* Слой доски стоит поверх ленты; доску кладёт в него задача 5. */}
-      {boardOpen ? <div data-room-board-layer="" className="absolute inset-0 z-10 flex min-h-0 flex-col bg-sheet" /> : null}
+      {/* Слой доски стоит поверх ленты. */}
+      {boardOpen && boardPlan !== null && roomRecord !== undefined ? (
+        <div data-room-board-layer="" className="absolute inset-0 z-10 flex min-h-0 flex-col bg-sheet">
+          <RoomBoard
+            plan={boardPlan}
+            room={roomRecord}
+            entry={entry}
+            participants={model.participants}
+            activity={activity}
+            now={now}
+            onOpenFeed={() => onViewChange?.('feed')}
+          />
+        </div>
+      ) : null}
       </div>
     </div>
   );
