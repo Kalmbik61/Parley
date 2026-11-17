@@ -26,6 +26,8 @@ export interface RoomHeaderProps {
   contextChip?: ReactNode;
   /** Чип контекста участника на карточке (`ContextChip`, спека 3.2). */
   participantContext?: (participant: ParticipantModel) => ReactNode;
+  /** Метки пунктов плана у участников (`participantItemTags`). */
+  itemTags?: ReadonlyMap<string, number[]>;
   title: string;
   subtitle: string;
   /** Комната в архиве: рядом с названием метка `Archived`. */
@@ -37,7 +39,7 @@ export interface RoomHeaderProps {
   now: Date;
 }
 
-export function RoomHeader({ title, subtitle, archived = false, participants, onOpenSession, onOpenPlan, modeControl, recipeChip, browserToggle, viewSwitch, usageChip, contextChip, participantContext, now }: RoomHeaderProps): JSX.Element {
+export function RoomHeader({ title, subtitle, archived = false, participants, onOpenSession, onOpenPlan, modeControl, recipeChip, browserToggle, viewSwitch, usageChip, contextChip, participantContext, itemTags, now }: RoomHeaderProps): JSX.Element {
   return (
     <div
       data-room-header=""
@@ -73,6 +75,7 @@ export function RoomHeader({ title, subtitle, archived = false, participants, on
         now={now}
         {...(onOpenPlan === undefined ? {} : { onOpenPlan })}
         {...(participantContext === undefined ? {} : { contextChip: participantContext })}
+        {...(itemTags === undefined ? {} : { itemTags })}
       />
     </div>
   );

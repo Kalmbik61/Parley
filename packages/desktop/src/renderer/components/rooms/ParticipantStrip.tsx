@@ -41,11 +41,13 @@ export interface ParticipantStripProps {
   /** Чип контекста участника (спека 2026-10-15, 3.2): во второй строке справа, вне кнопки открытия. */
   onOpenPlan?: (sessionId: string) => void;
   contextChip?: (participant: ParticipantModel) => ReactNode;
+  /** Пункты плана, по которым сессия сейчас должна действовать (`participantItemTags`): метка `#2` во второй строке. */
+  itemTags?: ReadonlyMap<string, number[]>;
   /** «Сейчас» окна — для времени сброса лимита в слове причины (`RoomPanel` тикает раз в 30 с). */
   now: Date;
 }
 
-export function ParticipantStrip({ participants, onOpenSession, onOpenPlan, contextChip, now }: ParticipantStripProps): JSX.Element {
+export function ParticipantStrip({ participants, onOpenSession, onOpenPlan, contextChip, itemTags, now }: ParticipantStripProps): JSX.Element {
   const [showClosed, setShowClosed] = useState(false);
   const renderCard = (participant: ParticipantModel, closed: boolean): JSX.Element => {
     const chip = contextChip?.(participant) ?? null;
@@ -56,6 +58,13 @@ export function ParticipantStrip({ participants, onOpenSession, onOpenPlan, cont
     const showPlanLine = participant.doing === null && participant.plan != null && participant.planLine != null;
     // Нужен человек — слово причины вместо слова состояния, `detail` в подсказке слова (спека застрявших 7.3).
     const need = participant.need ?? null;
+    const tagged = itemTags?.get(participant.id) ?? [];
+    const tags =
+      tagged.length === 0 ? null : (
+        <span data-participant-items="" className="shrink-0 text-[11px] text-muted-foreground">
+          {[...tagged.slice(0, 2).map((id) => S.roomBoard.item(id)), ...(tagged.length > 2 ? [S.roomBoard.moreItems(tagged.length - 2)] : [])].join(' ')}
+        </span>
+      );
     const header = (
       <span className="flex w-full min-w-0 items-center gap-1.5 text-xs">
         <AgentStateDot state={participant.state} lifecycle={participant.lifecycle} />
@@ -104,6 +113,7 @@ export function ParticipantStrip({ participants, onOpenSession, onOpenPlan, cont
               {header}
             </button>
             <div className="mx-3 mb-[9px] mt-1 flex min-w-0 items-center gap-2">
+              {tags}
               {participant.agents.length > 0 && participant.doing !== null ? (
                 <AgentsBadge
                   tasks={participant.agents}

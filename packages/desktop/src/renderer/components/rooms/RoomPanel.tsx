@@ -85,6 +85,7 @@ import { RoomPendingMessage } from './RoomPendingMessage.js';
 import { Composer, type ComposerSubmission } from './Composer.js';
 import { useHostStore } from '../../store/host.js';
 import { currentRoomPlan, PlanPanel, RoomModeControl } from './PlanPanel.js';
+import { participantItemTags } from './board/room-board-activity.js';
 import { roomBoardAvailable } from './board/room-board-model.js';
 import { RoomBoard } from './board/RoomBoard.js';
 import { RoomViewSwitch } from './board/RoomViewSwitch.js';
@@ -544,6 +545,7 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
       className={cn('flex h-full min-h-0 min-w-0 flex-col', (dropping || cardOver) && 'ring-2 ring-inset ring-ring')}
     >
       <RoomHeader
+        {...(boardPlan === null || roomRecord === undefined ? {} : { itemTags: participantItemTags(boardPlan, roomRecord, entry) })}
         {...(onViewChange !== undefined && boardAvailable ? { viewSwitch: <RoomViewSwitch view={boardOpen ? 'board' : 'feed'} onChange={onViewChange} /> } : {})}
         browserToggle={archived ? undefined : <PanelToggle workKey={workKey(entry.projectPath, entry.map.work.id)} owner={{ kind: 'room', roomId }} />}
         contextChip={<RoomContextChip bridge={bridge} roomTitle={model.title} participants={model.participants} />}

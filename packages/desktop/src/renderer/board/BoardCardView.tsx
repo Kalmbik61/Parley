@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { useDraggable } from '@dnd-kit/core';
 import { MoreHorizontal } from 'lucide-react';
 import { S } from '../../shared/strings.js';
+import { AgentIcon } from '../components/AgentIcon.js';
 import { Badge } from '../ui/badge.js';
 import { Button } from '../ui/button.js';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '../ui/dropdown-menu.js';
@@ -76,6 +77,21 @@ export function BoardCardView({ bridge, card, target, onOpen }: BoardCardViewPro
               </button>
               {target.word !== '' && <span className="shrink-0">{target.word}</span>}
             </>
+          )}
+        </div>
+      )}
+      {showTarget && target !== null && !target.gone && target.plan !== undefined && (
+        <div className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground" data-board-plan="">
+          <span className="min-w-0 truncate">{target.plan.progress}</span>
+          {target.plan.working.length > 0 && (
+            <span role="group" aria-label={S.roomBoard.working} className="flex shrink-0 items-center gap-1.5">
+              {target.plan.working.map(agent => (
+                <span key={agent.id} title={agent.label} className="inline-flex">
+                  <AgentIcon provider={agent.provider} size={14} sessionId={agent.id} />
+                </span>
+              ))}
+              {target.plan.more > 0 && <span>{S.roomBoard.moreItems(target.plan.more)}</span>}
+            </span>
           )}
         </div>
       )}
