@@ -1,4 +1,4 @@
-import { mkdir, rm } from 'node:fs/promises';
+import { appendFile, mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron, expect, test, type ElectronApplication, type Locator, type Page } from '@playwright/test';
@@ -43,10 +43,33 @@ async function call<T>(window: Page, method: string, params: unknown): Promise<T
   ) as Promise<T>;
 }
 
-async function setTheme(app: ElectronApplication, theme: 'light' | 'dark'): Promise<void> {
+/** Тема меняется в main; снимок делается, когда окно действительно её применило (класс `.dark` на `<html>`) и всё осело. */
+async function setTheme(app: ElectronApplication, window: Page, theme: 'light' | 'dark'): Promise<void> {
   await app.evaluate(({ nativeTheme }, source) => {
     nativeTheme.themeSource = source;
   }, theme);
+  await expect.poll(() => window.evaluate(() => document.documentElement.classList.contains('dark'))).toBe(theme === 'dark');
+  await window.waitForTimeout(300);
+}
+
+/** Панель выезжает справа: снимок — когда она встала на место (её левый край перестал двигаться) и целиком в окне. */
+async function expectSheetSettled(window: Page): Promise<void> {
+  const sheet = window.locator('[data-room-item-sheet]');
+  let last = -1;
+  await expect
+    .poll(async () => {
+      const box = await sheet.boundingBox();
+      const settled = box !== null && box.x === last && box.x + box.width <= (await window.evaluate(() => globalThis.innerWidth)) + 1;
+      last = box?.x ?? -1;
+      return settled;
+    }, { intervals: [150] })
+    .toBe(true);
+}
+
+/** Снимок без всплывашек: тост «Parley added PARLEY.md» от настоящей сессии закрывал бы низ окна. */
+async function snap(window: Page, file: string): Promise<void> {
+  await expect(window.locator('[data-sonner-toast]')).toHaveCount(0, { timeout: 20_000 });
+  await window.screenshot({ path: file });
 }
 
 async function setWindow(app: ElectronApplication, width: number, height: number): Promise<void> {
@@ -106,8 +129,24 @@ test.describe('доска комнаты в окне 800×500 (сквозная 
     let lead = '';
     let worker = '';
     let checker = '';
+    // Ведущая сессия — настоящая (заглушка агента): её слово состояния ведут хуки в журнале событий, как в
+    // `room-participants-layout.spec.ts`. Остальные лежат в карте без процесса.
+    await mkdir(path.join(project, '.claude', 'agents'), { recursive: true });
+    await writeFile(
+      path.join(project, '.claude', 'agents', 'migration-reviewer.md'),
+      `---\nname: ${LONG_ROLE}\ndescription: Reviews ledger migrations for locks and rollbacks.\n---\nReview the migration.\n`,
+    );
+    const created = await call<{ ref: { sessionId: string } }>(window, 'sessions.create', {
+      projectPath: project,
+      workId,
+      provider: 'claude',
+      label: `lead-${LONG_LABEL}`,
+      task: '',
+      parent: null,
+      role: { source: 'claude', name: LONG_ROLE },
+    });
+    lead = created.ref.sessionId;
     await updateMap(project, workId, (map) => {
-      lead = addSession(map, { provider: 'claude', label: `lead-${LONG_LABEL}`, task: '' }).id;
       worker = addSession(map, { provider: 'claude', label: `worker-${LONG_LABEL}`, task: '' }).id;
       checker = addSession(map, { provider: 'claude', label: `checker-${LONG_LABEL}`, task: '', role: { source: 'claude', name: LONG_ROLE } }).id;
       const room = addRoom(map, { title: `Delivery-${'D'.repeat(60)}`, creator: HUMAN, members: [lead, worker, checker], lead, mode: 'verified' });
@@ -246,11 +285,11 @@ test.describe('доска комнаты в окне 800×500 (сквозная 
 
     await mkdir(shots, { recursive: true });
     for (const theme of ['light', 'dark'] as const) {
-      await setTheme(electronApp, theme);
+      await setTheme(electronApp, window, theme);
       await window.waitForTimeout(300);
-      await window.screenshot({ path: path.join(shots, `board-800x500-${theme}.png`) });
+      await snap(window, path.join(shots, `board-800x500-${theme}.png`));
     }
-    await setTheme(electronApp, 'light');
+    await setTheme(electronApp, window, 'light');
 
     // ── 6. Состояние пункта меняется в карте: карточка в другой колонке без перезагрузки ─────────────────────────
     await updateMap(project, workId, (map) => {
@@ -264,7 +303,8 @@ test.describe('доска комнаты в окне 800×500 (сквозная 
     await card(window, 3).click();
     await expect(sheet).toBeVisible();
     await expect(sheet).toContainText('Plan item 3');
-    await window.screenshot({ path: path.join(shots, 'item-sheet-800x500-light.png') });
+    await expectSheetSettled(window);
+    await snap(window, path.join(shots, 'item-sheet-800x500-light.png'));
     await window.keyboard.press('Escape');
     await expect(sheet).toHaveCount(0);
     await expect(card(window, 3)).toBeFocused();
@@ -278,13 +318,14 @@ test.describe('доска комнаты в окне 800×500 (сквозная 
     await window.mouse.click(4, 250);
     await expect(sheet).toHaveCount(0);
     await expect(card(window, 3)).toBeFocused();
-    await setTheme(electronApp, 'dark');
+    await setTheme(electronApp, window, 'dark');
     await card(window, 3).click();
     await expect(sheet).toBeVisible();
     await window.waitForTimeout(300);
-    await window.screenshot({ path: path.join(shots, 'item-sheet-800x500-dark.png') });
+    await expectSheetSettled(window);
+    await snap(window, path.join(shots, 'item-sheet-800x500-dark.png'));
     await window.keyboard.press('Escape');
-    await setTheme(electronApp, 'light');
+    await setTheme(electronApp, window, 'light');
 
     // ── 8. Решение человека: уведомление над колонками; Open feed показывает ленту; Board снова ───────────────
     await updateMap(project, workId, (map) => {
@@ -342,11 +383,12 @@ test.describe('доска комнаты в окне 800×500 (сквозная 
     const planLine = window.locator('[data-board-plan]');
     await expect(planLine).toBeVisible({ timeout: 20_000 });
     await expect(planLine).toContainText('verified');
-    await window.screenshot({ path: path.join(shots, 'project-board-800x500-light.png') });
-    await setTheme(electronApp, 'dark');
+    await setTheme(electronApp, window, 'light');
+    await snap(window, path.join(shots, 'project-board-800x500-light.png'));
+    await setTheme(electronApp, window, 'dark');
     await window.waitForTimeout(300);
-    await window.screenshot({ path: path.join(shots, 'project-board-800x500-dark.png') });
-    await setTheme(electronApp, 'light');
+    await snap(window, path.join(shots, 'project-board-800x500-dark.png'));
+    await setTheme(electronApp, window, 'light');
     await window.locator(`[role="tab"][data-tab-id="room:${roomId}"]`).click();
     await expect(window.locator('[data-room-board-layer]')).toBeVisible();
 
@@ -394,17 +436,30 @@ test.describe('доска комнаты в окне 800×500 (сквозная 
     }
     await window.getByRole('radio', { name: 'Feed' }).click();
 
-    // ── 12. Карточка участника в окне 800×500: две метки пунктов и «+N», длинная роль, звезда, имя не уже 5ch ───
+    // ── 12. Карточка участника в окне 800×500: одна карточка сразу с двумя метками пунктов и «+N», длинным именем, длинной
+    // ролью, звездой ведущего и длинным словом состояния; имя не уже 5ch, вторая строка не выходит за карточку ─────────
     await updateMap(project, workId, (map) => {
       const plan = map.plans![0]!;
-      plan.items.find((item) => item.id === 1)!.owner = checker;
-      plan.items.find((item) => item.id === 2)!.owner = checker;
-      plan.items.find((item) => item.id === 3)!.owner = checker;
-      plan.items.find((item) => item.id === 5)!.owner = checker;
+      for (const id of [1, 2, 3, 5]) plan.items.find((item) => item.id === id)!.owner = lead;
     });
-    const participant = window.locator(`[data-participant="${checker}"]`);
-    await expect(participant.locator('[data-participant-items]')).toContainText('#', { timeout: 20_000 });
-    await expect(participant.locator('[data-participant-items]')).toContainText('+', { timeout: 20_000 });
+    // Ход начат и закончен, вкладку сессии никто не открывал: слово состояния `done · unseen`, самое длинное из обычных.
+    const eventsDir = path.join(project, '.parley', 'works', workId, 'events');
+    await mkdir(eventsDir, { recursive: true });
+    await appendFile(path.join(eventsDir, `${lead}.jsonl`), `${JSON.stringify({ hook_event_name: 'UserPromptSubmit' })}\n${JSON.stringify({ hook_event_name: 'Stop' })}\n`);
+    const participant = window.locator(`[data-participant="${lead}"]`);
+    await participant.scrollIntoViewIfNeeded();
+    // Предпосылки измерения — до геометрии: имя длинное (обрезано), роль длинная, звезда ведущего, длинное слово состояния,
+    // две метки пунктов и «+N».
+    await expect(participant).toContainText('done · unseen', { timeout: 20_000 });
+    await expect(participant.locator('[data-role-chip]')).toContainText(LONG_ROLE.slice(0, 8));
+    await expect(participant.locator('[title="Lead"]')).toHaveCount(1);
+    const tags = participant.locator('[data-participant-items]');
+    await expect(tags).toHaveText(/^#\d+ #\d+ \+\d+$/, { timeout: 20_000 });
+    const named = await participant.evaluate((element) => {
+      const name = element.querySelector<HTMLElement>('.font-semibold') as HTMLElement;
+      return { text: name.textContent ?? '', truncated: name.scrollWidth > name.clientWidth };
+    });
+    expect(named.text.length).toBeGreaterThan(8);
     const fit = await participant.evaluate((element) => {
       const header = element.querySelector<HTMLElement>('button > span') as HTMLElement;
       const name = header.querySelector<HTMLElement>('.font-semibold') as HTMLElement;
@@ -421,15 +476,17 @@ test.describe('доска комнаты в окне 800×500 (сквозная 
         fiveCh,
         secondRight: Math.max(...Array.from(second.children).map((child) => child.getBoundingClientRect().right)),
         cardRight,
+        headerRight: Math.max(...Array.from(header.children).map((child) => child.getBoundingClientRect().right)),
       };
     });
     expect(fit.nameWidth).toBeGreaterThanOrEqual(fit.fiveCh - 1);
     expect(fit.secondRight).toBeLessThanOrEqual(fit.cardRight + 1);
-    await window.screenshot({ path: path.join(shots, 'room-header-800x500-light.png') });
-    await setTheme(electronApp, 'dark');
+    expect(fit.headerRight).toBeLessThanOrEqual(fit.cardRight + 1);
+    await snap(window, path.join(shots, 'room-header-800x500-light.png'));
+    await setTheme(electronApp, window, 'dark');
     await window.waitForTimeout(300);
-    await window.screenshot({ path: path.join(shots, 'room-header-800x500-dark.png') });
-    await setTheme(electronApp, 'light');
+    await snap(window, path.join(shots, 'room-header-800x500-dark.png'));
+    await setTheme(electronApp, window, 'light');
 
     // В высокой панели (1280×800) лента участников видна и в виде Board.
     await setWindow(electronApp, 1280, 800);
@@ -438,13 +495,13 @@ test.describe('доска комнаты в окне 800×500 (сквозная 
     await expect(window.locator('[data-room-board-layer]')).toBeVisible();
     await expect(window.locator('[data-participant]')).toHaveCount(3);
     await expect(window.getByRole('combobox', { name: 'Room mode' })).toBeVisible();
-    await window.screenshot({ path: path.join(shots, 'board-1280x800-light.png') });
+    await snap(window, path.join(shots, 'board-1280x800-light.png'));
     const sidebarRoom = window.locator(`[data-room-row="${roomId}"]`);
     await sidebarRoom.screenshot({ path: path.join(shots, 'sidebar-rings-light.png') });
-    await setTheme(electronApp, 'dark');
+    await setTheme(electronApp, window, 'dark');
     await window.waitForTimeout(300);
-    await window.screenshot({ path: path.join(shots, 'board-1280x800-dark.png') });
+    await snap(window, path.join(shots, 'board-1280x800-dark.png'));
     await sidebarRoom.screenshot({ path: path.join(shots, 'sidebar-rings-dark.png') });
-    await setTheme(electronApp, 'light');
+    await setTheme(electronApp, window, 'light');
   });
 });
