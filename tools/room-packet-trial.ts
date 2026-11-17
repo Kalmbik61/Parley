@@ -1019,6 +1019,8 @@ export interface Cohort {
   blockers: string[];
   /** Sessions known only from the trace of a deleted session. */
   tracedSessions: number;
+  /** Tags found more than once (two works, a record and a trace) with the same data: counted once. */
+  duplicateTags: number;
 }
 
 const readIfExists = async (file: string): Promise<string | null> => {
@@ -1062,7 +1064,26 @@ export function membershipOf(map: WindowWorkMap, sessionId: string): Membership 
   return membership;
 }
 
-/** Reads the cohort of the named experiment from a snapshot of the home and the assignment list of the real home. Nothing is written. */
+/** One assignment found in a map: a live record or the trace of a deleted session. */
+interface Candidate {
+  workId: string;
+  projectPath: string;
+  /** Kept only for the named experiment (analysis needs the map); other experiments need only their tag data. */
+  map: WindowWorkMap | null;
+  subject: (SessionSubject & { trial: SessionTrial }) | null;
+  deleted: boolean;
+  label: string;
+  trial: SessionTrial;
+}
+
+const sameAssignment = (a: { name: string; arm: Arm; at: string }, b: { name: string; arm: Arm; at: string }): boolean =>
+  a.name === b.name && a.arm === b.arm && a.at === b.at;
+
+/**
+ * Reads the cohort of the named experiment from a snapshot of the home and the assignment list of the real home. Nothing is
+ * written. Every assignment is first gathered by its tag from all works (records and traces) and the list, reconciled (the
+ * name, the arm and the time must be the same everywhere; one tag is one session), and only then cut by the cutoff.
+ */
 export async function collectCohort(options: Options): Promise<Cohort> {
   const cutoffMs = options.cutoff === null ? null : ms(options.cutoff);
   const snapshot = makeSnapshot(options.home);
@@ -1083,39 +1104,11 @@ export async function collectCohort(options: Options): Promise<Cohort> {
     missingIntents: [],
     blockers: [],
     tracedSessions: 0,
+    duplicateTags: 0,
   };
-  /** Every assignment found in the maps (records and traces), by tag. */
-  const found = new Map<string, { arm: Arm; name: string; label: string }>();
-  const seen = (trial: SessionTrial, label: string): void => {
-    cohort.firstAssignment = cohort.firstAssignment === null || trial.at < cohort.firstAssignment ? trial.at : cohort.firstAssignment;
-    cohort.lastAssignment = cohort.lastAssignment === null || trial.at > cohort.lastAssignment ? trial.at : cohort.lastAssignment;
-    found.set(trial.tag, { arm: trial.arm, name: trial.name, label });
-  };
-  const analyzeOne = async (workId: string, projectPath: string, map: WindowWorkMap, subject: SessionSubject & { trial: SessionTrial }, deleted: boolean): Promise<void> => {
-    const label = `${workId}/${subject.id}`;
-    if (cutoffMs !== null && ms(subject.trial.at) >= cutoffMs) {
-      cohort.assignedAfterCutoff.push(label);
-      return;
-    }
-    const transcriptFiles: SessionInput['transcriptFiles'] = [];
-    for (const id of claudeIds(subject).ids) {
-      const file = await findClaudeSessionFile(id, options.claudeRoots);
-      transcriptFiles.push({ id, text: file === null ? null : await readIfExists(file) });
-    }
-    // A deleted session's hook journal is gone with it: it is not looked for, and the output says so (not zero refusals).
-    const journalFile = path.join(workPaths(projectPath, workId).events, `${subject.id}.jsonl`);
-    cohort.sessions.push(
-      analyzeSession({
-        session: subject,
-        deleted,
-        workId,
-        membership: membershipOf(map, subject.id),
-        hasMessages: map.messages.some((message) => message.from === subject.id),
-        journal: deleted ? parseJournal(null) : parseJournal(await readIfExists(journalFile)),
-        transcriptFiles,
-        cutoffMs,
-      }),
-    );
+  const byTag = new Map<string, Candidate[]>();
+  const add = (candidate: Candidate): void => {
+    byTag.set(candidate.trial.tag, [...(byTag.get(candidate.trial.tag) ?? []), candidate]);
   };
   try {
     process.env['PARLEY_HOME'] = snapshot.dir;
@@ -1139,23 +1132,20 @@ export async function collectCohort(options: Options): Promise<Cohort> {
           cohort.damagedSessions.push(`${entry.id}/${session.id}`);
           continue;
         }
-        if (trial.name !== options.trial) {
-          cohort.otherTrialSessions += 1;
-          continue;
-        }
-        seen(trial, `${entry.id}/${session.id}`);
-        await analyzeOne(entry.id, entry.projectPath, map, { ...session, trial }, false);
+        add({
+          workId: entry.id, projectPath: entry.projectPath, deleted: false, label: `${entry.id}/${session.id}`, trial,
+          map: trial.name === options.trial ? map : null,
+          subject: trial.name === options.trial ? { ...session, trial } : null,
+        });
       }
       for (const trace of map.work.trialTrace?.sessions ?? []) {
         if (isDamagedTrace(trace) || isDamagedTrial(trace.trial)) continue;
-        if (trace.trial.name !== options.trial) {
-          cohort.otherTrialSessions += 1;
-          continue;
-        }
         const traced: TrialSessionTrace = trace;
-        seen(trace.trial, `${entry.id}/${trace.session} (deleted)`);
-        cohort.tracedSessions += 1;
-        await analyzeOne(entry.id, entry.projectPath, map, { ...traced, id: traced.session, trial: trace.trial }, true);
+        add({
+          workId: entry.id, projectPath: entry.projectPath, deleted: true, label: `${entry.id}/${trace.session} (deleted)`, trial: trace.trial,
+          map: trace.trial.name === options.trial ? map : null,
+          subject: trace.trial.name === options.trial ? { ...traced, id: traced.session, trial: trace.trial } : null,
+        });
       }
     }
   } finally {
@@ -1174,9 +1164,8 @@ export async function collectCohort(options: Options): Promise<Cohort> {
     cohort.ledger = { ...cohort.ledger, status: 'unreadable', error: (error as Error).message };
   }
   if (ledger === undefined && cohort.ledger.status === 'ok') cohort.ledger = { ...cohort.ledger, status: 'missing' };
-  const counted = [...found.keys()].length;
-  if (cohort.ledger.status === 'unreadable') cohort.blockers.push(`the assignment list could not be read (${cohort.ledger.error}): a lost session cannot be noticed`);
-  else if (cohort.ledger.status === 'missing' && counted > 0) cohort.blockers.push('the assignment list is missing though sessions of the experiment exist: a lost session cannot be noticed');
+  const intents = new Map<string, TrialIntentLine>();
+  const cancelledTags = new Set<string>();
   if (ledger !== undefined) {
     cohort.ledger = {
       ...cohort.ledger,
@@ -1185,29 +1174,91 @@ export async function collectCohort(options: Options): Promise<Cohort> {
       cancelled: ledger.lines.filter((line) => line.kind === 'cancel').length,
       confirmed: ledger.lines.filter((line) => line.kind === 'confirm').length,
     };
-    if (ledger.unreadable.length > 0) cohort.blockers.push(`the assignment list has ${ledger.unreadable.length} unreadable line(s) (${ledger.unreadable.join(', ')}): a lost session cannot be noticed`);
-    const intentTags = new Map<string, TrialIntentLine>();
-    for (const line of ledger.lines) if (line.kind === 'intent') intentTags.set(line.tag, line);
-    const cancelledTags = new Set(ledger.lines.filter((line) => line.kind === 'cancel').map((line) => line.tag));
-    for (const [tag, record] of found) {
-      if (record.name !== options.trial) continue;
-      const intent = intentTags.get(tag);
-      if (intent === undefined) cohort.missingIntents.push(record.label);
-      else if (intent.arm !== record.arm || cancelledTags.has(tag)) cohort.ledgerDisagreements.push(record.label);
+    for (const line of ledger.lines) {
+      if (line.kind === 'intent') intents.set(line.tag, line);
+      if (line.kind === 'cancel') cancelledTags.add(line.tag);
     }
+    if (ledger.unreadable.length > 0) cohort.blockers.push(`the assignment list has ${ledger.unreadable.length} unreadable line(s) (${ledger.unreadable.join(', ')}): a lost session cannot be noticed`);
+  }
+
+  // Reconcile by tag, before any cut by the cutoff.
+  const toAnalyze: Candidate[] = [];
+  let foreignIntents = 0;
+  for (const [tag, group] of byTag) {
+    const intent = intents.get(tag);
+    const ours = group.some((candidate) => candidate.trial.name === options.trial) || intent !== undefined;
+    if (!ours) {
+      cohort.otherTrialSessions += group.length;
+      continue;
+    }
+    const sources = [...group.map((candidate) => candidate.trial), ...(intent === undefined ? [] : [intent])];
+    const first = sources[0]!;
+    const consistent = sources.every((source) => sameAssignment(first, source)) && !cancelledTags.has(tag);
+    if (!consistent) {
+      cohort.ledgerDisagreements.push(...group.map((candidate) => candidate.label));
+      continue;
+    }
+    if (first.name !== options.trial) {
+      foreignIntents += 1;
+      continue;
+    }
+    if (ledger !== undefined && intent === undefined) cohort.missingIntents.push(group[0]!.label);
+    if (group.length > 1) cohort.duplicateTags += 1;
+    // One assignment is one session of the cohort: a live record wins over a trace, the first of equals wins.
+    toAnalyze.push(group.find((candidate) => !candidate.deleted) ?? group[0]!);
+  }
+  for (const candidate of toAnalyze) {
+    const trial = candidate.trial;
+    cohort.firstAssignment = cohort.firstAssignment === null || trial.at < cohort.firstAssignment ? trial.at : cohort.firstAssignment;
+    cohort.lastAssignment = cohort.lastAssignment === null || trial.at > cohort.lastAssignment ? trial.at : cohort.lastAssignment;
+    if (cutoffMs !== null && ms(trial.at) >= cutoffMs) {
+      cohort.assignedAfterCutoff.push(candidate.label);
+      continue;
+    }
+    if (candidate.deleted) cohort.tracedSessions += 1;
+    cohort.sessions.push(await analyzeCandidate(candidate, options, cutoffMs));
+  }
+
+  if (cohort.ledger.status === 'unreadable') cohort.blockers.push(`the assignment list could not be read (${cohort.ledger.error}): a lost session cannot be noticed`);
+  else if (cohort.ledger.status === 'missing' && toAnalyze.length + cohort.ledgerDisagreements.length > 0) cohort.blockers.push('the assignment list is missing though sessions of the experiment exist: a lost session cannot be noticed');
+  if (ledger !== undefined) {
     for (const unresolved of unresolvedIntents(ledger.lines)) {
-      if (found.has(unresolved.intent.tag)) continue;
+      if (byTag.has(unresolved.intent.tag) || unresolved.intent.name !== options.trial) continue;
       if (cutoffMs !== null && ms(unresolved.intent.at) >= cutoffMs) {
         cohort.assignedAfterCutoff.push(`tag ${unresolved.intent.tag}`);
         continue;
       }
       cohort.sessions.push(lostSession(unresolved.intent, unresolved.confirm));
     }
-    if (cohort.missingIntents.length > 0) cohort.blockers.push(`${cohort.missingIntents.length} session(s) of the experiment have no intent line in the assignment list`);
-    if (cohort.ledgerDisagreements.length > 0) cohort.blockers.push(`${cohort.ledgerDisagreements.length} session(s) whose arm in the list and in the map differ (treated as a damaged assignment)`);
+    for (const line of ledger.lines) if (line.kind === 'intent' && line.name !== options.trial) foreignIntents += byTag.has(line.tag) ? 0 : 1;
   }
+  if (foreignIntents > 0) cohort.blockers.push(`${foreignIntents} intent line(s) in the list of this experiment name another experiment`);
+  if (cohort.missingIntents.length > 0) cohort.blockers.push(`${cohort.missingIntents.length} session(s) of the experiment have no intent line in the assignment list`);
+  if (cohort.ledgerDisagreements.length > 0) cohort.blockers.push(`${cohort.ledgerDisagreements.length} record(s) whose name, arm or time of assignment differ between the record, the trace and the list (treated as a damaged assignment; one tag found in several places is checked the same way)`);
   if (cohort.damagedWorks.length > 0) cohort.blockers.push(`${cohort.damagedWorks.length} work(s) with a damaged trial trace or assignment`);
   return cohort;
+}
+
+async function analyzeCandidate(candidate: Candidate, options: Options, cutoffMs: number | null): Promise<SessionFacts> {
+  const subject = candidate.subject!;
+  const transcriptFiles: SessionInput['transcriptFiles'] = [];
+  for (const id of claudeIds(subject).ids) {
+    const file = await findClaudeSessionFile(id, options.claudeRoots);
+    transcriptFiles.push({ id, text: file === null ? null : await readIfExists(file) });
+  }
+  // A deleted session's hook journal is gone with it: it is not looked for, and the output says so (not zero refusals).
+  const journalFile = path.join(workPaths(candidate.projectPath, candidate.workId).events, `${subject.id}.jsonl`);
+  const map = candidate.map!;
+  return analyzeSession({
+    session: subject,
+    deleted: candidate.deleted,
+    workId: candidate.workId,
+    membership: membershipOf(map, subject.id),
+    hasMessages: map.messages.some((message) => message.from === subject.id),
+    journal: candidate.deleted ? parseJournal(null) : parseJournal(await readIfExists(journalFile)),
+    transcriptFiles,
+    cutoffMs,
+  });
 }
 
 /** A session the list names but neither a record nor a trace holds: its number of windows is unknown. */
@@ -1330,6 +1381,7 @@ export function buildReport(options: Options, cohort: Cohort, retention: Retenti
       missingIntents: cohort.missingIntents,
       blockers: cohort.blockers,
       tracedSessions: cohort.tracedSessions,
+      duplicateTags: cohort.duplicateTags,
       otherTrialSessions: cohort.otherTrialSessions,
       assignedAfterCutoff: cohort.assignedAfterCutoff,
       worksRead: cohort.worksRead,
@@ -1482,7 +1534,8 @@ export function realPathLoose(target: string): string {
 
 export const insideReal = (child: string, parent: string): boolean => {
   const relative = path.relative(realPathLoose(parent), realPathLoose(child));
-  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+  // Outside only when the first link of the relative path is `..` as a whole: `..report.json` is a file name inside the directory.
+  return relative === '' || (relative.split(path.sep)[0] !== '..' && !path.isAbsolute(relative));
 };
 
 export interface Io { write: (text: string) => void }

@@ -1019,7 +1019,7 @@ describe('item 24: the cohort is the union of records, traces of deleted session
     for (const extra of [{ ledgerOtherArm: [0] }, { ledgerCancelled: [1] }] as Array<Partial<HomeSpec>>) {
       const { result } = await pair(extra);
       expect(cohortOf(result).ledgerDisagreements).toHaveLength(1);
-      expect(cohortOf(result).blockers.join(' ')).toContain('arm in the list and in the map differ');
+      expect(cohortOf(result).blockers.join(' ')).toContain('differ between the record, the trace and the list');
       expect(result.json['verdict']).toBe('undetermined');
       expect(result.json['bounds']).toBeNull();
     }
@@ -1091,5 +1091,85 @@ describe('item 24: the cohort is the union of records, traces of deleted session
       const result = await run(built, mode);
       expect(result.out).toContain('assignment list: ok; intents 1, cancelled 0, confirmed 1; unreadable lines 0');
     }
+  });
+
+  it('31: the name, the arm and the time of assignment must agree between the record and the list — checked before the cutoff', async () => {
+    const afterCutoff = '2026-11-22T00:00:00.000Z';
+    // the reviewer's counterexample: the time in the map is after the cutoff, the intent with the same tag is before it
+    const time = await pair({ ledgerOtherTime: [0] }, MEMBERS());
+    expect(cohortOf(time.result).ledgerDisagreements).toHaveLength(1);
+    const shifted = await buildHome({
+      root: freshRoot(),
+      sessions: [{ arm: 'packet', claudeId: 'claude-a', assignedAt: afterCutoff }, { arm: 'control', claudeId: 'claude-b' }],
+      rooms: MEMBERS(),
+      ledgerOtherTime: [0],
+    });
+    for (const id of ['claude-a', 'claude-b']) writeTranscript(shifted, id, new TranscriptBuilder(id, START).prompt().at(60).boundary().calls(2).text());
+    const shiftedResult = await run(shifted, '--final');
+    expect(cohortOf(shiftedResult).ledgerDisagreements).toHaveLength(1);
+    expect(cohortOf(shiftedResult).sessions).toBe(1);
+    expect(shiftedResult.json['verdict']).toBe('undetermined');
+    expect(shiftedResult.json['bounds']).toBeNull();
+    expect((shiftedResult.json['cohort'] as { assignedAfterCutoff: string[] }).assignedAfterCutoff).toEqual([]);
+    // the name differs
+    const name = await pair({ ledgerOtherName: [0] });
+    expect(cohortOf(name.result).ledgerDisagreements.length).toBeGreaterThan(0);
+    expect(name.result.json['verdict']).toBe('undetermined');
+    expect(name.result.json['bounds']).toBeNull();
+    // the arm differs
+    const arm = await pair({ ledgerOtherArm: [1] });
+    expect(cohortOf(arm.result).ledgerDisagreements).toHaveLength(1);
+    expect(arm.result.json['bounds']).toBeNull();
+  });
+
+  it('32: one tag is one session: a tag in two works with different arms, or in a record and in a trace, blocks; equal copies count once', async () => {
+    const twoWorks = await pair({ duplicates: [{ session: 0, as: 'other-work', arm: 'control' }] });
+    expect(cohortOf(twoWorks.result).ledgerDisagreements).toHaveLength(2);
+    expect(cohortOf(twoWorks.result).sessions).toBe(1);
+    expect(twoWorks.result.json['verdict']).toBe('undetermined');
+    expect(twoWorks.result.json['bounds']).toBeNull();
+    const recordAndTrace = await pair({ duplicates: [{ session: 0, as: 'trace', arm: 'control' }] });
+    expect(cohortOf(recordAndTrace.result).ledgerDisagreements).toHaveLength(2);
+    expect(recordAndTrace.result.json['bounds']).toBeNull();
+    const sameTime = await pair({ duplicates: [{ session: 0, as: 'trace', at: '2026-11-20T10:00:00.000Z' }] });
+    expect(cohortOf(sameTime.result).ledgerDisagreements.length).toBeGreaterThan(0);
+    // equal copies: counted once, nothing blocks
+    for (const as of ['trace', 'other-work'] as const) {
+      const equal = await pair({ duplicates: [{ session: 0, as }] });
+      expect(cohortOf(equal.result)).toMatchObject({ sessions: 2, duplicateTags: 1, blockers: [], ledgerDisagreements: [] });
+    }
+  });
+
+  it('an intent of another experiment name in this list blocks and is not a lost session; an intent after the cutoff is not lost', async () => {
+    const foreign = await pair({ lostIntents: [{ arm: 'packet', name: 'exp-other' }] });
+    expect(cohortOf(foreign.result).sessions).toBe(2);
+    expect(cohortOf(foreign.result).blockers.join(' ')).toContain('name another experiment');
+    expect(foreign.result.json['verdict']).toBe('undetermined');
+    const late = await pair({ lostIntents: [{ arm: 'packet', at: '2026-11-22T00:00:00.000Z' }] });
+    expect(cohortOf(late.result)).toMatchObject({ sessions: 2, blockers: [] });
+    expect((late.result.json['cohort'] as { assignedAfterCutoff: string[] }).assignedAfterCutoff).toHaveLength(1);
+    const early = await pair({ lostIntents: [{ arm: 'packet', at: '2026-11-20T12:00:00.000Z' }] });
+    expect(cohortOf(early.result).sessions).toBe(3);
+    expect(early.result.json['verdict']).toBe('undetermined');
+  });
+});
+
+describe('item 33: the output guard takes ".." as a whole link of the path', () => {
+  it('a file named "..report.json" inside the home or a transcript root is inside; the same name beside them is not', async () => {
+    const root = freshRoot();
+    const built = await buildHome({ root, sessions: [{ arm: 'packet', claudeId: 'claude-a' }], rooms: [] });
+    for (const target of [path.join(built.home, '..report.json'), path.join(built.claudeRoot, '..report.json')]) {
+      let out = '';
+      const code = await main(['--status', '--trial', 'exp-a', '--home', built.home, '--claude-root', built.claudeRoot, '--out', target], { write: (text) => { out += text; } });
+      expect(code).toBe(2);
+      expect(out).toContain('read-only');
+      expect(existsSync(target)).toBe(false);
+    }
+    const beside = path.join(root, '..report.json');
+    let out = '';
+    const code = await main(['--status', '--trial', 'exp-a', '--home', built.home, '--claude-root', built.claudeRoot, '--claude-settings', path.join(root, 'none.json'), '--out', beside], { write: (text) => { out += text; } });
+    expect(code).toBe(0);
+    expect(existsSync(beside)).toBe(true);
+    expect(out).toContain('JSON:');
   });
 });

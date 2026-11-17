@@ -201,12 +201,17 @@ export interface HomeSpec {
   ledgerSkip?: number[];
   /** Sessions whose intent line names the other arm. */
   ledgerOtherArm?: number[];
+  /** Sessions whose intent line carries another time of assignment, or another experiment name. */
+  ledgerOtherTime?: number[];
+  ledgerOtherName?: number[];
   /** Sessions whose tag the list calls cancelled. */
   ledgerCancelled?: number[];
   /** Sessions with an intent but no confirm line. */
   ledgerUnconfirmed?: number[];
   /** Intents of sessions that never reached a map: lost sessions; `confirm` adds a confirm line naming a work and a session. */
-  lostIntents?: Array<{ arm: 'packet' | 'control'; confirm?: { workId: string; sessionId: string } }>;
+  lostIntents?: Array<{ arm: 'packet' | 'control'; at?: string; name?: string; confirm?: { workId: string; sessionId: string } }>;
+  /** The tag of a session (by index) found again: in a second work, or in the trace of a deleted session, optionally with another arm or time. */
+  duplicates?: Array<{ session: number; as: 'other-work' | 'trace'; arm?: 'packet' | 'control'; at?: string }>;
   /** Raw text appended to the list file (garbage, a torn line). */
   ledgerRaw?: string;
   /** Rooms (by index in `rooms`) and sessions (by index) deleted after creation through core's own functions. */
@@ -292,6 +297,30 @@ export async function buildHome(spec: HomeSpec): Promise<BuiltHome> {
         else room.memberLog = roomSpec.members.map((member) => ({ session: ids[member.session]!, from: member.from, to: member.to ?? null }));
       }
     });
+    for (const [index, duplicate] of (spec.duplicates ?? []).entries()) {
+      const source = spec.sessions[duplicate.session]!;
+      const trial: SessionTrial = {
+        name: source.trialName ?? 'exp-a',
+        arm: duplicate.arm ?? (source.arm === 'control' ? 'control' : 'packet'),
+        at: duplicate.at ?? source.assignedAt ?? '2026-11-20T09:00:00.000Z',
+        tag: tagOf(duplicate.session),
+      };
+      if (duplicate.as === 'other-work') {
+        const second = await createWork(project, { title: `second work ${index}` });
+        await updateMap(project, second.work.id, (map) => {
+          const copy = addSession(map, { provider: 'claude', label: 'dup', task: '', parent: null }, '2026-11-20T09:00:00.000Z');
+          copy.trial = trial;
+        });
+      } else {
+        await updateMap(project, work.work.id, (map) => {
+          const trace: TrialTrace = map.work.trialTrace ?? { sessions: [], rooms: [], unknownParticipation: [] };
+          trace.sessions.push({
+            session: 's-90', trial, provider: 'claude', providerSessionId: null, startedAt: null, endedAt: null, closedAt: null, deletedAt: DELETED_AT,
+          });
+          map.work.trialTrace = trace;
+        });
+      }
+    }
     if ((spec.deleteRooms?.length ?? 0) > 0 || (spec.deleteSessions?.length ?? 0) > 0 || spec.traceDamage === true) {
       await updateMap(project, work.work.id, (map, letters) => {
         const rooms = (): void => { for (const index of spec.deleteRooms ?? []) deleteRoom(map, letters, roomIds[index]!, DELETED_AT); };
@@ -343,14 +372,16 @@ function writeLedger(spec: HomeSpec, home: string, project: string, workId: stri
     if (entry.arm === null || entry.arm === 'damaged' || spec.ledgerSkip?.includes(index) === true) return;
     const name = entry.trialName ?? 'exp-a';
     const arm = spec.ledgerOtherArm?.includes(index) === true ? (entry.arm === 'packet' ? 'control' : 'packet') : entry.arm;
-    appendTrialLedger(name, { kind: 'intent', tag: tagOf(index), name, arm, at: entry.assignedAt ?? at }, home);
+    const intentName = spec.ledgerOtherName?.includes(index) === true ? 'exp-other' : name;
+    const intentAt = spec.ledgerOtherTime?.includes(index) === true ? '2026-11-19T09:00:00.000Z' : (entry.assignedAt ?? at);
+    appendTrialLedger(name, { kind: 'intent', tag: tagOf(index), name: intentName, arm, at: intentAt }, home);
     if (spec.ledgerCancelled?.includes(index) === true) appendTrialLedger(name, { kind: 'cancel', tag: tagOf(index), at }, home);
     else if (spec.ledgerUnconfirmed?.includes(index) !== true) {
       appendTrialLedger(name, { kind: 'confirm', tag: tagOf(index), projectPath: project, workId, incarnation: 1, sessionId: ids[index]!, at }, home);
     }
   });
   (spec.lostIntents ?? []).forEach((lost, index) => {
-    appendTrialLedger('exp-a', { kind: 'intent', tag: lostTagOf(index), name: 'exp-a', arm: lost.arm, at }, home);
+    appendTrialLedger('exp-a', { kind: 'intent', tag: lostTagOf(index), name: lost.name ?? 'exp-a', arm: lost.arm, at: lost.at ?? at }, home);
     if (lost.confirm !== undefined) {
       appendTrialLedger('exp-a', { kind: 'confirm', tag: lostTagOf(index), projectPath: project, workId: lost.confirm.workId, incarnation: 1, sessionId: lost.confirm.sessionId, at }, home);
     }
