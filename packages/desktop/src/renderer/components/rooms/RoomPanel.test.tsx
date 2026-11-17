@@ -3042,3 +3042,84 @@ describe('RoomPanel — вид Feed / Board вкладки комнаты', () =
     });
   });
 });
+
+describe('RoomPanel — панель пункта на доске', () => {
+  const boardEntry = (): WindowWorkEntry => {
+    const entry = entryOf({ messages: [message('m-1')] });
+    entry.map.plans = [{
+      id: 'pl-01', roomId: 'r-01', rev: 1, mode: 'checklist', status: 'active', goal: 'Goal', backlog: [],
+      items: [
+        { id: 1, title: 'Recovery', owner: 's-01', scope: 'plain', after: [], criteria: [], verifier: null, status: 'in_progress', evidence: null, note: null, log: [] },
+        { id: 2, title: 'Refunds', owner: 's-02', scope: 'plain', after: [], criteria: [], verifier: null, status: 'ready', evidence: null, note: null, log: [] },
+      ],
+      acceptedAt: 'x', completedAt: null, cancelledAt: null, completionSummary: null,
+    }];
+    return entry;
+  };
+  const boardCard = (id: number): HTMLElement => document.querySelector(`[data-board-item="${id}"]`) as HTMLElement;
+  const sheet = (): HTMLElement | null => document.querySelector('[data-room-item-sheet]');
+
+  it('нажатие на карточку открывает панель этого пункта', () => {
+    renderPanel(boardEntry(), { view: 'board' });
+    expect(sheet()).toBeNull();
+    fireEvent.click(boardCard(2));
+    expect(sheet()).toBeTruthy();
+    expect(screen.getByText(S.roomBoard.sheet(2))).toBeTruthy();
+    expect(sheet()?.textContent).toContain('Refunds');
+  });
+
+  it('Show in feed из ленты, стоявшей у низа: вид feed, лента в начале, список плана виден', () => {
+    const spies = [
+      vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(1000),
+      vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(400),
+    ];
+    try {
+      const onViewChange = vi.fn();
+      const view = renderPanel(boardEntry(), { view: 'board', onViewChange });
+      feed().scrollTop = 600;
+      fireEvent.scroll(feed());
+      fireEvent.click(boardCard(1));
+      fireEvent.click(screen.getByRole('button', { name: S.roomBoard.showInFeed }));
+      expect(onViewChange).toHaveBeenCalledWith('feed');
+      expect(feed().scrollTop).toBe(0);
+      view.rerender(<RoomPanel {...view.initial} view="feed" onViewChange={onViewChange} />);
+      expect(feed().scrollTop).toBe(0);
+      expect(sheet()).toBeNull();
+      expect(feed().querySelector('[data-plan-summary]')).toBeTruthy();
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+    }
+  });
+
+  it('Open session зовёт onOpenSession исполнителя', () => {
+    const onOpenSession = vi.fn();
+    renderPanel(boardEntry(), { view: 'board', onOpenSession });
+    fireEvent.click(boardCard(1));
+    fireEvent.click(screen.getByRole('button', { name: S.roomBoard.openSession }));
+    expect(onOpenSession).toHaveBeenCalledWith('s-01');
+  });
+
+  it('после закрытия панели фокус на карточке', async () => {
+    renderPanel(boardEntry(), { view: 'board' });
+    boardCard(2).focus();
+    fireEvent.click(boardCard(2));
+    fireEvent.keyDown(sheet() as HTMLElement, { key: 'Escape', code: 'Escape' });
+    expect(sheet()).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(boardCard(2)));
+  });
+
+  it('две комнаты с одним номером пункта: фокус возвращается на карточку своей комнаты', async () => {
+    const second = boardEntry();
+    second.map.rooms = [{ ...makeRoom('r-02', 'Other'), members: ['s-01'], lead: 's-01' }];
+    second.map.plans = [{ ...second.map.plans![0]!, id: 'pl-02', roomId: 'r-02' }];
+    const first = render(<RoomPanel {...props(boardEntry(), { view: 'board' })} />);
+    const other = render(<RoomPanel {...props(second, { view: 'board', roomId: 'r-02' })} />);
+    const cardIn = (root: HTMLElement): HTMLElement => root.querySelector('[data-board-item="1"]') as HTMLElement;
+    const mine = cardIn(other.container);
+    mine.focus();
+    fireEvent.click(mine);
+    fireEvent.keyDown(document.querySelector('[data-room-item-sheet]') as HTMLElement, { key: 'Escape', code: 'Escape' });
+    await waitFor(() => expect(document.activeElement).toBe(mine));
+    expect(document.activeElement).not.toBe(cardIn(first.container));
+  });
+});

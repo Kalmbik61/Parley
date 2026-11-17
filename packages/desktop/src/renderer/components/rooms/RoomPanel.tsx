@@ -85,9 +85,10 @@ import { RoomPendingMessage } from './RoomPendingMessage.js';
 import { Composer, type ComposerSubmission } from './Composer.js';
 import { useHostStore } from '../../store/host.js';
 import { currentRoomPlan, PlanPanel, RoomModeControl } from './PlanPanel.js';
-import { participantItemTags } from './board/room-board-activity.js';
-import { roomBoardAvailable } from './board/room-board-model.js';
 import { RoomBoard } from './board/RoomBoard.js';
+import { RoomBoardItemSheet } from './board/RoomBoardItemSheet.js';
+import { participantItemTags } from './board/room-board-activity.js';
+import { boardItemAgent, roomBoardAvailable } from './board/room-board-model.js';
 import { RoomViewSwitch } from './board/RoomViewSwitch.js';
 import { HaltCard } from './HaltCard.js';
 import { CompletionCard } from './CompletionCard.js';
@@ -228,6 +229,11 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
     setBelow(0);
   }, []);
 
+  // Открытый на доске пункт. Номер дублируется в ref: к моменту, когда панель вернёт фокус, состояние уже сброшено.
+  const [openItemId, setOpenItemId] = useState<number | null>(null);
+  const focusItemRef = useRef<number | null>(null);
+  // Слой доски этой панели: карточку для возврата фокуса ищем только в нём — номера пунктов повторяются между планами.
+  const boardLayerRef = useRef<HTMLDivElement | null>(null);
   // Лента под доской: `inert` ставится через ref, типы React 18 атрибута не знают.
   const feedAreaRef = useRef<HTMLDivElement | null>(null);
   useLayoutEffect(() => {
@@ -710,7 +716,7 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
       </div>
       {/* Слой доски стоит поверх ленты. */}
       {boardOpen && boardPlan !== null && roomRecord !== undefined ? (
-        <div data-room-board-layer="" className="absolute inset-0 z-10 flex min-h-0 flex-col bg-sheet">
+        <div ref={boardLayerRef} data-room-board-layer="" className="absolute inset-0 z-10 flex min-h-0 flex-col bg-sheet">
           <RoomBoard
             plan={boardPlan}
             room={roomRecord}
@@ -719,9 +725,40 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
             activity={activity}
             now={now}
             onOpenFeed={() => onViewChange?.('feed')}
+            onOpenItem={(itemId) => {
+              focusItemRef.current = itemId;
+              setOpenItemId(itemId);
+            }}
           />
         </div>
       ) : null}
+      {boardOpen && boardPlan !== null && roomRecord !== undefined ? (() => {
+        const sheetItem = boardPlan.items.find((candidate) => candidate.id === openItemId) ?? null;
+        return (
+          <RoomBoardItemSheet
+            plan={boardPlan}
+            item={sheetItem}
+            agent={sheetItem === null ? null : boardItemAgent({ plan: boardPlan, room: roomRecord, entry, participants: model.participants, activity, now }, sheetItem)}
+            entry={entry}
+            bridge={bridge}
+            onClose={() => setOpenItemId(null)}
+            onReturnFocus={() => {
+              const id = focusItemRef.current;
+              if (id === null) return;
+              boardLayerRef.current?.querySelector<HTMLElement>(`[data-board-item="${id}"]`)?.focus();
+            }}
+            onOpenSession={(sessionId) => onOpenSession(sessionId)}
+            onShowInFeed={() => {
+              // Фокус на карточку не возвращается: доска закрывается. Лента не должна прижаться обратно к низу.
+              focusItemRef.current = null;
+              setOpenItemId(null);
+              atBottomRef.current = false;
+              onViewChange?.('feed');
+              if (containerRef.current !== null) containerRef.current.scrollTop = 0;
+            }}
+          />
+        );
+      })() : null}
       </div>
     </div>
   );
