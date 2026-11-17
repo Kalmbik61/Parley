@@ -19,8 +19,10 @@ import {
   grantTrust,
   defaultSessionName,
   NEW_LABEL,
+  parleyHome,
   plannedWorktree,
   readMap,
+  readTrialLedger,
   readStoredMap,
   saveConfig,
   setWorkStatus,
@@ -29,6 +31,7 @@ import {
   ENGINE,
   startAttempt,
   transitionSession,
+  unresolvedIntents,
   updateMap,
   workPaths,
 } from '@parley/core';
@@ -3281,9 +3284,11 @@ describe('опыт с пакетом состояния: розыгрыш и х�
   const PACKET_BRIDGE = { launcher: '/home/me/.parley/bin/parley-packet-hook', url: `${HOOK_URL}/packet` };
   const hookEnv = ['PARLEY_HOOK_TOKEN', 'PARLEY_HOOK_URL', 'PARLEY_HOOK_CAPABILITY'];
   let inheritedHooks: Array<string | undefined>;
-  beforeEach(() => {
+  beforeEach(async () => {
     inheritedHooks = hookEnv.map((name) => process.env[name]);
     for (const name of hookEnv) delete process.env[name];
+    // Дом общий для тестов файла: список назначений прежних тестов не должен попасть в счёт этих.
+    await rm(path.join(parleyHome(), 'trials'), { recursive: true, force: true });
   });
   afterEach(() => {
     hookEnv.forEach((name, index) => {
@@ -3447,6 +3452,64 @@ describe('опыт с пакетом состояния: розыгрыш и х�
     } finally { await service.stopAll(); }
   });
 
+  it('список назначений: на всех путях создания (окно, агент, рой) — намерение до карты, подтверждение после; метка из карты, путь проекта, работа, номер создания и сессия', async () => {
+    await enable('exp-a');
+    const { random } = draws(0, 1, 0, 1, 0);
+    const { workId, service } = await setup({ random });
+    const base = { projectPath: project, provider: 'claude', label: '', parent: null };
+    const caller = await createPendingSession(project, workId, { provider: 'claude', label: 'Caller', task: 'Coordinate', parent: null, contextFrom: [] });
+    const refs = [
+      await service.create({ ...base, workId: null, task: '' }),
+      await service.create({ ...base, workId, task: '' }),
+      await service.create({ ...base, workId, task: 'сделай штуку' }),
+      await service.create({ ...base, workId, task: 'Implement', requestedBy: caller }),
+      await service.create({ ...base, workId, task: 'Check everything', swarm: { kind: 'create', tag: 'Audit', objective: 'Check everything' } }),
+    ];
+    try {
+      const ledger = readTrialLedger('exp-a')!;
+      expect(ledger.unreadable).toEqual([]);
+      expect(ledger.lines).toHaveLength(refs.length * 2);
+      for (const ref of refs) {
+        const tag = (await trialOf(ref))!.tag;
+        const mine = ledger.lines.filter((line) => line.tag === tag);
+        // Намерение стоит раньше подтверждения, отмены нет, подтверждение называет ту же сессию, что и карта.
+        expect(mine.map((line) => line.kind), ref.sessionId).toEqual(['intent', 'confirm']);
+        expect(mine[1]).toMatchObject({ projectPath: ref.projectPath, workId: ref.workId, sessionId: ref.sessionId });
+        expect(mine[0]).toMatchObject({ name: 'exp-a', arm: (await trialOf(ref))!.arm });
+      }
+      expect(unresolvedIntents(ledger.lines)).toHaveLength(refs.length);
+    } finally { await service.stopAll(); }
+  });
+
+  it('сбой записи намерения: сессия создаётся без плеча на всех путях, список не появляется, остальной запуск идёт', async () => {
+    await enable('exp-a');
+    const { random } = draws(0, 0, 0);
+    const { workId, service } = await setup({ random });
+    // Вместо каталога `trials` — файл: дозапись невозможна.
+    await writeFile(path.join(parleyHome(), 'trials'), 'not a directory');
+    const base = { projectPath: project, provider: 'claude', label: '', parent: null };
+    const caller = await createPendingSession(project, workId, { provider: 'claude', label: 'Caller', task: 'Coordinate', parent: null, contextFrom: [] });
+    const refs = [
+      await service.create({ ...base, workId, task: '' }),
+      await service.create({ ...base, workId, task: 'сделай штуку' }),
+      await service.create({ ...base, workId, task: 'Implement', requestedBy: caller }),
+    ];
+    try {
+      for (const ref of refs) expect(await sessionOf(ref), ref.sessionId).not.toHaveProperty('trial');
+    } finally { await service.stopAll(); }
+  });
+
+  it('опыт не идёт: каталога trials нет, карта без следа', async () => {
+    await saveConfig({ roomPacket: true, roomPacketTrial: '' });
+    const { workId, service } = await setup();
+    const ref = await service.create({ projectPath: project, workId, provider: 'claude', label: '', task: '', parent: null });
+    try {
+      expect(existsSync(path.join(parleyHome(), 'trials'))).toBe(false);
+      expect((await readMap(project, workId)).work).not.toHaveProperty('trialTrace');
+      expect(await sessionOf(ref)).not.toHaveProperty('trial');
+    } finally { await service.stopAll(); }
+  });
+
   const SETTINGS_PATH = (argv: string[]): string => argv[argv.indexOf('--settings') + 1]!;
 
   it('сбой шага после создания записи оставляет в карте сессию с плечом на трёх путях; повторное чтение карты его возвращает', async () => {
@@ -3471,7 +3534,7 @@ describe('опыт с пакетом состояния: розыгрыш и х�
     const { workId, service } = await setup({ hooks, providerVersions: versions, packetHook: async () => PACKET_BRIDGE });
     const id = await createPendingSession(project, workId, {
       provider: 'claude', label: 'Опыт', task: 'сделай штуку', parent: null, contextFrom: [],
-      trial: { name: 'exp-a', arm: 'control', at: 'not-a-time' },
+      trial: { name: 'exp-a', arm: 'control', at: 'not-a-time', tag: '0123456789abcdef0123456789abcdef' },
     });
     const ref = { projectPath: project, workId, sessionId: id };
     // Любая запись карты стирать состояние не должна.
@@ -3492,7 +3555,7 @@ describe('опыт с пакетом состояния: розыгрыш и х�
     const { workId, service } = await setup({ hooks, providerVersions: versions, ...(packetHook === undefined ? {} : { packetHook }) });
     const id = await createPendingSession(project, workId, {
       provider: 'claude', label: 'Опыт', task: 'сделай штуку', parent: null, contextFrom: [],
-      ...(arm === 'none' ? {} : { trial: { name: 'exp-a', arm, at: '2026-11-17T10:00:00.000Z' } }),
+      ...(arm === 'none' ? {} : { trial: { name: 'exp-a', arm, at: '2026-11-17T10:00:00.000Z', tag: '0123456789abcdef0123456789abcdef' } }),
     });
     const ref = { projectPath: project, workId, sessionId: id };
     await service.launch(ref, 'new');

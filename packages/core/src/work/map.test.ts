@@ -1788,7 +1788,7 @@ describe('рои в карте (спека роя v1, 2.1–2.2)', () => {
 });
 
 describe('плечо опыта с пакетом состояния (Э-1)', () => {
-  const trial = { name: '2026-11', arm: 'control' as const, at: '2026-11-17T10:00:00.000Z' };
+  const trial = { name: '2026-11', arm: 'control' as const, at: '2026-11-17T10:00:00.000Z', tag: '0123456789abcdef0123456789abcdef' };
   const roundTrip = (value: unknown) => {
     const map = emptyMap();
     const session = addSession(map, { provider: 'claude', label: '', task: '' });
@@ -1820,6 +1820,9 @@ describe('плечо опыта с пакетом состояния (Э-1)', ()
       { ...trial, name: 'a'.repeat(33) },
       { ...trial, at: 'yesterday' },
       { ...trial, at: 5 },
+      { ...trial, tag: undefined },
+      { ...trial, tag: 'abc' },
+      { ...trial, tag: '0123456789ABCDEF0123456789ABCDEF' },
       'control',
       null,
       [],

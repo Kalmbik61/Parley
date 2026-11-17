@@ -65,6 +65,7 @@ import { opencodeRoleLaunch } from './opencode-role.js';
 import { CLAUDE_SKILL_BUDGET_ENV, CODEX_SKILL_CATALOG_OVERRIDE, claudeSkillReduction, codexSkillRoute } from './skill-reduction.js';
 import { isPointerText } from './delivery.js';
 import { createWork, deleteSessionFiles, readMap, SharedStateError, updateMap, workPaths } from './store.js';
+import { withTrialAssignment, type TrialProtocolOptions } from './trial-ledger.js';
 import type { LaunchedBy, WorkMap, WorkSession } from './types.js';
 
 /** Чего хочет запуск сверх самой сессии. */
@@ -856,12 +857,20 @@ export async function createNewSession(
   projectPath: string,
   workId: string | null,
   trial?: NewSession['trial'],
+  protocol?: TrialProtocolOptions,
 ): Promise<NewSessionResult> {
   const id = workId ?? (await createWork(projectPath, { title: UNTITLED_WORK, goal: '' })).work.id;
   let created: WorkSession | undefined;
-  await updateMap(projectPath, id, (map) => {
-    created = addSession(map, { provider: 'claude', label: NEW_LABEL, task: '', ...(trial === undefined ? {} : { trial }) });
-  });
+  // Назначение идёт по протоколу списка: намерение — прямо перед записью карты, отмена или подтверждение — после неё.
+  await withTrialAssignment(
+    trial,
+    { projectPath, workId: id },
+    (assigned) => updateMap(projectPath, id, (map) => {
+      created = addSession(map, { provider: 'claude', label: NEW_LABEL, task: '', ...(assigned === undefined ? {} : { trial: assigned }) });
+    }),
+    () => created!.id,
+    protocol,
+  );
   if (created === undefined) throw new Error(`session in workspace ${id} was not created`);
   return { workId: id, session: created };
 }
@@ -930,12 +939,21 @@ export async function createPendingSession(
   workId: string,
   init: NewSession,
   admit?: (map: WorkMap, sessionId: string) => void,
+  protocol?: TrialProtocolOptions,
 ): Promise<string> {
   let created = '';
-  const map = await updateMap(projectPath, workId, (current) => {
-    created = addSession(current, init).id;
-    admit?.(current, created);
-  });
+  // Назначение (`init.trial`) идёт по протоколу списка; бриф пишется после него, и его сбой отменой не считается.
+  const { trial, ...rest } = init;
+  const map = await withTrialAssignment(
+    trial,
+    { projectPath, workId },
+    (assigned) => updateMap(projectPath, workId, (current) => {
+      created = addSession(current, assigned === undefined ? rest : { ...rest, trial: assigned }).id;
+      admit?.(current, created);
+    }),
+    () => created,
+    protocol,
+  );
   await writeBrief(projectPath, map, created);
   return created;
 }

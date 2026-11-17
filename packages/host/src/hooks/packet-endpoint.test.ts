@@ -234,12 +234,12 @@ describe('опыт с пакетом: плечо сессии (Э-1, крите�
     await updateMap(project, workId, (map) => {
       const session = map.sessions.find((candidate) => candidate.id === 's-02')!;
       if (arm === 'none') delete session.trial;
-      else session.trial = { name: 'exp-a', arm, at: '2026-11-17T10:00:00.000Z' };
+      else session.trial = { name: 'exp-a', arm, at: '2026-11-17T10:00:00.000Z', tag: '0123456789abcdef0123456789abcdef' };
     });
   };
 
   it('правило packetGate: повреждённое назначение и «контроль» — отказ при любых настройках, «пакет» — да, без плеча — да только пока опыт не идёт', () => {
-    const trial = (arm: 'packet' | 'control') => ({ trial: { name: 'exp-a', arm, at: '2026-11-17T10:00:00.000Z' } });
+    const trial = (arm: 'packet' | 'control') => ({ trial: { name: 'exp-a', arm, at: '2026-11-17T10:00:00.000Z', tag: '0123456789abcdef0123456789abcdef' } });
     expect(packetGate(trial('control'), '')).toEqual({ ok: false, reason: 'control' });
     expect(packetGate(trial('control'), 'exp-a')).toEqual({ ok: false, reason: 'control' });
     expect(packetGate(trial('packet'), '')).toEqual({ ok: true });
@@ -293,7 +293,7 @@ describe('опыт с пакетом: плечо сессии (Э-1, крите�
   const corruptControl = async (): Promise<void> => {
     await updateMap(project, workId, (map) => {
       const session = map.sessions.find((candidate) => candidate.id === 's-02')!;
-      Object.assign(session, { trial: { name: 'exp-a', arm: 'control', at: 'not-a-time' } });
+      Object.assign(session, { trial: { name: 'exp-a', arm: 'control', at: 'not-a-time', tag: '0123456789abcdef0123456789abcdef' } });
     });
   };
 
@@ -319,7 +319,7 @@ describe('опыт с пакетом: плечо сессии (Э-1, крите�
         session: async () => {
           reads += 1;
           if (reads === 1) throw new Error('map is down');
-          return { trial: { name: 'exp-a', arm: 'packet' as const, at: '2026-11-17T10:00:00.000Z' } };
+          return { trial: { name: 'exp-a', arm: 'packet' as const, at: '2026-11-17T10:00:00.000Z', tag: '0123456789abcdef0123456789abcdef' } };
         },
         context: async () => { throw new Error('the packet must not be built'); },
       });

@@ -12,7 +12,7 @@
  * ручной `resume`, а живой PTY закрытой в карте сессии хост гасит сам.
  */
 
-import { randomInt, randomUUID } from 'node:crypto';
+import { randomBytes, randomInt, randomUUID } from 'node:crypto';
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import {
@@ -541,8 +541,10 @@ export function createSessionsService(
     if (provider !== 'claude') return undefined;
     const { config } = await loadConfig();
     if (!config.roomPacket || config.roomPacketTrial === '') return undefined;
-    return { name: config.roomPacketTrial, arm: random(2) === 0 ? 'packet' : 'control', at: new Date().toISOString() };
+    return { name: config.roomPacketTrial, arm: random(2) === 0 ? 'packet' : 'control', at: new Date().toISOString(), tag: randomBytes(16).toString('hex') };
   }
+  /** Предупреждения протокола списка назначений (намерение, отмена, подтверждение) идут в журнал хоста. */
+  const trialProtocol = { warn: (message: string): void => host.log.warn('room packet trial', { message }) };
   const warned = new Set<string>();
   const creationWarnings = new Set<string>();
   const gitWriteGrants = new Map<string, boolean>();
@@ -1751,7 +1753,7 @@ export function createSessionsService(
     }
 
     if (workId === null) {
-      const created = await timer.step('record', () => createNewSession(projectPath, null, trial));
+      const created = await timer.step('record', () => createNewSession(projectPath, null, trial, trialProtocol));
       const ref = { projectPath, workId: created.workId, sessionId: created.session.id };
       logged.sessionId = ref.sessionId;
       await timer.step('choice', () => applyChoice(ref, label, provider, role, choice, lean));
@@ -1760,7 +1762,7 @@ export function createSessionsService(
     }
 
     if (task === '') {
-      const created = await timer.step('record', () => createNewSession(projectPath, workId, trial));
+      const created = await timer.step('record', () => createNewSession(projectPath, workId, trial, trialProtocol));
       const ref = { projectPath, workId, sessionId: created.session.id };
       logged.sessionId = ref.sessionId;
       await timer.step('choice', () => applyChoice(ref, label, provider, role, choice, lean));
@@ -1827,7 +1829,7 @@ export function createSessionsService(
         map.resources!.spawned += 1;
         if (room !== null) map.resources!.spawnedByRoom[room] = (map.resources!.spawnedByRoom[room] ?? 0) + 1;
         noteCreation(map, 'session', room, now);
-      }));
+      }, trialProtocol));
       logged.sessionId = sessionId;
       const ref = { projectPath, workId, sessionId };
       if (worktree === true) await timer.step('worktreePlan', () => attachWorktreePlan(ref, true));

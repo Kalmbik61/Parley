@@ -831,6 +831,12 @@ export { proposeCompletion } from './work/proposals.js';
 export type { ProposalOptions } from './work/proposals.js';
 export type { MapCompact, MapCompactMail } from './work/types.js';
 export type { RoomMode, PlanMode, PlanStatus, PlanItemStatus, PlanDraft, PlanItemInput, PlanItem, PlanEvidence, PlanSubmission, PlanCheckpoint, RoomPlan, PlanExportIntent } from './work/types.js';
+export type { SessionTrial, DamagedTrial, TrialArm, DamagedTrace, TrialSegment, TrialSessionTrace, TrialRoomRow, TrialUnknownParticipation, TrialTrace } from './work/types.js';
+export { isDamagedTrial, isTrialName, isTrialTag, TRIAL_ARMS, TRIAL_TAG_PATTERN } from './work/types.js';
+export { isDamagedTrace, trialSegments, trialUnknownParticipation } from './work/trial-trace.js';
+export type { TrialSegments, TrialSegmentSource } from './work/trial-trace.js';
+export { appendTrialLedger, parseTrialLedger, readTrialLedger, trialLedgerFile, unresolvedIntents, withTrialAssignment } from './work/trial-ledger.js';
+export type { TrialCancelLine, TrialConfirmLine, TrialIntentLine, TrialLedger, TrialLedgerLine, TrialTarget, TrialProtocolOptions, UnresolvedIntent } from './work/trial-ledger.js';
 export type { AutonomousDraft, AttemptChannelRequest, AutonomousPlan, PlanAttempt, HandoffManifest, HandoffManifestInput, Receipt, CheckSpec, CheckResult, Integration, AutonomousBudget, AutonomousOp } from './work/types.js';
 
 export { parseProjectMemory, readProjectMemory, addProjectMemory, updateProjectMemory, removeProjectMemory, undoProjectMemory } from './work/project-memory.js';

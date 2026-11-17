@@ -17,7 +17,6 @@ import type {
   SessionLifecycle,
   SessionResult,
   SessionTrial,
-  TrialArm,
   WindowWorkMap,
   WorkMap,
   WorkProvider,
@@ -25,7 +24,7 @@ import type {
   SessionRole,
   WorksIndex,
 } from './types.js';
-import { isTrialName, TRIAL_ARMS } from './types.js';
+import { normalizeTrial, normalizeTrialTrace, traceDeletedSession } from './trial-trace.js';
 import type { WorkSwarm } from './swarms.js';
 
 /**
@@ -208,6 +207,8 @@ export function removeSession(
     }
   }
   letters.flagDeleted(sessionId);
+  // Опыт с пакетом состояния: след сессии с назначением — той же записью карты (комнаты ещё на месте).
+  traceDeletedSession(map, letters, removed, now);
 
   const deleted = map.work.deletedSessions ?? [];
   if (!deleted.includes(sessionId)) deleted.push(sessionId);
@@ -622,6 +623,7 @@ export function normalizeMap(data: unknown, source: string): WorkMap {
   validatePlanEffects(map);
   validateDecisionJournalStorage(map);
   validateResources(map);
+  normalizeTrialTrace(map.work as unknown as Record<string, unknown>);
   return map;
 }
 
@@ -857,14 +859,8 @@ function normalizeAgentFields(session: Record<string, unknown>): void {
     Array.isArray(silentEnding['told']) && silentEnding['told'].every((kind) => kind === 'exit' || kind === 'stop' || kind === 'close' || kind === 'turn'))) {
     delete session['silentEnding'];
   }
-  // Плечо опыта: ровно два значения, имя по правилу настройки и корректное время. Запись, не прошедшая проверку, не
+  // Плечо опыта: ровно два значения, имя по правилу настройки, корректное время и метка. Запись, не прошедшая проверку, не
   // стирается и не становится «плеча нет»: она заменяется явным состоянием «назначение повреждено», которое переживает
   // чтение и запись карты (план опыта, 1.1). Само состояние читается обратно как есть.
-  const trial = session['trial'];
-  if (trial !== undefined) {
-    if (isRecord(trial) && isTrialName(trial['name']) && TRIAL_ARMS.includes(trial['arm'] as TrialArm) &&
-      typeof trial['at'] === 'string' && Number.isFinite(Date.parse(trial['at']))) {
-      session['trial'] = { name: trial['name'], arm: trial['arm'], at: trial['at'] };
-    } else session['trial'] = { damaged: true };
-  }
+  if (session['trial'] !== undefined) session['trial'] = normalizeTrial(session['trial']);
 }
