@@ -937,6 +937,31 @@ describe('launch(): лента вида «Chat» — адрес приёмник
     await launched.stop();
   });
 
+  it('мост пакета комнаты: только claude с регистрацией хуков и когда packetHook вернул адрес; иначе в файле моста нет', async () => {
+    const packetHook = async () => ({ launcher: '/home/me/.parley/bin/parley-packet-hook', url: `${HOOK_URL}/packet` });
+    const commandsOf = (settings: Launched['settings']): string[] =>
+      (settings as unknown as { hooks: Record<string, { hooks: { type: string; command?: string; timeout?: number }[] }[]> } | null)
+        ?.hooks['SessionStart']?.[0]?.hooks.filter((hook) => hook.type === 'command').map((hook) => `${hook.command}|${hook.timeout ?? ''}`) ?? [];
+
+    const { hooks } = fakeHooks();
+    const on = await launchWith('claude', { hooks, providerVersions: fakeVersions({ claude: '2.1.286' }), packetHook });
+    expect(commandsOf(on.settings)).toHaveLength(2);
+    expect(commandsOf(on.settings)[1]).toBe(`"/home/me/.parley/bin/parley-packet-hook" "${HOOK_URL}/packet" PARLEY_HOOK_TOKEN|2`);
+    await on.stop();
+
+    // Настройка выключена (packetHook ничего не вернул) — файл прежний.
+    const off = await launchWith('claude', { hooks: fakeHooks().hooks, providerVersions: fakeVersions({ claude: '2.1.286' }), packetHook: async () => undefined });
+    expect(commandsOf(off.settings)).toHaveLength(1);
+    await off.stop();
+
+    // Без регистрации хуков (версия не опознана) packetHook не зовётся и моста нет.
+    let asked = 0;
+    const noFeed = await launchWith('claude', { hooks: fakeHooks().hooks, providerVersions: fakeVersions({ claude: null }), packetHook: async () => { asked += 1; return packetHook(); } });
+    expect(asked).toBe(0);
+    expect(noFeed.settings === null || commandsOf(noFeed.settings).length <= 1).toBe(true);
+    await noFeed.stop();
+  });
+
   it('codex — вне режима parley и при «подходящей» версии — без токена', async () => {
     const { hooks, registered } = fakeHooks();
     const launched = await launchWith(

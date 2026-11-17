@@ -54,6 +54,7 @@ describe('loadConfig', () => {
       leanAgents: true,
       remoteCreate: true,
       assistantAutonomy: false,
+      roomPacket: false,
       voiceDailyMinutes: 30,
       fontFamily: "'SF Mono', Menlo, monospace",
       fontSize: 14,
@@ -101,6 +102,7 @@ describe('loadConfig', () => {
       leanAgents: true,
       remoteCreate: true,
       assistantAutonomy: false,
+      roomPacket: false,
       voiceDailyMinutes: 30,
       fontFamily: "'SF Mono', Menlo, monospace",
       fontSize: 14,
@@ -133,6 +135,7 @@ describe('loadConfig', () => {
       leanAgents: true,
       remoteCreate: true,
       assistantAutonomy: false,
+      roomPacket: false,
       voiceDailyMinutes: 30,
       fontFamily: "'SF Mono', Menlo, monospace",
       fontSize: 14,
@@ -398,6 +401,7 @@ describe('переменные окружения: PARLEY_* и прежние HA
     ['leanAgents', 'LEAN_AGENTS', 'off', false],
     ['remoteCreate', 'REMOTE_CREATE', 'off', false],
     ['assistantAutonomy', 'ASSISTANT_AUTONOMY', 'on', true],
+    ['roomPacket', 'ROOM_PACKET', 'on', true],
     ['voiceDailyMinutes', 'VOICE_DAILY_MINUTES', '45', 45],
     ['fontFamily', 'FONT_FAMILY', 'Menlo', 'Menlo'],
     ['fontSize', 'FONT_SIZE', '18', 18],
@@ -682,6 +686,30 @@ describe('assistantAutonomy setting', () => {
     const bad = await loadConfig(file(), {});
     expect(bad.config.assistantAutonomy).toBe(false);
     expect(bad.warning).toContain('assistantAutonomy');
+  });
+});
+
+describe('roomPacket setting', () => {
+  it('выключен по умолчанию; parseSetting (settings.set) принимает булево и отвергает остальное', () => {
+    expect(DEFAULT_CONFIG.roomPacket).toBe(false);
+    expect(parseSetting('roomPacket', '1')).toEqual({ value: true });
+    expect(parseSetting('roomPacket', 'off')).toEqual({ value: false });
+    expect(parseSetting('roomPacket', 'maybe')).toEqual({ error: 'roomPacket: expected 0 or 1' });
+  });
+  it('окружение PARLEY_ROOM_PACKET включает и запирает ключ; файл читается; неверное значение — предупреждение', async () => {
+    expect((await loadConfig(file(), {})).config.roomPacket).toBe(false);
+    const fromEnv = await loadConfig(file(), { PARLEY_ROOM_PACKET: '1' });
+    expect(fromEnv.config.roomPacket).toBe(true);
+    expect(fromEnv.fromEnv).toContain('roomPacket');
+    await write({ roomPacket: true });
+    expect((await loadConfig(file(), {})).config.roomPacket).toBe(true);
+    await write({ roomPacket: 'yes please' });
+    const badFile = await loadConfig(file(), {});
+    expect(badFile.config.roomPacket).toBe(false);
+    expect(badFile.warning).toContain('roomPacket');
+    const badEnv = await loadConfig(file(), { PARLEY_ROOM_PACKET: 'sometimes' });
+    expect(badEnv.config.roomPacket).toBe(false);
+    expect(badEnv.warning).toContain('PARLEY_ROOM_PACKET');
   });
 });
 

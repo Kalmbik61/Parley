@@ -52,7 +52,7 @@ import {
 } from '../work/context-pages.js';
 import { heldWarning, settleDelayMs } from '../work/delivery.js';
 import { guide, GUIDE_TOPICS, guideTopic } from '../work/guide.js';
-import { mapLetterTx, storeLetterReader, unreadLetters, writeLetters, type LetterReads } from '../work/letter-store.js';
+import { mapLetterTx, storeLetterReader, storeLetterReads, unreadLetters, writeLetters, type LetterReads } from '../work/letter-store.js';
 import { recipientsOf } from '../work/letters.js';
 import { isCodexThreadBinding, transitionSession } from '../work/map.js';
 import { boardTake, markBoardReview, planBacklogIds, readBoardItems, type BoardSkipReason } from '../work/board.js';
@@ -85,6 +85,7 @@ import { PLAN_TASKS_TOOL, planTasks } from './plan-tasks.js';
 import { AGENT_SWITCH_UNAVAILABLE, CREATE_SESSION_TOOL, REQUEST_AGENT_SWITCH_TOOL, SESSION_CREATION_UNAVAILABLE, createSession, requestAgentSwitch } from './session-tools.js';
 import { CREATE_SWARM_TOOL, SWARM_ADD_TOOL, SWARM_UNAVAILABLE, createSwarm, swarmAdd } from './swarm-tools.js';
 import { fetchProviderRows } from './provider-rows.js';
+import { buildRoomPacket, type PacketTarget, type RoomPacketResult } from '../work/room-packet.js';
 import { addMemberByLead, addRoom, canReadRoom, isCreatedDescendant, isMember, isRoomArchived, joinNotice, leaveOtherRooms, liveLead, requireOpenRoom } from '../work/rooms.js';
 import { agentStatus, asleepHint } from '../work/session-state.js';
 import { SWARM_COVERAGES, swarmOfSession } from '../work/swarms.js';
@@ -103,7 +104,7 @@ import {
   type WorkMap,
   type WorkSession,
 } from '../work/types.js';
-import { BROWSER_UNAVAILABLE, createBrowserTools } from './browser-tools.js';
+import { BROWSER_TOOLS, BROWSER_UNAVAILABLE, createBrowserTools } from './browser-tools.js';
 import type { McpContext } from './context.js';
 import { inboxPage, type InboxCharLimit, type InboxExtras } from './inbox-page.js';
 import { watchInbox, type Ring } from './inbox-watch.js';
@@ -467,7 +468,7 @@ export const TOOLS: Tool[] = [
         room: { type: 'string' },
         field: {
           type: 'string',
-          enum: ['goal', 'title', 'task', 'summary', 'history', 'artifacts', 'contextFrom', 'messages', 'message', 'summaries', 'archive', 'providers', ...TOPOLOGY_FIELDS, 'plan'],
+          enum: ['goal', 'title', 'task', 'summary', 'history', 'artifacts', 'contextFrom', 'messages', 'message', 'summaries', 'archive', 'providers', ...TOPOLOGY_FIELDS, 'plan', 'packet'],
           description: 'task…contextFrom: with session; messages: room pages (no room: direct); message: by id; archive: other workspaces.',
         },
         id: { type: 'string' },
@@ -753,6 +754,43 @@ const optionalString = (args: Record<string, unknown>, name: string): string | u
   return value;
 };
 
+/**
+ * Чей пакет собирать для `get_map {field: "packet"}`. Участнику комната не нужна: она одна. Владелец вне состава обязан
+ * назвать её. Несуществующая и чужая комната отвечают одинаково: по ответу не узнать, есть ли она.
+ */
+function packetTarget(map: WorkMap, sessionId: string, roomId: string | undefined): PacketTarget {
+  const unavailable = (id: string): PageError => new PageError('unknown-target', `room ${id} is not available to this session`);
+  if (roomId !== undefined) {
+    const room = map.rooms.find((candidate) => candidate.id === roomId);
+    if (room === undefined) throw unavailable(roomId);
+    if (room.members.includes(sessionId)) return { roomId, viewer: { kind: 'member', sessionId } };
+    if (room.ownerId === sessionId) return { roomId, viewer: { kind: 'owner', sessionId } };
+    throw unavailable(roomId);
+  }
+  const mine = map.rooms.filter((candidate) => candidate.members.includes(sessionId));
+  if (mine.length === 1) return { roomId: mine[0]!.id, viewer: { kind: 'member', sessionId } };
+  if (mine.length > 1) throw new PageError('unknown-target', `You are in several rooms (${mine.map((room) => room.id).join(', ')}); name one with room.`);
+  const owned = map.rooms.filter((candidate) => candidate.ownerId === sessionId);
+  if (owned.length > 0) throw new PageError('unknown-target', `You are not a member of any room; name the room you own with room (${owned.map((room) => room.id).join(', ')}).`);
+  throw new PageError('unknown-target', 'This session is in no room: there is no room state packet.');
+}
+
+/**
+ * Инструменты, которые сервер добавляет к каталогу `ToolRunner.list` при канале агента: браузер окна и создание сессий.
+ * Один источник для `ListTools` и для имён в пакете состояния, чтобы пакет не разошёлся со списком сервера.
+ */
+function agentChannelTools(browser: readonly Tool[], sessionAgent: boolean): Tool[] {
+  return [...browser, ...(sessionAgent ? [CREATE_SESSION_TOOL, REQUEST_AGENT_SWITCH_TOOL, CREATE_SWARM_TOOL, SWARM_ADD_TOOL] : [])];
+}
+
+/** Имена инструментов, которые сервер объявляет этой сессии: каталог, профиль, навигатор навыков и канал агента — как у `ListTools`. */
+function declaredToolNames(context: McpContext): string[] {
+  const names = TOOLS.filter((tool) => toolDeclaredInProfile(context, tool)).map((tool) => tool.name);
+  if (context.skillNavigator === true) names.push(FIND_SKILL.name);
+  const channel = context.agent === undefined && context.hasAgentChannel !== true ? [] : agentChannelTools(BROWSER_TOOLS, context.sessionId !== null);
+  return [...names, ...channel.map((tool) => tool.name)];
+}
+
 /** Ограниченные страницы `get_map`: поле, список или письма — по параметрам; без параметров карту отдаёт `getMap`. */
 async function mapPage(context: McpContext, map: WorkMap, args: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
   const maxBytes = clampPageBytes(numberArg(args, 'maxBytes'));
@@ -766,6 +804,16 @@ async function mapPage(context: McpContext, map: WorkMap, args: Record<string, u
       if (sessionId !== undefined || roomId !== undefined || args['kind'] !== undefined || args['id'] !== undefined || args['rev'] !== undefined)
         throw new PageError('invalid-cursor', 'Collection pages accept only field, cursor and maxBytes; use session or room for detail.');
       return topologyListPage(map, context.sessionId, letters, { field: field as TopologyField, ...(cursorRaw === undefined ? {} : { cursor: cursorRaw }), maxBytes });
+    }
+    if (field === 'packet') {
+      if (sessionId !== undefined || args['kind'] !== undefined || args['id'] !== undefined || args['rev'] !== undefined || cursorRaw !== undefined)
+        throw new PageError('invalid-cursor', 'Field packet accepts only room and maxBytes.');
+      if (context.sessionId === null) throw new Error(NO_SESSION);
+      const built = buildRoomPacket(map, packetTarget(map, context.sessionId, roomId), storeLetterReads(context.projectPath, context.workId), declaredToolNames(context), new Date().toISOString());
+      if (!built.ok) throw new PageError('unknown-target', built.message);
+      // Пакет не режется: если запрошенного предела не хватает, отказ называет нужный размер.
+      if (built.bytes > maxBytes) throw new Error(`The room state packet is ${built.bytes} bytes, more than maxBytes ${maxBytes}; it is never cut. Call again with maxBytes of at least ${built.bytes}.`);
+      return built.text;
     }
     if (field === 'plan') {
       const id = stringArg(args, 'id');
@@ -1476,6 +1524,23 @@ export function takeInlineMail(
   return { text: `${INLINE_MAIL_LINE}\n${JSON.stringify({ messages, ...extras })}`, letters: messages.length };
 }
 
+/**
+ * Пакет состояния комнаты для сессии контекста (мост после сжатия, спека 2026-11-16, 3.5): та же сборка, что у
+ * `get_map {field: "packet"}` без параметра `room`. `null` — пакета нет: сессия без комнаты или в нескольких комнатах
+ * (мосту некого выбирать), комната закрыта, сбой сборки. Ничего не пишет.
+ */
+export async function sessionRoomPacket(context: McpContext, at: string = new Date().toISOString()): Promise<RoomPacketResult | null> {
+  if (context.sessionId === null) return null;
+  const map = await readMap(context.projectPath, context.workId);
+  let target: PacketTarget;
+  try {
+    target = packetTarget(map, context.sessionId, undefined);
+  } catch {
+    return null;
+  }
+  return buildRoomPacket(map, target, storeLetterReads(context.projectPath, context.workId), declaredToolNames(context), at);
+}
+
 async function checkInbox(context: McpContext, sessionId: string): Promise<unknown> {
   const { messages, extras } = takeInbox(context, sessionId);
   return { messages, ...extras };
@@ -2167,10 +2232,13 @@ export async function staleAgent(context: McpContext): Promise<boolean> {
   return current !== null && current !== context.agentRevision;
 }
 
+const toolDeclaredInProfile = (context: McpContext, tool: Tool): boolean =>
+  context.toolProfile !== 'short' || !(SHORT_PROFILE_HIDDEN_TOOLS as readonly string[]).includes(tool.name);
+
 export function createToolRunner(context: McpContext): ToolRunner {
   const navigator = context.skillNavigator === true ? skillNavigator(context) : null;
   // Профиль `short` (Codex): три инструмента памяти не объявляются; вызов такого имени уходит в обычный разбор, как и любое неизвестное.
-  const declaredInProfile = (tool: Tool): boolean => context.toolProfile !== 'short' || !(SHORT_PROFILE_HIDDEN_TOOLS as readonly string[]).includes(tool.name);
+  const declaredInProfile = (tool: Tool): boolean => toolDeclaredInProfile(context, tool);
   // Тред Codex привязывается один раз за жизнь исполнителя — с первого вызова, где `_meta.threadId` есть.
   const revision = context.nativeContextRevision;
   const launchRevision = typeof revision === 'string' && THREAD_ID.test(revision) && revision === revision.toLowerCase() ? revision : null;
@@ -2243,7 +2311,7 @@ export function createParleyServer(context: McpContext, runner?: ToolRunner): Se
   const browser = context.agent === undefined ? null : createBrowserTools(context.agent, { clientName: () => server.getClientVersion()?.name });
   const sessionAgent = sessionId === null ? undefined : context.agent;
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: [...await tools.list(), ...(browser?.tools ?? []), ...(sessionAgent ? [CREATE_SESSION_TOOL, REQUEST_AGENT_SWITCH_TOOL, CREATE_SWARM_TOOL, SWARM_ADD_TOOL] : [])],
+    tools: [...await tools.list(), ...agentChannelTools(browser?.tools ?? [], sessionAgent !== undefined)],
   }));
   server.setRequestHandler(
     CallToolRequestSchema,

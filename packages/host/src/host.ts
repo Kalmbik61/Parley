@@ -141,6 +141,8 @@ import { createVoiceTelemetry, LIVE_USD_PER_MINUTE } from './voice/telemetry.js'
 import { dailyBudget } from './voice/budget.js';
 import { AGENT_BROWSER_PATH, createBrowserEndpoint } from './agent/browser-endpoint.js';
 import { createHookServer, type HookRequest } from './hooks/hook-server.js';
+import { createPacketEndpoint, PACKET_PATH, packetContext } from './hooks/packet-endpoint.js';
+import { ensurePacketHookLauncher } from './hooks/packet-hook-launcher.js';
 import { createInlineMail, hookWithInlineMail } from './hooks/inline-mail.js';
 import { appendMailJournal } from './feed/mail-journal.js';
 import { createSilentEndings } from './endings/silent-endings.js';
@@ -597,6 +599,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   // тот же, что у остальных маршрутов агента.
   const toolContextFor = (ref: SessionRef, launch: ToolLaunch): Promise<McpContext> =>
     hostToolContext(ref, launch, {
+      // Канал агента — по регистрации хоста: от него зависят имена инструментов канала, которые пакет комнаты называет сессии.
+      agentChannel: (agentRef) => browserEndpoint.isRegistered(agentRef),
       providerRows: listProviderRows,
       onWorksChange: mapChangeSignal(worksService),
       roleCatalog: (cwd) => roleCatalog(cwd, { codex: true }),
@@ -656,9 +660,17 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       // событие с глухим `respond`: её `{}` второй ответ не перебьёт.
       hookWithInlineMail(inlineMail, (hook) => feedService.onHook(hook))(request);
   };
+  // Путь пакета состояния комнаты (спека 2026-11-16, 3.5): доступ проверяет приёмник общей с `/hooks` точкой, сессия — из регистрации.
+  // Возможности запуска (навигатор, профиль, канал агента) — из состояния хоста: снимок запуска, который процесс MCP этой сессии
+  // прислал по своему токену (`launchOf`), и регистрация хуков; запрос моста их не называет. Снимка нет — пакета нет.
+  const packetEndpoint = createPacketEndpoint({
+    log,
+    context: packetContext(toolsEndpoint, toolContextFor),
+  });
   const hookServer = createHookServer({
     log,
     onHook: dispatchHook,
+    guarded: { [PACKET_PATH]: (request) => packetEndpoint.handle(request) },
     routes: { [AGENT_ATTEMPTS_PATH]: (req, res) => attemptsEndpoint.handle(req, res), [AGENT_SESSIONS_PATH]: (req, res) => sessionEndpoint.handle(req, res), [AGENT_SWITCH_PATH]: (req, res) => switchEndpoint.handle(req, res), [AGENT_SWARMS_PATH]: (req, res) => swarmEndpoint.handle(req, res), [AGENT_PROVIDERS_PATH]: (req, res) => providersEndpoint.handle(req, res), [AGENT_TOOLS_PATH]: (req, res) => toolsEndpoint.handle(req, res), [AGENT_BROWSER_PATH]: (req, res) => browserEndpoint.handle(req, res), ...assistantEndpoint.routes() },
   });
 
@@ -690,6 +702,25 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       return undefined;
     });
     return codexHookCommand;
+  };
+  // Мост пакета комнаты: запускатель заводится при первой надобности, когда настройка `roomPacket` включена на запуске
+  // `claude`. Не записался — запуск идёт без моста, следующий пробует снова.
+  let packetLauncher: Promise<string | undefined> | undefined;
+  const packetHookOnce = async (): Promise<{ launcher: string; url: string } | undefined> => {
+    if (!(await loadConfig()).config.roomPacket) return undefined;
+    const origin = hookServer.origin();
+    if (origin === null) return undefined;
+    packetLauncher ??= ensurePacketHookLauncher(
+      parleyHome(),
+      process.execPath,
+      fileURLToPath(new URL('./hooks/packet-hook-bin.js', import.meta.url)),
+    ).catch((error: unknown) => {
+      log.warn('пакет комнаты: запускатель не записан, запуск без моста', { error: String(error) });
+      packetLauncher = undefined;
+      return undefined;
+    });
+    const launcher = await packetLauncher;
+    return launcher === undefined ? undefined : { launcher, url: `${origin}${PACKET_PATH}` };
   };
   // Согласия человека на папку (спека 2026-10-21, 4.2 и 4.4): запуск Codex без согласия на проект ждёт здесь. Служба
   // заводится до сессий и будильника, а продолжает запуски через них — привязка поздняя, замыкания читают их позже.
@@ -799,6 +830,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       providerVersions,
       signedIn: accountSignedIn,
       codexHookCommand: codexHookCommandOnce,
+      packetHook: packetHookOnce,
       agent: {
         url: () => {
           const origin = hookServer.origin();

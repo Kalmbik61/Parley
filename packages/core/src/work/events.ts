@@ -151,6 +151,16 @@ export const PERMISSION_ANSWERED_EVENT = 'ParleyPermissionAnswered';
 export const INLINE_MAIL_EVENT = 'ParleyInlineMail';
 
 /**
+ * Отметка хоста «пакет состояния комнаты отдан мосту после сжатия» (`{revision, bytes, reason}`): пишется только для запроса,
+ * прошедшего проверку токена, в журнал сессии из регистрации. Доказывает отправку, не получение: получение подтверждает
+ * транскрипт сессии. Хода не начинает и не кончает. Запись самого моста — `PACKET_BRIDGE_EVENT`.
+ */
+export const ROOM_PACKET_EVENT = 'ParleyRoomPacket';
+
+/** Отметка моста пакета: одна строка на событие сжатия, исход и время работы моста; пишет сам мост, даже когда хост недоступен. */
+export const PACKET_BRIDGE_EVENT = 'ParleyRoomPacketBridge';
+
+/**
  * `notification_type` внутреннего уведомления хоста: процесс агента запущен, а за срок ни одного события — он на
  * экране старта (вход, доверие к папке). Хук Claude Code такого не шлёт: хост записывает его в свёртку сам, как кадр
  * спиннера Codex, а `activityOf` читает как ожидание человека — `blocked`, `need` вида `startup` (спека «Застрявшие

@@ -41,6 +41,17 @@ export const GUIDANCE_MAX_BYTES = 8192;
 export const BRIEF_MAX_BYTES = 32768;
 /** Ответ `read_guide`: весь гид сегодня около 33 КиБ, потолок вдвое выше — для роста, а не для отсечения. */
 export const READ_GUIDE_MAX_BYTES = 65536;
+/** Пакет состояния комнаты целиком (`room-packet.ts`): выбор, а не замер; считается `contextBytes`. */
+export const PACKET_MAX_BYTES = 8192;
+/** Пределы полей пакета: что не влезло, заменяется ссылкой (`inlineOrRef`). Названия работы и комнаты, цель плана, название пункта и решения. */
+export const PACKET_LIMITS = {
+  title: 128,
+  planGoal: 200,
+  planItem: 200,
+  decisionTitle: 160,
+} as const;
+/** Сколько принятых решений комнаты пакет называет сам; остальные — строкой «… and K more». */
+export const PACKET_MAX_DECISIONS = 12;
 /** Ответ `find_skill` целиком. */
 export const FIND_SKILL_MAX_BYTES = 8192;
 /** Страница почты (`check_inbox`, `wait_for("inbox")`): письма и байты результата MCP; письмо, не влезшее первым, урезается до `INBOX_CUT_BYTES`. */

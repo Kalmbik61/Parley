@@ -36,7 +36,7 @@ import { defaultSessionName } from './names.js';
 import { submitPlanItem } from './plans.js';
 import { resolveProposal, setProposal } from './proposals.js';
 import { addRoom } from './rooms.js';
-import { CLOSE_SESSION_PERMISSION, workSettingsJson } from './settings-file.js';
+import { CLOSE_SESSION_PERMISSION, packetBridgeCommand, workSettingsJson } from './settings-file.js';
 import { createWork, readMap, updateMap, workPaths, workVersion } from './store.js';
 import { createWorktree } from './worktree.js';
 import { grantTrust, revokeTrust } from './trust.js';
@@ -557,6 +557,30 @@ describe('план запуска', () => {
     const resumed = await planResume(project, workId, await sessionOf(workId, sessionId));
     expect(resumed.args[resumed.args.indexOf('--settings') + 1]).toBe(file);
     expect(await readFile(file, 'utf8')).toBe(workSettingsJson());
+  });
+
+  it('packetBridge: мост пакета комнаты только у claude и только с hookUrl; файл — свой у сессии; без него файл прежний', async () => {
+    const url = 'http://127.0.0.1:41234/hooks';
+    const packetBridge = { launcher: '/h/bin/parley-packet-hook', url: 'http://127.0.0.1:41234/hooks/packet' };
+    const bridge = packetBridgeCommand(packetBridge.launcher, packetBridge.url, 'PARLEY_HOOK_TOKEN');
+    const settingsOf = async (plan: { args: string[] }): Promise<string> => readFile(plan.args[plan.args.indexOf('--settings') + 1] as string, 'utf8');
+
+    const claude = await pending('claude');
+    const withBridge = await planLaunch(project, claude.workId, await sessionOf(claude.workId, claude.sessionId), { hookUrl: url, packetBridge });
+    expect(withBridge.args[withBridge.args.indexOf('--settings') + 1]).toBe(path.join(workPaths(project, claude.workId).dir, 'settings', `${claude.sessionId}.json`));
+    expect(await settingsOf(withBridge)).toBe(workSettingsJson({ hookUrl: url, packetBridge: bridge }));
+    expect(await settingsOf(withBridge)).toContain('"timeout": 2');
+
+    // Без hookUrl регистрации нет — моста нет; без packetBridge файл общий и прежний.
+    const noUrl = await planLaunch(project, claude.workId, await sessionOf(claude.workId, claude.sessionId), { packetBridge });
+    expect(await settingsOf(noUrl)).toBe(workSettingsJson());
+    const plain = await planLaunch(project, claude.workId, await sessionOf(claude.workId, claude.sessionId), { hookUrl: url });
+    expect(await settingsOf(plain)).toBe(workSettingsJson({ hookUrl: url }));
+
+    // GLM — тот же CLI, но срез его не затрагивает.
+    const glm = await pending('glm');
+    const glmPlan = await planLaunch(project, glm.workId, await sessionOf(glm.workId, glm.sessionId), { hookUrl: url, packetBridge });
+    expect(await settingsOf(glmPlan)).not.toContain('parley-packet-hook');
   });
 
   it('у claude ни notify, ни каталога codex-журнала запуск не добавляет', async () => {

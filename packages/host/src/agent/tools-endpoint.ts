@@ -44,6 +44,8 @@ interface CallRecord {
 interface SessionTools {
   /** Снимок запуска, для которого собран исполнитель: другой снимок — другой исполнитель. */
   launchKey: string;
+  /** Сам снимок: его отдаёт `launchOf`, чтобы путь пакета комнаты собрал те же возможности запуска, что и вызовы этой сессии. */
+  launch: ToolLaunch;
   runner: Promise<ToolRunner>;
   calls: Map<string, CallRecord>;
 }
@@ -149,7 +151,12 @@ export function createToolsEndpoint(options: {
    * Called only after the 200 answer went out, with the generation taken when the request arrived.
    */
   onList?(ref: SessionRef, generation: number | null): void;
-}): { handle(req: IncomingMessage, res: ServerResponse): void; forget(ref: SessionRef): void } {
+}): {
+  handle(req: IncomingMessage, res: ServerResponse): void;
+  forget(ref: SessionRef): void;
+  /** Последний снимок запуска, который процесс MCP этой сессии прислал по своему токену; `undefined` — ещё не обращался или токен снят. */
+  launchOf(ref: SessionRef): ToolLaunch | undefined;
+} {
   const { log } = options;
   const now = options.now ?? Date.now;
   const sessions = new Map<string, SessionTools>();
@@ -161,6 +168,7 @@ export function createToolsEndpoint(options: {
     if (known !== undefined && known.launchKey === launchKey) return known;
     const created: SessionTools = {
       launchKey,
+      launch,
       runner: options.contextFor(ref, launch).then(createToolRunner),
       calls: new Map(),
     };
@@ -314,6 +322,10 @@ export function createToolsEndpoint(options: {
     },
     forget(ref) {
       sessions.delete(refKey(ref));
+    },
+    launchOf(ref) {
+      const known = sessions.get(refKey(ref));
+      return known === undefined ? undefined : { ...known.launch };
     },
   };
 }

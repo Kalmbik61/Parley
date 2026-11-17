@@ -12,7 +12,7 @@ import { fakeFeedDeps, REF, silentLog } from '../../test/feed-fakes.js';
 import { createFeedService } from '../feed/feed-service.js';
 import type { FeedService } from '../feed/feed-service.js';
 import { createHookServer } from './hook-server.js';
-import type { HookRequest, HookServer, HookServerOptions } from './hook-server.js';
+import type { GuardedRequest, HookRequest, HookServer, HookServerOptions } from './hook-server.js';
 
 const PROVIDER_SESSION = 'c-1';
 
@@ -505,6 +505,78 @@ describe('другие пути сервера (спека браузера 3.7;
     const origin = server.origin();
     expect(url).toBe(`${origin}/hooks`);
     expect((await post(`${origin}/agent/browser`, {}, { token })).status).toBe(404);
+  });
+});
+
+describe('защищённые пути (guarded): та же проверка, что у /hooks', () => {
+  const GUARDED = '/hooks/probe';
+
+  async function bootGuarded(overrides: Partial<HookServerOptions> = {}) {
+    const calls: GuardedRequest[] = [];
+    const booted = await boot({
+      guarded: {
+        [GUARDED]: (request) => {
+          calls.push(request);
+          request.respond({ ref: request.ref, provider: request.provider, text: request.text });
+        },
+      },
+      ...overrides,
+    });
+    return { ...booted, calls, probe: `${booted.server.origin()}${GUARDED}` };
+  }
+
+  it('верный токен и заголовок сессии: обработчик получает сессию из регистрации, провайдера, ревизию и тело; в ленту событие не идёт', async () => {
+    const { server, probe, calls, seen } = await bootGuarded();
+    const token = server.register(REF, PROVIDER_SESSION, 'claude', 'rev-9');
+    const reply = await post(probe, { hook_event_name: 'SessionStart', source: 'compact' }, { token });
+    expect(reply.status).toBe(200);
+    expect(JSON.parse(reply.body)).toMatchObject({ ref: REF, provider: 'claude' });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.agentRevision).toBe('rev-9');
+    expect(seen).toHaveLength(0);
+  });
+
+  it('чужой токен, нет токена, отозванный токен — 401; токен прежнего запуска после нового — 401; обработчик не вызван; токена в логе нет', async () => {
+    const { server, probe, token, calls, log } = await bootGuarded();
+    expect(await post(probe, {})).toEqual({ status: 401, body: '' });
+    expect(await post(probe, {}, { token: 'f'.repeat(64) })).toEqual({ status: 401, body: '' });
+    const fresh = server.register(REF, PROVIDER_SESSION);
+    expect(await post(probe, {}, { token })).toEqual({ status: 401, body: '' });
+    expect((await post(probe, {}, { token: fresh })).status).toBe(200);
+    server.unregister(REF);
+    expect(await post(probe, {}, { token: fresh })).toEqual({ status: 401, body: '' });
+    expect(calls).toHaveLength(1);
+    expect(JSON.stringify(log.warn.mock.calls)).not.toContain(token);
+  });
+
+  it('заголовок сессии не тот или нет его — 404; токен одной сессии не открывает другую', async () => {
+    const { server, probe, token, calls } = await bootGuarded();
+    expect(await post(probe, {}, { token, session: 's-02' })).toEqual({ status: 404, body: '' });
+    expect(await post(probe, {}, { token, session: null })).toEqual({ status: 404, body: '' });
+    const other: SessionRef = { ...REF, workId: 'w-2' };
+    const otherToken = server.register(other, 'c-2', 'claude');
+    // Тот же id сессии, но токен другой работы: сессию называет регистрация токена, не запрос.
+    const reply = await post(probe, {}, { token: otherToken });
+    expect(JSON.parse(reply.body).ref).toEqual(other);
+    expect(calls).toHaveLength(1);
+  });
+
+  it('тело больше предела — 413 по Content-Length; GET и чужой путь — 404', async () => {
+    const { probe, token, calls } = await bootGuarded({ bodyLimit: 1024 });
+    expect(await post(probe, 'x'.repeat(2048), { token })).toEqual({ status: 413, body: '' });
+    expect(await post(probe, {}, { token, method: 'GET' })).toEqual({ status: 404, body: '' });
+    expect((await post(`${probe}/more`, {}, { token })).status).toBe(404);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('close(): висящему защищённому запросу уходит {}', async () => {
+    const held: GuardedRequest[] = [];
+    const { server, probe, token } = await bootGuarded({ guarded: { [GUARDED]: (request) => void held.push(request) } });
+    const pending = post(probe, {}, { token });
+    await until(() => held.length === 1);
+    await server.close();
+    expect(await pending).toEqual({ status: 200, body: '{}' });
+    expect(held[0]?.answered()).toBe(true);
   });
 });
 
