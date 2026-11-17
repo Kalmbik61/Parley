@@ -4,6 +4,12 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
+## Unreleased
+
+### Added
+
+- **A room state packet for Claude sessions after context compaction (experimental, off by default).** When the `roomPacket` setting is on, a Claude Code session whose context was just compacted receives a short packet built from the Parley store: its place in the room, the room's active plan with the items it owns or verifies, the proposal waiting for the human, the history of accepted decisions, room questions addressed to it that have no linked reply, and the exact names of the Parley tools it can call. The packet is at most 8 KiB and is assembled by code, with no model involved. Delivery uses a second command hook on `SessionStart`: it asks the host for the packet only when the source is a compaction, waits at most 1.5 seconds and never blocks the session. The same packet can be read at any time with `get_map {field: "packet"}`. There is no switch in the window yet: turn the setting on with `"roomPacket": true` in `config.json` or `PARLEY_ROOM_PACKET=1`. It applies to sessions started afterwards; turning it off takes effect at once. Other providers are not affected.
+
 ## 0.36.0
 
 ### Added
