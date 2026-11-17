@@ -62,6 +62,8 @@ function normalizeSessionTrace(value: unknown): TrialSessionTrace | DamagedTrace
     !nullableString(value['providerSessionId']) || !nullableTime(value['startedAt']) || !nullableTime(value['endedAt']) ||
     !nullableTime(value['closedAt']) || !isTime(value['deletedAt']) ||
     !isRecord(value['trial'])) return DAMAGED;
+  // Текущий отрезок: активация сохраняет первое `startedAt` и очищает `endedAt` (`transitionSession`), поэтому конец раньше начала — повреждение.
+  if (value['startedAt'] !== null && value['endedAt'] !== null && !ordered(value['startedAt'], value['endedAt'])) return DAMAGED;
   const previous = value['previousAgents'];
   let previousAgents: TrialSegment[] | undefined;
   if (previous !== undefined) {

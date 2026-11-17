@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { addSession, parseMap, removeSession } from './map.js';
+import { addSession, parseMap, removeSession, transitionSession } from './map.js';
 import { mapLetterTx } from './letter-store.js';
 import { roomMembership } from './room-membership.js';
 import { addMember, addRoom, addSystemMessage, deleteRoom, joinedLine } from './rooms.js';
@@ -319,6 +319,21 @@ describe('времена в следе проверяются (Э-1б, уточ�
     ['прежний отрезок перевёрнут', { previousAgents: [{ provider: 'claude', providerSessionId: null, startedAt: T1, endedAt: T0 }] }],
   ])('след сессии: %s неверно — запись «повреждена»', (_name, patch) => {
     expect(read({ sessions: [{ ...session, ...patch }] })?.sessions).toEqual([DAMAGED]);
+  });
+
+  it('текущий отрезок: startedAt 12:00, endedAt 10:00 — след «повреждён»', () => {
+    expect(read({ sessions: [{ ...session, startedAt: '2026-11-17T12:00:00.000Z', endedAt: '2026-11-17T10:00:00.000Z' }] })?.sessions).toEqual([DAMAGED]);
+  });
+
+  it('настоящий переход через функцию переходов: ожидает → активна 10:00 → спит 11:00 → активна 12:00, затем удаление — след целый, startedAt 10:00, endedAt пуст', () => {
+    const map = world();
+    transitionSession(map, 's-01', 'active', { at: '2026-11-17T10:00:00.000Z' });
+    transitionSession(map, 's-01', 'sleeping', { at: '2026-11-17T11:00:00.000Z' });
+    transitionSession(map, 's-01', 'active', { at: '2026-11-17T12:00:00.000Z' });
+    removeSession(map, lt(map), 's-01', DELETED);
+    const entry = roundTrip(map).work.trialTrace?.sessions[0];
+    expect(entry).toMatchObject({ session: 's-01', startedAt: '2026-11-17T10:00:00.000Z', endedAt: null, trial: trialOf('packet', TAG_A) });
+    expect(entry).not.toEqual(DAMAGED);
   });
 
   it.each([
