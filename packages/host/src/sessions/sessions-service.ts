@@ -12,7 +12,7 @@
  * ручной `resume`, а живой PTY закрытой в карте сессии хост гасит сам.
  */
 
-import { randomUUID } from 'node:crypto';
+import { randomInt, randomUUID } from 'node:crypto';
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import {
@@ -152,6 +152,7 @@ import type { WorksService, WorksView } from '../works/works-service.js';
 import { createDepsSeeder, type DepsSeeder } from '../worktrees/deps-seed.js';
 import { gitFailure } from '../worktrees/worktrees-service.js';
 import { createStepTimer } from '../timing.js';
+import { packetGate } from '../hooks/packet-endpoint.js';
 import { admitSwarmSession, swarmBudgetRefusal, swarmMemberRefusal } from '../swarms/spawn.js';
 import type { SwarmSpawn } from '../swarms/spawn.js';
 import { createSkillInstaller } from './agent-skills.js';
@@ -414,6 +415,8 @@ export interface SessionsFeedOptions {
    * адресом приёмника; `undefined` — настройка `roomPacket` выключена или запускатель не записан, моста в файле нет.
    */
   packetHook?: () => Promise<{ launcher: string; url: string } | undefined>;
+  /** Источник случайности для розыгрыша плеча опыта: целое от 0 до `max - 1`; по умолчанию `crypto.randomInt`. Для тестов. */
+  random?: (max: number) => number;
   /**
    * Согласия человека на папку (спека 2026-10-21, 4.2): запуск Codex в проекте без записи в `trust.json` останавливается
    * и заводит карточку. Без сервиса (изолированные тесты) такой запуск не удерживается.
@@ -527,6 +530,18 @@ export function createSessionsService(
 ): SessionsService {
   const { hooks, providerVersions, capacity, endings, opencode, opencodeEvents } = feed;
   const spawnLimits = feed.spawnLimits ?? querySpawnLimits;
+  const random = feed.random ?? ((max: number): number => randomInt(max));
+
+  /**
+   * Плечо опыта с пакетом состояния (план опыта 2026-11-17, 1.1, Э-1): только новая сессия `claude`, пока включён
+   * `roomPacket` и задано имя `roomPacketTrial`; вероятность 1/2. Остальные — без плеча.
+   */
+  async function drawTrial(provider: string): Promise<WorkSession['trial']> {
+    if (provider !== 'claude') return undefined;
+    const { config } = await loadConfig();
+    if (!config.roomPacket || config.roomPacketTrial === '') return undefined;
+    return { name: config.roomPacketTrial, arm: random(2) === 0 ? 'packet' : 'control', at: new Date().toISOString() };
+  }
   const warned = new Set<string>();
   const creationWarnings = new Set<string>();
   const gitWriteGrants = new Map<string, boolean>();
@@ -1267,7 +1282,10 @@ export function createSessionsService(
         const codexCommand = url !== undefined && byFamily(session.provider, { claude: false, codex: true, qwen: false, opencode: false, neutral: false })
           ? await feed.codexHookCommand?.() : undefined;
         // Мост пакета — только провайдер `claude` и только при действующей регистрации хуков (есть адрес приёмника).
-        const bridge = url !== undefined && session.provider === 'claude' ? await feed.packetHook?.() : undefined;
+        // Опыт: плечо «контроль» моста не получает никогда, сессия без плеча — только пока опыт не идёт (`packetGate`).
+        const bridge = url !== undefined && session.provider === 'claude' && feed.packetHook !== undefined &&
+          packetGate(session, (await loadConfig()).config.roomPacketTrial).ok
+          ? await feed.packetHook() : undefined;
         return { hookUrl: url, codexHookCommand: codexCommand, packetBridge: bridge };
       });
       const roleCatalog = feed.roleCatalog
@@ -1614,6 +1632,7 @@ export function createSessionsService(
     role: SessionRole | null,
     choice: LaunchChoice,
     lean: boolean | undefined,
+    trial: WorkSession['trial'],
   ): Promise<void> {
     const trimmed = label.trim();
     await updateMap(ref.projectPath, ref.workId, (map) => {
@@ -1625,6 +1644,7 @@ export function createSessionsService(
       if (choice.model !== undefined) session.model = choice.model;
       if (choice.effort !== undefined) session.effort = choice.effort;
       if (lean !== undefined) session.lean = lean;
+      if (trial !== undefined) session.trial = trial;
     });
   }
 
@@ -1706,6 +1726,9 @@ export function createSessionsService(
     // Own-key: «constructor» и «toString» с провода не должны находить прототипные свойства реестра.
     const entry = Object.hasOwn(registry, provider) ? registry[provider] : undefined;
     if (!entry) throw new HostError('bad_request', `unknown provider ${provider}; see get_map {field: "providers"}`);
+    // Опыт с пакетом состояния: плечо разыгрывается здесь, одним местом для окна, агента, роя и движка, и пишется в запись
+    // сессии при её создании ниже. Пары в записи нет, если опыт не идёт или провайдер не `claude`.
+    const trial = await drawTrial(provider);
     await timer.step('role', async () => {
       await prepareSessionRole(projectPath, entry, { roleId: roleId(role), provider, mode: 'create' }, feed.roleCatalog ? await feed.roleCatalog(projectPath) : undefined);
     });
@@ -1732,7 +1755,7 @@ export function createSessionsService(
       const created = await timer.step('record', () => createNewSession(projectPath, null));
       const ref = { projectPath, workId: created.workId, sessionId: created.session.id };
       logged.sessionId = ref.sessionId;
-      await timer.step('choice', () => applyChoice(ref, label, provider, role, choice, lean));
+      await timer.step('choice', () => applyChoice(ref, label, provider, role, choice, lean, trial));
       if (worktree === true) await timer.step('worktreePlan', () => attachWorktreePlan(ref, false));
       return timer.step('launch', () => createInteractive(ref, 'new', choice));
     }
@@ -1741,7 +1764,7 @@ export function createSessionsService(
       const created = await timer.step('record', () => createNewSession(projectPath, workId));
       const ref = { projectPath, workId, sessionId: created.session.id };
       logged.sessionId = ref.sessionId;
-      await timer.step('choice', () => applyChoice(ref, label, provider, role, choice, lean));
+      await timer.step('choice', () => applyChoice(ref, label, provider, role, choice, lean, trial));
       if (worktree === true) await timer.step('worktreePlan', () => attachWorktreePlan(ref, false));
       return timer.step('launch', () => createInteractive(ref, 'new', choice));
     }
@@ -1764,6 +1787,7 @@ export function createSessionsService(
         role,
         ...choice,
         ...(lean === undefined ? {} : { lean }),
+        ...(trial === undefined ? {} : { trial }),
       }, agentConfig === undefined ? undefined : (map, sessionId) => {
         const limits = limitsFromConfig(agentConfig);
         if (input.swarm !== undefined) {

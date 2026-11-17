@@ -194,6 +194,17 @@ export type SilentEndingKind = 'exit' | 'stop' | 'close' | 'turn';
  */
 export interface SilentEndingMark { assignment: string | null; told: SilentEndingKind[]; nudgedAt: string | null }
 
+/** Плечо опыта с пакетом состояния: «пакет» — мост после сжатия установлен, «контроль» — моста нет никогда. */
+export type TrialArm = 'packet' | 'control';
+export const TRIAL_ARMS: readonly TrialArm[] = ['packet', 'control'];
+
+/** Имя опыта: строчные латинские буквы, цифры и дефис, до 32 знаков. Один разбор для настройки и для записи сессии. */
+export const TRIAL_NAME_PATTERN = /^[a-z0-9-]{1,32}$/;
+export const isTrialName = (value: unknown): value is string => typeof value === 'string' && TRIAL_NAME_PATTERN.test(value);
+
+/** Назначение плеча сессии: имя опыта, плечо и время назначения. Пишет только хост при создании; агент его не видит. */
+export interface SessionTrial { name: string; arm: TrialArm; at: string }
+
 export interface WorkSession {
   id: string;
   /** Explicit personal steps, published by this session; separate from accepted room assignments. */
@@ -317,6 +328,11 @@ export interface WorkSession {
    * под замком карты. Нет поля — то же, что `null`: ничего не сказано, миграции карты не нужно.
    */
   silentEnding?: SilentEndingMark | null;
+  /**
+   * Плечо опыта с пакетом состояния (план опыта 2026-11-17, 1.1): разыгрывается один раз при создании сессии Claude и не
+   * меняется. Нет поля — сессия вне опыта. Закрытое поле: в `get_map` и в историю сессии не попадает.
+   */
+  trial?: SessionTrial;
 }
 
 /**

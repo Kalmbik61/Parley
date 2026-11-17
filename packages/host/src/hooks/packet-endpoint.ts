@@ -16,8 +16,8 @@
 
 import { appendFile } from 'node:fs/promises';
 import path from 'node:path';
-import { ROOM_PACKET_EVENT, loadConfig, sessionRoomPacket, workPaths } from '@parley/core';
-import type { McpContext, ToolLaunch } from '@parley/core';
+import { ROOM_PACKET_EVENT, loadConfig, readMap, sessionRoomPacket, workPaths } from '@parley/core';
+import type { McpContext, ToolLaunch, WorkSession } from '@parley/core';
 import type { SessionRef } from '@parley/protocol';
 import type { Log } from '../log.js';
 import { EMPTY_HOOK_RESPONSE } from './decisions.js';
@@ -64,12 +64,30 @@ export function packetContext(
   };
 }
 
+/**
+ * Правило опыта (план опыта 2026-11-17, 1.1, Э-1): кто получает мост и пакет. Плечо «контроль» — никогда; плечо «пакет» — да;
+ * сессия без плеча — только пока опыт не идёт (`roomPacketTrial` пуст). Одно правило для установки моста при запуске и для
+ * каждого запроса к пути пакета; причина отказа — в журнале сессии.
+ */
+export type PacketGate = { ok: true } | { ok: false; reason: 'control' | 'not-in-trial' };
+
+export function packetGate(session: Pick<WorkSession, 'trial'> | undefined, trialName: string): PacketGate {
+  const arm = session?.trial?.arm;
+  if (arm === 'control') return { ok: false, reason: 'control' };
+  if (arm === 'packet') return { ok: true };
+  return trialName === '' ? { ok: true } : { ok: false, reason: 'not-in-trial' };
+}
+
 export interface PacketEndpointDeps {
   log: Log;
   /** Настройка `roomPacket`; зовётся на каждом запросе. */
   enabled?(): Promise<boolean>;
   /** Контекст исполнителя инструментов сессии (тот же, что у `/agent/tools`); `null` — возможности запуска неизвестны (`packetContext`). */
   context(ref: SessionRef, registered: { agentRevision?: string }): Promise<McpContext | null>;
+  /** Имя идущего опыта (`roomPacketTrial`); зовётся на каждом запросе. */
+  trial?(): Promise<string>;
+  /** Запись сессии в карте (плечо опыта); `undefined` — записи нет. */
+  session?(ref: SessionRef): Promise<Pick<WorkSession, 'trial'> | undefined>;
   /** Запись хоста в `events/<сессия>.jsonl`; сбой не меняет ответ. */
   journal?(ref: SessionRef, record: Record<string, unknown>): void;
   /** Испытательная переменная; по умолчанию — окружение хоста. */
@@ -77,6 +95,11 @@ export interface PacketEndpointDeps {
 }
 
 const defaultEnabled = async (): Promise<boolean> => (await loadConfig()).config.roomPacket;
+
+const defaultTrial = async (): Promise<string> => (await loadConfig()).config.roomPacketTrial;
+
+const defaultSession = async (ref: SessionRef): Promise<Pick<WorkSession, 'trial'> | undefined> =>
+  (await readMap(ref.projectPath, ref.workId)).sessions.find((candidate) => candidate.id === ref.sessionId);
 
 const defaultJournal = (ref: SessionRef, record: Record<string, unknown>): void => {
   const file = path.join(workPaths(ref.projectPath, ref.workId).events, `${ref.sessionId}.jsonl`);
@@ -90,6 +113,8 @@ export interface PacketEndpoint {
 
 export function createPacketEndpoint(deps: PacketEndpointDeps): PacketEndpoint {
   const enabled = deps.enabled ?? defaultEnabled;
+  const trial = deps.trial ?? defaultTrial;
+  const sessionOf = deps.session ?? defaultSession;
   const journal = deps.journal ?? defaultJournal;
   const faultValue = deps.fault ?? ((): string | undefined => process.env[PACKET_FAULT_ENV]);
 
@@ -164,6 +189,29 @@ export function createPacketEndpoint(deps: PacketEndpointDeps): PacketEndpoint {
         }
         if (request.answered()) return;
         if (!on) {
+          request.respond(EMPTY_HOOK_RESPONSE);
+          return;
+        }
+        // Опыт: правило то же, что при установке моста; плечо читается из карты, а не из запроса.
+        let held: Pick<WorkSession, 'trial'> | undefined;
+        try {
+          held = await sessionOf(request.ref);
+        } catch (error) {
+          // Карта не читается — сессия считается без плеча: пока опыт идёт, это отказ `not-in-trial`, а не пакет.
+          deps.log.warn('пакет комнаты: плечо опыта не прочитано', { error: String(error) });
+        }
+        let name: string;
+        try {
+          name = await trial();
+        } catch (error) {
+          deps.log.warn('пакет комнаты: имя опыта не прочитано', { error: String(error) });
+          if (!request.answered()) request.respond(EMPTY_HOOK_RESPONSE);
+          return;
+        }
+        const gate = packetGate(held, name);
+        if (request.answered()) return;
+        if (!gate.ok) {
+          write(request.ref, null, 0, gate.reason);
           request.respond(EMPTY_HOOK_RESPONSE);
           return;
         }

@@ -1786,3 +1786,45 @@ describe('рои в карте (спека роя v1, 2.1–2.2)', () => {
     });
   });
 });
+
+describe('плечо опыта с пакетом состояния (Э-1)', () => {
+  const trial = { name: '2026-11', arm: 'control' as const, at: '2026-11-17T10:00:00.000Z' };
+  const roundTrip = (value: unknown) => {
+    const map = emptyMap();
+    const session = addSession(map, { provider: 'claude', label: '', task: '' });
+    Object.assign(session, { trial: value });
+    return parseMap(JSON.stringify(map), 'map.json').sessions[0]!;
+  };
+
+  it('addSession кладёт назначение в запись; без входа поля нет вовсе', () => {
+    const map = emptyMap();
+    const plain = addSession(map, { provider: 'claude', label: '', task: '' });
+    const drawn = addSession(map, { provider: 'claude', label: '', task: '', trial });
+    expect(plain).not.toHaveProperty('trial');
+    expect(drawn.trial).toEqual(trial);
+    expect(drawn.history).toEqual([{ event: 'pending', at: expect.any(String) }]);
+  });
+
+  it('назначение переживает запись и чтение карты, оба плеча', () => {
+    for (const arm of ['packet', 'control'] as const) {
+      expect(roundTrip({ ...trial, arm }).trial).toEqual({ ...trial, arm });
+    }
+  });
+
+  it('запись с недопустимым значением отвергается при чтении: плечо, имя, время, форма', () => {
+    for (const bad of [
+      { ...trial, arm: 'both' },
+      { ...trial, arm: undefined },
+      { ...trial, name: '' },
+      { ...trial, name: 'Upper' },
+      { ...trial, name: 'a'.repeat(33) },
+      { ...trial, at: 'yesterday' },
+      { ...trial, at: 5 },
+      'control',
+      null,
+      [],
+    ]) {
+      expect(roundTrip(bad)).not.toHaveProperty('trial');
+    }
+  });
+});

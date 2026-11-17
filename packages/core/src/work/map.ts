@@ -16,6 +16,8 @@ import type {
   MessageVia,
   SessionLifecycle,
   SessionResult,
+  SessionTrial,
+  TrialArm,
   WindowWorkMap,
   WorkMap,
   WorkProvider,
@@ -23,6 +25,7 @@ import type {
   SessionRole,
   WorksIndex,
 } from './types.js';
+import { isTrialName, TRIAL_ARMS } from './types.js';
 import type { WorkSwarm } from './swarms.js';
 
 /**
@@ -117,6 +120,8 @@ export interface NewSession {
   /** Облегчённый запуск (C2.2): решение при создании; без поля — запись как до этого куска. */
   lean?: boolean;
   workspace?: WorkSession['workspace'];
+  /** Плечо опыта, разыгранное хостом при создании; без поля — сессия вне опыта. */
+  trial?: SessionTrial;
 }
 
 /**
@@ -160,6 +165,7 @@ export function addSession(
     ...(init.model === undefined ? {} : { model: init.model }),
     ...(init.effort === undefined ? {} : { effort: init.effort }),
     ...(init.lean === undefined ? {} : { lean: init.lean }),
+    ...(init.trial === undefined ? {} : { trial: init.trial }),
   };
   map.sessions.push(session);
   return session;
@@ -850,5 +856,13 @@ function normalizeAgentFields(session: Record<string, unknown>): void {
     nullableString(silentEnding['assignment']) && nullableString(silentEnding['nudgedAt']) &&
     Array.isArray(silentEnding['told']) && silentEnding['told'].every((kind) => kind === 'exit' || kind === 'stop' || kind === 'close' || kind === 'turn'))) {
     delete session['silentEnding'];
+  }
+  // Плечо опыта: ровно два значения, имя по правилу настройки и корректное время; иная запись отвергается при чтении.
+  const trial = session['trial'];
+  if (trial !== undefined) {
+    if (isRecord(trial) && isTrialName(trial['name']) && TRIAL_ARMS.includes(trial['arm'] as TrialArm) &&
+      typeof trial['at'] === 'string' && Number.isFinite(Date.parse(trial['at']))) {
+      session['trial'] = { name: trial['name'], arm: trial['arm'], at: trial['at'] };
+    } else delete session['trial'];
   }
 }

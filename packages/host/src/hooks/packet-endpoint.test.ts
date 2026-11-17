@@ -15,7 +15,7 @@ import {
 import type { SessionRef } from '@parley/protocol';
 import { silentLog } from '../../test/feed-fakes.js';
 import { createHookServer, type HookServer } from './hook-server.js';
-import { createPacketEndpoint, PACKET_FAULT_ENV, PACKET_PATH, parsePacketFault, type PacketEndpointDeps } from './packet-endpoint.js';
+import { createPacketEndpoint, PACKET_FAULT_ENV, PACKET_PATH, packetGate, parsePacketFault, type PacketEndpointDeps } from './packet-endpoint.js';
 
 let home = '';
 let project = '';
@@ -223,6 +223,78 @@ describe('настройка roomPacket проверяется на каждом
     expect(packetTextOf(await ask())).toBeDefined();
     await writeFile(path.join(home, 'config.json'), JSON.stringify({ roomPacket: false }));
     expect(await ask()).toEqual({ status: 200, body: '{}' });
+  });
+});
+
+describe('опыт с пакетом: плечо сессии (Э-1, критерии 1 и 4)', () => {
+  const ARMS = ['none', 'packet', 'control'] as const;
+  type Arm = (typeof ARMS)[number];
+
+  const setArm = async (arm: Arm): Promise<void> => {
+    await updateMap(project, workId, (map) => {
+      const session = map.sessions.find((candidate) => candidate.id === 's-02')!;
+      if (arm === 'none') delete session.trial;
+      else session.trial = { name: 'exp-a', arm, at: '2026-11-17T10:00:00.000Z' };
+    });
+  };
+
+  it('правило packetGate: плечо «контроль» — отказ control, «пакет» — да, без плеча — да только пока опыт не идёт', () => {
+    const trial = (arm: 'packet' | 'control') => ({ trial: { name: 'exp-a', arm, at: '2026-11-17T10:00:00.000Z' } });
+    expect(packetGate(trial('control'), '')).toEqual({ ok: false, reason: 'control' });
+    expect(packetGate(trial('control'), 'exp-a')).toEqual({ ok: false, reason: 'control' });
+    expect(packetGate(trial('packet'), '')).toEqual({ ok: true });
+    expect(packetGate(trial('packet'), 'exp-b')).toEqual({ ok: true });
+    expect(packetGate({}, '')).toEqual({ ok: true });
+    expect(packetGate(undefined, '')).toEqual({ ok: true });
+    expect(packetGate({}, 'exp-a')).toEqual({ ok: false, reason: 'not-in-trial' });
+    expect(packetGate(undefined, 'exp-a')).toEqual({ ok: false, reason: 'not-in-trial' });
+  });
+
+  // Все двенадцать сочетаний на настоящем приёмнике: три состояния плеча × `roomPacket` × опыт идёт или нет.
+  const cases = ARMS.flatMap((arm) => [true, false].flatMap((roomPacket) => [true, false].map((running) => ({ arm, roomPacket, running }))));
+  const expected = ({ arm, roomPacket, running }: { arm: Arm; roomPacket: boolean; running: boolean }): { delivered: boolean; reason: string | null } => {
+    if (!roomPacket) return { delivered: false, reason: null };
+    if (arm === 'control') return { delivered: false, reason: 'control' };
+    if (arm === 'packet') return { delivered: true, reason: 'sent' };
+    return running ? { delivered: false, reason: 'not-in-trial' } : { delivered: true, reason: 'sent' };
+  };
+
+  it.each(cases)('плечо $arm, roomPacket $roomPacket, опыт идёт $running', async (combo) => {
+    await setArm(combo.arm);
+    await writeFile(path.join(home, 'config.json'), JSON.stringify({ roomPacket: combo.roomPacket, roomPacketTrial: combo.running ? 'exp-a' : '' }));
+    // Настоящие чтение настройки и чтение плеча из карты: `enabled`, `trial` и `session` по умолчанию.
+    const { url, server: hooks } = await boot({ enabled: undefined });
+    const token = hooks.register(refOf('s-02'), 'c-1', 'claude');
+    const reply = await post(url, COMPACT, { token, session: 's-02' });
+    const want = expected(combo);
+    expect(reply.status).toBe(200);
+    if (want.delivered) expect(packetTextOf(reply)).toContain('viewer: member s-02');
+    else expect(reply.body).toBe('{}');
+    const records = await journalOf('s-02');
+    if (want.reason === null) expect(records).toEqual([]);
+    else expect(records).toEqual([expect.objectContaining({ hook_event_name: ROOM_PACKET_EVENT, reason: want.reason })]);
+    if (!want.delivered && want.reason !== null) expect(records[0]).toMatchObject({ revision: null, bytes: 0 });
+  });
+
+  it('плечо читается на каждом запросе: опыт заморожен (имя очищено) — «контроль» по-прежнему без пакета, «пакет» — с пакетом', async () => {
+    await writeFile(path.join(home, 'config.json'), JSON.stringify({ roomPacket: true, roomPacketTrial: 'exp-a' }));
+    const { url, server: hooks } = await boot({ enabled: undefined });
+    const token = hooks.register(refOf('s-02'), 'c-1', 'claude');
+    const ask = (): Promise<Reply> => post(url, COMPACT, { token, session: 's-02' });
+    await setArm('control');
+    expect((await ask()).body).toBe('{}');
+    await writeFile(path.join(home, 'config.json'), JSON.stringify({ roomPacket: true, roomPacketTrial: '' }));
+    expect((await ask()).body).toBe('{}');
+    await setArm('packet');
+    expect(packetTextOf(await ask())).toBeDefined();
+    expect((await journalOf('s-02')).map((record) => record['reason'])).toEqual(['control', 'control', 'sent']);
+  });
+
+  it('карта не читается: сессия считается без плеча — при идущем опыте отказ not-in-trial, а не пакет', async () => {
+    const { url, server: hooks } = await boot({ trial: async () => 'exp-a', session: async () => { throw new Error('map is down'); } });
+    const token = hooks.register(refOf('s-02'), 'c-1', 'claude');
+    expect((await post(url, COMPACT, { token, session: 's-02' })).body).toBe('{}');
+    expect(await journalOf('s-02')).toEqual([expect.objectContaining({ reason: 'not-in-trial' })]);
   });
 });
 

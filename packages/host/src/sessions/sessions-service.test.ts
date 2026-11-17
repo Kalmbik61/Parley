@@ -3274,3 +3274,226 @@ describe('лимиты созданий агентами — за сутки, а
     } finally { await service.stopAll(); }
   });
 });
+
+describe('опыт с пакетом состояния: розыгрыш и хранение плеча, установка моста (Э-1)', () => {
+  const HOOK_URL = 'http://127.0.0.1:4321/hooks';
+  const PACKET_BRIDGE = { launcher: '/home/me/.parley/bin/parley-packet-hook', url: `${HOOK_URL}/packet` };
+  const hookEnv = ['PARLEY_HOOK_TOKEN', 'PARLEY_HOOK_URL', 'PARLEY_HOOK_CAPABILITY'];
+  let inheritedHooks: Array<string | undefined>;
+  beforeEach(() => {
+    inheritedHooks = hookEnv.map((name) => process.env[name]);
+    for (const name of hookEnv) delete process.env[name];
+  });
+  afterEach(() => {
+    hookEnv.forEach((name, index) => {
+      if (inheritedHooks[index] === undefined) delete process.env[name];
+      else process.env[name] = inheritedHooks[index];
+    });
+  });
+
+  const hooks: NonNullable<SessionsFeedOptions['hooks']> = { url: () => HOOK_URL, register: () => 'token', unregister: () => {} };
+  const versions = { ready: Promise.resolve(), get: () => '2.1.286', fresh: async () => '2.1.286' } as ProviderVersions;
+  const trialOf = async (ref: SessionRef) =>
+    (await readMap(ref.projectPath, ref.workId)).sessions.find((candidate) => candidate.id === ref.sessionId)?.trial;
+  const sessionOf = async (ref: SessionRef) =>
+    (await readMap(ref.projectPath, ref.workId)).sessions.find((candidate) => candidate.id === ref.sessionId)!;
+  const enable = (trial: string, roomPacket = true) => saveConfig({ roomPacket, roomPacketTrial: trial });
+
+  /** Источник случайности по списку: вызовы идут по порядку, каждый записан. */
+  const draws = (...values: number[]) => {
+    const asked: number[] = [];
+    const random = (max: number): number => { asked.push(max); return values[asked.length - 1] ?? 0; };
+    return { random, asked };
+  };
+
+  async function setup(feed: SessionsFeedOptions = {}) {
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    setEnv('STUB_ARGS_FILE', await tempArgsFile());
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity(), feed);
+    return { workId: work.work.id, service };
+  }
+
+  it('опыт включён: пути окна (три вида создания) получают плечо и имя по подставленному источнику случайности', async () => {
+    await enable('exp-a');
+    const { random, asked } = draws(0, 1, 0, 1, 1, 0);
+    const { workId, service } = await setup({ random });
+    const base = { projectPath: project, provider: 'claude', label: '', parent: null };
+    const refs = [
+      await service.create({ ...base, workId: null, task: '' }),
+      await service.create({ ...base, workId, task: '' }),
+      await service.create({ ...base, workId, task: 'сделай штуку' }),
+      await service.create({ ...base, workId: null, task: '' }),
+      await service.create({ ...base, workId, task: '' }),
+      await service.create({ ...base, workId, task: 'сделай штуку' }),
+    ];
+    try {
+      const arms = [];
+      for (const ref of refs) {
+        const trial = await trialOf(ref);
+        expect(trial, ref.sessionId).toMatchObject({ name: 'exp-a' });
+        expect(Number.isFinite(Date.parse(trial!.at))).toBe(true);
+        arms.push(trial!.arm);
+        // В историю сессии назначение не пишется.
+        expect(JSON.stringify((await sessionOf(ref)).history)).not.toContain('exp-a');
+      }
+      expect(arms).toEqual(['packet', 'control', 'packet', 'control', 'control', 'packet']);
+      expect(asked).toEqual([2, 2, 2, 2, 2, 2]);
+    } finally { await service.stopAll(); }
+  });
+
+  it('путь агента (create_session) и путь роя получают плечо; один розыгрыш на сессию', async () => {
+    await enable('exp-a');
+    const { random, asked } = draws(1, 0);
+    const { workId, service } = await setup({ random });
+    const caller = await createPendingSession(project, workId, { provider: 'claude', label: 'Caller', task: 'Coordinate', parent: null, contextFrom: [] });
+    const agent = await service.create({ projectPath: project, workId, provider: 'claude', label: 'Peer', task: 'Implement', parent: null, requestedBy: caller });
+    const swarm = await service.create({
+      projectPath: project, workId, provider: 'claude', label: '', task: 'Check everything', parent: null,
+      swarm: { kind: 'create', tag: 'Audit', objective: 'Check everything' },
+    });
+    try {
+      expect(await trialOf(agent)).toMatchObject({ name: 'exp-a', arm: 'control' });
+      expect(await trialOf(swarm)).toMatchObject({ name: 'exp-a', arm: 'packet' });
+      // Создающая сессия без розыгрыша и без плеча: она заведена до включения плеча.
+      expect((await sessionOf({ projectPath: project, workId, sessionId: caller })).trial).toBeUndefined();
+      expect(asked).toEqual([2, 2]);
+    } finally { await service.stopAll(); }
+  });
+
+  it('плеча нет: другой провайдер, опыт не идёт, roomPacket выключен, сессия создана до включения; розыгрыш не вызывается', async () => {
+    const { random, asked } = draws(0, 0, 0, 0, 0);
+    setEnv('PARLEY_CODEX_BIN', STUB);
+    const { workId, service } = await setup({ random });
+    const base = { projectPath: project, workId, label: '', task: '', parent: null };
+    const refs: SessionRef[] = [];
+    // До включения опыта.
+    await saveConfig({ roomPacket: true, roomPacketTrial: '' });
+    refs.push(await service.create({ ...base, provider: 'claude' }));
+    // roomPacket выключен, имя задано.
+    await enable('exp-a', false);
+    refs.push(await service.create({ ...base, provider: 'claude' }));
+    // Опыт идёт, но провайдер не claude.
+    await enable('exp-a');
+    refs.push(await service.create({ ...base, provider: 'codex' }));
+    try {
+      for (const ref of refs) expect(await sessionOf(ref), ref.sessionId).not.toHaveProperty('trial');
+      expect(asked).toEqual([]);
+      // Сессия, созданная до включения, плеча не получила и позже: имя опыта в записи появляется только при создании.
+      await enable('exp-b');
+      expect(await sessionOf(refs[0]!)).not.toHaveProperty('trial');
+    } finally { await service.stopAll(); }
+  });
+
+  it('смена имени опыта: новые сессии получают новое имя, у прежних остаётся прежнее, время назначения не меняется', async () => {
+    await enable('exp-a');
+    const { random } = draws(0, 1, 0);
+    const { workId, service } = await setup({ random });
+    const base = { projectPath: project, workId, provider: 'claude', label: '', task: '', parent: null };
+    const first = await service.create(base);
+    const second = await service.create(base);
+    const firstTrial = await trialOf(first);
+    await enable('exp-b');
+    const third = await service.create(base);
+    // Заморозка набора: имя очищено — новые сессии плеча не получают, прежние сохраняют своё.
+    await enable('');
+    const fourth = await service.create(base);
+    try {
+      expect(await trialOf(first)).toEqual(firstTrial);
+      expect((await trialOf(second))?.name).toBe('exp-a');
+      expect(await trialOf(third)).toMatchObject({ name: 'exp-b', arm: 'packet' });
+      expect(await sessionOf(fourth)).not.toHaveProperty('trial');
+    } finally { await service.stopAll(); }
+  });
+
+  it('плечо сохраняется после возобновления, повторного чтения карты и смены провайдера туда и обратно; недопустимое значение при чтении отвергается', async () => {
+    await enable('exp-a');
+    const { random } = draws(1);
+    const { workId, service } = await setup({ random });
+    const ref = await service.create({ projectPath: project, workId, provider: 'claude', label: '', task: '', parent: null });
+    const assigned = await trialOf(ref);
+    expect(assigned).toMatchObject({ name: 'exp-a', arm: 'control' });
+    try {
+      // Возобновление: процесс остановлен и поднят снова.
+      await service.stop(ref);
+      await service.launch(ref, 'resume');
+      expect(await trialOf(ref)).toEqual(assigned);
+      // Повторное чтение карты.
+      expect(await trialOf(ref)).toEqual(assigned);
+      // Смена провайдера туда и обратно: запись сессии переносится целиком.
+      await updateMap(project, workId, (map) => {
+        const session = map.sessions.find((candidate) => candidate.id === ref.sessionId)!;
+        session.provider = 'codex';
+      });
+      expect(await trialOf(ref)).toEqual(assigned);
+      await updateMap(project, workId, (map) => {
+        const session = map.sessions.find((candidate) => candidate.id === ref.sessionId)!;
+        session.provider = 'claude';
+      });
+      expect(await trialOf(ref)).toEqual(assigned);
+      // Запись с недопустимым значением отвергается при чтении: поле исчезает.
+      await updateMap(project, workId, (map) => {
+        Object.assign(map.sessions.find((candidate) => candidate.id === ref.sessionId)!, { trial: { ...assigned, arm: 'both' } });
+      });
+      expect(await trialOf(ref)).toBeUndefined();
+    } finally { await service.stopAll(); }
+  });
+
+  const SETTINGS_PATH = (argv: string[]): string => argv[argv.indexOf('--settings') + 1]!;
+
+  /** Файл настроек запуска `claude` со сценарием: плечо, `roomPacket`, имя опыта. Возвращает число команд в `SessionStart` и сам файл. */
+  async function launchedSettings(arm: 'none' | 'packet' | 'control', roomPacket: boolean, trialName: string, packetHook: SessionsFeedOptions['packetHook']) {
+    await saveConfig({ roomPacket, roomPacketTrial: trialName });
+    const { workId, service } = await setup({ hooks, providerVersions: versions, ...(packetHook === undefined ? {} : { packetHook }) });
+    const id = await createPendingSession(project, workId, {
+      provider: 'claude', label: 'Опыт', task: 'сделай штуку', parent: null, contextFrom: [],
+      ...(arm === 'none' ? {} : { trial: { name: 'exp-a', arm, at: '2026-11-17T10:00:00.000Z' } }),
+    });
+    const ref = { projectPath: project, workId, sessionId: id };
+    await service.launch(ref, 'new');
+    const file = process.env['STUB_ARGS_FILE']!;
+    const args = await readArgs(file);
+    const text = await readFile(SETTINGS_PATH(args.argv), 'utf8');
+    const settings = JSON.parse(text) as { hooks: Record<string, { hooks: { type: string; command?: string }[] }[]> };
+    const commands = settings.hooks['SessionStart']?.[0]?.hooks.filter((hook) => hook.type === 'command').map((hook) => hook.command) ?? [];
+    await service.stopAll();
+    return { text, commands };
+  }
+
+  // Мост: сессия с плечом «контроль» — никогда; «пакет» — при включённом roomPacket; без плеча — при включённом roomPacket
+  // и пустом имени опыта. Все двенадцать сочетаний.
+  const ARMS = ['none', 'packet', 'control'] as const;
+  const combos = ARMS.flatMap((arm) => [true, false].flatMap((roomPacket) => [true, false].map((running) => ({ arm, roomPacket, running }))));
+  const bridgeExpected = ({ arm, roomPacket, running }: { arm: (typeof ARMS)[number]; roomPacket: boolean; running: boolean }): boolean =>
+    roomPacket && arm !== 'control' && (arm === 'packet' || !running);
+
+  it.each(combos)('мост в файле настроек: плечо $arm, roomPacket $roomPacket, опыт идёт $running', async (combo) => {
+    // Как `packetHook` хоста: при выключенном roomPacket он ничего не возвращает.
+    const packetHook = async () => (combo.roomPacket ? PACKET_BRIDGE : undefined);
+    const { commands } = await launchedSettings(combo.arm, combo.roomPacket, combo.running ? 'exp-a' : '', packetHook);
+    expect(commands.length).toBe(bridgeExpected(combo) ? 2 : 1);
+    if (bridgeExpected(combo)) expect(commands[1]).toContain('parley-packet-hook');
+  });
+
+  it('опыт выключен и плеч нет: файл настроек не зависит от того, есть ли у сервиса мост, пока roomPacket выключен; при включённом — мост ровно один', async () => {
+    const off = await launchedSettings('none', false, '', async () => undefined);
+    const offWithoutHook = await launchedSettings('none', false, '', undefined);
+    expect(off.text).toBe(offWithoutHook.text);
+    expect(off.commands).toHaveLength(1);
+    const on = await launchedSettings('none', true, '', async () => PACKET_BRIDGE);
+    expect(on.commands).toHaveLength(2);
+    // Единственное отличие включённого моста — вторая команда в `SessionStart`.
+    const withoutBridge = JSON.parse(on.text) as { hooks: { SessionStart: { hooks: { command?: string }[] }[] } };
+    withoutBridge.hooks.SessionStart[0]!.hooks = withoutBridge.hooks.SessionStart[0]!.hooks.filter((hook) => !hook.command?.includes('parley-packet-hook'));
+    expect(withoutBridge).toEqual(JSON.parse(off.text));
+  });
+
+  it('пакетHook не зовётся, когда правило отказывает: контроль и сессия без плеча при идущем опыте', async () => {
+    let asked = 0;
+    const hook = async () => { asked += 1; return PACKET_BRIDGE; };
+    await launchedSettings('control', true, 'exp-a', hook);
+    await launchedSettings('none', true, 'exp-a', hook);
+    expect(asked).toBe(0);
+    await launchedSettings('packet', true, 'exp-a', hook);
+    expect(asked).toBe(1);
+  });
+});

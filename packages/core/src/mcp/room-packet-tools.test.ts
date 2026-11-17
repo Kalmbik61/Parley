@@ -189,3 +189,37 @@ describe('get_map {field: "packet"}', () => {
     expect(JSON.parse((await getMap('s-01', {})).text).map.work.id).toBe(context.workId);
   });
 });
+
+describe('плечо опыта не видно агенту (Э-1, критерий 5)', () => {
+  const NAME = 'zz-hidden-exp';
+
+  beforeEach(async () => {
+    await updateMap(project, context.workId, (map) => {
+      for (const [id, arm] of [['s-01', 'packet'], ['s-02', 'control']] as const) {
+        map.sessions.find((session) => session.id === id)!.trial = { name: NAME, arm, at: '2026-11-17T10:00:00.000Z' };
+      }
+    });
+  });
+
+  it('ответы get_map по сессии, обзору, строкам, истории и комнатам не содержат ни имени опыта, ни плеча', async () => {
+    const asks: Array<[string, Record<string, unknown>]> = [
+      ['s-01', {}],
+      ['s-01', { session: 's-02' }],
+      ['s-02', { session: 's-02' }],
+      ['s-01', { field: 'sessions' }],
+      ['s-01', { field: 'rooms' }],
+      ['s-01', { field: 'history', session: 's-02' }],
+      ['s-01', { field: 'task', session: 's-02' }],
+      ['s-01', { field: 'summaries' }],
+      ['s-01', { field: 'packet' }],
+      ['s-02', { field: 'packet', room: 'r-01' }],
+    ];
+    for (const [caller, args] of asks) {
+      const result = await getMap(caller, args);
+      const label = `${caller} ${JSON.stringify(args)}`;
+      expect(result.failed, `${label} ${result.text.slice(0, 120)}`).toBe(false);
+      expect(result.text, label).not.toContain(NAME);
+      expect(result.text, label).not.toMatch(/\barm\b|"trial"|\btrial:/);
+    }
+  });
+});
