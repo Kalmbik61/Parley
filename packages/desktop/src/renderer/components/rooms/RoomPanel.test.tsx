@@ -2889,3 +2889,156 @@ it('shows the host item-selection error from a generic proposal response', async
   fireEvent.click(screen.getByText('Send to lead'));
   await waitFor(() => expect(toast).toHaveBeenCalledWith(message));
 });
+
+describe('RoomPanel — вид Feed / Board вкладки комнаты', () => {
+  type PlanStatus = import('@parley/core').RoomPlan['status'];
+  const planEntry = (status: PlanStatus | null, messages: Message[] = []): WindowWorkEntry => {
+    const entry = entryOf({ messages });
+    if (status === null) return entry;
+    entry.map.plans = [{
+      id: 'pl-01', roomId: 'r-01', rev: 1, mode: 'checklist', status, goal: 'Goal', backlog: [],
+      items: [{ id: 1, title: 'Recovery', owner: 's-01', scope: 'plain', after: [], criteria: [], verifier: null, status: 'ready', evidence: null, note: null, log: [] }],
+      acceptedAt: 'x', completedAt: null, cancelledAt: null, completionSummary: null,
+    }];
+    return entry;
+  };
+  const switchOf = (): HTMLElement | null => document.querySelector(`[aria-label="${S.roomBoard.viewLabel}"]`);
+  const area = (): HTMLElement => document.querySelector('[data-room-feed-area]') as HTMLElement;
+  const layer = (): HTMLElement | null => document.querySelector('[data-room-board-layer]');
+  const editorNode = (): HTMLElement | null => screen.queryByRole('textbox', { name: 'Message' });
+
+  it('переключатель есть при плане active, completing, completed; нет без плана, при proposed и cancelled и без onViewChange', () => {
+    for (const status of ['active', 'completing', 'completed'] as const) {
+      renderPanel(planEntry(status), { onViewChange: vi.fn() });
+      expect(switchOf(), status).toBeTruthy();
+      cleanup();
+    }
+    for (const status of [null, 'proposed', 'cancelled'] as const) {
+      renderPanel(planEntry(status), { onViewChange: vi.fn() });
+      expect(switchOf(), String(status)).toBeNull();
+      cleanup();
+    }
+    renderPanel(planEntry('active'));
+    expect(switchOf()).toBeNull();
+  });
+
+  it('нажатие Board зовёт onViewChange("board"), Feed — onViewChange("feed"), повторное нажатие на выбранный пункт ничего не зовёт', () => {
+    const onViewChange = vi.fn();
+    const first = renderPanel(planEntry('active'), { onViewChange });
+    fireEvent.click(screen.getByRole('radio', { name: S.roomBoard.board }));
+    expect(onViewChange).toHaveBeenCalledWith('board');
+    fireEvent.click(screen.getByRole('radio', { name: S.roomBoard.feed }));
+    expect(onViewChange).toHaveBeenCalledTimes(1);
+    first.rerender(<RoomPanel {...first.initial} onViewChange={onViewChange} view="board" />);
+    fireEvent.click(screen.getByRole('radio', { name: S.roomBoard.board }));
+    expect(onViewChange).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('radio', { name: S.roomBoard.feed }));
+    expect(onViewChange).toHaveBeenLastCalledWith('feed');
+  });
+
+  it('вид board: лента остаётся в дереве и получает inert, слой доски стоит поверх, поля ввода и плашки ответа в дереве нет', () => {
+    renderPanel(planEntry('active', [message('m-1', { from: 's-01', text: 'Ответ агента' })]), { view: 'board' });
+    expect(feed()).toBeTruthy();
+    expect(area().hasAttribute('inert')).toBe(true);
+    expect(area().getAttribute('aria-hidden')).toBe('true');
+    expect(layer()).toBeTruthy();
+    expect(layer()?.parentElement?.hasAttribute('data-room-feed-stack')).toBe(true);
+    expect(editorNode()).toBeNull();
+    expect(screen.queryByTestId('reply-plate')).toBeNull();
+  });
+
+  it('вид board при недоступной доске: слоя нет, inert нет', () => {
+    renderPanel(planEntry('proposed'), { view: 'board' });
+    expect(layer()).toBeNull();
+    expect(area().hasAttribute('inert')).toBe(false);
+    expect(editorNode()).toBeTruthy();
+  });
+
+  it('без пропа view панель ведёт себя как раньше', () => {
+    renderPanel(planEntry('active'));
+    expect(layer()).toBeNull();
+    expect(area().hasAttribute('inert')).toBe(false);
+    expect(editorNode()).toBeTruthy();
+  });
+
+  it('черновик поля ввода и выбранный ответ сохраняются после board → feed', () => {
+    const entry = planEntry('active', [message('m-1', { from: 's-01', text: 'Ответ агента' })]);
+    const view = renderPanel(entry);
+    fireEvent.click(within(document.querySelector('[data-message-meta="m-1"]')!.closest('[data-message-id]') ?? document.body).getByRole('button', { name: S.chat.actions.reply }));
+    const node = document.createTextNode('недописано');
+    editorNode()!.append(node);
+    document.getSelection()?.collapse(node, node.data.length);
+    fireEvent.input(editorNode()!);
+    view.rerender(<RoomPanel {...view.initial} view="board" />);
+    expect(editorNode()).toBeNull();
+    expect(screen.queryByTestId('reply-plate')).toBeNull();
+    view.rerender(<RoomPanel {...view.initial} view="feed" />);
+    expect(screen.getByTestId('reply-plate').textContent).toContain(S.rooms.replyTo('S01 архитектор'));
+    expect(editorNode()?.textContent).toBe('недописано');
+  });
+
+  describe('прочтение и прокрутка', () => {
+    let marked: string[][];
+    beforeEach(() => {
+      vi.useFakeTimers();
+      FakeIntersectionObserver.all = [];
+      vi.stubGlobal('IntersectionObserver', FakeIntersectionObserver);
+      marked = [];
+      bridge.setHandler('mail.markRead', (params) => {
+        marked.push([...params.messageIds]);
+        return { marked: params.messageIds.length };
+      });
+    });
+    const unread = (): Message[] => [message('m-1', { from: 's-02', readBy: {} })];
+    const showMeta = (id: string): void => {
+      act(() => {
+        const el = document.querySelector(`[data-message-meta="${id}"]`);
+        if (el === null) throw new Error(`нет сообщения ${id}`);
+        for (const observer of FakeIntersectionObserver.all) observer.fire(el, true);
+      });
+    };
+    const wait = async (ms: number): Promise<void> => {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(ms);
+      });
+    };
+
+    it('в виде board видимое письмо не уходит в mail.markRead; после возврата в feed — уходит', async () => {
+      const view = renderPanel(planEntry('active', unread()), { view: 'board' });
+      showMeta('m-1');
+      await wait(3000);
+      expect(marked).toEqual([]);
+      view.rerender(<RoomPanel {...view.initial} view="feed" />);
+      showMeta('m-1');
+      await wait(1600);
+      expect(marked).toEqual([['m-1']]);
+    });
+
+    it('таймер прочтения, начатый до переключения в board, письмо не отмечает', async () => {
+      const view = renderPanel(planEntry('active', unread()));
+      showMeta('m-1');
+      await wait(500);
+      view.rerender(<RoomPanel {...view.initial} view="board" />);
+      await wait(3000);
+      expect(marked).toEqual([]);
+    });
+
+    it('при возврате в feed лента, стоявшая у низа, прижимается к низу', () => {
+      const spies = [
+        vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(1000),
+        vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(400),
+      ];
+      try {
+        const view = renderPanel(planEntry('active', [message('m-1')]));
+        feed().scrollTop = 600;
+        fireEvent.scroll(feed());
+        view.rerender(<RoomPanel {...view.initial} view="board" />);
+        feed().scrollTop = 0;
+        view.rerender(<RoomPanel {...view.initial} view="feed" />);
+        expect(feed().scrollTop).toBe(1000);
+      } finally {
+        for (const spy of spies) spy.mockRestore();
+      }
+    });
+  });
+});

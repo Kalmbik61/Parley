@@ -11,6 +11,7 @@ import { toast } from 'sonner';
 import type { WindowWorkEntry } from '@parley/core';
 import type { SessionRef } from '@parley/protocol';
 import type { ParleyBridge } from '../../../shared/bridge.js';
+import type { RoomView } from '../../../shared/layout-types.js';
 import { S } from '../../../shared/strings.js';
 import { applyFocusTarget, buildFocusTargetDeps } from '../../attention/focus-target.js';
 import { openAgentInPanel } from '../../agents/open-agents.js';
@@ -18,6 +19,9 @@ import { PanelHost } from '../../browser/panel/PanelHost.js';
 import { ImagePreviewHost } from '../../chat/ImagePreview.js';
 import { FilePathLinksContext, type FilePathLinks } from '../../components/rooms/FilePathText.js';
 import { RoomPanel } from '../../components/rooms/RoomPanel.js';
+import { tabId } from '../ids.js';
+import { useLayoutStore } from '../store.js';
+import { updateTab } from '../tree.js';
 import { workKey as workKeyOf } from '../../lib/tree-order.js';
 import { useActivityStore } from '../../store/activity.js';
 import { useHostStore } from '../../store/host.js';
@@ -28,9 +32,11 @@ export interface RoomBodyProps {
   roomId: string;
   /** Работа активна — `LayoutBodyContext.active` из `GroupView` (кусок 4.2). */
   active: boolean;
+  /** Вид вкладки: лента или доска плана; по умолчанию лента. */
+  view?: RoomView;
 }
 
-export function RoomBody({ bridge, entry, roomId, active }: RoomBodyProps): JSX.Element {
+export function RoomBody({ bridge, entry, roomId, active, view = 'feed' }: RoomBodyProps): JSX.Element {
   const activityByRef = useActivityStore((state) => state.byRef);
   const [providers, setProviders] = useState<Array<{ id: string; label: string }>>([]);
   // Связь вернулась — список заново: тело при обрыве не перемонтируется (fix-7.3).
@@ -60,6 +66,11 @@ export function RoomBody({ bridge, entry, roomId, active }: RoomBodyProps): JSX.
     [bridge, entry.projectPath, entry.map.work.id],
   );
 
+  const workKey = workKeyOf(entry.projectPath, entry.map.work.id);
+  const changeView = (roomView: RoomView): void => {
+    useLayoutStore.getState().apply(workKey, (layout) => updateTab(layout, tabId.room(roomId), { roomView }));
+  };
+
   // Панель браузера комнаты (спека браузера 4.11) стоит справа от вида; архивная комната панели не имеет — её убирает слежение
   // за составом работы (`layout/persistence.ts`), а кнопки в шапке архивной комнаты нет.
   return (
@@ -74,6 +85,8 @@ export function RoomBody({ bridge, entry, roomId, active }: RoomBodyProps): JSX.
             activity={activityByRef}
             bridge={bridge}
             active={active}
+            view={view}
+            onViewChange={changeView}
             onOpenExternal={(url) => void bridge.app.openExternal(url)}
             onOpenSession={openSession}
           />

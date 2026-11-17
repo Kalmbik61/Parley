@@ -14,6 +14,7 @@ import type {
   GroupNode,
   LayoutNode,
   TabSpec,
+  RoomView,
   TerminalView,
   WorkLayout,
 } from '../../shared/layout-types.js';
@@ -56,6 +57,8 @@ export type Where = 'active' | { groupId: string; index?: number };
 export type TabPatch = {
   url?: string;
   view?: TerminalView;
+  /** Вид вкладки комнаты; `feed` убирает поле. Отдельно от `view`, чтобы не смешивать с видом вкладки сессии. */
+  roomView?: RoomView;
   viewport?: ViewportSpec | null;
   /** `null` — снять поле (откат на умолчание). */
   target?: BrowserTarget | null;
@@ -306,6 +309,12 @@ export function updateTab(layout: WorkLayout, tabId: string, patch: TabPatch): W
   )
     next = patchBrowser(tab, patch);
   else if (tab.kind === 'terminal' && patch.view !== undefined) next = { ...tab, view: patch.view };
+  else if (tab.kind === 'room' && patch.roomView !== undefined) {
+    next =
+      patch.roomView === 'board'
+        ? { kind: 'room', id: tab.id, roomId: tab.roomId, view: 'board' }
+        : { kind: 'room', id: tab.id, roomId: tab.roomId };
+  }
   else return layout;
 
   const newTabs = found.group.tabs.map((t, i) => (i === found.index ? next : t));
@@ -659,7 +668,11 @@ function parseTabSpec(value: unknown): TabSpec | null {
     case 'board':
       return id === 'board' ? { kind: 'board', id: 'board' } : null;
     case 'room':
-      return typeof value.roomId === 'string' ? { kind: 'room', id, roomId: value.roomId } : null;
+      if (typeof value.roomId !== 'string') return null;
+      // Нет поля или незнакомое значение — Feed: раскладка остаётся валидной.
+      return value.view === 'board'
+        ? { kind: 'room', id, roomId: value.roomId, view: 'board' }
+        : { kind: 'room', id, roomId: value.roomId };
     case 'diff': {
       if (typeof value.sessionId !== 'string') return null;
       const commit = value.commit;

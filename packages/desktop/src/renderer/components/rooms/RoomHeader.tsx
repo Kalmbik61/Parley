@@ -18,6 +18,8 @@ export interface RoomHeaderProps {
   recipeChip?: ReactNode;
   /** Кнопка «Browser» панели браузера комнаты (спека браузера 4.11) — справа в строке названия. */
   browserToggle?: ReactNode;
+  /** Переключатель Feed / Board (`RoomViewSwitch`) — в строке названия перед кнопкой Browser. */
+  viewSwitch?: ReactNode;
   /** Значок расхода токенов комнаты (`RoomUsageChip`) рядом с режимом. */
   usageChip?: ReactNode;
   /** Значок контекста комнаты (`RoomContextChip`, спека 2026-10-15, 3.3) рядом с расходом. */
@@ -35,7 +37,7 @@ export interface RoomHeaderProps {
   now: Date;
 }
 
-export function RoomHeader({ title, subtitle, archived = false, participants, onOpenSession, onOpenPlan, modeControl, recipeChip, browserToggle, usageChip, contextChip, participantContext, now }: RoomHeaderProps): JSX.Element {
+export function RoomHeader({ title, subtitle, archived = false, participants, onOpenSession, onOpenPlan, modeControl, recipeChip, browserToggle, viewSwitch, usageChip, contextChip, participantContext, now }: RoomHeaderProps): JSX.Element {
   return (
     <div
       data-room-header=""
@@ -51,7 +53,12 @@ export function RoomHeader({ title, subtitle, archived = false, participants, on
               {S.rooms.archived}
             </Badge>
           ) : null}
-          {browserToggle === undefined ? null : <div className="ml-auto shrink-0">{browserToggle}</div>}
+          {browserToggle === undefined && viewSwitch === undefined ? null : (
+            <div className="ml-auto flex shrink-0 items-center gap-2">
+              {viewSwitch}
+              {browserToggle}
+            </div>
+          )}
         </div>
         <span title={subtitle} className="truncate text-[13px] text-muted-foreground">
           {subtitle}

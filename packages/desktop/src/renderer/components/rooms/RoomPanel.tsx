@@ -50,6 +50,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { toast } from 'sonner';
 import type { WindowWorkEntry } from '@parley/core';
 import type { ParleyBridge } from '../../../shared/bridge.js';
+import type { RoomView } from '../../../shared/layout-types.js';
 import { decodeIpcError } from '../../../shared/ipc-error.js';
 import { S, errorText } from '../../../shared/strings.js';
 import { useMarkRead } from '../../attention/use-mark-read.js';
@@ -83,7 +84,9 @@ import { roomOutbox, useMailLanded } from './room-outbox.js';
 import { RoomPendingMessage } from './RoomPendingMessage.js';
 import { Composer, type ComposerSubmission } from './Composer.js';
 import { useHostStore } from '../../store/host.js';
-import { PlanPanel, RoomModeControl } from './PlanPanel.js';
+import { currentRoomPlan, PlanPanel, RoomModeControl } from './PlanPanel.js';
+import { roomBoardAvailable } from './board/room-board-model.js';
+import { RoomViewSwitch } from './board/RoomViewSwitch.js';
 import { HaltCard } from './HaltCard.js';
 import { CompletionCard } from './CompletionCard.js';
 import { DecisionCard } from './DecisionCard.js';
@@ -106,6 +109,10 @@ export interface RoomPanelProps {
   onOpenExternal: (url: string) => void;
   /** Клик по карточке участника: открыть терминал его сессии; по агенту в поповере строки субагентов — на карточке агента (`agentId`). */
   onOpenSession: (sessionId: string, agentId?: string) => void;
+  /** Вид вкладки: лента или доска плана; по умолчанию лента. */
+  view?: RoomView;
+  /** Без обработчика переключателя Feed / Board в шапке нет. */
+  onViewChange?: (view: RoomView) => void;
 }
 
 /** Относительное время сообщений («2m») обновляется раз в столько же, что и в сайдбаре. */
@@ -120,7 +127,7 @@ const REPLY_FLASH_MS = 1200;
 /** Дольше лента не ждёт `scrollend` после плавной прокрутки: оригинал мог уже стоять на месте — тогда события не будет. */
 const SCROLL_END_WAIT_MS = 2000;
 
-export function RoomPanel({ entry, roomId, providers, activity, bridge, active, onOpenExternal, onOpenSession }: RoomPanelProps): JSX.Element {
+export function RoomPanel({ entry, roomId, providers, activity, bridge, active, onOpenExternal, onOpenSession, view = 'feed', onViewChange }: RoomPanelProps): JSX.Element {
   // Оригиналы цитат, которых окно не держит, подгружаются по id (`context.letter`, спека rooms.mail 6.9) и приходят в модель.
   const quoted = useRoomPagesStore((state) => quotesOf(state, entry));
   const model = buildRoomModel({ entry, roomId, providers, activity, ...(quoted === undefined ? {} : { quoted }) });
@@ -134,8 +141,12 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
   const liveKey = busy
     .map((participant) => `${participant.id}\u0000${participant.doing}`)
     .join('\n');
+  // Доска плана: вид Board открывается, только пока доска доступна (план active, completing или completed).
+  const boardAvailable = roomBoardAvailable(currentRoomPlan(entry, roomId));
+  const boardOpen = view === 'board' && boardAvailable;
   // Хуки — до раннего выхода «комнаты нет»: порядок хуков не должен зависеть от данных.
-  const markRead = useMarkRead({ bridge, projectPath: entry.projectPath, workId: entry.map.work.id, active });
+  // Под доской лента остаётся в дереве, но письма в ней не читаются: как у неактивной работы.
+  const markRead = useMarkRead({ bridge, projectPath: entry.projectPath, workId: entry.map.work.id, active: active && !boardOpen });
   const now = useNow(NOW_PERIOD_MS);
   const canResolve = useHostSupports('rooms.resolveProposal') && entry.map.work.status === 'active' && !archived;
   const canReopen = useHostSupports('rooms.reopen');
@@ -213,6 +224,18 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
     atBottomRef.current = true;
     setBelow(0);
   }, []);
+
+  // Лента под доской: `inert` ставится через ref, типы React 18 атрибута не знают.
+  const feedAreaRef = useRef<HTMLDivElement | null>(null);
+  useLayoutEffect(() => {
+    feedAreaRef.current?.toggleAttribute('inert', boardOpen);
+  }, [boardOpen]);
+  // Возврат в Feed: поле ввода вернулось и лента стала ниже — стоявшая у низа прижимается к низу.
+  const wasBoardOpen = useRef(boardOpen);
+  useLayoutEffect(() => {
+    if (wasBoardOpen.current && !boardOpen && atBottomRef.current) pinToBottom();
+    wasBoardOpen.current = boardOpen;
+  }, [boardOpen, pinToBottom]);
 
   /** Высота ленты изменилась (живая строка, форма возврата у решения): у низа стояла — остаётся у низа, иначе не трогаем. */
   const keepAtBottom = useCallback((): void => {
@@ -519,6 +542,7 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
       className={cn('flex h-full min-h-0 min-w-0 flex-col', (dropping || cardOver) && 'ring-2 ring-inset ring-ring')}
     >
       <RoomHeader
+        {...(onViewChange !== undefined && boardAvailable ? { viewSwitch: <RoomViewSwitch view={boardOpen ? 'board' : 'feed'} onChange={onViewChange} /> } : {})}
         browserToggle={archived ? undefined : <PanelToggle workKey={workKey(entry.projectPath, entry.map.work.id)} owner={{ kind: 'room', roomId }} />}
         contextChip={<RoomContextChip bridge={bridge} roomTitle={model.title} participants={model.participants} />}
         participantContext={(participant: ParticipantModel) =>
@@ -541,6 +565,13 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
           )
         }
         usageChip={<RoomUsageChip bridge={bridge} entry={entry} roomId={roomId} active={active} providers={providers}/>} recipeChip={recipe == null ? undefined : <RoomRecipeChip recipe={recipe}/>} modeControl={<RoomModeControl key={draftKey} entry={entry} roomId={roomId} bridge={bridge}/>} title={model.title} subtitle={model.subtitle} archived={archived} participants={model.participants} now={now} onOpenSession={onOpenSession} onOpenPlan={(id) => openPlanInPanel({ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: id })} />
+      <div data-room-feed-stack="" className="relative flex min-h-0 flex-1 flex-col">
+      <div
+        ref={feedAreaRef}
+        data-room-feed-area=""
+        {...(boardOpen ? { 'aria-hidden': true } : {})}
+        className="flex min-h-0 flex-1 flex-col"
+      >
       {/* Обёртка — только для кнопки `↓N` поверх низа ленты: прокручивается сама лента. */}
       <div className="relative flex min-h-0 flex-1 flex-col">
         <div
@@ -660,7 +691,7 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
             </Button>
           ) : null}
         </div>
-      ) : (
+      ) : boardOpen ? null : (
         <>
           {reply === null ? null : (
             <ReplyPlate
@@ -672,6 +703,10 @@ export function RoomPanel({ entry, roomId, providers, activity, bridge, active, 
           <Composer key={draftKey} members={members} bridge={bridge} draftKey={draftKey} onSend={handleSend} />
         </>
       )}
+      </div>
+      {/* Слой доски стоит поверх ленты; доску кладёт в него задача 5. */}
+      {boardOpen ? <div data-room-board-layer="" className="absolute inset-0 z-10 flex min-h-0 flex-col bg-sheet" /> : null}
+      </div>
     </div>
   );
 }
