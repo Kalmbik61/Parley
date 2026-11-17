@@ -41,6 +41,9 @@ export type FileRootSpec = { kind: 'project' } | { kind: 'worktree'; sessionId: 
 /** Вид вкладки сессии (план 2026-10-01, решение 6): лента «Chat» или терминал. */
 export type TerminalView = 'chat' | 'terminal';
 
+/** Вид вкладки комнаты: лента или доска плана. */
+export type RoomView = 'feed' | 'board';
+
 /**
  * Цель «To» вкладки браузера (спека браузера 4.5): куда ложатся файлы-контексты — сессия или комната работы. В
  * раскладке только id: путей `drops/` здесь нет (спека окна 15.2).
@@ -53,7 +56,7 @@ export type TabSpec =
   | { kind: 'terminal'; id: string; sessionId: string; view?: TerminalView }
   | { kind: 'mail'; id: 'mail' }
   | { kind: 'board'; id: 'board' }
-  | { kind: 'room'; id: string; roomId: string }
+  | { kind: 'room'; id: string; roomId: string; view?: 'board' }
   // commit: null — все изменения ветки, иначе один коммит.
   | { kind: 'diff'; id: string; sessionId: string; commit: string | null }
   // path — относительный; у корня `external` — абсолютный.

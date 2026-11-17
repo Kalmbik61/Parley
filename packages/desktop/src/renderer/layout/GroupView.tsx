@@ -100,7 +100,7 @@ function TabBody({ tab, entry, host, onMissing }: TabBodyProps): JSX.Element {
     case 'room': {
       const room = entry.map.rooms.find((candidate) => candidate.id === tab.roomId);
       if (room === undefined) return <MissingBody kind="room" onClose={onMissing} />;
-      return <RoomBody bridge={host.bridge} entry={entry} roomId={tab.roomId} active={host.active} />;
+      return <RoomBody bridge={host.bridge} entry={entry} roomId={tab.roomId} active={host.active} view={tab.view ?? 'feed'} />;
     }
     case 'diff': {
       const session: WorkSession | undefined = entry.map.sessions.find((candidate) => candidate.id === tab.sessionId);

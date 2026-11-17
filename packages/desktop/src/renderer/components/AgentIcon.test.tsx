@@ -199,3 +199,38 @@ describe('AgentIcon — аккаунты подписки (спека подпи
     expect(imageOf(container)?.getAttribute('src')).toMatch(/claude\.svg$/);
   });
 });
+
+describe('AgentIcon — кольцо цвета агента (спека доски комнаты 5.1)', () => {
+  it('без sessionId разметка прежняя: data-agent-icon на картинке, обёртки нет', () => {
+    const { container } = render(<AgentIcon provider="claude" />);
+    expect(container.firstElementChild?.tagName).toBe('IMG');
+    expect(imageOf(container)?.getAttribute('data-agent-icon')).toBe('');
+    expect(container.querySelector('[data-agent-colour]')).toBeNull();
+  });
+
+  it('с sessionId — обёртка с data-agent-icon и data-agent-colour, у картинки атрибута нет', () => {
+    const { container } = render(<AgentIcon provider="claude" size={14} sessionId="s-11" />);
+    const ring = container.firstElementChild as HTMLElement;
+    expect(ring.tagName).toBe('SPAN');
+    expect(ring.getAttribute('data-agent-icon')).toBe('');
+    expect(ring.getAttribute('data-agent-colour')).toBe('3');
+    expect(ring.style.width).toBe('14px');
+    expect(ring.style.outlineOffset).toBe('2px');
+    expect(imageOf(container)?.getAttribute('data-agent-icon')).toBeNull();
+    expect(container.querySelectorAll('[data-agent-icon]').length).toBe(1);
+  });
+
+  it('буква неизвестного провайдера тоже получает кольцо', () => {
+    const { container } = render(<AgentIcon provider="zeta" sessionId="s-2" />);
+    const ring = container.firstElementChild as HTMLElement;
+    expect(ring.getAttribute('data-agent-colour')).toBe('2');
+    expect(container.textContent).toBe('Z');
+    expect(container.querySelectorAll('[data-agent-icon]').length).toBe(1);
+  });
+
+  it('sessionId не вида s-N — как без него', () => {
+    const { container } = render(<AgentIcon provider="claude" sessionId="human" />);
+    expect(container.firstElementChild?.tagName).toBe('IMG');
+    expect(container.querySelector('[data-agent-colour]')).toBeNull();
+  });
+});

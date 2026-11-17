@@ -1277,6 +1277,33 @@ export const S = {
     kindTag: { note: 'note', question: 'question', decision: 'decision' } as const,
   },
 
+  roomBoard: {
+    viewLabel: 'Room view', feed: 'Feed', board: 'Board',
+    columns: { waiting: 'Waiting', progress: 'In progress', review: 'In review', done: 'Done', verified: 'Verified' },
+    empty: 'Nothing here', engine: 'Engine',
+    ready: 'Ready',
+    waitsFor: (items: string): string => `Waits for ${items}`,
+    blocked: (note: string): string => (note === '' ? 'Blocked' : `Blocked: ${note}`),
+    returned: (note: string): string => (note === '' ? 'Returned' : `Returned: ${note}`),
+    waitingFor: (who: string): string => `Submitted · waiting for ${who}`,
+    waitingForYou: 'Submitted · waiting for you',
+    noVerifier: 'No verifier available',
+    attempt: (n: number, of: number): string => `attempt ${n} of ${of}`,
+    submission: (n: number): string => `submission ${n}`,
+    updated: (ago: string): string => `updated ${ago}`,
+    noticeDecision: 'A decision is waiting for you in the feed',
+    openFeed: 'Open feed',
+    filter: 'Show the cards of one agent',
+    filterOnly: (label: string): string => `Only ${label}`,
+    item: (id: number): string => `#${id}`,
+    moreItems: (count: number): string => `+${count}`,
+    sheet: (id: number): string => `Plan item ${id}`,
+    openSession: 'Open session', showInFeed: 'Show in feed',
+    events: 'Latest changes',
+    event: (who: string, item: number, status: string): string => `${who} · #${item} → ${status}`,
+    working: 'Working now',
+  },
+
   /** Комнаты — `rooms/*`. */
   rooms: {
     planLabel: 'Plan',

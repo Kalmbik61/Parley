@@ -741,6 +741,59 @@ describe('updateTab', () => {
     expect(validateLayout(toTerminal)).toEqual([]);
     expect(updateTab(layout, page.id, { view: 'chat' })).toBe(layout);
   });
+
+  // Доска комнаты: вид вкладки комнаты — отдельное поле патча `roomView`.
+  const roomTab = (): TabSpec => ({ kind: 'room', id: tabId.room('r-1'), roomId: 'r-1' });
+
+  it('патч roomView: board ставит вид вкладке комнаты, feed — убирает поле', () => {
+    const room = roomTab();
+    const layout = openTab(emptyLayout(), room, 'active');
+    const board = updateTab(layout, room.id, { roomView: 'board' });
+    expect(groups(board)[0]?.tabs[0]).toEqual({ ...room, view: 'board' });
+    expect(validateLayout(board)).toEqual([]);
+    const feed = updateTab(board, room.id, { roomView: 'feed' });
+    expect(groups(feed)[0]?.tabs[0]).toEqual(room);
+    expect(Object.keys(groups(feed)[0]?.tabs[0] ?? {})).not.toContain('view');
+  });
+
+  it('roomView не меняет вкладку сессии, а view не меняет вкладку комнаты', () => {
+    const term = freshTab();
+    const room = roomTab();
+    let layout = openTab(emptyLayout(), term, 'active');
+    layout = openTab(layout, room, 'active');
+    expect(updateTab(layout, term.id, { roomView: 'board' })).toBe(layout);
+    expect(updateTab(layout, room.id, { view: 'terminal' })).toBe(layout);
+  });
+
+  it('раскладка с view: board у комнаты разбирается с видом', () => {
+    const layout = updateTab(openTab(emptyLayout(), roomTab(), 'active'), tabId.room('r-1'), { roomView: 'board' });
+    const parsed = parseWorkLayout(JSON.parse(JSON.stringify(layout)));
+    expect(parsed).toEqual(layout);
+    expect(parsed === null ? null : groups(parsed)[0]?.tabs[0]).toMatchObject({ kind: 'room', view: 'board' });
+  });
+
+  it('раскладка без поля и с незнакомым значением даёт вкладку без вида и остаётся валидной', () => {
+    const base = openTab(emptyLayout(), roomTab(), 'active');
+    const old = parseWorkLayout(JSON.parse(JSON.stringify(base)));
+    expect(old).toEqual(base);
+    for (const bad of ['feed', 'grid', 5, null]) {
+      const raw = JSON.parse(JSON.stringify(base)) as { root: { tabs: Array<Record<string, unknown>> } };
+      raw.root.tabs[0]!.view = bad;
+      const parsed = parseWorkLayout(raw);
+      expect(parsed, String(bad)).toEqual(base);
+      expect(parsed === null ? [] : validateLayout(parsed)).toEqual([]);
+      expect('view' in (parsed === null ? {} : (groups(parsed)[0]?.tabs[0] ?? {}))).toBe(false);
+    }
+  });
+
+  it('вид chat и terminal у вкладки сессии разбирается как раньше', () => {
+    const term = freshTab();
+    const base = openTab(emptyLayout(), term, 'active');
+    for (const view of ['chat', 'terminal'] as const) {
+      const layout = updateTab(base, term.id, { view });
+      expect(parseWorkLayout(JSON.parse(JSON.stringify(layout)))).toEqual(layout);
+    }
+  });
 });
 
 describe('validateLayout — дубль id узла, не только вкладки (раунд исправлений 1, Critical B)', () => {

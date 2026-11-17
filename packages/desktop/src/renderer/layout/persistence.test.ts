@@ -203,6 +203,20 @@ describe('useLayoutPersistence', () => {
     expect(groups(restored)).toHaveLength(1);
   });
 
+  it('вид board у вкладки комнаты переживает сохранение и чтение раскладки', async () => {
+    const bridge = createFakeBridge();
+    const entryA = work('w-a', '/tmp/a', [session('s-01')]);
+    entryA.map.rooms.push({ id: 'r-01', title: 'r', creator: 'human', members: [], createdAt: '2026-01-01' });
+    const roomTab: TabSpec = { kind: 'room', id: tabId.room('r-01'), roomId: 'r-01', view: 'board' };
+    await bridge.app.saveLayout(keyA, openTab(emptyLayout(), roomTab, 'active'));
+
+    renderHook(() => useLayoutPersistence({ bridge, works: [entryA], worksLoaded: true, order: [keyA], visibleOrder: [keyA] }));
+    await waitFor(() => expect(useLayoutStore.getState().hydrated[keyA]).toBe(true));
+
+    const restored = useLayoutStore.getState().layouts[keyA] as WorkLayout;
+    expect(groups(restored)[0]?.tabs[0]).toEqual(roomTab);
+  });
+
   it('работа, пропавшая из снимка, — drop и removeLayout (тест 6)', async () => {
     const bridge = createFakeBridge();
     const entryA = work('w-a', '/tmp/a');

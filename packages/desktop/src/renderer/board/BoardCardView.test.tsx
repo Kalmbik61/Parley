@@ -1,5 +1,5 @@
 import { DndContext, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BacklogSnapshot } from '@parley/protocol';
 import { S } from '../../shared/strings.js';
@@ -159,5 +159,32 @@ describe('BoardCardView — перетаскивание', () => {
     fireEvent.click(title);
     expect(started).not.toHaveBeenCalled();
     expect(onOpen).toHaveBeenCalledTimes(1);
+  });
+
+  it('In progress и Review показывают ход и значки с подсказкой-подписью', () => {
+    const withPlan: TargetInfo = { ...live, plan: { progress: '1/4 verified', working: [{ id: 's-02', provider: 'claude', label: 'S02 front' }, { id: 's-03', provider: 'codex', label: 'S03 back' }], more: 2 } };
+    for (const state of ['in-progress', 'review'] as const) {
+      render(<ul><BoardCardView bridge={bridge} card={make(state, { taken: 'w-01/s-01' })} target={withPlan} onOpen={vi.fn()} /></ul>);
+      const line = document.querySelector('[data-board-plan]') as HTMLElement;
+      expect(line.textContent).toContain('1/4 verified');
+      const group = screen.getByRole('group', { name: S.roomBoard.working });
+      expect(within(group).getByTitle('S02 front').querySelector('[data-agent-colour]')).toBeTruthy();
+      expect(within(group).getByTitle('S03 back')).toBeTruthy();
+      expect(group.textContent).toContain(S.roomBoard.moreItems(2));
+      cleanup();
+    }
+  });
+
+  it('без plan карточка как раньше', () => {
+    render(<ul><BoardCardView bridge={bridge} card={make('in-progress', { taken: 'w-01/s-01' })} target={live} onOpen={vi.fn()} /></ul>);
+    expect(document.querySelector('[data-board-plan]')).toBeNull();
+    cleanup();
+    const withPlan: TargetInfo = { ...live, plan: { progress: '0/1 verified', working: [], more: 0 } };
+    render(<ul><BoardCardView bridge={bridge} card={make('backlog')} target={withPlan} onOpen={vi.fn()} /></ul>);
+    expect(document.querySelector('[data-board-plan]')).toBeNull();
+    cleanup();
+    render(<ul><BoardCardView bridge={bridge} card={make('in-progress', { taken: 'w-01/s-01' })} target={withPlan} onOpen={vi.fn()} /></ul>);
+    expect(document.querySelector('[data-board-plan]')?.textContent).toBe('0/1 verified');
+    expect(screen.queryByRole('group', { name: S.roomBoard.working })).toBeNull();
   });
 });

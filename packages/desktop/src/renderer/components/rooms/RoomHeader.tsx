@@ -18,12 +18,18 @@ export interface RoomHeaderProps {
   recipeChip?: ReactNode;
   /** Кнопка «Browser» панели браузера комнаты (спека браузера 4.11) — справа в строке названия. */
   browserToggle?: ReactNode;
+  /** Переключатель Feed / Board (`RoomViewSwitch`) — в строке названия перед кнопкой Browser. */
+  viewSwitch?: ReactNode;
   /** Значок расхода токенов комнаты (`RoomUsageChip`) рядом с режимом. */
   usageChip?: ReactNode;
   /** Значок контекста комнаты (`RoomContextChip`, спека 2026-10-15, 3.3) рядом с расходом. */
   contextChip?: ReactNode;
   /** Чип контекста участника на карточке (`ContextChip`, спека 3.2). */
   participantContext?: (participant: ParticipantModel) => ReactNode;
+  /** Вид Board в низкой панели: ряд режима и лента участников не рисуются, остаются название, подзаголовок и кнопки. */
+  compact?: boolean;
+  /** Метки пунктов плана у участников (`participantItemTags`). */
+  itemTags?: ReadonlyMap<string, number[]>;
   title: string;
   subtitle: string;
   /** Комната в архиве: рядом с названием метка `Archived`. */
@@ -35,7 +41,7 @@ export interface RoomHeaderProps {
   now: Date;
 }
 
-export function RoomHeader({ title, subtitle, archived = false, participants, onOpenSession, onOpenPlan, modeControl, recipeChip, browserToggle, usageChip, contextChip, participantContext, now }: RoomHeaderProps): JSX.Element {
+export function RoomHeader({ title, subtitle, archived = false, participants, onOpenSession, onOpenPlan, modeControl, recipeChip, browserToggle, viewSwitch, usageChip, contextChip, participantContext, itemTags, compact = false, now }: RoomHeaderProps): JSX.Element {
   return (
     <div
       data-room-header=""
@@ -51,22 +57,32 @@ export function RoomHeader({ title, subtitle, archived = false, participants, on
               {S.rooms.archived}
             </Badge>
           ) : null}
-          {browserToggle === undefined ? null : <div className="ml-auto shrink-0">{browserToggle}</div>}
+          {browserToggle === undefined && viewSwitch === undefined ? null : (
+            <div className="ml-auto flex shrink-0 items-center gap-2">
+              {viewSwitch}
+              {browserToggle}
+            </div>
+          )}
         </div>
         <span title={subtitle} className="truncate text-[13px] text-muted-foreground">
           {subtitle}
         </span>
       </div>
-      {recipeChip === undefined && usageChip === undefined && contextChip === undefined ? modeControl : (
-        <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2">{modeControl}{recipeChip}{usageChip}{contextChip}</div>
+      {compact ? null : (
+        <>
+          {recipeChip === undefined && usageChip === undefined && contextChip === undefined ? modeControl : (
+            <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2">{modeControl}{recipeChip}{usageChip}{contextChip}</div>
+          )}
+          <ParticipantStrip
+            participants={participants}
+            onOpenSession={onOpenSession}
+            now={now}
+            {...(onOpenPlan === undefined ? {} : { onOpenPlan })}
+            {...(participantContext === undefined ? {} : { contextChip: participantContext })}
+            {...(itemTags === undefined ? {} : { itemTags })}
+          />
+        </>
       )}
-      <ParticipantStrip
-        participants={participants}
-        onOpenSession={onOpenSession}
-        now={now}
-        {...(onOpenPlan === undefined ? {} : { onOpenPlan })}
-        {...(participantContext === undefined ? {} : { contextChip: participantContext })}
-      />
     </div>
   );
 }
