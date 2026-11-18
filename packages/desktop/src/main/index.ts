@@ -913,6 +913,7 @@ if (!gotLock) {
     // снимался бы насовсем; главный кадр окна от гостей не зависит.
     const ops = createAgentOps({
       basicAuth,
+      clientCert,
       scripts: createAgentScripts({ inspector }),
       storage: createAgentStorage({ cookies: browserSession.cookies, inspector }),
       downloads: agentDownloads,

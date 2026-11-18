@@ -10,6 +10,7 @@ import type { AgentInput, InputGuard, MouseStep } from './agent-input.js';
 import type { PageRecord } from './agent-pages.js';
 import { S } from '../../shared/strings.js';
 import { BASIC_AUTH_HINT } from './basic-auth.js';
+import { CLIENT_CERT_HINT } from './client-cert.js';
 import { SELECT_OPTION_FN } from './page-fns.js';
 
 const request = { opId: 'op-1', ref: { projectPath: '/proj', workId: 'w-1', sessionId: 's-02' }, label: 'S02', owners: [], op: 'action', args: {} } as unknown as BrowserAgentOpEvent;
@@ -18,7 +19,7 @@ const record = { workKey: 'w', pageId: 'bp-aaaaaa', agentId: 't1' } as unknown a
 type Describe = { nodeName: string; attributes: string[] };
 type FileSpec = { size: number; real?: string } | 'dir';
 
-function setup(options: { fit?: { scale: number; mobile: boolean } | null; zoom?: number; selectAnswer?: unknown; files?: Record<string, FileSpec>; home?: string; checked?: Array<boolean | 'mixed' | null>; take?: string[]; basicAuth?: { isPending(id: number): boolean; onPending(id: number, listener: () => void): () => void } } = {}) {
+function setup(options: { fit?: { scale: number; mobile: boolean } | null; zoom?: number; selectAnswer?: unknown; files?: Record<string, FileSpec>; home?: string; checked?: Array<boolean | 'mixed' | null>; take?: string[]; basicAuth?: { isPending(id: number): boolean; onPending(id: number, listener: () => void): () => void }; clientCert?: { isPending(id: number): boolean; onPending(id: number, listener: () => void): () => void } } = {}) {
   const guest = Object.assign(new EventEmitter(), {
     id: 7,
     getZoomFactor: () => options.zoom ?? 1,
@@ -62,6 +63,7 @@ function setup(options: { fit?: { scale: number; mobile: boolean } | null; zoom?
     window: { take: () => options.take ?? [] },
     activity: ctx.activity,
     ...(options.basicAuth === undefined ? {} : { basicAuth: options.basicAuth }),
+    ...(options.clientCert === undefined ? {} : { clientCert: options.clientCert }),
     files: {
       realpath: async (path) => {
         const spec = specs[path];
@@ -263,6 +265,37 @@ describe('action (спека 5.1, 4.8)', () => {
     const result = await ctx.actions.actionOf(ctx.contents, record, request, { tab: 't1', action: 'click', x: 5, y: 5 }, guard());
     expect(result).toMatchObject({ navigated: true, notes: [BASIC_AUTH_HINT] });
     expect(Date.now() - started).toBeLessThan(AGENT_LIMITS.loadMs);
+  });
+
+  it('действие открыло страницу, ждущую выбор сертификата, — CLIENT_CERT_HINT сразу, без «still loading» и без ожидания loadMs', async () => {
+    let pending = false;
+    const ctx = setup({ clientCert: { isPending: () => pending, onPending: () => () => undefined } });
+    ctx.input.mouse.mockImplementation(async (_c, steps) => {
+      if (steps.some((step) => step.type === 'mouseReleased')) {
+        ctx.guest.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false });
+        ctx.guest.isLoading.mockReturnValue(true);
+        pending = true;
+      }
+    });
+    const started = Date.now();
+    const result = await ctx.actions.actionOf(ctx.contents, record, request, { tab: 't1', action: 'click', x: 5, y: 5 }, guard());
+    expect(result).toMatchObject({ navigated: true, notes: [CLIENT_CERT_HINT] });
+    expect(Date.now() - started).toBeLessThan(AGENT_LIMITS.loadMs);
+  });
+
+  it('висят и пароль, и сертификат — обе подсказки, basic-auth первой', async () => {
+    const ctx = setup({
+      basicAuth: { isPending: () => true, onPending: () => () => undefined },
+      clientCert: { isPending: () => true, onPending: () => () => undefined },
+    });
+    ctx.input.mouse.mockImplementation(async (_c, steps) => {
+      if (steps.some((step) => step.type === 'mouseReleased')) {
+        ctx.guest.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false });
+        ctx.guest.isLoading.mockReturnValue(true);
+      }
+    });
+    const result = await ctx.actions.actionOf(ctx.contents, record, request, { tab: 't1', action: 'click', x: 5, y: 5 }, guard());
+    expect(result).toMatchObject({ navigated: true, notes: [BASIC_AUTH_HINT, CLIENT_CERT_HINT] });
   });
 
   it('withNavigation: переход в том же документе и в дочернем кадре не считается; слушатель снят', async () => {
