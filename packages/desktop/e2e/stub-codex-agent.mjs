@@ -16,6 +16,12 @@
 //     STUB_QUESTION   — вопрос с тремя вариантами на экране и заголовок Action Required, без OSC 9 (как `request_user_input`
 //                       Codex в режиме Plan, спайк 2026-11-18); ждёт цифру 1–3 (`picked: <цифра>`), Enter без текста
 //                       (`picked: default`) или текст с Enter (`enter: <текст>`), затем заголовок `Ready`
+//     STUB_APPROVAL_SCREEN [команда] — экран одобрения команды Codex 0.166 (форма с образца спайка: заголовок, `$ команда`,
+//                       три пронумерованных варианта, строка-подсказка), OSC 9 `Approval requested` и заголовок Action Required;
+//                       ждёт цифру 1–3 одним нажатием (`approved: <команда>`, `approved-always: <команда>`, `denied: <команда>`),
+//                       затем заголовок `Ready`. `STUB_APPROVAL_SCREEN <команда> => <другая>` через 4 с печатает поверх прежнего экран
+//                       с другой командой (экран сменился, пока человек ещё не ответил): `pty.send` в ожидающую сессию хост
+//                       не пускает, поэтому смену экрана делает сама заглушка
 //     STUB_LIMIT [текст] — лимит подписки (спека застрявших, 3.3 и 9): ход кончается ошибкой — в журнале треда
 //                       `task_complete` с `error: { message, codex_error_info: 'usage_limit_exceeded' }` (нужен
 //                       STUB_CODEX_SESSIONS), заголовок `Ready`, как у Codex; без текста — сообщение без времени сброса
@@ -117,6 +123,37 @@ let questionOpen = false;
 function closeQuestion(answer) {
   questionOpen = false;
   if (answer !== null) line(answer);
+  title(`Ready | ${THREAD}`);
+}
+
+/** Открыто одобрение `STUB_APPROVAL_SCREEN`: команда на экране; следующая цифра 1–3 отвечает на него. */
+let approvalCommand = null;
+
+function printApproval(command) {
+  approvalCommand = command;
+  line('');
+  line('  Would you like to run the following command?');
+  line('');
+  line('  Environment: local');
+  line('');
+  line(`  Reason: Allow \`${command}\` to write in the read-only workspace?`);
+  line('');
+  line(`  $ ${command}`);
+  line('');
+  line('› 1. Yes, proceed (y)');
+  line(`  2. Yes, and don't ask again for commands that start with \`${command}\` (p)`);
+  line('  3. No, and tell Codex what to do differently (esc)');
+  line('');
+  line('  Press enter to confirm or esc to cancel');
+  stopSpinner();
+  out(`\x1b]9;Approval requested: ${command}\x07`);
+  title(`[ ! ] Action Required | ${THREAD}`);
+}
+
+function answerApproval(digit) {
+  const command = approvalCommand;
+  approvalCommand = null;
+  line(digit === '1' ? `approved: ${command}` : digit === '2' ? `approved-always: ${command}` : `denied: ${command}`);
   title(`Ready | ${THREAD}`);
 }
 
@@ -346,6 +383,10 @@ function submit(text, key) {
   else if (text === 'STUB_READY') {
     stopSpinner();
     title(`Ready | ${THREAD}`);
+  } else if (text === 'STUB_APPROVAL_SCREEN' || text.startsWith('STUB_APPROVAL_SCREEN ')) {
+    const [first, replacement] = text.slice('STUB_APPROVAL_SCREEN'.length).split('=>').map((part) => part.trim());
+    printApproval(first || 'touch created.txt');
+    if (replacement) setTimeout(() => printApproval(replacement), 4_000);
   } else if (text === 'STUB_QUESTION') {
     stopSpinner();
     questionOpen = true;
@@ -440,8 +481,11 @@ function interrupt() {
 /** Нажатия вне вставки: Enter отправляет, Tab — в очередь, остальное — набор. */
 function typed(text) {
   for (const char of text) {
-    // Вопрос открыт, поле пусто: цифра выбирает вариант, Enter — вариант по умолчанию.
-    if (questionOpen && composer === '' && char >= '1' && char <= '3') {
+    // Одобрение открыто, поле пусто: цифра отвечает на него одним нажатием, как у Codex.
+    if (approvalCommand !== null && composer === '' && char >= '1' && char <= '3') {
+      answerApproval(char);
+    } else if (questionOpen && composer === '' && char >= '1' && char <= '3') {
+      // Вопрос открыт, поле пусто: цифра выбирает вариант, Enter — вариант по умолчанию.
       closeQuestion(`picked: ${char}`);
     } else if (questionOpen && composer === '' && (char === '\r' || char === '\n')) {
       closeQuestion('picked: default');

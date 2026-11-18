@@ -420,6 +420,42 @@ test.describe('вид Chat у Codex на журнале (план 2026-10-07, Ta
     expect(errors).toEqual([]);
   });
 
+  test('одобрение команды на экране терминала Codex без хуков: карточка с кнопками, Allow нажимает 1; экран сменился до клика — «Answered in the terminal», клавиша не ушла', async () => {
+    const { window, ref, errors } = await open(1400, 900);
+    const chat = await toChat(window);
+    const card = (state: 'pending' | 'allowed' | 'elsewhere'): Locator =>
+      chat.locator(`[data-testid="chat-card"][data-card-kind="permission"][data-card-state="${state}"]`);
+
+    // Заглушка рисует экран одобрения и ставит заголовок Action Required: хост узнаёт форму и заводит карточку.
+    await stub(window, ref, 'STUB_APPROVAL_SCREEN touch created.txt');
+    await expect(card('pending')).toHaveCount(1, { timeout: 20_000 });
+    await expect(card('pending')).toContainText('touch created.txt');
+    await expect(card('pending').getByTestId('card-allow')).toBeVisible();
+    await expect(card('pending').getByTestId('card-deny')).toBeVisible();
+    // Есть карточка — панели вопроса терминала нет.
+    await expect(chat.getByTestId('chat-terminal-prompt')).toHaveCount(0);
+
+    // Allow доходит до терминала цифрой 1.
+    await card('pending').getByTestId('card-allow').click();
+    await expect(card('allowed')).toHaveCount(1, { timeout: 20_000 });
+    await window.getByRole('radio', { name: 'Terminal' }).click();
+    await expect.poll(() => screenText(window)).toContain('approved: touch created.txt');
+    await window.getByRole('radio', { name: 'Chat' }).click();
+
+    // Второе одобрение; через 4 с, до клика, заглушка рисует поверх другое: карточка по прежнему экрану уже не наша.
+    await stub(window, ref, 'STUB_APPROVAL_SCREEN rm -rf build => rm -rf dist');
+    await expect(card('pending')).toContainText('rm -rf build', { timeout: 20_000 });
+    await expect(card('elsewhere')).toHaveCount(1, { timeout: 20_000 });
+    await expect(card('elsewhere')).toContainText('Answered in the terminal');
+    // Кнопок у отвеченной карточки нет, а заглушка ничего не получила: ни одобрения, ни отказа второй команды.
+    await expect(card('elsewhere').getByTestId('card-allow')).toHaveCount(0);
+    await window.getByRole('radio', { name: 'Terminal' }).click();
+    await expect.poll(() => screenText(window)).toContain('rm -rf dist');
+    const screen = await screenText(window);
+    for (const answered of ['approved: rm', 'approved-always: rm', 'denied: rm']) expect(screen).not.toContain(answered);
+    expect(errors).toEqual([]);
+  });
+
   test('вопрос на экране терминала: панель в Chat показывает его, Enter с кнопки и текст из поля доходят до агента', async () => {
     const { window, ref, errors } = await open(1400, 900);
     const chat = await toChat(window);
