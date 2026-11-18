@@ -655,7 +655,7 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
   });
   const reads = createAgentReads({ inspector: deps.inspector });
   const dom = createAgentDom({ inspector: deps.inspector });
-  const settle = createAgentSettle({ inspector: deps.inspector, sleep });
+  const settle = createAgentSettle({ inspector: deps.inspector });
   const capture = createAgentCapture({ inspector: deps.inspector, emulation: deps.emulation, registry, dom, saveImage: deps.saveImage, image: deps.image, activity: deps.activity, inGuest: deps.inGuest, ...(deps.captureReadyMs === undefined ? {} : { captureReadyMs: deps.captureReadyMs }), ...(deps.guestCallMs === undefined ? {} : { guestCallMs: deps.guestCallMs }), ...(deps.windowHeight === undefined ? {} : { windowHeight: deps.windowHeight }), ...(deps.screenDpr === undefined ? {} : { screenDpr: deps.screenDpr }) });
 
   function askWindow(event: AgentOpenTab): Promise<AgentOpenTabResult | 'no_window' | 'timeout'> {

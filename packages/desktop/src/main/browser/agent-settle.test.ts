@@ -18,13 +18,15 @@ interface Raw {
  * Подставная страница: пробы отдаются по очереди (последняя повторяется), часы идут только от `sleep`.
  * `network` — записи журнала инспектора, `epoch` — его эпоха.
  */
-function setup(options: { probes: Raw[]; network?: Array<{ epoch: number; ts: number; status?: number | null; failure?: unknown }>; epoch?: number; createFails?: boolean; callFailsOnce?: boolean }) {
+function setup(options: { probes: Raw[]; network?: Array<{ epoch: number; ts: number; status?: number | null; failure?: unknown }>; epoch?: number; createFails?: boolean; callFailsOnce?: boolean; hangFrom?: number; sleepImpl?: (ms: number, signal: AbortSignal) => Promise<void> }) {
   let clock = 10_000;
   let epoch = options.epoch ?? 1;
   const queue = [...options.probes];
   let callFailed = false;
+  let calls = 0;
   const sleeps: number[] = [];
   const sleep = vi.fn(async (ms: number, signal: AbortSignal): Promise<void> => {
+    if (options.sleepImpl !== undefined) return options.sleepImpl(ms, signal);
     if (signal.aborted) throw signal.reason;
     sleeps.push(ms);
     clock += ms;
@@ -36,6 +38,8 @@ function setup(options: { probes: Raw[]; network?: Array<{ epoch: number; ts: nu
       return { executionContextId: 40 + send.mock.calls.filter(([, name]) => name === 'Page.createIsolatedWorld').length };
     }
     if (method === 'Runtime.callFunctionOn') {
+      calls += 1;
+      if (options.hangFrom !== undefined && calls >= options.hangFrom) return new Promise<never>(() => undefined);
       if (options.callFailsOnce === true && !callFailed) {
         callFailed = true;
         throw new Error('Cannot find context with specified id');
@@ -132,12 +136,74 @@ describe('agent-settle: проба в изолированном мире и о�
     expect(t.send.mock.calls.filter(([, method]) => method === 'Page.createIsolatedWorld')).toHaveLength(2);
   });
 
-  it('обрыв signal во время сна — отказ с причиной сигнала', async () => {
-    const t = setup({ probes: [{ idle: 10 }] });
-    const abort = new AbortController();
+  it('обрыв signal до начала: отказ с причиной и при тихой странице, и при потерянной пробе', async () => {
     const reason = new Error('stopped');
+    const abort = new AbortController();
     abort.abort(reason);
-    await expect(t.settle.quiet(contents, abort.signal)).rejects.toBe(reason);
+    const quiet = setup({ probes: [{ idle: 500 }] });
+    await expect(quiet.settle.quiet(contents, abort.signal)).rejects.toBe(reason);
+    const lost = setup({ probes: [{ idle: 0 }], createFails: true });
+    await expect(lost.settle.quiet(contents, abort.signal)).rejects.toBe(reason);
+  });
+
+  it('обрыв signal ВО ВРЕМЯ сна — отказ с причиной сигнала', async () => {
+    const reason = new Error('stopped');
+    const abort = new AbortController();
+    const t = setup({
+      probes: [{ idle: 10 }],
+      sleepImpl: (_ms, signal) => new Promise<void>((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true })),
+    });
+    const quiet = t.settle.quiet(contents, abort.signal);
+    await vi.waitFor(() => expect(t.sleep).toHaveBeenCalled());
+    abort.abort(reason);
+    await expect(quiet).rejects.toBe(reason);
+  });
+
+  it('обрыв signal ВО ВРЕМЯ вызова пробы, который не завершается — отказ с причиной, без ожидания срока', async () => {
+    const reason = new Error('stopped');
+    const abort = new AbortController();
+    const t = setup({ probes: [{ idle: 0 }], hangFrom: 1 });
+    const quiet = t.settle.quiet(contents, abort.signal);
+    await vi.waitFor(() => expect(t.send.mock.calls.some(([, method]) => method === 'Runtime.callFunctionOn')).toBe(true));
+    abort.abort(reason);
+    await expect(quiet).rejects.toBe(reason);
+  });
+
+  it('проба не отвечает: ожидание не длиннее остатка settleCapMs; последняя полученная проба или null', async () => {
+    vi.useFakeTimers();
+    try {
+      const lost = setup({ probes: [{ idle: 0 }], hangFrom: 1 });
+      const first = lost.settle.quiet(contents, new AbortController().signal);
+      await vi.advanceTimersByTimeAsync(AGENT_LIMITS.settleCapMs);
+      await expect(first).resolves.toBeNull();
+      const partial = setup({ probes: [{ n: 4, idle: 10 }], hangFrom: 2 });
+      const second = partial.settle.quiet(contents, new AbortController().signal);
+      await vi.advanceTimersByTimeAsync(AGENT_LIMITS.settleCapMs);
+      await expect(second).resolves.toMatchObject({ n: 4, idle: 10 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('без sleep в зависимостях работает своё ожидание: цикл идёт и заканчивается по потолку', async () => {
+    vi.useFakeTimers();
+    try {
+      let clock = 0;
+      const send = vi.fn(async (_id: number, method: string): Promise<unknown> => {
+        if (method === 'Page.getFrameTree') return { frameTree: { frame: { id: 'f' } } };
+        if (method === 'Page.createIsolatedWorld') return { executionContextId: 1 };
+        return { result: { value: { n: 0, idle: 10, ready: 'complete' } } };
+      });
+      const settle = createAgentSettle({ inspector: { send, snapshot: () => null } as never, now: () => clock });
+      const quiet = settle.quiet(contents, new AbortController().signal);
+      for (let step = 0; step < 100; step += 1) {
+        clock += 50;
+        await vi.advanceTimersByTimeAsync(50);
+      }
+      await expect(quiet).resolves.toMatchObject({ idle: 10 });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

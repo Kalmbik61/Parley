@@ -31,6 +31,52 @@ export interface PageProbe {
   world: number;
 }
 
+/**
+ * Сон с обрывом по `signal`. Свой, а не `sleep` из `agent-actions.ts`: тот модуль импортирует `changeOf` отсюда, и
+ * общий импорт замкнул бы модули по кругу.
+ */
+function waitFor(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(signal.reason);
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      reject(signal.reason);
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+const TIMEOUT = Symbol('timeout');
+
+/** Ждёт `work` не дольше `ms`; срок вышел — `TIMEOUT`, обрыв `signal` — отказ с его причиной. */
+function bounded<T>(work: Promise<T>, ms: number, signal: AbortSignal): Promise<T | typeof TIMEOUT> {
+  return new Promise((resolve, reject) => {
+    let done = false;
+    const finish = (action: () => void): void => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      signal.removeEventListener('abort', onAbort);
+      action();
+    };
+    const onAbort = (): void => finish(() => reject(signal.reason));
+    const timer = setTimeout(() => finish(() => resolve(TIMEOUT)), Math.max(0, ms));
+    timer.unref();
+    signal.addEventListener('abort', onAbort, { once: true });
+    work.then(
+      (value) => finish(() => resolve(value)),
+      (error: unknown) => finish(() => reject(error)),
+    );
+  });
+}
+
 export interface AgentSettle {
   /** Проба документа; `null` — мира нет и создать не вышло. Не бросает. */
   probe(contents: WebContents): Promise<PageProbe | null>;
@@ -48,12 +94,11 @@ interface World {
 export function createAgentSettle(deps: {
   inspector: Pick<Inspector, 'send' | 'snapshot'>;
   now?(): number;
-  /** Сон с обрывом по `signal` (`sleep` из `agent-actions.ts`): сюда не импортируется, чтобы модули не ссылались друг на друга по кругу. */
-  sleep(ms: number, signal: AbortSignal): Promise<void>;
+  sleep?(ms: number, signal: AbortSignal): Promise<void>;
 }): AgentSettle {
   const { inspector } = deps;
   const now = deps.now ?? Date.now;
-  const { sleep } = deps;
+  const sleep = deps.sleep ?? waitFor;
   const worlds = new Map<number, World>();
   let serial = 0;
 
@@ -108,11 +153,19 @@ export function createAgentSettle(deps: {
     probe,
     async quiet(contents, signal) {
       const started = now();
+      const leftMs = (): number => AGENT_LIMITS.settleCapMs - (now() - started);
+      /** Последняя полученная проба: срок вышел посреди вызова — отдаём её. */
+      let last: PageProbe | null = null;
       for (;;) {
-        const last = await probe(contents);
-        if (last === null) return null;
+        // Обрыв — отказ с причиной на любом пути, в том числе при тихой странице и потерянной пробе.
+        signal.throwIfAborted();
+        const got = await bounded(probe(contents), leftMs(), signal);
+        signal.throwIfAborted();
+        if (got === TIMEOUT) return last;
+        if (got === null) return null;
+        last = got;
         if (last.ready !== 'loading' && last.idle >= AGENT_LIMITS.settleQuietMs && !requestsInFlight(contents.id)) return last;
-        const left = AGENT_LIMITS.settleCapMs - (now() - started);
+        const left = leftMs();
         if (left <= 0) return last;
         await sleep(Math.min(Math.max(MIN_STEP_MS, AGENT_LIMITS.settleQuietMs - last.idle), left), signal);
       }
