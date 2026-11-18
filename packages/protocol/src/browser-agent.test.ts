@@ -29,10 +29,11 @@ describe('канал агента к браузеру: константы (сп�
     expect(BROWSER_AGENT_OPS).toEqual(['tabs', 'console', 'network', 'screenshot', 'open', 'navigate', 'snapshot', 'action', 'wait_for', 'resize', 'evaluate', 'cookies', 'storage', 'downloads', 'close']);
   });
 
-  it('одиннадцать кодов: девять прежних, human_busy и stale_ref (спека 5.1)', () => {
+  it('двенадцать кодов: одиннадцать прежних и covered (спека 5.1, этап точности 1)', () => {
     expect([...BROWSER_AGENT_ERROR_CODES].sort()).toEqual([
       'access_denied',
       'bad_request',
+      'covered',
       'human_busy',
       'no_tab',
       'not_loopback',
@@ -71,6 +72,13 @@ describe('канал агента к браузеру: константы (сп�
       snapshotBytes: 51_200,
       guardTailMs: 2_000,
       settleMs: 300,
+      settleQuietMs: 100,
+      settleCapMs: 1_000,
+      settleFreshRequestMs: 1_500,
+      steps: 10,
+      stepReserveMs: 3_000,
+      frames: 20,
+      frameDepth: 3,
       pollMs: 500,
       resizeMs: 2_000,
       clickDotMs: 600,
@@ -273,6 +281,39 @@ describe('операции управления (этап D)', () => {
       { tab: 't1', action: 'click', x: -1, y: 0 },
       { tab: 't1', action: 'scroll', direction: 'down', amount: 0 },
     ]);
+  });
+
+  it('action: список steps — до 10 шагов, snapshot; поля шага проверяются теми же правилами, что одиночное действие', () => {
+    const step = { action: 'click', ref: 'e1' };
+    for (const args of [
+      { tab: 't1', steps: [step] },
+      { tab: 't1', steps: Array.from({ length: 10 }, () => step), snapshot: 'interactive' },
+      { tab: 't1', steps: [{ action: 'type', ref: 'e2', text: 'Ann' }, { action: 'press', key: 'Enter' }], snapshot: 'full' },
+      { tab: 't1', action: 'click', ref: 'e1', snapshot: 'full' },
+    ]) {
+      expect(ok('action', args), JSON.stringify(args).slice(0, 80)).toBe(true);
+    }
+    bad('action', [
+      { tab: 't1', steps: [] },
+      { tab: 't1', steps: Array.from({ length: 11 }, () => step) },
+      { tab: 't1', steps: [{ action: 'type' }] },
+      { tab: 't1', steps: [{ action: 'click' }] },
+      { tab: 't1', steps: [{ tab: 't1', action: 'click', ref: 'e1' }] },
+      { tab: 't1', steps: [step], snapshot: 'none' },
+    ]);
+  });
+
+  it('action и steps: отказы называют причину теми же словами', () => {
+    const messages = (args: unknown): string[] => {
+      const parsed = browserAgentArgs.action.safeParse(args);
+      return parsed.success ? [] : parsed.error.issues.map((issue) => issue.message);
+    };
+    expect(messages({ tab: 't1', action: 'click', ref: 'e1', steps: [{ action: 'click', ref: 'e1' }] })).toEqual(['Pass action or steps, not both.']);
+    expect(messages({ tab: 't1' })).toEqual(['Pass action or steps.']);
+    expect(messages({ tab: 't1', snapshot: 'full' })).toEqual(['Pass action or steps.']);
+    expect(messages({ tab: 't1', ref: 'e1', steps: [{ action: 'click', ref: 'e1' }] })).toEqual(['With steps, put ref, text and the other fields inside each step.']);
+    expect(messages({ tab: 't1', steps: [{ action: 'type' }] })).toEqual(['type needs text.']);
+    expect(messages({ tab: 't1', action: 'type' })).toEqual(['type needs text.']);
   });
 
   it('wait_for: ровно одно из text, gone, ms; ms до 10 000', () => {

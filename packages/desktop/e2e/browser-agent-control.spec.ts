@@ -85,6 +85,58 @@ console.error('token=SECRET5');
 fetch('/api/me?access_token=SECRET6').catch(() => {});
 </script>`;
 
+/** Кнопка под фиксированным слоем `role="dialog"` с кнопкой закрытия: клик по кнопке под слоем должен получить отказ `covered`. */
+const COVER_HTML = `<!doctype html><meta name="viewport" content="width=device-width, initial-scale=1"><title>Cover page</title><h1>Cover page</h1>
+<button id="target">Target</button><div id="clicks">0</div>
+<div id="layer" role="dialog" aria-label="Cookie consent" style="position:fixed;inset:0;z-index:10;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center">
+<button id="close">Close layer</button></div>
+<script>
+document.getElementById('target').addEventListener('click', () => { const out = document.getElementById('clicks'); out.textContent = String(Number(out.textContent) + 1); });
+document.getElementById('close').addEventListener('click', () => { document.getElementById('layer').remove(); });
+</script>`;
+
+/**
+ * Три действия с разным следом на странице: кнопка с отложенным `fetch` (запрос отвечает через 400 мс, текст дописывается
+ * через 150 мс после его начала, пока запрос ещё в полёте: без ожидания сети затишье зачлось бы раньше и ответ был бы `none`),
+ * кнопка без обработчика и ссылка на вторую страницу.
+ */
+const CHANGE_HTML = `<!doctype html><meta name="viewport" content="width=device-width, initial-scale=1"><title>Change page</title><h1>Change page</h1>
+<button id="slow">Slow update</button><div id="out"></div>
+<button id="noop">No effect</button>
+<a id="go" href="/next">Go next</a>
+<script>
+document.getElementById('slow').addEventListener('click', () => {
+  fetch('/slow');
+  setTimeout(() => { document.getElementById('out').textContent = 'Later'; }, 150);
+});
+</script>`;
+
+/** Форма из трёх полей и кнопки: список шагов `browser_action` заполняет её одним вызовом. */
+const STEPS_HTML = `<!doctype html><meta name="viewport" content="width=device-width, initial-scale=1"><title>Steps page</title><h1>Steps page</h1>
+<label>First <input id="f1" aria-label="First" autocomplete="off"></label>
+<label>Second <input id="f2" aria-label="Second" autocomplete="off"></label>
+<label>Third <input id="f3" aria-label="Third" autocomplete="off"></label>
+<button id="send">Send</button><div id="status"></div>
+<script>
+document.getElementById('send').addEventListener('click', () => {
+  document.getElementById('status').textContent = 'Sent ' + ['f1', 'f2', 'f3'].map((id) => document.getElementById(id).value).join(',');
+});
+</script>`;
+
+/** Форма в `<iframe>` того же origin: поле `Card` и кнопка `Pay` живут только во фрейме. */
+const FRAME_FORM_HTML = `<!doctype html><meta name="viewport" content="width=device-width, initial-scale=1"><title>Frame form</title>
+<label>Card <input id="card" aria-label="Card" autocomplete="off"></label>
+<button id="pay">Pay</button><div id="status"></div>
+<script>
+document.getElementById('pay').addEventListener('click', () => {
+  document.getElementById('status').textContent = 'Paid ' + document.getElementById('card').value;
+});
+</script>`;
+
+/** Кнопка во фрейме другого сайта: в точке (20, 20) фрейма, клик виден серверу запросом `/frame-click`. */
+const FRAME_BUTTON_HTML = `<!doctype html><title>Frame button</title>
+<button id="go" style="position:absolute;left:20px;top:20px;width:100px;height:40px" onclick="fetch('/frame-click')">Go</button>`;
+
 test.describe('агент управляет страницами браузера чата и комнаты (этап D, 22a)', () => {
   test.setTimeout(150_000);
   let home: string;
@@ -92,17 +144,42 @@ test.describe('агент управляет страницами браузер
   let server: Server;
   let origin: string;
   let mcpLog: string;
+  /** Сколько раз кнопка фрейма другого сайта дошла до сервера. */
+  let frameClicks = 0;
   let app: ElectronApplication | null = null;
 
   test.beforeEach(async () => {
     home = await makeTempHome('browser-agent-control');
     project = await makeTempProject('browser-agent-control');
     mcpLog = path.join(home, 'mcp.jsonl');
+    frameClicks = 0;
     await writeFile(path.join(project, 'PARLEY.md'), 'E2E project rules.\n');
     server = createServer((req, res) => {
       const url = req.url ?? '/';
       if (url.startsWith('/api/me')) {
         res.writeHead(401, { 'content-type': 'application/json' }).end('{"error":"no session"}');
+      } else if (url.startsWith('/slow')) {
+        setTimeout(() => res.writeHead(200, { 'content-type': 'text/plain' }).end('ok'), 400);
+      } else if (url.startsWith('/frame-form')) {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(FRAME_FORM_HTML);
+      } else if (url.startsWith('/frame-click')) {
+        frameClicks += 1;
+        res.writeHead(200, { 'content-type': 'text/plain' }).end('ok');
+      } else if (url.startsWith('/frame-button')) {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(FRAME_BUTTON_HTML);
+      } else if (url.startsWith('/frames-cross')) {
+        // `localhost` — другой сайт относительно `127.0.0.1`: фрейм другого процесса.
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(
+          `<!doctype html><title>Cross frame</title><h1>Cross frame</h1><iframe title="Other site" style="position:absolute;left:100px;top:200px;width:300px;height:200px;border:0" src="${origin.replace('127.0.0.1', 'localhost')}/frame-button"></iframe>`,
+        );
+      } else if (url.startsWith('/frames')) {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end('<!doctype html><title>Same frame</title><h1>Same frame</h1><iframe title="Payment" style="width:400px;height:200px" src="/frame-form"></iframe>');
+      } else if (url.startsWith('/steps')) {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(STEPS_HTML);
+      } else if (url.startsWith('/cover')) {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(COVER_HTML);
+      } else if (url.startsWith('/change')) {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(CHANGE_HTML);
       } else if (url.startsWith('/next')) {
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end('<!doctype html><title>Next page</title><h1>Next page</h1>');
       } else {
@@ -209,6 +286,17 @@ test.describe('агент управляет страницами браузер
     return ref as string;
   }
 
+  /** Ссылки `eN` из ОДНОГО снимка: роль и имя → ссылка; нет такой строки в снимке — тест падает с текстом снимка. */
+  async function refsOf(opened: Opened, session: string, tab: string, wanted: Array<[role: string, name: string]>): Promise<string[]> {
+    const snapshot = await agentTool(opened, session, 'browser_snapshot', { tab, interactiveOnly: true });
+    expect(snapshot.isError, snapshot.text).toBe(false);
+    return wanted.map(([role, name]) => {
+      const ref = new RegExp(`\\[ref=(e\\d+)\\] ${role} "${name}"`).exec(snapshot.text)?.[1];
+      expect(ref, snapshot.text).toBeDefined();
+      return ref as string;
+    });
+  }
+
   /** Всё, что агент менять не вправе: активные вкладки окна, фокус клавиатуры и фокус окна. */
   async function humanState(window: Page): Promise<{ tabs: string[]; focus: string; windowFocused: boolean }> {
     return window.evaluate(() => {
@@ -263,6 +351,154 @@ test.describe('агент управляет страницами браузер
       .toContain('/api/me');
     expect(network).not.toContain('SECRET6');
     expect(network).toContain('<redacted>');
+  });
+
+  test('перекрытая цель: клик отказан кодом covered и страница его не получила; после закрытия слоя тот же клик проходит', async () => {
+    const opened = await openApp();
+    const { window, lead, electronApp } = opened;
+    const url = `${origin}/cover`;
+    const tab = await openPage(opened, lead, { url, own: true });
+    await showPanel(window, lead);
+    const clicks = (): Promise<string | null> => guestEval<string>(electronApp, url, "document.getElementById('clicks').textContent");
+
+    const target = await refOf(opened, lead, tab, 'button', 'Target');
+    const refused = await agentTool(opened, lead, 'browser_action', { tab, action: 'click', ref: target });
+    expect(refused.isError, refused.text).toBe(true);
+    expect(refused.text.startsWith('covered:'), refused.text).toBe(true);
+    expect(await clicks()).toBe('0');
+
+    const close = await refOf(opened, lead, tab, 'button', 'Close layer');
+    const closed = await agentTool(opened, lead, 'browser_action', { tab, action: 'click', ref: close });
+    expect(closed.isError, closed.text).toBe(false);
+    const passed = await agentTool(opened, lead, 'browser_action', { tab, action: 'click', ref: target });
+    expect(passed.isError, passed.text).toBe(false);
+    expect(await clicks()).toBe('1');
+  });
+
+  test('строка изменения: отложенный fetch — The page changed., кнопка без обработчика — Nothing changed, ссылка — The page navigated', async () => {
+    const opened = await openApp();
+    const { window, lead } = opened;
+    const tab = await openPage(opened, lead, { url: `${origin}/change`, own: true });
+    await showPanel(window, lead);
+
+    const slow = await refOf(opened, lead, tab, 'button', 'Slow update');
+    const changed = await agentTool(opened, lead, 'browser_action', { tab, action: 'click', ref: slow });
+    expect(changed.isError, changed.text).toBe(false);
+    expect(changed.text).toContain('The page changed.');
+    // Текст дописан через 150 мс, пока запрос висел: ответ дождался его, а не вернулся по первому затишью.
+    expect(await guestEval<string>(opened.electronApp, `${origin}/change`, "document.getElementById('out').textContent")).toBe('Later');
+
+    const noop = await refOf(opened, lead, tab, 'button', 'No effect');
+    const none = await agentTool(opened, lead, 'browser_action', { tab, action: 'click', ref: noop });
+    expect(none.isError, none.text).toBe(false);
+    expect(none.text).toContain('Nothing changed on the page');
+
+    const go = await refOf(opened, lead, tab, 'link', 'Go next');
+    const navigated = await agentTool(opened, lead, 'browser_action', { tab, action: 'click', ref: go });
+    expect(navigated.isError, navigated.text).toBe(false);
+    expect(navigated.text).toContain('The page navigated');
+  });
+
+  test('форма одним вызовом: три type и click по ссылкам из одного снимка, snapshot — в том же ответе', async () => {
+    const opened = await openApp();
+    const { window, lead, electronApp } = opened;
+    const url = `${origin}/steps`;
+    const tab = await openPage(opened, lead, { url, own: true });
+    await showPanel(window, lead);
+    const [first, second, third, send] = (await refsOf(opened, lead, tab, [['textbox', 'First'], ['textbox', 'Second'], ['textbox', 'Third'], ['button', 'Send']])) as [string, string, string, string];
+    const actionsBefore = (await readLines<McpResult>(mcpLog)).filter((entry) => entry.tool === 'browser_action').length;
+
+    const answer = await agentTool(opened, lead, 'browser_action', {
+      tab,
+      steps: [
+        { action: 'type', ref: first, text: 'ann' },
+        { action: 'type', ref: second, text: 'bob' },
+        { action: 'type', ref: third, text: 'cat' },
+        { action: 'click', ref: send },
+      ],
+      snapshot: 'interactive',
+    });
+    expect(answer.isError, answer.text).toBe(false);
+    // Ровно один вызов browser_action на всю форму.
+    expect((await readLines<McpResult>(mcpLog)).filter((entry) => entry.tool === 'browser_action')).toHaveLength(actionsBefore + 1);
+    for (const index of [1, 2, 3, 4]) expect(answer.text, `step ${index}`).toMatch(new RegExp(`^${index}\\. `, 'm'));
+    expect(answer.text).toContain('New snapshot:');
+    expect(await guestEval<string>(electronApp, url, "document.getElementById('f1').value")).toBe('ann');
+    expect(await guestEval<string>(electronApp, url, "document.getElementById('f2').value")).toBe('bob');
+    expect(await guestEval<string>(electronApp, url, "document.getElementById('f3').value")).toBe('cat');
+    expect(await guestEval<string>(electronApp, url, "document.getElementById('status').textContent")).toBe('Sent ann,bob,cat');
+  });
+
+  test('список останавливается на устаревшей ссылке: шаг 1 выполнен, Step 2 failed: stale_ref, Not run: 3., третье поле пустое', async () => {
+    const opened = await openApp();
+    const { window, lead, electronApp } = opened;
+    const url = `${origin}/steps`;
+    const tab = await openPage(opened, lead, { url, own: true });
+    await showPanel(window, lead);
+    const [first, third] = (await refsOf(opened, lead, tab, [['textbox', 'First'], ['textbox', 'Third']])) as [string, string];
+
+    const answer = await agentTool(opened, lead, 'browser_action', {
+      tab,
+      steps: [
+        { action: 'type', ref: first, text: 'ann' },
+        { action: 'type', ref: 'e9999', text: 'bob' },
+        { action: 'type', ref: third, text: 'cat' },
+      ],
+    });
+    expect(answer.isError, answer.text).toBe(false);
+    expect(answer.text).toMatch(/^1\. Typed 3 characters into /);
+    expect(answer.text).toContain('Step 2 failed: stale_ref');
+    expect(answer.text).toContain('Not run: 3.');
+    expect(await guestEval<string>(electronApp, url, "document.getElementById('f1').value")).toBe('ann');
+    expect(await guestEval<string>(electronApp, url, "document.getElementById('f3').value")).toBe('');
+  });
+
+  test('форма во фрейме того же сайта: ссылки под строкой iframe из одного снимка, type и click меняют страницу фрейма', async () => {
+    const opened = await openApp();
+    const { window, lead, electronApp } = opened;
+    const url = `${origin}/frames`;
+    const tab = await openPage(opened, lead, { url, own: true });
+    await showPanel(window, lead);
+    const snapshot = await agentTool(opened, lead, 'browser_snapshot', { tab, interactiveOnly: false });
+    expect(snapshot.isError, snapshot.text).toBe(false);
+    expect(snapshot.text).not.toContain('content not available');
+    const lines = snapshot.text.split('\n');
+    const frameAt = lines.findIndex((line) => /\[ref=e\d+\] iframe "Payment"/.test(line));
+    expect(frameAt, snapshot.text).toBeGreaterThanOrEqual(0);
+    const indentOf = (line: string): number => line.length - line.trimStart().length;
+    const card = lines.findIndex((line) => /\[ref=e\d+\] textbox "Card"/.test(line));
+    expect(card, snapshot.text).toBeGreaterThan(frameAt);
+    expect(indentOf(lines[card] as string)).toBeGreaterThan(indentOf(lines[frameAt] as string));
+    const refOfLine = (pattern: RegExp): string => {
+      const ref = pattern.exec(snapshot.text)?.[1];
+      expect(ref, snapshot.text).toBeDefined();
+      return ref as string;
+    };
+    const cardRef = refOfLine(/\[ref=(e\d+)\] textbox "Card"/);
+    const payRef = refOfLine(/\[ref=(e\d+)\] button "Pay"/);
+
+    const typed = await agentTool(opened, lead, 'browser_action', { tab, action: 'type', ref: cardRef, text: '4242' });
+    expect(typed.isError, typed.text).toBe(false);
+    const clicked = await agentTool(opened, lead, 'browser_action', { tab, action: 'click', ref: payRef });
+    expect(clicked.isError, clicked.text).toBe(false);
+    const status = await guestEval<string>(electronApp, url, "document.querySelector('iframe').contentDocument.getElementById('status').textContent");
+    expect(status).toBe('Paid 4242');
+  });
+
+  test('фрейм другого сайта: в снимке строка с пометкой, клик по x, y внутри фрейма доходит до его кнопки', async () => {
+    const opened = await openApp();
+    const { window, lead } = opened;
+    const tab = await openPage(opened, lead, { url: `${origin}/frames-cross`, own: true });
+    await showPanel(window, lead);
+    const snapshot = await agentTool(opened, lead, 'browser_snapshot', { tab, interactiveOnly: false });
+    expect(snapshot.isError, snapshot.text).toBe(false);
+    expect(snapshot.text).toContain('iframe "Other site" (content not available: another site)');
+    expect(snapshot.text).not.toContain('button "Go"');
+
+    // Рамка фрейма начинается в (100, 200); кнопка внутри — (20, 20) размером 100×40: центр (170, 240) во вьюпорте страницы.
+    const clicked = await agentTool(opened, lead, 'browser_action', { tab, action: 'click', x: 170, y: 240 });
+    expect(clicked.isError, clicked.text).toBe(false);
+    await expect.poll(() => frameClicks, { timeout: 10_000 }).toBe(1);
   });
 
   test('ввод агента не попадает в поле человека и не трогает окно (Фокус ревью 1)', async () => {

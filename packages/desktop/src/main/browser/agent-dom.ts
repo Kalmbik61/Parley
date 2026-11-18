@@ -12,7 +12,7 @@ import { AgentOpError } from './agent-errors.js';
 import type { PageRecord } from './agent-pages.js';
 import { urlForAgent } from './agent-url.js';
 import { axHasText, axSnapshot, axState } from './ax-snapshot.js';
-import type { AxNode } from './ax-snapshot.js';
+import type { AxFrames, AxNode } from './ax-snapshot.js';
 import type { Inspector } from './inspector.js';
 
 export interface AgentDom {
@@ -24,6 +24,12 @@ export interface AgentDom {
   boxOf(contents: WebContents, backendNodeId: number): Promise<{ x: number; y: number; width: number; height: number }>;
   waitFor(contents: WebContents, record: PageRecord, args: BrowserAgentArgs<'wait_for'>, signal: AbortSignal): Promise<BrowserAgentWaitResult>;
   checkedOf(contents: WebContents, backendNodeId: number): Promise<boolean | 'mixed' | null>;
+}
+
+/** Дерево фреймов `Page.getFrameTree` — нужные поля. */
+interface FrameTree {
+  frame?: { id?: string };
+  childFrames?: FrameTree[];
 }
 
 const STALE = (what: string): AgentOpError =>
@@ -47,11 +53,50 @@ export function createAgentDom(deps: { inspector: Pick<Inspector, 'send' | 'snap
   const epochOf = (contents: WebContents): number => inspector.snapshot(contents.id)?.epoch ?? 0;
 
   /** Включение перед каждым деревом: Select выключает Accessibility, отладчик переподключается на навигации (рецензия m5). */
-  async function treeOf(contents: WebContents): Promise<AxNode[]> {
+  async function treeOf(contents: WebContents): Promise<{ nodes: AxNode[]; frames: AxFrames }> {
     await inspector.send(contents.id, 'DOM.enable');
     await inspector.send(contents.id, 'Accessibility.enable');
     const { nodes } = await inspector.send<{ nodes?: AxNode[] }>(contents.id, 'Accessibility.getFullAXTree');
-    return nodes ?? [];
+    return { nodes: nodes ?? [], frames: await framesOf(contents) };
+  }
+
+  /**
+   * Деревья дочерних фреймов: обход `Page.getFrameTree` в глубину до `frameDepth` и не больше `frames` штук; на каждый — владелец
+   * (`DOM.getFrameOwner`) и дерево (`Accessibility.getFullAXTree` по `frameId`) параллельно. Отказ любой из двух команд — фрейма
+   * в карте нет, его строка получит пометку. У фреймов того же процесса `backendNodeId` общий с главным документом.
+   */
+  async function framesOf(contents: WebContents): Promise<AxFrames> {
+    const frames = new Map<number, AxNode[]>();
+    let root: FrameTree | undefined;
+    try {
+      root = (await inspector.send<{ frameTree?: FrameTree }>(contents.id, 'Page.getFrameTree')).frameTree;
+    } catch {
+      return frames;
+    }
+    const ids: string[] = [];
+    const collect = (tree: FrameTree, level: number): void => {
+      for (const child of tree.childFrames ?? []) {
+        if (ids.length >= AGENT_LIMITS.frames || level > AGENT_LIMITS.frameDepth) return;
+        const id = child.frame?.id;
+        if (typeof id === 'string') ids.push(id);
+        collect(child, level + 1);
+      }
+    };
+    if (root !== undefined) collect(root, 1);
+    await Promise.all(
+      ids.map(async (frameId) => {
+        try {
+          const [owner, tree] = await Promise.all([
+            inspector.send<{ backendNodeId?: number }>(contents.id, 'DOM.getFrameOwner', { frameId }),
+            inspector.send<{ nodes?: AxNode[] }>(contents.id, 'Accessibility.getFullAXTree', { frameId }),
+          ]);
+          if (typeof owner.backendNodeId === 'number' && tree.nodes !== undefined) frames.set(owner.backendNodeId, tree.nodes);
+        } catch {
+          // Фрейм без владельца или дерева остаётся вне карты.
+        }
+      }),
+    );
+    return frames;
   }
 
   async function boxModel(contents: WebContents, backendNodeId: number): Promise<{ x: number; y: number; width: number; height: number }> {
@@ -67,8 +112,8 @@ export function createAgentDom(deps: { inspector: Pick<Inspector, 'send' | 'snap
     async snapshotOf(contents, record, args) {
       // Эпоха — до дерева: документ, сменившийся, пока дерево снималось, делает ссылки снимка устаревшими сразу.
       const epoch = epochOf(contents);
-      const nodes = await treeOf(contents);
-      const snap = axSnapshot(nodes, { interactiveOnly: args.interactiveOnly ?? false, limitBytes: AGENT_LIMITS.snapshotBytes });
+      const { nodes, frames } = await treeOf(contents);
+      const snap = axSnapshot(nodes, { interactiveOnly: args.interactiveOnly ?? false, limitBytes: AGENT_LIMITS.snapshotBytes, frames });
       maps.set(keyOf(record), { epoch, refs: snap.refs });
       return { tab: args.tab, url: urlForAgent(contents.getURL()), text: snap.text, refs: snap.refs.size, truncated: snap.truncated };
     },
@@ -89,7 +134,8 @@ export function createAgentDom(deps: { inspector: Pick<Inspector, 'send' | 'snap
     },
     boxOf: boxModel,
     async checkedOf(contents, backendNodeId) {
-      return axState(await treeOf(contents), backendNodeId, 'checked');
+      const { nodes, frames } = await treeOf(contents);
+      return axState(nodes, backendNodeId, 'checked', frames);
     },
     async waitFor(contents, record, args, signal) {
       const started = now();
@@ -102,7 +148,8 @@ export function createAgentDom(deps: { inspector: Pick<Inspector, 'send' | 'snap
       const result = (outcome: BrowserAgentWaitResult['outcome']): BrowserAgentWaitResult => ({ tab: args.tab, url: urlForAgent(contents.getURL()), outcome, ms: elapsed() });
       for (;;) {
         signal.throwIfAborted();
-        const present = axHasText(await treeOf(contents), (args.text ?? args.gone) as string);
+        const { nodes, frames } = await treeOf(contents);
+        const present = axHasText(nodes, (args.text ?? args.gone) as string, frames);
         if (args.text !== undefined && present) return result('found');
         if (args.gone !== undefined && !present) return result('gone');
         const left = limit - elapsed();

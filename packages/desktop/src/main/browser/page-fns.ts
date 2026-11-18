@@ -35,5 +35,51 @@ export const SELECT_OPTION_FN = `function (wanted) {
   return { ok: true, label: (list[found].textContent || '').trim() };
 }`;
 
+/**
+ * `this` — цель клика; `recenter` — сначала прокрутить цель в середину вьюпорта. Спрашивает у своего документа (сквозь
+ * открытые теневые корни), какой элемент лежит в центре рамки цели. Не перекрыта: сама цель, её потомок или предок,
+ * `<label>` её поля, рамка нулевого размера, точка вне страницы. Ответ: `{ covered: false }` или
+ * `{ covered: true, by }` — тег, роль и первые 60 знаков текста верхнего элемента (данные страницы).
+ */
+export const HIT_TEST_FN = `function (recenter) {
+  var el = this;
+  if (!el || el.nodeType !== 1) return { covered: false };
+  if (recenter) el.scrollIntoView({ block: 'center', inline: 'center' });
+  var rect = el.getBoundingClientRect();
+  if (rect.width === 0 || rect.height === 0) return { covered: false };
+  var x = rect.left + rect.width / 2;
+  var y = rect.top + rect.height / 2;
+  var root = el.getRootNode ? el.getRootNode() : el.ownerDocument;
+  var top = root && root.elementFromPoint ? root.elementFromPoint(x, y) : el.ownerDocument.elementFromPoint(x, y);
+  if (!top) return { covered: false };
+  var node = top;
+  while (node) {
+    if (node === el) return { covered: false };
+    node = node.parentNode || node.host;
+  }
+  if (top.contains && top.contains(el)) return { covered: false };
+  var label = top.closest ? top.closest('label') : null;
+  if (label && label.control === el) return { covered: false };
+  var text = (top.getAttribute('aria-label') || top.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 60);
+  var role = top.getAttribute('role');
+  return { covered: true, by: top.tagName.toLowerCase() + (role ? '[role=' + role + ']' : '') + (text ? ' "' + text + '"' : '') };
+}`;
+
+/**
+ * Проба изменений страницы; исполняется в изолированном мире `parley-agent` (`agent-settle.ts`), `this` не нужен. Первый
+ * вызов ставит `MutationObserver` на документ, следующие только читают. Ответ: `n` — сколько изменений насчитано, `idle` —
+ * сколько мс DOM молчит, `ready` — `document.readyState`.
+ */
+export const PROBE_FN = `function () {
+  var g = globalThis;
+  var p = g.__parleyProbe;
+  if (!p) {
+    p = g.__parleyProbe = { n: 0, at: Date.now() };
+    new MutationObserver(function (list) { p.n += list.length; p.at = Date.now(); })
+      .observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
+  }
+  return { n: p.n, idle: Date.now() - p.at, ready: document.readyState };
+}`;
+
 /** Функции, которые `cdpCallAllowed` пускает в `Runtime.callFunctionOn`. */
-export const PAGE_FNS: ReadonlySet<string> = new Set([REACT_INFO_FN, SELECT_OPTION_FN]);
+export const PAGE_FNS: ReadonlySet<string> = new Set([REACT_INFO_FN, SELECT_OPTION_FN, HIT_TEST_FN, PROBE_FN]);
