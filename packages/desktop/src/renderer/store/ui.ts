@@ -27,7 +27,7 @@ export interface BacklogTakeContext {
 }
 
 /** Вкладки диалога настроек: `openSettingsDialog(section)` открывает его на нужной. */
-export type SettingsSection = 'appearance' | 'terminal' | 'agents' | 'notifications' | 'browser' | 'voice' | 'assistant' | 'providers' | 'projects' | 'remote';
+export type SettingsSection = 'appearance' | 'terminal' | 'agents' | 'notifications' | 'browser' | 'voice' | 'assistant' | 'providers' | 'projects' | 'remote' | 'about';
 
 export interface DialogsState {
   /**
