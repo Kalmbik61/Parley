@@ -30,7 +30,7 @@ export interface AxSnapshot {
 const TRANSPARENT = new Set(['generic', 'GenericContainer', 'none', 'presentation']);
 /** Узлы без строки и без обхода детей: куски текста строк и маркеры списков. */
 const SKIPPED = new Set(['InlineTextBox', 'LineBreak', 'ListMarker']);
-/** Фрейм: одна строка `iframe "<имя>"` со ссылкой, содержимое не обходится (чужой origin, решения плана). */
+/** Фрейм: строка `iframe "<имя>"` со ссылкой; содержимое — из карты `AxFrames` (фреймы того же процесса), без неё — пометка. */
 const FRAMES = new Set(['Iframe', 'iframe']);
 /** Роли, с которыми агенту есть что делать: только они (и фокусируемые) — в `interactiveOnly`. */
 const INTERACTIVE = new Set([
@@ -88,11 +88,15 @@ function secretField(node: AxNode): boolean {
   return node.value !== undefined && isSecretName(clean(node.name?.value, NAME_LIMIT));
 }
 
-export function axSnapshot(nodes: readonly AxNode[], options: { interactiveOnly: boolean; limitBytes: number }): AxSnapshot {
-  const byId = new Map(nodes.map((node) => [node.nodeId, node] as const));
+/** Деревья фреймов того же процесса: `backendDOMNodeId` элемента iframe → дерево его документа. Нет в карте — содержимое недоступно. */
+export type AxFrames = ReadonlyMap<number, readonly AxNode[]>;
+
+/** Хвост строки `iframe` без дерева: чужой сайт (отдельный процесс) или фрейм не удалось прочитать. */
+const FRAME_UNAVAILABLE = ' (content not available: another site)';
+
+export function axSnapshot(nodes: readonly AxNode[], options: { interactiveOnly: boolean; limitBytes: number; frames?: AxFrames }): AxSnapshot {
   const refs = new Map<string, number>();
   const lines: string[] = [];
-  const seen = new Set<string>();
   let bytes = 0;
   let truncated = false;
 
@@ -108,7 +112,7 @@ export function axSnapshot(nodes: readonly AxNode[], options: { interactiveOnly:
   };
 
   /** Строка узла и его ссылка; `null` — своей строки нет (дети всё равно обходятся). */
-  const entryOf = (node: AxNode, role: string, depth: number): { line: string; ref: [string, number] | null } | null => {
+  const entryOf = (node: AxNode, role: string, depth: number, hasTree: boolean): { line: string; ref: [string, number] | null } | null => {
     const name = clean(node.name?.value, NAME_LIMIT);
     const indent = options.interactiveOnly ? '' : '  '.repeat(depth);
     if (role === 'RootWebArea') return options.interactiveOnly ? null : { line: `${indent}document ${JSON.stringify(name)}`, ref: null };
@@ -120,67 +124,84 @@ export function axSnapshot(nodes: readonly AxNode[], options: { interactiveOnly:
     const states = statesOf(node);
     const line =
       `${indent}${ref === null ? '' : `[ref=${ref[0]}] `}${FRAMES.has(role) ? 'iframe' : role}${name === '' ? '' : ` ${JSON.stringify(name)}`}` +
-      `${value}${states.length === 0 ? '' : ` (${states.join(', ')})`}`;
+      `${value}${states.length === 0 ? '' : ` (${states.join(', ')})`}${FRAMES.has(role) && !hasTree ? FRAME_UNAVAILABLE : ''}`;
     return { line, ref };
   };
 
-  /** false — предел исчерпан, обход стоит. */
-  const visit = (node: AxNode, depth: number): boolean => {
-    if (seen.has(node.nodeId)) return true;
-    seen.add(node.nodeId);
-    const role = stringOf(node.role?.value);
-    if (SKIPPED.has(role)) return true;
-    let childDepth = depth;
-    if (!node.ignored && !TRANSPARENT.has(role)) {
-      const entry = entryOf(node, role, depth);
-      if (entry !== null) {
-        if (!push(entry.line)) return false;
-        if (entry.ref !== null) refs.set(entry.ref[0], entry.ref[1]);
-        childDepth = depth + 1;
+  /**
+   * Обход одного дерева: `nodeId` разных деревьев совпадают, поэтому карта узлов и `seen` — свои у каждого. Корень документа
+   * фрейма (`inFrame`) своей строки не даёт и глубину не прибавляет. false — предел исчерпан, обход стоит.
+   */
+  const visitTree = (treeNodes: readonly AxNode[], startDepth: number, inFrame: boolean): boolean => {
+    const byId = new Map(treeNodes.map((node) => [node.nodeId, node] as const));
+    const seen = new Set<string>();
+    const visit = (node: AxNode, depth: number): boolean => {
+      if (seen.has(node.nodeId)) return true;
+      seen.add(node.nodeId);
+      const role = stringOf(node.role?.value);
+      if (SKIPPED.has(role)) return true;
+      const frameTree = FRAMES.has(role) && typeof node.backendDOMNodeId === 'number' ? options.frames?.get(node.backendDOMNodeId) : undefined;
+      let childDepth = depth;
+      if (!node.ignored && !TRANSPARENT.has(role) && !(inFrame && role === 'RootWebArea' && node.parentId === undefined)) {
+        const entry = entryOf(node, role, depth, frameTree !== undefined);
+        if (entry !== null) {
+          if (!push(entry.line)) return false;
+          if (entry.ref !== null) refs.set(entry.ref[0], entry.ref[1]);
+          childDepth = depth + 1;
+        }
       }
-    }
-    if (FRAMES.has(role)) return true;
-    if (secretField(node)) return true;
-    for (const childId of node.childIds ?? []) {
-      const child = byId.get(childId);
-      if (child !== undefined && !visit(child, childDepth)) return false;
-    }
-    return true;
+      if (FRAMES.has(role)) return frameTree === undefined || visitTree(frameTree, childDepth, true);
+      if (secretField(node)) return true;
+      for (const childId of node.childIds ?? []) {
+        const child = byId.get(childId);
+        if (child !== undefined && !visit(child, childDepth)) return false;
+      }
+      return true;
+    };
+    const root = treeNodes.find((node) => node.parentId === undefined) ?? treeNodes[0];
+    return root === undefined ? true : visit(root, startDepth);
   };
 
-  const root = nodes.find((node) => node.parentId === undefined) ?? nodes[0];
-  if (root !== undefined) visit(root, 0);
+  visitTree(nodes, 0, false);
   return { text: lines.join('\n'), refs, truncated };
 }
 
 /**
- * Обход тем же правилом, что у `axSnapshot`: пропускаются `SKIPPED`, дети фреймов, дети поля с секретным именем и повторы;
- * игнорируемые узлы не отдаются, но их дети обходятся. `false` из `onNode` останавливает обход.
+ * Обход тем же правилом, что у `axSnapshot`: пропускаются `SKIPPED`, дети поля с секретным именем и повторы; у элемента
+ * iframe обход продолжается деревом его документа из `frames`. Игнорируемые узлы не отдаются, но их дети обходятся.
+ * `false` из `onNode` останавливает обход.
  */
-function walk(nodes: readonly AxNode[], onNode: (node: AxNode, role: string) => boolean | void): void {
-  const byId = new Map(nodes.map((node) => [node.nodeId, node] as const));
-  const seen = new Set<string>();
-  const visit = (node: AxNode): boolean => {
-    if (seen.has(node.nodeId)) return true;
-    seen.add(node.nodeId);
-    const role = stringOf(node.role?.value);
-    if (SKIPPED.has(role)) return true;
-    if (!node.ignored && onNode(node, role) === false) return false;
-    if (FRAMES.has(role) || secretField(node)) return true;
-    for (const childId of node.childIds ?? []) {
-      const child = byId.get(childId);
-      if (child !== undefined && !visit(child)) return false;
-    }
-    return true;
+function walk(nodes: readonly AxNode[], onNode: (node: AxNode, role: string) => boolean | void, frames?: AxFrames): void {
+  const walkTree = (treeNodes: readonly AxNode[]): boolean => {
+    const byId = new Map(treeNodes.map((node) => [node.nodeId, node] as const));
+    const seen = new Set<string>();
+    const visit = (node: AxNode): boolean => {
+      if (seen.has(node.nodeId)) return true;
+      seen.add(node.nodeId);
+      const role = stringOf(node.role?.value);
+      if (SKIPPED.has(role)) return true;
+      if (!node.ignored && onNode(node, role) === false) return false;
+      if (FRAMES.has(role)) {
+        const inner = typeof node.backendDOMNodeId === 'number' ? frames?.get(node.backendDOMNodeId) : undefined;
+        return inner === undefined || walkTree(inner);
+      }
+      if (secretField(node)) return true;
+      for (const childId of node.childIds ?? []) {
+        const child = byId.get(childId);
+        if (child !== undefined && !visit(child)) return false;
+      }
+      return true;
+    };
+    const root = treeNodes.find((node) => node.parentId === undefined) ?? treeNodes[0];
+    return root === undefined ? true : visit(root);
   };
-  const root = nodes.find((node) => node.parentId === undefined) ?? nodes[0];
-  if (root !== undefined) visit(root);
+  walkTree(nodes);
 }
 
 const squash = (value: string): string => value.replace(/\s+/g, ' ').trim().toLowerCase();
 
 /** Видимый текст: имена не игнорируемых узлов (в том числе `StaticText`) содержат `text`, без учёта регистра и пробелов. */
-export function axHasText(nodes: readonly AxNode[], text: string): boolean {
+export function axHasText(nodes: readonly AxNode[], text: string, frames?: AxFrames): boolean {
   const needle = squash(text);
   let found = false;
   walk(nodes, (node) => {
@@ -189,18 +210,18 @@ export function axHasText(nodes: readonly AxNode[], text: string): boolean {
       return false;
     }
     return undefined;
-  });
+  }, frames);
   return found;
 }
 
 /** Состояние `checked` узла по `backendNodeId`: CDP отдаёт `'true' | 'false' | 'mixed'` строкой или boolean; нет узла — `null`. */
-export function axState(nodes: readonly AxNode[], backendNodeId: number, state: 'checked'): boolean | 'mixed' | null {
+export function axState(nodes: readonly AxNode[], backendNodeId: number, state: 'checked', frames?: AxFrames): boolean | 'mixed' | null {
   let result: boolean | 'mixed' | null = null;
   walk(nodes, (node) => {
     if (node.backendDOMNodeId !== backendNodeId) return undefined;
     const value = propertyOf(node, state);
     result = value === 'mixed' ? 'mixed' : value === true || value === 'true';
     return false;
-  });
+  }, frames);
   return result;
 }

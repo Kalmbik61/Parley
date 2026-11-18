@@ -1,6 +1,6 @@
 /** Дерево доступности для агента (спека браузера 2026-10-07, 5.1, 6): строки, ссылки, маска, предел. */
 import { describe, expect, it } from 'vitest';
-import { axHasText, axSnapshot, axState, type AxNode } from './ax-snapshot.js';
+import { axHasText, axSnapshot, axState, type AxFrames, type AxNode } from './ax-snapshot.js';
 
 const NODES: AxNode[] = [
   { nodeId: '1', ignored: false, role: { value: 'RootWebArea' }, name: { value: 'Agent form' }, childIds: ['2', '3', '4', '6', '7', '9'], backendDOMNodeId: 1 },
@@ -130,5 +130,88 @@ describe('axSnapshot — расширения этапа D', () => {
     expect(axState(tri('true'), 5, 'checked')).toBe(true);
     expect(axState(tri(true), 5, 'checked')).toBe(true);
     expect(axState(NODES, 999, 'checked')).toBeNull();
+  });
+});
+
+describe('фреймы того же процесса (спека 2026-11-18, раздел 4)', () => {
+  /** Главный документ: кнопка `Open` (nodeId 2) и iframe `Pay` с owner 6. */
+  const main = (frameName = 'Pay'): AxNode[] => [
+    { nodeId: '1', ignored: false, role: { value: 'RootWebArea' }, name: { value: 'Shop' }, childIds: ['2', '3'] },
+    { nodeId: '2', parentId: '1', ignored: false, role: { value: 'button' }, name: { value: 'Open' }, backendDOMNodeId: 5 },
+    { nodeId: '3', parentId: '1', ignored: false, role: { value: 'Iframe' }, name: { value: frameName }, backendDOMNodeId: 6 },
+  ];
+  /** Документ фрейма: nodeId те же `1` и `2`, что у главного, — деревья не должны путаться. */
+  const inner = (extra: AxNode[] = [], childIds = ['2']): AxNode[] => [
+    { nodeId: '1', ignored: false, role: { value: 'RootWebArea' }, name: { value: 'Pay frame' }, childIds },
+    { nodeId: '2', parentId: '1', ignored: false, role: { value: 'button' }, name: { value: 'Pay now' }, backendDOMNodeId: 20 },
+    ...extra,
+  ];
+  const options = (frames: AxFrames | undefined, extra: { interactiveOnly?: boolean; limitBytes?: number } = {}) => ({
+    interactiveOnly: extra.interactiveOnly ?? false,
+    limitBytes: extra.limitBytes ?? 51_200,
+    ...(frames === undefined ? {} : { frames }),
+  });
+
+  it('строки фрейма — под строкой iframe, на уровень глубже; кнопка фрейма со ссылкой; строки document у фрейма нет; одинаковые nodeId не путаются', () => {
+    const snap = axSnapshot(main(), options(new Map([[6, inner()]])));
+    expect(snap.text).toBe(['document "Shop"', '  [ref=e1] button "Open"', '  [ref=e2] iframe "Pay"', '    [ref=e3] button "Pay now"'].join('\n'));
+    expect(snap.refs.get('e1')).toBe(5);
+    expect(snap.refs.get('e3')).toBe(20);
+    expect(snap.truncated).toBe(false);
+  });
+
+  it('фрейм во фрейме — два уровня отступа', () => {
+    const outer: AxNode[] = [
+      { nodeId: '1', ignored: false, role: { value: 'RootWebArea' }, name: { value: 'Outer' }, childIds: ['2'] },
+      { nodeId: '2', parentId: '1', ignored: false, role: { value: 'Iframe' }, name: { value: 'Inner' }, backendDOMNodeId: 21 },
+    ];
+    const deep: AxNode[] = [
+      { nodeId: '1', ignored: false, role: { value: 'RootWebArea' }, name: { value: 'Deep' }, childIds: ['2'] },
+      { nodeId: '2', parentId: '1', ignored: false, role: { value: 'button' }, name: { value: 'Deep button' }, backendDOMNodeId: 30 },
+    ];
+    const snap = axSnapshot(main('Outer'), options(new Map([[6, outer], [21, deep]])));
+    expect(snap.text.split('\n').slice(2)).toEqual(['  [ref=e2] iframe "Outer"', '    [ref=e3] iframe "Inner"', '      [ref=e4] button "Deep button"']);
+  });
+
+  it('фрейма нет в карте (или карты нет) — строка iframe с пометкой «another site», без строк содержимого', () => {
+    for (const frames of [new Map<number, AxNode[]>(), undefined]) {
+      const snap = axSnapshot(main(), options(frames));
+      expect(snap.text.split('\n')[2]).toBe('  [ref=e2] iframe "Pay" (content not available: another site)');
+      expect(snap.text).not.toContain('Pay now');
+    }
+  });
+
+  it('interactiveOnly: контролы фрейма — в списке, без отступов', () => {
+    const snap = axSnapshot(main(), options(new Map([[6, inner()]]), { interactiveOnly: true }));
+    expect(snap.text).toBe(['[ref=e1] button "Open"', '[ref=e2] button "Pay now"'].join('\n'));
+  });
+
+  it('поле с секретным именем во фрейме — значение <redacted>, дочерний текст не обходится', () => {
+    const field: AxNode[] = [
+      { nodeId: '3', parentId: '1', ignored: false, role: { value: 'textbox' }, name: { value: 'API key' }, value: { value: 'sk-live-123' }, childIds: ['4'], backendDOMNodeId: 22 },
+      { nodeId: '4', parentId: '3', ignored: false, role: { value: 'StaticText' }, name: { value: 'sk-live-123' } },
+    ];
+    const snap = axSnapshot(main(), options(new Map([[6, inner(field, ['2', '3'])]])));
+    expect(snap.text).toContain('textbox "API key" value=<redacted>');
+    expect(snap.text).not.toContain('sk-live-123');
+  });
+
+  it('предел байт общий: срабатывает внутри фрейма — truncated, ссылок за пределом нет', () => {
+    const frames: AxFrames = new Map([[6, inner()]]);
+    const lines = axSnapshot(main(), options(frames)).text.split('\n').slice(0, 3);
+    const limit = lines.reduce((sum, line) => sum + Buffer.byteLength(line) + 1, 0);
+    const cut = axSnapshot(main(), options(frames, { limitBytes: limit }));
+    expect(cut.truncated).toBe(true);
+    expect(cut.text).toBe(lines.join('\n'));
+    expect([...cut.refs.keys()]).toEqual(['e1', 'e2']);
+  });
+
+  it('axHasText и axState заходят во фреймы тем же правилом', () => {
+    const box: AxNode[] = [{ nodeId: '3', parentId: '1', ignored: false, role: { value: 'checkbox' }, name: { value: 'Agree' }, properties: [{ name: 'checked', value: { value: 'true' } }], backendDOMNodeId: 40 }];
+    const frames: AxFrames = new Map([[6, inner(box, ['2', '3'])]]);
+    expect(axHasText(main(), 'pay now', frames)).toBe(true);
+    expect(axHasText(main(), 'pay now')).toBe(false);
+    expect(axState(main(), 40, 'checked', frames)).toBe(true);
+    expect(axState(main(), 40, 'checked')).toBeNull();
   });
 });

@@ -77,6 +77,8 @@ describe('канал агента к браузеру: константы (сп�
       settleFreshRequestMs: 1_500,
       steps: 10,
       stepReserveMs: 3_000,
+      frames: 20,
+      frameDepth: 3,
       pollMs: 500,
       resizeMs: 2_000,
       clickDotMs: 600,

@@ -750,6 +750,7 @@ describe('команды CDP (спека 3.3)', () => {
         'DOM.describeNode',
         'DOM.disable',
         'DOM.enable',
+        'DOM.getFrameOwner',
         'DOM.getNodeForLocation',
         'DOM.resolveNode',
         'Emulation.clearDeviceMetricsOverride',
