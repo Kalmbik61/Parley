@@ -1,21 +1,21 @@
-› Create a new file p1.txt containing the word hi, using the apply_patch tool …
+  >_ OpenAI Codex (v0.166.0)
+     /work/project
 
-  Worked for 7s • 17:44
-
-
-› Create a new file p2.txt containing the word hi, using the apply_patch tool
-  only.
+⚠ Heads up, you have less than 25% of your weekly limit left. Run /status for a
+  breakdown.
 
 
-• I’ll use apply_patch to create p2.txt.
+› Create a new file p5.txt containing the word hi, using the apply_patch tool
+  only. Do not run shell commands.
 
-• Added p2.txt (+1 -0)
+
+• I’ll use apply_patch to create p5.txt.
+
+• Added p5.txt (+1 -0)
     1 +hi
     + Show details
 
-• Created p2.txt containing hi.
-
-  Worked for 6s • 17:44
+• Created [p5.txt]
                                              ⚠ weekly limit: 21% left · /status
 
 › Ask Codex to do anything

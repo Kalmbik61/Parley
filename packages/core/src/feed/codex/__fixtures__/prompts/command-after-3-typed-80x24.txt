@@ -1,14 +1,14 @@
   >_ OpenAI Codex (v0.166.0)
      /work/project
 
-⚠ Heads up, you have less than 25% of your weekly limit left. Run /status for a
-  breakdown.
-
 
 › Run exactly this shell command and nothing else: touch d1.txt
 
 
-• I’ll run the requested command.
+⚠ Heads up, you have less than 25% of your weekly limit left. Run /status for a
+  breakdown.
+
+• I’ll run the command as written.
 
 ✗ You canceled the request to run touch d1.txt
 
