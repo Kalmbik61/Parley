@@ -255,6 +255,17 @@ test.describe('агент управляет страницами браузер
     return ref as string;
   }
 
+  /** Ссылки `eN` из ОДНОГО снимка: роль и имя → ссылка; нет такой строки в снимке — тест падает с текстом снимка. */
+  async function refsOf(opened: Opened, session: string, tab: string, wanted: Array<[role: string, name: string]>): Promise<string[]> {
+    const snapshot = await agentTool(opened, session, 'browser_snapshot', { tab, interactiveOnly: true });
+    expect(snapshot.isError, snapshot.text).toBe(false);
+    return wanted.map(([role, name]) => {
+      const ref = new RegExp(`\\[ref=(e\\d+)\\] ${role} "${name}"`).exec(snapshot.text)?.[1];
+      expect(ref, snapshot.text).toBeDefined();
+      return ref as string;
+    });
+  }
+
   /** Всё, что агент менять не вправе: активные вкладки окна, фокус клавиатуры и фокус окна. */
   async function humanState(window: Page): Promise<{ tabs: string[]; focus: string; windowFocused: boolean }> {
     return window.evaluate(() => {
@@ -363,10 +374,7 @@ test.describe('агент управляет страницами браузер
     const url = `${origin}/steps`;
     const tab = await openPage(opened, lead, { url, own: true });
     await showPanel(window, lead);
-    const first = await refOf(opened, lead, tab, 'textbox', 'First');
-    const second = await refOf(opened, lead, tab, 'textbox', 'Second');
-    const third = await refOf(opened, lead, tab, 'textbox', 'Third');
-    const send = await refOf(opened, lead, tab, 'button', 'Send');
+    const [first, second, third, send] = (await refsOf(opened, lead, tab, [['textbox', 'First'], ['textbox', 'Second'], ['textbox', 'Third'], ['button', 'Send']])) as [string, string, string, string];
     const actionsBefore = (await readLines<McpResult>(mcpLog)).filter((entry) => entry.tool === 'browser_action').length;
 
     const answer = await agentTool(opened, lead, 'browser_action', {
@@ -396,8 +404,7 @@ test.describe('агент управляет страницами браузер
     const url = `${origin}/steps`;
     const tab = await openPage(opened, lead, { url, own: true });
     await showPanel(window, lead);
-    const first = await refOf(opened, lead, tab, 'textbox', 'First');
-    const third = await refOf(opened, lead, tab, 'textbox', 'Third');
+    const [first, third] = (await refsOf(opened, lead, tab, [['textbox', 'First'], ['textbox', 'Third']])) as [string, string];
 
     const answer = await agentTool(opened, lead, 'browser_action', {
       tab,
