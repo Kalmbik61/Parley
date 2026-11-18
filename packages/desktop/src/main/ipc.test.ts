@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BrowserWindow, IpcMain, Session, WebContents } from 'electron';
 import type { WorksSnapshot } from '@parley/protocol';
 import type { FeedCard, FeedItem } from '@parley/core';
+import type { AboutInfo, UpdateCheckResult } from '../shared/bridge.js';
 import { decodeIpcError, type IpcErrorInfo } from '../shared/ipc-error.js';
 import type { DevtoolsSnapshot, ResponseBody, ViewportSpec } from '../shared/browser-devtools.js';
 import { ISLAND_EVENTS } from '../shared/island.js';
@@ -21,6 +22,22 @@ import type { NotesFile } from '../shared/notes-types.js';
 import { bindWorksSyncWindow, forwardHostToPages, forwardHostToWindow, isFocusTarget, parseAgentRegistration, registerIpc, withIpcError, type RegisterIpcOptions } from './ipc.js';
 import { createRootsRegistry, FilesDeniedError, type RootsRegistry } from './roots.js';
 import type { TtsState } from './assistant/tts.js';
+
+const ABOUT_INFO: AboutInfo = {
+  version: '0.37.0',
+  commit: '2b52d262',
+  commitDate: '2026-11-17',
+  dirty: false,
+  arch: 'arm64',
+  electron: '44.0.0',
+  chrome: '140.0.0.0',
+  node: '24.0.0',
+  os: 'macOS 15.0',
+  appPath: '/Applications/Parley.app',
+  dataDir: '~/.parley',
+  updateChecks: true,
+  lastCheck: null,
+};
 
 /** Подставной `ipcMain`: сохраняет обработчики и умеет их дёргать, как настоящий `invoke`. */
 class FakeIpcMain {
@@ -133,6 +150,8 @@ function setup(
     webContents?: Map<number, unknown>;
     onUiSaved?: () => void;
     appVersion?: string | null;
+    aboutInfo?: AboutInfo;
+    checkForUpdates?: () => Promise<UpdateCheckResult>;
     isIslandSender?: (sender: unknown) => boolean;
     islandActive?: () => boolean;
     reportSessionVisibility?: (event: { sender?: unknown; senderFrame?: unknown }, value: unknown) => void;
@@ -253,6 +272,8 @@ function setup(
     installUpdate,
     takeUpdateResult,
     appVersion: overrides.appVersion === undefined ? '0.2.0-test' : overrides.appVersion,
+    aboutInfo: () => overrides.aboutInfo ?? ABOUT_INFO,
+    checkForUpdates: overrides.checkForUpdates ?? (async () => ({ kind: 'unavailable' as const })),
     ...(overrides.onUiSaved === undefined ? {} : { onUiSaved: overrides.onUiSaved }),
     ...(overrides.isIslandSender === undefined ? {} : { isIslandSender: overrides.isIslandSender }),
     ...(overrides.islandActive === undefined ? {} : { islandActive: overrides.islandActive }),
@@ -1202,6 +1223,22 @@ describe('registerIpc — app:version (хост другой сборки, 0.2.0
   it('несобранное окно (pnpm dev, E2E) — null: версия Electron там не версия Parley, сверять нечего', async () => {
     const { ipcMain } = setup({ appVersion: null });
     await expect(ipcMain.invoke('app:version')).resolves.toBeNull();
+  });
+});
+
+describe('registerIpc — app:about-info', () => {
+  it('отдаёт то, что вернула опция', async () => {
+    const info: AboutInfo = { ...ABOUT_INFO, version: null, commit: null, dirty: true };
+    const { ipcMain } = setup({ aboutInfo: info });
+    await expect(ipcMain.invoke('app:about-info')).resolves.toEqual(info);
+  });
+});
+
+describe('registerIpc — app:check-for-updates', () => {
+  it('отдаёт итог опции', async () => {
+    const result: UpdateCheckResult = { kind: 'available', latest: '0.38.0', checkedAt: 5 };
+    const { ipcMain } = setup({ checkForUpdates: async () => result });
+    await expect(ipcMain.invoke('app:check-for-updates')).resolves.toEqual(result);
   });
 });
 

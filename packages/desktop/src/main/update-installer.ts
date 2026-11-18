@@ -133,6 +133,8 @@ export interface UpdateInstaller {
   checksDisabled(): Promise<void>;
   /** Переключатель включён (или так было при старте): находки снова принимаются. */
   checksEnabled(): void;
+  /** Была ручная проверка («Check now»): находки принимаются и при выключенном переключателе. */
+  manualCheck(): void;
   /** Из `available` (с `canInstall`) и `failed` — загрузка. Из прочих — ничего. */
   download(): Promise<void>;
   /** Из `downloading` и `verifying` — отмена, `available` с последней найденной версией. */
@@ -177,8 +179,11 @@ export function createUpdateInstaller(deps: InstallerDeps): UpdateInstaller {
   let counter = 0;
   let installing = false;
   let started = false;
-  /** Переключатель «Check for updates»: пока выключен, находки не принимаются и загрузка не начинается. */
-  let enabled = true;
+  /** Переключатель «Check for updates»: пока выключен (и ручной проверки не было), находки не принимаются. */
+  let auto = true;
+  /** Была ручная проверка при выключенном переключателе. */
+  let manual = false;
+  const allowed = (): boolean => auto || manual;
   let startupResult = deps.startupResult;
 
   const setState = (next: UpdateState): void => {
@@ -309,7 +314,7 @@ export function createUpdateInstaller(deps: InstallerDeps): UpdateInstaller {
 
   const installer: UpdateInstaller = {
     async onFound(info) {
-      if (!enabled) return;
+      if (!allowed()) return;
       if (!isNewerVersion(info.version, deps.version)) return;
       latest = info;
       if (!takesFound(info)) return;
@@ -317,11 +322,19 @@ export function createUpdateInstaller(deps: InstallerDeps): UpdateInstaller {
     },
 
     checksEnabled() {
-      enabled = true;
+      auto = true;
+    },
+
+    manualCheck() {
+      manual = true;
     },
 
     async checksDisabled() {
-      enabled = false;
+      // Сохранение настроек при уже выключенном переключателе ничего не сбрасывает: идущая загрузка после
+      // ручной проверки остаётся.
+      if (!auto) return;
+      auto = false;
+      manual = false;
       latest = null;
       const wasReady = current.phase === 'ready';
       const attempt = release();
@@ -332,7 +345,7 @@ export function createUpdateInstaller(deps: InstallerDeps): UpdateInstaller {
     },
 
     async download() {
-      if (!enabled || selected !== null) return;
+      if (!allowed() || selected !== null) return;
       let info: UpdateInfo;
       if (current.phase === 'available' && current.canInstall) {
         info = { version: current.version, url: current.url };

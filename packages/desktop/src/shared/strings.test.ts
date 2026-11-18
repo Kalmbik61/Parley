@@ -155,12 +155,23 @@ describe('S.update и S.settings.checkForUpdates', () => {
   });
 
   it('переключатель: «Check for updates» и пояснение о GitHub', () => {
-    expect(S.settings.checkForUpdates).toBe('Check for updates');
+    expect(S.settings.checkForUpdates).toBe('Check for updates automatically');
     expect(S.settings.checkForUpdatesHint).toMatch(/GitHub/);
+  });
+
+  it('About: подпись раздела и строки итога на месте', () => {
+    expect(S.settings.sections.about).toBe('About');
+    expect(S.settings.about.title('0.37.0')).toBe('Parley 0.37.0');
+    expect(S.settings.about.title(null)).toBe('Parley (development build)');
+    expect(S.settings.about.build('2b52d262', '2026-11-17', 'arm64', true)).toBe('Build 2b52d262 · 2026-11-17 · arm64 · modified');
+    expect(S.settings.about.build(null, null, 'arm64', false)).toBe('Build arm64');
+    expect(S.settings.about.checkNow).toBe('Check now');
+    expect(S.settings.about.unavailable).toBe('Update checks are off in this build');
   });
 
   it('ни одного кириллического знака', () => {
     const texts = [
+      ...Object.values(S.settings.about).filter((value): value is string => typeof value === 'string'),
       S.update.available('0.2.0'),
       S.update.download,
       S.update.later,

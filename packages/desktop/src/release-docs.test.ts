@@ -42,7 +42,8 @@ describe('README, «Updates» и первый запуск: обещания с�
   const updates = flat(section('Updates'));
 
   it('называет раздел настроек так, как он написан в strings.ts', () => {
-    expect(updates).toContain(`Settings → ${S.settings.sections.notifications}`);
+    expect(updates).toContain(`Settings → ${S.settings.sections.about}`);
+    expect(updates).not.toContain(`Settings → ${S.settings.sections.notifications}`);
   });
 
   it('обновление кнопкой: «Update», затем «Restart now», обычный выход, ручное восстановление', () => {

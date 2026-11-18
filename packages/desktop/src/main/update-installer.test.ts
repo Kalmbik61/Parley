@@ -329,6 +329,30 @@ describe('SU-01: проверка выключена или новой верс�
     expect(t.installer.state().phase).toBe('ready');
   });
 
+  it('переключатель выключен: ручная проверка принимает находку, сохранение настроек её не сбрасывает', async () => {
+    const t = setup();
+    await t.installer.checksDisabled();
+    t.installer.manualCheck();
+    await t.installer.onFound(A);
+    expect(t.installer.state()).toMatchObject({ phase: 'available', version: A.version });
+    // Сохранение ui.json при выключенном переключателе (ширина сайдбара, тема).
+    await t.installer.checksDisabled();
+    expect(t.installer.state()).toMatchObject({ phase: 'available', version: A.version });
+    const pending = t.installer.download();
+    await vi.waitFor(() => expect(t.attempts).toHaveLength(1));
+    t.last().settle({ ok: true, stagedApp: '/x' });
+    await pending;
+    expect(t.installer.state().phase).toBe('ready');
+  });
+
+  it('переключатель был включён: checksDisabled сбрасывает в idle даже после ручной проверки', async () => {
+    const t = setup();
+    t.installer.manualCheck();
+    await t.installer.onFound(A);
+    await t.installer.checksDisabled();
+    expect(t.installer.state()).toEqual({ phase: 'idle' });
+  });
+
   it('F7: установщик по умолчанию включён (находки принимаются без вызова checksEnabled)', async () => {
     const t = setup();
     await t.installer.onFound(A);

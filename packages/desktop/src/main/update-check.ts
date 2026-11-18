@@ -7,6 +7,8 @@
  * Сеть — один запрос `GET releases/latest` без токенов и куки. Черновики и prerelease этот адрес не отдаёт, а
  * разбор отвергает их ещё раз. Любая беда (нет сети, 403 от лимита GitHub, 404 до первого релиза, чужой JSON,
  * ответ больше предела, таймаут 10 с) — «нового нет» и тишина: человек про неё не узнаёт.
+ * Так — у плановой проверки. Ручная («Check now», `checkNow`) отдаёт итог с причиной: «последняя версия», «нет связи»,
+ * «лимит GitHub», «ответ не годится».
  *
  * Идёт только у собранного окна (`app.isPackaged`): в разработке `app.getVersion()` — версия `package.json` ветки, и
  * каждый `pnpm dev:desktop` ходил бы на api.github.com, а на новом релизе показывал бы тост окну разработки.
@@ -16,7 +18,7 @@
  */
 
 import { envValue, type Env } from '@parley/core';
-import type { UpdateInfo } from '../shared/bridge.js';
+import type { UpdateCheckFailure, UpdateCheckResult, UpdateInfo } from '../shared/bridge.js';
 
 export const RELEASES_LATEST_URL = 'https://api.github.com/repos/Kalmbik61/Parley/releases/latest';
 export const CHECK_TIMEOUT_MS = 10_000;
@@ -154,7 +156,12 @@ async function readLimitedText(response: Response): Promise<string | null> {
   return Buffer.concat(chunks).toString('utf8');
 }
 
-async function download(fetch: UpdateFetch, signal: AbortSignal): Promise<UpdateInfo | null> {
+/** Итог запроса: релиз или причина, по которой он не годится. */
+export type LatestReleaseResult = { ok: true; info: UpdateInfo } | { ok: false; reason: UpdateCheckFailure };
+
+const failed = (reason: UpdateCheckFailure): LatestReleaseResult => ({ ok: false, reason });
+
+async function download(fetch: UpdateFetch, signal: AbortSignal): Promise<LatestReleaseResult> {
   const response = await fetch(RELEASES_LATEST_URL, {
     // GitHub требует `User-Agent`: константа без версии окна и без Chromium. `Accept-Language` стек Chromium дописал бы
     // по системной локали человека, а языка GitHub не нужно — запрос его не выдаёт.
@@ -170,33 +177,51 @@ async function download(fetch: UpdateFetch, signal: AbortSignal): Promise<Update
   if (!response.ok) {
     // Тело не читается вовсе: соединение отпускаем сразу.
     void response.body?.cancel().catch(() => {});
-    return null;
+    if (response.status === 403 || response.status === 429) return failed('rate_limited');
+    return failed(response.status === 404 ? 'bad_response' : 'network');
   }
   const text = await readLimitedText(response);
-  return text === null ? null : parseLatestRelease(JSON.parse(text));
+  if (text === null) return failed('bad_response');
+  let body: unknown;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    return failed('bad_response');
+  }
+  const info = parseLatestRelease(body);
+  return info === null ? failed('bad_response') : { ok: true, info };
 }
 
 /**
- * Последний стабильный релиз; `null` — любая неудача, исключений нет. За `timeoutMs` — гонка с таймером, а не только
+ * Последний стабильный релиз или причина неудачи; исключений нет. За `timeoutMs` — гонка с таймером, а не только
  * `AbortSignal`: `fetch`, который сигнал не слушает, всё равно не держит проверку дольше предела.
  */
+export async function fetchLatestReleaseResult(
+  fetch: UpdateFetch,
+  timeoutMs: number = CHECK_TIMEOUT_MS,
+): Promise<LatestReleaseResult> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<LatestReleaseResult>((resolve) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      resolve(failed('network'));
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([download(fetch, controller.signal).catch(() => failed('network')), timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Последний стабильный релиз; `null` — любая неудача, исключений нет. */
 export async function fetchLatestRelease(
   fetch: UpdateFetch,
   timeoutMs: number = CHECK_TIMEOUT_MS,
 ): Promise<UpdateInfo | null> {
-  const controller = new AbortController();
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<null>((resolve) => {
-    timer = setTimeout(() => {
-      controller.abort();
-      resolve(null);
-    }, timeoutMs);
-  });
-  try {
-    return await Promise.race([download(fetch, controller.signal).catch(() => null), timeout]);
-  } finally {
-    clearTimeout(timer);
-  }
+  const result = await fetchLatestReleaseResult(fetch, timeoutMs);
+  return result.ok ? result.info : null;
 }
 
 export interface UpdateChecker {
@@ -211,6 +236,14 @@ export interface UpdateChecker {
   settingsChanged(): Promise<void>;
   /** Релиз новее запущенной версии из последней удачной проверки; `null` — его нет, проверка выключена или ещё не ответила. */
   latest(): Promise<UpdateInfo | null>;
+  /**
+   * Ручная проверка («Check now»): без оглядки на `isEnabled` — это явная просьба человека. Идущая проверка не
+   * запускает вторую: повторный вызов получает тот же промис. Новее запущенной — `onUpdate`, как у плановой.
+   * Не бросает.
+   */
+  checkNow(): Promise<UpdateCheckResult>;
+  /** Итог последней проверки, ручной или плановой, дошедшей до запроса; `null` — ещё не было. */
+  lastCheck(): UpdateCheckResult | null;
 }
 
 export interface UpdateCheckerOptions {
@@ -222,15 +255,48 @@ export interface UpdateCheckerOptions {
   /** Найден релиз новее запущенной версии: окно получит его событием; позже — по запросу (`latest`). */
   onUpdate: (info: UpdateInfo) => void;
   intervalMs?: number;
+  /** Часы для `checkedAt`; по умолчанию `Date.now`. */
+  now?: () => number;
 }
 
 export function createUpdateChecker(options: UpdateCheckerOptions): UpdateChecker {
-  const { currentVersion, fetch, isEnabled, onUpdate, intervalMs = CHECK_INTERVAL_MS } = options;
+  const { currentVersion, fetch, isEnabled, onUpdate, intervalMs = CHECK_INTERVAL_MS, now = Date.now } = options;
   let found: UpdateInfo | null = null;
   let timer: ReturnType<typeof setInterval> | null = null;
   // Была ли проверка включена при последнем чтении настройки (`check` и `settingsChanged`): переход «выключена →
   // включена» — повод проверить сразу. `latest` его не трогает: у него свой, не связанный с переключателем повод.
   let wasEnabled = false;
+
+  let last: UpdateCheckResult | null = null;
+  let manual: Promise<UpdateCheckResult> | null = null;
+
+  // Запрос и запись итога; найденное новее запущенной версии идёт в `onUpdate`. Не бросает.
+  const run = async (): Promise<UpdateCheckResult> => {
+    let result: UpdateCheckResult;
+    try {
+      const response = await fetchLatestReleaseResult(fetch);
+      const checkedAt = now();
+      if (!response.ok) {
+        // Неудача проверки прежний ответ не отменяет: найденный релиз остаётся найденным.
+        result = { kind: 'failed', reason: response.reason, checkedAt };
+      } else if (isNewerVersion(response.info.version, currentVersion)) {
+        found = response.info;
+        result = { kind: 'available', latest: response.info.version, checkedAt };
+        try {
+          onUpdate(found);
+        } catch {
+          // Итог проверки от потребителя не зависит.
+        }
+      } else {
+        found = null;
+        result = { kind: 'current', latest: response.info.version, checkedAt };
+      }
+    } catch {
+      result = { kind: 'failed', reason: 'network', checkedAt: now() };
+    }
+    last = result;
+    return result;
+  };
 
   // Отказ чтения настройки — «выключено»: лучше не спросить, чем спросить против воли человека.
   const enabled = async (): Promise<boolean> => {
@@ -246,11 +312,7 @@ export function createUpdateChecker(options: UpdateCheckerOptions): UpdateChecke
     try {
       wasEnabled = await enabled();
       if (!wasEnabled) return;
-      const release = await fetchLatestRelease(fetch);
-      // Неудача проверки прежний ответ не отменяет: найденный релиз остаётся найденным.
-      if (release === null) return;
-      found = isNewerVersion(release.version, currentVersion) ? release : null;
-      if (found !== null) onUpdate(found);
+      await run();
     } catch {
       // Молчим.
     }
@@ -275,5 +337,12 @@ export function createUpdateChecker(options: UpdateCheckerOptions): UpdateChecke
       if (switchedOn) await check();
     },
     latest: async () => ((await enabled()) ? found : null),
+    checkNow() {
+      manual ??= run().finally(() => {
+        manual = null;
+      });
+      return manual;
+    },
+    lastCheck: () => last,
   };
 }

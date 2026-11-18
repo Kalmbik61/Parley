@@ -17,7 +17,7 @@ import type {
   Result,
   TrustRecord,
 } from '@parley/protocol';
-import type { AppNote, CloseAnswer, DiagnosticsSaveResult, FocusTarget, ParleyBridge, HostStatus, UpdateResult, UpdateState } from '../../shared/bridge.js';
+import type { AppNote, CloseAnswer, DiagnosticsSaveResult, FocusTarget, ParleyBridge, HostStatus, UpdateCheckResult, UpdateResult, UpdateState } from '../../shared/bridge.js';
 import type { DevtoolsBatch, DevtoolsSnapshot, ResponseBody } from '../../shared/browser-devtools.js';
 import type {
   AgentActivity,
@@ -102,6 +102,8 @@ export interface FakeBridge extends ParleyBridge {
   emitUpdateState(state: UpdateState): void;
   /** Версия окна, которую отдаёт `app.version` (0.2.0); по умолчанию — та же, что у хоста моста: `0.0.0-test`; `null` — несобранное окно. */
   setAppVersion(version: string | null): void;
+  /** Ответ `app.checkForUpdates`; по умолчанию `{ kind: 'unavailable' }`. */
+  setCheckForUpdatesResult(result: UpdateCheckResult): void;
   /** Текущее состояние без события (`app:get-update-state`): каждый новый подписчик `onUpdateState` получает его сразу. */
   setUpdateState(state: UpdateState): void;
   /** Итог прошлой замены: `takeUpdateResult` отдаёт его один раз, дальше `null`. */
@@ -333,6 +335,7 @@ export function createFakeBridge(): FakeBridge {
   let updateState: UpdateState = { phase: 'idle' };
   let updateResult: UpdateResult | null = null;
   let appVersion: string | null = '0.0.0-test';
+  let checkForUpdatesResult: UpdateCheckResult = { kind: 'unavailable' };
   const badges: number[] = [];
   const hostActions: Array<'reconnect' | 'restartHost'> = [];
   const layoutSaves: Array<{ workKey: string; layout: WorkLayout }> = [];
@@ -985,6 +988,22 @@ export function createFakeBridge(): FakeBridge {
       chooseFolder: async () => null,
       chooseFiles: async () => chosenFiles,
       version: async () => appVersion,
+      checkForUpdates: async () => checkForUpdatesResult,
+      aboutInfo: async () => ({
+        version: '0.0.0-test',
+        commit: '2b52d262',
+        commitDate: '2026-11-17',
+        dirty: false,
+        arch: 'arm64',
+        electron: '44.0.0',
+        chrome: '140.0.0.0',
+        node: '24.0.0',
+        os: 'macOS 15.0',
+        appPath: '/Applications/Parley.app',
+        dataDir: '~/.parley',
+        updateChecks: false,
+        lastCheck: null,
+      }),
       restartHost: async () => {
         hostActions.push('restartHost');
       },
@@ -1160,6 +1179,9 @@ export function createFakeBridge(): FakeBridge {
     },
     setAppVersion: (version) => {
       appVersion = version;
+    },
+    setCheckForUpdatesResult: (result) => {
+      checkForUpdatesResult = result;
     },
     setUpdateState: (state) => {
       updateState = state;

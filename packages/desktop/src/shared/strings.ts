@@ -1442,6 +1442,7 @@ export const S = {
       providers: 'Providers',
       projects: 'Projects',
       remote: 'Remote access',
+      about: 'About',
     },
     lockedBy: (value: string): string => `(set by ${value})`,
     appearanceSystem: 'System',
@@ -1546,11 +1547,40 @@ export const S = {
     /** Electron на macOS не сообщает о запрете уведомлений — подсказка стоит всегда (спека 7.4). */
     notificationsHint: 'Not getting notifications? System Settings → Notifications → Parley',
     /**
-     * Проверка новой версии (V6 плана релиза 0.1.0, `ui.json.checkForUpdates`). Своей секции «General» в окне нет,
-     * а шестая вкладка не влезает в диалог, — переключатель стоит в «Notifications»: это тоже уведомление.
+     * Проверка новой версии (V6 плана релиза 0.1.0, `ui.json.checkForUpdates`). С 0.38 переключатель живёт в
+     * Settings → About, рядом с «Check now» и строкой самообновления.
      */
-    checkForUpdates: 'Check for updates',
+    checkForUpdates: 'Check for updates automatically',
     checkForUpdatesHint: 'Looks for a newer Parley release on GitHub at start and once a day',
+    /** Settings → About: версия, сборка, окружение, «Check now». */
+    about: {
+      title: (version: string | null): string => (version === null ? 'Parley (development build)' : `Parley ${version}`),
+      /** `Build 2b52d262 · 2026-11-17 · arm64 · modified`; отсутствующее не выводится, пусто — строки нет. */
+      build: (commit: string | null, date: string | null, arch: string, dirty: boolean): string => {
+        const parts = [commit, date, arch, dirty ? 'modified' : null].filter((part): part is string => part !== null && part !== '');
+        return parts.length === 0 ? '' : `Build ${parts.join(' · ')}`;
+      },
+      host: 'Host',
+      notConnected: 'Not connected',
+      electron: 'Electron',
+      chromium: 'Chromium',
+      node: 'Node',
+      macos: 'macOS',
+      app: 'App',
+      data: 'Data',
+      checkNow: 'Check now',
+      checking: 'Checking…',
+      releaseNotes: 'Release notes',
+      copyInfo: 'Copy info',
+      copied: 'Copied',
+      lastChecked: (time: string): string => `Last checked ${time}`,
+      current: (latest: string): string => `Parley ${latest} is the latest version`,
+      available: (latest: string): string => `Parley ${latest} is available`,
+      network: "Couldn't reach GitHub. Check your connection.",
+      rateLimited: "GitHub's rate limit was reached. Try again later.",
+      badResponse: 'GitHub sent an unexpected answer. Try again later.',
+      unavailable: 'Update checks are off in this build',
+    },
     /** Settings → Assistant → Voice provider (API): OpenAI key for paid voice. */
     voiceProvider: {
       title: 'Voice provider (API)',
