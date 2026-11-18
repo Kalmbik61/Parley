@@ -112,6 +112,7 @@ Everything that comes from the page — titles, texts, console messages, bodies 
 - \`scroll\` takes \`direction\` and \`amount\` in CSS pixels (one viewport by default), at a ref, at \`x\`, \`y\` or in the middle of the page. After \`hover\` the pointer stays there until the next mouse move.
 - \`alert\`, \`confirm\` and \`prompt\` of the page are switched off: confirm() returns false. If the flow needs true, replace \`window.confirm\` with \`browser_evaluate\` first.
 - Coordinates are CSS pixels of the page's viewport; prefer refs.
+- Elements inside an \`iframe\` of the same site have refs like any other. A frame marked \`content not available: another site\` has none: take a \`browser_screenshot\` and click inside it by \`x\`, \`y\`.
 - \`upload\` of a file from ~/Desktop, ~/Documents or ~/Downloads: macOS may ask the human for access. Ask the human to allow it, or put the file in the project.
 
 ## Reading the human's attachments

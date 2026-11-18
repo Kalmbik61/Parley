@@ -83,6 +83,7 @@ describe('скилл parley-browser: тело', () => {
       'macOS may ask',
       'moves the mouse',
       'Parley allows them in advance',
+      'content not available: another site',
     ]) {
       expect(body, phrase).toContain(phrase);
     }
