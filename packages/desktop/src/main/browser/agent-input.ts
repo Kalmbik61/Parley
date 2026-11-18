@@ -43,6 +43,8 @@ export interface MouseStep {
 export interface InputGuard {
   signal: AbortSignal;
   check(): void;
+  /** Момент `Date.now()`, к которому операция получит `timeout`: список шагов не начинает шаг без запаса (`stepReserveMs`). */
+  deadline?: number;
   keyboardQuiet?(): void;
   /**
    * Фокус гостя одолжен агенту с этого вызова до конца операции (D1): нажатие человека, пришедшее в страницу, гасится, а

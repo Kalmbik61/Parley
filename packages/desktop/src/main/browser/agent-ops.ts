@@ -256,6 +256,7 @@ export function createPageRunner(deps: {
       let lent = null as { unlend(): void; release(): void } | null;
       const guard: InputGuard = {
         signal,
+        deadline,
         check() {
           if (!allowed) throw new AgentOpError('access_denied', AGENTS_OFF);
           if (registry.isPaused(record.workKey, record.owner)) throw new AgentOpError('access_denied', PAUSED);

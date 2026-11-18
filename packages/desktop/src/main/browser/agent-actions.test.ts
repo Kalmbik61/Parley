@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { AGENT_LIMITS } from '@parley/protocol';
 import type { BrowserAgentOpEvent } from '@parley/protocol';
 import { createAgentActions, secretUploadPath, withNavigation } from './agent-actions.js';
+import { AgentOpError } from './agent-errors.js';
 import type { AgentDom } from './agent-dom.js';
 import type { AgentInput, InputGuard, MouseStep } from './agent-input.js';
 import type { AgentSettle, PageProbe } from './agent-settle.js';
@@ -20,7 +21,7 @@ const record = { workKey: 'w', pageId: 'bp-aaaaaa', agentId: 't1' } as unknown a
 type Describe = { nodeName: string; attributes: string[] };
 type FileSpec = { size: number; real?: string } | 'dir';
 
-function setup(options: { fit?: { scale: number; mobile: boolean } | null; zoom?: number; selectAnswer?: unknown; hits?: unknown[]; settle?: AgentSettle; files?: Record<string, FileSpec>; home?: string; checked?: Array<boolean | 'mixed' | null>; take?: string[]; basicAuth?: { isPending(id: number): boolean; onPending(id: number, listener: () => void): () => void }; clientCert?: { isPending(id: number): boolean; onPending(id: number, listener: () => void): () => void } } = {}) {
+function setup(options: { fit?: { scale: number; mobile: boolean } | null; zoom?: number; selectAnswer?: unknown; hits?: unknown[]; settle?: AgentSettle; snapshotFails?: boolean; files?: Record<string, FileSpec>; home?: string; checked?: Array<boolean | 'mixed' | null>; take?: string[]; basicAuth?: { isPending(id: number): boolean; onPending(id: number, listener: () => void): () => void }; clientCert?: { isPending(id: number): boolean; onPending(id: number, listener: () => void): () => void } } = {}) {
   const guest = Object.assign(new EventEmitter(), {
     id: 7,
     getZoomFactor: () => options.zoom ?? 1,
@@ -34,7 +35,14 @@ function setup(options: { fit?: { scale: number; mobile: boolean } | null; zoom?
   const input = { mouse, key, text } as unknown as AgentInput;
   const checked = [...(options.checked ?? [])];
   const dom = {
-    nodeOf: (_c: WebContents, _r: PageRecord, ref: string): number => ({ e1: 11, e2: 12, e5: 15, e8: 18 })[ref] ?? 99,
+    nodeOf: (_c: WebContents, _r: PageRecord, ref: string): number => {
+      if (ref === 'e404') throw new AgentOpError('stale_ref', 'Ref e404 is from an older snapshot.');
+      return ({ e1: 11, e2: 12, e5: 15, e8: 18 })[ref] ?? 99;
+    },
+    snapshotOf: vi.fn(async (_c: WebContents, _r: PageRecord, args: { tab: string; interactiveOnly?: boolean }) => {
+      if (options.snapshotFails === true) throw new Error('snapshot failed');
+      return { tab: args.tab, url: 'http://localhost:5173/form', text: '[ref=e1] button "Go"', refs: 1, truncated: false };
+    }),
     centerOf: vi.fn(async () => ({ x: 200, y: 230 })),
     checkedOf: vi.fn(async () => checked.shift() ?? null),
   } as unknown as AgentDom;
@@ -92,6 +100,8 @@ function setup(options: { fit?: { scale: number; mobile: boolean } | null; zoom?
 }
 
 const guard = (): InputGuard => ({ signal: new AbortController().signal, check: vi.fn() });
+
+const quickSettle = (): AgentSettle => ({ probe: vi.fn(async () => ({ n: 1, idle: 0, ready: 'complete', world: 1 })), quiet: vi.fn(async () => ({ n: 1, idle: 0, ready: 'complete', world: 1 })) });
 
 describe('action (спека 5.1, 4.8)', () => {
   it('click по ref: центр × fitOf, mouseMoved/Pressed/Released; точка клика — событием step в пикселях <webview>; что сделано', async () => {
@@ -420,5 +430,128 @@ describe('action (спека 5.1, 4.8)', () => {
     }, new AbortController().signal);
     expect(outcome).toEqual({ value: 'x', navigated: false, loaded: true, change: 'unknown' });
     expect(guest.listenerCount('did-start-navigation')).toBe(0);
+  });
+});
+
+describe('список шагов steps и снимок snapshot (спека 2026-11-18, раздел 5)', () => {
+  const click = { action: 'click', x: 5, y: 5 } as const;
+
+  it('три шага без отказов: steps длиной 3, «Ran 3 of 3 steps.», поля stopped нет', async () => {
+    const ctx = setup({ settle: quickSettle() });
+    const result = await ctx.actions.actionOf(ctx.contents, record, request, { tab: 't1', steps: [click, { action: 'press', key: 'Tab' }, { action: 'hover', x: 1, y: 2 }] }, guard());
+    expect(result.done).toBe('Ran 3 of 3 steps.');
+    expect(result.steps?.map((step) => step.done)).toEqual(['Clicked (5, 5).', 'Pressed Tab.', 'Moved the pointer over (1, 2).']);
+    expect(result.steps?.every((step) => step.change === 'none')).toBe(true);
+    expect('stopped' in result).toBe(false);
+    expect(result.navigated).toBe(false);
+    expect(result.change).toBe('none');
+  });
+
+  it('отказ stale_ref на шаге 2: steps длиной 1, stopped с кодом и текстом, шаг 3 не исполнялся', async () => {
+    const ctx = setup({ settle: quickSettle() });
+    const result = await ctx.actions.actionOf(ctx.contents, record, request, { tab: 't1', steps: [click, { action: 'click', ref: 'e404' }, click] }, guard());
+    expect(result.steps).toHaveLength(1);
+    expect(result.stopped).toEqual({ at: 2, reason: 'failed', code: 'stale_ref', message: 'Ref e404 is from an older snapshot.' });
+    expect(result.done).toBe('Ran 1 of 3 steps.');
+    expect(ctx.input.mouse).toHaveBeenCalledTimes(1);
+  });
+
+  it('отказ на шаге 1 — обычная ошибка операции: ничего не сделано, частичного ответа нет', async () => {
+    const ctx = setup({ settle: quickSettle() });
+    await expect(ctx.actions.actionOf(ctx.contents, record, request, { tab: 't1', steps: [{ action: 'click', ref: 'e404' }, click] }, guard())).rejects.toMatchObject({ code: 'stale_ref' });
+    expect(ctx.input.mouse).not.toHaveBeenCalled();
+  });
+
+  it('переход на шаге 1: press без ссылки идёт, click по ссылке — stopped «navigated» на шаге 3', async () => {
+    const ctx = setup({ settle: quickSettle() });
+    ctx.input.mouse.mockImplementationOnce(async () => {
+      ctx.guest.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false });
+    });
+    const result = await ctx.actions.actionOf(ctx.contents, record, request, { tab: 't1', steps: [click, { action: 'press', key: 'Enter' }, { action: 'click', ref: 'e2' }] }, guard());
+    expect(result.steps).toHaveLength(2);
+    expect(result.steps?.[0]?.change).toBe('navigated');
+    expect(result.stopped).toEqual({ at: 3, reason: 'navigated' });
+    expect(result.navigated).toBe(true);
+    expect(ctx.input.mouse).toHaveBeenCalledTimes(1);
+  });
+
+  it('переход, чья загрузка не дождана (вкладка ждёт логин человека), при оставшихся шагах — stopped «navigated» на следующем шаге', async () => {
+    const ctx = setup({ settle: quickSettle(), basicAuth: { isPending: () => true, onPending: () => () => undefined } });
+    ctx.input.mouse.mockImplementationOnce(async () => {
+      ctx.guest.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false });
+      ctx.guest.isLoading.mockReturnValue(true);
+    });
+    const result = await ctx.actions.actionOf(ctx.contents, record, request, { tab: 't1', steps: [click, { action: 'press', key: 'Tab' }] }, guard());
+    expect(result.steps).toHaveLength(1);
+    expect(result.stopped).toEqual({ at: 2, reason: 'navigated' });
+  });
+
+  it('до конца срока меньше stepReserveMs — перед шагом 2 stopped «time», снимок не снимается', async () => {
+    const ctx = setup({ settle: quickSettle() });
+    const limited = { ...guard(), deadline: Date.now() + 2_000 };
+    const result = await ctx.actions.actionOf(ctx.contents, record, request, { tab: 't1', steps: [click, click], snapshot: 'full' }, limited);
+    expect(result.steps).toHaveLength(1);
+    expect(result.stopped).toEqual({ at: 2, reason: 'time' });
+    expect(ctx.dom.snapshotOf).not.toHaveBeenCalled();
+    expect('snapshot' in result).toBe(false);
+  });
+
+  it('запас по сроку хватает — шаги идут; срок на шаге 1 не проверяется', async () => {
+    const ctx = setup({ settle: quickSettle() });
+    const roomy = { ...guard(), deadline: Date.now() + AGENT_LIMITS.stepReserveMs + 5_000 };
+    const result = await ctx.actions.actionOf(ctx.contents, record, request, { tab: 't1', steps: [click, click] }, roomy);
+    expect(result.steps).toHaveLength(2);
+    const spent = { ...guard(), deadline: Date.now() - 1 };
+    const first = await ctx.actions.actionOf(ctx.contents, record, request, { tab: 't1', steps: [click] }, spent);
+    expect(first.steps).toHaveLength(1);
+  });
+
+  it('guard.check бросает access_denied перед шагом 2 — stopped «failed» с этим кодом', async () => {
+    const ctx = setup({ settle: quickSettle() });
+    let armed = false;
+    ctx.input.mouse.mockImplementation(async () => {
+      armed = true;
+    });
+    const stopping: InputGuard = {
+      signal: new AbortController().signal,
+      check: () => {
+        if (armed) throw new AgentOpError('access_denied', 'Stopped by the human.');
+      },
+    };
+    const result = await ctx.actions.actionOf(ctx.contents, record, request, { tab: 't1', steps: [click, click] }, stopping);
+    expect(result.steps).toHaveLength(1);
+    expect(result.stopped).toEqual({ at: 2, reason: 'failed', code: 'access_denied', message: 'Stopped by the human.' });
+  });
+
+  it('ошибка не AgentOpError на шаге 2 пробрасывается: обрыв не прячется в stopped', async () => {
+    const ctx = setup({ settle: quickSettle() });
+    ctx.input.mouse.mockImplementationOnce(async () => undefined).mockImplementationOnce(async () => {
+      throw new Error('boom');
+    });
+    await expect(ctx.actions.actionOf(ctx.contents, record, request, { tab: 't1', steps: [click, click] }, guard())).rejects.toThrow('boom');
+  });
+
+  it("snapshot: 'interactive' — dom.snapshotOf с interactiveOnly: true, результат несёт snapshot; отказ снимка — заметка и без поля", async () => {
+    const ctx = setup({ settle: quickSettle() });
+    const result = await ctx.actions.actionOf(ctx.contents, record, request, { tab: 't1', steps: [click], snapshot: 'interactive' }, guard());
+    expect(ctx.dom.snapshotOf).toHaveBeenCalledWith(ctx.contents, record, { tab: 't1', interactiveOnly: true });
+    expect(result.snapshot).toEqual({ text: '[ref=e1] button "Go"', refs: 1, truncated: false });
+    const broken = setup({ settle: quickSettle(), snapshotFails: true });
+    const failed = await broken.actions.actionOf(broken.contents, record, request, { tab: 't1', steps: [click], snapshot: 'interactive' }, guard());
+    expect('snapshot' in failed).toBe(false);
+    expect(failed.notes).toContain('Snapshot failed: call browser_snapshot.');
+  });
+
+  it('одиночное действие: ключей steps и stopped нет, форма прежняя; со snapshot «full» поле snapshot есть', async () => {
+    const ctx = setup({ settle: quickSettle() });
+    const plain = await ctx.actions.actionOf(ctx.contents, record, request, { tab: 't1', ...click }, guard());
+    expect('steps' in plain).toBe(false);
+    expect('stopped' in plain).toBe(false);
+    expect('snapshot' in plain).toBe(false);
+    expect(plain.done).toBe('Clicked (5, 5).');
+    const withSnapshot = await ctx.actions.actionOf(ctx.contents, record, request, { tab: 't1', ...click, snapshot: 'full' }, guard());
+    expect(ctx.dom.snapshotOf).toHaveBeenCalledWith(ctx.contents, record, { tab: 't1', interactiveOnly: false });
+    expect(withSnapshot.snapshot).toMatchObject({ refs: 1 });
+    expect('steps' in withSnapshot).toBe(false);
   });
 });

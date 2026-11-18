@@ -108,6 +108,10 @@ export const AGENT_LIMITS = {
   settleCapMs: 1_000,
   /** Запрос моложе этого срока и без ответа держит ожидание затишья. */
   settleFreshRequestMs: 1_500,
+  /** Шагов в одном вызове `browser_action`. */
+  steps: 10,
+  /** Остаток срока операции, меньше которого следующий шаг списка не начинается. */
+  stepReserveMs: 3_000,
   /** Шаг опроса `wait_for` (полное дерево доступности), регистрации страницы `open` и размера `resize`. */
   pollMs: 500,
   /** Сколько ждать, пока окно поставит размер от агента. */
@@ -215,6 +219,54 @@ const exactlyOne = (values: readonly unknown[]): boolean => values.filter((value
 const TARGET_ACTIONS: ReadonlySet<string> = new Set(['click', 'double_click', 'hover', 'drag']);
 
 /** Схемы аргументов по операциям; хост проверяет до окна, main окна — у себя. */
+/** Поля одного действия: одиночное действие `browser_action` и каждый элемент `steps`. */
+const stepFields = {
+  action: z.enum(AGENT_ACTIONS),
+  ref: ref.optional(),
+  x: coordinate(AGENT_VIEWPORT.maxWidth).optional(),
+  y: coordinate(AGENT_VIEWPORT.maxHeight).optional(),
+  text: z.string().min(1).max(AGENT_LIMITS.text).optional(),
+  key: z.string().min(1).max(AGENT_INPUT.key).optional(),
+  modifiers: z.array(z.enum(AGENT_MODIFIERS)).max(AGENT_MODIFIERS.length).optional(),
+  submit: z.boolean().optional(),
+  direction: z.enum(['up', 'down', 'left', 'right']).optional(),
+  amount: z.number().int().min(1).max(AGENT_INPUT.scroll).optional(),
+  value: z.string().min(1).max(AGENT_INPUT.option).optional(),
+  toRef: ref.optional(),
+  toX: coordinate(AGENT_VIEWPORT.maxWidth).optional(),
+  toY: coordinate(AGENT_VIEWPORT.maxHeight).optional(),
+  files: z.array(absolutePath).min(1).max(AGENT_LIMITS.uploadFiles).optional(),
+};
+/** Верхний уровень `browser_action`: `action` необязателен, его заменяет `steps`. */
+const optionalStepFields = { ...stepFields, action: stepFields.action.optional() };
+
+/** Отказы одного действия, в порядке прежних проверок; их применяют и к шагу, и к одиночной форме. */
+function stepProblems(step: z.infer<z.ZodObject<typeof stepFields>>): string[] {
+  const problems: string[] = [];
+  const check = (failed: boolean, message: string): void => {
+    if (failed) problems.push(message);
+  };
+  check((step.x === undefined) !== (step.y === undefined), 'Pass x and y together.');
+  check((step.toX === undefined) !== (step.toY === undefined), 'Pass toX and toY together.');
+  check(step.ref !== undefined && step.x !== undefined, 'Pass ref or x and y, not both.');
+  check(TARGET_ACTIONS.has(step.action) && step.ref === undefined && step.x === undefined, 'click, double_click, hover and drag need ref, or x and y.');
+  check(step.action === 'drag' && step.toRef === undefined && step.toX === undefined, 'drag needs toRef, or toX and toY.');
+  check(step.action === 'type' && step.text === undefined, 'type needs text.');
+  check(step.action === 'press' && step.key === undefined, 'press needs key.');
+  check(step.action === 'scroll' && step.direction === undefined, 'scroll needs direction.');
+  check(step.action === 'select' && (step.ref === undefined || step.value === undefined), 'select needs ref and value.');
+  check(['check', 'uncheck', 'upload'].includes(step.action) && step.ref === undefined, 'check, uncheck and upload need ref.');
+  check(step.action === 'upload' && step.files === undefined, 'upload needs files.');
+  check(step.files !== undefined && step.action !== 'upload', 'files go only with upload.');
+  return problems;
+}
+
+const actionStep = z.strictObject(stepFields).superRefine((step, ctx) => {
+  for (const message of stepProblems(step)) ctx.addIssue({ code: 'custom', message });
+});
+/** Один шаг списка `steps` — поля действия без `tab`. */
+export type BrowserAgentStep = z.infer<typeof actionStep>;
+
 export const browserAgentArgs = {
   tabs: z.strictObject({}),
   console: z.strictObject({
@@ -264,36 +316,26 @@ export const browserAgentArgs = {
   action: z
     .strictObject({
       tab,
-      action: z.enum(AGENT_ACTIONS),
-      ref: ref.optional(),
-      x: coordinate(AGENT_VIEWPORT.maxWidth).optional(),
-      y: coordinate(AGENT_VIEWPORT.maxHeight).optional(),
-      text: z.string().min(1).max(AGENT_LIMITS.text).optional(),
-      key: z.string().min(1).max(AGENT_INPUT.key).optional(),
-      modifiers: z.array(z.enum(AGENT_MODIFIERS)).max(AGENT_MODIFIERS.length).optional(),
-      submit: z.boolean().optional(),
-      direction: z.enum(['up', 'down', 'left', 'right']).optional(),
-      amount: z.number().int().min(1).max(AGENT_INPUT.scroll).optional(),
-      value: z.string().min(1).max(AGENT_INPUT.option).optional(),
-      toRef: ref.optional(),
-      toX: coordinate(AGENT_VIEWPORT.maxWidth).optional(),
-      toY: coordinate(AGENT_VIEWPORT.maxHeight).optional(),
-      files: z.array(absolutePath).min(1).max(AGENT_LIMITS.uploadFiles).optional(),
+      ...optionalStepFields,
+      steps: z.array(actionStep).min(1).max(AGENT_LIMITS.steps).optional(),
+      snapshot: z.enum(['full', 'interactive']).optional(),
     })
-    .refine((args) => (args.x === undefined) === (args.y === undefined), { message: 'Pass x and y together.' })
-    .refine((args) => (args.toX === undefined) === (args.toY === undefined), { message: 'Pass toX and toY together.' })
-    .refine((args) => !(args.ref !== undefined && args.x !== undefined), { message: 'Pass ref or x and y, not both.' })
-    .refine((args) => !TARGET_ACTIONS.has(args.action) || args.ref !== undefined || args.x !== undefined, {
-      message: 'click, double_click, hover and drag need ref, or x and y.',
-    })
-    .refine((args) => args.action !== 'drag' || args.toRef !== undefined || args.toX !== undefined, { message: 'drag needs toRef, or toX and toY.' })
-    .refine((args) => args.action !== 'type' || args.text !== undefined, { message: 'type needs text.' })
-    .refine((args) => args.action !== 'press' || args.key !== undefined, { message: 'press needs key.' })
-    .refine((args) => args.action !== 'scroll' || args.direction !== undefined, { message: 'scroll needs direction.' })
-    .refine((args) => args.action !== 'select' || (args.ref !== undefined && args.value !== undefined), { message: 'select needs ref and value.' })
-    .refine((args) => !['check', 'uncheck', 'upload'].includes(args.action) || args.ref !== undefined, { message: 'check, uncheck and upload need ref.' })
-    .refine((args) => args.action !== 'upload' || args.files !== undefined, { message: 'upload needs files.' })
-    .refine((args) => args.files === undefined || args.action === 'upload', { message: 'files go only with upload.' }),
+    .superRefine((args, ctx) => {
+      const problems: string[] = [];
+      const { steps, action } = args;
+      // Поля действия на верхнем уровне: всё, кроме `tab`, `snapshot`, `steps` и самого `action`.
+      const fields: Record<string, unknown> = { ...args };
+      for (const key of ['tab', 'snapshot', 'steps', 'action']) delete fields[key];
+      if (steps !== undefined) {
+        if (action !== undefined) problems.push('Pass action or steps, not both.');
+        else if (Object.values(fields).some((value) => value !== undefined)) problems.push('With steps, put ref, text and the other fields inside each step.');
+      } else if (action === undefined) {
+        problems.push('Pass action or steps.');
+      } else {
+        problems.push(...stepProblems({ ...(fields as Omit<BrowserAgentStep, 'action'>), action }));
+      }
+      for (const message of problems) ctx.addIssue({ code: 'custom', message });
+    }),
   wait_for: z
     .strictObject({
       tab,
@@ -519,6 +561,13 @@ export interface BrowserAgentSnapshotResult {
 /** Что случилось со страницей после действия: переход, изменение, ничего или неизвестно (проба недоступна). */
 export type BrowserAgentChange = 'navigated' | 'changed' | 'none' | 'unknown';
 
+/** Итог одного шага списка `steps`: что сделано, что изменилось, данные страницы (подпись выбранной опции). */
+export interface BrowserAgentStepResult {
+  done: string;
+  change?: BrowserAgentChange;
+  pageData?: string;
+}
+
 export interface BrowserAgentActionResult {
   tab: string;
   /** Адрес после действия (с маской). */
@@ -530,6 +579,12 @@ export interface BrowserAgentActionResult {
   /** Изменение страницы после действия; нет поля — окно до этапа 1 точности, core ничего не печатает. */
   change?: BrowserAgentChange;
   notes: string[];
+  /** Итоги шагов списка `steps`; у одиночного действия поля нет. */
+  steps?: BrowserAgentStepResult[];
+  /** Список остановился раньше конца: `at` — номер (с 1) первого невыполненного шага; у `failed` это шаг с отказом. */
+  stopped?: { at: number; reason: 'failed' | 'navigated' | 'time'; code?: BrowserAgentErrorCode; message?: string };
+  /** Свежий снимок после действия или списка (`snapshot` аргументов): ссылки в нём заменяют все прежние. */
+  snapshot?: { text: string; refs: number; truncated: boolean };
   /** Данные страницы к ответу (подпись выбранной опции `select`): core печатает их в ограде под адресом. */
   pageData?: string;
 }
