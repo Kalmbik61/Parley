@@ -159,6 +159,39 @@ describe('TerminalPromptPanel — клавиши и кнопки', () => {
   });
 });
 
+describe('TerminalPromptPanel — потеря фокуса', () => {
+  it('в фокусе клавиши идут в терминал; фокус ушёл наружу — подпись сброшена и клавиши снаружи в терминал не попадают', async () => {
+    render(
+      <div>
+        <button type="button" data-testid="outside">outside</button>
+        <TerminalPromptPanel workKey="/tmp/p w-01" tabId="terminal:s-01" sessionRef={REF} bridge={bridge} title="t" active />
+      </div>,
+    );
+    await advance(0);
+    const outside = screen.getByTestId('outside');
+    act(() => panel().focus());
+    expect(document.activeElement).toBe(panel());
+    expect(screen.getByTestId('chat-terminal-prompt-hint').textContent).toBe(S.chat.terminalPrompt.keysHint);
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'ArrowDown' });
+    expect(inputs()).toEqual([{ ref: REF, data: '\u001b[B' }]);
+
+    act(() => outside.focus());
+    expect(document.activeElement).toBe(outside);
+    expect(screen.getByTestId('chat-terminal-prompt-hint').textContent).toBe(S.chat.terminalPrompt.focusHint);
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'ArrowDown' });
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'y' });
+    expect(inputs()).toEqual([{ ref: REF, data: '\u001b[B' }]);
+  });
+
+  it('фокус перешёл с панели на её же кнопку — подпись остаётся «Keys go to the terminal»', async () => {
+    setup();
+    await advance(0);
+    act(() => panel().focus());
+    act(() => screen.getByTestId('chat-terminal-prompt-up').focus());
+    expect(screen.getByTestId('chat-terminal-prompt-hint').textContent).toBe(S.chat.terminalPrompt.keysHint);
+  });
+});
+
 describe('TerminalPromptPanel — поле «Type an answer»', () => {
   it('текст → pty.input с текстом, через 80 мс — отдельным сообщением \\r; поле очищается', async () => {
     setup();
