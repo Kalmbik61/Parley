@@ -106,7 +106,7 @@ export interface AboutInfo {
   chrome: string; // process.versions.chrome
   node: string; // process.versions.node
   os: string; // `macOS ${process.getSystemVersion()}`
-  /** Путь `.app`; не из `.app` — `null`. Домашний каталог заменён на `~`. */
+  /** Путь `.app`; не из `.app` и не собранное окно — `null`. Домашний каталог заменён на `~`. */
   appPath: string | null;
   /** `parleyHome()`; домашний каталог заменён на `~`. */
   dataDir: string;

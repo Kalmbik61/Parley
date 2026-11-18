@@ -1209,7 +1209,8 @@ if (!gotLock) {
           chrome: process.versions.chrome,
           node: process.versions.node,
           os: `macOS ${process.getSystemVersion()}`,
-          appPath: bundle === null ? null : tildify(bundle.app, home),
+          // Не собранное окно (dev, E2E): `bundleOf` нашёл бы Electron.app — это неверные сведения.
+          appPath: !app.isPackaged || bundle === null ? null : tildify(bundle.app, home),
           dataDir: tildify(parleyHome(), home),
           updateChecks: updateCheckAllowed(shellEnv.env, app.isPackaged),
           lastCheck: updates.lastCheck(),
