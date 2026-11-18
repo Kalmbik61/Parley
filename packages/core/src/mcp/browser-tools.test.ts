@@ -442,15 +442,19 @@ describe('инструменты действий (этап D)', () => {
       status: 200,
       body: { ok: true, result: { tab: 't1', url: 'http://localhost:5173/', done: 'Clicked e2.', navigated, ...(change === undefined ? {} : { change }), notes: [] } },
     });
-    answers.push(reply('changed'), reply('none'), reply('navigated', true), reply(undefined, true), reply('unknown'), reply(undefined));
+    answers.push(reply('changed'), reply('none'), reply('navigated', true), reply(undefined, true), reply('navigated', false), reply('unknown'), reply(undefined));
     const changed = await call(client, 'browser_action', { tab: 't1', action: 'click', ref: 'e2' });
     expect(changed.text).toContain('Clicked e2. The page changed.');
     expect(changed.text).not.toContain(stale);
     expect((await call(client, 'browser_action', { tab: 't1', action: 'click', ref: 'e2' })).text).toContain(none);
+    // оба признака сразу (change и navigated) — фраза одна, без повтора
     const moved = (await call(client, 'browser_action', { tab: 't1', action: 'click', ref: 'e2' })).text;
     expect(moved.split(stale)).toHaveLength(2);
     const oldWindow = (await call(client, 'browser_action', { tab: 't1', action: 'click', ref: 'e2' })).text;
     expect(oldWindow.split(stale)).toHaveLength(2);
+    const onlyChange = (await call(client, 'browser_action', { tab: 't1', action: 'click', ref: 'e2' })).text;
+    expect(onlyChange.split(stale)).toHaveLength(2);
+    expect(onlyChange).toContain('Clicked e2. The page navigated: old refs are stale, take a new browser_snapshot.');
     for (const text of [(await call(client, 'browser_action', { tab: 't1', action: 'click', ref: 'e2' })).text, (await call(client, 'browser_action', { tab: 't1', action: 'click', ref: 'e2' })).text]) {
       expect(text).not.toContain('The page changed.');
       expect(text).not.toContain('Nothing changed');

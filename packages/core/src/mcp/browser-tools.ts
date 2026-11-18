@@ -213,7 +213,7 @@ export const BROWSER_TOOLS: readonly Tool[] = [
       'Act on a page like a person: click, double_click, hover, type, press, scroll, select, check, uncheck, drag, upload. ' +
       'Target an element by ref from browser_snapshot, or a point by x and y in CSS px. type enters text into the focused field (submit: true then presses Enter); press sends one key with modifiers; ' +
       'select picks an option of a <select> by value or text; upload puts files (absolute paths) into an input[type=file]. ' +
-      'Fails with human_busy while the human selects or annotates in that page, and with stale_ref when the ref is from an older snapshot, and with covered when another element lies over the target (nothing is clicked).',
+      'Fails with human_busy while the human selects or annotates in that page, with stale_ref when the ref is from an older snapshot, and with covered when another element lies over the target (nothing is clicked).',
     annotations: CONTROL,
     inputSchema: {
       type: 'object',
