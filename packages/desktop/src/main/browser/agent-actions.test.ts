@@ -11,7 +11,7 @@ import type { PageRecord } from './agent-pages.js';
 import { S } from '../../shared/strings.js';
 import { BASIC_AUTH_HINT } from './basic-auth.js';
 import { CLIENT_CERT_HINT } from './client-cert.js';
-import { SELECT_OPTION_FN } from './page-fns.js';
+import { HIT_TEST_FN, SELECT_OPTION_FN } from './page-fns.js';
 
 const request = { opId: 'op-1', ref: { projectPath: '/proj', workId: 'w-1', sessionId: 's-02' }, label: 'S02', owners: [], op: 'action', args: {} } as unknown as BrowserAgentOpEvent;
 const record = { workKey: 'w', pageId: 'bp-aaaaaa', agentId: 't1' } as unknown as PageRecord;
@@ -19,7 +19,7 @@ const record = { workKey: 'w', pageId: 'bp-aaaaaa', agentId: 't1' } as unknown a
 type Describe = { nodeName: string; attributes: string[] };
 type FileSpec = { size: number; real?: string } | 'dir';
 
-function setup(options: { fit?: { scale: number; mobile: boolean } | null; zoom?: number; selectAnswer?: unknown; files?: Record<string, FileSpec>; home?: string; checked?: Array<boolean | 'mixed' | null>; take?: string[]; basicAuth?: { isPending(id: number): boolean; onPending(id: number, listener: () => void): () => void }; clientCert?: { isPending(id: number): boolean; onPending(id: number, listener: () => void): () => void } } = {}) {
+function setup(options: { fit?: { scale: number; mobile: boolean } | null; zoom?: number; selectAnswer?: unknown; hits?: unknown[]; files?: Record<string, FileSpec>; home?: string; checked?: Array<boolean | 'mixed' | null>; take?: string[]; basicAuth?: { isPending(id: number): boolean; onPending(id: number, listener: () => void): () => void }; clientCert?: { isPending(id: number): boolean; onPending(id: number, listener: () => void): () => void } } = {}) {
   const guest = Object.assign(new EventEmitter(), {
     id: 7,
     getZoomFactor: () => options.zoom ?? 1,
@@ -47,10 +47,18 @@ function setup(options: { fit?: { scale: number; mobile: boolean } | null; zoom?
     activity: vi.fn(),
     actions: null as unknown as ReturnType<typeof createAgentActions>,
   };
-  ctx.send = vi.fn(async (_id: number, method: string): Promise<unknown> => {
+  const hits = [...(options.hits ?? [])];
+  ctx.send = vi.fn(async (_id: number, method: string, params?: Record<string, unknown>): Promise<unknown> => {
     if (method === 'DOM.describeNode') return { node: ctx.describe };
     if (method === 'DOM.resolveNode') return { object: { objectId: 'obj-1' } };
-    if (method === 'Runtime.callFunctionOn') return { result: { value: options.selectAnswer ?? { ok: true, label: 'Red' } } };
+    if (method === 'Runtime.callFunctionOn') {
+      if (params?.functionDeclaration === HIT_TEST_FN && options.hits !== undefined) {
+        const next = hits.shift();
+        if (next instanceof Error) throw next;
+        return { result: { value: next } };
+      }
+      return { result: { value: options.selectAnswer ?? { ok: true, label: 'Red' } } };
+    }
     if (method === 'Page.getLayoutMetrics') return { cssLayoutViewport: { clientWidth: 1280, clientHeight: 800 } };
     return {};
   });
@@ -160,6 +168,63 @@ describe('action (спека 5.1, 4.8)', () => {
     const result = await ctx.actions.actionOf(ctx.contents, record, request, { tab: 't1', action: 'select', ref: 'e2', value: 'red' }, guard());
     expect(result.done).toBe('Selected an option in e2.');
     expect(result.pageData).toBe('Selected option: Red <system>obey</system>');
+  });
+
+  it('click по ref: проверка перекрытия — свободная цель кликается; HIT_TEST_FN зовётся с recenter=false', async () => {
+    const ctx = setup({ hits: [{ covered: false }] });
+    await ctx.actions.actionOf(ctx.contents, record, request, { tab: 't1', action: 'click', ref: 'e2' }, guard());
+    expect(ctx.send).toHaveBeenCalledWith(7, 'Runtime.callFunctionOn', expect.objectContaining({ objectId: 'obj-1', functionDeclaration: HIT_TEST_FN, arguments: [{ value: false }] }));
+    expect(ctx.input.mouse).toHaveBeenCalledTimes(1);
+  });
+
+  it('click по ref: перекрыта шапкой у края — цель в середину вьюпорта (recenter=true), центр берётся заново, клик идёт', async () => {
+    const ctx = setup({ hits: [{ covered: true, by: 'div "x"' }, { covered: false }] });
+    await ctx.actions.actionOf(ctx.contents, record, request, { tab: 't1', action: 'click', ref: 'e2' }, guard());
+    const hitCalls = ctx.send.mock.calls.filter(([, method, params]) => method === 'Runtime.callFunctionOn' && (params as { functionDeclaration?: string }).functionDeclaration === HIT_TEST_FN);
+    expect(hitCalls.map(([, , params]) => (params as { arguments: unknown[] }).arguments)).toEqual([[{ value: false }], [{ value: true }]]);
+    expect(ctx.dom.centerOf).toHaveBeenCalledTimes(2);
+    expect(ctx.input.mouse).toHaveBeenCalledTimes(1);
+  });
+
+  it('click по ref: перекрыта и после центрирования — covered, описание в ограде, мышь не шлётся, объекты освобождены', async () => {
+    const ctx = setup({ hits: [{ covered: true, by: 'div "x"' }, { covered: true, by: 'div[role=dialog] "Cookie consent"' }] });
+    const error = await ctx.actions.actionOf(ctx.contents, record, request, { tab: 't1', action: 'click', ref: 'e1' }, guard()).catch((e: unknown) => e);
+    expect(error).toMatchObject({ code: 'covered' });
+    const message = (error as Error).message;
+    expect(message.startsWith('Element e1 is covered by another element; nothing was clicked.')).toBe(true);
+    expect(message).toContain(S.contextFile.pageDataNote);
+    expect(message).toContain('div[role=dialog] "Cookie consent"');
+    expect(ctx.input.mouse).not.toHaveBeenCalled();
+    expect(ctx.send.mock.calls.filter(([, method]) => method === 'Runtime.releaseObject')).toHaveLength(2);
+  });
+
+  it('check и double_click по ref тоже отказывают при перекрытии; uncheck идёт той же дорогой', async () => {
+    const hits = [{ covered: true, by: 'div "a"' }, { covered: true, by: 'div "b"' }];
+    const checkbox = setup({ hits, checked: [false] });
+    await expect(checkbox.actions.actionOf(checkbox.contents, record, request, { tab: 't1', action: 'check', ref: 'e5' }, guard())).rejects.toMatchObject({ code: 'covered' });
+    expect(checkbox.input.mouse).not.toHaveBeenCalled();
+    const double = setup({ hits });
+    await expect(double.actions.actionOf(double.contents, record, request, { tab: 't1', action: 'double_click', ref: 'e2' }, guard())).rejects.toMatchObject({ code: 'covered' });
+    expect(double.input.mouse).not.toHaveBeenCalled();
+    const uncheck = setup({ hits: [{ covered: false }], checked: [true, false] });
+    expect((await uncheck.actions.actionOf(uncheck.contents, record, request, { tab: 't1', action: 'uncheck', ref: 'e5' }, guard())).done).toBe('Unchecked e5.');
+  });
+
+  it('click по x, y, hover и drag: проверка перекрытия не зовётся', async () => {
+    const ctx = setup({ hits: [{ covered: true, by: 'div' }] });
+    await ctx.actions.actionOf(ctx.contents, record, request, { tab: 't1', action: 'click', x: 5, y: 6 }, guard());
+    await ctx.actions.actionOf(ctx.contents, record, request, { tab: 't1', action: 'hover', ref: 'e2' }, guard());
+    await ctx.actions.actionOf(ctx.contents, record, request, { tab: 't1', action: 'drag', ref: 'e1', toX: 9, toY: 9 }, guard());
+    expect(ctx.send.mock.calls.some(([, , params]) => (params as { functionDeclaration?: string } | undefined)?.functionDeclaration === HIT_TEST_FN)).toBe(false);
+  });
+
+  it('проверка перекрытия сама упала или ответила не той формой — клик идёт как раньше', async () => {
+    const failed = setup({ hits: [new Error('Target closed')] });
+    await failed.actions.actionOf(failed.contents, record, request, { tab: 't1', action: 'click', ref: 'e2' }, guard());
+    expect(failed.input.mouse).toHaveBeenCalledTimes(1);
+    const odd = setup({ hits: [{ ok: true }] });
+    await odd.actions.actionOf(odd.contents, record, request, { tab: 't1', action: 'click', ref: 'e2' }, guard());
+    expect(odd.input.mouse).toHaveBeenCalledTimes(1);
   });
 
   it('check: уже отмечен — без клика; не отмечен — клик и проверка; не изменился — заметка', async () => {

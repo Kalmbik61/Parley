@@ -24,7 +24,7 @@ import { BASIC_AUTH_HINT, type BasicAuth } from './basic-auth.js';
 import { CLIENT_CERT_HINT, humanWait, type ClientCert } from './client-cert.js';
 import type { Emulation } from './emulation.js';
 import type { Inspector } from './inspector.js';
-import { SELECT_OPTION_FN } from './page-fns.js';
+import { HIT_TEST_FN, SELECT_OPTION_FN } from './page-fns.js';
 import { cutCodePoints } from '../../shared/code-points.js';
 import { fence } from '../../shared/context-markdown.js';
 import { S } from '../../shared/strings.js';
@@ -210,6 +210,48 @@ export function createAgentActions(deps: {
         return { point, label: `(${Math.round(point.x)}, ${Math.round(point.y)})` };
       }
 
+      /**
+       * Спрашивает документ цели, не лежит ли над её центром чужой элемент. Не смогли спросить (узла нет, страница
+       * упала, ответ не той формы) — `null`: клик идёт как раньше. Остановка человеком не глотается: `guard.check()`.
+       */
+      async function hitOf(node: number, recenter: boolean): Promise<{ covered: boolean; by?: string } | null> {
+        let objectId: string | undefined;
+        try {
+          const { object } = await send<{ object: { objectId?: string } }>('DOM.resolveNode', { backendNodeId: node });
+          objectId = object.objectId;
+          if (objectId === undefined) return null;
+          const reply = await send<{ result?: { value?: unknown } }>('Runtime.callFunctionOn', {
+            objectId,
+            functionDeclaration: HIT_TEST_FN,
+            arguments: [{ value: recenter }],
+            returnByValue: true,
+          });
+          const value = reply.result?.value as { covered?: unknown; by?: unknown } | undefined;
+          if (typeof value?.covered !== 'boolean') return null;
+          return { covered: value.covered, ...(typeof value.by === 'string' ? { by: value.by } : {}) };
+        } catch {
+          guard.check();
+          return null;
+        } finally {
+          if (objectId !== undefined) await inspector.send(id, 'Runtime.releaseObject', { objectId }).catch(() => undefined);
+        }
+      }
+
+      /**
+       * Центр цели по ссылке для клика: над ним лежит чужой элемент — цель прокручивается в середину вьюпорта (фиксированная
+       * шапка у края уходит) и проверка идёт второй раз; всё ещё перекрыта — отказ `covered`, ничего не нажато.
+       */
+      async function clearPointOf(name: string): Promise<{ x: number; y: number }> {
+        const node = nodeOf(name);
+        const point = await dom.centerOf(contents, node);
+        const first = await hitOf(node, false);
+        if (first === null || !first.covered) return point;
+        const second = await hitOf(node, true);
+        if (second === null || !second.covered) return dom.centerOf(contents, node);
+        const by = second.by === undefined ? '' : `\n${optionsData([second.by])}`;
+        throw new AgentOpError('covered', `Element ${name} is covered by another element; nothing was clicked.${by}`);
+      }
+
       /** Точка для CDP — с поправкой на вписывание эмуляции и масштаб страницы. */
       const cdpPoint = (point: { x: number; y: number }): { x: number; y: number } => inputPoint(point, fit, zoom);
 
@@ -251,7 +293,7 @@ export function createAgentActions(deps: {
             if (args.ref !== undefined && (await nodeNameOf(ref, nodeOf(ref))).nodeName.toUpperCase() === 'SELECT') {
               throw new AgentOpError('bad_request', 'Use action select for a <select>.');
             }
-            const { point, label } = await pointOf(args.ref, args.x, args.y);
+            const { point, label } = args.ref !== undefined ? { point: await clearPointOf(ref), label: ref } : await pointOf(args.ref, args.x, args.y);
             await clickAt(point, args.action === 'click' ? 1 : 2);
             return args.action === 'click' ? `Clicked ${label}.` : `Double-clicked ${label}.`;
           }
@@ -328,8 +370,7 @@ export function createAgentActions(deps: {
             const before = await dom.checkedOf(contents, node);
             if (before === null) throw new AgentOpError('bad_request', `Element ${ref} is not a checkbox, radio button or switch.`);
             if (before === want) return `${ref} is already ${word}.`;
-            const { point } = await pointOf(ref, undefined, undefined);
-            await clickAt(point, 1);
+            await clickAt(await clearPointOf(ref), 1);
             const after = await dom.checkedOf(contents, node);
             if (after !== want) {
               notes.push(`${ref} did not become ${word} after the click.`);
