@@ -1704,13 +1704,17 @@ describe('мост browser:* (тест 8 куска 9.1)', () => {
     expect(clientCert.answer).toHaveBeenCalledWith('r3', null, false, sender);
   });
 
-  it('clear-data — clearStorageData() и clearCache() раздела', async () => {
+  it('clear-data — clearStorageData() и clearCache() раздела, затем clientCert.clear()', async () => {
     browserSession.clearStorageData.mockClear();
     browserSession.clearCache.mockClear();
+    clientCert.clear.mockClear();
     const { ipcMain } = browserSetup();
     await ipcMain.invoke('browser:clear-data');
     expect(browserSession.clearStorageData).toHaveBeenCalledTimes(1);
     expect(browserSession.clearCache).toHaveBeenCalledTimes(1);
+    expect(clientCert.clear).toHaveBeenCalledTimes(1);
+    const order = [browserSession.clearStorageData, browserSession.clearCache, clientCert.clear].map((fn) => fn.mock.invocationCallOrder[0] ?? 0);
+    expect(order).toEqual([...order].sort((a, b) => a - b));
     expect(otherSession.clearStorageData).not.toHaveBeenCalled();
   });
 

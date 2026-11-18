@@ -995,6 +995,9 @@ export function registerIpc(options: RegisterIpcOptions): void {
     withIpcError(async () => {
       await browser.session.clearStorageData();
       await browser.session.clearCache();
+      // Выборы клиентского сертификата «для сайта» (файл main): стираются вместе с данными раздела. Выбор, на который Chromium
+      // уже ответил в этом запуске, он помнит до перезапуска — сбросить его нельзя.
+      await browser.clientCert.clear();
     }),
   );
 
