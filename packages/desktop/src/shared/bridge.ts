@@ -58,7 +58,7 @@ export type HostStatus =
  * Явный view:'terminal' меняет и сохранённый вид сессии; с cardId он несовместим.
  */
 export type FocusTarget =
-  | ({ kind: 'session'; ref: SessionRef } & ({ cardId?: string; view?: never } | { view: 'terminal'; cardId?: never }))
+  | ({ kind: 'session'; ref: SessionRef } & ({ cardId?: string; view?: never } | { view: 'terminal' | 'chat'; cardId?: never }))
   | { kind: 'mail'; projectPath: string; workId: string }
   | { kind: 'room'; projectPath: string; workId: string; roomId: string };
 

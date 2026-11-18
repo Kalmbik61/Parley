@@ -356,13 +356,14 @@ describe('вид острова', () => {
     expect(props.api.open).toHaveBeenCalledWith({ kind: 'session', ref: REF });
   });
 
-  it('запись без карточки: хост читает экран (inWindow) — «Open in Parley» ведёт в сессию без вида terminal; без метода — «Open terminal»', () => {
+  it('запись без карточки: хост читает экран (inWindow) — «Open in Parley» ведёт в сессию явно в виде Chat; без метода — «Open terminal»', () => {
     const withScreen = view({ items: [permissionItem({ card: null, inWindow: true })] });
     expect(screen.getByTestId('island-open').textContent).toBe(S.island.openInParley);
     expect(screen.queryByTestId('island-allow')).toBeNull();
     fireEvent.click(screen.getByTestId('island-open'));
     expect(withScreen.api.open).toHaveBeenCalledTimes(1);
-    expect(withScreen.api.open).toHaveBeenCalledWith({ kind: 'session', ref: REF });
+    // Явно Chat: уже открытая вкладка в виде Terminal иначе осталась бы в терминале.
+    expect(withScreen.api.open).toHaveBeenCalledWith({ kind: 'session', ref: REF, view: 'chat' });
     cleanup();
 
     const withoutScreen = view({ items: [permissionItem({ card: null, inWindow: false })] });

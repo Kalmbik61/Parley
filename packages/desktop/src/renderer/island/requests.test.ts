@@ -99,12 +99,21 @@ describe('очередь запросов острова', () => {
     expect(useIslandRequests.getState().items[0]).toMatchObject({ card: null, inWindow: false });
   });
 
-  it('запись с карточкой от pty.screenText не меняется', async () => {
+  it('запись с карточкой от pty.screenText не меняется: ни с флагом, ни при его переключении', async () => {
     const { call } = bridge({ 's-01': [permission('c-1')] });
     useIslandRequests.getState().bind(call as never);
-    useIslandRequests.getState().sync(entries, activityMap([makeActivity(ref('s-01'), 'blocked')]), false);
+    const blocked = activityMap([makeActivity(ref('s-01'), 'blocked')]);
+    useIslandRequests.getState().sync(entries, blocked, true);
     await flush();
-    expect(useIslandRequests.getState().items.find((item) => item.card !== null)).toMatchObject({ card: { cardId: 'c-1' }, inWindow: true });
+    const find = () => useIslandRequests.getState().items.find((item) => item.card !== null);
+    const first = find();
+    expect(first).toMatchObject({ card: { cardId: 'c-1' }, inWindow: true });
+    useIslandRequests.getState().sync(entries, blocked, false);
+    await flush();
+    expect(find()).toEqual(first);
+    useIslandRequests.getState().sync(entries, blocked, true);
+    await flush();
+    expect(find()).toEqual(first);
   });
 
   // Спека подписок К16: причина «needs you» одна на окно, остров и Telegram — текст из ядра (`needReason`).

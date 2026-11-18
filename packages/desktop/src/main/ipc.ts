@@ -155,7 +155,7 @@ export function isFocusTarget(value: unknown): value is FocusTarget {
         typeof ref.workId === 'string' &&
         typeof ref.sessionId === 'string' &&
         (value.cardId === undefined || isValidPathArg(value.cardId)) &&
-        (value.view === undefined || value.view === 'terminal' && value.cardId === undefined)
+        (value.view === undefined || (value.view === 'terminal' || value.view === 'chat') && value.cardId === undefined)
       );
     }
     case 'mail':
