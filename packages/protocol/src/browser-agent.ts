@@ -57,6 +57,7 @@ export const BROWSER_AGENT_ERROR_CODES = [
   'tab_not_loaded',
   'human_busy',
   'stale_ref',
+  'covered',
 ] as const;
 export type BrowserAgentErrorCode = (typeof BROWSER_AGENT_ERROR_CODES)[number];
 
@@ -101,6 +102,12 @@ export const AGENT_LIMITS = {
   guardTailMs: 2_000,
   /** Сколько ждать начала перехода после действия. */
   settleMs: 300,
+  /** Сколько DOM должен молчать, чтобы страница считалась успокоившейся после действия. */
+  settleQuietMs: 100,
+  /** Потолок ожидания затишья после действия. */
+  settleCapMs: 1_000,
+  /** Запрос моложе этого срока и без ответа держит ожидание затишья. */
+  settleFreshRequestMs: 1_500,
   /** Шаг опроса `wait_for` (полное дерево доступности), регистрации страницы `open` и размера `resize`. */
   pollMs: 500,
   /** Сколько ждать, пока окно поставит размер от агента. */
@@ -509,6 +516,9 @@ export interface BrowserAgentSnapshotResult {
   truncated: boolean;
 }
 
+/** Что случилось со страницей после действия: переход, изменение, ничего или неизвестно (проба недоступна). */
+export type BrowserAgentChange = 'navigated' | 'changed' | 'none' | 'unknown';
+
 export interface BrowserAgentActionResult {
   tab: string;
   /** Адрес после действия (с маской). */
@@ -517,6 +527,8 @@ export interface BrowserAgentActionResult {
   done: string;
   /** Действие вызвало переход главного фрейма (дождан до `AGENT_LIMITS.loadMs`). */
   navigated: boolean;
+  /** Изменение страницы после действия; нет поля — окно до этапа 1 точности, core ничего не печатает. */
+  change?: BrowserAgentChange;
   notes: string[];
   /** Данные страницы к ответу (подпись выбранной опции `select`): core печатает их в ограде под адресом. */
   pageData?: string;

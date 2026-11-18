@@ -213,7 +213,7 @@ export const BROWSER_TOOLS: readonly Tool[] = [
       'Act on a page like a person: click, double_click, hover, type, press, scroll, select, check, uncheck, drag, upload. ' +
       'Target an element by ref from browser_snapshot, or a point by x and y in CSS px. type enters text into the focused field (submit: true then presses Enter); press sends one key with modifiers; ' +
       'select picks an option of a <select> by value or text; upload puts files (absolute paths) into an input[type=file]. ' +
-      'Fails with human_busy while the human selects or annotates in that page, and with stale_ref when the ref is from an older snapshot.',
+      'Fails with human_busy while the human selects or annotates in that page, and with stale_ref when the ref is from an older snapshot, and with covered when another element lies over the target (nothing is clicked).',
     annotations: CONTROL,
     inputSchema: {
       type: 'object',
@@ -374,6 +374,7 @@ export const BROWSER_TOOL_HINTS: Readonly<Record<string, string>> = {
   // Причину (Select или Annotate в странице, печать человека) называет текст окна; подсказка годится к любой (D2 живых проверок).
   human_busy: 'The human is busy in Parley (selecting, annotating or typing): wait a few seconds and retry; if it keeps failing, ask the human.',
   stale_ref: 'Take a new browser_snapshot and use its refs.',
+  covered: 'Close or move what covers the element (a banner, a dialog, a sticky bar), take a new browser_snapshot and retry.',
   not_loopback: 'An older Parley window answered: ask the human to update Parley.',
 };
 
@@ -444,6 +445,8 @@ interface ActionResult {
   url: string;
   done: string;
   navigated: boolean;
+  /** Нет поля у окна до этапа 1 точности: тогда core о нём молчит. */
+  change?: 'navigated' | 'changed' | 'none' | 'unknown';
   notes: string[];
   /** Данные страницы к ответу (подпись выбранной опции): только в ограде. */
   pageData?: string;
@@ -473,7 +476,11 @@ function formatSnapshot(result: SnapshotResult): string {
 }
 
 function formatAction(result: ActionResult): string {
-  const moved = result.navigated ? ' The page navigated: old refs are stale, take a new browser_snapshot.' : '';
+  const moved =
+    result.navigated || result.change === 'navigated' ? ' The page navigated: old refs are stale, take a new browser_snapshot.'
+    : result.change === 'changed' ? ' The page changed.'
+    : result.change === 'none' ? ' Nothing changed on the page: check the target with a new browser_snapshot.'
+    : '';
   const data = result.pageData === undefined ? '' : `\n${result.pageData}`;
   return `${result.done}${moved}${noteLines(result.notes)}\n${pageData(`Page: ${result.url}${data}`)}`;
 }

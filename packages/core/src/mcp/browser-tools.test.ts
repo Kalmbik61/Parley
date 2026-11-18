@@ -434,6 +434,30 @@ describe('инструменты действий (этап D)', () => {
     expect(result.text).toContain('Page: http://localhost:5173/next');
   });
 
+  it('action: строка изменения страницы — по полю change; без поля (старое окно) и при unknown ни одной из трёх фраз', async () => {
+    const client = await connect(await startEndpoint());
+    const stale = 'old refs are stale';
+    const none = 'Nothing changed on the page: check the target with a new browser_snapshot.';
+    const reply = (change: string | undefined, navigated = false) => ({
+      status: 200,
+      body: { ok: true, result: { tab: 't1', url: 'http://localhost:5173/', done: 'Clicked e2.', navigated, ...(change === undefined ? {} : { change }), notes: [] } },
+    });
+    answers.push(reply('changed'), reply('none'), reply('navigated', true), reply(undefined, true), reply('unknown'), reply(undefined));
+    const changed = await call(client, 'browser_action', { tab: 't1', action: 'click', ref: 'e2' });
+    expect(changed.text).toContain('Clicked e2. The page changed.');
+    expect(changed.text).not.toContain(stale);
+    expect((await call(client, 'browser_action', { tab: 't1', action: 'click', ref: 'e2' })).text).toContain(none);
+    const moved = (await call(client, 'browser_action', { tab: 't1', action: 'click', ref: 'e2' })).text;
+    expect(moved.split(stale)).toHaveLength(2);
+    const oldWindow = (await call(client, 'browser_action', { tab: 't1', action: 'click', ref: 'e2' })).text;
+    expect(oldWindow.split(stale)).toHaveLength(2);
+    for (const text of [(await call(client, 'browser_action', { tab: 't1', action: 'click', ref: 'e2' })).text, (await call(client, 'browser_action', { tab: 't1', action: 'click', ref: 'e2' })).text]) {
+      expect(text).not.toContain('The page changed.');
+      expect(text).not.toContain('Nothing changed');
+      expect(text).not.toContain(stale);
+    }
+  });
+
   it('action: данные страницы ответа (подпись выбранной опции) — в ограде под адресом, не в первой строке (финальная рецензия m2)', async () => {
     const client = await connect(await startEndpoint());
     answers.push({ status: 200, body: { ok: true, result: { tab: 't1', url: 'http://localhost:5173/', done: 'Selected an option in e3.', navigated: false, notes: [], pageData: 'Selected option: Red' } } });
@@ -467,6 +491,15 @@ describe('инструменты действий (этап D)', () => {
     );
     expect((await call(client, 'browser_action', { tab: 't1', action: 'click', ref: 'e4' })).text).toContain('wait');
     expect((await call(client, 'browser_action', { tab: 't1', action: 'click', ref: 'e4' })).text).toContain('browser_snapshot');
+  });
+
+  it('covered: текст окна и подсказка в одной строке отказа', async () => {
+    const client = await connect(await startEndpoint());
+    answers.push({ status: 200, body: { ok: false, error: { code: 'covered', message: 'Element e4 is covered by another element; nothing was clicked.' } } });
+    const result = await call(client, 'browser_action', { tab: 't1', action: 'click', ref: 'e4' });
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain(`covered: Element e4 is covered by another element; nothing was clicked. ${BROWSER_TOOL_HINTS.covered}`);
+    expect(BROWSER_TOOL_HINTS.covered).toContain('Close or move what covers the element');
   });
 
   it('подсказка к human_busy годится и к Select/Annotate, и к печати человека: причину не придумывает (D2 живых проверок)', async () => {

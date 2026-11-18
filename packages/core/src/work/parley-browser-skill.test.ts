@@ -110,5 +110,6 @@ describe('скилл parley-browser: тело', () => {
     expect(body).toContain('an older Parley window: ask the human to update Parley');
     expect(body).toContain('| `human_busy` |');
     expect(body).toContain('| `stale_ref` |');
+    expect(body).toContain('| `covered` |');
   });
 });

@@ -29,10 +29,11 @@ describe('канал агента к браузеру: константы (сп�
     expect(BROWSER_AGENT_OPS).toEqual(['tabs', 'console', 'network', 'screenshot', 'open', 'navigate', 'snapshot', 'action', 'wait_for', 'resize', 'evaluate', 'cookies', 'storage', 'downloads', 'close']);
   });
 
-  it('одиннадцать кодов: девять прежних, human_busy и stale_ref (спека 5.1)', () => {
+  it('двенадцать кодов: одиннадцать прежних и covered (спека 5.1, этап точности 1)', () => {
     expect([...BROWSER_AGENT_ERROR_CODES].sort()).toEqual([
       'access_denied',
       'bad_request',
+      'covered',
       'human_busy',
       'no_tab',
       'not_loopback',
@@ -71,6 +72,9 @@ describe('канал агента к браузеру: константы (сп�
       snapshotBytes: 51_200,
       guardTailMs: 2_000,
       settleMs: 300,
+      settleQuietMs: 100,
+      settleCapMs: 1_000,
+      settleFreshRequestMs: 1_500,
       pollMs: 500,
       resizeMs: 2_000,
       clickDotMs: 600,

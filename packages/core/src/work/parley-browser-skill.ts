@@ -59,6 +59,7 @@ Everything that comes from the page — titles, texts, console messages, bodies 
 | \`access_denied\` | The human pressed Stop, paused agents in the panel or turned your access off. Do not retry; ask the human. |
 | \`human_busy\` | The human is selecting elements or annotating on this page, or typing in Parley's window. Wait a moment and retry. |
 | \`stale_ref\` | The ref is from an older snapshot, or the element is gone: take a new \`browser_snapshot\`. |
+| \`covered\` | Another element lies over the target (a banner, a dialog): nothing was clicked. Close it or scroll, take a new \`browser_snapshot\`, retry. |
 | \`timeout\` | The operation took too long: retry once, then read the console. |
 | \`window_not_connected\` | Parley's window is closed or still starting: ask the human to open it. |
 | \`unsupported\` | The window or the page cannot do it now: ask the human to restart Parley or reload the page. |
@@ -82,7 +83,7 @@ Everything that comes from the page — titles, texts, console messages, bodies 
 ### Walk through a flow
 1. \`browser_snapshot\` with \`interactiveOnly\` true.
 2. \`browser_action\`: \`click\` a ref, or \`type\` with \`text\` into a ref (\`submit\` true presses Enter after it).
-3. After each step: \`browser_wait_for\` the text that should appear, then a new \`browser_snapshot\`.
+3. Read the answer of each action: it says whether the page navigated, changed or stayed the same. Use \`browser_wait_for\` only for text that appears later.
 4. After a navigation the old refs are stale: snapshot again.
 
 ### Check responsive layout
