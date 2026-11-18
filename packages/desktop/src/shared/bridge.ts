@@ -80,6 +80,42 @@ export interface UpdateInfo {
   url: string;
 }
 
+/** Почему проверка новой версии не ответила. */
+export type UpdateCheckFailure =
+  | 'network' // нет ответа, обрыв, таймаут, 5xx и прочие не-2xx, кроме ниже
+  | 'rate_limited' // 403 или 429: лимит GitHub для запросов без токена
+  | 'bad_response'; // ответ пришёл, но не годится: 404, больше предела, не JSON, не стабильный релиз
+
+/** Итог проверки — по кнопке «Check now» или по расписанию. */
+export type UpdateCheckResult =
+  | { kind: 'current'; latest: string; checkedAt: number } // последний релиз не новее запущенной версии
+  | { kind: 'available'; latest: string; checkedAt: number } // есть новее
+  | { kind: 'failed'; reason: UpdateCheckFailure; checkedAt: number }
+  | { kind: 'unavailable' }; // окно не собрано или PARLEY_UPDATE_CHECK=off
+
+/** Сведения для раздела Settings → About (`app:about-info`). */
+export interface AboutInfo {
+  /** `app.getVersion()` собранного окна; `null` — разработка (как `appVersion` в `ipc.ts`). */
+  version: string | null;
+  /** Сборка: короткий SHA (8 знаков), дата коммита `YYYY-MM-DD`, правки отслеживаемых файлов. Нет git — `null`. */
+  commit: string | null;
+  commitDate: string | null;
+  dirty: boolean;
+  arch: string; // process.arch
+  electron: string; // process.versions.electron
+  chrome: string; // process.versions.chrome
+  node: string; // process.versions.node
+  os: string; // `macOS ${process.getSystemVersion()}`
+  /** Путь `.app`; не из `.app` — `null`. Домашний каталог заменён на `~`. */
+  appPath: string | null;
+  /** `parleyHome()`; домашний каталог заменён на `~`. */
+  dataDir: string;
+  /** Проверка возможна вообще: `updateCheckAllowed(env, app.isPackaged)`. */
+  updateChecks: boolean;
+  /** Последняя завершённая проверка, ручная или по расписанию; `null` — ещё не было. */
+  lastCheck: UpdateCheckResult | null;
+}
+
 /** Почему попытка самообновления отказала (спека self-update §5.1). */
 export type UpdateFailure =
   | 'network' // нет ответа, не 2xx, обрыв, вышло время ожидания
@@ -161,6 +197,8 @@ export interface ParleyBridge {
      * перезапускают. `null` — окно не собрано (`pnpm dev`, E2E), и сверять нечего.
      */
     version(): Promise<string | null>;
+    /** Сведения о сборке и окружении для Settings → About (`app:about-info`). */
+    aboutInfo(): Promise<AboutInfo>;
     restartHost(): Promise<void>;
     /** «Retry» экрана «No connection to host»: подключение заново, с короткой паузой (fix-final-b). */
     reconnect(): Promise<void>;

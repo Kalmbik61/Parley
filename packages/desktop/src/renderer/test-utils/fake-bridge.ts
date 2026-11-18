@@ -985,6 +985,21 @@ export function createFakeBridge(): FakeBridge {
       chooseFolder: async () => null,
       chooseFiles: async () => chosenFiles,
       version: async () => appVersion,
+      aboutInfo: async () => ({
+        version: '0.0.0-test',
+        commit: '2b52d262',
+        commitDate: '2026-11-17',
+        dirty: false,
+        arch: 'arm64',
+        electron: '44.0.0',
+        chrome: '140.0.0.0',
+        node: '24.0.0',
+        os: 'macOS 15.0',
+        appPath: '/Applications/Parley.app',
+        dataDir: '~/.parley',
+        updateChecks: false,
+        lastCheck: null,
+      }),
       restartHost: async () => {
         hostActions.push('restartHost');
       },

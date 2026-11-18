@@ -3,7 +3,7 @@ import type { WorksSyncSurfaceBatch, WorksSyncSurfaceStatus } from '@parley/prot
 import type { WorksSyncBridge } from '../shared/bridge.js';
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { EventMessage, EventName, MethodName, NotificationName } from '@parley/protocol';
-import type { AppNote, CloseAnswer, DiagnosticsSaveResult, FocusTarget, ParleyBridge, HostStatus, UpdateResult, UpdateState } from '../shared/bridge.js';
+import type { AboutInfo, AppNote, CloseAnswer, DiagnosticsSaveResult, FocusTarget, ParleyBridge, HostStatus, UpdateResult, UpdateState } from '../shared/bridge.js';
 import type { BrowserAuthCancel, BrowserAuthRequest } from '../shared/basic-auth.js';
 import type { DevtoolsBatch, DevtoolsSnapshot, ResponseBody, ViewportSpec } from '../shared/browser-devtools.js';
 import type {
@@ -308,6 +308,7 @@ const bridge = {
     chooseFolder: () => ipcRenderer.invoke('app:choose-folder') as Promise<string | null>,
     chooseFiles: () => ipcRenderer.invoke('app:choose-files') as Promise<string[]>,
     version: () => ipcRenderer.invoke('app:version') as Promise<string | null>,
+    aboutInfo: () => ipcRenderer.invoke('app:about-info') as Promise<AboutInfo>,
     restartHost: () => ipcRenderer.invoke('app:restart-host') as Promise<void>,
     reconnect: () => ipcRenderer.invoke('app:reconnect') as Promise<void>,
     loadLayout: (workKey: string) =>

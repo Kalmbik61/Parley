@@ -5,7 +5,7 @@ import { DECISION_FILE_NAME, METHODS, NOTIFICATIONS, SHARED_FILE_PATH, progressR
 import type { MethodName, NotificationName, Result } from '@parley/protocol';
 import type { BrowserWindow, IpcMain, NativeTheme, Session, WebContents } from 'electron';
 import { clampNoteText } from '../shared/app-note.js';
-import type { AppNote, CloseAnswer, DiagnosticsSaveResult, FocusTarget, UpdateResult, UpdateState } from '../shared/bridge.js';
+import type { AboutInfo, AppNote, CloseAnswer, DiagnosticsSaveResult, FocusTarget, UpdateResult, UpdateState } from '../shared/bridge.js';
 import { splitUrlCredentials } from '../shared/basic-auth.js';
 import { encodeIpcError } from '../shared/ipc-error.js';
 import { DEVTOOLS_LIMITS, isViewportSpec, type DevtoolsSnapshot } from '../shared/browser-devtools.js';
@@ -248,6 +248,8 @@ export interface RegisterIpcOptions {
    * `package.json` и отдаёт свою версию, а не версию Parley, — сверять нечего.
    */
   appVersion: string | null;
+  /** Сведения для Settings → About (`app:about-info`); сеть не трогает. */
+  aboutInfo: () => AboutInfo;
   /**
    * Окно сохранило `ui.json` (`app:save-ui`): main реагирует на смену настроек сразу — включённая проверка новой
    * версии идёт тут же (`main/update-check.ts`, `settingsChanged`). Вызывается после записи; не бросает.
@@ -421,6 +423,7 @@ export function registerIpc(options: RegisterIpcOptions): void {
     installUpdate,
     takeUpdateResult,
     appVersion,
+    aboutInfo,
     onUiSaved,
     setBadge,
     layoutStore,
@@ -576,6 +579,7 @@ export function registerIpc(options: RegisterIpcOptions): void {
   ipcMain.handle('app:install-update', withIpcError(() => installUpdate()));
   ipcMain.handle('app:take-update-result', withIpcError(() => takeUpdateResult()));
   ipcMain.handle('app:version', withIpcError(async () => appVersion));
+  ipcMain.handle('app:about-info', withIpcError(async () => aboutInfo()));
 
   ipcMain.on('app:set-badge', (_event, count: number) => {
     setBadge(count);
