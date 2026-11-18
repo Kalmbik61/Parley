@@ -186,6 +186,24 @@ describe('pty.send', () => {
   });
 });
 
+describe('pty.screenText', () => {
+  const ref = { projectPath: '/p', workId: 'w-0001', sessionId: 's-01' };
+
+  it('rows — целое от 1 до 40; лишние ключи и пропуск ref отвергаются', () => {
+    expect(METHODS['pty.screenText'].safeParse({ ref, rows: 1 }).success).toBe(true);
+    expect(METHODS['pty.screenText'].safeParse({ ref, rows: 40 }).success).toBe(true);
+    expect(METHODS['pty.screenText'].safeParse({ ref, rows: 0 }).success).toBe(false);
+    expect(METHODS['pty.screenText'].safeParse({ ref, rows: 41 }).success).toBe(false);
+    expect(METHODS['pty.screenText'].safeParse({ ref, rows: 2.5 }).success).toBe(false);
+    expect(METHODS['pty.screenText'].safeParse({ ref, rows: 24, extra: 1 }).success).toBe(false);
+    expect(METHODS['pty.screenText'].safeParse({ rows: 24 }).success).toBe(false);
+  });
+
+  it('результат — строки экрана', () => {
+    expectTypeOf<Result<'pty.screenText'>>().toEqualTypeOf<{ lines: string[] }>();
+  });
+});
+
 describe('ревью изменений (кусок 8.1)', () => {
   const ref = { projectPath: '/p', workId: 'w-0001', sessionId: 's-01' };
 

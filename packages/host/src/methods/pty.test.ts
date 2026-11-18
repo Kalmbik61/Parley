@@ -67,6 +67,7 @@ function fakePtyManager() {
   const exitListeners = new Set<(ref: SessionRef, exit: ExitInfo) => void>();
   const startListeners = new Set<(ref: SessionRef) => void>();
   const snapshotResult = { snapshot: 'SNAPSHOT', cols: 80, rows: 24 };
+  const screens = new Map<string, string[]>();
 
   const manager: PtyManager = {
     start: (): PtyHandle => {
@@ -81,7 +82,7 @@ function fakePtyManager() {
     input: vi.fn(),
     resize: vi.fn(),
     snapshot: () => snapshotResult,
-    screenText: () => [],
+    screenText: vi.fn((ref: SessionRef, rows?: number) => screens.get(refKey(ref))?.slice(-(rows ?? 1000))),
     stop: async () => ({ exitCode: 0, signal: null }),
     setHostDraft: vi.fn(),
     on(event: 'output' | 'exit' | 'start' | 'draft' | 'host-draft', listener: never): () => void {
@@ -104,6 +105,8 @@ function fakePtyManager() {
   return {
     manager,
     snapshotResult,
+    /** Экран живой сессии для `screenText`: нет записи — нет сессии. */
+    setScreen: (ref: SessionRef, lines: string[]) => screens.set(refKey(ref), lines),
     markLive: (ref: SessionRef) => live.add(refKey(ref)),
     emitOutput: (ref: SessionRef, data: string) => {
       for (const listener of outputListeners) listener(ref, data);
@@ -501,6 +504,39 @@ describe('pty.send и замок смены модели и effort', () => {
     expect(pty.manager.write).not.toHaveBeenCalled();
     release();
     await holding;
+  });
+});
+
+describe('pty.screenText', () => {
+  it('отдаёт строки экрана, спрошенные у менеджера с теми же ref и rows', async () => {
+    const pty = fakePtyManager();
+    pty.setScreen(ref(), ['a', 'b', 'c']);
+    const handlers = createPtyHandlers({ wake: fakeWake(), pty: pty.manager, activity: fakeActivity(), works: fakeWorks() });
+
+    await expect(handlers.ptyScreenText({ ref: ref(), rows: 2 }, requestOf(fakeClient()))).resolves.toEqual({
+      lines: ['b', 'c'],
+    });
+    expect(pty.manager.screenText).toHaveBeenCalledWith(ref(), 2);
+  });
+
+  it('сессии нет — пустой список, без ошибки', async () => {
+    const pty = fakePtyManager();
+    const handlers = createPtyHandlers({ wake: fakeWake(), pty: pty.manager, activity: fakeActivity(), works: fakeWorks() });
+
+    await expect(handlers.ptyScreenText({ ref: ref('s-09'), rows: 24 }, requestOf(fakeClient()))).resolves.toEqual({ lines: [] });
+  });
+
+  it('строки экрана не попадают в журнал хоста', async () => {
+    const pty = fakePtyManager();
+    pty.setScreen(ref(), ['SECRET-SCREEN-LINE']);
+    const handlers = createPtyHandlers({ wake: fakeWake(), pty: pty.manager, activity: fakeActivity(), works: fakeWorks() });
+    const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const request: RequestInfo = { client: fakeClient(), host: { ...fakeHost(), log } };
+
+    await handlers.ptyScreenText({ ref: ref(), rows: 24 }, request);
+
+    for (const method of [log.info, log.warn, log.error]) expect(JSON.stringify(method.mock.calls)).not.toContain('SECRET-SCREEN-LINE');
+    expect(log.info).not.toHaveBeenCalled();
   });
 });
 

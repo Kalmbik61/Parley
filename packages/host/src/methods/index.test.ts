@@ -278,6 +278,13 @@ describe('методы на старте хоста ждут первого чт
     expect([...WORKS_GATED_NOTIFICATIONS]).toEqual(['activity.seen']);
   });
 
+  it('pty.screenText зарегистрирован и не входит в перечень ждущих работ (экран не зависит от снимка работ)', () => {
+    const { deps } = fakeDeps(new Promise<void>(() => {}));
+    const handlers = createHostHandlers(deps);
+    expect(handlers.methods['pty.screenText']).toBeTypeOf('function');
+    expect(WORKS_GATED_METHODS).not.toContain('pty.screenText');
+  });
+
   it('до worksReady ни один из них не трогает сервисы; после — трогает', async () => {
     let markReady!: () => void;
     const ready = new Promise<void>((resolve) => {

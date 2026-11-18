@@ -339,6 +339,7 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     'pty.attach': pty.ptyAttach as AnyHandler,
     'pty.detach': pty.ptyDetach as AnyHandler,
     'pty.send': pty.ptySend as AnyHandler,
+    'pty.screenText': pty.ptyScreenText as AnyHandler,
     'roles.list': createRolesList(roleCatalog, deps.works) as AnyHandler,
     'recipes.list': createRecipesList(roleCatalog) as AnyHandler,
     'sessions.create': sessions.sessionsCreate as AnyHandler,
