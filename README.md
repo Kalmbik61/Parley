@@ -238,8 +238,9 @@ Parley (the button appears after the first attempt to open the app).
 ### Updates
 
 Once a day Parley checks GitHub for a new release and shows a toast when one is out (turn it
-off in Settings → Notifications). Press **Update** in the toast (or in the same place in
-Settings → Notifications): Parley downloads the release archive, checks it against the
+off in Settings → About, where **Check now** asks GitHub right away, even with the daily check off).
+Press **Update** in the toast (or in the same place in
+Settings → About): Parley downloads the release archive, checks it against the
 release's `SHA256SUMS.txt`, unpacks it next to the app and shows **Restart now**. Nothing is
 replaced before that click, and **Cancel** stops the download. Restarting is an ordinary quit:
 it asks about unsaved files and running sessions, stops the agents, and a **Cancel** in any of

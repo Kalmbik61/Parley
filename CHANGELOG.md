@@ -4,6 +4,16 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
+## Unreleased
+
+### Added
+
+- **Settings → About.** A new section shows the Parley version, the build (commit, date, architecture, and `modified` when tracked files were changed), the host version, Electron, Chromium, Node and macOS versions, and the paths of the app and of Parley's data. **Check now** asks GitHub for the latest release at once, also when the automatic check is off, and says what happened: Parley is the latest version, a newer one is available, GitHub could not be reached, GitHub's rate limit was reached, or GitHub sent an unexpected answer. **Release notes** opens the release page of the running version, and **Copy info** puts these details on the clipboard with the home folder written as `~`.
+
+### Changed
+
+- **The update switch and the update row moved from Notifications to About.** **Check for updates automatically** and the row with **Update** now live in Settings → About; the row is shown also when the automatic check is off, so a release found by **Check now** can be installed.
+
 ## 0.37.0
 
 ### Added
