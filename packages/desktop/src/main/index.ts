@@ -1143,6 +1143,7 @@ if (!gotLock) {
         emulation,
         agent: ops,
         basicAuth,
+        clientCert,
       },
       saveDropImage: async () => {
         if (fakeDrops) return saveImage({ png: FAKE_DROP_PNG, dir: dropsDir() });
