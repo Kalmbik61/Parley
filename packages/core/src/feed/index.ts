@@ -69,6 +69,8 @@ export { codexAgentMeta, emptyCodexAgentMeta, withCodexAgentMeta } from './codex
 export type { CodexAgentMeta } from './codex/codex-agents.js';
 export { applyCodexHookEvent, CODEX_EARLY_TOOLS, CODEX_HOOK_EVENTS } from './codex/apply-codex-hook.js';
 export type { CodexHookEvent } from './codex/apply-codex-hook.js';
+export { codexPromptKey, recogniseCodexPrompt } from './codex/terminal-prompt.js';
+export type { CodexPrompt, CodexPromptOption } from './codex/terminal-prompt.js';
 export { applyQwenRecords, emptyQwenCursor, feedFromQwenTranscript } from './qwen/apply-qwen.js';
 export type { QwenCursor, QwenUsage } from './qwen/apply-qwen.js';
 export { parseQwenLine, qwenRecordOf, splitQwenChunk } from './qwen/transcript-record.js';
