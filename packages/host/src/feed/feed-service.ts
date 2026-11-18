@@ -404,6 +404,8 @@ interface SessionFeed {
   codexPoll?: NodeJS.Timeout | undefined;
   /** Кто отвечает на одобрения Codex: `null` — пока неизвестно (у Claude всегда). */
   decisions: FeedDecisions | null;
+  /** `decisions` вернулся к `null` с прошлой дельты: дельта несёт `decisions: null` явно (без поля подписчик оставил бы прежнее). */
+  decisionsReset?: true;
   /** Таймер ожидания первого хука Codex после старта процесса. */
   codexGrace?: NodeJS.Timeout | undefined;
 }
@@ -558,6 +560,8 @@ export function createFeedService(
   /** Идущий поиск вопроса на экране (опрос раз в `terminalFindStepMs`) и проверка после решения. */
   const terminalFinders = new Map<string, NodeJS.Timeout>();
   const terminalConfirms = new Map<string, NodeJS.Timeout>();
+  /** Сессии, которые сейчас ждут одобрения или ответа (`blocked` с нуждой `approval`/`question`): только им ищется вопрос на экране. */
+  const terminalEligible = new Set<string>();
   let stopped = false;
 
   const rawPending: PendingHooks = createPendingHooks({
@@ -722,6 +726,8 @@ export function createFeedService(
     if (upsert.size === 0 && removed.size === 0 && !feed.modeChanged) return;
     feed.batch = { upsert: new Map(), removed: new Set() };
     feed.modeChanged = false;
+    const decisionsReset = feed.decisionsReset === true;
+    delete feed.decisionsReset;
     feed.revision += 1;
     // Журнал задержек (спека диагностики, A4): запись нужна и без открытого Chat, поэтому до проверки подписчиков.
     // Эхо промпта человека — не ответ агента: пачка только из промптов метку не снимает.
@@ -743,7 +749,7 @@ export function createFeedService(
       upsert: Array.from(upsert.values()),
       removed: Array.from(removed),
       mode: feed.state.permissionMode,
-      ...(feed.decisions === null ? {} : { decisions: feed.decisions }),
+      ...(feed.decisions === null ? (decisionsReset ? { decisions: null } : {}) : { decisions: feed.decisions }),
     };
     // Клиенту без `feed-mail` — то же событие без `mail` в `upsert` и `mail:` в `removed`; `revision` тот же, пустая пачка идёт.
     const plain = withoutMail(data);
@@ -842,6 +848,7 @@ export function createFeedService(
   function setDecisions(feed: SessionFeed, value: FeedDecisions): void {
     if (feed.decisions === value) return;
     feed.decisions = value;
+    delete feed.decisionsReset;
     // Дельта уходит и без элементов: окно должно узнать, кто отвечает на одобрения.
     feed.modeChanged = true;
     schedule(feed);
@@ -854,6 +861,7 @@ export function createFeedService(
       return;
     }
     feed.decisions = null;
+    feed.decisionsReset = true;
     feed.modeChanged = true;
     schedule(feed);
   }
@@ -908,7 +916,7 @@ export function createFeedService(
   /** Заводит карточку по узнанному вопросу и берёт её под присмотр: экран сверяется раз в `terminalWatchMs`. */
   function openTerminalPrompt(feed: SessionFeed, prompt: CodexPrompt): void {
     const key = refKey(feed.ref);
-    if (terminalPrompts.has(key) || feed.state.items.some(isPendingCard)) return;
+    if (!terminalEligible.has(key) || terminalPrompts.has(key) || feed.state.items.some(isPendingCard)) return;
     const update = applyCodexTerminalPrompt(feed.state, prompt, at());
     const card = update.changes.find((item): item is FeedCard => isPendingCard(item));
     if (card === undefined) return;
@@ -927,7 +935,7 @@ export function createFeedService(
       }
       const seen = readTerminalPrompt(feed.ref);
       // Ответили в терминале, вопрос сменился или ушёл, сессия перестала ждать: карточка отвечена в другом месте.
-      if (lastActivity.get(key) !== 'blocked' || seen === null || seen.fingerprint !== record.fingerprint) {
+      if (!terminalEligible.has(key) || seen === null || seen.fingerprint !== record.fingerprint) {
         closeTerminalPrompt(feed.ref, 'elsewhere');
       }
     }, terminalWatchMs);
@@ -941,13 +949,14 @@ export function createFeedService(
    */
   function findTerminalPrompt(ref: SessionRef): void {
     const key = refKey(ref);
-    if (stopped || terminalPrompts.has(key) || terminalFinders.has(key)) return;
+    if (stopped || !terminalEligible.has(key) || terminalPrompts.has(key) || terminalFinders.has(key)) return;
     const feed = feedOf(ref);
     if (feed.state.items.some(isPendingCard)) return;
     const startedAt = now();
     const finish = (): void => clearTerminalTimer(terminalFinders, key, 'interval');
     const step = (): void => {
-      if (stopped) return finish();
+      // Сессия перестала ждать до того, как вопрос узнали: поиск снят, карточку по экрану не заводим.
+      if (stopped || !terminalEligible.has(key)) return finish();
       const found = readTerminalPrompt(ref);
       if (found !== null) {
         finish();
@@ -968,7 +977,7 @@ export function createFeedService(
     clearTerminalTimer(terminalConfirms, key, 'timeout');
     const timer = setTimeout(() => {
       terminalConfirms.delete(key);
-      if (stopped || lastActivity.get(key) !== 'blocked') return;
+      if (stopped || !terminalEligible.has(key)) return;
       const seen = readTerminalPrompt(ref);
       // Строки экрана в журнал не идут: только вид вопроса и исход.
       if (seen !== null && seen.fingerprint === before.fingerprint) {
@@ -1944,10 +1953,13 @@ export function createFeedService(
     if (!stopped) {
       const need = value.activity.need?.kind;
       if (activity === 'blocked' && (need === 'approval' || need === 'question')) {
+        terminalEligible.add(key);
         if (isCodexSession(ref)) findTerminalPrompt(ref);
-      } else if (terminalPrompts.has(key)) {
-        // Сессия перестала ждать: ответили в терминале.
-        closeTerminalPrompt(ref, 'elsewhere');
+      } else {
+        // Сессия перестала ждать (или ждёт не этого): идущий поиск снят, ждущая карточка — ответили в терминале.
+        terminalEligible.delete(key);
+        clearTerminalTimer(terminalFinders, key, 'interval');
+        if (terminalPrompts.has(key)) closeTerminalPrompt(ref, 'elsewhere');
       }
     }
     if (stopped || activity !== 'idle' || previous === 'idle') return;
@@ -2041,6 +2053,7 @@ export function createFeedService(
     sentAt.delete(key);
     subscribers.delete(key);
     graceWaiting.delete(key);
+    terminalEligible.delete(key);
     clearProgress(key);
   }
 
@@ -2119,6 +2132,7 @@ export function createFeedService(
     // Ответа вышедшего процесса не будет: метка отправки не должна дожить до чужой пачки.
     sentAt.delete(refKey(ref));
     graceWaiting.delete(refKey(ref));
+    terminalEligible.delete(refKey(ref));
     const feed = feeds.get(refKey(ref));
     if (feed === undefined) {
       pending.settle(ref);
