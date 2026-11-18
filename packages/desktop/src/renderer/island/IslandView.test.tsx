@@ -356,6 +356,21 @@ describe('вид острова', () => {
     expect(props.api.open).toHaveBeenCalledWith({ kind: 'session', ref: REF });
   });
 
+  it('запись без карточки: хост читает экран (inWindow) — «Open in Parley» ведёт в сессию без вида terminal; без метода — «Open terminal»', () => {
+    const withScreen = view({ items: [permissionItem({ card: null, inWindow: true })] });
+    expect(screen.getByTestId('island-open').textContent).toBe(S.island.openInParley);
+    expect(screen.queryByTestId('island-allow')).toBeNull();
+    fireEvent.click(screen.getByTestId('island-open'));
+    expect(withScreen.api.open).toHaveBeenCalledTimes(1);
+    expect(withScreen.api.open).toHaveBeenCalledWith({ kind: 'session', ref: REF });
+    cleanup();
+
+    const withoutScreen = view({ items: [permissionItem({ card: null, inWindow: false })] });
+    expect(screen.getByTestId('island-open').textContent).toBe(S.island.openTerminal);
+    fireEvent.click(screen.getByTestId('island-open'));
+    expect(withoutScreen.api.open).toHaveBeenCalledWith({ kind: 'session', ref: REF });
+  });
+
   it('решается — кнопки выключены', () => {
     view({ items: [permissionItem({ deciding: true })] });
     expect((screen.getByTestId('island-allow') as HTMLButtonElement).disabled).toBe(true);

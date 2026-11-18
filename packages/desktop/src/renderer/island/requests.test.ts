@@ -80,6 +80,33 @@ describe('очередь запросов острова', () => {
     expect(snapshot).toHaveBeenCalledWith({ ref: ref('s-01'), scope: 'attention' });
   });
 
+  it('хост знает pty.screenText — запись Codex без карточки ведёт в Chat (inWindow); без метода и по умолчанию — как раньше', async () => {
+    const { call } = bridge({});
+    useIslandRequests.getState().bind(call as never);
+    const blocked = activityMap([makeActivity(ref('s-03'), 'blocked')]);
+    useIslandRequests.getState().sync(entries, blocked, true);
+    expect(useIslandRequests.getState().items[0]).toMatchObject({ ref: ref('s-03'), card: null, inWindow: true });
+
+    // Метод пропал или появился в том же ожидании: ключ и since прежние, меняется только inWindow.
+    const first = useIslandRequests.getState().items[0]!;
+    useIslandRequests.getState().sync(entries, blocked, false);
+    expect(useIslandRequests.getState().items[0]).toMatchObject({ key: first.key, since: first.since, card: null, inWindow: false });
+    useIslandRequests.getState().sync(entries, blocked, true);
+    expect(useIslandRequests.getState().items[0]).toMatchObject({ key: first.key, since: first.since, inWindow: true });
+
+    useIslandRequests.getState().clear();
+    useIslandRequests.getState().sync(entries, blocked);
+    expect(useIslandRequests.getState().items[0]).toMatchObject({ card: null, inWindow: false });
+  });
+
+  it('запись с карточкой от pty.screenText не меняется', async () => {
+    const { call } = bridge({ 's-01': [permission('c-1')] });
+    useIslandRequests.getState().bind(call as never);
+    useIslandRequests.getState().sync(entries, activityMap([makeActivity(ref('s-01'), 'blocked')]), false);
+    await flush();
+    expect(useIslandRequests.getState().items.find((item) => item.card !== null)).toMatchObject({ card: { cardId: 'c-1' }, inWindow: true });
+  });
+
   // Спека подписок К16: причина «needs you» одна на окно, остров и Telegram — текст из ядра (`needReason`).
   it('Codex с need: переход к терминалу называет причину; без need — прежний «Codex needs your attention»', async () => {
     const { call } = bridge({});

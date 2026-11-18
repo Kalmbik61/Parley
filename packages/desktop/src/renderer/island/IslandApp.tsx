@@ -226,6 +226,8 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
   const navigationEmptyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [progressSelected, setProgressSelected] = useState<SessionRef | null>(null);
   const [progressConnection, setProgressConnection] = useState<{ generation: number; methods: readonly string[] | null }>({ generation: 0, methods: null });
+  // Хост читает экран терминала: запись Codex без карточки ведёт в Chat сессии.
+  const screenText = progressConnection.methods?.includes('pty.screenText') ?? false;
   const [progressDocumentVisible, setProgressDocumentVisible] = useState(!document.hidden);
   const progressScopeRef = useRef('');
   const [progressData, setProgressData] = useState<{ scope: string; state: ProgressState }>({ scope: '', state: { kind: 'loading' } });
@@ -396,8 +398,8 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
     [bridge],
   );
   useEffect(() => {
-    if (connected) useIslandRequests.getState().sync(entries, byRef);
-  }, [connected, entries, byRef]);
+    if (connected) useIslandRequests.getState().sync(entries, byRef, screenText);
+  }, [connected, entries, byRef, screenText]);
 
   const withCard = useMemo(() => new Set(items.filter((item) => item.inWindow).map((item) => refKey(item.ref))), [items]);
   const model = useMemo(() => islandModel(entries, byRef, withCard, cleared, held), [entries, byRef, withCard, cleared, held]);
