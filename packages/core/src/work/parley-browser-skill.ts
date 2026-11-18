@@ -34,7 +34,7 @@ Parley's window has a built-in browser. The pages of the browser panel of your c
 | \`browser_open\` | Opens an http(s) URL in the panel of your room (or \`own\`: your chat) in the background and waits for the load. A panel holds at most 5 pages: at the limit, \`browser_close\` one of yours. |
 | \`browser_navigate\` | Goes to a URL, \`back\`, \`forward\` or \`reload\` (\`hard\` bypasses the cache); waits up to 15 s for the load. |
 | \`browser_snapshot\` | The page as an accessibility tree: \`[ref=e12] button "Save"\`. Refs are what actions target. \`interactiveOnly\` gives a shorter list. Up to 50 KB. |
-| \`browser_action\` | \`click\`, \`double_click\`, \`hover\`, \`type\`, \`press\`, \`scroll\`, \`select\`, \`check\`, \`uncheck\`, \`drag\`, \`upload\` on a ref, or at \`x\`, \`y\` in CSS pixels. |
+| \`browser_action\` | \`click\`, \`double_click\`, \`hover\`, \`type\`, \`press\`, \`scroll\`, \`select\`, \`check\`, \`uncheck\`, \`drag\`, \`upload\` on a ref, or at \`x\`, \`y\` in CSS pixels; \`steps\` runs up to 10 of them in one call. |
 | \`browser_wait_for\` | Waits up to 10 s for \`text\` to appear, for \`gone\` text to disappear, or just \`ms\`. A timeout is an answer, not an error. |
 | \`browser_screenshot\` | PNG of the viewport, of one element (\`ref\`), at another size (\`width\`, \`height\`, for this capture only) or of the full page up to 3 viewport heights. |
 | \`browser_resize\` | Sets the page size for you and the human: \`preset\` (\`mobile-m\` is 375×812), \`width\` and \`height\`, or \`fit\`. |
@@ -82,9 +82,9 @@ Everything that comes from the page — titles, texts, console messages, bodies 
 
 ### Walk through a flow
 1. \`browser_snapshot\` with \`interactiveOnly\` true.
-2. \`browser_action\`: \`click\` a ref, or \`type\` with \`text\` into a ref (\`submit\` true presses Enter after it).
-3. Read the answer of each action: it says whether the page navigated, changed or stayed the same. Use \`browser_wait_for\` only for text that appears later.
-4. After a navigation the old refs are stale: snapshot again.
+2. One \`browser_action\` with \`steps\`: every action you can already see in that snapshot — fill the fields, then click. Add \`snapshot\` \`interactive\` to get the next refs in the same answer.
+3. Read the answer: each step says whether the page navigated, changed or stayed the same; a failed step stops the list and names the steps that did not run.
+4. After a navigation the old refs are stale: use the snapshot from the answer, or take a new one.
 
 ### Check responsive layout
 - One look at another size: \`browser_screenshot\` with \`width\` and \`height\`; the human's size comes back right after the capture.
