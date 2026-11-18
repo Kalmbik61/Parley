@@ -1,0 +1,24 @@
+
+⚠ Heads up, you have less than 25% of your weekly limit left. Run /status for a
+  breakdown.
+
+• Model changed to gpt-6.2-sol medium for Plan mode.
+
+
+› Call your request_user_input tool once with TWO questions: first which color
+  I prefer (red, green, blue), second which size (small, large). Do nothing
+  else.
+
+
+
+  Question 1/2 (2 unanswered)
+  Which color do you prefer?
+
+  › 1. Red (Recommended)  Choose red.
+    2. Green              Choose green.
+    3. Blue               Choose blue.
+    4. None of the above  Optionally, add details in notes (tab)
+
+  tab to add notes | enter to submit answer | ←/→ to navigate questions
+  esc to interrupt
+
