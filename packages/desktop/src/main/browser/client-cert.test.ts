@@ -440,11 +440,9 @@ describe('createCertChoiceStore: файл', () => {
     expect(again.get('a.b:6443')).toBe('sha256/x');
   });
 
-  it('delete снимает запись и с диска; delete отсутствующего файл не создаёт', async () => {
+  it('delete снимает запись и с диска', async () => {
     const file = await fileIn();
     const store = createCertChoiceStore({ file });
-    await store.delete('none:443');
-    await expect(readFile(file, 'utf8')).rejects.toThrow();
     await store.set('a.b:443', 'sha256/x');
     await store.delete('a.b:443');
     expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({ version: 1, choices: {} });
@@ -475,6 +473,31 @@ describe('createCertChoiceStore: файл', () => {
     expect(again.get('keep:443')).toBe('sha256/keep');
     expect(again.get('bad:443')).toBeNull();
     expect(again.get('empty:443')).toBeNull();
+  });
+
+  it('set и delete до окончания load не теряются и не затирают выборы из файла', async () => {
+    const file = await fileIn();
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, JSON.stringify({ version: 1, choices: { 'old:443': 'sha256/old', 'gone:443': 'sha256/gone' } }));
+
+    const store = createCertChoiceStore({ file });
+    const loading = store.load();
+    const setting = store.set('new:443', 'sha256/new');
+    const deleting = store.delete('gone:443');
+    await Promise.all([loading, setting, deleting]);
+    expect(store.get('old:443')).toBe('sha256/old');
+    expect(store.get('new:443')).toBe('sha256/new');
+    expect(store.get('gone:443')).toBeNull();
+    expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({ version: 1, choices: { 'old:443': 'sha256/old', 'new:443': 'sha256/new' } });
+
+    // set до того, как load вообще позвали: выбор из файла остаётся, свой — тоже.
+    const second = createCertChoiceStore({ file });
+    const early = second.set('early:443', 'sha256/early');
+    const late = second.load();
+    await Promise.all([early, late]);
+    expect(second.get('early:443')).toBe('sha256/early');
+    expect(second.get('old:443')).toBe('sha256/old');
+    expect(JSON.parse(await readFile(file, 'utf8')).choices).toEqual({ 'old:443': 'sha256/old', 'new:443': 'sha256/new', 'early:443': 'sha256/early' });
   });
 
   it('clear стирает память и пишет пустые choices', async () => {

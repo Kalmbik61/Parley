@@ -68,42 +68,49 @@ interface ChoicesFile {
 export function createCertChoiceStore(deps: { file: string }): CertChoiceStore {
   const choices = new Map<string, string>();
   const enqueue = createFileQueue();
+  /** Файл уже прочитан в память: до этого запись затёрла бы чужие выборы, которых память ещё не знает. */
+  let loaded = false;
+
+  /** Заменяет память содержимым файла; битый или отсутствующий файл — пусто. Зовётся только внутри очереди. */
+  const read = async (): Promise<void> => {
+    loaded = true;
+    choices.clear();
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(await readFile(deps.file, 'utf8'));
+    } catch {
+      return;
+    }
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return;
+    const raw = (parsed as { choices?: unknown }).choices;
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return;
+    for (const [hostPort, fingerprint] of Object.entries(raw)) {
+      if (typeof fingerprint === 'string' && fingerprint !== '') choices.set(hostPort, fingerprint);
+    }
+  };
 
   const persist = (): Promise<void> => {
     const body: ChoicesFile = { version: 1, choices: Object.fromEntries(choices) };
     return writeAtomic(deps.file, `${JSON.stringify(body, null, 2)}\n`);
   };
 
+  /**
+   * Изменения идут через ту же очередь, что и `load`, и до первой записи читают файл: `set` или `delete` до окончания
+   * `load` не теряются и не затирают выборы, записанные раньше. Память меняется в очереди, `get` видит результат после `await`.
+   */
+  const mutate = (change: () => void): Promise<void> =>
+    enqueue(async () => {
+      if (!loaded) await read();
+      change();
+      await persist();
+    });
+
   return {
-    load: () =>
-      enqueue(async () => {
-        choices.clear();
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(await readFile(deps.file, 'utf8'));
-        } catch {
-          return;
-        }
-        if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return;
-        const raw = (parsed as { choices?: unknown }).choices;
-        if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return;
-        for (const [hostPort, fingerprint] of Object.entries(raw)) {
-          if (typeof fingerprint === 'string' && fingerprint !== '') choices.set(hostPort, fingerprint);
-        }
-      }),
+    load: () => enqueue(read),
     get: (hostPort) => choices.get(hostPort) ?? null,
-    set(hostPort, fingerprint) {
-      choices.set(hostPort, fingerprint);
-      return enqueue(persist);
-    },
-    delete(hostPort) {
-      if (!choices.delete(hostPort)) return Promise.resolve();
-      return enqueue(persist);
-    },
-    clear() {
-      choices.clear();
-      return enqueue(persist);
-    },
+    set: (hostPort, fingerprint) => mutate(() => void choices.set(hostPort, fingerprint)),
+    delete: (hostPort) => mutate(() => void choices.delete(hostPort)),
+    clear: () => mutate(() => choices.clear()),
   };
 }
 
