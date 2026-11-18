@@ -192,8 +192,7 @@ describe('action (спека 5.1, 4.8)', () => {
     expect(error).toMatchObject({ code: 'covered' });
     const message = (error as Error).message;
     expect(message.startsWith('Element e1 is covered by another element; nothing was clicked.')).toBe(true);
-    expect(message).toContain(S.contextFile.pageDataNote);
-    expect(message).toContain('div[role=dialog] "Cookie consent"');
+    expect(message).toBe(`Element e1 is covered by another element; nothing was clicked.\n${S.contextFile.pageDataNote}\n\n\`\`\`text\ndiv[role=dialog] "Cookie consent"\n\`\`\``);
     expect(ctx.input.mouse).not.toHaveBeenCalled();
     expect(ctx.send.mock.calls.filter(([, method]) => method === 'Runtime.releaseObject')).toHaveLength(2);
   });
