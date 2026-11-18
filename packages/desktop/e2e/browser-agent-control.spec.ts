@@ -111,6 +111,18 @@ document.getElementById('slow').addEventListener('click', () => {
 });
 </script>`;
 
+/** Форма из трёх полей и кнопки: список шагов `browser_action` заполняет её одним вызовом. */
+const STEPS_HTML = `<!doctype html><meta name="viewport" content="width=device-width, initial-scale=1"><title>Steps page</title><h1>Steps page</h1>
+<label>First <input id="f1" aria-label="First" autocomplete="off"></label>
+<label>Second <input id="f2" aria-label="Second" autocomplete="off"></label>
+<label>Third <input id="f3" aria-label="Third" autocomplete="off"></label>
+<button id="send">Send</button><div id="status"></div>
+<script>
+document.getElementById('send').addEventListener('click', () => {
+  document.getElementById('status').textContent = 'Sent ' + ['f1', 'f2', 'f3'].map((id) => document.getElementById(id).value).join(',');
+});
+</script>`;
+
 test.describe('агент управляет страницами браузера чата и комнаты (этап D, 22a)', () => {
   test.setTimeout(150_000);
   let home: string;
@@ -131,6 +143,8 @@ test.describe('агент управляет страницами браузер
         res.writeHead(401, { 'content-type': 'application/json' }).end('{"error":"no session"}');
       } else if (url.startsWith('/slow')) {
         setTimeout(() => res.writeHead(200, { 'content-type': 'text/plain' }).end('ok'), 400);
+      } else if (url.startsWith('/steps')) {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(STEPS_HTML);
       } else if (url.startsWith('/cover')) {
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(COVER_HTML);
       } else if (url.startsWith('/change')) {
@@ -341,6 +355,64 @@ test.describe('агент управляет страницами браузер
     const navigated = await agentTool(opened, lead, 'browser_action', { tab, action: 'click', ref: go });
     expect(navigated.isError, navigated.text).toBe(false);
     expect(navigated.text).toContain('The page navigated');
+  });
+
+  test('форма одним вызовом: три type и click по ссылкам из одного снимка, snapshot — в том же ответе', async () => {
+    const opened = await openApp();
+    const { window, lead, electronApp } = opened;
+    const url = `${origin}/steps`;
+    const tab = await openPage(opened, lead, { url, own: true });
+    await showPanel(window, lead);
+    const first = await refOf(opened, lead, tab, 'textbox', 'First');
+    const second = await refOf(opened, lead, tab, 'textbox', 'Second');
+    const third = await refOf(opened, lead, tab, 'textbox', 'Third');
+    const send = await refOf(opened, lead, tab, 'button', 'Send');
+    const actionsBefore = (await readLines<McpResult>(mcpLog)).filter((entry) => entry.tool === 'browser_action').length;
+
+    const answer = await agentTool(opened, lead, 'browser_action', {
+      tab,
+      steps: [
+        { action: 'type', ref: first, text: 'ann' },
+        { action: 'type', ref: second, text: 'bob' },
+        { action: 'type', ref: third, text: 'cat' },
+        { action: 'click', ref: send },
+      ],
+      snapshot: 'interactive',
+    });
+    expect(answer.isError, answer.text).toBe(false);
+    // Ровно один вызов browser_action на всю форму.
+    expect((await readLines<McpResult>(mcpLog)).filter((entry) => entry.tool === 'browser_action')).toHaveLength(actionsBefore + 1);
+    for (const index of [1, 2, 3, 4]) expect(answer.text, `step ${index}`).toMatch(new RegExp(`^${index}\\. `, 'm'));
+    expect(answer.text).toContain('New snapshot:');
+    expect(await guestEval<string>(electronApp, url, "document.getElementById('f1').value")).toBe('ann');
+    expect(await guestEval<string>(electronApp, url, "document.getElementById('f2').value")).toBe('bob');
+    expect(await guestEval<string>(electronApp, url, "document.getElementById('f3').value")).toBe('cat');
+    expect(await guestEval<string>(electronApp, url, "document.getElementById('status').textContent")).toBe('Sent ann,bob,cat');
+  });
+
+  test('список останавливается на устаревшей ссылке: шаг 1 выполнен, Step 2 failed: stale_ref, Not run: 3., третье поле пустое', async () => {
+    const opened = await openApp();
+    const { window, lead, electronApp } = opened;
+    const url = `${origin}/steps`;
+    const tab = await openPage(opened, lead, { url, own: true });
+    await showPanel(window, lead);
+    const first = await refOf(opened, lead, tab, 'textbox', 'First');
+    const third = await refOf(opened, lead, tab, 'textbox', 'Third');
+
+    const answer = await agentTool(opened, lead, 'browser_action', {
+      tab,
+      steps: [
+        { action: 'type', ref: first, text: 'ann' },
+        { action: 'type', ref: 'e9999', text: 'bob' },
+        { action: 'type', ref: third, text: 'cat' },
+      ],
+    });
+    expect(answer.isError, answer.text).toBe(false);
+    expect(answer.text).toMatch(/^1\. Typed 3 characters into /);
+    expect(answer.text).toContain('Step 2 failed: stale_ref');
+    expect(answer.text).toContain('Not run: 3.');
+    expect(await guestEval<string>(electronApp, url, "document.getElementById('f1').value")).toBe('ann');
+    expect(await guestEval<string>(electronApp, url, "document.getElementById('f3').value")).toBe('');
   });
 
   test('ввод агента не попадает в поле человека и не трогает окно (Фокус ревью 1)', async () => {
