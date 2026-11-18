@@ -4060,3 +4060,206 @@ describe('inline mail: live item and reseed (spec 2026-11-12, M4)', () => {
     expect(mailsOf(sub.items)).toEqual([]);
   });
 });
+
+describe('вопрос терминала Codex становится карточкой (план слоя 2, задача 3)', () => {
+  const PROMPTS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../core/src/feed/codex/__fixtures__/prompts');
+  const screenOf = (name: string): string[] => readFileSync(path.join(PROMPTS, `${name}.txt`), 'utf8').split('\n');
+  // Короткие сроки службы: поиск, присмотр и проверка после решения.
+  const SHORT = { findMs: 80, findStepMs: 5, watchMs: 15, confirmMs: 120 };
+  const QUESTION = 'Which color do you prefer?';
+  const pause = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+  type Card = FeedPermissionCard | FeedQuestionCard;
+  const cardsOf = async (): Promise<Card[]> =>
+    (await service.snapshot(REF)).items.filter((item): item is Card => item.kind === 'permission' || item.kind === 'question');
+  const pendingOf = async (): Promise<Card[]> => (await cardsOf()).filter((card) => card.state === 'pending');
+  const waitPending = async (count = 1): Promise<Card[]> => {
+    let found: Card[] = [];
+    await vi.waitFor(async () => {
+      found = await pendingOf();
+      expect(found).toHaveLength(count);
+    });
+    return found;
+  };
+  const blockedWith = (screen: string, need: 'approval' | 'question' = 'approval'): void => {
+    fakes.setScreen(screenOf(screen));
+    fakes.emitActivity(REF, 'blocked', need);
+  };
+
+  beforeEach(() => {
+    fakes.setSessions([{ ref: REF, provider: 'codex' }]);
+    start({ terminalPrompt: SHORT });
+  });
+
+  it('ожидание + экран одобрения команды: одна ждущая карточка permission с via terminal, decisions — window', async () => {
+    blockedWith('command-approval-80x24');
+    const [card] = (await waitPending()) as FeedPermissionCard[];
+    expect(card).toMatchObject({ kind: 'permission', toolName: 'Bash', toolInput: { command: 'touch created.txt' }, via: 'terminal' });
+    expect((await service.snapshot(REF)).decisions).toBe('window');
+  });
+
+  it('три события активности подряд — одна карточка', async () => {
+    fakes.setScreen(screenOf('command-approval-80x24'));
+    for (let attempt = 0; attempt < 3; attempt += 1) fakes.emitActivity(REF, 'blocked', 'approval');
+    await waitPending();
+    fakes.emitActivity(REF, 'blocked', 'approval');
+    await pause(40);
+    expect(await cardsOf()).toHaveLength(1);
+  });
+
+  it('ждущая карточка хука уже есть — карточка по экрану не заводится', async () => {
+    const hook = hookRequest({ hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: { command: 'ls' } });
+    service.onHook(hook);
+    expect(await pendingOf()).toHaveLength(1);
+    blockedWith('command-approval-80x24');
+    await pause(60);
+    const cards = await cardsOf();
+    expect(cards).toHaveLength(1);
+    expect('via' in cards[0]!).toBe(false);
+  });
+
+  it('экран не узнан за срок поиска — карточки нет и экран больше не читается', async () => {
+    blockedWith('idle-80x24');
+    await pause(SHORT.findMs + 60);
+    fakes.setScreen(screenOf('command-approval-80x24'));
+    await pause(60);
+    expect(await cardsOf()).toHaveLength(0);
+  });
+
+  it('decide: allow → клавиша 1, карточка allowed, decisions возвращён', async () => {
+    blockedWith('command-approval-80x24');
+    const [card] = await waitPending();
+    expect(service.decide(REF, card!.cardId, { kind: 'permission', behavior: 'allow' })).toEqual({ applied: true, state: 'allowed' });
+    expect(fakes.writes).toEqual(['1']);
+    expect((await cardsOf())[0]).toMatchObject({ state: 'allowed' });
+    expect((await service.snapshot(REF)).decisions).toBeUndefined();
+  });
+
+  it('decide: allow + always → клавиша 2; deny → клавиша 3', async () => {
+    blockedWith('command-approval-80x24');
+    const [first] = await waitPending();
+    service.decide(REF, first!.cardId, { kind: 'permission', behavior: 'allow', always: true });
+    expect(fakes.writes).toEqual(['2']);
+    // Новый вопрос на экране — новый поиск после проверки; следующий экран — одобрение правки.
+    fakes.writes.length = 0;
+    fakes.setScreen(screenOf('patch-approval-80x24'));
+    const [second] = await vi.waitFor(async () => {
+      const found = await pendingOf();
+      expect(found).toHaveLength(1);
+      return found;
+    });
+    expect(second).toMatchObject({ toolName: 'apply_patch' });
+    expect(service.decide(REF, second!.cardId, { kind: 'permission', behavior: 'deny' })).toEqual({ applied: true, state: 'denied' });
+    expect(fakes.writes).toEqual(['3']);
+  });
+
+  it('вопрос с вариантами: ответ — подпись варианта → цифра варианта, карточка answered', async () => {
+    blockedWith('question-options-80x24', 'question');
+    const [card] = (await waitPending()) as FeedQuestionCard[];
+    expect(card!.questions[0]!.question).toBe(QUESTION);
+    expect(service.decide(REF, card!.cardId, { kind: 'question', answers: { [QUESTION]: 'Blue' } })).toEqual({ applied: true, state: 'answered' });
+    expect(fakes.writes).toEqual(['3']);
+  });
+
+  it('свой ответ клавишей не выражается: applied false, записи в терминал нет (задача 4)', async () => {
+    blockedWith('question-options-80x24', 'question');
+    const [card] = await waitPending();
+    expect(service.decide(REF, card!.cardId, { kind: 'question', answers: { [QUESTION]: 'purple' } })).toEqual({ applied: false, state: 'pending' });
+    expect(fakes.writes).toEqual([]);
+    expect(await pendingOf()).toHaveLength(1);
+  });
+
+  it('экран сменился до решения: записи нет, карточка elsewhere, ответ applied false', async () => {
+    blockedWith('command-approval-80x24');
+    const [card] = await waitPending();
+    fakes.setScreen(screenOf('patch-approval-80x24'));
+    expect(service.decide(REF, card!.cardId, { kind: 'permission', behavior: 'allow' })).toEqual({ applied: false, state: 'elsewhere' });
+    expect(fakes.writes).toEqual([]);
+    expect((await cardsOf())[0]).toMatchObject({ state: 'elsewhere' });
+    expect((await service.snapshot(REF)).decisions).toBeUndefined();
+  });
+
+  it('перерисовка того же вопроса (метка › сместилась) решению не мешает', async () => {
+    blockedWith('command-approval-80x24');
+    const [card] = await waitPending();
+    fakes.setScreen(screenOf('command-approval-second-selected-80x24'));
+    expect(service.decide(REF, card!.cardId, { kind: 'permission', behavior: 'allow' })).toMatchObject({ applied: true });
+    expect(fakes.writes).toEqual(['1']);
+  });
+
+  it('вопрос исчез без решения — по присмотру карточка elsewhere, decisions возвращён', async () => {
+    blockedWith('command-approval-80x24');
+    await waitPending();
+    fakes.setScreen(screenOf('idle-80x24'));
+    await vi.waitFor(async () => expect((await cardsOf())[0]).toMatchObject({ state: 'elsewhere' }));
+    expect((await service.snapshot(REF)).decisions).toBeUndefined();
+  });
+
+  it('сессия перестала ждать — карточка elsewhere', async () => {
+    blockedWith('command-approval-80x24');
+    await waitPending();
+    fakes.emitActivity(REF, 'working');
+    await vi.waitFor(async () => expect((await cardsOf())[0]).toMatchObject({ state: 'elsewhere' }));
+  });
+
+  it('выход процесса — карточка stale, таймеры сняты: новый экран карточки не заводит', async () => {
+    blockedWith('command-approval-80x24');
+    await waitPending();
+    fakes.emitExit(REF);
+    await vi.waitFor(async () => expect((await cardsOf())[0]).toMatchObject({ state: 'stale' }));
+    fakes.setScreen(screenOf('patch-approval-80x24'));
+    await pause(60);
+    expect(await cardsOf()).toHaveLength(1);
+  });
+
+  it('сессия Claude с тем же экраном — ничего', async () => {
+    fakes.setSessions([{ ref: REF, provider: 'claude' }]);
+    blockedWith('command-approval-80x24');
+    await pause(60);
+    expect(await cardsOf()).toHaveLength(0);
+  });
+
+  it('нужда не approval и не question (например, startup) — карточки нет', async () => {
+    fakes.setScreen(screenOf('command-approval-80x24'));
+    fakes.emitActivity(REF, 'blocked', 'startup');
+    await pause(60);
+    expect(await cardsOf()).toHaveLength(0);
+  });
+
+  it('два экрана вопроса подряд — две карточки, по одной на экран', async () => {
+    blockedWith('question-two-first-80x24', 'question');
+    const [first] = await waitPending();
+    expect(first).toMatchObject({ kind: 'question' });
+    expect(service.decide(REF, first!.cardId, { kind: 'question', answers: { [QUESTION]: 'Green' } })).toMatchObject({ applied: true });
+    expect(fakes.writes).toEqual(['2']);
+    // Codex показал второй вопрос; сессия всё ещё ждёт — после проверки поиск идёт заново.
+    fakes.setScreen(screenOf('question-two-second-80x24'));
+    const [second] = (await vi.waitFor(async () => {
+      const found = await pendingOf();
+      expect(found).toHaveLength(1);
+      return found;
+    })) as FeedQuestionCard[];
+    expect(second!.questions[0]!.question).toBe('Which size do you prefer?');
+    expect(second!.cardId).not.toBe(first!.cardId);
+    expect((await cardsOf()).filter((card) => card.kind === 'question')).toHaveLength(2);
+  });
+
+  it('клавиша не сработала (тот же вопрос на экране): запись в журнал без текста экрана и новая карточка', async () => {
+    blockedWith('command-approval-80x24');
+    const [card] = await waitPending();
+    service.decide(REF, card!.cardId, { kind: 'permission', behavior: 'allow' });
+    await vi.waitFor(() => expect(fakes.log.info).toHaveBeenCalledWith('вопрос терминала не снят ответом', expect.objectContaining({ op: 'feed.terminalPrompt', outcome: 'not-applied' })));
+    await waitPending();
+    for (const call of [...fakes.log.info.mock.calls, ...fakes.log.warn.mock.calls]) expect(JSON.stringify(call)).not.toContain('touch created.txt');
+  });
+
+  it('stop() снимает присмотр и возвращает decisions', async () => {
+    blockedWith('command-approval-80x24');
+    await waitPending();
+    await service.stop();
+    fakes.setScreen(screenOf('idle-80x24'));
+    await pause(60);
+    // Лента остановлена: новых изменений и таймеров нет, повторный stop безопасен.
+    await expect(service.stop()).resolves.toBeUndefined();
+  });
+});

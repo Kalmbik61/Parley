@@ -31,6 +31,7 @@ import {
   applyHookEvent,
   applyCodexHookEvent,
   applyCodexRecords,
+  applyCodexTerminalPrompt,
   applyOpencodeMessages,
   applyQwenRecords,
   feedFromOpencodeMessages,
@@ -38,6 +39,7 @@ import {
   claudeProjectRoots,
   closeFeedTurn,
   codexAgentMeta,
+  codexPromptKey,
   codexHooksWanted,
   emptyCodexAgentMeta,
   emptyCodexCursor,
@@ -53,6 +55,7 @@ import {
   isClaudeCode,
   loadConfig,
   parleyHome,
+  recogniseCodexPrompt,
   retryFromTranscript,
   settleCards,
   turnActive,
@@ -61,6 +64,7 @@ import {
 import type {
   CodexAgentMeta,
   CodexCursor,
+  CodexPrompt,
   OpencodeCursor,
   QwenCursor,
   FeedCard,
@@ -152,6 +156,16 @@ export const CODEX_HOOK_GRACE_MS = 15_000;
  */
 export const CODEX_HOLD_MS = 590_000;
 
+/**
+ * Вопрос Codex на экране терминала (план слоя 2, задача 3): сколько и как часто хост ищет вопрос на экране после того,
+ * как сессия стала ждать человека, как часто сверяет экран, пока карточка ждёт, и через сколько после решения
+ * проверяет, что вопрос ушёл с экрана.
+ */
+export const TERMINAL_PROMPT_FIND_MS = 2_000;
+export const TERMINAL_PROMPT_FIND_STEP_MS = 100;
+export const TERMINAL_PROMPT_WATCH_MS = 1_000;
+export const TERMINAL_PROMPT_CONFIRM_MS = 1_500;
+
 export interface FeedServiceDeps {
   host: Pick<HostContext, 'log'>;
   works: Pick<WorksService, 'entry' | 'onChange'>;
@@ -192,6 +206,8 @@ export interface FeedServiceOptions {
   seedTailBytes?: number;
   /** Каталог файлов картинок ленты; по умолчанию `<дом Parley>/feed-images`. */
   imagesDir?: string;
+  /** Сроки карточек по вопросу терминала Codex; по умолчанию `TERMINAL_PROMPT_*`, тесты ставят короткие. */
+  terminalPrompt?: { findMs?: number; findStepMs?: number; watchMs?: number; confirmMs?: number };
 }
 
 export type FeedSnapshot = Result<'feed.snapshot'>;
@@ -526,6 +542,22 @@ export function createFeedService(
   const graceWaiting = new Map<string, SessionRef>();
   /** Таймеры присмотра за Esc из чата. */
   const interruptTimers = new Set<NodeJS.Timeout>();
+  const terminalFindMs = options.terminalPrompt?.findMs ?? TERMINAL_PROMPT_FIND_MS;
+  const terminalFindStepMs = options.terminalPrompt?.findStepMs ?? TERMINAL_PROMPT_FIND_STEP_MS;
+  const terminalWatchMs = options.terminalPrompt?.watchMs ?? TERMINAL_PROMPT_WATCH_MS;
+  const terminalConfirmMs = options.terminalPrompt?.confirmMs ?? TERMINAL_PROMPT_CONFIRM_MS;
+  /** Карточки по вопросу терминала: ключ сессии → запись о вопросе, пока карточка ждёт (хук Codex такой записи не имеет). */
+  interface TerminalPrompt {
+    cardId: string;
+    fingerprint: string;
+    /** `feed.decisions` до карточки: вернуть при закрытии. */
+    decisionsBefore: FeedDecisions | null;
+    watch: NodeJS.Timeout;
+  }
+  const terminalPrompts = new Map<string, TerminalPrompt>();
+  /** Идущий поиск вопроса на экране (опрос раз в `terminalFindStepMs`) и проверка после решения. */
+  const terminalFinders = new Map<string, NodeJS.Timeout>();
+  const terminalConfirms = new Map<string, NodeJS.Timeout>();
   let stopped = false;
 
   const rawPending: PendingHooks = createPendingHooks({
@@ -815,6 +847,165 @@ export function createFeedService(
     schedule(feed);
   }
 
+  function restoreDecisions(feed: SessionFeed, before: FeedDecisions | null): void {
+    if (feed.decisions === before) return;
+    if (before !== null) {
+      setDecisions(feed, before);
+      return;
+    }
+    feed.decisions = null;
+    feed.modeChanged = true;
+    schedule(feed);
+  }
+
+  function isCodexSession(ref: SessionRef): boolean {
+    try {
+      return byFamily(sessionOf(ref).provider, { claude: false, codex: true, qwen: false, opencode: false, neutral: false });
+    } catch {
+      return false;
+    }
+  }
+
+  /** Вопрос на экране сессии; `null` — экрана нет или вопрос не узнан. Строки экрана дальше этой функции не идут. */
+  function readTerminalPrompt(ref: SessionRef): CodexPrompt | null {
+    const lines = deps.pty.screenText(ref);
+    return lines === undefined ? null : recogniseCodexPrompt(lines);
+  }
+
+  function clearTerminalTimer(timers: Map<string, NodeJS.Timeout>, key: string, kind: 'interval' | 'timeout'): void {
+    const timer = timers.get(key);
+    if (timer === undefined) return;
+    if (kind === 'interval') clearInterval(timer);
+    else clearTimeout(timer);
+    timers.delete(key);
+  }
+
+  /** Снимает запись о вопросе терминала; `outcome` — во что перевести ждущую карточку (`null` — карточку не трогать). */
+  function closeTerminalPrompt(ref: SessionRef, outcome: 'elsewhere' | 'stale' | null): void {
+    const key = refKey(ref);
+    const record = terminalPrompts.get(key);
+    if (record === undefined) return;
+    clearInterval(record.watch);
+    terminalPrompts.delete(key);
+    const feed = feeds.get(key);
+    if (feed === undefined) return;
+    restoreDecisions(feed, record.decisionsBefore);
+    if (outcome !== null) settle(ref, outcome, [record.cardId]);
+  }
+
+  /** Всё, что хост держит по вопросам терминала сессии: поиск, проверку после решения и запись (карточка не меняется). */
+  function dropTerminalState(key: string): void {
+    clearTerminalTimer(terminalFinders, key, 'interval');
+    clearTerminalTimer(terminalConfirms, key, 'timeout');
+    const record = terminalPrompts.get(key);
+    if (record === undefined) return;
+    clearInterval(record.watch);
+    terminalPrompts.delete(key);
+    const feed = feeds.get(key);
+    if (feed !== undefined) restoreDecisions(feed, record.decisionsBefore);
+  }
+
+  /** Заводит карточку по узнанному вопросу и берёт её под присмотр: экран сверяется раз в `terminalWatchMs`. */
+  function openTerminalPrompt(feed: SessionFeed, prompt: CodexPrompt): void {
+    const key = refKey(feed.ref);
+    if (terminalPrompts.has(key) || feed.state.items.some(isPendingCard)) return;
+    const update = applyCodexTerminalPrompt(feed.state, prompt, at());
+    const card = update.changes.find((item): item is FeedCard => isPendingCard(item));
+    if (card === undefined) return;
+    const decisionsBefore = feed.decisions;
+    commit(feed, update);
+    setDecisions(feed, 'window');
+    const watch = setInterval(() => {
+      const record = terminalPrompts.get(key);
+      if (record === undefined) return;
+      // Карточку унёс сев ленты из журнала (он заменяет состояние): запись снята, вопрос на экране ищется заново.
+      const own = feed.state.items.find((item) => isCard(item) && item.cardId === record.cardId);
+      if (own === undefined || !isPendingCard(own)) {
+        closeTerminalPrompt(feed.ref, null);
+        findTerminalPrompt(feed.ref);
+        return;
+      }
+      const seen = readTerminalPrompt(feed.ref);
+      // Ответили в терминале, вопрос сменился или ушёл, сессия перестала ждать: карточка отвечена в другом месте.
+      if (lastActivity.get(key) !== 'blocked' || seen === null || seen.fingerprint !== record.fingerprint) {
+        closeTerminalPrompt(feed.ref, 'elsewhere');
+      }
+    }, terminalWatchMs);
+    watch.unref();
+    terminalPrompts.set(key, { cardId: card.cardId, fingerprint: prompt.fingerprint, decisionsBefore, watch });
+  }
+
+  /**
+   * Сессия Codex ждёт одобрения или ответа: ищет вопрос на экране (каждые `terminalFindStepMs` до `terminalFindMs`) и,
+   * узнав, заводит карточку. Нет ждущей карточки в ленте, нет записи о вопросе и второго поиска — иначе ничего.
+   */
+  function findTerminalPrompt(ref: SessionRef): void {
+    const key = refKey(ref);
+    if (stopped || terminalPrompts.has(key) || terminalFinders.has(key)) return;
+    const feed = feedOf(ref);
+    if (feed.state.items.some(isPendingCard)) return;
+    const startedAt = now();
+    const finish = (): void => clearTerminalTimer(terminalFinders, key, 'interval');
+    const step = (): void => {
+      if (stopped) return finish();
+      const found = readTerminalPrompt(ref);
+      if (found !== null) {
+        finish();
+        openTerminalPrompt(feed, found);
+        return;
+      }
+      if (now() - startedAt >= terminalFindMs) finish();
+    };
+    const timer = setInterval(step, terminalFindStepMs);
+    timer.unref();
+    terminalFinders.set(key, timer);
+    step();
+  }
+
+  /** После решения человека: через `terminalConfirmMs` вопрос должен уйти с экрана; не ушёл — запись в журнал, поиск заново. */
+  function confirmTerminalAnswer(ref: SessionRef, before: CodexPrompt): void {
+    const key = refKey(ref);
+    clearTerminalTimer(terminalConfirms, key, 'timeout');
+    const timer = setTimeout(() => {
+      terminalConfirms.delete(key);
+      if (stopped || lastActivity.get(key) !== 'blocked') return;
+      const seen = readTerminalPrompt(ref);
+      // Строки экрана в журнал не идут: только вид вопроса и исход.
+      if (seen !== null && seen.fingerprint === before.fingerprint) {
+        log.info('вопрос терминала не снят ответом', { op: 'feed.terminalPrompt', outcome: 'not-applied', kind: before.kind, sessionId: ref.sessionId });
+      }
+      // Следующий вопрос из нескольких или тот же, если клавиша не сработала: карточка по новому поиску.
+      findTerminalPrompt(ref);
+    }, terminalConfirmMs);
+    timer.unref();
+    terminalConfirms.set(key, timer);
+  }
+
+  /** Решение по карточке терминала: клавиша уходит, только если экран прямо сейчас даёт тот же отпечаток. */
+  function decideTerminalPrompt(feed: SessionFeed, record: TerminalPrompt, decision: FeedDecision, current: FeedCardState): Result<'feed.decide'> {
+    const seen = readTerminalPrompt(feed.ref);
+    if (seen === null || seen.fingerprint !== record.fingerprint) {
+      closeTerminalPrompt(feed.ref, 'elsewhere');
+      return { applied: false, state: 'elsewhere' };
+    }
+    const keyToPress = codexPromptKey(seen, decision);
+    if (keyToPress === null) return { applied: false, state: current };
+    const result = applyDecision(feed.state, record.cardId, decision, at());
+    if (!result.applied) return { applied: false, state: current };
+    // Между сверкой экрана и записью нет `await`: клавиша уходит в тот вопрос, который только что видели.
+    try {
+      deps.pty.write(feed.ref, keyToPress);
+    } catch {
+      closeTerminalPrompt(feed.ref, 'stale');
+      return { applied: false, state: 'stale' };
+    }
+    const next = result.changes.find((item): item is FeedCard => isCard(item) && item.cardId === record.cardId);
+    commit(feed, result);
+    closeTerminalPrompt(feed.ref, null);
+    confirmTerminalAnswer(feed.ref, seen);
+    return { applied: true, state: next?.state ?? current };
+  }
+
   function clearCodexGrace(feed: SessionFeed): void {
     if (feed.codexGrace !== undefined) clearTimeout(feed.codexGrace);
     feed.codexGrace = undefined;
@@ -828,6 +1019,8 @@ export function createFeedService(
     const { ref, body } = request;
     const feed = feedOf(ref);
     clearCodexGrace(feed);
+    // Карточка хука и карточка по экрану вместе не живут: ждущая карточка экрана уступает хуку.
+    if (body['hook_event_name'] === 'PermissionRequest') closeTerminalPrompt(ref, 'elsewhere');
     setDecisions(feed, 'window');
     const update = applyCodexHookEvent(feed.state, stashHookBody(body, saveImage), at());
     commit(feed, update);
@@ -1748,6 +1941,15 @@ export function createFeedService(
     const activity = value.activity.activity;
     const previous = lastActivity.get(key);
     lastActivity.set(key, activity);
+    if (!stopped) {
+      const need = value.activity.need?.kind;
+      if (activity === 'blocked' && (need === 'approval' || need === 'question')) {
+        if (isCodexSession(ref)) findTerminalPrompt(ref);
+      } else if (terminalPrompts.has(key)) {
+        // Сессия перестала ждать: ответили в терминале.
+        closeTerminalPrompt(ref, 'elsewhere');
+      }
+    }
     if (stopped || activity !== 'idle' || previous === 'idle') return;
     const feed = feeds.get(key);
     if (feed === undefined) return;
@@ -1788,6 +1990,7 @@ export function createFeedService(
     feed.timer = undefined;
     clearCodexGrace(feed);
     stopCodexPoll(feed);
+    dropTerminalState(key);
     pending.settle(feed.ref);
     feed.progressEpoch?.eligible.clear();
     feed.progressEpoch = null;
@@ -1922,6 +2125,7 @@ export function createFeedService(
       return;
     }
     clearCodexGrace(feed);
+    dropTerminalState(refKey(ref));
     // Процесс вышел: висящим хукам `{}`, карточки — `stale` (терминал ответит уже новому процессу),
     // ход закрыт.
     const time = at();
@@ -2197,6 +2401,11 @@ export function createFeedService(
       // Решение без удержанного хука ушло бы в никуда: карточка в окне сказала бы «allowed», а CLI
       // ничего не получил. Такое решение не применяется (окно повторит, когда хук дойдёт).
       const held = pending.get(feed.ref, cardId);
+      if (held === undefined && current === 'pending') {
+        // Карточка по вопросу терминала Codex: хука нет, клавишу вводит хост.
+        const record = terminalPrompts.get(refKey(feed.ref));
+        if (record !== undefined && record.cardId === cardId) return decideTerminalPrompt(feed, record, decision, current);
+      }
       if (held === undefined || current !== 'pending') return { applied: false, state: current };
       const result = applyDecision(feed.state, cardId, decision, at());
       if (!result.applied) return { applied: false, state: current };
@@ -2263,6 +2472,8 @@ export function createFeedService(
       clearInterval(evictSweep);
       // Ждущие посевы запускаются и сразу выходят (`stopped`): снимок, ждавший место, завершается пустой лентой.
       for (const waiter of seedWaiters.splice(0)) waiter.start();
+      // До снятия таймеров лент: возврат `decisions` ставит пачку дельты.
+      for (const key of new Set([...terminalFinders.keys(), ...terminalConfirms.keys(), ...terminalPrompts.keys()])) dropTerminalState(key);
       for (const feed of feeds.values()) {
         if (feed.timer !== undefined) clearTimeout(feed.timer);
         feed.timer = undefined;
