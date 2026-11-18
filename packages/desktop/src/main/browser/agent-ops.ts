@@ -166,7 +166,15 @@ export interface PageUse {
   changes?: boolean;
   window?: boolean;
   seen?: boolean;
+  /**
+   * Список шагов: обрыв человека (Stop, пауза, выключатель) не отбрасывает задачу сразу, а ждёт её частичный результат не
+   * дольше стольких мс — иначе агент не узнает, какие шаги выполнены. Не вышло за срок — отказ с причиной обрыва, как у прочих.
+   */
+  partialMs?: number;
 }
+
+/** Сколько мс после обрыва ждать частичный результат списка шагов (`PageUse.partialMs`). */
+export const STEPS_ABORT_GRACE_MS = 1_000;
 
 /** 15b: окно операции (перехват выбора файла, скачивания, подавление `browser:focus`); в 15a его нет. */
 export interface PageWindowHooks {
@@ -278,10 +286,18 @@ export function createPageRunner(deps: {
       };
       const endWindow = use.window === true ? (deps.window?.begin(contents, record, request) ?? null) : null;
       deps.activity({ webContentsId: contents.id, session: request.label, op: request.op, phase: 'start' });
+      let graceTimer: ReturnType<typeof setTimeout> | undefined;
       try {
         // Только обрыв человека (Stop, пауза, выключатель) отпускает очередь сразу; срок очереди держит её до настоящего конца задачи.
         const aborted = new Promise<never>((_resolve, reject) => {
-          control.signal.addEventListener('abort', () => reject(control.signal.reason), { once: true });
+          control.signal.addEventListener('abort', () => {
+            if (use.partialMs === undefined) {
+              reject(control.signal.reason);
+              return;
+            }
+            graceTimer = setTimeout(() => reject(control.signal.reason), use.partialMs);
+            graceTimer.unref();
+          }, { once: true });
         });
         // Незавершённая задача после обрыва не должна оставить необработанный отказ.
         const working = task(contents, record, guard);
@@ -290,6 +306,7 @@ export function createPageRunner(deps: {
       } catch (error) {
         throw pageFailure(record, contents, signal, error);
       } finally {
+        clearTimeout(graceTimer);
         running.delete(entry);
         const held = lent;
         const free = (): void => {
@@ -871,7 +888,7 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
               ...(deps.clientCert === undefined ? {} : { clientCert: deps.clientCert }),
               ...(deps.uploadHome === undefined ? {} : { home: deps.uploadHome }),
             });
-            return ok(await runner.run(request, args.tab, (contents, record, guard) => actions.actionOf(contents, record, request, args, guard), { changes: true, window: true, seen: true }));
+            return ok(await runner.run(request, args.tab, (contents, record, guard) => actions.actionOf(contents, record, request, args, guard), { changes: true, window: true, seen: true, ...(args.steps === undefined ? {} : { partialMs: STEPS_ABORT_GRACE_MS }) }));
           }
           case 'navigate': {
             const args = parsed.data as BrowserAgentArgs<'navigate'>;

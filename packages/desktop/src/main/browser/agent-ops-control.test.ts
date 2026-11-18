@@ -15,7 +15,10 @@ import type { BrowserAgentDownload, BrowserAgentDownloadsResult, BrowserAgentNav
 import { createAgentStorage } from './agent-storage.js';
 import { createAgentWindow } from './agent-window.js';
 import { createTypingClock } from './human-typing.js';
-import { agentViewport, createAgentOps, createFocusBorrower, createPageRunner, createWindowHooks, NOT_MOUNTED_NOTE, resolveAgentUrl, routeDownload, AgentOpError, type PageUse } from './agent-ops.js';
+import { agentViewport, createAgentOps, createFocusBorrower, createPageRunner, createWindowHooks, NOT_MOUNTED_NOTE, resolveAgentUrl, routeDownload, AgentOpError, STEPS_ABORT_GRACE_MS, type PageUse } from './agent-ops.js';
+import { createAgentActions } from './agent-actions.js';
+import type { AgentDom } from './agent-dom.js';
+import type { AgentInput } from './agent-input.js';
 
 const REF = { projectPath: '/proj', workId: 'w-1', sessionId: 's-02' };
 const WORK = workKey(REF.projectPath, REF.workId);
@@ -215,6 +218,56 @@ describe('занятость, Stop, пауза и выключатель (Фок
     await expect(first).rejects.toMatchObject({ code: 'access_denied', message: expect.stringContaining('paused by the human') });
     await expect(second).rejects.toMatchObject({ code: 'access_denied' });
     await expect(ctx.page('t1', {})).rejects.toMatchObject({ code: 'access_denied' });
+  });
+
+  it('Stop посреди списка шагов (настоящие runner и actionOf): ответ несёт выполненные шаги и первый несделанный, а не просто отказ', async () => {
+    const ctx = pageSetup();
+    let clicks = 0;
+    let release = (): void => undefined;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const mouse = vi.fn(async (_contents: unknown, _steps: unknown, _mask: unknown, guard: InputGuard): Promise<void> => {
+      clicks += 1;
+      if (clicks === 2) {
+        await gate;
+        guard.check();
+      }
+    });
+    const actions = createAgentActions({
+      inspector: { send: vi.fn(async () => ({})) } as never,
+      input: { mouse, key: vi.fn(), text: vi.fn() } as unknown as AgentInput,
+      dom: { nodeOf: () => 1, centerOf: vi.fn(async () => ({ x: 1, y: 1 })), snapshotOf: vi.fn() } as unknown as AgentDom,
+      emulation: { fitOf: () => null },
+      window: { take: () => [] },
+      activity: () => undefined,
+    });
+    const click = { action: 'click', x: 5, y: 5 } as const;
+    const pending = ctx.runner.run(request('action'), 't1', (contents, record, guard) => actions.actionOf(contents, record, request('action'), { tab: 't1', steps: [click, click, click] }, guard), { changes: true, partialMs: STEPS_ABORT_GRACE_MS });
+    await vi.waitFor(() => expect(clicks).toBe(2));
+    ctx.ops.stop(7);
+    release();
+    await expect(pending).resolves.toMatchObject({
+      done: 'Ran 1 of 3 steps.',
+      steps: [{ done: 'Clicked (5, 5).' }],
+      stopped: { at: 2, reason: 'failed', code: 'access_denied', message: expect.stringContaining('paused by the human') },
+    });
+    expect(clicks).toBe(2);
+  });
+
+  it('partialMs: задача, которая не отвечает после Stop, не держит ответ дольше срока — отказ с причиной обрыва; без partialMs отказ сразу', async () => {
+    const ctx = pageSetup();
+    let started = false;
+    const hang = (): Promise<never> => {
+      started = true;
+      return new Promise<never>(() => undefined);
+    };
+    const waiting = ctx.runner.run(request('action'), 't1', hang, { changes: true, partialMs: 40 });
+    const settled = vi.fn();
+    void waiting.then(settled, settled);
+    await vi.waitFor(() => expect(started).toBe(true));
+    ctx.ops.stop(7);
+    await Promise.resolve();
+    expect(settled).not.toHaveBeenCalled();
+    await expect(waiting).rejects.toMatchObject({ code: 'access_denied' });
   });
 
   it('«Pause agents» (запись paused: true) посреди операции — обрыв, как у Stop', async () => {
