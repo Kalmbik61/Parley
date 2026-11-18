@@ -41,6 +41,8 @@ import {
   FEED_SEED_CONCURRENCY,
   readRecordsTail,
   SEED_RECORD_WINDOW,
+  TERMINAL_MESSAGE_POLL_MS,
+  TERMINAL_MESSAGE_WAIT_MS,
   TERMINAL_PROMPT_CONFIRM_MS,
   TERMINAL_PROMPT_FIND_MS,
   TERMINAL_PROMPT_FIND_STEP_MS,
@@ -4326,5 +4328,167 @@ describe('вопрос терминала Codex становится карто�
     fakes.setScreen(screenOf('idle-80x24'));
     await advance(TERMINAL_PROMPT_CONFIRM_MS * 2);
     await expect(service.stop()).resolves.toBeUndefined();
+  });
+});
+
+describe('свой ответ и отказ с текстом по вопросу терминала Codex (план слоя 2, задача 4)', () => {
+  const PROMPTS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../core/src/feed/codex/__fixtures__/prompts');
+  const screenOf = (name: string): string[] => readFileSync(path.join(PROMPTS, `${name}.txt`), 'utf8').split('\n');
+  const QUESTION = 'Which color do you prefer?';
+  const DOWN = '\u001b[B';
+  const advance = async (ms: number): Promise<void> => {
+    await vi.advanceTimersByTimeAsync(ms);
+  };
+  type Card = FeedPermissionCard | FeedQuestionCard;
+  const cardsOf = async (): Promise<Card[]> =>
+    (await service.snapshot(REF)).items.filter((item): item is Card => item.kind === 'permission' || item.kind === 'question');
+  const pendingOf = async (): Promise<Card[]> => (await cardsOf()).filter((card) => card.state === 'pending');
+  const sendMock = vi.fn<(params: { ref: SessionRef; text: string; submit: boolean }) => Promise<{ inserted: boolean; submitted: boolean; reason: null }>>(async () => ({ inserted: true, submitted: true, reason: null }));
+
+  /** Экран вопроса с меткой › на варианте `at`: подписи прежние, сдвигается только метка. */
+  const withSelected = (lines: readonly string[], at: number): string[] =>
+    lines.map((line) => {
+      const match = /^\s*›?\s*(\d)\. (.*)$/.exec(line);
+      return match === null ? line : `  ${Number(match[1]) - 1 === at ? '› ' : '  '}${match[1]}. ${match[2]}`;
+    });
+
+  /** Codex отвечает на клавиши хоста: стрелки двигают метку, Tab открывает заметки, текст появляется, Enter снимает вопрос. */
+  function liveQuestion(): void {
+    let state: 'prompt' | 'notes' | 'typed' | 'answered' = 'prompt';
+    let selected = 0;
+    const base = screenOf('question-options-80x24');
+    const show = (): void =>
+      fakes.setScreen(
+        state === 'prompt'
+          ? withSelected(base, selected)
+          : state === 'notes'
+            ? screenOf('question-notes-open-80x24')
+            : state === 'typed'
+              ? screenOf('question-notes-typed-80x24')
+              : screenOf('question-answered-80x24'),
+      );
+    show();
+    const pty = fakes.deps.pty as unknown as { write: (ref: SessionRef, data: string) => void };
+    const original = pty.write;
+    pty.write = (ref, data): void => {
+      original(ref, data);
+      if (state === 'prompt') {
+        if (data === DOWN) selected += 1;
+        else if (data === '\t' && selected === 3) state = 'notes';
+      } else if (state === 'notes') {
+        if (data !== '\r') state = 'typed';
+      } else if (state === 'typed' && data === '\r') state = 'answered';
+      show();
+    };
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    sendMock.mockClear();
+    fakes.setSessions([{ ref: REF, provider: 'codex' }]);
+    (fakes.deps as unknown as { send?: typeof sendMock }).send = sendMock;
+    start();
+  });
+  afterEach(async () => {
+    await service.stop();
+    vi.useRealTimers();
+  });
+
+  it('свой ответ на вопрос: карточка answered сразу, в терминал уходит путь стрелки, Tab, текст, Enter', async () => {
+    liveQuestion();
+    fakes.emitActivity(REF, 'blocked', 'question');
+    const [card] = await pendingOf();
+    expect(service.decide(REF, card!.cardId, { kind: 'question', answers: { [QUESTION]: 'purple please' } })).toEqual({ applied: true, state: 'answered' });
+    await advance(0);
+    expect(fakes.writes).toEqual([DOWN, DOWN, DOWN, '\t', 'purple please', '\r']);
+    expect((await cardsOf())[0]).toMatchObject({ state: 'answered' });
+    // Пока печаталось, новой карточки по тому же вопросу не заводили.
+    expect(await pendingOf()).toHaveLength(0);
+    expect(fakes.log.info).not.toHaveBeenCalledWith('свой ответ на вопрос терминала не доведён', expect.anything());
+  });
+
+  it('шаг не показался: печать останавливается, запись в журнал с исходом и без текста ответа', async () => {
+    fakes.setScreen(screenOf('question-options-80x24'));
+    fakes.emitActivity(REF, 'blocked', 'question');
+    const [card] = await pendingOf();
+    expect(service.decide(REF, card!.cardId, { kind: 'question', answers: { [QUESTION]: 'purple please' } })).toMatchObject({ applied: true });
+    await advance(2_000);
+    expect(fakes.writes).toEqual([DOWN]);
+    expect(fakes.log.info).toHaveBeenCalledWith('свой ответ на вопрос терминала не доведён', expect.objectContaining({ op: 'feed.terminalPrompt', outcome: 'own-answer-timeout' }));
+    for (const call of [...fakes.log.info.mock.calls, ...fakes.log.warn.mock.calls]) expect(JSON.stringify(call)).not.toContain('purple');
+  });
+
+  it('экран сменился до решения — свой ответ не печатается, карточка elsewhere', async () => {
+    fakes.setScreen(screenOf('question-options-80x24'));
+    fakes.emitActivity(REF, 'blocked', 'question');
+    const [card] = await pendingOf();
+    fakes.setScreen(screenOf('command-approval-80x24'));
+    expect(service.decide(REF, card!.cardId, { kind: 'question', answers: { [QUESTION]: 'purple please' } })).toEqual({ applied: false, state: 'elsewhere' });
+    await advance(2_000);
+    expect(fakes.writes).toEqual([]);
+  });
+
+  it('отказ с текстом: клавиша 3, карточка denied; текст уходит сообщением человека, когда сессия перестала ждать', async () => {
+    fakes.setScreen(screenOf('command-approval-80x24'));
+    fakes.emitActivity(REF, 'blocked', 'approval');
+    const [card] = await pendingOf();
+    expect(service.decide(REF, card!.cardId, { kind: 'permission', behavior: 'deny', message: ' use another way ' })).toEqual({ applied: true, state: 'denied' });
+    expect(fakes.writes).toEqual(['3']);
+    await advance(TERMINAL_MESSAGE_POLL_MS * 3);
+    expect(sendMock).not.toHaveBeenCalled();
+    // Codex прервал ход и готов к вводу: заголовок Ready — сессия больше не ждёт.
+    fakes.emitActivity(REF, 'working');
+    await advance(TERMINAL_MESSAGE_POLL_MS);
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(sendMock).toHaveBeenCalledWith({ ref: REF, text: 'use another way', submit: true });
+    expect(fakes.log.info).toHaveBeenCalledWith('отказ с текстом по вопросу терминала', expect.objectContaining({ outcome: 'denial-message-sent' }));
+    for (const call of fakes.log.info.mock.calls) expect(JSON.stringify(call)).not.toContain('another way');
+  });
+
+  it('отказ с текстом, а сессия не перестала ждать за срок: текст не печатается, в журнале исход без текста', async () => {
+    fakes.setScreen(screenOf('command-approval-80x24'));
+    fakes.emitActivity(REF, 'blocked', 'approval');
+    const [card] = await pendingOf();
+    service.decide(REF, card!.cardId, { kind: 'permission', behavior: 'deny', message: 'use another way' });
+    await advance(TERMINAL_MESSAGE_WAIT_MS + TERMINAL_MESSAGE_POLL_MS);
+    expect(sendMock).not.toHaveBeenCalled();
+    expect(fakes.log.info).toHaveBeenCalledWith('отказ с текстом по вопросу терминала', expect.objectContaining({ outcome: 'denial-message-timeout' }));
+    for (const call of fakes.log.info.mock.calls) expect(JSON.stringify(call)).not.toContain('another way');
+    // После срока сообщение не уходит и позже.
+    fakes.emitActivity(REF, 'working');
+    await advance(TERMINAL_MESSAGE_POLL_MS * 3);
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  it('отказ без текста: только клавиша 3, сообщения нет', async () => {
+    fakes.setScreen(screenOf('command-approval-80x24'));
+    fakes.emitActivity(REF, 'blocked', 'approval');
+    const [card] = await pendingOf();
+    expect(service.decide(REF, card!.cardId, { kind: 'permission', behavior: 'deny' })).toEqual({ applied: true, state: 'denied' });
+    fakes.emitActivity(REF, 'working');
+    await advance(TERMINAL_MESSAGE_POLL_MS * 3);
+    expect(fakes.writes).toEqual(['3']);
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  it('у хоста нет отправителя: клавиша 3 уходит, текст нет, в журнале исход без текста', async () => {
+    delete (fakes.deps as unknown as { send?: unknown }).send;
+    fakes.setScreen(screenOf('command-approval-80x24'));
+    fakes.emitActivity(REF, 'blocked', 'approval');
+    const [card] = await pendingOf();
+    service.decide(REF, card!.cardId, { kind: 'permission', behavior: 'deny', message: 'use another way' });
+    expect(fakes.writes).toEqual(['3']);
+    expect(fakes.log.info).toHaveBeenCalledWith('отказ с текстом по вопросу терминала', expect.objectContaining({ outcome: 'denial-message-unavailable' }));
+  });
+
+  it('выход процесса до отправки снимает ожидание текста', async () => {
+    fakes.setScreen(screenOf('command-approval-80x24'));
+    fakes.emitActivity(REF, 'blocked', 'approval');
+    const [card] = await pendingOf();
+    service.decide(REF, card!.cardId, { kind: 'permission', behavior: 'deny', message: 'use another way' });
+    fakes.emitExit(REF);
+    fakes.emitActivity(REF, 'working');
+    await advance(TERMINAL_MESSAGE_POLL_MS * 3);
+    expect(sendMock).not.toHaveBeenCalled();
   });
 });
