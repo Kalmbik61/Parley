@@ -199,6 +199,8 @@ export interface ParleyBridge {
     version(): Promise<string | null>;
     /** Сведения о сборке и окружении для Settings → About (`app:about-info`). */
     aboutInfo(): Promise<AboutInfo>;
+    /** «Check now»: проверка новой версии с итогом; ответ всегда приходит, исключений нет. */
+    checkForUpdates(): Promise<UpdateCheckResult>;
     restartHost(): Promise<void>;
     /** «Retry» экрана «No connection to host»: подключение заново, с короткой паузой (fix-final-b). */
     reconnect(): Promise<void>;

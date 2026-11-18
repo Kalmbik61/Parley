@@ -26,7 +26,7 @@ import { configPath, envValue, loadConfig, migrateHome, parleyHome, readSecret }
 import type { AssistantLanguage } from '@parley/core/assistant';
 import { systemAssistantLanguage } from '../shared/assistant-language.js';
 import { AGENT_LIMITS, type WorksSnapshot } from '@parley/protocol';
-import type { AboutInfo, FocusTarget, HostStatus, UpdateResult } from '../shared/bridge.js';
+import type { AboutInfo, FocusTarget, UpdateCheckResult, HostStatus, UpdateResult } from '../shared/bridge.js';
 import { BROWSER_PARTITION, type AgentActivity } from '../shared/browser-types.js';
 import { ISLAND_EVENTS, ttsAvailable, type AssistantOpenRequest, type IslandConfig } from '../shared/island.js';
 import { S } from '../shared/strings.js';
@@ -1193,6 +1193,11 @@ if (!gotLock) {
       // Только у собранного окна: несобранное (E2E, `pnpm dev`) отдало бы версию Electron, и любой хост
       // показался бы хостом другой сборки — с тостом поверх окна.
       appVersion,
+      checkForUpdates: async (): Promise<UpdateCheckResult> => {
+        if (!updateCheckAllowed(shellEnv.env, app.isPackaged)) return { kind: 'unavailable' };
+        updateInstaller.manualCheck();
+        return updates.checkNow();
+      },
       aboutInfo: (): AboutInfo => {
         const home = os.homedir();
         const bundle = bundleOf(app.getPath('exe'));
@@ -1207,7 +1212,7 @@ if (!gotLock) {
           appPath: bundle === null ? null : tildify(bundle.app, home),
           dataDir: tildify(parleyHome(), home),
           updateChecks: updateCheckAllowed(shellEnv.env, app.isPackaged),
-          lastCheck: null,
+          lastCheck: updates.lastCheck(),
         };
       },
       setBadge: (count) => {

@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BrowserWindow, IpcMain, Session, WebContents } from 'electron';
 import type { WorksSnapshot } from '@parley/protocol';
 import type { FeedCard, FeedItem } from '@parley/core';
-import type { AboutInfo } from '../shared/bridge.js';
+import type { AboutInfo, UpdateCheckResult } from '../shared/bridge.js';
 import { decodeIpcError, type IpcErrorInfo } from '../shared/ipc-error.js';
 import type { DevtoolsSnapshot, ResponseBody, ViewportSpec } from '../shared/browser-devtools.js';
 import { ISLAND_EVENTS } from '../shared/island.js';
@@ -151,6 +151,7 @@ function setup(
     onUiSaved?: () => void;
     appVersion?: string | null;
     aboutInfo?: AboutInfo;
+    checkForUpdates?: () => Promise<UpdateCheckResult>;
     isIslandSender?: (sender: unknown) => boolean;
     islandActive?: () => boolean;
     reportSessionVisibility?: (event: { sender?: unknown; senderFrame?: unknown }, value: unknown) => void;
@@ -272,6 +273,7 @@ function setup(
     takeUpdateResult,
     appVersion: overrides.appVersion === undefined ? '0.2.0-test' : overrides.appVersion,
     aboutInfo: () => overrides.aboutInfo ?? ABOUT_INFO,
+    checkForUpdates: overrides.checkForUpdates ?? (async () => ({ kind: 'unavailable' as const })),
     ...(overrides.onUiSaved === undefined ? {} : { onUiSaved: overrides.onUiSaved }),
     ...(overrides.isIslandSender === undefined ? {} : { isIslandSender: overrides.isIslandSender }),
     ...(overrides.islandActive === undefined ? {} : { islandActive: overrides.islandActive }),
@@ -1229,6 +1231,14 @@ describe('registerIpc — app:about-info', () => {
     const info: AboutInfo = { ...ABOUT_INFO, version: null, commit: null, dirty: true };
     const { ipcMain } = setup({ aboutInfo: info });
     await expect(ipcMain.invoke('app:about-info')).resolves.toEqual(info);
+  });
+});
+
+describe('registerIpc — app:check-for-updates', () => {
+  it('отдаёт итог опции', async () => {
+    const result: UpdateCheckResult = { kind: 'available', latest: '0.38.0', checkedAt: 5 };
+    const { ipcMain } = setup({ checkForUpdates: async () => result });
+    await expect(ipcMain.invoke('app:check-for-updates')).resolves.toEqual(result);
   });
 });
 
