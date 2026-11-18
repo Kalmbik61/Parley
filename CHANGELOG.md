@@ -10,6 +10,10 @@ All notable changes to Parley are documented in this file.
 
 - Built-in browser: sites that ask for a client certificate (SSO over mTLS) now show a chooser over the tab. The choice can be saved per site; "Clear browsing data" removes the saved choices, and a site already answered in this run asks again after Parley restarts.
 
+### Changed
+
+- Built-in browser, agents: a click on an element covered by a banner or a dialog is refused with "covered" instead of landing on the cover, and every action says whether the page navigated, changed or stayed the same.
+
 ## 0.37.1
 
 ### Added

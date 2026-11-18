@@ -85,6 +85,31 @@ console.error('token=SECRET5');
 fetch('/api/me?access_token=SECRET6').catch(() => {});
 </script>`;
 
+/** Кнопка под фиксированным слоем `role="dialog"` с кнопкой закрытия: клик по кнопке под слоем должен получить отказ `covered`. */
+const COVER_HTML = `<!doctype html><meta name="viewport" content="width=device-width, initial-scale=1"><title>Cover page</title><h1>Cover page</h1>
+<button id="target">Target</button><div id="clicks">0</div>
+<div id="layer" role="dialog" aria-label="Cookie consent" style="position:fixed;inset:0;z-index:10;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center">
+<button id="close">Close layer</button></div>
+<script>
+document.getElementById('target').addEventListener('click', () => { const out = document.getElementById('clicks'); out.textContent = String(Number(out.textContent) + 1); });
+document.getElementById('close').addEventListener('click', () => { document.getElementById('layer').remove(); });
+</script>`;
+
+/**
+ * Три действия с разным следом на странице: кнопка с отложенным `fetch` (DOM меняется сразу, ответ приходит через 400 мс —
+ * ожидание затишья не успокаивается, пока запрос в полёте), кнопка без обработчика и ссылка на вторую страницу.
+ */
+const CHANGE_HTML = `<!doctype html><meta name="viewport" content="width=device-width, initial-scale=1"><title>Change page</title><h1>Change page</h1>
+<button id="slow">Slow update</button><div id="out"></div>
+<button id="noop">No effect</button>
+<a id="go" href="/next">Go next</a>
+<script>
+document.getElementById('slow').addEventListener('click', () => {
+  document.getElementById('out').textContent = 'Loading';
+  fetch('/slow').then(() => { document.getElementById('out').textContent = 'Loaded'; });
+});
+</script>`;
+
 test.describe('агент управляет страницами браузера чата и комнаты (этап D, 22a)', () => {
   test.setTimeout(150_000);
   let home: string;
@@ -103,6 +128,12 @@ test.describe('агент управляет страницами браузер
       const url = req.url ?? '/';
       if (url.startsWith('/api/me')) {
         res.writeHead(401, { 'content-type': 'application/json' }).end('{"error":"no session"}');
+      } else if (url.startsWith('/slow')) {
+        setTimeout(() => res.writeHead(200, { 'content-type': 'text/plain' }).end('ok'), 400);
+      } else if (url.startsWith('/cover')) {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(COVER_HTML);
+      } else if (url.startsWith('/change')) {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(CHANGE_HTML);
       } else if (url.startsWith('/next')) {
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end('<!doctype html><title>Next page</title><h1>Next page</h1>');
       } else {
@@ -263,6 +294,50 @@ test.describe('агент управляет страницами браузер
       .toContain('/api/me');
     expect(network).not.toContain('SECRET6');
     expect(network).toContain('<redacted>');
+  });
+
+  test('перекрытая цель: клик отказан кодом covered и страница его не получила; после закрытия слоя тот же клик проходит', async () => {
+    const opened = await openApp();
+    const { window, lead, electronApp } = opened;
+    const url = `${origin}/cover`;
+    const tab = await openPage(opened, lead, { url, own: true });
+    await showPanel(window, lead);
+    const clicks = (): Promise<string | null> => guestEval<string>(electronApp, url, "document.getElementById('clicks').textContent");
+
+    const target = await refOf(opened, lead, tab, 'button', 'Target');
+    const refused = await agentTool(opened, lead, 'browser_action', { tab, action: 'click', ref: target });
+    expect(refused.isError, refused.text).toBe(true);
+    expect(refused.text.startsWith('covered:'), refused.text).toBe(true);
+    expect(await clicks()).toBe('0');
+
+    const close = await refOf(opened, lead, tab, 'button', 'Close layer');
+    const closed = await agentTool(opened, lead, 'browser_action', { tab, action: 'click', ref: close });
+    expect(closed.isError, closed.text).toBe(false);
+    const passed = await agentTool(opened, lead, 'browser_action', { tab, action: 'click', ref: target });
+    expect(passed.isError, passed.text).toBe(false);
+    expect(await clicks()).toBe('1');
+  });
+
+  test('строка изменения: отложенный fetch — The page changed., кнопка без обработчика — Nothing changed, ссылка — The page navigated', async () => {
+    const opened = await openApp();
+    const { window, lead } = opened;
+    const tab = await openPage(opened, lead, { url: `${origin}/change`, own: true });
+    await showPanel(window, lead);
+
+    const slow = await refOf(opened, lead, tab, 'button', 'Slow update');
+    const changed = await agentTool(opened, lead, 'browser_action', { tab, action: 'click', ref: slow });
+    expect(changed.isError, changed.text).toBe(false);
+    expect(changed.text).toContain('The page changed.');
+
+    const noop = await refOf(opened, lead, tab, 'button', 'No effect');
+    const none = await agentTool(opened, lead, 'browser_action', { tab, action: 'click', ref: noop });
+    expect(none.isError, none.text).toBe(false);
+    expect(none.text).toContain('Nothing changed on the page');
+
+    const go = await refOf(opened, lead, tab, 'link', 'Go next');
+    const navigated = await agentTool(opened, lead, 'browser_action', { tab, action: 'click', ref: go });
+    expect(navigated.isError, navigated.text).toBe(false);
+    expect(navigated.text).toContain('The page navigated');
   });
 
   test('ввод агента не попадает в поле человека и не трогает окно (Фокус ревью 1)', async () => {
