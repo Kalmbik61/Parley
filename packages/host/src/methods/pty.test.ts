@@ -519,6 +519,16 @@ describe('pty.screenText', () => {
     expect(pty.manager.screenText).toHaveBeenCalledWith(ref(), 2);
   });
 
+  it('без rows отдаёт весь экран: screenText вызван без числа строк', async () => {
+    const pty = fakePtyManager();
+    pty.setScreen(ref(), ['a', 'b', 'c']);
+    const handlers = createPtyHandlers({ wake: fakeWake(), pty: pty.manager, activity: fakeActivity(), works: fakeWorks() });
+
+    await expect(handlers.ptyScreenText({ ref: ref() }, requestOf(fakeClient()))).resolves.toEqual({ lines: ['a', 'b', 'c'] });
+    expect(pty.manager.screenText).toHaveBeenCalledTimes(1);
+    expect((pty.manager.screenText as ReturnType<typeof vi.fn>).mock.calls[0]).toEqual([ref()]);
+  });
+
   it('сессии нет — пустой список, без ошибки', async () => {
     const pty = fakePtyManager();
     const handlers = createPtyHandlers({ wake: fakeWake(), pty: pty.manager, activity: fakeActivity(), works: fakeWorks() });

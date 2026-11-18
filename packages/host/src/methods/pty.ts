@@ -154,7 +154,10 @@ export function createPtyHandlers(deps: PtyMethodDeps): PtyHandlers {
     },
 
     // Текст экрана — данные терминала: ни в журнал, ни в ошибки он не идёт.
-    ptyScreenText: async (params) => ({ lines: deps.pty.screenText(params.ref, params.rows) ?? [] }),
+    // Без `rows` — весь видимый экран: вопрос на пустом экране стоит вверху, нижних строк не хватило бы.
+    ptyScreenText: async (params) => ({
+      lines: (params.rows === undefined ? deps.pty.screenText(params.ref) : deps.pty.screenText(params.ref, params.rows)) ?? [],
+    }),
 
     // Отвечает после ожидания своего Enter (около enterDelayMs), исход — в SendResult.
     ptySend: async (params, { host }) => {
