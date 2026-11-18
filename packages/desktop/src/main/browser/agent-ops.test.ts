@@ -343,7 +343,7 @@ describe('open (спека 5.1 browser_open)', () => {
     const guest = guests.get(7);
     if (guest === undefined) throw new Error('нет гостя 7');
     Object.assign(guest, { reload: vi.fn() });
-    const result = okResult<{ notes: string[] }>(await runOp('navigate', { tab: 't1' }));
+    const result = okResult<{ notes: string[] }>(await runOp('navigate', { tab: 't1', reload: true }));
     expect(result.notes).toContain(CLIENT_CERT_HINT);
   });
 
