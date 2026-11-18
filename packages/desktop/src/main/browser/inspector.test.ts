@@ -914,7 +914,7 @@ describe('закрытый список CDP — этап B (спека брау�
       for (const match of text.matchAll(/'Runtime\.callFunctionOn'/g)) {
         calls += 1;
         const at = match.index ?? 0;
-        expect(text.slice(at, at + 200), file).toMatch(/functionDeclaration: (REACT_INFO_FN|SELECT_OPTION_FN)/);
+        expect(text.slice(at, at + 200), file).toMatch(/functionDeclaration: (REACT_INFO_FN|SELECT_OPTION_FN|HIT_TEST_FN|PROBE_FN)/);
       }
     }
     expect(calls).toBeGreaterThan(0);
