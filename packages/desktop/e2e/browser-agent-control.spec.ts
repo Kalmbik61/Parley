@@ -96,8 +96,9 @@ document.getElementById('close').addEventListener('click', () => { document.getE
 </script>`;
 
 /**
- * Три действия с разным следом на странице: кнопка с отложенным `fetch` (DOM меняется сразу, ответ приходит через 400 мс —
- * ожидание затишья не успокаивается, пока запрос в полёте), кнопка без обработчика и ссылка на вторую страницу.
+ * Три действия с разным следом на странице: кнопка с отложенным `fetch` (запрос отвечает через 400 мс, текст дописывается
+ * через 150 мс после его начала, пока запрос ещё в полёте: без ожидания сети затишье зачлось бы раньше и ответ был бы `none`),
+ * кнопка без обработчика и ссылка на вторую страницу.
  */
 const CHANGE_HTML = `<!doctype html><meta name="viewport" content="width=device-width, initial-scale=1"><title>Change page</title><h1>Change page</h1>
 <button id="slow">Slow update</button><div id="out"></div>
@@ -105,8 +106,8 @@ const CHANGE_HTML = `<!doctype html><meta name="viewport" content="width=device-
 <a id="go" href="/next">Go next</a>
 <script>
 document.getElementById('slow').addEventListener('click', () => {
-  document.getElementById('out').textContent = 'Loading';
-  fetch('/slow').then(() => { document.getElementById('out').textContent = 'Loaded'; });
+  fetch('/slow');
+  setTimeout(() => { document.getElementById('out').textContent = 'Later'; }, 150);
 });
 </script>`;
 
@@ -328,6 +329,8 @@ test.describe('агент управляет страницами браузер
     const changed = await agentTool(opened, lead, 'browser_action', { tab, action: 'click', ref: slow });
     expect(changed.isError, changed.text).toBe(false);
     expect(changed.text).toContain('The page changed.');
+    // Текст дописан через 150 мс, пока запрос висел: ответ дождался его, а не вернулся по первому затишью.
+    expect(await guestEval<string>(opened.electronApp, `${origin}/change`, "document.getElementById('out').textContent")).toBe('Later');
 
     const noop = await refOf(opened, lead, tab, 'button', 'No effect');
     const none = await agentTool(opened, lead, 'browser_action', { tab, action: 'click', ref: noop });
