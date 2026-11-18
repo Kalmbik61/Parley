@@ -45,6 +45,7 @@ function waitFor(ms: number, signal: AbortSignal): Promise<void> {
       signal.removeEventListener('abort', onAbort);
       resolve();
     }, ms);
+    timer.unref();
     const onAbort = (): void => {
       clearTimeout(timer);
       reject(signal.reason);
