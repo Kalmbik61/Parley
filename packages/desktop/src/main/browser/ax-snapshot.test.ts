@@ -160,6 +160,12 @@ describe('фреймы того же процесса (спека 2026-11-18, р
     expect(snap.truncated).toBe(false);
   });
 
+  it('корень документа фрейма не даёт строки и тогда, когда у него есть parentId владельца, которого нет в дереве фрейма', () => {
+    const tree = inner().map((node, index) => (index === 0 ? { ...node, parentId: '3' } : node));
+    const snap = axSnapshot(main(), options(new Map([[6, tree]])));
+    expect(snap.text).toBe(['document "Shop"', '  [ref=e1] button "Open"', '  [ref=e2] iframe "Pay"', '    [ref=e3] button "Pay now"'].join('\n'));
+  });
+
   it('фрейм во фрейме — два уровня отступа', () => {
     const outer: AxNode[] = [
       { nodeId: '1', ignored: false, role: { value: 'RootWebArea' }, name: { value: 'Outer' }, childIds: ['2'] },

@@ -135,6 +135,7 @@ export function axSnapshot(nodes: readonly AxNode[], options: { interactiveOnly:
   const visitTree = (treeNodes: readonly AxNode[], startDepth: number, inFrame: boolean): boolean => {
     const byId = new Map(treeNodes.map((node) => [node.nodeId, node] as const));
     const seen = new Set<string>();
+    const root = treeNodes.find((node) => node.parentId === undefined) ?? treeNodes[0];
     const visit = (node: AxNode, depth: number): boolean => {
       if (seen.has(node.nodeId)) return true;
       seen.add(node.nodeId);
@@ -142,7 +143,7 @@ export function axSnapshot(nodes: readonly AxNode[], options: { interactiveOnly:
       if (SKIPPED.has(role)) return true;
       const frameTree = FRAMES.has(role) && typeof node.backendDOMNodeId === 'number' ? options.frames?.get(node.backendDOMNodeId) : undefined;
       let childDepth = depth;
-      if (!node.ignored && !TRANSPARENT.has(role) && !(inFrame && role === 'RootWebArea' && node.parentId === undefined)) {
+      if (!node.ignored && !TRANSPARENT.has(role) && !(inFrame && role === 'RootWebArea' && node === root)) {
         const entry = entryOf(node, role, depth, frameTree !== undefined);
         if (entry !== null) {
           if (!push(entry.line)) return false;
@@ -158,7 +159,6 @@ export function axSnapshot(nodes: readonly AxNode[], options: { interactiveOnly:
       }
       return true;
     };
-    const root = treeNodes.find((node) => node.parentId === undefined) ?? treeNodes[0];
     return root === undefined ? true : visit(root, startDepth);
   };
 
