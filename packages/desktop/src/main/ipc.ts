@@ -333,7 +333,7 @@ export interface RegisterIpcOptions {
     /** HTTP basic-auth гостей (main/browser/basic-auth.ts): пара из адреса и ответ окна на запрос логина. */
     basicAuth: Pick<BasicAuth, 'remember' | 'claimPage' | 'answer'>;
     /** Клиентский сертификат гостей (main/browser/client-cert.ts): ответ окна на запрос выбора. */
-    clientCert: Pick<ClientCert, 'answer'>;
+    clientCert: Pick<ClientCert, 'answer' | 'clear'>;
   };
 }
 
