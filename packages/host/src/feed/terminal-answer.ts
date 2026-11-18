@@ -26,23 +26,42 @@ const squash = (text: string): string => text.replace(/\s+/g, ' ').trim();
 /** Строка поля заметок: метка `›` без номера варианта (у вариантов после метки стоит `N.`). */
 const INPUT_LINE = /^\s*›\s+(?!\d+\.\s)(.*)$/;
 
+/** Строка-подсказка обычного экрана вопроса: ею достраивается блок вопроса, чтобы сверить его с исходным отпечатком. */
+const PLAIN_HINT = '  tab to add notes | enter to submit answer | esc to interrupt';
+const QUESTION_HEADER = /^\s*Question \d+\/\d+\b/;
+
 /**
  * Поле заметок на экране: текст в поле (подсказка `Add notes`, пока пусто) или `null`, если экран — не поле заметок
- * вопроса `prompt`. Тот же вопрос — по тексту вопроса и месту `Question N/M`: после Tab экран может смениться на другой
- * вопрос, и текст в него уходить не должен.
+ * вопроса `prompt`. Вопрос сверяется по блоку ниже ПОСЛЕДНЕГО заголовка `Question N/M` (прежний текст вопроса в истории
+ * выше не считается): блок до строки поля плюс обычная подсказка разбирается тем же распознавателем и даёт тот же
+ * отпечаток — номер, текст вопроса и подписи вариантов. Сменился вопрос или варианты — текст в поле не уходит.
  */
 function notesInput(screen: readonly string[], prompt: CodexPrompt & { kind: 'question' }): string | null {
   const hintAt = screen.findIndex((line) => line.includes(NOTES_HINT));
   if (hintAt < 0) return null;
-  const flat = squash(screen.join(' '));
-  if (!flat.includes(squash(prompt.question)) || !flat.includes(`Question ${prompt.index}/${prompt.total}`)) return null;
-  // Поле — ближайшая над подсказкой строка с меткой без номера; продолжения (перенос) идут до подсказки.
+  let headerAt = -1;
   for (let at = hintAt - 1; at >= 0; at -= 1) {
-    const match = INPUT_LINE.exec(screen[at]!);
-    if (match === null) continue;
-    return squash([match[1]!, ...screen.slice(at + 1, hintAt)].join(' '));
+    if (QUESTION_HEADER.test(screen[at]!)) {
+      headerAt = at;
+      break;
+    }
   }
-  return null;
+  if (headerAt < 0) return null;
+  // Поле — ближайшая над подсказкой строка с меткой без номера; продолжения (перенос) идут до подсказки.
+  let inputAt = -1;
+  let first = '';
+  for (let at = hintAt - 1; at > headerAt; at -= 1) {
+    const match = INPUT_LINE.exec(screen[at]!);
+    if (match !== null) {
+      inputAt = at;
+      first = match[1]!;
+      break;
+    }
+  }
+  if (inputAt < 0) return null;
+  const seen = recogniseCodexPrompt([...screen.slice(headerAt, inputAt), '', PLAIN_HINT]);
+  if (seen === null || seen.kind !== 'question' || seen.fingerprint !== prompt.fingerprint) return null;
+  return squash([first, ...screen.slice(inputAt + 1, hintAt)].join(' '));
 }
 
 export interface TerminalAnswerDeps {

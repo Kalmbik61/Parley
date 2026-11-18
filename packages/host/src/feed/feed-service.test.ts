@@ -4365,7 +4365,8 @@ describe('свой ответ и отказ с текстом по вопрос�
   function liveQuestion(): void {
     let state: 'prompt' | 'notes' | 'typed' | 'answered' = 'prompt';
     let selected = 0;
-    const base = screenOf('question-options-80x24');
+    // Экраны одного прогона Codex: вопрос и поле заметок с теми же подписями вариантов.
+    const base = screenOf('question-other-selected-80x24');
     const show = (): void =>
       fakes.setScreen(
         state === 'prompt'
