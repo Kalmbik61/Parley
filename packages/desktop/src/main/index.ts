@@ -47,6 +47,7 @@ import guestDomScript from './browser/guest-dom.js?raw';
 import guestPickScript from './browser/guest-pick.js?raw';
 import { installBrowserGuard, promptDownload } from './browser/guard.js';
 import { createBasicAuth } from './browser/basic-auth.js';
+import { createCertChoiceStore, createClientCert } from './browser/client-cert.js';
 import { createInspector, forwardBatches } from './browser/inspector.js';
 import { saveDiagnostics } from './diagnostics/bundle.js';
 import { AGENT_SHOT_MAX_AGE_MS, AGENT_SHOT_PREFIX, cleanupDrops, cleanupDropsTree, DropTooLargeError, dropsDir, MAX_DROP_IMAGE_BYTES, saveImage } from './drops.js';
@@ -456,6 +457,15 @@ if (!gotLock) {
     forwardBatches(inspector, (id) => webContents.fromId(id) ?? null);
     // HTTP basic-auth гостей: пара из адреса — только память; запрос логина идёт окну-хозяину гостя (страж подписывает гостя).
     const basicAuth = createBasicAuth();
+    // Клиентский сертификат гостей (SSO с mTLS): выбирает человек в слое над вкладкой; с галочкой выбор лежит в файле
+    // (отпечаток по `хост:порт`), без неё его помнит сам Chromium до выхода. Страж подписывает гостя и передаёт модулю событие.
+    const certChoices = createCertChoiceStore({ file: path.join(parleyHome(), 'desktop', 'browser-client-certs.json') });
+    void certChoices.load();
+    const clientCert = createClientCert({
+      isGuest: (contents) => contents.getType() === 'webview' && contents.session === browserSession,
+      store: certChoices,
+      log: (line) => console.info('[parley] client certificate', JSON.stringify(line)),
+    });
     const typing = createTypingClock();
     const emulation = createEmulation({ inspector });
     // Окно операции агента, скачивания агента и тишина клавиатуры человека (15b): до стража, он их читает.
@@ -518,6 +528,7 @@ if (!gotLock) {
         fetchFavicon(iconUrl, pageUrl, (url, init) => browserSession.fetch(url, init)),
       inspect: (contents) => inspector.attach(contents),
       basicAuth,
+      clientCert,
     });
 
     mainWindow = openWindow();
@@ -902,6 +913,7 @@ if (!gotLock) {
     // снимался бы насовсем; главный кадр окна от гостей не зависит.
     const ops = createAgentOps({
       basicAuth,
+      clientCert,
       scripts: createAgentScripts({ inspector }),
       storage: createAgentStorage({ cookies: browserSession.cookies, inspector }),
       downloads: agentDownloads,
@@ -1132,6 +1144,7 @@ if (!gotLock) {
         emulation,
         agent: ops,
         basicAuth,
+        clientCert,
       },
       saveDropImage: async () => {
         if (fakeDrops) return saveImage({ png: FAKE_DROP_PNG, dir: dropsDir() });

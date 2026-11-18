@@ -359,6 +359,81 @@ describe('BrowserSurface (тест 3)', () => {
     });
   });
 
+  describe('клиентский сертификат: слой выбора', () => {
+    const CERT_REQUEST = {
+      requestId: 'k1',
+      webContentsId: 42,
+      host: 'auth.example.com:6443',
+      pageHost: null,
+      certificates: [{ fingerprint: 'sha256/fp-1', subjectName: 'Subject 1', issuerName: 'Issuer 1', serialNumber: '01', validExpiry: 1_800_000_001 }],
+    };
+
+    function openedTab(): void {
+      setBrowserTab('http://localhost:5173/');
+      renderWork();
+      fire(arm(webview(), 42), 'dom-ready');
+    }
+
+    it('запрос своего гостя рисует слой, запрос чужого — нет', () => {
+      openedTab();
+      act(() => bridge.emitCertRequest({ ...CERT_REQUEST, webContentsId: 5 }));
+      expect(screen.queryByTestId('browser-cert')).toBeNull();
+      act(() => bridge.emitCertRequest(CERT_REQUEST));
+      expect(screen.getByTestId('browser-cert')).toBeTruthy();
+    });
+
+    it('cert-cancel с тем же requestId убирает слой, с чужим requestId — нет', () => {
+      openedTab();
+      act(() => bridge.emitCertRequest(CERT_REQUEST));
+      act(() => bridge.emitCertCancel({ requestId: 'other', webContentsId: 42 }));
+      expect(screen.getByTestId('browser-cert')).toBeTruthy();
+      act(() => bridge.emitCertCancel({ requestId: 'k1', webContentsId: 42 }));
+      expect(screen.queryByTestId('browser-cert')).toBeNull();
+    });
+
+    it('ответ зовёт certResponse с отпечатком и «запомнить»; слой снимается по подтверждению main', async () => {
+      openedTab();
+      let ack: () => void = () => undefined;
+      bridge.browser.certResponse = vi.fn(() => new Promise<void>((resolve) => (ack = resolve)));
+      act(() => bridge.emitCertRequest(CERT_REQUEST));
+      fireEvent.click(within(screen.getByTestId('browser-cert')).getByRole('checkbox'));
+      fireEvent.click(screen.getByRole('button', { name: 'Use certificate' }));
+      expect(bridge.browser.certResponse).toHaveBeenCalledWith('k1', { fingerprint: 'sha256/fp-1', remember: true });
+      expect(screen.getByTestId('browser-cert')).toBeTruthy();
+      await act(async () => ack());
+      expect(screen.queryByTestId('browser-cert')).toBeNull();
+    });
+
+    it('Escape — certResponse(null); мост отказал — слой остаётся с ошибкой', async () => {
+      openedTab();
+      act(() => bridge.emitCertRequest(CERT_REQUEST));
+      await act(async () => {
+        fireEvent.keyDown(screen.getAllByRole('radio')[0] as HTMLElement, { key: 'Escape' });
+      });
+      expect(bridge.browserCalls).toContainEqual({ method: 'certResponse', args: ['k1', null] });
+      expect(screen.queryByTestId('browser-cert')).toBeNull();
+
+      bridge.browser.certResponse = vi.fn(async () => {
+        throw new Error('invalid');
+      });
+      act(() => bridge.emitCertRequest({ ...CERT_REQUEST, requestId: 'k2' }));
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Use certificate' }));
+      });
+      expect(screen.getByTestId('browser-cert')).toBeTruthy();
+      expect(screen.getByRole('alert').textContent).toBe("Couldn't send the choice. Try again or cancel.");
+    });
+
+    it('если висят и запрос пароля, и запрос сертификата, сверху basic-auth (позже в разметке)', () => {
+      openedTab();
+      act(() => bridge.emitCertRequest(CERT_REQUEST));
+      act(() => bridge.emitAuthRequest({ requestId: 'a1', webContentsId: 42, host: '127.0.0.1:8080', realm: 'Stand', isProxy: false, retry: false }));
+      const cert = screen.getByTestId('browser-cert');
+      const auth = screen.getByTestId('browser-auth');
+      expect(cert.compareDocumentPosition(auth) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+  });
+
   it('вкладка человека агенту не регистрируется: registerTab не зовётся ни разу', () => {
     setBrowserTab('http://localhost:5173/');
     renderWork();

@@ -4,6 +4,12 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
+## Unreleased
+
+### Added
+
+- Built-in browser: sites that ask for a client certificate (SSO over mTLS) now show a chooser over the tab. The choice can be saved per site; "Clear browsing data" removes the saved choices, and a site already answered in this run asks again after Parley restarts.
+
 ## 0.37.1
 
 ### Added

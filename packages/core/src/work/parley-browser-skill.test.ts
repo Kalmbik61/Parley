@@ -88,6 +88,12 @@ describe('скилл parley-browser: тело', () => {
     }
   });
 
+  it('Troubleshooting: строки про клиентский сертификат и окно доступа macOS к ключу', () => {
+    const troubleshooting = body.slice(body.indexOf('## Troubleshooting'));
+    expect(troubleshooting).toContain('A note says the site asks for a client certificate: only the human can choose it, in the browser panel. Ask them, then retry.');
+    expect(troubleshooting).toContain('may wait for a macOS key access window: ask the human to answer it with "Always Allow".');
+  });
+
   it('старых запретов этапов B2/C в тексте нет', () => {
     expect(body).not.toContain('Only localhost');
     expect(body).not.toContain('no JavaScript');

@@ -32,6 +32,7 @@ import type { TtsService } from './assistant/tts.js';
 import { parseAnnotationPins, type createAnnotate } from './browser/annotate.js';
 import type { AgentOps } from './browser/agent-ops.js';
 import type { BasicAuth } from './browser/basic-auth.js';
+import type { ClientCert } from './browser/client-cert.js';
 import { parseContextInput } from './browser/context-files.js';
 import type { createDesignMode } from './browser/design-mode.js';
 import type { Emulation } from './browser/emulation.js';
@@ -331,6 +332,8 @@ export interface RegisterIpcOptions {
     agent: Pick<AgentOps, 'openTabResult' | 'registerTab' | 'captureReady' | 'stop' | 'focusReady'>;
     /** HTTP basic-auth гостей (main/browser/basic-auth.ts): пара из адреса и ответ окна на запрос логина. */
     basicAuth: Pick<BasicAuth, 'remember' | 'claimPage' | 'answer'>;
+    /** Клиентский сертификат гостей (main/browser/client-cert.ts): ответ окна на запрос выбора. */
+    clientCert: Pick<ClientCert, 'answer' | 'clear'>;
   };
 }
 
@@ -992,6 +995,9 @@ export function registerIpc(options: RegisterIpcOptions): void {
     withIpcError(async () => {
       await browser.session.clearStorageData();
       await browser.session.clearCache();
+      // Выборы клиентского сертификата «для сайта» (файл main): стираются вместе с данными раздела. Выбор, на который Chromium
+      // уже ответил в этом запуске, он помнит до перезапуска — сбросить его нельзя.
+      await browser.clientCert.clear();
     }),
   );
 
@@ -1045,6 +1051,19 @@ export function registerIpc(options: RegisterIpcOptions): void {
         throw new HostError('bad_request', 'invalid credentials');
       }
       browser.basicAuth.answer(requestId, { username, password }, sender);
+    }),
+  );
+
+  // Ответ окна на `browser:cert-request`: отпечаток выбранного сертификата или `null` («не сейчас»). Принимается только от
+  // окна-хозяина запроса, отпечаток обязан быть из списка этого запроса (проверяет `clientCert.answer`).
+  ipcMain.handle(
+    'browser:cert-response',
+    withIpcError(async (rawEvent, requestId: unknown, fingerprint: unknown, remember: unknown) => {
+      const sender = (rawEvent as { sender: WebContents }).sender;
+      if (typeof requestId !== 'string' || requestId.length === 0 || requestId.length > 64) throw new HostError('bad_request', 'invalid certificate request id');
+      if (fingerprint !== null && (typeof fingerprint !== 'string' || fingerprint.length > 256)) throw new HostError('bad_request', 'invalid certificate fingerprint');
+      if (typeof remember !== 'boolean') throw new HostError('bad_request', 'invalid remember flag');
+      browser.clientCert.answer(requestId, fingerprint, fingerprint === null ? false : remember, sender);
     }),
   );
 

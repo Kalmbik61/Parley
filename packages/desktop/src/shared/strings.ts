@@ -2450,6 +2450,19 @@ export const S = {
       wrong: 'Wrong username or password. Try again.',
       sendFailed: "Couldn't send the credentials. Try again or cancel.",
     },
+    /** Слой выбора клиентского сертификата над вкладкой (`renderer/browser/CertPrompt.tsx`, SSO с mTLS). */
+    cert: {
+      title: (host: string): string => `${host} asks for a certificate that identifies you.`,
+      requestedBy: (pageHost: string): string => `Requested by the page ${pageHost}.`,
+      issuer: (name: string): string => `Issued by ${name}`,
+      expires: (date: string): string => `Valid until ${date}`,
+      serial: (serial: string): string => `Serial ${serial}`,
+      remember: "Remember for this site. Agents working in Parley's browser will be identified by it too.",
+      keyAccess: 'macOS may then ask for access to the key. Choose "Always Allow", or agents will stop at that window.',
+      use: 'Use certificate',
+      notNow: 'Not now',
+      sendFailed: "Couldn't send the choice. Try again or cancel.",
+    },
     /** ⌖ Select (спека браузера 4.6). */
     select: {
       button: 'Select',

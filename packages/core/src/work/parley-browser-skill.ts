@@ -131,5 +131,7 @@ The human can attach page context to a message: a path such as \`.parley/desktop
 - \`tab_hidden\` again and again: ask the human to open the panel and show the page.
 - \`tab_not_loaded\`: ask the human to open your workspace in Parley's window.
 - \`access_denied\`: the human stopped you or turned you off; ask before you use the browser again.
+- A note says the site asks for a client certificate: only the human can choose it, in the browser panel. Ask them, then retry.
+- A page that keeps loading right after the human chose a certificate may wait for a macOS key access window: ask the human to answer it with "Always Allow".
 - browser_evaluate, browser_cookies and browser_storage run without a question in Claude Code and Codex alike: Parley allows them in advance. That is the human's choice, not a reason to run more scripts or read more cookies and storage than the task needs.
 `;

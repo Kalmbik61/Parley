@@ -142,7 +142,11 @@ function fakeContents(id: number, type: 'window' | 'webview' | 'remote') {
   return contents;
 }
 
-function setupGuard(isMainWindow: (c: WebContents) => boolean = () => false, agentFocus?: (id: number) => boolean) {
+function setupGuard(
+  isMainWindow: (c: WebContents) => boolean = () => false,
+  agentFocus?: (id: number) => boolean,
+  clientCert?: Parameters<typeof installBrowserGuard>[0]['clientCert'],
+) {
   const app = new EventEmitter();
   let requestHandler: ((wc: unknown, permission: string, cb: (granted: boolean) => void) => void) | null = null;
   let checkHandler: ((...args: unknown[]) => boolean) | null = null;
@@ -172,6 +176,7 @@ function setupGuard(isMainWindow: (c: WebContents) => boolean = () => false, age
       fetchFavicon,
       inspect,
       ...(agentFocus === undefined ? {} : { agentFocus }),
+      ...(clientCert === undefined ? {} : { clientCert }),
     });
   install();
   const created = (contents: ReturnType<typeof fakeContents>): void => {
@@ -371,7 +376,22 @@ describe('installBrowserGuard (тест 4)', () => {
     expect(guard.forwardShortcuts).not.toHaveBeenCalled();
   });
 
-  it('select-client-certificate — preventDefault и callback() без сертификата', () => {
+  it('select-client-certificate с модулем сертификата — preventDefault и событие уходит модулю как есть', () => {
+    const clientCert = { select: vi.fn(), attach: vi.fn() };
+    const guard = setupGuard(undefined, undefined, clientCert);
+    const event = fakeEvent();
+    const callback = vi.fn();
+    const contents = fakeContents(42, 'webview');
+    const list = [{ subjectName: 'me' }];
+    guard.app.emit('select-client-certificate', event, contents, '127.0.0.1:18444', list, callback);
+    expect(event.defaultPrevented).toBe(true);
+    expect(clientCert.select).toHaveBeenCalledTimes(1);
+    expect(clientCert.select).toHaveBeenCalledWith(contents, '127.0.0.1:18444', list, callback);
+    // Решение за модулем: страж сам callback не зовёт.
+    expect(callback).not.toHaveBeenCalled();
+  });
+
+  it('select-client-certificate без модуля сертификата — preventDefault и callback() без сертификата', () => {
     const guard = setupGuard();
     const event = fakeEvent();
     const callback = vi.fn();
@@ -379,6 +399,25 @@ describe('installBrowserGuard (тест 4)', () => {
     expect(event.defaultPrevented).toBe(true);
     expect(callback).toHaveBeenCalledTimes(1);
     expect(callback.mock.calls[0]).toEqual([]);
+  });
+
+  it('гость получает clientCert.attach, не-гость — нет; сбой attach клетку гостя не снимает', () => {
+    const clientCert = { select: vi.fn(), attach: vi.fn() };
+    const guard = setupGuard(undefined, undefined, clientCert);
+    guard.created(fakeContents(43, 'remote'));
+    expect(clientCert.attach).not.toHaveBeenCalled();
+    const guest = fakeContents(42, 'webview');
+    guard.created(guest);
+    expect(clientCert.attach).toHaveBeenCalledTimes(1);
+    expect(clientCert.attach).toHaveBeenCalledWith(guest);
+
+    const broken = { select: vi.fn(), attach: vi.fn(() => { throw new Error('attach'); }) };
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const guard2 = setupGuard(undefined, undefined, broken);
+    const guest2 = fakeContents(44, 'webview');
+    guard2.created(guest2);
+    warn.mockRestore();
+    expect(guest2.openHandler('https://x')).toEqual({ action: 'deny' });
   });
 });
 

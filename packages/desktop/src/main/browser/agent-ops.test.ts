@@ -16,7 +16,8 @@ import { createPageRegistry } from './agent-pages.js';
 import { createAgentWindow } from './agent-window.js';
 import { createTypingClock } from './human-typing.js';
 import { captureSpec, createAgentOps, NOT_MOUNTED_NOTE, openableHref, openableTarget, resolveAgentTarget, type AgentOps } from './agent-ops.js';
-import type { BasicAuth } from './basic-auth.js';
+import { BASIC_AUTH_HINT, type BasicAuth } from './basic-auth.js';
+import { CLIENT_CERT_HINT, type ClientCert } from './client-cert.js';
 
 const REF = { projectPath: '/proj', workId: 'w-1', sessionId: 's-02' };
 const OTHER_REF = { projectPath: '/proj', workId: 'w-2', sessionId: 's-01' };
@@ -61,7 +62,7 @@ function sendWith(options: { viewport?: { width: number; height: number }; conte
 }
 
 /** Окно отвечает на просьбу своим ответом (если он задан) сразу после неё, как ответил бы рендерер. */
-function setup(overrides: { allowed?: boolean; reply?: AgentOpenTabResult | null; sent?: boolean; openMs?: number; owners?: BrowserAgentOwner[]; confirmSurface?: boolean; captureReadyMs?: number; windowHeight?: number; screenDpr?: number; screenDprHangs?: boolean; screenDprRejects?: boolean; guestCallMs?: number; opTimeoutMs?: number; basicAuth?: Pick<BasicAuth, 'remember' | 'holdForPage' | 'dropPage' | 'isPending' | 'onPending'> } = {}) {
+function setup(overrides: { allowed?: boolean; reply?: AgentOpenTabResult | null; sent?: boolean; openMs?: number; owners?: BrowserAgentOwner[]; confirmSurface?: boolean; captureReadyMs?: number; windowHeight?: number; screenDpr?: number; screenDprHangs?: boolean; screenDprRejects?: boolean; guestCallMs?: number; opTimeoutMs?: number; basicAuth?: Pick<BasicAuth, 'remember' | 'holdForPage' | 'dropPage' | 'isPending' | 'onPending'>; clientCert?: Pick<ClientCert, 'isPending' | 'onPending'> } = {}) {
   const asked: AgentOpenTab[] = [];
   const state = { allowed: overrides.allowed ?? true, reply: overrides.reply === undefined ? { tabId: 'browser:aaaaaa', reused: false, mounted: true } : overrides.reply };
   const openTab = vi.fn((e: AgentOpenTab): boolean => {
@@ -127,6 +128,7 @@ function setup(overrides: { allowed?: boolean; reply?: AgentOpenTabResult | null
     ...(overrides.screenDprRejects === true ? { screenDpr: () => Promise.reject(new Error('Script failed to execute')) } : {}),
     ...(overrides.guestCallMs === undefined ? {} : { guestCallMs: overrides.guestCallMs }),
     ...(overrides.basicAuth === undefined ? {} : { basicAuth: overrides.basicAuth }),
+    ...(overrides.clientCert === undefined ? {} : { clientCert: overrides.clientCert }),
   };
   const ops: AgentOps = createAgentOps(deps);
   // Окно всегда начинает с `hello`: записи до него реестр пропускает.
@@ -312,6 +314,37 @@ describe('open (спека 5.1 browser_open)', () => {
     okResult(await run({ url: 'http://admin:s3cret@127.0.0.1:8080/' }));
     expect(basicAuth.remember).toHaveBeenCalledWith(7, 'http://127.0.0.1:8080', { username: 'admin', password: 's3cret' });
     expect(basicAuth.holdForPage).not.toHaveBeenCalled();
+  });
+
+  it('open при висящем выборе сертификата: loaded false сразу и CLIENT_CERT_HINT в notes; при висящих обоих basic-auth первой', async () => {
+    const clientCert = { isPending: () => true, onPending: () => () => undefined };
+    const { ops, run, state, guests } = setup({ clientCert, openMs: 200 });
+    register(ops, { pageId: 'browser:aaaaaa' });
+    state.reply = { tabId: 'browser:aaaaaa', reused: true, mounted: true };
+    guests.get(7)?.isLoading.mockReturnValue(true);
+    const started = Date.now();
+    const result = okResult(await run({ url: PAGE }));
+    expect(result.loaded).toBe(false);
+    expect(result.notes).toContain(CLIENT_CERT_HINT);
+    expect(Date.now() - started).toBeLessThan(AGENT_LIMITS.loadMs);
+
+    const both = setup({ clientCert, basicAuth: { ...authMock(), isPending: () => true }, openMs: 200 });
+    register(both.ops, { pageId: 'browser:aaaaaa' });
+    both.state.reply = { tabId: 'browser:aaaaaa', reused: true, mounted: true };
+    both.guests.get(7)?.isLoading.mockReturnValue(true);
+    const twice = okResult(await both.run({ url: PAGE }));
+    expect(twice.notes.slice(0, 2)).toEqual([BASIC_AUTH_HINT, CLIENT_CERT_HINT]);
+  });
+
+  it('navigate при висящем выборе сертификата — CLIENT_CERT_HINT в notes', async () => {
+    const clientCert = { isPending: () => true, onPending: () => () => undefined };
+    const { ops, runOp, guests } = setup({ clientCert });
+    register(ops, {});
+    const guest = guests.get(7);
+    if (guest === undefined) throw new Error('нет гостя 7');
+    Object.assign(guest, { reload: vi.fn() });
+    const result = okResult<{ notes: string[] }>(await runOp('navigate', { tab: 't1', reload: true }));
+    expect(result.notes).toContain(CLIENT_CERT_HINT);
   });
 
   it('общий выключатель «Let agents use the browser» — access_denied, окну ничего', async () => {
