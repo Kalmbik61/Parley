@@ -573,6 +573,8 @@ export function createFeedService(
   const terminalEligible = new Set<string>();
   /** Сессии, в которые хост сейчас печатает свой ответ по шагам: поиск и новые карточки по экрану ждут. */
   const terminalBusy = new Set<string>();
+  /** Идущая печать своего ответа по сессии: `cancel` снимает её ожидания и не даёт продолжиться после выхода процесса. */
+  const terminalTyping = new Map<string, { cancel(): void }>();
   /** Ожидание конца ожидания сессии после отказа с текстом: затем текст уходит сообщением человека. */
   const terminalMessages = new Map<string, NodeJS.Timeout>();
   let stopped = false;
@@ -919,6 +921,9 @@ export function createFeedService(
     clearTerminalTimer(terminalFinders, key, 'interval');
     clearTerminalTimer(terminalConfirms, key, 'timeout');
     clearTerminalTimer(terminalMessages, key, 'interval');
+    terminalTyping.get(key)?.cancel();
+    terminalTyping.delete(key);
+    terminalBusy.delete(key);
     const record = terminalPrompts.get(key);
     if (record === undefined) return;
     clearInterval(record.watch);
@@ -1017,12 +1022,31 @@ export function createFeedService(
     const key = refKey(ref);
     terminalBusy.add(key);
     clearTerminalTimer(terminalFinders, key, 'interval');
+    // Ожидания шагов записаны: выход процесса, выгрузка ленты и `stop()` снимают их и печать не продолжается.
+    let cancelled = false;
+    const sleepers = new Set<() => void>();
+    const operation = {
+      cancel(): void {
+        cancelled = true;
+        for (const wake of Array.from(sleepers)) wake();
+      },
+    };
+    terminalTyping.set(key, operation);
     const sleep = (ms: number): Promise<void> =>
       new Promise((resolve) => {
-        setTimeout(resolve, ms).unref();
+        const wake = (): void => {
+          clearTimeout(timer);
+          sleepers.delete(wake);
+          resolve();
+        };
+        const timer = setTimeout(wake, ms);
+        timer.unref();
+        sleepers.add(wake);
       });
-    typeOwnAnswer({ pty: deps.pty, sleep, cancelled: () => stopped }, ref, prompt, text)
+    typeOwnAnswer({ pty: deps.pty, sleep, cancelled: () => cancelled || stopped }, ref, prompt, text)
       .then((outcome) => {
+        // Печать отменена (процесс вышел, лента выгружена, хост остановлен): ни записи в журнал, ни нового поиска.
+        if (cancelled) return;
         if (outcome !== 'done') {
           log.info('свой ответ на вопрос терминала не доведён', { op: 'feed.terminalPrompt', outcome: `own-answer-${outcome}`, sessionId: ref.sessionId });
           return;
@@ -1034,6 +1058,8 @@ export function createFeedService(
         log.warn('свой ответ на вопрос терминала: ошибка', { op: 'feed.terminalPrompt', sessionId: ref.sessionId, error: String(error) });
       })
       .finally(() => {
+        if (terminalTyping.get(key) !== operation) return;
+        terminalTyping.delete(key);
         terminalBusy.delete(key);
       });
   }
@@ -1057,7 +1083,8 @@ export function createFeedService(
     const startedAt = now();
     const timer = setInterval(() => {
       if (stopped) return clearTerminalTimer(terminalMessages, key, 'interval');
-      const ready = !terminalEligible.has(key);
+      // Готов, когда сессия вовсе перестала быть `blocked`: другая нужда при `blocked` (startup, лимит) — ещё не готов.
+      const ready = lastActivity.get(key) !== 'blocked';
       if (!ready && now() - startedAt < TERMINAL_MESSAGE_WAIT_MS) return;
       clearTerminalTimer(terminalMessages, key, 'interval');
       if (!ready) return outcome('denial-message-timeout');
@@ -2581,7 +2608,7 @@ export function createFeedService(
       // Ждущие посевы запускаются и сразу выходят (`stopped`): снимок, ждавший место, завершается пустой лентой.
       for (const waiter of seedWaiters.splice(0)) waiter.start();
       // До снятия таймеров лент: возврат `decisions` ставит пачку дельты.
-      for (const key of new Set([...terminalFinders.keys(), ...terminalConfirms.keys(), ...terminalPrompts.keys(), ...terminalMessages.keys()])) dropTerminalState(key);
+      for (const key of new Set([...terminalFinders.keys(), ...terminalConfirms.keys(), ...terminalPrompts.keys(), ...terminalMessages.keys(), ...terminalTyping.keys()])) dropTerminalState(key);
       for (const feed of feeds.values()) {
         if (feed.timer !== undefined) clearTimeout(feed.timer);
         feed.timer = undefined;

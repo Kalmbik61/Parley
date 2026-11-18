@@ -20,8 +20,30 @@ const ARROW_DOWN = '\u001b[B';
 const TAB = '\t';
 /** Подсказка экрана, на котором открыто поле заметок (замер: `question-notes-open`). */
 const NOTES_HINT = 'tab or esc to clear notes';
-/** Сколько знаков начала текста сверяется с экраном: длинный ответ переносится по строкам. */
+/** Сколько знаков начала текста сверяется с полем заметок: длинный ответ переносится по строкам. */
 const SHOWN_PREFIX = 20;
+const squash = (text: string): string => text.replace(/\s+/g, ' ').trim();
+/** Строка поля заметок: метка `›` без номера варианта (у вариантов после метки стоит `N.`). */
+const INPUT_LINE = /^\s*›\s+(?!\d+\.\s)(.*)$/;
+
+/**
+ * Поле заметок на экране: текст в поле (подсказка `Add notes`, пока пусто) или `null`, если экран — не поле заметок
+ * вопроса `prompt`. Тот же вопрос — по тексту вопроса и месту `Question N/M`: после Tab экран может смениться на другой
+ * вопрос, и текст в него уходить не должен.
+ */
+function notesInput(screen: readonly string[], prompt: CodexPrompt & { kind: 'question' }): string | null {
+  const hintAt = screen.findIndex((line) => line.includes(NOTES_HINT));
+  if (hintAt < 0) return null;
+  const flat = squash(screen.join(' '));
+  if (!flat.includes(squash(prompt.question)) || !flat.includes(`Question ${prompt.index}/${prompt.total}`)) return null;
+  // Поле — ближайшая над подсказкой строка с меткой без номера; продолжения (перенос) идут до подсказки.
+  for (let at = hintAt - 1; at >= 0; at -= 1) {
+    const match = INPUT_LINE.exec(screen[at]!);
+    if (match === null) continue;
+    return squash([match[1]!, ...screen.slice(at + 1, hintAt)].join(' '));
+  }
+  return null;
+}
 
 export interface TerminalAnswerDeps {
   pty: Pick<PtyManager, 'write' | 'screenText'>;
@@ -61,7 +83,7 @@ export async function typeOwnAnswer(
     const seen = recogniseCodexPrompt(screen);
     return seen !== null && seen.kind === 'question' && seen.fingerprint === prompt.fingerprint ? seen : null;
   };
-  const notesOpen = (screen: readonly string[]): boolean => screen.some((line) => line.includes(NOTES_HINT));
+  const notesOpen = (screen: readonly string[]): boolean => notesInput(screen, prompt) !== null;
   const cancelled = (): boolean => deps.cancelled?.() === true;
 
   /** Ждёт, что экран отвечает условию: сначала сразу, затем раз в `ANSWER_POLL_MS` до `ANSWER_STEP_MAX_MS`. */
@@ -95,10 +117,16 @@ export async function typeOwnAnswer(
   }
   if (!press(TAB, (screen) => same(screen)?.selected === last)) return 'screen-changed';
   if (!(await waitFor(notesOpen))) return 'timeout';
-  if (!press(clean, notesOpen)) return 'screen-changed';
-  const shown = clean.slice(0, SHOWN_PREFIX);
-  if (!(await waitFor((screen) => screen.some((line) => line.includes(shown))))) return 'timeout';
-  if (!press('\r', notesOpen)) return 'screen-changed';
+  // Поле до записи: пустое (подсказка) или с чем-то прежним; текст принят, когда поле изменилось и начинается с него.
+  const before = notesInput(lines(), prompt);
+  if (before === null || !press(clean, notesOpen)) return 'screen-changed';
+  const shown = squash(clean).slice(0, SHOWN_PREFIX);
+  const typed = (screen: readonly string[]): boolean => {
+    const input = notesInput(screen, prompt);
+    return input !== null && input !== before && input.startsWith(shown);
+  };
+  if (!(await waitFor(typed))) return 'timeout';
+  if (!press('\r', typed)) return 'screen-changed';
   // Вопроса нет: ответ принят (последний вопрос) или Codex показал следующий (другой отпечаток).
   return (await waitFor((screen) => !notesOpen(screen) && same(screen) === null)) ? 'done' : 'timeout';
 }

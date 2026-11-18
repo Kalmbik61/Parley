@@ -24,22 +24,32 @@ function withSelected(lines: readonly string[], at: number): string[] {
 
 type Stuck = 'arrow' | 'tab' | 'text' | 'enter';
 
+/** Тот же экран заметок, но у другого вопроса. */
+const otherQuestion = (lines: readonly string[]): string[] => lines.map((line) => line.replace('Which color do you prefer?', 'Which size do you prefer?'));
+
 /** Сценарный экран Codex: вопрос → поле заметок → текст → ответ; `stuck` — шаг, который Codex не принял. */
-function scenario(options: { selected?: number; stuck?: Stuck; screen?: string[] } = {}) {
+function scenario(options: { selected?: number; stuck?: Stuck; screen?: string[]; afterTab?: 'other-question'; flipAfterText?: boolean } = {}) {
   type State = 'prompt' | 'notes' | 'typed' | 'answered';
   let state: State = 'prompt';
   let selected = options.selected ?? 0;
   const base = screenOf('question-options-80x24');
   const writes: string[] = [];
-  const view = (): string[] =>
-    options.screen ??
-    (state === 'prompt'
-      ? withSelected(base, selected)
-      : state === 'notes'
-        ? screenOf('question-notes-open-80x24')
-        : state === 'typed'
-          ? screenOf('question-notes-typed-80x24')
-          : screenOf('question-answered-80x24'));
+  let typedReads = 0;
+  const view = (): string[] => {
+    if (options.screen !== undefined) return options.screen;
+    if (state === 'prompt') return withSelected(base, selected);
+    if (state === 'notes') {
+      const notes = screenOf('question-notes-open-80x24');
+      return options.afterTab === 'other-question' ? otherQuestion(notes) : notes;
+    }
+    if (state === 'typed') {
+      typedReads += 1;
+      const typed = screenOf('question-notes-typed-80x24');
+      // Читается дважды (ожидание текста и сверка перед Enter): со второго чтения экран — другой вопрос.
+      return options.flipAfterText === true && typedReads >= 2 ? otherQuestion(typed) : typed;
+    }
+    return screenOf('question-answered-80x24');
+  };
   const pty = {
     screenText: (): string[] => view(),
     write: (_ref: SessionRef, data: string): void => {
@@ -114,6 +124,24 @@ describe('typeOwnAnswer', () => {
     const setup = scenario({ stuck: 'text' });
     await expect(run(setup).outcome).resolves.toBe('timeout');
     expect(setup.writes).toEqual([DOWN, DOWN, DOWN, '\t', TEXT]);
+  });
+
+  it('после Tab экран сменился на заметки другого вопроса — текст в него не уходит', async () => {
+    const setup = scenario({ afterTab: 'other-question' });
+    await expect(run(setup).outcome).resolves.toBe('timeout');
+    expect(setup.writes).toEqual([DOWN, DOWN, DOWN, '\t']);
+  });
+
+  it('экран сменился на заметки другого вопроса между текстом и Enter — Enter не нажимается, screen-changed', async () => {
+    const setup = scenario({ flipAfterText: true });
+    await expect(run(setup).outcome).resolves.toBe('screen-changed');
+    expect(setup.writes).toEqual([DOWN, DOWN, DOWN, '\t', TEXT]);
+  });
+
+  it('ответ повторяет начало вопроса, запись текста потеряна: строка вопроса не считается введённым текстом, Enter не нажимается', async () => {
+    const setup = scenario({ stuck: 'text' });
+    await expect(run(setup, 'Which color do you prefer?').outcome).resolves.toBe('timeout');
+    expect(setup.writes).toEqual([DOWN, DOWN, DOWN, '\t', 'Which color do you prefer?']);
   });
 
   it('вопрос не ушёл после Enter — timeout', async () => {

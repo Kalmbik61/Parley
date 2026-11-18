@@ -4204,12 +4204,21 @@ describe('вопрос терминала Codex становится карто�
     expect(fakes.writes).toEqual(['3']);
   });
 
-  it('свой ответ клавишей не выражается: applied false, записи в терминал нет (задача 4)', async () => {
+  it('пустой ответ ни клавишей, ни своим текстом не выражается: applied false, записи нет, карточка ждёт', async () => {
     blockedWith('question-options-80x24', 'question');
     const [card] = await pendingOf();
-    expect(service.decide(REF, card!.cardId, { kind: 'question', answers: { [QUESTION]: 'purple' } })).toEqual({ applied: false, state: 'pending' });
+    expect(service.decide(REF, card!.cardId, { kind: 'question', answers: { [QUESTION]: '  ' } })).toEqual({ applied: false, state: 'pending' });
     expect(fakes.writes).toEqual([]);
     expect(await pendingOf()).toHaveLength(1);
+  });
+
+  // Заменяет прежний случай задачи 3 («свой ответ → applied false»): с задачей 4 свой ответ печатает хост по шагам.
+  it('свой ответ клавишей не выражается — его печатает хост по шагам (задача 4): карточка answered, первая клавиша — стрелка', async () => {
+    blockedWith('question-options-80x24', 'question');
+    const [card] = await pendingOf();
+    expect(service.decide(REF, card!.cardId, { kind: 'question', answers: { [QUESTION]: 'purple' } })).toEqual({ applied: true, state: 'answered' });
+    expect(fakes.writes).toEqual(['\u001b[B']);
+    expect(await pendingOf()).toHaveLength(0);
   });
 
   it('экран сменился до решения: записи нет, карточка elsewhere, ответ applied false, decisions возвращён', async () => {
@@ -4426,6 +4435,52 @@ describe('свой ответ и отказ с текстом по вопрос�
     expect(service.decide(REF, card!.cardId, { kind: 'question', answers: { [QUESTION]: 'purple please' } })).toEqual({ applied: false, state: 'elsewhere' });
     await advance(2_000);
     expect(fakes.writes).toEqual([]);
+  });
+
+  it('выход процесса посреди печати: ожидание снято, клавиш больше нет, таймеров нет, поиск не запускается', async () => {
+    const baseline = vi.getTimerCount();
+    fakes.setScreen(screenOf('question-options-80x24'));
+    fakes.emitActivity(REF, 'blocked', 'question');
+    const [card] = await pendingOf();
+    expect(service.decide(REF, card!.cardId, { kind: 'question', answers: { [QUESTION]: 'purple please' } })).toMatchObject({ applied: true });
+    expect(fakes.writes).toEqual([DOWN]);
+    // Печать ждёт, пока метка сдвинется: идёт ожидание шага.
+    expect(vi.getTimerCount()).toBeGreaterThan(baseline);
+    fakes.emitExit(REF);
+    await advance(0);
+    // Тот же экран с вопросом после выхода: печать не продолжается, поиск не запускается.
+    fakes.setScreen(screenOf('question-options-80x24'));
+    await advance(10_000);
+    expect(fakes.writes).toEqual([DOWN]);
+    expect(await pendingOf()).toHaveLength(0);
+    expect(vi.getTimerCount()).toBe(baseline);
+    expect(fakes.log.info).not.toHaveBeenCalledWith('свой ответ на вопрос терминала не доведён', expect.anything());
+  });
+
+  it('stop() посреди печати: ожидание снято, таймеров службы не остаётся, клавиш больше нет', async () => {
+    fakes.setScreen(screenOf('question-options-80x24'));
+    fakes.emitActivity(REF, 'blocked', 'question');
+    const [card] = await pendingOf();
+    service.decide(REF, card!.cardId, { kind: 'question', answers: { [QUESTION]: 'purple please' } });
+    expect(fakes.writes).toEqual([DOWN]);
+    await service.stop();
+    expect(vi.getTimerCount()).toBe(0);
+    await advance(10_000);
+    expect(fakes.writes).toEqual([DOWN]);
+  });
+
+  it('отказ с текстом: другая нужда при blocked (startup) не считается готовностью; текст уходит, когда blocked снят', async () => {
+    fakes.setScreen(screenOf('command-approval-80x24'));
+    fakes.emitActivity(REF, 'blocked', 'approval');
+    const [card] = await pendingOf();
+    service.decide(REF, card!.cardId, { kind: 'permission', behavior: 'deny', message: 'use another way' });
+    fakes.emitActivity(REF, 'blocked', 'startup');
+    await advance(TERMINAL_MESSAGE_POLL_MS * 3);
+    expect(sendMock).not.toHaveBeenCalled();
+    fakes.emitActivity(REF, 'idle');
+    await advance(TERMINAL_MESSAGE_POLL_MS);
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(sendMock).toHaveBeenCalledWith({ ref: REF, text: 'use another way', submit: true });
   });
 
   it('отказ с текстом: клавиша 3, карточка denied; текст уходит сообщением человека, когда сессия перестала ждать', async () => {
