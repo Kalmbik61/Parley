@@ -319,6 +319,26 @@ describe('вид острова', () => {
     expect(props.onDecide).toHaveBeenCalledWith('k\u0000c-1', { kind: 'permission', behavior: 'allow', always: true });
   });
 
+  it('карточка по вопросу терминала Codex (via terminal): Allow, Always с правилом варианта 2 и Deny', () => {
+    const rule = "Yes, and don't ask again for commands that start with `touch created.txt`";
+    const base = permissionItem({}, [{ type: 'addRules', rules: [{ toolName: 'Bash', ruleContent: rule }] }]);
+    const card = { ...base.card!, via: 'terminal' } as FeedCard;
+    const props = view({ items: [{ ...base, card }] });
+    expect(screen.getByTestId('island-allow')).toBeTruthy();
+    expect(screen.getByTestId('island-always').getAttribute('title')).toBe(`Bash(${rule})`);
+    expect(screen.getByTestId('island-deny')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('island-always'));
+    expect(props.onDecide).toHaveBeenCalledWith('k\u0000c-1', { kind: 'permission', behavior: 'allow', always: true });
+  });
+
+  it('карточка вопроса терминала Codex (via terminal): форма вопроса с вариантами и Submit', () => {
+    const base = questionItem(['Red (Recommended)', 'Green', 'Blue']);
+    const card = { ...base.card!, via: 'terminal' } as FeedCard;
+    view({ items: [{ ...base, card }] });
+    expect(screen.getByRole('button', { name: 'Submit' })).toBeTruthy();
+    expect(screen.queryByTestId('island-allow')).toBeNull();
+  });
+
   it('вопрос выбирает вариант, но отправляется только явным Submit', () => {
     const props = view({ items: [questionItem(['Postgres', 'SQLite'])] });
     fireEvent.click(screen.getByRole('radio', { name: 'SQLite' }));

@@ -70,6 +70,36 @@ describe('questionKeyboard', () => {
   });
 });
 
+describe('карточки по вопросу терминала Codex (via terminal, план слоя 2, задача 5)', () => {
+  const rule = [{ type: 'addRules', rules: [{ toolName: 'Bash', ruleContent: "Yes, and don't ask again for commands that start with `ls`" }] }];
+  const terminalPermission = (): FeedPermissionCard => ({ ...permission(rule, 'touch created.txt'), via: 'terminal' });
+  const terminalPatch = (): FeedPermissionCard => ({ ...permission([{ type: 'addRules', rules: [{ toolName: 'apply_patch', ruleContent: "Yes, and don't ask again for these files" }] }]), toolName: 'apply_patch', toolInput: { path: '/p/my_harnas/src/a.ts' }, via: 'terminal' });
+  const terminalQuestion = (): FeedQuestionCard => ({ ...question(['Red (Recommended)', 'Green', 'Blue']), toolName: 'request_user_input', via: 'terminal' });
+
+  it('одобрение команды с правилом: три кнопки, команда в тексте', () => {
+    const { text, keyboard } = feedCardMessage(terminalPermission(), meta);
+    expect(codes(keyboard)).toEqual(['pc1:aB3dE9fG:a', 'pc1:aB3dE9fG:d', 'pc1:aB3dE9fG:A']);
+    expect(text).toContain('<pre>touch created.txt</pre>');
+  });
+  it('код A даёт «разрешить и не спрашивать» (клавиша 2 у хоста)', () => {
+    expect(feedDecisionFor(terminalPermission(), 'A')).toEqual({ kind: 'permission', behavior: 'allow', always: true });
+    expect(feedDecisionFor(terminalPermission(), 'a')).toEqual({ kind: 'permission', behavior: 'allow' });
+    expect(feedDecisionFor(terminalPermission(), 'd')).toEqual({ kind: 'permission', behavior: 'deny' });
+  });
+  it('одобрение правки: три кнопки и путь файла в тексте', () => {
+    const { text, keyboard } = feedCardMessage(terminalPatch(), meta);
+    expect(codes(keyboard)).toEqual(['pc1:aB3dE9fG:a', 'pc1:aB3dE9fG:d', 'pc1:aB3dE9fG:A']);
+    expect(text).toContain('Permission: apply_patch');
+    expect(text).toContain('<pre>/p/my_harnas/src/a.ts</pre>');
+  });
+  it('вопрос с вариантами: кнопка на каждый вариант и «Other»; ответ-подпись и свой ответ', () => {
+    const card = terminalQuestion();
+    expect(codes(feedCardMessage(card, meta).keyboard)).toEqual(['pc1:aB3dE9fG:q0', 'pc1:aB3dE9fG:q1', 'pc1:aB3dE9fG:q2', 'pc1:aB3dE9fG:o']);
+    expect(feedDecisionFor(card, 'q2')).toEqual({ kind: 'question', answers: { 'Which one?': 'Blue' } });
+    expect(feedDecisionFor(card, 'o', 'purple please')).toEqual({ kind: 'question', answers: { 'Which one?': 'purple please' } });
+  });
+});
+
 describe('feedDecisionFor', () => {
   it('permission: a, A, d', () => {
     expect(feedDecisionFor(permission([{}]), 'a')).toEqual({ kind: 'permission', behavior: 'allow' });

@@ -116,6 +116,33 @@ describe('очередь запросов острова', () => {
     expect(find()).toEqual(first);
   });
 
+  it('карточка по вопросу терминала Codex (via terminal) при decisions window: запись с кнопками, решение уходит feed.decide', async () => {
+    const rule = { type: 'addRules', rules: [{ toolName: 'Bash', ruleContent: "Yes, and don't ask again for commands that start with `ls`" }] };
+    const terminal = { ...permission('t-1', 'ls'), via: 'terminal', suggestions: [rule] } as FeedCard;
+    const { call, decide } = bridge({ 's-03': [terminal] });
+    useIslandRequests.getState().bind(call as never);
+    useIslandRequests.getState().sync(entries, activityMap([makeActivity(ref('s-03'), 'blocked')]), true);
+    await flush();
+    const item = useIslandRequests.getState().items.find((candidate) => candidate.card?.cardId === 't-1');
+    expect(item).toMatchObject({ ref: ref('s-03'), inWindow: true, summary: 'Run: ls', card: { via: 'terminal' } });
+    const always = { kind: 'permission', behavior: 'allow', always: true } as const;
+    await useIslandRequests.getState().decide(item!.key, always);
+    expect(decide).toHaveBeenCalledWith({ ref: ref('s-03'), cardId: 't-1', decision: always });
+  });
+
+  it('вопрос терминала Codex (via terminal): запись в окне с картой вопроса', async () => {
+    const question = {
+      id: 'q-1', at: '2026-10-12T10:00:00.000Z', kind: 'question', cardId: 'q-1', state: 'pending', toolUseId: null, toolName: 'request_user_input',
+      toolInput: { question: 'Which color do you prefer?' }, via: 'terminal',
+      questions: [{ question: 'Which color do you prefer?', header: null, multiSelect: false, options: [{ label: 'Red', description: null }, { label: 'Blue', description: null }] }],
+    } as unknown as FeedCard;
+    const { call } = bridge({ 's-03': [question] });
+    useIslandRequests.getState().bind(call as never);
+    useIslandRequests.getState().sync(entries, activityMap([makeActivity(ref('s-03'), 'blocked')]), true);
+    await flush();
+    expect(useIslandRequests.getState().items.find((candidate) => candidate.card?.cardId === 'q-1')).toMatchObject({ inWindow: true, card: { kind: 'question', via: 'terminal' } });
+  });
+
   // Спека подписок К16: причина «needs you» одна на окно, остров и Telegram — текст из ядра (`needReason`).
   it('Codex с need: переход к терминалу называет причину; без need — прежний «Codex needs your attention»', async () => {
     const { call } = bridge({});
