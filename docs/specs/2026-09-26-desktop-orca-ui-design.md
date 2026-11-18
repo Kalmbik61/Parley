@@ -2249,8 +2249,10 @@ interface DiffNote {
       `setPermissionCheckHandler(() => false)`: камера, микрофон, геолокация,
       уведомления, буфер обмена и прочее — отказ;
     - `certificate-error` не перехватывается — отказ по умолчанию;
-    - сертификат клиента не отдаётся: `app.on('select-client-certificate')` —
-      `preventDefault` и пустой ответ. Это событие `app`, а не разрешение, и без него
+    - сертификат клиента отдаётся только по выбору человека в слое над вкладкой; не гостям
+      раздела — отказ (спека 2026-11-18-browser-client-certificate-design.md).
+      `app.on('select-client-certificate')` — `preventDefault` и решение модуля
+      `main/browser/client-cert.ts`. Это событие `app`, а не разрешение, и без него
       Electron отдал бы сайту с mTLS первый сертификат из хранилища;
     - загрузки (`will-download`) — стандартный диалог сохранения;
     - `render-process-gone` — слой поверх страницы «Страница упала» и «Перезагрузить»:

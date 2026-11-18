@@ -402,6 +402,64 @@ describe('инструменты действий (этап D)', () => {
     }
   });
 
+  it('browser_action: схема строгая, обязателен только tab, steps — до 10 строгих шагов без tab, snapshot — full или interactive', () => {
+    const tool = BROWSER_TOOLS.find((candidate) => candidate.name === 'browser_action');
+    const schema = tool?.inputSchema as { required?: string[]; additionalProperties?: unknown; properties?: Record<string, Record<string, unknown>> };
+    expect(schema.required).toEqual(['tab']);
+    expect(schema.additionalProperties).toBe(false);
+    const steps = schema.properties?.steps as { type: string; minItems: number; maxItems: number; items: { required: string[]; additionalProperties: unknown; properties: Record<string, unknown> } };
+    expect(steps).toMatchObject({ type: 'array', minItems: 1, maxItems: 10 });
+    expect(steps.items.required).toEqual(['action']);
+    expect(steps.items.additionalProperties).toBe(false);
+    expect(Object.keys(steps.items.properties)).not.toContain('tab');
+    expect(Object.keys(steps.items.properties).sort()).toEqual(Object.keys(schema.properties ?? {}).filter((name) => !['tab', 'steps', 'snapshot'].includes(name)).sort());
+    expect(schema.properties?.snapshot).toMatchObject({ type: 'string', enum: ['full', 'interactive'] });
+    expect(tool?.description).toContain('steps runs up to 10 actions in one call and stops at the first failure or when a navigation makes the next ref stale; snapshot adds a fresh snapshot (full or interactive) to the answer.');
+    expect(tool?.description?.length ?? 0).toBeLessThanOrEqual(900);
+  });
+
+  it('action со steps: четыре ответа — без остановки, failed, navigated, time — печатаются построчно по формату', async () => {
+    const client = await connect(await startEndpoint());
+    const url = 'http://localhost:5173/form';
+    const base = { tab: 't1', url, navigated: false, notes: [] as string[] };
+    const fenced = (body: string): string => `${PAGE_DATA_NOTE}\n\n\`\`\`text\n${body}\n\`\`\``;
+    answers.push(
+      { status: 200, body: { ok: true, result: { ...base, done: 'Ran 2 of 2 steps.', steps: [{ done: 'Typed 3 characters into e1.', change: 'changed' }, { done: 'Clicked e2.', change: 'none' }] } } },
+      { status: 200, body: { ok: true, result: { ...base, done: 'Ran 1 of 3 steps.', steps: [{ done: 'Clicked e4.', change: 'changed' }], stopped: { at: 2, reason: 'failed', code: 'stale_ref', message: 'Ref e9999 is from an older snapshot.' } } } },
+      { status: 200, body: { ok: true, result: { ...base, navigated: true, done: 'Ran 1 of 5 steps.', steps: [{ done: 'Clicked e1.', change: 'navigated' }], stopped: { at: 2, reason: 'navigated' } } } },
+      { status: 200, body: { ok: true, result: { ...base, done: 'Ran 1 of 3 steps.', steps: [{ done: 'Clicked e1.' }], stopped: { at: 2, reason: 'time' } } } },
+    );
+    const step = { action: 'click', ref: 'e1' };
+    const plain = await call(client, 'browser_action', { tab: 't1', steps: [step, step] });
+    expect(plain.isError).toBe(false);
+    expect(plain.text).toBe(`1. Typed 3 characters into e1. The page changed.\n2. Clicked e2. Nothing changed on the page: check the target with a new browser_snapshot.\n${fenced(`Page: ${url}`)}`);
+    const failed = await call(client, 'browser_action', { tab: 't1', steps: [step, step, step] });
+    expect(failed.text).toBe(`1. Clicked e4. The page changed.\nStep 2 failed: stale_ref: Ref e9999 is from an older snapshot. ${BROWSER_TOOL_HINTS.stale_ref}\nNot run: 3.\n${fenced(`Page: ${url}`)}`);
+    const navigated = await call(client, 'browser_action', { tab: 't1', steps: [step, step, step, step, step] });
+    expect(navigated.text).toBe(`1. Clicked e1. The page navigated: old refs are stale, take a new browser_snapshot.\nNot run: 2-5 (refs are stale after the navigation).\n${fenced(`Page: ${url}`)}`);
+    const late = await call(client, 'browser_action', { tab: 't1', steps: [step, step, step] });
+    expect(late.text).toBe(`1. Clicked e1.\nNot run: 2-3 (out of time: call again).\n${fenced(`Page: ${url}`)}`);
+  });
+
+  it('action: snapshot у списка и у одиночного действия; данные страницы шагов — в ограде; отказ на последнем шаге без «Not run»', async () => {
+    const client = await connect(await startEndpoint());
+    const url = 'http://localhost:5173/form';
+    const base = { tab: 't1', url, navigated: false, notes: [] as string[] };
+    const fenced = (body: string): string => `${PAGE_DATA_NOTE}\n\n\`\`\`text\n${body}\n\`\`\``;
+    const snapshot = { text: '[ref=e1] button "Go"', refs: 1, truncated: false };
+    answers.push(
+      { status: 200, body: { ok: true, result: { ...base, done: 'Ran 1 of 1 steps.', steps: [{ done: 'Selected an option in e3.', change: 'changed', pageData: 'Selected option: Red' }], snapshot } } },
+      { status: 200, body: { ok: true, result: { ...base, done: 'Clicked e2.', change: 'changed', snapshot: { ...snapshot, truncated: true } } } },
+      { status: 200, body: { ok: true, result: { ...base, done: 'Ran 1 of 2 steps.', steps: [{ done: 'Clicked e1.', change: 'none' }], stopped: { at: 2, reason: 'failed', code: 'covered', message: 'Element e2 is covered.' } } } },
+    );
+    const listed = await call(client, 'browser_action', { tab: 't1', steps: [{ action: 'select', ref: 'e3', value: 'Red' }], snapshot: 'interactive' });
+    expect(listed.text).toBe(`1. Selected an option in e3. The page changed.\nNew snapshot: 1 refs; they replace all earlier refs.\n${fenced(`Page: ${url}\nStep 1: Selected option: Red\n[ref=e1] button "Go"`)}`);
+    const single = await call(client, 'browser_action', { tab: 't1', action: 'click', ref: 'e2', snapshot: 'full' });
+    expect(single.text).toBe(`Clicked e2. The page changed.\nNew snapshot: 1 refs; they replace all earlier refs. The snapshot was cut at ${BROWSER_TOOL_LIMITS.snapshotBytes / 1024} KB: pass interactiveOnly: true for a shorter one.\n${fenced(`Page: ${url}\n[ref=e1] button "Go"`)}`);
+    const last = await call(client, 'browser_action', { tab: 't1', steps: [{ action: 'click', ref: 'e1' }, { action: 'click', ref: 'e2' }] });
+    expect(last.text).toBe(`1. Clicked e1. Nothing changed on the page: check the target with a new browser_snapshot.\nStep 2 failed: covered: Element e2 is covered. ${BROWSER_TOOL_HINTS.covered}\n${fenced(`Page: ${url}`)}`);
+  });
+
   it('описания называют то, что агенту нужно знать', () => {
     const d = (name: string): string => BROWSER_TOOLS.find((tool) => tool.name === name)?.description ?? '';
     for (const phrase of ['any http(s) URL', 'back', 'forward', 'reload', '15 s']) expect(d('browser_navigate'), phrase).toContain(phrase);
@@ -432,6 +490,34 @@ describe('инструменты действий (этап D)', () => {
     expect(result.text).toContain('old refs are stale');
     expect(result.text).toContain('\nNote: The page started a download: report.csv.');
     expect(result.text).toContain('Page: http://localhost:5173/next');
+  });
+
+  it('action: строка изменения страницы — по полю change; без поля (старое окно) и при unknown ни одной из трёх фраз', async () => {
+    const client = await connect(await startEndpoint());
+    const stale = 'old refs are stale';
+    const none = 'Nothing changed on the page: check the target with a new browser_snapshot.';
+    const reply = (change: string | undefined, navigated = false) => ({
+      status: 200,
+      body: { ok: true, result: { tab: 't1', url: 'http://localhost:5173/', done: 'Clicked e2.', navigated, ...(change === undefined ? {} : { change }), notes: [] } },
+    });
+    answers.push(reply('changed'), reply('none'), reply('navigated', true), reply(undefined, true), reply('navigated', false), reply('unknown'), reply(undefined));
+    const changed = await call(client, 'browser_action', { tab: 't1', action: 'click', ref: 'e2' });
+    expect(changed.text).toContain('Clicked e2. The page changed.');
+    expect(changed.text).not.toContain(stale);
+    expect((await call(client, 'browser_action', { tab: 't1', action: 'click', ref: 'e2' })).text).toContain(none);
+    // оба признака сразу (change и navigated) — фраза одна, без повтора
+    const moved = (await call(client, 'browser_action', { tab: 't1', action: 'click', ref: 'e2' })).text;
+    expect(moved.split(stale)).toHaveLength(2);
+    const oldWindow = (await call(client, 'browser_action', { tab: 't1', action: 'click', ref: 'e2' })).text;
+    expect(oldWindow.split(stale)).toHaveLength(2);
+    const onlyChange = (await call(client, 'browser_action', { tab: 't1', action: 'click', ref: 'e2' })).text;
+    expect(onlyChange.split(stale)).toHaveLength(2);
+    expect(onlyChange).toContain('Clicked e2. The page navigated: old refs are stale, take a new browser_snapshot.');
+    for (const text of [(await call(client, 'browser_action', { tab: 't1', action: 'click', ref: 'e2' })).text, (await call(client, 'browser_action', { tab: 't1', action: 'click', ref: 'e2' })).text]) {
+      expect(text).not.toContain('The page changed.');
+      expect(text).not.toContain('Nothing changed');
+      expect(text).not.toContain(stale);
+    }
   });
 
   it('action: данные страницы ответа (подпись выбранной опции) — в ограде под адресом, не в первой строке (финальная рецензия m2)', async () => {
@@ -467,6 +553,15 @@ describe('инструменты действий (этап D)', () => {
     );
     expect((await call(client, 'browser_action', { tab: 't1', action: 'click', ref: 'e4' })).text).toContain('wait');
     expect((await call(client, 'browser_action', { tab: 't1', action: 'click', ref: 'e4' })).text).toContain('browser_snapshot');
+  });
+
+  it('covered: текст окна и подсказка в одной строке отказа', async () => {
+    const client = await connect(await startEndpoint());
+    answers.push({ status: 200, body: { ok: false, error: { code: 'covered', message: 'Element e4 is covered by another element; nothing was clicked.' } } });
+    const result = await call(client, 'browser_action', { tab: 't1', action: 'click', ref: 'e4' });
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain(`covered: Element e4 is covered by another element; nothing was clicked. ${BROWSER_TOOL_HINTS.covered}`);
+    expect(BROWSER_TOOL_HINTS.covered).toContain('Close or move what covers the element');
   });
 
   it('подсказка к human_busy годится и к Select/Annotate, и к печати человека: причину не придумывает (D2 живых проверок)', async () => {

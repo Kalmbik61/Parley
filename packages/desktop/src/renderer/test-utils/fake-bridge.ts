@@ -6,6 +6,7 @@
  */
 
 import type { BrowserAuthCancel, BrowserAuthRequest } from '../../shared/basic-auth.js';
+import type { BrowserCertCancel, BrowserCertRequest } from '../../shared/client-cert.js';
 import type {
   ConsentCard,
   EventData,
@@ -254,6 +255,10 @@ export interface FakeBridge extends ParleyBridge {
   emitAuthRequest(e: BrowserAuthRequest): void;
   /** Запрос снят main'ом: событие `browser:auth-cancel` слушателям `browser.onAuthCancel`. */
   emitAuthCancel(e: BrowserAuthCancel): void;
+  /** Сайт просит клиентский сертификат: событие `browser:cert-request` слушателям `browser.onCertRequest`. */
+  emitCertRequest(e: BrowserCertRequest): void;
+  /** Запрос сертификата снят main'ом: событие `browser:cert-cancel` слушателям `browser.onCertCancel`. */
+  emitCertCancel(e: BrowserCertCancel): void;
   /** Фокус окна macOS: событие `app:window-focus` слушателям `app.onWindowFocus` (кусок 9.2b). */
   emitWindowFocus(focused: boolean): void;
   /** Ответ browser.pickStart; по умолчанию null. Отказ — объект с code, как у прочих отказов подставного моста. */
@@ -404,6 +409,8 @@ export function createFakeBridge(): FakeBridge {
   const agentResizeListeners = new Set<(e: AgentResize) => void>();
   const authRequestListeners = new Set<(e: BrowserAuthRequest) => void>();
   const authCancelListeners = new Set<(e: BrowserAuthCancel) => void>();
+  const certRequestListeners = new Set<(e: BrowserCertRequest) => void>();
+  const certCancelListeners = new Set<(e: BrowserCertCancel) => void>();
   const windowFocusListeners = new Set<(focused: boolean) => void>();
   let voiceModels: VoiceModelId[] = [];
   let transcribeResult: TranscribeResult = { text: 'dictated text' };
@@ -624,6 +631,12 @@ export function createFakeBridge(): FakeBridge {
     emitAuthRequest: (e) => {
       for (const listener of authRequestListeners) listener(e);
     },
+    emitCertRequest: (e) => {
+      for (const listener of certRequestListeners) listener(e);
+    },
+    emitCertCancel: (e) => {
+      for (const listener of certCancelListeners) listener(e);
+    },
     emitAuthCancel: (e) => {
       for (const listener of authCancelListeners) listener(e);
     },
@@ -840,6 +853,17 @@ export function createFakeBridge(): FakeBridge {
       },
       authResponse: async (requestId, credentials) => {
         browserCalls.push({ method: 'authResponse', args: [requestId, credentials] });
+      },
+      onCertRequest: (listener) => {
+        certRequestListeners.add(listener);
+        return () => certRequestListeners.delete(listener);
+      },
+      onCertCancel: (listener) => {
+        certCancelListeners.add(listener);
+        return () => certCancelListeners.delete(listener);
+      },
+      certResponse: async (requestId, answer) => {
+        browserCalls.push({ method: 'certResponse', args: [requestId, answer] });
       },
       agentStop: async (webContentsId) => {
         browserCalls.push({ method: 'agentStop', args: [webContentsId] });

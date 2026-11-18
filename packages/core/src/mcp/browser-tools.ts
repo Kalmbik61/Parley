@@ -78,6 +78,25 @@ const TAB = { type: 'string', pattern: '^t\\d{1,4}$', description: 'Page id from
 const REF = { type: 'string', pattern: '^e\\d{1,6}$', description: 'Element ref from browser_snapshot, for example e12.' };
 const LIMIT = { type: 'integer', minimum: 1, maximum: BROWSER_TOOL_LIMITS.listEntries, default: 50 };
 
+/** Свойства одного действия `browser_action`: верхний уровень (одиночное действие) и каждый элемент `steps`. */
+const ACTION_PROPERTIES = {
+  action: { type: 'string', enum: ['click', 'double_click', 'hover', 'type', 'press', 'scroll', 'select', 'check', 'uncheck', 'drag', 'upload'], description: 'What to do.' },
+  ref: { ...REF, description: 'Target element: ref from browser_snapshot. Not together with x and y.' },
+  x: { type: 'number', minimum: 0, maximum: 3840, description: 'Target point x in CSS px, with y.' },
+  y: { type: 'number', minimum: 0, maximum: 2400, description: 'Target point y in CSS px, with x.' },
+  text: { type: 'string', minLength: 1, maxLength: BROWSER_TOOL_LIMITS.text, description: 'type: the text to enter.' },
+  key: { type: 'string', minLength: 1, maxLength: 32, description: 'press: the key, for example Enter, Escape, Tab, ArrowDown, a.' },
+  modifiers: { type: 'array', items: { type: 'string', enum: ['Alt', 'Control', 'Meta', 'Shift'] }, maxItems: 4, description: 'Modifier keys held during click or press.' },
+  submit: { type: 'boolean', description: 'type: press Enter after the text.' },
+  direction: { type: 'string', enum: ['up', 'down', 'left', 'right'], description: 'scroll: the direction.' },
+  amount: { type: 'integer', minimum: 1, maximum: 10_000, description: 'scroll: distance in CSS px.' },
+  value: { type: 'string', minLength: 1, maxLength: 1024, description: 'select: the value or text of the option.' },
+  toRef: { ...REF, description: 'drag: drop target, a ref.' },
+  toX: { type: 'number', minimum: 0, maximum: 3840, description: 'drag: drop point x, with toY.' },
+  toY: { type: 'number', minimum: 0, maximum: 2400, description: 'drag: drop point y, with toX.' },
+  files: { type: 'array', items: { type: 'string', pattern: '^/', minLength: 1, maxLength: 4096 }, minItems: 1, maxItems: 10, description: 'upload: absolute paths of existing files.' },
+};
+
 export const BROWSER_TOOLS: readonly Tool[] = [
   {
     name: 'browser_tabs',
@@ -213,29 +232,18 @@ export const BROWSER_TOOLS: readonly Tool[] = [
       'Act on a page like a person: click, double_click, hover, type, press, scroll, select, check, uncheck, drag, upload. ' +
       'Target an element by ref from browser_snapshot, or a point by x and y in CSS px. type enters text into the focused field (submit: true then presses Enter); press sends one key with modifiers; ' +
       'select picks an option of a <select> by value or text; upload puts files (absolute paths) into an input[type=file]. ' +
-      'Fails with human_busy while the human selects or annotates in that page, and with stale_ref when the ref is from an older snapshot.',
+      'Fails with human_busy while the human selects or annotates in that page, with stale_ref when the ref is from an older snapshot, and with covered when another element lies over the target (nothing is clicked). ' +
+      'steps runs up to 10 actions in one call and stops at the first failure or when a navigation makes the next ref stale; snapshot adds a fresh snapshot (full or interactive) to the answer.',
     annotations: CONTROL,
     inputSchema: {
       type: 'object',
       properties: {
         tab: TAB,
-        action: { type: 'string', enum: ['click', 'double_click', 'hover', 'type', 'press', 'scroll', 'select', 'check', 'uncheck', 'drag', 'upload'], description: 'What to do.' },
-        ref: { ...REF, description: 'Target element: ref from browser_snapshot. Not together with x and y.' },
-        x: { type: 'number', minimum: 0, maximum: 3840, description: 'Target point x in CSS px, with y.' },
-        y: { type: 'number', minimum: 0, maximum: 2400, description: 'Target point y in CSS px, with x.' },
-        text: { type: 'string', minLength: 1, maxLength: BROWSER_TOOL_LIMITS.text, description: 'type: the text to enter.' },
-        key: { type: 'string', minLength: 1, maxLength: 32, description: 'press: the key, for example Enter, Escape, Tab, ArrowDown, a.' },
-        modifiers: { type: 'array', items: { type: 'string', enum: ['Alt', 'Control', 'Meta', 'Shift'] }, maxItems: 4, description: 'Modifier keys held during click or press.' },
-        submit: { type: 'boolean', description: 'type: press Enter after the text.' },
-        direction: { type: 'string', enum: ['up', 'down', 'left', 'right'], description: 'scroll: the direction.' },
-        amount: { type: 'integer', minimum: 1, maximum: 10_000, description: 'scroll: distance in CSS px.' },
-        value: { type: 'string', minLength: 1, maxLength: 1024, description: 'select: the value or text of the option.' },
-        toRef: { ...REF, description: 'drag: drop target, a ref.' },
-        toX: { type: 'number', minimum: 0, maximum: 3840, description: 'drag: drop point x, with toY.' },
-        toY: { type: 'number', minimum: 0, maximum: 2400, description: 'drag: drop point y, with toX.' },
-        files: { type: 'array', items: { type: 'string', pattern: '^/', minLength: 1, maxLength: 4096 }, minItems: 1, maxItems: 10, description: 'upload: absolute paths of existing files.' },
+        ...ACTION_PROPERTIES,
+        steps: { type: 'array', items: { type: 'object', properties: ACTION_PROPERTIES, required: ['action'], additionalProperties: false }, minItems: 1, maxItems: 10, description: 'Up to 10 actions run in order in one call; each is an action with its own fields (no tab).' },
+        snapshot: { type: 'string', enum: ['full', 'interactive'], description: 'Add a fresh snapshot of the page to the answer after the action or the steps.' },
       },
-      required: ['tab', 'action'],
+      required: ['tab'],
       additionalProperties: false,
     },
   },
@@ -374,6 +382,7 @@ export const BROWSER_TOOL_HINTS: Readonly<Record<string, string>> = {
   // Причину (Select или Annotate в странице, печать человека) называет текст окна; подсказка годится к любой (D2 живых проверок).
   human_busy: 'The human is busy in Parley (selecting, annotating or typing): wait a few seconds and retry; if it keeps failing, ask the human.',
   stale_ref: 'Take a new browser_snapshot and use its refs.',
+  covered: 'Close or move what covers the element (a banner, a dialog, a sticky bar), take a new browser_snapshot and retry.',
   not_loopback: 'An older Parley window answered: ask the human to update Parley.',
 };
 
@@ -444,6 +453,12 @@ interface ActionResult {
   url: string;
   done: string;
   navigated: boolean;
+  /** Нет поля у окна до этапа 1 точности: тогда core о нём молчит. */
+  change?: 'navigated' | 'changed' | 'none' | 'unknown';
+  /** Итоги шагов списка `steps` (копия `BrowserAgentStepResult` протокола). */
+  steps?: Array<{ done: string; change?: 'navigated' | 'changed' | 'none' | 'unknown'; pageData?: string }>;
+  stopped?: { at: number; reason: 'failed' | 'navigated' | 'time'; code?: string; message?: string };
+  snapshot?: { text: string; refs: number; truncated: boolean };
   notes: string[];
   /** Данные страницы к ответу (подпись выбранной опции): только в ограде. */
   pageData?: string;
@@ -472,10 +487,48 @@ function formatSnapshot(result: SnapshotResult): string {
   return `Accessibility snapshot of ${result.tab}: ${result.refs} refs. Refs work until the page navigates.${cutNote}\n\n${pageData(`Page: ${result.url}\n${result.text}`)}`;
 }
 
-function formatAction(result: ActionResult): string {
-  const moved = result.navigated ? ' The page navigated: old refs are stale, take a new browser_snapshot.' : '';
-  const data = result.pageData === undefined ? '' : `\n${result.pageData}`;
-  return `${result.done}${moved}${noteLines(result.notes)}\n${pageData(`Page: ${result.url}${data}`)}`;
+/** Фраза об изменении страницы после действия; поле нет или `unknown` — ничего (окно до этапа 1 точности). */
+function changePhrase(change: ActionResult['change'], navigated = false): string {
+  if (navigated || change === 'navigated') return ' The page navigated: old refs are stale, take a new browser_snapshot.';
+  if (change === 'changed') return ' The page changed.';
+  if (change === 'none') return ' Nothing changed on the page: check the target with a new browser_snapshot.';
+  return '';
+}
+
+/** `4` или `4-5`: номера шагов от `from` до `to` включительно. */
+const rangeOf = (from: number, to: number): string => (from >= to ? String(from) : `${from}-${to}`);
+
+/** Строки об остановке списка: что отказало и какие шаги не выполнены; `total` — сколько шагов послали. */
+function stoppedLines(stopped: NonNullable<ActionResult['stopped']>, total: number): string {
+  if (stopped.reason === 'failed') {
+    const code = stopped.code ?? 'unsupported';
+    const hint = BROWSER_TOOL_HINTS[code];
+    const failed = `\nStep ${stopped.at} failed: ${code}: ${stopped.message ?? ''}${hint === undefined ? '' : ` ${hint}`}`;
+    return stopped.at < total ? `${failed}\nNot run: ${rangeOf(stopped.at + 1, total)}.` : failed;
+  }
+  const why = stopped.reason === 'navigated' ? ' (refs are stale after the navigation)' : ' (out of time: call again)';
+  return `\nNot run: ${rangeOf(stopped.at, total)}${why}.`;
+}
+
+/** Строка «новый снимок» к ответу действия: ссылки из него заменяют все прежние. */
+function snapshotLine(snapshot: NonNullable<ActionResult['snapshot']>): string {
+  const cut = snapshot.truncated ? ` The snapshot was cut at ${BROWSER_TOOL_LIMITS.snapshotBytes / 1024} KB: pass interactiveOnly: true for a shorter one.` : '';
+  return `\nNew snapshot: ${snapshot.refs} refs; they replace all earlier refs.${cut}`;
+}
+
+/** `total` — сколько шагов послали в `steps` (из аргументов вызова); у одиночного действия не нужен. */
+function formatAction(result: ActionResult, total = 0): string {
+  const tree = result.snapshot === undefined ? '' : `\n${result.snapshot.text}`;
+  if (result.steps === undefined) {
+    const data = result.pageData === undefined ? '' : `\n${result.pageData}`;
+    const snapshot = result.snapshot === undefined ? '' : snapshotLine(result.snapshot);
+    return `${result.done}${changePhrase(result.change, result.navigated)}${noteLines(result.notes)}${snapshot}\n${pageData(`Page: ${result.url}${data}${tree}`)}`;
+  }
+  const lines = result.steps.map((step, index) => `${index + 1}. ${step.done}${changePhrase(step.change)}`).join('\n');
+  const stopped = result.stopped === undefined ? '' : stoppedLines(result.stopped, Math.max(total, result.steps.length));
+  const data = result.steps.flatMap((step, index) => (step.pageData === undefined ? [] : [`\nStep ${index + 1}: ${step.pageData}`])).join('');
+  const snapshot = result.snapshot === undefined ? '' : snapshotLine(result.snapshot);
+  return `${lines}${stopped}${noteLines(result.notes)}${snapshot}\n${pageData(`Page: ${result.url}${data}${tree}`)}`;
 }
 
 /** `timeout` — ответ, не ошибка; что ждали, видно по аргументам. */
@@ -837,7 +890,7 @@ export function createBrowserTools(agent: AgentChannel, deps: BrowserToolDeps = 
           case 'snapshot':
             return text(formatSnapshot(answer.result as SnapshotResult));
           case 'action':
-            return text(formatAction(answer.result as ActionResult));
+            return text(formatAction(answer.result as ActionResult, Array.isArray(args.steps) ? args.steps.length : 0));
           case 'wait_for':
             return text(formatWait(answer.result as WaitResult, args));
           case 'resize':

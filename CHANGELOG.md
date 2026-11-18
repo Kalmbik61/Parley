@@ -10,6 +10,13 @@ All notable changes to Parley are documented in this file.
 
 - Codex: command approvals, edit approvals and questions that Codex shows in its terminal now appear as cards with buttons in Chat, on the island, in Telegram and on the phone, in every approvals mode. Other terminal prompts are answered in the Chat panel.
 - Chat: when an agent waits at a prompt in its terminal, the prompt is shown in Chat and you can answer it there with keys or text, without opening the terminal. Works for Codex, Claude Code, Qwen Code and OpenCode.
+- Built-in browser, agents: the snapshot now includes the content of frames of the same site, with refs that actions can target.
+- Built-in browser, agents: browser_action takes a list of up to 10 steps and can return a fresh snapshot in the same answer, so a form takes one call instead of one per field.
+- Built-in browser: sites that ask for a client certificate (SSO over mTLS) now show a chooser over the tab. The choice can be saved per site; "Clear browsing data" removes the saved choices, and a site already answered in this run asks again after Parley restarts.
+
+### Changed
+
+- Built-in browser, agents: a click on an element covered by a banner or a dialog is refused with "covered" instead of landing on the cover, and every action says whether the page navigated, changed or stayed the same.
 
 ## 0.37.1
 

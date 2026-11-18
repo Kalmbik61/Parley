@@ -427,6 +427,17 @@ describe('окно операции, выбор файла, скачивания
     expect(ctx.requestFocus).toHaveBeenCalledTimes(1);
   });
 
+  it('guard.deadline — момент постановки плюс срок операции (шаги списка сверяют по нему остаток)', async () => {
+    const ctx = windowSetup();
+    let guard: InputGuard | null = null;
+    const before = Date.now();
+    await ctx.runner.run(request(), 't1', async (_c, _r, g) => { guard = g; return 'x'; }, {});
+    const after = Date.now();
+    const deadline = (guard as unknown as InputGuard).deadline as number;
+    expect(deadline).toBeGreaterThanOrEqual(before + AGENT_LIMITS.opMs - 2_000);
+    expect(deadline).toBeLessThanOrEqual(after + AGENT_LIMITS.opMs - 2_000);
+  });
+
   it('guard.keyboardQuiet: человек печатает — human_busy; потом можно (M3). guard.check на клавиатуру не смотрит: переход, размер и подготовка действия не ждут тишины (рецензия пачки 3)', async () => {
     const ctx = windowSetup();
     let guard: InputGuard | null = null;

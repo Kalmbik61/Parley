@@ -43,6 +43,7 @@ import type { WindowWorkEntry } from '@parley/core';
 import { AGENT_LIMITS } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { splitUrlCredentials, type BrowserAuthRequest } from '../../shared/basic-auth.js';
+import type { BrowserCertRequest } from '../../shared/client-cert.js';
 import { viewportSize, type ViewportSpec } from '../../shared/browser-devtools.js';
 import { BROWSER_PARTITION, type PickResult, type ViewportFraction } from '../../shared/browser-types.js';
 import { viewportNote } from '../../shared/context-markdown.js';
@@ -62,6 +63,7 @@ import { AnnotationTray } from './annotate/AnnotationTray.js';
 import { EMPTY_ANNOTATE, useAnnotateStore } from './annotate/store.js';
 import { addAnnotationsToChat, cancelMark, saveDraft, syncPins, useAnnotateMode } from './annotate/use-annotate-mode.js';
 import { AuthPrompt } from './AuthPrompt.js';
+import { CertPrompt } from './CertPrompt.js';
 import { BrowserChrome } from './BrowserChrome.js';
 import { createPageContextActions, elementDraft } from './context/actions.js';
 import { TargetMenu } from './context/TargetMenu.js';
@@ -378,6 +380,52 @@ export function BrowserSurface({ workKey, place, url, viewport, visible, bridge,
         console.warn('[parley] authResponse failed', error);
         // Ошибка отправки — на запрос, который не дошёл; новый запрос не пострадавший.
         if (currentAuthIdRef.current === request.requestId) setAuthFailed(true);
+      },
+    );
+  };
+  // Запрос клиентского сертификата этой вкладки (SSO с mTLS): путь тот же, что у basic-auth выше — по id гостя, снимается
+  // ответом, отменой main'а или сменой гостя; ответ на старый запрос касается только текущего.
+  const [certRequest, setCertRequest] = useState<BrowserCertRequest | null>(null);
+  const currentCertIdRef = useRef<string | null>(null);
+  const dismissCert = useCallback((requestId: string): boolean => {
+    if (currentCertIdRef.current !== requestId) return false;
+    currentCertIdRef.current = null;
+    setCertRequest((current) => (current !== null && current.requestId === requestId ? null : current));
+    return true;
+  }, []);
+  useEffect(() => {
+    const offRequest = bridge.browser.onCertRequest((event) => {
+      const own = useBrowserStore.getState().tabs[tabId]?.webContentsId ?? null;
+      if (own === null || event.webContentsId !== own) return;
+      currentCertIdRef.current = event.requestId;
+      setCertRequest(event);
+    });
+    const offCancel = bridge.browser.onCertCancel((event) => {
+      dismissCert(event.requestId);
+    });
+    return () => {
+      offRequest();
+      offCancel();
+    };
+  }, [bridge, tabId, dismissCert]);
+  useEffect(() => {
+    currentCertIdRef.current = null;
+    setCertRequest(null);
+  }, [state.webContentsId]);
+  const [certFailed, setCertFailed] = useState(false);
+  useEffect(() => {
+    setCertFailed(false);
+  }, [certRequest?.requestId]);
+  const answerCert = (answer: { fingerprint: string; remember: boolean } | null): void => {
+    const request = certRequest;
+    if (request === null) return;
+    bridge.browser.certResponse(request.requestId, answer).then(
+      () => {
+        if (dismissCert(request.requestId)) viewRef.current?.focus();
+      },
+      (error: unknown) => {
+        console.warn('[parley] certResponse failed', error);
+        if (currentCertIdRef.current === request.requestId) setCertFailed(true);
       },
     );
   };
@@ -966,6 +1014,7 @@ export function BrowserSurface({ workKey, place, url, viewport, visible, bridge,
             onAddToChat={addAnnotations}
           />
         )}
+        {certRequest === null ? null : <CertPrompt request={certRequest} failed={certFailed} onSubmit={answerCert} />}
         {authRequest === null ? null : <AuthPrompt request={authRequest} failed={authFailed} onSubmit={answerAuth} />}
         {state.loadFailed && !state.crashed ? (
           <div

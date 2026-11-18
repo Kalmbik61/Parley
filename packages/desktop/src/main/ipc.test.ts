@@ -105,6 +105,8 @@ const emulation = {
   })),
 };
 /** Ответы окна на просьбы агента (этап B2): main/browser/agent-ops.ts подменён — мост проверяет только форму. */
+/** Модуль клиентского сертификата: мост проверяет только форму ответа окна и передаёт `sender`. */
+const clientCert = { answer: vi.fn(), clear: vi.fn(async () => undefined) };
 const agentOps = { openTabResult: vi.fn(), registerTab: vi.fn(), captureReady: vi.fn(), stop: vi.fn(), focusReady: vi.fn() };
 
 /** Подставной webContents для моста `browser:*`: EventEmitter плюс то, что трогает мост. */
@@ -299,6 +301,7 @@ function setup(
       inspector,
       emulation,
       agent: agentOps,
+      clientCert,
     },
   });
 
@@ -1670,13 +1673,50 @@ describe('мост browser:* (тест 8 куска 9.1)', () => {
     expect(guest.setZoomLevel).toHaveBeenCalledTimes(3);
   });
 
-  it('clear-data — clearStorageData() и clearCache() раздела', async () => {
+  it('cert-response: requestId, отпечаток и remember проверяются; верный вызов передаёт sender события в clientCert.answer', async () => {
+    clientCert.answer.mockClear();
+    const { ipcMain } = browserSetup();
+    const sender = { id: 1 };
+    const send = (...args: unknown[]) => ipcMain.invokeWithEvent('browser:cert-response', { sender }, ...args);
+    for (const id of [42, '', 'x'.repeat(65), null, undefined]) {
+      expect(await codeOf(send(id, 'sha256/a', false)), String(id)).toBe('bad_request');
+    }
+    for (const fingerprint of [42, undefined, {}, 'f'.repeat(257)]) {
+      expect(await codeOf(send('r1', fingerprint, false)), String(fingerprint)).toBe('bad_request');
+    }
+    for (const remember of ['yes', 1, null, undefined]) {
+      expect(await codeOf(send('r1', 'sha256/a', remember)), String(remember)).toBe('bad_request');
+    }
+    expect(clientCert.answer).not.toHaveBeenCalled();
+
+    await send('r1', 'sha256/a', true);
+    expect(clientCert.answer).toHaveBeenLastCalledWith('r1', 'sha256/a', true, sender);
+    await send('r2', 'sha256/b', false);
+    expect(clientCert.answer).toHaveBeenLastCalledWith('r2', 'sha256/b', false, sender);
+    await send('x'.repeat(64), 'f'.repeat(256), false);
+    expect(clientCert.answer).toHaveBeenCalledTimes(3);
+  });
+
+  it('cert-response: null — «не сейчас», answer(requestId, null, false, sender) даже при remember = true', async () => {
+    clientCert.answer.mockClear();
+    const { ipcMain } = browserSetup();
+    const sender = { id: 1 };
+    await ipcMain.invokeWithEvent('browser:cert-response', { sender }, 'r3', null, true);
+    expect(clientCert.answer).toHaveBeenCalledTimes(1);
+    expect(clientCert.answer).toHaveBeenCalledWith('r3', null, false, sender);
+  });
+
+  it('clear-data — clearStorageData() и clearCache() раздела, затем clientCert.clear()', async () => {
     browserSession.clearStorageData.mockClear();
     browserSession.clearCache.mockClear();
+    clientCert.clear.mockClear();
     const { ipcMain } = browserSetup();
     await ipcMain.invoke('browser:clear-data');
     expect(browserSession.clearStorageData).toHaveBeenCalledTimes(1);
     expect(browserSession.clearCache).toHaveBeenCalledTimes(1);
+    expect(clientCert.clear).toHaveBeenCalledTimes(1);
+    const order = [browserSession.clearStorageData, browserSession.clearCache, clientCert.clear].map((fn) => fn.mock.invocationCallOrder[0] ?? 0);
+    expect(order).toEqual([...order].sort((a, b) => a - b));
     expect(otherSession.clearStorageData).not.toHaveBeenCalled();
   });
 

@@ -13,6 +13,7 @@ import path from 'node:path';
 import type { App, DownloadItem, Session, WebContents, WebPreferences } from 'electron';
 import { BROWSER_PARTITION, type BrowserOpenTab } from '../../shared/browser-types.js';
 import type { BasicAuth } from './basic-auth.js';
+import type { ClientCert } from './client-cert.js';
 
 export type NavVerdict = 'allow' | 'deny';
 
@@ -102,7 +103,7 @@ export function guardWebviewAttach(contents: Pick<WebContents, 'on'>): void {
 /** Обработчики гостя `<webview>`: окна, навигация, масштаб, уход со страницы, клавиши. */
 function guardGuest(
   contents: WebContents,
-  deps: Pick<BrowserGuardDeps, 'openTab' | 'forwardShortcuts' | 'fetchFavicon' | 'inspect' | 'agentFocus' | 'basicAuth'>,
+  deps: Pick<BrowserGuardDeps, 'openTab' | 'forwardShortcuts' | 'fetchFavicon' | 'inspect' | 'agentFocus' | 'basicAuth' | 'clientCert'>,
 ): void {
   // Журнал консоли и сети — первым: до первой загрузки гостя, иначе её запросы и ранние сообщения прошли бы мимо
   // (спайк 0.1). Сбой журнала клетку не отменяет: исключение отсюда оставило бы гостя с allowpopups без обработчиков
@@ -118,6 +119,13 @@ function guardGuest(
     deps.basicAuth?.attach(contents);
   } catch (error) {
     console.warn('[parley] basic auth attach failed', error);
+  }
+
+  // Клиентский сертификат гостя: уход со страницы и закрытие вкладки забывают её запросы выбора. Сбой не снимает клетку.
+  try {
+    deps.clientCert?.attach(contents);
+  } catch (error) {
+    console.warn('[parley] client certificate attach failed', error);
   }
 
   contents.setWindowOpenHandler(({ url }) => {
@@ -212,6 +220,8 @@ interface BrowserGuardDeps {
   agentFocus?(webContentsId: number): boolean;
   /** HTTP basic-auth гостей (`main/browser/basic-auth.ts`): подписка на `login` каждого гостя. */
   basicAuth?: Pick<BasicAuth, 'attach'>;
+  /** Клиентский сертификат гостей (`main/browser/client-cert.ts`): решение по `select-client-certificate` и подписка на гостя. */
+  clientCert?: Pick<ClientCert, 'select' | 'attach'>;
 }
 
 /**
@@ -248,10 +258,13 @@ export function installBrowserGuard(deps: BrowserGuardDeps): void {
   deps.session.setPermissionCheckHandler(() => false);
   deps.session.on('will-download', (_event, item, source) => deps.download(item, source));
 
-  // Событие app, а не разрешение: обработчики сессии его не видят. Без preventDefault Electron
-  // отдал бы сайту с mTLS первый сертификат из хранилища — личность человека без вопроса.
-  deps.app.on('select-client-certificate', (event, _contents, _url, _list, callback) => {
+  // Событие app, а не разрешение: обработчики сессии его не видят. Без preventDefault Electron отдал бы сайту с mTLS первый
+  // сертификат из хранилища — личность человека без вопроса. Сертификат отдаётся только по выбору человека в слое над
+  // вкладкой (клиентский модуль решает: не гость — отказ, запомненный выбор — без вопроса); без модуля — отказ, как раньше
+  // (спека 2026-11-18-browser-client-certificate-design.md).
+  deps.app.on('select-client-certificate', (event, contents, url, list, callback) => {
     event.preventDefault();
-    callback();
+    if (deps.clientCert === undefined) callback();
+    else deps.clientCert.select(contents, url, list, callback);
   });
 }
