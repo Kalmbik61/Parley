@@ -1,7 +1,7 @@
 // packages/desktop/src/main/browser/page-fns.test.ts
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from 'vitest';
-import { HIT_TEST_FN, PAGE_FNS, SELECT_OPTION_FN } from './page-fns.js';
+import { HIT_TEST_FN, PAGE_FNS, PROBE_FN, SELECT_OPTION_FN } from './page-fns.js';
 import { REACT_INFO_FN } from './react-info.js';
 
 type SelectFn = (this: unknown, wanted: string) => { ok: boolean; label?: string; options?: string[] };
@@ -52,11 +52,12 @@ describe('SELECT_OPTION_FN (функция Parley в мире страницы)'
     expect(fn.call(el, 'nope').options).toHaveLength(50);
   });
 
-  it('PAGE_FNS — три функции Parley', () => {
+  it('PAGE_FNS — четыре функции Parley', () => {
     expect(PAGE_FNS.has(SELECT_OPTION_FN)).toBe(true);
     expect(PAGE_FNS.has(REACT_INFO_FN)).toBe(true);
     expect(PAGE_FNS.has(HIT_TEST_FN)).toBe(true);
-    expect(PAGE_FNS.size).toBe(3);
+    expect(PAGE_FNS.has(PROBE_FN)).toBe(true);
+    expect(PAGE_FNS.size).toBe(4);
   });
 });
 
@@ -145,5 +146,41 @@ describe('HIT_TEST_FN (проверка перекрытия перед клик
       return div;
     });
     expect(hit.call(named, false).by).toBe('div "Close banner"');
+  });
+});
+
+type ProbeFn = () => { n: number; idle: number; ready: string };
+const probeFn = new Function(`return (${PROBE_FN});`)() as ProbeFn;
+
+describe('PROBE_FN (проба изменений страницы)', () => {
+  it('два вызова подряд ставят один наблюдатель; счёт растёт от правки DOM, idle после правки падает', async () => {
+    delete (globalThis as { __parleyProbe?: unknown }).__parleyProbe;
+    const Real = MutationObserver;
+    let made = 0;
+    vi.stubGlobal('MutationObserver', class extends Real {
+      constructor(callback: MutationCallback) {
+        super(callback);
+        made += 1;
+      }
+    });
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(1_000_000);
+      expect(probeFn()).toMatchObject({ n: 0, idle: 0, ready: expect.any(String) });
+      expect(made).toBe(1);
+      vi.setSystemTime(1_000_500);
+      expect(probeFn()).toMatchObject({ n: 0, idle: 500 });
+      expect(made).toBe(1);
+      document.body.append(document.createElement('p'));
+      await new Promise<void>((resolve) => queueMicrotask(resolve));
+      const after = probeFn();
+      expect(after.n).toBeGreaterThanOrEqual(1);
+      expect(after.idle).toBe(0);
+      expect(made).toBe(1);
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+      delete (globalThis as { __parleyProbe?: unknown }).__parleyProbe;
+    }
   });
 });

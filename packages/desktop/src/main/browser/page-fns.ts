@@ -65,5 +65,21 @@ export const HIT_TEST_FN = `function (recenter) {
   return { covered: true, by: top.tagName.toLowerCase() + (role ? '[role=' + role + ']' : '') + (text ? ' "' + text + '"' : '') };
 }`;
 
+/**
+ * Проба изменений страницы; исполняется в изолированном мире `parley-agent` (`agent-settle.ts`), `this` не нужен. Первый
+ * вызов ставит `MutationObserver` на документ, следующие только читают. Ответ: `n` — сколько изменений насчитано, `idle` —
+ * сколько мс DOM молчит, `ready` — `document.readyState`.
+ */
+export const PROBE_FN = `function () {
+  var g = globalThis;
+  var p = g.__parleyProbe;
+  if (!p) {
+    p = g.__parleyProbe = { n: 0, at: Date.now() };
+    new MutationObserver(function (list) { p.n += list.length; p.at = Date.now(); })
+      .observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
+  }
+  return { n: p.n, idle: Date.now() - p.at, ready: document.readyState };
+}`;
+
 /** Функции, которые `cdpCallAllowed` пускает в `Runtime.callFunctionOn`. */
-export const PAGE_FNS: ReadonlySet<string> = new Set([REACT_INFO_FN, SELECT_OPTION_FN, HIT_TEST_FN]);
+export const PAGE_FNS: ReadonlySet<string> = new Set([REACT_INFO_FN, SELECT_OPTION_FN, HIT_TEST_FN, PROBE_FN]);

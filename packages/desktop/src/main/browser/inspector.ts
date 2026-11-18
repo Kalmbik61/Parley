@@ -95,6 +95,9 @@ export const CDP_ALLOWED: ReadonlySet<CdpMethod> = new Set<CdpMethod>([
   'Page.setInterceptFileChooserDialog',
   'Emulation.setFocusEmulationEnabled',
   'Runtime.terminateExecution',
+  // Этап 1 точности: изолированный мир для пробы изменений страницы (`agent-settle.ts`).
+  'Page.getFrameTree',
+  'Page.createIsolatedWorld',
   'DOMStorage.enable',
   'DOMStorage.disable',
   'DOMStorage.getDOMStorageItems',

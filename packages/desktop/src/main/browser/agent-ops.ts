@@ -41,6 +41,7 @@ import type { TypingClock } from './human-typing.js';
 import { createAgentCapture } from './agent-capture.js';
 import { createAgentActions, settleLoad, sleep, withNavigation } from './agent-actions.js';
 import { createAgentDom } from './agent-dom.js';
+import { createAgentSettle } from './agent-settle.js';
 import type { AgentCaptureDeps } from './agent-capture.js';
 import { createPageRegistry, listTabs } from './agent-pages.js';
 import type { PageRecord, PageRegistry } from './agent-pages.js';
@@ -654,6 +655,7 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
   });
   const reads = createAgentReads({ inspector: deps.inspector });
   const dom = createAgentDom({ inspector: deps.inspector });
+  const settle = createAgentSettle({ inspector: deps.inspector, sleep });
   const capture = createAgentCapture({ inspector: deps.inspector, emulation: deps.emulation, registry, dom, saveImage: deps.saveImage, image: deps.image, activity: deps.activity, inGuest: deps.inGuest, ...(deps.captureReadyMs === undefined ? {} : { captureReadyMs: deps.captureReadyMs }), ...(deps.guestCallMs === undefined ? {} : { guestCallMs: deps.guestCallMs }), ...(deps.windowHeight === undefined ? {} : { windowHeight: deps.windowHeight }), ...(deps.screenDpr === undefined ? {} : { screenDpr: deps.screenDpr }) });
 
   function askWindow(event: AgentOpenTab): Promise<AgentOpenTabResult | 'no_window' | 'timeout'> {
@@ -863,6 +865,7 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
               emulation: deps.emulation,
               window: deps.agentWindow,
               activity: deps.activity,
+              settle,
               ...(deps.basicAuth === undefined ? {} : { basicAuth: deps.basicAuth }),
               ...(deps.clientCert === undefined ? {} : { clientCert: deps.clientCert }),
               ...(deps.uploadHome === undefined ? {} : { home: deps.uploadHome }),

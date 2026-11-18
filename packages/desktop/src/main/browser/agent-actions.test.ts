@@ -7,6 +7,7 @@ import type { BrowserAgentOpEvent } from '@parley/protocol';
 import { createAgentActions, secretUploadPath, withNavigation } from './agent-actions.js';
 import type { AgentDom } from './agent-dom.js';
 import type { AgentInput, InputGuard, MouseStep } from './agent-input.js';
+import type { AgentSettle, PageProbe } from './agent-settle.js';
 import type { PageRecord } from './agent-pages.js';
 import { S } from '../../shared/strings.js';
 import { BASIC_AUTH_HINT } from './basic-auth.js';
@@ -19,7 +20,7 @@ const record = { workKey: 'w', pageId: 'bp-aaaaaa', agentId: 't1' } as unknown a
 type Describe = { nodeName: string; attributes: string[] };
 type FileSpec = { size: number; real?: string } | 'dir';
 
-function setup(options: { fit?: { scale: number; mobile: boolean } | null; zoom?: number; selectAnswer?: unknown; hits?: unknown[]; files?: Record<string, FileSpec>; home?: string; checked?: Array<boolean | 'mixed' | null>; take?: string[]; basicAuth?: { isPending(id: number): boolean; onPending(id: number, listener: () => void): () => void }; clientCert?: { isPending(id: number): boolean; onPending(id: number, listener: () => void): () => void } } = {}) {
+function setup(options: { fit?: { scale: number; mobile: boolean } | null; zoom?: number; selectAnswer?: unknown; hits?: unknown[]; settle?: AgentSettle; files?: Record<string, FileSpec>; home?: string; checked?: Array<boolean | 'mixed' | null>; take?: string[]; basicAuth?: { isPending(id: number): boolean; onPending(id: number, listener: () => void): () => void }; clientCert?: { isPending(id: number): boolean; onPending(id: number, listener: () => void): () => void } } = {}) {
   const guest = Object.assign(new EventEmitter(), {
     id: 7,
     getZoomFactor: () => options.zoom ?? 1,
@@ -72,6 +73,7 @@ function setup(options: { fit?: { scale: number; mobile: boolean } | null; zoom?
     activity: ctx.activity,
     ...(options.basicAuth === undefined ? {} : { basicAuth: options.basicAuth }),
     ...(options.clientCert === undefined ? {} : { clientCert: options.clientCert }),
+    ...(options.settle === undefined ? {} : { settle: options.settle }),
     files: {
       realpath: async (path) => {
         const spec = specs[path];
@@ -362,6 +364,53 @@ describe('action (спека 5.1, 4.8)', () => {
     expect(result).toMatchObject({ navigated: true, notes: [BASIC_AUTH_HINT, CLIENT_CERT_HINT] });
   });
 
+  describe('строка изменения: change (спека 2026-11-18, 3.2)', () => {
+    const probe = (n: number, world = 1): PageProbe => ({ n, idle: 0, ready: 'complete', world });
+    const stub = (before: PageProbe | null, after: PageProbe | null) => ({ probe: vi.fn(async () => before), quiet: vi.fn(async () => after) }) satisfies AgentSettle;
+    const click = { tab: 't1', action: 'click', x: 5, y: 5 } as const;
+
+    it('без settle в результате действия нет ключа change', async () => {
+      const ctx = setup();
+      const result = await ctx.actions.actionOf(ctx.contents, record, request, click, guard());
+      expect('change' in result).toBe(false);
+    });
+
+    it('счёт изменений вырос — changed; не вырос — none; затишье ждётся, а не sleep(settleMs)', async () => {
+      const changed = stub(probe(1), probe(4));
+      const ctx = setup({ settle: changed });
+      const started = Date.now();
+      expect((await ctx.actions.actionOf(ctx.contents, record, request, click, guard())).change).toBe('changed');
+      expect(Date.now() - started).toBeLessThan(AGENT_LIMITS.settleMs - 50);
+      expect(changed.probe).toHaveBeenCalledTimes(1);
+      expect(changed.quiet).toHaveBeenCalledTimes(1);
+      const quiet = setup({ settle: stub(probe(2), probe(2)) });
+      expect((await quiet.actions.actionOf(quiet.contents, record, request, click, guard())).change).toBe('none');
+    });
+
+    it('переход главного фрейма во время действия — navigated', async () => {
+      const ctx = setup({ settle: stub(probe(1), probe(1, 2)) });
+      ctx.input.mouse.mockImplementation(async () => {
+        ctx.guest.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false });
+      });
+      const result = await ctx.actions.actionOf(ctx.contents, record, request, click, guard());
+      expect(result).toMatchObject({ navigated: true, change: 'navigated' });
+    });
+
+    it('проба потеряна — unknown и прежний сон settleMs; quiet не зовётся, если пропала проба до действия', async () => {
+      const lostBefore = stub(null, probe(1));
+      const ctx = setup({ settle: lostBefore });
+      const started = Date.now();
+      expect((await ctx.actions.actionOf(ctx.contents, record, request, click, guard())).change).toBe('unknown');
+      expect(Date.now() - started).toBeGreaterThanOrEqual(AGENT_LIMITS.settleMs - 20);
+      expect(lostBefore.quiet).not.toHaveBeenCalled();
+      const lostAfter = stub(probe(1), null);
+      const next = setup({ settle: lostAfter });
+      const again = Date.now();
+      expect((await next.actions.actionOf(next.contents, record, request, click, guard())).change).toBe('unknown');
+      expect(Date.now() - again).toBeGreaterThanOrEqual(AGENT_LIMITS.settleMs - 20);
+    });
+  });
+
   it('withNavigation: переход в том же документе и в дочернем кадре не считается; слушатель снят', async () => {
     const guest = Object.assign(new EventEmitter(), { isLoading: () => false });
     const outcome = await withNavigation(guest as unknown as WebContents, async () => {
@@ -369,7 +418,7 @@ describe('action (спека 5.1, 4.8)', () => {
       guest.emit('did-start-navigation', { isMainFrame: false, isSameDocument: false });
       return 'x';
     }, new AbortController().signal);
-    expect(outcome).toEqual({ value: 'x', navigated: false, loaded: true });
+    expect(outcome).toEqual({ value: 'x', navigated: false, loaded: true, change: 'unknown' });
     expect(guest.listenerCount('did-start-navigation')).toBe(0);
   });
 });

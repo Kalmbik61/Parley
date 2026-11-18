@@ -15,6 +15,8 @@ import type { BrowserAgentActionResult, BrowserAgentArgs, BrowserAgentOpEvent } 
 import type { AgentActivity } from '../../shared/browser-types.js';
 import { AgentOpError } from './agent-errors.js';
 import type { AgentDom } from './agent-dom.js';
+import { changeOf } from './agent-settle.js';
+import type { AgentSettle, BrowserAgentChange, PageProbe } from './agent-settle.js';
 import { inputPoint, keySpec, modifierMask, viewPoint } from './agent-input.js';
 import type { AgentInput, InputGuard, MouseStep } from './agent-input.js';
 import type { PageRecord } from './agent-pages.js';
@@ -104,24 +106,37 @@ export function settleLoad(contents: WebContents, ms: number, signal: AbortSigna
 }
 
 /**
- * Шаги страницы и переход, который они начали за `settleMs`: его загрузка дожидается до `loadMs` (спека 5.1). Переход на
- * другой документ — главный кадр и не `isSameDocument`.
+ * Шаги страницы и переход, который они начали: его загрузка дожидается до `loadMs` (спека 5.1). Переход на другой
+ * документ — главный кадр и не `isSameDocument`. Без `settle` после шагов спим `settleMs`, `change` — `navigated` или
+ * `unknown`. С `settle` проба берётся до шагов, после них ждём затишья страницы (спека 3.2), и `change` говорит, что
+ * изменилось; проба потеряна — прежние `settleMs` и `unknown`.
  */
-export async function withNavigation<T>(contents: WebContents, run: () => Promise<T>, signal: AbortSignal, auth?: Pick<BasicAuth, 'isPending' | 'onPending'>): Promise<{ value: T; navigated: boolean; loaded: boolean }> {
+export async function withNavigation<T>(
+  contents: WebContents,
+  run: () => Promise<T>,
+  signal: AbortSignal,
+  auth?: Pick<BasicAuth, 'isPending' | 'onPending'>,
+  settle?: AgentSettle,
+): Promise<{ value: T; navigated: boolean; loaded: boolean; change: BrowserAgentChange }> {
   let started = false;
   const onStart = (details: { isMainFrame: boolean; isSameDocument: boolean }): void => {
     if (details.isMainFrame && !details.isSameDocument) started = true;
   };
   contents.on('did-start-navigation', onStart as never);
   let value: T;
+  let before: PageProbe | null = null;
+  let after: PageProbe | null = null;
   try {
+    if (settle !== undefined) before = await settle.probe(contents);
     value = await run();
-    await sleep(AGENT_LIMITS.settleMs, signal);
+    if (settle !== undefined && before !== null) after = await settle.quiet(contents, signal);
+    if (after === null) await sleep(AGENT_LIMITS.settleMs, signal);
   } finally {
     contents.off('did-start-navigation', onStart as never);
   }
-  if (!started) return { value, navigated: false, loaded: true };
-  return { value, navigated: true, loaded: await settleLoad(contents, AGENT_LIMITS.loadMs, signal, auth) };
+  const change = changeOf(before, after, started);
+  if (!started) return { value, navigated: false, loaded: true, change };
+  return { value, navigated: true, loaded: await settleLoad(contents, AGENT_LIMITS.loadMs, signal, auth), change };
 }
 
 const SECRET_UPLOAD = 'Parley does not upload files from secret locations (~/.ssh, keychains, .env …).';
@@ -166,6 +181,8 @@ export function createAgentActions(deps: {
   basicAuth?: Pick<BasicAuth, 'isPending' | 'onPending'>;
   /** Вкладка, ждущая выбора сертификата человеком (`client-cert.ts`): так же — подсказка вместо ожидания загрузки. */
   clientCert?: Pick<ClientCert, 'isPending' | 'onPending'>;
+  /** Проба страницы и ожидание затишья: без неё ответ без поля `change`, как у окна до этапа 1 точности. */
+  settle?: AgentSettle;
   files?: { realpath(p: string): Promise<string>; stat(p: string): Promise<{ isFile(): boolean; size: number }> };
   home?: string;
 }): AgentActions {
@@ -431,14 +448,14 @@ export function createAgentActions(deps: {
         }
       }
 
-      const outcome = await withNavigation(contents, act, guard.signal, humanWait(deps.basicAuth, deps.clientCert));
+      const outcome = await withNavigation(contents, act, guard.signal, humanWait(deps.basicAuth, deps.clientCert), deps.settle);
       notes.push(...deps.window.take(`${record.workKey}\n${record.pageId}`));
       const authPending = deps.basicAuth?.isPending(contents.id) === true;
       const certPending = deps.clientCert?.isPending(contents.id) === true;
       if (authPending) notes.push(BASIC_AUTH_HINT);
       if (certPending) notes.push(CLIENT_CERT_HINT);
       if (!authPending && !certPending && outcome.navigated && !outcome.loaded) notes.push('The page is still loading.');
-      return { tab: record.agentId, url: urlForAgent(contents.getURL()), done: outcome.value, navigated: outcome.navigated, notes, ...(pageData === undefined ? {} : { pageData }) };
+      return { tab: record.agentId, url: urlForAgent(contents.getURL()), done: outcome.value, navigated: outcome.navigated, ...(deps.settle === undefined ? {} : { change: outcome.change }), notes, ...(pageData === undefined ? {} : { pageData }) };
     },
   };
 }
