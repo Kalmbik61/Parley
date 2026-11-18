@@ -280,13 +280,14 @@ test.describe('вид Chat у Codex на журнале (план 2026-10-07, Ta
     expect(errors).toEqual([]);
   });
 
-  test('запрос подтверждения в терминале Codex — баннер ожидания в ленте, переход в терминал показывает вопрос', async () => {
+  test('запрос подтверждения в терминале Codex — панель вопроса терминала в ленте, переход в терминал показывает вопрос', async () => {
     const { window, ref, errors } = await open(1400, 900);
     const chat = await toChat(window);
     await stub(window, ref, 'STUB_APPROVAL');
-    const banner = chat.getByTestId('chat-waiting-banner');
-    await expect(banner).toBeVisible({ timeout: 20_000 });
-    await chat.getByTestId('chat-waiting-open').click();
+    // Хост знает `pty.screenText`: вместо строки «ждёт в терминале» — панель с экраном терминала.
+    await expect(chat.getByTestId('chat-terminal-prompt')).toBeVisible({ timeout: 20_000 });
+    await expect(chat.getByTestId('chat-waiting-banner')).toHaveCount(0);
+    await chat.getByTestId('chat-terminal-prompt-open').click();
     await expect(window.getByTestId('chat-view')).toHaveCount(0);
     await expect.poll(() => screenText(window)).toContain('enter: STUB_APPROVAL');
     expect(errors).toEqual([]);
@@ -419,7 +420,37 @@ test.describe('вид Chat у Codex на журнале (план 2026-10-07, Ta
     expect(errors).toEqual([]);
   });
 
-  test('настройка включена, хуки не одобрены: подсказка про доверие, Open terminal, STUB_APPROVAL — баннер ожидания без карточки', async () => {
+  test('вопрос на экране терминала: панель в Chat показывает его, Enter с кнопки и текст из поля доходят до агента', async () => {
+    const { window, ref, errors } = await open(1400, 900);
+    const chat = await toChat(window);
+    const panel = chat.getByTestId('chat-terminal-prompt');
+
+    // Вопрос с тремя вариантами: его текст виден в панели.
+    await stub(window, ref, 'STUB_QUESTION');
+    await expect(panel).toBeVisible({ timeout: 20_000 });
+    await expect(chat.getByTestId('chat-terminal-prompt-screen')).toContainText('Which color do you prefer?', { timeout: 20_000 });
+    await expect(chat.getByTestId('chat-terminal-prompt-screen')).toContainText('3. Blue');
+
+    // Клик по Enter доходит до заглушки: она отвечает `picked: default`, вопрос закрыт — панель уходит.
+    await chat.getByTestId('chat-terminal-prompt-enter').click();
+    await expect(panel).toHaveCount(0, { timeout: 20_000 });
+    await window.getByRole('radio', { name: 'Terminal' }).click();
+    await expect.poll(() => screenText(window)).toContain('picked: default');
+    await window.getByRole('radio', { name: 'Chat' }).click();
+    await expect(chat).toBeVisible();
+
+    // Второй вопрос: текст из поля доходит до заглушки целиком, затем Enter отдельным нажатием.
+    await stub(window, ref, 'STUB_QUESTION');
+    await expect(panel).toBeVisible({ timeout: 20_000 });
+    await chat.getByTestId('chat-terminal-prompt-input').fill('yes please');
+    await chat.getByTestId('chat-terminal-prompt-send').click();
+    await expect(panel).toHaveCount(0, { timeout: 20_000 });
+    await window.getByRole('radio', { name: 'Terminal' }).click();
+    await expect.poll(() => screenText(window)).toContain('enter: yes please');
+    expect(errors).toEqual([]);
+  });
+
+  test('настройка включена, хуки не одобрены: подсказка про доверие, Open terminal, STUB_APPROVAL — панель вопроса терминала без карточки', async () => {
     const { window, ref, errors } = await open(1400, 900, '0.160.0', 'untrusted');
     const chat = await toChat(window);
     const hint = chat.getByTestId('codex-hooks-hint');
@@ -428,7 +459,7 @@ test.describe('вид Chat у Codex на журнале (план 2026-10-07, Ta
     await shot(window, 'hooks-hint-1400x900');
 
     await stub(window, ref, 'STUB_APPROVAL');
-    await expect(chat.getByTestId('chat-waiting-banner')).toBeVisible({ timeout: 20_000 });
+    await expect(chat.getByTestId('chat-terminal-prompt')).toBeVisible({ timeout: 20_000 });
     await expect(chat.locator('[data-testid="chat-card"][data-card-kind="permission"]')).toHaveCount(0);
 
     await hint.getByRole('button', { name: 'Open terminal' }).click();

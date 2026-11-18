@@ -13,6 +13,9 @@
 //     STUB_WORK       — ход: заголовок со спиннером, пока не придёт STUB_READY или STUB_NOTE
 //     STUB_READY      — конец хода: `Ready`
 //     STUB_APPROVAL   — вопрос человеку: OSC 9 `Approval requested: …` и заголовок Action Required
+//     STUB_QUESTION   — вопрос с тремя вариантами на экране и заголовок Action Required, без OSC 9 (как `request_user_input`
+//                       Codex в режиме Plan, спайк 2026-11-18); ждёт цифру 1–3 (`picked: <цифра>`), Enter без текста
+//                       (`picked: default`) или текст с Enter (`enter: <текст>`), затем заголовок `Ready`
 //     STUB_LIMIT [текст] — лимит подписки (спека застрявших, 3.3 и 9): ход кончается ошибкой — в журнале треда
 //                       `task_complete` с `error: { message, codex_error_info: 'usage_limit_exceeded' }` (нужен
 //                       STUB_CODEX_SESSIONS), заголовок `Ready`, как у Codex; без текста — сообщение без времени сброса
@@ -108,6 +111,14 @@ const title = (text) => out(`\x1b]0;${text}\x07`);
 const line = (text) => out(`${text.replace(/\r?\n/g, '\r\n')}\r\n`);
 
 let spinner = null;
+/** Открыт вопрос `STUB_QUESTION`: следующая цифра 1–3 или Enter отвечает на него. */
+let questionOpen = false;
+
+function closeQuestion(answer) {
+  questionOpen = false;
+  if (answer !== null) line(answer);
+  title(`Ready | ${THREAD}`);
+}
 
 // Журнал Codex: rollout-файл треда в корне STUB_CODEX_SESSIONS. Без переменной все функции ниже ничего не делают.
 // Хост запускает бинарь и без терминала (клиент ролей `app-server` по stdio): журнал пишет только процесс под PTY.
@@ -321,6 +332,8 @@ function submit(text, key) {
     return undefined;
   }
   line(`enter: ${text}`);
+  // Ответ текстом на открытый вопрос (кроме самой команды STUB_QUESTION): вопрос закрыт.
+  if (questionOpen && text !== '' && text !== 'STUB_QUESTION') closeQuestion(null);
   if (journalCommand(text)) return undefined;
   if (text === 'STUB_WORK') {
     // Ход в ленте начинается сообщением пользователя: без него `turnActive` хода не видит (кнопки Stop не будет).
@@ -333,6 +346,14 @@ function submit(text, key) {
   else if (text === 'STUB_READY') {
     stopSpinner();
     title(`Ready | ${THREAD}`);
+  } else if (text === 'STUB_QUESTION') {
+    stopSpinner();
+    questionOpen = true;
+    line('Which color do you prefer?');
+    line('1. Red');
+    line('2. Green');
+    line('3. Blue');
+    title(`[ ! ] Action Required | ${THREAD}`);
   } else if (text === 'STUB_APPROVAL') {
     // Пока Codex ждёт человека, спиннер не крутится: заголовок держит Action Required.
     stopSpinner();
@@ -419,7 +440,12 @@ function interrupt() {
 /** Нажатия вне вставки: Enter отправляет, Tab — в очередь, остальное — набор. */
 function typed(text) {
   for (const char of text) {
-    if (char === '\r' || char === '\n') {
+    // Вопрос открыт, поле пусто: цифра выбирает вариант, Enter — вариант по умолчанию.
+    if (questionOpen && composer === '' && char >= '1' && char <= '3') {
+      closeQuestion(`picked: ${char}`);
+    } else if (questionOpen && composer === '' && (char === '\r' || char === '\n')) {
+      closeQuestion('picked: default');
+    } else if (char === '\r' || char === '\n') {
       const sent = composer;
       composer = '';
       submit(sent, 'enter');
