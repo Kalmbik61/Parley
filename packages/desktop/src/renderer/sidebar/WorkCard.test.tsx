@@ -114,6 +114,26 @@ describe('WorkCard (тест 3)', () => {
     expect(card().querySelector('[data-room-row="r-owned"] [data-tree-guide="elbow"]')).not.toBeNull();
   });
 
+  it('значки веток: две открытые worktree-сессии с общей базой — один цвет, сессия с другой базой — без цвета', () => {
+    const wt = (id: string, base: string) => ({ path: `/tmp/${id}`, branch: `parley/w-01/${id}`, base, createdAt: null });
+    renderCard(
+      makeWork('w-01', {
+        sessions: [
+          makeSession('s-01', 'a', { worktree: wt('s-01', 'main') }),
+          makeSession('s-02', 'b', { worktree: wt('s-02', 'main') }),
+          makeSession('s-03', 'c', { worktree: wt('s-03', 'develop') }),
+        ],
+      }),
+    );
+    const colorOf = (id: string): string | null =>
+      card().querySelector(`[data-session-id="${id}"] [data-worktree]`)?.getAttribute('data-branch-color') ?? null;
+    // `main` → FNV-1a % 5 = 2, значит слот 3 в атрибуте.
+    expect(colorOf('s-01')).toBe('3');
+    expect(colorOf('s-02')).toBe('3');
+    expect(colorOf('s-03')).toBeNull();
+    expect(card().querySelector('[data-session-id="s-03"] [data-worktree]')).not.toBeNull();
+  });
+
   it('на корне data-work-key', () => {
     renderCard(entry);
     expect(card().getAttribute('data-work-key')).toBe(workKey('/Users/me/VoiceStudio', 'w-01'));

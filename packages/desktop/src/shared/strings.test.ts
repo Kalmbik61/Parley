@@ -91,7 +91,7 @@ describe('S.sidebar — тексты карточки и строк (Organic, 1.
   });
 
   it('тултип ветки своего worktree, заголовки блоков «Closed sessions» и «Archived rooms», кнопки «Hide …»', () => {
-    expect(S.sidebar.ownWorktree('harnas/s-01')).toBe('Own worktree · harnas/s-01');
+    expect(S.sidebar.ownWorktree('harnas/s-01', 'main')).toBe('Own worktree · harnas/s-01 ← main');
     expect(S.sidebar.closedSessions).toBe('Closed sessions');
     expect(S.sidebar.archivedRooms).toBe('Archived rooms');
     expect(S.sidebar.hideClosed).toBe('Hide closed');

@@ -5,7 +5,7 @@
  *
  * Облик Organic (спека окна 2026-09-29, 1.2): пилюля 26px, сдвиг на уровень `marginLeft: 20·depth` (заливка начинается
  * после изгиба линии дерева, `TreeGuides.tsx`) и `paddingLeft` 8, зазор 6, 12px; значок состояния 12, значок агента 13,
- * слово 11px строчными, GitBranch 11 (тултип `Own worktree · {branch}`), время 10px шириной 22. Фон: `blocked` —
+ * слово 11px строчными, GitBranch 11 (тултип `Own worktree · {branch} ← {base}`; у общей базы — свой цвет, `lib/branch-colors.ts`), время 10px шириной 22. Фон: `blocked` —
  * `accent-200` (слово `accent-800`), `unseen` — `accent-2-200` (слово `accent-2-800`), иначе выбранная и hover — `text 9%`; подкраска бьёт выбор. Выбранная —
  * вес 700. Закрытая — `data-dimmed="row"`: значки .5 при правиле `dimmed.css`. На hover весь текст строки —
  * основной цвет (наследство куска 1: `neutral-700` на заливке hover ниже 4.5:1). Оба цвета задаются явно
@@ -69,6 +69,7 @@ import { AgentIcon } from '../components/AgentIcon.js';
 import { AgentsBadge } from '../components/AgentsBadge.js';
 import { AgentStateDot } from '../components/AgentStateDot.js';
 import { dndId, type DragSourceData } from '../layout/dnd.js';
+import { BRANCH_COLOR_CLASS } from '../lib/branch-colors.js';
 import { RoleChip } from '../lib/role-summary.js';
 import { cn } from '../lib/cn.js';
 import { formatMetricsLine } from '../lib/metrics-line.js';
@@ -120,6 +121,8 @@ export interface SessionRowProps {
   roomId?: string;
   /** Ведущий комнаты — `★` после названия; только у участника комнаты. */
   lead?: boolean;
+  /** Слот 0…4 цвета значка ветки (`sessionBranchColor`); `null` или нет — вторичный цвет. */
+  branchColor?: number | null;
 }
 
 // `memo`: строка перерисовывается, только когда сменились её сессия, её запись активности
@@ -140,6 +143,7 @@ export const SessionRow = memo(function SessionRow({
   guides = NO_GUIDES,
   roomId,
   lead = false,
+  branchColor = null,
 }: SessionRowProps): JSX.Element {
   const data: DragSourceData = { item: { kind: 'session', sessionId: session.id } };
   const dragId = dndId.session(workKey, session.id);
@@ -397,7 +401,12 @@ export const SessionRow = memo(function SessionRow({
             {word}
           </span>
           {session.worktree !== null ? (
-            <span data-worktree title={S.sidebar.ownWorktree(session.worktree.branch)} className={cn('inline-flex shrink-0', secondary)}>
+            <span
+              data-worktree
+              {...(branchColor === null ? {} : { 'data-branch-color': branchColor + 1 })}
+              title={S.sidebar.ownWorktree(session.worktree.branch, session.worktree.base)}
+              className={cn('inline-flex shrink-0', branchColor === null ? secondary : BRANCH_COLOR_CLASS[branchColor])}
+            >
               <GitBranch className="size-[11px]" aria-hidden="true" />
             </span>
           ) : null}
@@ -452,7 +461,7 @@ function SessionTooltip({
       {sleepTip === null ? null : <div className="break-words">{sleepTip}</div>}
       {metrics?.model !== null && metrics?.model !== undefined ? <div className="font-mono">{metrics.model}</div> : null}
       {metrics !== null ? <div className="text-muted-foreground">{formatMetricsLine(metrics)}</div> : null}
-      {session.worktree !== null ? <div className="font-mono">⎇ {session.worktree.branch}</div> : null}
+      {session.worktree !== null ? <div className="font-mono">⎇ {session.worktree.branch} ← {session.worktree.base}</div> : null}
     </div>
   );
 }
