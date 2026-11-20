@@ -14,16 +14,22 @@ import { useFeedUnavailableReason } from '../lib/feed-view.js';
  * «Browser» панели браузера сессии (`browser/panel/PanelToggle.tsx`, этап B2). По центру — где человек: тег и ярлык
  * сессии, как в строке сайдбара (`sessionRowLabel`); длинный обрезается многоточием с полным текстом в подсказке и
  * занимает только свободное место между соседями: на узкой вкладке пропадает она, а не модель (ярлык виден во вкладке).
+ *
+ * Левее подписи, после чипа роли, — чип ветки сессии (`BranchChip`): у worktree её ветка, у клона ветка клона, у сессии в
+ * папке проекта — живая ветка проекта (`useWorksStore().branches`). Значок красится слотом базы, как в сайдбаре
+ * (`lib/branch-colors.ts`). Чип сжимается (потолок 30% шапки) раньше, чем исчезает подпись.
  */
 
 import type { ReactNode } from 'react';
-import { ChevronDown, LoaderCircle } from 'lucide-react';
+import { ChevronDown, GitBranch, LoaderCircle } from 'lucide-react';
 
+import type { WorkSession } from '@parley/core';
 import type { EffortOption, LiveMetrics, ModelOption, SessionRef } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import type { TerminalView } from '../../shared/layout-types.js';
 import { S } from '../../shared/strings.js';
 import { useLayoutStore } from '../layout/store.js';
+import { BRANCH_COLOR_CLASS, branchColors, sessionBranchColor } from '../lib/branch-colors.js';
 import { sessionRowLabel } from '../lib/participant.js';
 import { RoleChip } from '../lib/role-summary.js';
 import { swarmOfSession } from '@parley/core/swarms';
@@ -238,6 +244,31 @@ function ChoiceMenu({ menu }: { menu: ChoiceMenuProps }): JSX.Element {
   );
 }
 
+/** Чип ветки сессии в шапке: значок и имя `font-mono`, имя обрезается многоточием; тултип — откуда ветка. */
+function BranchChip({ branch, title, colorClass }: { branch: string; title: string; colorClass: string }): JSX.Element {
+  return (
+    <span data-testid="chat-branch" title={title} className="flex min-w-0 max-w-[30%] shrink items-center gap-1 text-xs text-muted-foreground">
+      <GitBranch data-testid="chat-branch-icon" className={`size-3 shrink-0 ${colorClass}`} aria-hidden="true" />
+      <span className="min-w-0 truncate font-mono">{branch}</span>
+    </span>
+  );
+}
+
+/**
+ * Чип ветки сессии: worktree — сохранённая ветка и база; клон — ветка клона; сессия в папке проекта — живая ветка проекта;
+ * папка артефактов и неизвестная ветка проекта (`null`) — чипа нет.
+ */
+function renderBranchChip(session: WorkSession, sessions: readonly WorkSession[], projectBranch: string | null): JSX.Element | null {
+  if (session.worktree !== null) {
+    const slot = sessionBranchColor(branchColors(sessions), session);
+    return <BranchChip branch={session.worktree.branch} title={S.sidebar.ownWorktree(session.worktree.branch, session.worktree.base)} colorClass={slot === null ? '' : (BRANCH_COLOR_CLASS[slot] ?? '')} />;
+  }
+  const workspace = session.workspace ?? null;
+  if (workspace?.kind === 'clone') return <BranchChip branch={workspace.branch} title={S.chat.branch.clone(workspace.branch)} colorClass="" />;
+  if (workspace !== null || projectBranch === null) return null;
+  return <BranchChip branch={projectBranch} title={S.chat.branch.projectFolder(projectBranch)} colorClass="" />;
+}
+
 export function ChatToolbar({ workKey, tabId, view, available, provider, modeLabelText = null, model = null, modeMenu, choiceMenu, agents, processes, micTargetId, metrics = null, contextChip }: ChatToolbarProps): JSX.Element {
   const reason = useFeedUnavailableReason(provider);
   const unavailableTitle = reason === 'unknown-version' ? S.chat.versionUnknown
@@ -250,6 +281,7 @@ export function ChatToolbar({ workKey, tabId, view, available, provider, modeLab
   const entry = entries.find(item => keyOf(item.projectPath, item.map.work.id) === workKey);
   const session = tab?.kind === 'terminal' ? entry?.map.sessions.find(item => item.id === tab.sessionId) : undefined;
   const title = session === undefined ? null : sessionRowLabel(session.id, session.label);
+  const projectBranch = useWorksStore(state => (entry === undefined ? null : state.branches[entry.projectPath] ?? null));
   const inSwarm = session === undefined || entry === undefined ? null : swarmOfSession(entry.map, session.id);
   const choose = (value: string): void => {
     // Повторный клик по выбранному снял бы выбор: пустое значение пропускаем.
@@ -281,6 +313,7 @@ export function ChatToolbar({ workKey, tabId, view, available, provider, modeLab
         </ToggleGroup>
       </span>
       {session && entry ? <RoleChip cwd={session.worktree?.path ?? entry.projectPath} role={session.role} sessionRef={{ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id }} /> : null}
+      {session && entry ? renderBranchChip(session, entry.map.sessions, projectBranch) : null}
       <div className="flex min-w-0 flex-1 items-start justify-center self-start">
         <div data-testid="chat-toolbar-plate" className="flex min-w-0 items-start" style={{ height: PLATE_H }}>
           <TitleWing />

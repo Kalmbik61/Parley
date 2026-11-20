@@ -138,6 +138,13 @@ describe('S.sidebar — тексты карточки и строк (Organic, 1.
   });
 });
 
+describe('S.chat.branch — тултипы чипа ветки в шапке сессии', () => {
+  it('папка проекта и клон', () => {
+    expect(S.chat.branch.projectFolder('feat/x')).toBe('Project folder · feat/x');
+    expect(S.chat.branch.clone('feat/x')).toBe('Own clone · feat/x');
+  });
+});
+
 describe('S.terminal — карточка неживой сессии (Organic, 1.8)', () => {
   it('последнее событие и суффикс «ago»', () => {
     expect(S.terminal.lastEvent('3h ago')).toBe('last event 3h ago');

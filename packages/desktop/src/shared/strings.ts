@@ -2033,6 +2033,11 @@ export const S = {
     /** Сегмент тулбара вкладки «Chat | Terminal». */
     segment: { chat: 'Chat', terminal: 'Terminal' },
     viewLabel: 'Session view',
+    /** Тултип чипа ветки в шапке вкладки сессии; у worktree — `S.sidebar.ownWorktree`. */
+    branch: {
+      projectFolder: (branch: string): string => `Project folder · ${branch}`,
+      clone: (branch: string): string => `Own clone · ${branch}`,
+    },
     /** Подсказка выключенного сегмента: Codex, `claude` ниже порога версии ленты или версия неизвестна. */
     versionUnknown: 'Chat is unavailable because the CLI version could not be verified. Refresh providers to retry.',
     hostFeedUnsupported: 'This Parley host does not support Chat for this provider. Update Parley to enable it.',

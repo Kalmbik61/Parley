@@ -8,6 +8,7 @@ All notable changes to Parley are documented in this file.
 
 ### Added
 
+- Sessions: the session toolbar shows the session's branch, and the sidebar branch icons of worktree sessions that share a base branch are colored the same.
 - Built-in browser, agents: the snapshot now includes the content of frames of the same site, with refs that actions can target.
 - Built-in browser, agents: browser_action takes a list of up to 10 steps and can return a fresh snapshot in the same answer, so a form takes one call instead of one per field.
 - Built-in browser: sites that ask for a client certificate (SSO over mTLS) now show a chooser over the tab. The choice can be saved per site; "Clear browsing data" removes the saved choices, and a site already answered in this run asks again after Parley restarts.
