@@ -122,6 +122,11 @@
   --color-git-graph-lane-3: var(--git-graph-lane-3);
   --color-git-graph-lane-4: var(--git-graph-lane-4);
   --color-git-graph-lane-5: var(--git-graph-lane-5);
+  --color-branch-1: var(--branch-1);
+  --color-branch-2: var(--branch-2);
+  --color-branch-3: var(--branch-3);
+  --color-branch-4: var(--branch-4);
+  --color-branch-5: var(--branch-5);
   --color-annotation-highlight: var(--annotation-highlight);
   --shadow-floating: 0 10px 24px rgb(0 0 0 / 0.18);
   /* Organic: главная кнопка (решение 1 спеки), hover неактивной карточки (решение 2), лист центра
@@ -388,6 +393,11 @@
   --git-graph-lane-3: #994f00;
   --git-graph-lane-4: #40b0a6;
   --git-graph-lane-5: #b66dff;
+  --branch-1: #2b5fb3;
+  --branch-2: #a8246a;
+  --branch-3: #0f7466;
+  --branch-4: #7140b8;
+  --branch-5: #6b6400;
   --annotation-highlight: #f59e0b;
   --markdown-search-match: #facc15;
   --markdown-search-match-active: #fb923c;
@@ -500,6 +510,11 @@
   --git-graph-lane-3: #ce9178;
   --git-graph-lane-4: #40b0a6;
   --git-graph-lane-5: #b66dff;
+  --branch-1: #7fb0ff;
+  --branch-2: #f27ab8;
+  --branch-3: #4fc9b8;
+  --branch-4: #bf9bff;
+  --branch-5: #c9c04a;
   --annotation-highlight: #fbbf24;
   --markdown-search-match: #facc15;
   --markdown-search-match-active: #fb923c;

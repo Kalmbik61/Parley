@@ -34,7 +34,7 @@
  * `showArchivedRooms`), → и ← клавиатуры сайдбара раскрывают и сворачивают оба блока разом.
  */
 
-import { memo, useRef, useState } from 'react';
+import { memo, useMemo, useRef, useState } from 'react';
 import { create } from 'zustand';
 import { AtSign, ChevronDown, ChevronUp, Hash, Mail, Plus } from 'lucide-react';
 import type { SessionLifecycle, WindowWorkEntry } from '@parley/core';
@@ -46,6 +46,7 @@ import { forYouTarget, roomAwaitsDecision, sessionNeed, type WorkAttention } fro
 import { AgentStateDot } from '../components/AgentStateDot.js';
 import { SwarmIcon } from '../components/SwarmIcon.js';
 import { useHostSupports } from '../lib/capabilities.js';
+import { branchColors, sessionBranchColor } from '../lib/branch-colors.js';
 import { cn } from '../lib/cn.js';
 import { isRoomArchived } from '../lib/room-archive.js';
 import { nominalSwarm, swarmBadge, swarmBadgeView } from '../lib/swarm-view.js';
@@ -216,6 +217,9 @@ export const WorkCard = memo(function WorkCard({
   const awaitingDecision = map.rooms.some(roomAwaitsDecision);
   const glyph = awaitingDecision ? { state: 'blocked' as const, lifecycle: 'active' as const } : urgentGlyph(entry, activity);
 
+  // Цвета значков веток: общая база двух и более открытых worktree-сессий работы — один слот (`lib/branch-colors.ts`).
+  const colors = useMemo(() => branchColors(map.sessions), [map.sessions]);
+
   // Строка комнаты — и в основных строках, и в блоке архивных: одни пропсы, у архивной приглушение делает сама строка.
   const renderRoomRow = (row: CardRoomRow, rowGuides: readonly TreeGuide[] = NO_GUIDES): JSX.Element => (
     <RoomRow
@@ -235,6 +239,7 @@ export const WorkCard = memo(function WorkCard({
       selectedSessionId={selectedSessionId}
       onOpen={() => onOpenRoom(row.room.id)}
       openerFor={openerFor}
+      branchColors={colors}
     />
   );
 
@@ -255,6 +260,7 @@ export const WorkCard = memo(function WorkCard({
         selected={row.session.id === selectedSessionId}
         onOpen={openerFor(row.session.id)}
         guides={rowGuides}
+        branchColor={sessionBranchColor(colors, row.session)}
       />
     ) : row.kind === 'swarm' ? (
       <SwarmRow

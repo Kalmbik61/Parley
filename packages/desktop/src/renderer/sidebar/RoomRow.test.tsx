@@ -320,6 +320,30 @@ describe('RoomRow — свёрнутая (1.2)', () => {
 describe('RoomRow — развёрнутая (1.2)', () => {
   const expand = (): void => useUiStore.getState().setRoomExpanded(roomKey(KEY, 'r-01'), true);
 
+  it('участник получает цвет значка ветки из branchColors, без карты значок вторичный', () => {
+    expand();
+    const wt = (id: string) => ({ path: `/tmp/${id}`, branch: `parley/w/${id}`, base: 'main', createdAt: null });
+    const entry = fourAgents(
+      {},
+      {
+        sessions: [
+          makeSession('s-01', 'a', { worktree: wt('s-01') }),
+          makeSession('s-02', 'b', { worktree: wt('s-02') }),
+          makeSession('s-03', 'c'),
+          makeSession('s-04', 'd'),
+        ],
+      },
+    );
+    const badgeOf = (id: string): Element | null => memberRows().find((row) => row.getAttribute('data-session-id') === id)?.querySelector('[data-worktree]') ?? null;
+    renderRow(entry, { branchColors: new Map([['main', 4]]) });
+    expect(badgeOf('s-01')?.getAttribute('data-branch-color')).toBe('5');
+    expect(badgeOf('s-02')?.getAttribute('data-branch-color')).toBe('5');
+    expect(badgeOf('s-03')).toBeNull();
+    cleanup();
+    renderRow(entry);
+    expect(badgeOf('s-01')?.hasAttribute('data-branch-color')).toBe(false);
+  });
+
   it('строки участников 26px, как строки сессий, но с отступом слева 18 и без правого поля; значков-счётчиков нет', () => {
     expand();
     renderRow(fourAgents());

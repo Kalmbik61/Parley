@@ -60,6 +60,7 @@ import { roomAwaitsDecision, sessionNeed } from '../attention/derive.js';
 import { AgentIcon } from '../components/AgentIcon.js';
 import { AgentStateDot } from '../components/AgentStateDot.js';
 import { useLayoutStore } from '../layout/store.js';
+import { sessionBranchColor } from '../lib/branch-colors.js';
 import { cn } from '../lib/cn.js';
 import { liveContext } from '../lib/context-format.js';
 import { sessionRowLabel, sessionTag } from '../lib/participant.js';
@@ -102,6 +103,8 @@ export interface RoomRowProps {
   onOpen(): void;
   /** Колбэк строки участника — один на сессию на всё время жизни карточки (`SessionRow` — `memo`). */
   openerFor(sessionId: string): () => void;
+  /** Цвета значков веток работы (`lib/branch-colors.ts`); нет — значки участников вторичного цвета. */
+  branchColors?: ReadonlyMap<string, number>;
 }
 
 interface ProviderBadge {
@@ -142,6 +145,7 @@ export function RoomRow({
   selectedSessionId,
   onOpen,
   openerFor,
+  branchColors,
 }: RoomRowProps): JSX.Element {
   const { room } = row;
   const stateKey = roomKey(workKey, room.id);
@@ -334,6 +338,7 @@ export function RoomRow({
               // `roomId` нужен только для «Make lead»; в архивную комнату хост ведущего не пускает (`requireOpenRoom`).
               {...(row.archived ? {} : { roomId: room.id })}
               lead={session.id === row.lead}
+              {...(branchColors === undefined ? {} : { branchColor: sessionBranchColor(branchColors, session) })}
             />
           ))}
         </div>

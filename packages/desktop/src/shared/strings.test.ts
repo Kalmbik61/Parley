@@ -91,7 +91,7 @@ describe('S.sidebar — тексты карточки и строк (Organic, 1.
   });
 
   it('тултип ветки своего worktree, заголовки блоков «Closed sessions» и «Archived rooms», кнопки «Hide …»', () => {
-    expect(S.sidebar.ownWorktree('harnas/s-01')).toBe('Own worktree · harnas/s-01');
+    expect(S.sidebar.ownWorktree('harnas/s-01', 'main')).toBe('Own worktree · harnas/s-01 ← main');
     expect(S.sidebar.closedSessions).toBe('Closed sessions');
     expect(S.sidebar.archivedRooms).toBe('Archived rooms');
     expect(S.sidebar.hideClosed).toBe('Hide closed');
@@ -135,6 +135,13 @@ describe('S.sidebar — тексты карточки и строк (Organic, 1.
     expect(S.sidebar.roomTooltip('S01', ['S01', 'S02', 'S03', 'S04'])).toBe('Room · lead S01 · S01, S02, S03, S04');
     expect(S.sidebar.roomTooltip(null, ['S01'])).toBe('Room · S01');
     expect(S.sidebar.roomTooltip(null, [])).toBe('Room');
+  });
+});
+
+describe('S.chat.branch — тултипы чипа ветки в шапке сессии', () => {
+  it('папка проекта и клон', () => {
+    expect(S.chat.branch.projectFolder('feat/x')).toBe('Project folder · feat/x');
+    expect(S.chat.branch.clone('feat/x')).toBe('Own clone · feat/x');
   });
 });
 
