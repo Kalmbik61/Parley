@@ -66,6 +66,8 @@ describe('белый список против запретного списка
     'providers.skipUpdate',
     // Процессы сессии для тулбара окна (PR #196): телефону пока не открыты.
     'processes.subscribe', 'processes.unsubscribe',
+    // Состояние и настройки сессии Kimi Code доступны только в окне.
+    'kimi.getState', 'kimi.setConfig',
   ];
   /** Рукопожатие: хост принимает `hello` у любого клиента, это не метод белого списка. */
   const HANDSHAKE = new Set(['hello']);

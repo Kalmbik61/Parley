@@ -180,11 +180,38 @@ export interface FeedPermissionCard extends FeedCardBase {
   message?: string;
   /** Пришёл `Notification` `permission_prompt`: CLI сам напомнил человеку про диалог. */
   notified: boolean;
+  /** Explicit choices offered by a provider, with the original response IDs. */
+  permissionOptions?: FeedPermissionOption[];
+  permissionPreview?: FeedPermissionPreview[];
 }
+
+export interface FeedPermissionOption {
+  optionId: string;
+  name: string;
+  kind: 'allow_once' | 'allow_always' | 'reject_once' | 'reject_always';
+}
+
+export type FeedPermissionPreview =
+  | { type: 'text'; text: string }
+  | { type: 'diff'; path: string; oldText: string | null; newText: string };
 
 export interface FeedQuestionOption {
   label: string;
   description: string | null;
+  /** For a structured question, the displayed label can differ from its answer. */
+  value?: string;
+}
+
+export type FeedQuestionValue = string | number | boolean | string[];
+
+export interface FeedQuestionField {
+  id: string;
+  type: 'choice' | 'text' | 'number' | 'integer' | 'boolean';
+  required: boolean;
+  description?: string;
+  /** Bounds on cardinality, text length or numeric value, depending on type. */
+  min?: number;
+  max?: number;
 }
 
 export interface FeedQuestion {
@@ -192,12 +219,14 @@ export interface FeedQuestion {
   header: string | null;
   options: FeedQuestionOption[];
   multiSelect: boolean;
+  field?: FeedQuestionField;
 }
 
 /** Вопрос агента (`AskUserQuestion`). */
 export interface FeedQuestionCard extends FeedCardBase {
   kind: 'question';
   questions: FeedQuestion[];
+  formPrompt?: string;
   /** Ответ — из окна или из `PostToolUse`, если ответили в терминале. */
   answers?: Record<string, string>;
 }
@@ -329,8 +358,8 @@ export type FeedItem =
 
 /** Решение человека из окна (`feed.decide`). */
 export type FeedDecision =
-  | { kind: 'permission'; behavior: 'allow' | 'deny'; always?: true; message?: string }
-  | { kind: 'question'; answers: Record<string, string> }
+  | { kind: 'permission'; behavior: 'allow' | 'deny'; always?: true; message?: string; optionId?: string }
+  | { kind: 'question'; answers: Record<string, string>; values?: Record<string, FeedQuestionValue> }
   | { kind: 'plan'; choice: 'auto-accept' | 'manual' };
 
 /**

@@ -147,6 +147,7 @@ import type { HookServer } from '../hooks/hook-server.js';
 import type { OpencodeBridge } from '../opencode/events.js';
 import type { OpencodeSupervisor } from '../opencode/server.js';
 import { createOpencodeSession } from '../opencode/create-session.js';
+import type { KimiSessions } from '../kimi/sessions.js';
 import type { ProviderVersions } from '../providers/versions.js';
 import type { PtyHandle, PtyManager } from '../pty/pty-manager.js';
 import type { WorksService, WorksView } from '../works/works-service.js';
@@ -445,6 +446,7 @@ export interface SessionsFeedOptions {
   opencode?: Pick<OpencodeSupervisor, 'start' | 'stop' | 'onExit'>;
   /** OpenCode event bridge (spec 4.4, O6): attached once the TUI runs, detached before its server stops. */
   opencodeEvents?: Pick<OpencodeBridge, 'attach' | 'detach'>;
+  kimi?: KimiSessions;
   /**
    * Потолок машины (спека ёмкости 2026-10-30, 4.2): `CapacityService` хоста. Тип структурный, как у `hooks` и `consents`:
    * сервис ёмкости сам зовёт `launch` сессий, и сессии его не импортируют. `admit` зовётся после бюджета работы и до
@@ -529,7 +531,7 @@ export function createSessionsService(
   activity: ActivityService,
   feed: SessionsFeedOptions = {},
 ): SessionsService {
-  const { hooks, providerVersions, capacity, endings, opencode, opencodeEvents } = feed;
+  const { hooks, providerVersions, capacity, endings, opencode, opencodeEvents, kimi } = feed;
   const spawnLimits = feed.spawnLimits ?? querySpawnLimits;
   const random = feed.random ?? ((max: number): number => randomInt(max));
 
@@ -876,7 +878,8 @@ export function createSessionsService(
       signedIn: entry.account === undefined ? null : ((await feed.signedIn?.(entry.id)) ?? null),
     });
     const refusal = providerReadinessError(entry, readiness);
-    if (refusal !== null) throw new HostError('bad_request', refusal);
+    if (refusal !== null) throw new HostError('bad_request', refusal,
+      entry.id === 'kimi' && readiness.needs === 'cli' ? { reason: 'kimi-missing-cli' } : undefined);
     return entry;
   }
 
@@ -1458,6 +1461,7 @@ export function createSessionsService(
       // `provider` — процессу не нужен, а хосту нужен: у codex состояние берётся из потока его терминала,
       // и ввод идёт своим порядком (спека комнат, 3.6).
       let handle: PtyHandle;
+      let nativeKimi: Awaited<ReturnType<KimiSessions['start']>> | undefined;
       const previousGitGrant = gitWriteGrants.get(key);
       try {
         // The hook token and inherited host environment are now final. No PTY starts on guard failure.
@@ -1465,7 +1469,12 @@ export function createSessionsService(
           validateSpawnBudget(command, args, env, await spawnLimits());
           gitWriteGrants.set(key, Boolean(session.provider === 'codex' && !session.workspace && session.worktree &&
             plan.args.some(arg => arg.startsWith('sandbox_workspace_write.writable_roots='))));
+          if (plan.kimiAcp !== undefined) {
+            if (kimi === undefined) throw new HostError('bad_request', 'Kimi Code sessions need the ACP transport');
+            nativeKimi = await kimi.start(ref, { ...plan.kimiAcp, command, args, cwd: plan.cwd, env });
+          }
           const spawned = pty.start(ref, {
+            ...(nativeKimi === undefined ? {} : { process: nativeKimi.process }),
             command,
             args,
             cwd: plan.cwd,
@@ -1482,6 +1491,7 @@ export function createSessionsService(
           return spawned;
         });
       } catch (error) {
+        nativeKimi?.process.kill();
         if (previousGitGrant === undefined) gitWriteGrants.delete(key);
         else gitWriteGrants.set(key, previousGitGrant);
         if (hookUrl !== undefined) hooks?.unregister(ref);
@@ -1516,7 +1526,7 @@ export function createSessionsService(
           };
           for (let attempt = 1; ; attempt += 1) {
             try {
-              await startSession(ref.projectPath, ref.workId, ref.sessionId, plan.providerSessionId, stamp,
+              await startSession(ref.projectPath, ref.workId, ref.sessionId, nativeKimi?.sessionId ?? plan.providerSessionId, stamp,
                 plan.env['PARLEY_NATIVE_CONTEXT_REVISION']);
               break;
             } catch (error) {
@@ -1541,6 +1551,7 @@ export function createSessionsService(
       }
       try {
         await timer.step('startWrite', () => started);
+        nativeKimi?.activate();
         failed = false;
       } catch (error) {
         // Процесс идёт, а карта о нём не знает: окно по карте показывало бы спящую рядом с живым процессом.
