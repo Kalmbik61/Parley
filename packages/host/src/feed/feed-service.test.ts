@@ -4116,6 +4116,29 @@ describe('вопрос терминала Codex становится карто�
     expect((await service.snapshot(REF)).decisions).toBe('window');
   });
 
+  it('первый сев журнала сохраняет уже показанную карточку и возможность ответить по её id', async () => {
+    const client = fakeClient();
+    service.subscribe(REF, client);
+    blockedWith('command-approval-80x24');
+    await advance(FEED_BATCH_MS);
+    const [card] = await pendingOf();
+    expect(card).toBeDefined();
+
+    const file = path.join(await tempRoot(), 'codex.jsonl');
+    await writeFile(file, `${JSON.stringify({
+      timestamp: new Date().toISOString(),
+      type: 'turn_context',
+      payload: { model: 'gpt-6-astra' },
+    })}\n`);
+    fakes.setLogFile(file);
+    const seeded = await service.snapshot(REF);
+    expect(seeded.items).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'notice' }), card]));
+    expect(seeded.decisions).toBe('window');
+    expect(service.decide(REF, card!.cardId, { kind: 'permission', behavior: 'allow' })).toEqual({ applied: true, state: 'allowed' });
+    expect(fakes.writes).toEqual(['1']);
+    expect(await cardsOf()).toEqual([expect.objectContaining({ cardId: card!.cardId, state: 'allowed' })]);
+  });
+
   it('повторные события активности и время не плодят карточек: одна на вопрос', async () => {
     fakes.setScreen(screenOf('command-approval-80x24'));
     for (let attempt = 0; attempt < 3; attempt += 1) fakes.emitActivity(REF, 'blocked', 'approval');

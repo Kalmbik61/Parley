@@ -13,9 +13,9 @@
 //     STUB_WORK       — ход: заголовок со спиннером, пока не придёт STUB_READY или STUB_NOTE
 //     STUB_READY      — конец хода: `Ready`
 //     STUB_APPROVAL   — вопрос человеку: OSC 9 `Approval requested: …` и заголовок Action Required
-//     STUB_QUESTION   — вопрос с тремя вариантами на экране и заголовок Action Required, без OSC 9 (как `request_user_input`
-//                       Codex в режиме Plan, спайк 2026-11-18); ждёт цифру 1–3 (`picked: <цифра>`), Enter без текста
+//     STUB_QUESTION   — неузнанная форма вопроса для сырой панели: цифра 1–3 (`picked: <цифра>`), Enter без текста
 //                       (`picked: default`) или текст с Enter (`enter: <текст>`), затем заголовок `Ready`
+//     STUB_QUESTION_SCREEN — экран `request_user_input` Codex 0.166 по замеру; цифра сразу отправляет выбранный ответ
 //     STUB_APPROVAL_SCREEN [команда] — экран одобрения команды Codex 0.166 (форма с образца спайка: заголовок, `$ команда`,
 //                       три пронумерованных варианта, строка-подсказка), OSC 9 `Approval requested` и заголовок Action Required;
 //                       ждёт цифру 1–3 одним нажатием (`approved: <команда>`, `approved-always: <команда>`, `denied: <команда>`),
@@ -117,11 +117,26 @@ const title = (text) => out(`\x1b]0;${text}\x07`);
 const line = (text) => out(`${text.replace(/\r?\n/g, '\r\n')}\r\n`);
 
 let spinner = null;
-/** Открыт вопрос `STUB_QUESTION`: следующая цифра 1–3 или Enter отвечает на него. */
-let questionOpen = false;
+const questionOptions = ['Red (Recommended)', 'Green', 'Blue', 'None of the above'];
+/** Открыт вопрос: упрощённая форма для сырой панели или узнанная форма для карточки. */
+let questionOpen = null;
+
+function printQuestionScreen() {
+  questionOpen = 'options';
+  line('  Question 1/1 (1 unanswered)');
+  line('  Which color do you prefer?');
+  line('');
+  line('  › 1. Red (Recommended)  Select red as your preferred color.');
+  line('    2. Green              Select green as your preferred color.');
+  line('    3. Blue               Select blue as your preferred color.');
+  line('    4. None of the above  Optionally, add details in notes (tab)');
+  line('');
+  line('  tab to add notes | enter to submit answer | esc to interrupt');
+  title(`[ ! ] Action Required | ${THREAD}`);
+}
 
 function closeQuestion(answer) {
-  questionOpen = false;
+  questionOpen = null;
   if (answer !== null) line(answer);
   title(`Ready | ${THREAD}`);
 }
@@ -370,7 +385,7 @@ function submit(text, key) {
   }
   line(`enter: ${text}`);
   // Ответ текстом на открытый вопрос (кроме самой команды STUB_QUESTION): вопрос закрыт.
-  if (questionOpen && text !== '' && text !== 'STUB_QUESTION') closeQuestion(null);
+  if (questionOpen === 'raw' && text !== '') closeQuestion(null);
   if (journalCommand(text)) return undefined;
   if (text === 'STUB_WORK') {
     // Ход в ленте начинается сообщением пользователя: без него `turnActive` хода не видит (кнопки Stop не будет).
@@ -387,9 +402,12 @@ function submit(text, key) {
     const [first, replacement] = text.slice('STUB_APPROVAL_SCREEN'.length).split('=>').map((part) => part.trim());
     printApproval(first || 'touch created.txt');
     if (replacement) setTimeout(() => printApproval(replacement), 4_000);
+  } else if (text === 'STUB_QUESTION_SCREEN') {
+    stopSpinner();
+    printQuestionScreen();
   } else if (text === 'STUB_QUESTION') {
     stopSpinner();
-    questionOpen = true;
+    questionOpen = 'raw';
     line('Which color do you prefer?');
     line('1. Red');
     line('2. Green');
@@ -484,10 +502,12 @@ function typed(text) {
     // Одобрение открыто, поле пусто: цифра отвечает на него одним нажатием, как у Codex.
     if (approvalCommand !== null && composer === '' && char >= '1' && char <= '3') {
       answerApproval(char);
-    } else if (questionOpen && composer === '' && char >= '1' && char <= '3') {
+    } else if (questionOpen === 'options' && composer === '' && /^[1-4]$/.test(char)) {
+      closeQuestion(`answer: ${questionOptions[Number(char) - 1]}`);
+    } else if (questionOpen === 'raw' && composer === '' && char >= '1' && char <= '3') {
       // Вопрос открыт, поле пусто: цифра выбирает вариант, Enter — вариант по умолчанию.
       closeQuestion(`picked: ${char}`);
-    } else if (questionOpen && composer === '' && (char === '\r' || char === '\n')) {
+    } else if (questionOpen === 'raw' && composer === '' && (char === '\r' || char === '\n')) {
       closeQuestion('picked: default');
     } else if (char === '\r' || char === '\n') {
       const sent = composer;

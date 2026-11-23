@@ -167,7 +167,7 @@ test.describe('вид Chat у Codex на журнале (план 2026-10-07, Ta
     await resize(app, width, height);
     await expect(window.getByTestId('landing')).toBeVisible();
     const errors: string[] = [];
-    window.on('pageerror', (error) => errors.push(`pageerror: ${error.message}`));
+    window.on('pageerror', (error) => errors.push(`pageerror: ${error.stack ?? error.message}`));
     const work = await call<{ workId: string }>(window, 'works.create', {
       projectPath: project,
       title: 'e2e-codex-chat',
@@ -456,10 +456,44 @@ test.describe('вид Chat у Codex на журнале (план 2026-10-07, Ta
     expect(errors).toEqual([]);
   });
 
+  test('вопрос Codex с вариантами: выбранный ответ из карточки Chat доходит до терминала', async () => {
+    const { window, ref, errors } = await open(1400, 900, '0.166.0');
+    const chat = await toChat(window);
+    const card = chat.locator('[data-testid="chat-card"][data-card-kind="question"]');
+
+    await stub(window, ref, 'STUB_QUESTION_SCREEN');
+    await expect(card).toHaveAttribute('data-card-state', 'pending', { timeout: 20_000 });
+    await expect(card).toContainText('Which color do you prefer?');
+    await expect(chat.getByTestId('chat-terminal-prompt')).toHaveCount(0);
+    await card.getByRole('radio', { name: /^Blue/ }).check();
+    await card.getByTestId('card-submit').click();
+    await expect(card).toHaveAttribute('data-card-state', 'answered', { timeout: 20_000 });
+    await expect(card.getByTestId('card-answers')).toContainText('Blue');
+
+    await window.getByRole('radio', { name: 'Terminal' }).click();
+    await expect.poll(() => screenText(window)).toContain('answer: Blue');
+    expect(errors).toEqual([]);
+  });
+
   test('вопрос на экране терминала: панель в Chat показывает его, Enter с кнопки и текст из поля доходят до агента', async () => {
     const { window, ref, errors } = await open(1400, 900);
     const chat = await toChat(window);
     const panel = chat.getByTestId('chat-terminal-prompt');
+
+    // Возврат в Chat сразу после монтажа xterm оставляет отложенный вызов viewport.
+    await window.getByRole('radio', { name: 'Terminal' }).evaluate((terminal) => new Promise<void>((resolve) => {
+      const observer = new MutationObserver(() => {
+        if (document.querySelector('.xterm') === null) return;
+        observer.disconnect();
+        const radio = [...document.querySelectorAll<HTMLButtonElement>('button[role="radio"]')]
+          .find((button) => button.textContent?.trim() === 'Chat');
+        radio?.click();
+        resolve();
+      });
+      observer.observe(document.body, { childList: true, subtree: true });
+      (terminal as HTMLButtonElement).click();
+    }));
+    await expect(chat).toBeVisible();
 
     // Вопрос с тремя вариантами: его текст виден в панели.
     await stub(window, ref, 'STUB_QUESTION');

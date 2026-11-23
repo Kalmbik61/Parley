@@ -1398,8 +1398,15 @@ export function createFeedService(
         const seeded = feedFromCodexRollout(stashCodex(records), { limit: maxItems });
         // Ход, оборванный в журнале, закрывается только без живого процесса: у живого он ещё идёт
         // (рестарт хоста — процесс умер с ним).
-        const state =
+        const replayed =
           deps.pty.get(feed.ref) === undefined ? closeBrokenTurn(seeded.state) : seeded.state;
+        // Журнал не содержит карточек по экрану: сохраняем их вместе с id, уже показанными в Chat.
+        const terminalCards = feed.state.items.filter((item) => isCard(item) && 'via' in item && item.via === 'terminal');
+        const state = terminalCards.length === 0 ? replayed : {
+          ...replayed,
+          items: [...replayed.items, ...terminalCards],
+          seq: Math.max(replayed.seq, feed.state.seq),
+        };
         feed.state = state;
         feed.codex = {
           tail, cursor: seeded.cursor, agents: new Map(), queue: Promise.resolve(),
