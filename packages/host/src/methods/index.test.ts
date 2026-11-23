@@ -273,6 +273,8 @@ describe('методы на старте хоста ждут первого чт
         'feed.unsubscribe',
         'feed.decide',
         'feed.interrupt',
+        'kimi.getState',
+        'kimi.setConfig',
       ].sort(),
     );
     expect([...WORKS_GATED_NOTIFICATIONS]).toEqual(['activity.seen']);

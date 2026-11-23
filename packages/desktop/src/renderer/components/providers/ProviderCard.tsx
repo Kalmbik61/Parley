@@ -389,6 +389,26 @@ export function ProviderCard({
           <p className="text-xs text-muted-foreground">{S.providerCard.qwen.modelHelp}</p>
         </div>
       ) : null}
+      {provider.id === 'kimi' && !provider.available ? (
+        <div className="space-y-1" data-kimi-connection={provider.needs ?? 'unknown'}>
+          {provider.needs === 'cli' ? (
+            <>
+              <p className="text-xs text-muted-foreground">{S.providerCard.kimi.missingCli}</p>
+              <Button type="button" size="xs" variant="link"
+                onClick={() => openGuide('https://www.kimi.com/code/docs/en/kimi-code-cli/guides/getting-started#installation')}>
+                {S.providerCard.installationGuide}
+              </Button>
+            </>
+          ) : null}
+          {provider.needs === 'sign-in' ? (
+            <p className="text-xs text-muted-foreground">{S.providerCard.kimi.signIn}</p>
+          ) : null}
+          <Button type="button" size="xs" variant="outline" disabled={busy}
+            onClick={() => void run(S.errors.actions.loadProviders, onReload)}>
+            {S.providerCard.kimi.refresh}
+          </Button>
+        </div>
+      ) : null}
       {provider.id === 'opencode' && provider.available ? (
         // OpenCode signs in inside its own TUI: the card shows how many integrations `opencode auth list` reports, never a verdict.
         <div data-opencode-auth={opencodeConnected === null ? 'unknown' : opencodeConnected > 0 ? 'signed-in' : 'signed-out'} className="space-y-1">

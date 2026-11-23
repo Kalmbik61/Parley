@@ -149,7 +149,7 @@ export function createPtyManager(host: HostContext, windowCounters?: WindowCount
     // До spawn: хук процесса пишется в журнал только после, и его mtime не раньше этой метки.
     const startedAt = Date.now();
     // Не `process`: имя затенило бы глобальный `process` до конца функции.
-    const ptyProcess = spawnPty(launch, size);
+    const ptyProcess = launch.process ?? spawnPty(launch, size);
     const screen = createScreen(size.cols, size.rows);
     const batcher = new OutputBatcher((data) => {
       for (const listener of outputListeners) listener(ref, data);

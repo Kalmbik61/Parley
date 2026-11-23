@@ -21,9 +21,10 @@ import type { WorkProvider } from './work/types.js';
  * `work/qwen-settings-file.ts`): подстановки `{mcpConfig}` у Qwen Code нет, сервер доходит через окружение.
  * `opencode-server` — OpenCode 2.x: сервер `parley` лежит в `OPENCODE_CONFIG_CONTENT` процесса `opencode serve`, которым
  * владеет хост (`work/opencode-config.ts`, спека 2026-11-12, 4.2–4.3); TUI получает только адрес сервера и пароль.
+ * `kimi-acp` — stdio-сервер передаётся в `session/new` и `session/load`.
  * `undefined` — провайдер MCP не принимает, координация ему недоступна.
  */
-export type McpConfigKind = 'json-file' | 'codex-override' | 'qwen-system-settings' | 'opencode-server';
+export type McpConfigKind = 'json-file' | 'codex-override' | 'qwen-system-settings' | 'opencode-server' | 'kimi-acp';
 
 /**
  * Чем запись карты связывается с сессией в логах провайдера: id задан снаружи
@@ -149,9 +150,11 @@ export function ownsHookToken(entry: ProviderEntry): boolean {
   return entry.id === 'glm' || isManagedEntry(entry);
 }
 
+type BuiltinProvider = Provider | 'kimi';
+
 /** Запись встроенного реестра: id из закрытого списка, всё остальное как у `ProviderEntry`. */
-export interface ProviderInfo extends Omit<ProviderEntry, 'id'> {
-  id: Provider;
+export interface ProviderInfo<Id extends BuiltinProvider = BuiltinProvider> extends Omit<ProviderEntry, 'id'> {
+  id: Id;
 }
 
 /**
@@ -261,7 +264,7 @@ const CODEX_ASSISTANT_RESUME_ARGS = [
  * specs/runners.md), поэтому в списке сессий он не появляется, но запустить
  * его в правой панели можно тем же PTY-менеджером.
  */
-export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
+export const PROVIDERS: Readonly<Record<BuiltinProvider, ProviderInfo>> = {
   claude: {
     id: 'claude',
     family: 'claude',
@@ -531,6 +534,14 @@ export const PROVIDERS: Readonly<Record<Provider, ProviderInfo>> = {
       mcpConfig: 'opencode-server',
     },
   },
+  kimi: {
+    id: 'kimi',
+    label: 'Kimi Code',
+    mark: 'Ki',
+    hasHistory: false,
+    linkBy: 'cwd+time',
+    runner: { command: 'kimi', args: ['acp'], resumeArgs: ['acp'], mcpConfig: 'kimi-acp' },
+  },
 };
 
 /** Built-in Claude Code family, independent of provider label, command or allowed overrides. */
@@ -594,8 +605,8 @@ export function claudeConfigDirFor(entry: ProviderEntry, env: NodeJS.ProcessEnv)
 }
 
 /** Провайдеры, чьи сессии попадают в список. */
-export function providersWithHistory(): ProviderInfo[] {
-  return Object.values(PROVIDERS).filter((provider) => provider.hasHistory);
+export function providersWithHistory(): ProviderInfo<Provider>[] {
+  return Object.values(PROVIDERS).filter((provider): provider is ProviderInfo<Provider> => provider.id !== 'kimi' && provider.hasHistory);
 }
 
 /**
@@ -965,7 +976,7 @@ export async function providerReadiness(entry: ProviderEntry, options: ProviderR
     if (!supported) return { needs: 'cli', error: null, version };
   }
   // Вход — после CLI и версии: без подходящего `claude` проверять его не у кого (спека подписок 5.5).
-  if (entry.account !== undefined && options.signedIn !== true) return { needs: 'sign-in', error: null, version };
+  if ((entry.account !== undefined && options.signedIn !== true) || (entry.id === 'kimi' && options.signedIn === false)) return { needs: 'sign-in', error: null, version };
   if (entry.runner.secret !== undefined && entry.runner.keyOptional !== true && !(options.keyPresent ?? ((await readSecret(entry.runner.secret)) !== null))) {
     return { needs: 'key', error: null, version };
   }
@@ -979,6 +990,7 @@ export function providerReadinessError(entry: ProviderEntry, readiness: Provider
   const name = isManagedEntry(entry) || entry.family === 'qwen' ? entry.label : 'GLM';
   // The CLI the version belongs to: Qwen Code has its own; every other versioned entry runs Claude Code.
   const cli = entry.family === 'qwen' ? entry.runner.command : 'Claude Code';
+  if (readiness.needs === 'sign-in' && entry.id === 'kimi') return 'Kimi Code is not signed in. Run kimi login and try again.';
   if (readiness.needs === 'sign-in') return `${name} is not signed in: open Settings → Providers and press Sign in`;
   // DO1: a 1.x OpenCode is found but never run; the card says what to do instead of a generic "newer required".
   if (readiness.needs === 'cli' && entry.family === 'opencode' && readiness.version !== null && isOpenCodeLegacy(readiness.version)) {

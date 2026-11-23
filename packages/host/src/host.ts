@@ -111,9 +111,12 @@ import { createCliInstaller } from './providers/install-run.js';
 import { createCliRun } from './providers/cli-run.js';
 import type { VersionProbe } from './providers/versions.js';
 import { createPtyManager } from './pty/pty-manager.js';
+import { createKimiSessions } from './kimi/sessions.js';
+import { createKimiAuth } from './providers/kimi-auth.js';
 import { createProcessMonitor } from './pty/process-monitor.js';
 import { createSender } from './pty/send.js';
 import { createFeedService } from './feed/feed-service.js';
+import { canShowKimiElicitation } from './feed/kimi-interactions.js';
 import { ensureCodexHookLauncher } from './feed/codex-hook-launcher.js';
 import { createBacklogService } from './backlog/backlog-service.js';
 import { createPlanEffectsService } from './rooms/plan-effects.js';
@@ -506,6 +509,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     ...(options.codexHookGraceMs === undefined ? {} : { codexHookGraceMs: options.codexHookGraceMs }),
     // OpenCode Chat reads the messages of the session's own server (the supervisor is created further down; it is only called later).
     opencodeServer: (ref) => opencodeSupervisor.get(ref),
+    kimiRespond: (ref, requestId, response) => kimi.respond(ref, requestId, response),
   });
   // Канал агента к браузеру окна (спека браузера 2026-10-07, 3.7): путь `/agent/browser` на сервере хуков и свой
   // реестр токенов — у всех провайдеров. Операцию исполняет окно с возможностью `browser-agent`.
@@ -812,6 +816,15 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     onSessionEvent: (ref) => void feedService.opencodePoll(ref).catch(() => {}),
   });
   handle.context.onShutdown(async () => opencodeEvents.stopAll());
+  const kimiAuth = createKimiAuth(() => handle.context.broadcast('providers.changed', { provider: 'kimi' }));
+  const kimi = createKimiSessions(handle.context, {
+    output: feedService.kimiOutput,
+    requestsChanged: feedService.kimiRequests,
+    canShowElicitation: canShowKimiElicitation,
+    hasHistory: feedService.kimiHasHistory,
+    activity: activityService.kimiActivity,
+    authChanged: kimiAuth.observe,
+  });
   sessionsService = createSessionsService(
     handle.context,
     worksService,
@@ -825,6 +838,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       hooks: hookServer,
       opencode: opencodeSupervisor,
       opencodeEvents,
+      kimi,
       // Qwen's brief is typed by the wake service once the process is ready (spec 2026-11-11, 3.4 amendment).
       deferFirst: (ref, pid, text) => wakeService.deferFirst(ref, pid, text),
       providerVersions,
@@ -858,6 +872,10 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   handle.context.onShutdown(async () => wakeService.stop());
   handle.context.onShutdown(async () => autoSleepService.stop());
   handle.context.onShutdown(() => sessionsService.stopAll());
+  handle.context.onShutdown(async () => {
+    await kimi.stopAll();
+    await kimiAuth.stop();
+  });
   // Sessions stop their servers on exit; this catches any left (a TUI that did not exit in time). The lifelines also
   // kill their groups when the host's pipes close.
   handle.context.onShutdown(() => opencodeSupervisor.stopAll());
@@ -923,12 +941,20 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   handle.context.onShutdown(async () => compactionService?.stop());
 
   // Один отправитель на хост: окно (`pty.send`) и помощник делят «свой Enter в полёте» по сессии.
-  const send = createSender({
+  const sendPty = createSender({
     pty: ptyManager,
     activity: activityService,
     wake: wakeService,
     switching: (ref: SessionRef) => sessionsService.exclusive.held(ref),
   });
+  const send: typeof sendPty = async (params, log) => {
+    const { ref, text, submit } = params;
+    if (ptyManager.get(ref)?.provider !== 'kimi') return sendPty(params, log);
+    if (sessionsService.exclusive.held(ref) || wakeService.inFlight(ref)) {
+      return { inserted: false, submitted: false, reason: 'busy' };
+    }
+    return kimi.send(ref, text, submit);
+  };
   const secretOf = (entry: ProviderEntry): Promise<string | null> =>
     entry.runner.secret === undefined ? Promise.resolve(null) : readSecret(entry.runner.secret);
   // Готовность провайдера к запуску агента: ключ, версия CLI для окна, вход аккаунта подписки. Версия для помощника — в `ready`.
@@ -1319,6 +1345,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     activity: activityService,
     pty: ptyManager,
     sessions: sessionsService,
+    kimi,
+    kimiAuth,
     swarms: swarmsService,
     wake: wakeService,
     consents: consentsService,

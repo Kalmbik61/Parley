@@ -19,6 +19,7 @@ import type {
 import type { WorksSyncInvalidated } from './works-sync.js';
 import type { CardsEvents } from './remote/cards.js';
 import type { VoiceEvents } from './remote/voice.js';
+import type { KimiConfigOption, KimiRequest } from './kimi.js';
 
 /** Однонаправленные события хоста → клиенту, без ответа. */
 export interface Events {
@@ -93,6 +94,8 @@ export interface Events {
   /** Телефону: голосовая сессия закрыта (любая причина). */
   'voice.session.closed': VoiceEvents['voice.session.closed'];
   'telegram.changed': TelegramStatus;
+  'kimi.requests': { ref: SessionRef; requests: KimiRequest[] };
+  'kimi.configChanged': { ref: SessionRef; config: KimiConfigOption[] };
   /**
    * Изменились карточки согласий (спека 2026-10-21, 4.4): `upsert` — новые и изменённые, `removed` — `id` решённых
    * и снятых. Окна, остров и Telegram по нему показывают и закрывают карточку «доверять ли папке».

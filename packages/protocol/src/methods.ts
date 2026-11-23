@@ -30,6 +30,7 @@ import type { VoiceMethodResults } from './remote/voice.js';
 import { customProviderMethodSchemas } from './custom-providers.js';
 import type { CustomProviderInfo, CustomProviderMethodResults } from './custom-providers.js';
 import type { QwenAuthHints } from './qwen-auth.js';
+import { kimiConfigValue, type KimiMethodResults } from './kimi.js';
 import type { AssistantMethodResults } from './assistant.js';
 import { telegramMethodSchemas } from './telegram.js';
 import { voiceProviderMethodSchemas } from './voice-provider.js';
@@ -215,6 +216,8 @@ export const METHODS = {
   'sessions.rename': z.object({ ref: sessionRef, label: renameTitle }),
   'sessions.interrupted': z.object({}),
   // Режим разрешений (план 2026-10-01, решение 4): хост жмёт Shift+Tab и сверяет подвал терминала.
+  'kimi.getState': z.object({ ref: sessionRef }),
+  'kimi.setConfig': z.object({ ref: sessionRef, configId: z.string().min(1).max(1024), value: kimiConfigValue }),
   'sessions.setMode': z.object({ ref: sessionRef, mode: permissionModeChoice }),
   // «Keep awake» из меню строки сессии (спека сна агентов, 4.1): человек запрещает хосту усыплять сессию, флаг лежит в
   // карте. Закрытая сессия — `conflict`, нет сессии или работы — `not_found`. Агент флаг не ставит. Старый хост метода не
@@ -409,7 +412,7 @@ export const NOTIFICATIONS = {
   'activity.seen': z.object({ ref: sessionRef }),
 } as const;
 
-export interface Results extends AssistantMethodResults, VoiceMethodResults, CardsMethodResults, TelegramMethodResults, VoiceProviderMethodResults, ConsentMethodResults, CustomProviderMethodResults, CapabilitySkillMethodResults, BacklogMethodResults, CapabilityPluginMethodResults, PlanMethodResults, JournalMethodResults, MemoryMethodResults, HistoryMethodResults, ContextPageMethodResults {
+export interface Results extends KimiMethodResults, AssistantMethodResults, VoiceMethodResults, CardsMethodResults, TelegramMethodResults, VoiceProviderMethodResults, ConsentMethodResults, CustomProviderMethodResults, CapabilitySkillMethodResults, BacklogMethodResults, CapabilityPluginMethodResults, PlanMethodResults, JournalMethodResults, MemoryMethodResults, HistoryMethodResults, ContextPageMethodResults {
   /** `methods` — все методы и уведомления хоста; нет поля — хост до этапа 3 (спека 3.2). */
   /** `features` — что хост умеет сверх протокола 1 (например, компактные снимки): нет поля — хост до P35. */
   hello: { hostVersion: string; protocol: number; pid: number; methods?: string[]; features?: string[] };

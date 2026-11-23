@@ -398,6 +398,14 @@ describe('пределы и версия', () => {
     expect(feedDecision.safeParse({ kind: 'plan', choice: 'manual' }).success).toBe(true);
     expect(feedDecision.safeParse({ kind: 'plan', choice: 'edit' }).success).toBe(false);
   });
+
+  it('preserves structured choices alongside legacy decisions', () => {
+    const permission = { kind: 'permission', behavior: 'deny', optionId: 'reject_for_session' };
+    const question = { kind: 'question', answers: {}, values: { q0: ['Blue, green', 'Red'], q1: 'Some text', q2: false, q3: 0 } };
+    expect(feedDecision.parse(permission)).toEqual(permission);
+    expect(feedDecision.parse(question)).toEqual(question);
+    expect(feedDecision.safeParse({ ...question, values: { q0: { text: 'Nested' } } }).success).toBe(false);
+  });
 });
 
 describe('feedItem: картинки результата инструмента (план 2026-10-09, Task 1)', () => {

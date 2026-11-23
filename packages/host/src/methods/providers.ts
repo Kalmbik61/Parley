@@ -12,6 +12,7 @@ import {
   supportsEffort,
   writeSecret,
 } from '@parley/core';
+import type { KimiAuth } from '../providers/kimi-auth.js';
 import type { CliTool, ProviderEntry, SecretId } from '@parley/core';
 import type { CustomProviderInfo } from '@parley/protocol';
 import type { Handler } from '../context.js';
@@ -107,6 +108,7 @@ export function createProvidersList(
   qwenCatalog?: Pick<QwenCatalog, 'refreshIfStale'>,
   opencodeCatalog?: Pick<OpencodeCatalog, 'refreshIfStale'>,
   opencodeAuth?: Pick<OpencodeAuthHint, 'current' | 'refreshIfStale'>,
+  kimiAuth?: Pick<KimiAuth, 'current' | 'refreshIfStale'>,
 ): Handler<'providers.list'> {
   return async () => {
     catalog?.refreshIfStale();
@@ -135,7 +137,9 @@ export function createProvidersList(
           }
         }
         // Состояние входа спрашивается только у аккаунта подписки.
-        const signedIn = entry.account === undefined ? null : (auth?.status(entry.id) ?? null);
+        if (entry.id === 'kimi') kimiAuth?.refreshIfStale(entry.runner.command);
+        const signedIn = entry.id === 'kimi' ? kimiAuth?.current() ?? null
+          : entry.account === undefined ? null : auth?.status(entry.id) ?? null;
         const readiness = await providerReadiness(entry, {
           keyPresent: key !== null,
           probeVersion,

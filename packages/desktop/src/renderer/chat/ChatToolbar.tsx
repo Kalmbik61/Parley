@@ -143,6 +143,8 @@ export interface ChatToolbarProps {
   model?: string | null;
   /** Меню «модель · effort»; есть — вместо подписи модели. */
   choiceMenu?: ChoiceMenuProps;
+  /** Настройки активной ACP-сессии. */
+  sessionConfig?: ReactNode;
   /** Сколько карточек агентов ещё работает; нет — кнопки «N agents running» нет. Клик ведёт ленту к первой из них. */
   agents?: { running: number; onShow: () => void };
   /** Чип «N shell» (процессы PTY сессии); нет — чипа нет. `active`: вкладка на экране и сессия живая. */
@@ -269,7 +271,7 @@ function renderBranchChip(session: WorkSession, sessions: readonly WorkSession[]
   return <BranchChip branch={projectBranch} title={S.chat.branch.projectFolder(projectBranch)} colorClass="" />;
 }
 
-export function ChatToolbar({ workKey, tabId, view, available, provider, modeLabelText = null, model = null, modeMenu, choiceMenu, agents, processes, micTargetId, metrics = null, contextChip }: ChatToolbarProps): JSX.Element {
+export function ChatToolbar({ workKey, tabId, view, available, provider, modeLabelText = null, model = null, modeMenu, choiceMenu, sessionConfig, agents, processes, micTargetId, metrics = null, contextChip }: ChatToolbarProps): JSX.Element {
   const reason = useFeedUnavailableReason(provider);
   const unavailableTitle = reason === 'unknown-version' ? S.chat.versionUnknown
     : reason === 'host-unsupported' ? S.chat.hostFeedUnsupported
@@ -337,6 +339,7 @@ export function ChatToolbar({ workKey, tabId, view, available, provider, modeLab
         </Button>
       )}
       {processes === undefined ? null : <SessionProcessesChip bridge={processes.bridge} sessionRef={processes.sessionRef} active={processes.active} />}
+      {sessionConfig}
       {modeMenu === undefined && modeLabelText !== null ? (
         <span data-testid="chat-mode" title={S.chat.mode.label} className="shrink-0 text-xs text-muted-foreground">
           {modeLabelText}

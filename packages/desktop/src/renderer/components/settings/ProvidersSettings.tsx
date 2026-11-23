@@ -36,9 +36,11 @@ export function ProvidersSettings(): JSX.Element {
   }, [requested]);
 
   const customs = providers.filter((provider) => provider.custom != null);
+  const kimi = providers.find((provider) => provider.id === 'kimi');
   const pills = [
     ...CORE_IDS.map((id) => providers.find((provider) => provider.id === id) ??
       { id, label: providerName(id, id), available: false, version: null, limits: null }),
+    ...(kimi === undefined ? [] : [kimi]),
     ...customs,
   ];
   const current = selected === 'new' ? undefined : pills.find((provider) => provider.id === selected);

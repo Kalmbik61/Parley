@@ -789,6 +789,20 @@ describe('ProviderCard: Qwen Code (spec 2026-11-11, 3.6)', () => {
   });
 });
 
+describe('ProviderCard: Kimi Code', () => {
+  it.each([
+    ['cli', S.providerCard.kimi.missingCli],
+    ['sign-in', S.providerCard.kimi.signIn],
+  ] as const)('shows the specific %s blocker and allows refresh', (needs, copy) => {
+    const onReload = vi.fn(async () => {});
+    render(<ProviderCard provider={{ id: 'kimi', label: 'Kimi Code', available: false, needs }}
+      onReload={onReload} onRestartHost={() => {}} />);
+    expect(screen.getByText(copy)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: S.providerCard.kimi.refresh }));
+    expect(onReload).toHaveBeenCalledOnce();
+  });
+});
+
 describe('ProviderCard: OpenCode (spec 2026-11-12, 4.9, 4.12)', () => {
   const oc = (patch: Partial<Provider> = {}): Provider => ({
     id: 'opencode', label: 'OpenCode', available: true, family: 'opencode', needs: null, version: '2.2.7', ...patch,

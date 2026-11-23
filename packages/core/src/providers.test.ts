@@ -877,7 +877,7 @@ describe('переопределения из PARLEY_HOME/providers.json', () =>
 
   it('файла нет — работает встроенный реестр', async () => {
     const registry = await loadProviders();
-    expect(Object.keys(registry).sort()).toEqual(['claude', 'codex', 'glm', 'opencode', 'qwen']);
+    expect(Object.keys(registry).sort()).toEqual(['claude', 'codex', 'glm', 'kimi', 'opencode', 'qwen']);
     expect(registry['claude']?.runner.command).toBe('claude');
   });
 

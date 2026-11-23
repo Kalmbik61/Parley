@@ -262,3 +262,6 @@ export { CODEX_ACCOUNT_PREFIX, CUSTOM_PROVIDER_PREFIX, customProviderMethodSchem
 export type { QwenAuthHints } from './qwen-auth.js';
 export type { CustomAccountInfo, CustomEndpointInfo, CustomProviderAuth, CustomProviderInfo, CustomProviderKind, CustomProviderMethodResults, CustomProviderSaveParams, CustomProviderModels } from './custom-providers.js';
 export type * from './human-overview.js';
+
+export { kimiConfigOption, kimiElicitationSchema, kimiPermissionOption, kimiResponse } from './kimi.js';
+export type { KimiConfigOption, KimiMethodResults, KimiPermissionContent, KimiRequest, KimiResponse, KimiState } from './kimi.js';

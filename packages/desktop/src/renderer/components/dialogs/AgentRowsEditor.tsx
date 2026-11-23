@@ -124,15 +124,16 @@ export function AgentRowsEditor({
         {agents.map((row, index) => {
           const role = roleOf(env, row);
           const info = infoOf(env, row);
-          const roleModel = roleModelOf(role, providerIdOf(env, row));
+          const chosenId = providerIdOf(env, row);
+          const roleModel = roleModelOf(role, chosenId);
           const displayedModel = row.modelTouched ? chosenModel(row, info) : roleModel;
-          const models = info?.models ?? null;
-          const efforts = effortChoices(info, chosenModel(row, info));
+          const chosenKimi = chosenId === 'kimi';
+          const models = chosenKimi ? null : info?.models ?? null;
+          const efforts = chosenKimi ? null : effortChoices(info, chosenModel(row, info));
           // Без касания показывается умолчание роли, если оно есть среди уровней модели, иначе `Default`.
           const roleEffort = role?.effort ?? null;
           const roleEffortListed = roleEffort !== null && efforts?.some((level) => level.id === roleEffort) === true;
           const displayedEffort = row.effortTouched ? chosenEffort(row, info) : roleEffortListed ? roleEffort : null;
-          const chosenId = providerIdOf(env, row);
           const chosenQwen = info?.family === 'qwen';
           const result = results[row.key];
           const rowLocked = busy || result?.status === 'started';
@@ -267,7 +268,10 @@ export function AgentRowsEditor({
                 ) : (
                   <span className="min-w-0 flex-1" />
                 )}
-                {!row.effortTouched && roleEffort !== null && !roleEffortListed ? <span data-role-effort className="text-xs text-muted-foreground">{S.roles.defaultEffort(roleEffort)}</span> : null}
+                {chosenKimi && info?.available === true ? (
+                  <p className="text-xs text-muted-foreground">{S.providerCard.kimi.chooseInChat}</p>
+                ) : null}
+                {!chosenKimi && !row.effortTouched && roleEffort !== null && !roleEffortListed ? <span data-role-effort className="text-xs text-muted-foreground">{S.roles.defaultEffort(roleEffort)}</span> : null}
                 <div className="ml-auto flex items-center gap-2">
                 {efforts === null ? null : (
                   <Select
