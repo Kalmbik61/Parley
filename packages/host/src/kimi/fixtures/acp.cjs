@@ -76,10 +76,28 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
       if (params.sessionId !== 'acp-session') process.exit(6);
       prompt = id;
       if (params.prompt[0].text === 'disconnect') process.exit(7);
-      if (params.prompt[0].text === 'approve') {
+      if (['approve', 'large approval'].includes(params.prompt[0].text)) {
+        const before = params.prompt[0].text === 'large approval' ? 'x'.repeat(70 * 1024) : 'before';
         return write({ id: 700, method: 'session/request_permission', params: {
-          sessionId: params.sessionId, toolCall: { toolCallId: 'tool', title: 'Write file' },
+          sessionId: params.sessionId,
+          toolCall: {
+            toolCallId: 'tool', title: 'WriteFile',
+            content: [
+              { type: 'content', content: { type: 'text', text: 'Write the release notes to notes.md' } },
+              { type: 'diff', path: 'notes.md', oldText: before, newText: 'after' },
+            ],
+          },
           options: [{ optionId: 'allow', kind: 'allow_once', name: 'Allow' }, { optionId: 'deny', kind: 'reject_once', name: 'Deny' }],
+        } });
+      }
+      if (params.prompt[0].text === 'fallback question') {
+        return write({ id: 702, method: 'session/request_permission', params: {
+          sessionId: params.sessionId,
+          toolCall: {
+            toolCallId: 'question-tool', title: 'AskUserQuestion',
+            content: [{ type: 'content', content: { type: 'text', text: 'Which release?' } }],
+          },
+          options: [{ optionId: 'option:stable', kind: 'allow_once', name: 'Stable' }],
         } });
       }
       if (params.prompt[0].text === 'question') {
@@ -106,7 +124,7 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
     case 'session/close':
       return reply(id, {});
     case undefined:
-      if (id === 700 && result.outcome.optionId) chunk('acp-session', result.outcome.optionId);
+      if ((id === 700 || id === 702) && result.outcome.optionId) chunk('acp-session', result.outcome.optionId);
       if (id === 701 && result.action === 'accept') chunk('acp-session', result.content.name);
       return reply(prompt, { stopReason: 'end_turn' });
   }

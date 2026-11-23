@@ -4,7 +4,7 @@ import { constants } from 'node:os';
 import { StringDecoder } from 'node:string_decoder';
 import {
   kimiConfigOption, kimiElicitationSchema, kimiPermissionOption,
-  type KimiConfigOption, type KimiRequest, type KimiResponse, type KimiState,
+  type KimiConfigOption, type KimiPermissionContent, type KimiRequest, type KimiResponse, type KimiState,
 } from '@parley/protocol';
 import type { ExitInfo } from '../pty/pty-process.js';
 
@@ -47,6 +47,36 @@ const isId = (id: unknown): id is RpcId => typeof id === 'string' || typeof id =
 const MAX_LINE = 4 * 1024 * 1024;
 const RPC_TIMEOUT_MS = 15_000;
 const CANCEL_TIMEOUT_MS = 5_000;
+const MAX_PERMISSION_BLOCKS = 4;
+const MAX_PREVIEW_CHARS = 4096;
+
+function permissionContent(raw: unknown): KimiPermissionContent[] {
+  if (!Array.isArray(raw)) return [];
+  const blocks: KimiPermissionContent[] = [];
+  for (const input of raw.slice(0, MAX_PERMISSION_BLOCKS)) {
+    const block = record(input);
+    if (block['type'] === 'content') {
+      const content = record(block['content']);
+      const text = content['text'];
+      if (content['type'] !== 'text' || typeof text !== 'string') continue;
+      blocks.push({
+        type: 'content', content: { type: 'text', text: text.slice(0, MAX_PREVIEW_CHARS) },
+        ...(text.length > MAX_PREVIEW_CHARS ? { truncated: true } : {}),
+      });
+    } else if (block['type'] === 'diff') {
+      const { path, oldText, newText } = block;
+      if (typeof path !== 'string' || typeof newText !== 'string') continue;
+      const truncated = [path, oldText, newText].some((value) => typeof value === 'string' && value.length > MAX_PREVIEW_CHARS);
+      blocks.push({
+        type: 'diff', path: path.slice(0, MAX_PREVIEW_CHARS), newText: newText.slice(0, MAX_PREVIEW_CHARS),
+        ...(typeof oldText === 'string' ? { oldText: oldText.slice(0, MAX_PREVIEW_CHARS) } : oldText === null ? { oldText } : {}),
+        ...(truncated ? { truncated: true } : {}),
+      });
+    }
+  }
+  return blocks;
+}
+
 
 interface Waiter {
   resolve(value: JsonObject): void;
@@ -236,7 +266,7 @@ export function createKimiAcp(options: KimiAcpOptions) {
 
     const invalid = () => write({ id, error: { code: -32602, message: 'Invalid ACP request' } });
     if (method === 'session/request_permission' || method === 'elicitation/create') {
-      if (!connected || !turn || turn.cancelled || pending.size >= 16 || JSON.stringify(params).length > 64 * 1024) return invalid();
+      if (!connected || !turn || turn.cancelled || pending.size >= 16) return invalid();
       const requestId = randomUUID();
       const belongsToTurn = params['sessionId'] === sessionId
         || (method === 'elicitation/create' && params['sessionId'] === undefined && params['requestId'] === turn.rpcId);
@@ -244,18 +274,25 @@ export function createKimiAcp(options: KimiAcpOptions) {
       if ([...pending.values()].some(({ rpcId }) => rpcId === id)) return;
       if (method === 'session/request_permission') {
         const call = record(params['toolCall']);
-        if (!Array.isArray(params['options']) || typeof call['toolCallId'] !== 'string') return invalid();
-        const choices = params['options'].map((option: unknown) => kimiPermissionOption.safeParse(option));
+        const rawOptions = params['options'];
+        const toolCallId = call['toolCallId'];
+        if (!Array.isArray(rawOptions) || rawOptions.length > 32 || typeof toolCallId !== 'string' || toolCallId.length > 1024) return invalid();
+        const choices = rawOptions.map((option: unknown) => kimiPermissionOption.safeParse(option));
         if (choices.length === 0 || choices.some((option) => !option.success)) return invalid();
         const permissionOptions = choices.flatMap((option) => option.success ? [option.data] : []);
-        if (new Set(permissionOptions.map((option) => option.optionId)).size !== choices.length) return invalid();
+        if (new Set(permissionOptions.map((option) => option.optionId)).size !== choices.length ||
+          permissionOptions.some((option) => option.name.length > 1024)) return invalid();
+        const requestedContent = call['content'];
         const request: KimiRequest = {
-          kind: 'permission', id: requestId, toolCallId: call['toolCallId'],
-          title: typeof call['title'] === 'string' ? call['title'] : 'Kimi Code',
+          kind: 'permission', id: requestId, toolCallId,
+          title: typeof call['title'] === 'string' ? call['title'].slice(0, 512) : 'Kimi Code',
           options: permissionOptions,
+          content: permissionContent(requestedContent),
+          ...(Array.isArray(requestedContent) && requestedContent.length > MAX_PERMISSION_BLOCKS ? { contentTruncated: true } : {}),
         };
         pending.set(requestId, { rpcId: id, request });
       } else {
+        if (JSON.stringify(params).length > 64 * 1024) return invalid();
         const schema = kimiElicitationSchema.safeParse(params['requestedSchema']);
         const message = params['message'];
         const toolCallId = params['toolCallId'];

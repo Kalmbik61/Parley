@@ -29,8 +29,21 @@ export const kimiElicitationSchema = z.object({
   required: z.array(z.string()).nullish(),
 });
 
+/** ACP tool-call preview, limited to the display formats Parley can render. */
+export type KimiPermissionContent =
+  | { type: 'content'; content: { type: 'text'; text: string }; truncated?: true }
+  | { type: 'diff'; path: string; oldText?: string | null; newText: string; truncated?: true };
+
 export type KimiRequest =
-  | { kind: 'permission'; id: string; toolCallId: string; title: string; options: z.infer<typeof kimiPermissionOption>[] }
+  | {
+      kind: 'permission';
+      id: string;
+      toolCallId: string;
+      title: string;
+      options: z.infer<typeof kimiPermissionOption>[];
+      content: KimiPermissionContent[];
+      contentTruncated?: true;
+    }
   | { kind: 'elicitation'; id: string; toolCallId?: string; message: string; requestedSchema: z.infer<typeof kimiElicitationSchema> };
 
 const formContent = z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.array(z.string())]));

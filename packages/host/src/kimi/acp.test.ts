@@ -51,9 +51,16 @@ describe('Kimi Code ACP subprocess', () => {
     const { acp, text } = start();
     await acp.connect();
     const approval = acp.prompt('approve');
+    void approval.catch(() => {});
     await expect.poll(() => acp.state().requests.length).toBe(1);
     const [permission] = acp.state().requests;
-    expect(permission?.kind).toBe('permission');
+    expect(permission).toMatchObject({
+      kind: 'permission', title: 'WriteFile',
+      content: [
+        { type: 'content', content: { type: 'text', text: 'Write the release notes to notes.md' } },
+        { type: 'diff', path: 'notes.md', oldText: 'before', newText: 'after' },
+      ],
+    });
     expect(() => acp.respond(permission!.id, { kind: 'permission', optionId: 'invented' })).toThrow();
     acp.respond(permission!.id, { kind: 'permission', optionId: 'deny' });
     await approval;
@@ -66,6 +73,40 @@ describe('Kimi Code ACP subprocess', () => {
     await question;
     expect(text).toEqual(['deny', 'Parley']);
     expect(acp.state().requests).toEqual([]);
+  });
+
+  it('keeps the real question text and option IDs in the permission fallback', async () => {
+    const { acp, text } = start();
+    await acp.connect();
+    const prompt = acp.prompt('fallback question');
+    void prompt.catch(() => {});
+    await expect.poll(() => acp.state().requests.length).toBe(1);
+    const [question] = acp.state().requests;
+    expect(question).toMatchObject({
+      kind: 'permission', title: 'AskUserQuestion',
+      content: [{ type: 'content', content: { type: 'text', text: 'Which release?' } }],
+      options: [{ optionId: 'option:stable', kind: 'allow_once', name: 'Stable' }],
+    });
+    acp.respond(question!.id, { kind: 'permission', optionId: 'option:stable' });
+    expect(await prompt).toBe('end_turn');
+    expect(text).toEqual(['option:stable']);
+  });
+
+  it('keeps an oversized preview answerable and marks its shortened diff', async () => {
+    const { acp } = start();
+    await acp.connect();
+    const prompt = acp.prompt('large approval');
+    void prompt.catch(() => {});
+    await expect.poll(() => acp.state().requests.length).toBe(1);
+    const [approval] = acp.state().requests;
+    expect(approval).toMatchObject({
+      kind: 'permission', content: [
+        { type: 'content' },
+        { type: 'diff', path: 'notes.md', oldText: 'x'.repeat(4096), newText: 'after', truncated: true },
+      ],
+    });
+    acp.respond(approval!.id, { kind: 'permission', optionId: 'deny' });
+    expect(await prompt).toBe('end_turn');
   });
 
   it('loads a previously bound session with its conversation when the host needs history', async () => {

@@ -264,4 +264,4 @@ export type { CustomAccountInfo, CustomEndpointInfo, CustomProviderAuth, CustomP
 export type * from './human-overview.js';
 
 export { kimiConfigOption, kimiElicitationSchema, kimiPermissionOption, kimiResponse } from './kimi.js';
-export type { KimiConfigOption, KimiMethodResults, KimiRequest, KimiResponse, KimiState } from './kimi.js';
+export type { KimiConfigOption, KimiMethodResults, KimiPermissionContent, KimiRequest, KimiResponse, KimiState } from './kimi.js';
