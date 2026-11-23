@@ -359,6 +359,8 @@ interface SessionFeed {
   ref: SessionRef;
   /** Provider owning this source; process starts and same-provider resumes do not replace it. */
   provider: string | undefined;
+  /** Native output may arrive before the works cache publishes a newly created session. */
+  awaitingRegistration: boolean;
   state: FeedState;
   revision: number;
   /** Байты JSON каждого элемента кольца и их сумма. */
@@ -592,12 +594,13 @@ export function createFeedService(
 
   const at = (): string => new Date(now()).toISOString();
 
-  function feedOf(ref: SessionRef): SessionFeed {
+  function feedOf(ref: SessionRef, nativeProvider?: string): SessionFeed {
     const key = refKey(ref);
     let feed = feeds.get(key);
     let provider: string | undefined;
     try { provider = sessionOf(ref).provider; } catch { /* A late hook can outlive the session. */ }
-    const previous = feed !== undefined && feed.provider !== provider ? feed : undefined;
+    const owner = provider ?? nativeProvider ?? feed?.provider;
+    const previous = feed !== undefined && feed.provider !== owner ? feed : undefined;
     if (previous !== undefined) {
       invalidateProgress(previous);
       dropFeed(key);
@@ -606,7 +609,8 @@ export function createFeedService(
     if (feed === undefined) {
       feed = {
         ref: { ...ref },
-        provider,
+        provider: owner,
+        awaitingRegistration: provider === undefined,
         state: emptyFeedState(),
         revision: previous?.revision ?? 0,
         sizes: new Map(),
@@ -634,6 +638,7 @@ export function createFeedService(
         flush(feed);
       }
     }
+    if (provider !== undefined) feed.awaitingRegistration = false;
     if (!stopped && (subscribers.get(key)?.size ?? 0) > 0 && provider !== undefined &&
         byFamily(provider, { claude: false, codex: true, qwen: true, opencode: true, neutral: false })) startCodexPoll(feed);
     feed.usedAt = now();
@@ -1566,7 +1571,13 @@ export function createFeedService(
 
   function feedCurrent(feed: SessionFeed): boolean {
     if (stopped || feeds.get(refKey(feed.ref)) !== feed) return false;
-    try { return sessionOf(feed.ref).provider === feed.provider; } catch { return false; }
+    try {
+      const current = sessionOf(feed.ref).provider;
+      feed.awaitingRegistration = false;
+      return current === feed.provider;
+    } catch {
+      return feed.awaitingRegistration;
+    }
   }
 
   function invalidateProgress(feed: SessionFeed): void {
@@ -2071,7 +2082,8 @@ export function createFeedService(
     },
     kimiOutput(ref, event) {
       if (stopped) return;
-      const feed = feedOf(ref);
+      const feed = feedOf(ref, 'kimi');
+      if (feed.provider !== 'kimi') return;
       feed.live = true;
       const time = at();
       if (event.kind === 'end' && event.error === undefined) {
@@ -2085,8 +2097,8 @@ export function createFeedService(
     },
     kimiRequests(ref, requests) {
       if (stopped || options.kimiRespond === undefined) return;
-      const feed = requests.length === 0 ? feeds.get(refKey(ref)) : feedOf(ref);
-      if (feed === undefined || !feedCurrent(feed)) return;
+      const feed = requests.length === 0 ? feeds.get(refKey(ref)) : feedOf(ref, 'kimi');
+      if (feed?.provider !== 'kimi' || !feedCurrent(feed)) return;
       feed.live = true;
       setDecisions(feed, 'window');
       const live = (feed.kimiInteractions ??= new Map());

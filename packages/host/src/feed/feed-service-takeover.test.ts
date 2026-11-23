@@ -228,3 +228,16 @@ it('keeps an already cold Qwen source subscribed through a same-provider resume'
   for (const item of before.items) expect(view.read().filter((candidate) => candidate.id === item.id)).toHaveLength(1);
   expect(view.read()).toEqual((await service.snapshot(REF)).items);
 });
+
+it('keeps early Kimi output when the session is registered and rejects it after Qwen takes over', async () => {
+  fakes.setSessions([]);
+  service.kimiOutput(REF, { kind: 'prompt', text: 'early prompt' });
+  fakes.setSessions([{ ref: REF, provider: 'kimi' }]);
+  expect((await service.snapshot(REF)).items).toContainEqual(expect.objectContaining({ kind: 'prompt', text: 'early prompt' }));
+
+  fakes.setLogFile(file);
+  fakes.setSessions([{ ref: REF, provider: 'qwen' }]);
+  service.kimiOutput(REF, { kind: 'text', messageId: 'late', text: 'late Kimi reply' });
+  const snapshot = await service.snapshot(REF);
+  expect(snapshot.items.filter((item) => item.kind === 'text').map((item) => item.text)).toEqual(['Qwen answer']);
+});
