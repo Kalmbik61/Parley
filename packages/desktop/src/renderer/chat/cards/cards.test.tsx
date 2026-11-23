@@ -358,6 +358,17 @@ describe('QuestionCard', () => {
     expect(lastDecision()).toEqual({ kind: 'question', answers: { 'Which fruit?': 'Mango' } });
   });
 
+  it('sends native Qwen multi-select choices and custom text without splitting commas', async () => {
+    render(<Card item={question({ id: 'qwen-dialog:test', via: 'terminal', questions: [question().questions[1]!] })} />);
+    fireEvent.click(option('Nuts'));
+    fireEvent.click(screen.getByTestId('card-other'));
+    fireEvent.change(screen.getByTestId('card-other-text'), { target: { value: 'Red, white' } });
+    fireEvent.click(screen.getByTestId('card-submit'));
+    await waitFor(() => expect(decideCalls()).toHaveLength(1));
+    expect(lastDecision()).toEqual({ kind: 'question', answers: { 'Which toppings?': 'Nuts, Red, white' },
+      values: { choices: ['Nuts'], other: 'Red, white' } });
+  });
+
   it('multiSelect — «Other» добавляется к выбранным подписям', async () => {
     render(<Card item={question({ questions: [question().questions[1]!] })} />);
     fireEvent.click(option('Nuts'));

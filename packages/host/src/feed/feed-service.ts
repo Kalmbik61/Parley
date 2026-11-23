@@ -23,6 +23,7 @@
  * редьюсер не идёт — из него читаются только ретраи и прерывания, — поэтому картинок там не ищут.
  */
 
+import { randomUUID } from 'node:crypto';
 import { lstat, open, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
@@ -96,6 +97,7 @@ import type { PendingHooks } from '../hooks/pending.js';
 import type { PtyManager } from '../pty/pty-manager.js';
 import type { WorksService } from '../works/works-service.js';
 import { createRolloutTail } from './codex-source.js';
+import { answerQwenPrompt, recogniseQwenPrompt, type QwenPrompt, type QwenPromptKind } from './qwen-prompt.js';
 import { createQwenTail } from './qwen-source.js';
 import { fetchOpencodeMessages, readOpencodeCache, writeOpencodeCache, type OpencodeAddress } from './opencode-source.js';
 import { createFeedImageStore } from './image-store.js';
@@ -280,7 +282,7 @@ export interface FeedService {
   dropClient(client: Client): void;
   /** Сколько подписок на ленты держит хост: сумма размеров множеств подписчиков по всем сессиям. */
   subscriberCount(): number;
-  decide(ref: SessionRef, cardId: string, decision: FeedDecision): Result<'feed.decide'>;
+  decide(ref: SessionRef, cardId: string, decision: FeedDecision): Result<'feed.decide'> | Promise<Result<'feed.decide'>>;
   /**
    * Режим разрешений, который хост сверил по подвалу терминала (`sessions.setMode`): ставит его в
    * ленту и шлёт дельту подписчикам, не дожидаясь события хука с `permission_mode`.
@@ -412,6 +414,15 @@ interface SessionFeed {
   codex?: CodexFeed;
   /** Qwen Code: state of the feed read from the bound transcript. */
   qwen?: QwenFeed;
+  /** A native OSC wait belongs to this feed and process, including while the user is navigating between questions. */
+  qwenWait?: {
+    kind: QwenPromptKind;
+    pid: number;
+    watch: NodeJS.Timeout;
+    prompt: QwenPrompt | null;
+    answering: boolean;
+  };
+
   /** OpenCode 2.x: state of the feed read from the session's server or cache. */
   opencode?: OpencodeFeed;
   /** Only the live ACP process may resolve these cards. */
@@ -1495,17 +1506,19 @@ export function createFeedService(
         const seeded = feedFromQwenTranscript(records, { limit: maxItems });
         // A turn left open by the transcript is closed only without a live process (a host restart killed it with the host).
         const state = deps.pty.get(feed.ref) === undefined ? closeBrokenTurn(seeded.state) : closedByQwenStop(feed, seeded.state);
-        feed.state = state;
+        // A transcript seed can finish after the native dialog has opened or been answered.
+        const cards = feed.state.items.filter(item => isCard(item) && item.id.startsWith('qwen-dialog:'));
+        feed.state = cards.length ? { ...state, items: [...state.items, ...cards].sort((a, b) => a.at.localeCompare(b.at)) } : state;
         feed.qwen = { tail, cursor: seeded.cursor, queue: Promise.resolve() };
         feed.sizes = new Map();
         feed.bytes = 0;
-        for (const item of state.items) {
+        for (const item of feed.state.items) {
           const size = itemBytes(item);
           feed.sizes.set(item.id, size);
           feed.bytes += size;
         }
         trim(feed, false);
-        setDecisions(feed, 'terminal');
+        setDecisions(feed, cards.some(isPendingCard) ? 'window' : 'terminal');
         if (seeded.cursor.skipped > 0) {
           log.info('qwen feed: unknown transcript records skipped', { sessionId: feed.ref.sessionId, skipped: seeded.cursor.skipped });
         }
@@ -1755,6 +1768,79 @@ export function createFeedService(
     });
     opencode.queue = run.catch(() => {});
     return run;
+  }
+
+  function endQwenWait(feed: SessionFeed, outcome: 'elsewhere' | 'stale'): void {
+    const wait = feed.qwenWait;
+    if (!wait) return;
+    clearInterval(wait.watch);
+    delete feed.qwenWait;
+    if (wait.prompt && feedCurrent(feed)) {
+      settle(feed.ref, outcome, [wait.prompt.card.id]);
+      setDecisions(feed, 'terminal');
+    }
+  }
+
+  const unsubscribeQwenStatus = deps.pty.on('program-status', (ref, status) => {
+    const kind = status.state === 'blocked' ? status.kind : null;
+    if (kind !== 'question' && kind !== 'permission') {
+      const feed = feeds.get(refKey(ref));
+      if (feed) endQwenWait(feed, 'elsewhere');
+      return;
+    }
+    const feed = feedOf(ref, 'qwen');
+    const pid = deps.pty.get(ref)?.pid;
+    if (pid === undefined || feed.provider === undefined || !byFamily(feed.provider, { claude: false, codex: false, qwen: true, opencode: false, neutral: false })) return;
+    if (feed.qwenWait?.pid === pid && feed.qwenWait.kind === kind) return;
+    endQwenWait(feed, 'elsewhere');
+    function refresh(): void {
+      const wait = feed.qwenWait;
+      if (!wait || wait.answering || !feedCurrent(feed) || deps.pty.get(ref)?.pid !== pid) return;
+      const parsed = recogniseQwenPrompt(deps.pty.screenText(ref) ?? [], wait.kind, '', at());
+      // When someone is typing a custom answer in the terminal, leave its editor in their hands.
+      const next = parsed?.card.kind === 'question' && !parsed.review && parsed.rows.at(-1)?.selected ? null : parsed;
+      if (next?.fingerprint === wait.prompt?.fingerprint) return;
+      if (wait.prompt) settle(ref, 'elsewhere', [wait.prompt.card.id]);
+      wait.prompt = next;
+      if (!next) {
+        setDecisions(feed, 'terminal');
+        return;
+      }
+      // The next question may arrive under the same OSC wait. Its card gets its own decision identity.
+      const cardId = 'qwen-dialog:' + randomUUID();
+      next.card = { ...next.card, id: cardId, cardId };
+      commit(feed, { state: { ...feed.state, items: [...feed.state.items, next.card] }, changes: [next.card] });
+      setDecisions(feed, 'window');
+    }
+    const watch = setInterval(refresh, terminalWatchMs);
+    watch.unref();
+    feed.qwenWait = { kind, pid, watch, prompt: null, answering: false };
+    refresh();
+  });
+
+  async function decideQwen(feed: SessionFeed, prompt: QwenPrompt, decision: FeedDecision): Promise<Result<'feed.decide'>> {
+    const wait = feed.qwenWait!;
+    if (wait.answering) return { applied: false, state: 'pending' };
+    const current = () => feedCurrent(feed) && feed.qwenWait === wait && wait.prompt === prompt &&
+      deps.pty.get(feed.ref)?.pid === wait.pid;
+    wait.answering = true;
+    try {
+      const applied = await answerQwenPrompt(prompt, decision, {
+        current,
+        screen: () => deps.pty.screenText(feed.ref),
+        write: keys => deps.pty.write(feed.ref, keys),
+      });
+      if (!applied || !current()) return { applied: false, state: 'pending' };
+      const reviewAnswer = decision.kind === 'question' ? decision.values?.answer : undefined;
+      const recorded = prompt.review && prompt.card.kind === 'question' && decision.kind === 'question' && typeof reviewAnswer === 'string'
+        ? { ...decision, answers: { [prompt.card.questions[0]!.question]: reviewAnswer } } : decision;
+      const result = applyDecision(feed.state, prompt.card.id, recorded, at());
+      commit(feed, result);
+      const next = result.changes.find(isCard);
+      return { applied: result.applied, state: next?.state ?? 'pending' };
+    } finally {
+      wait.answering = false;
+    }
   }
 
   function startCodexPoll(feed: SessionFeed): void {
@@ -2196,6 +2282,7 @@ export function createFeedService(
     feed.timer = undefined;
     clearCodexGrace(feed);
     stopCodexPoll(feed);
+    if (feed.qwenWait) clearInterval(feed.qwenWait.watch);
     dropTerminalState(key);
     pending.settle(feed.ref);
     feed.progressEpoch?.eligible.clear();
@@ -2287,6 +2374,7 @@ export function createFeedService(
     // Новый процесс не ответит на отправку старого: метка дала бы ложные минуты в `feed.firstDelta`.
     sentAt.delete(refKey(ref));
     const previous = feeds.get(refKey(ref));
+    if (previous) endQwenWait(previous, 'stale');
     let previousStartedAt = previous?.observedSource?.startedAtProcess ?? null;
     if (previousStartedAt === null) {
       try { previousStartedAt = sessionOf(ref).startedAtProcess ?? null; } catch { /* Карта ещё не прочитана. */ }
@@ -2322,6 +2410,8 @@ export function createFeedService(
   }
 
   const unsubscribeExit = deps.pty.on('exit', (ref) => {
+    const exiting = feeds.get(refKey(ref));
+    if (exiting) endQwenWait(exiting, 'stale');
     if (stopped) return;
     confirmStart(ref);
     // Ответа вышедшего процесса не будет: метка отправки не должна дожить до чужой пачки.
@@ -2658,6 +2748,8 @@ export function createFeedService(
       }
       const current: FeedCardState = card.state;
       if (current !== 'pending') return { applied: false, state: current };
+      const qwen = feed.qwenWait?.prompt;
+      if (qwen?.card.id === cardId) return decideQwen(feed, qwen, decision);
       const interaction = feed.kimiInteractions?.get(cardId);
       if (interaction !== undefined && options.kimiRespond !== undefined) {
         const answer = interaction.answer(decision);
@@ -2742,6 +2834,7 @@ export function createFeedService(
       progressStarts.clear();
       for (const state of progressClients.values()) state.active?.cancel();
       progressClients.clear();
+      unsubscribeQwenStatus();
       unsubscribeActivity();
       unsubscribeStart();
       unsubscribeExit();
@@ -2754,6 +2847,7 @@ export function createFeedService(
       // До снятия таймеров лент: возврат `decisions` ставит пачку дельты.
       for (const key of new Set([...terminalFinders.keys(), ...terminalConfirms.keys(), ...terminalPrompts.keys(), ...terminalMessages.keys(), ...terminalTyping.keys()])) dropTerminalState(key);
       for (const feed of feeds.values()) {
+        if (feed.qwenWait) clearInterval(feed.qwenWait.watch);
         if (feed.timer !== undefined) clearTimeout(feed.timer);
         feed.timer = undefined;
         clearCodexGrace(feed);

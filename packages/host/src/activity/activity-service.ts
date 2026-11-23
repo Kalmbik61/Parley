@@ -483,6 +483,8 @@ interface QwenProcess {
   authAt: number | null;
   /** The session's Parley MCP server listed its tools through the host. */
   mcpListed: boolean;
+  /** A live native prompt also drives the in-chat terminal panel for unrecognised layouts. */
+  promptNeed?: SessionNeed;
   /** The last report was `state=blocked`. */
   blocked: boolean;
 }
@@ -1451,7 +1453,7 @@ export function createActivityService(
     // событий самого CLI (лимит, вход: ход ими оборван, а не стоит) главнее — они остаются, сторож к ним ничего не
     // добавляет: `blocked` с таким `need` несогласован (`reportedNeed`).
     const held = questionHeldKeys.get(key);
-    const waiting: SessionActivity =
+    let waiting: SessionActivity =
       activity.activity === 'blocked'
         ? activity
         : held !== undefined
@@ -1470,6 +1472,10 @@ export function createActivityService(
                 },
               }
             : activity;
+    const nativeNeed = isQwen(session) ? qwenProcesses.get(key)?.promptNeed : undefined;
+    if (nativeNeed) {
+      waiting = { ...waiting, activity: 'blocked', need: nativeNeed };
+    }
     const need = publishedNeed(key, session, waiting.need, now);
     const published: SessionActivity = need === waiting.need ? waiting : { ...waiting, need };
     const value: SessionLive = { activity: published, metrics };
@@ -2021,6 +2027,15 @@ export function createActivityService(
       current.statusSeen = true;
       if (status.state === 'idle') current.idleSeen = true;
       current.blocked = status.state === 'blocked';
+      if (current.blocked && (status.kind === 'question' || status.kind === 'permission')) {
+        const kind = status.kind === 'permission' ? 'approval' : 'question';
+        current.promptNeed = {
+          kind, since: current.promptNeed?.kind === kind ? current.promptNeed.since : new Date(nowFn()).toISOString(),
+          detail: clampDetail(status.msg), resetsAt: null, window: null, account: null,
+        };
+      } else {
+        delete current.promptNeed;
+      }
       const auth = status.state === 'blocked' && status.kind === 'auth';
       // The picker is left once Qwen reports any other state.
       current.authAt = auth ? (current.authAt ?? nowFn()) : null;
