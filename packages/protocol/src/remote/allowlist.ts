@@ -125,6 +125,7 @@ export const REMOTE_FORBIDDEN: readonly string[] = [
   'wake.*',
   'pty.input',
   'pty.resize',
+  'pty.screenText',
   'works.create',
   'works.delete',
   'works.rename',

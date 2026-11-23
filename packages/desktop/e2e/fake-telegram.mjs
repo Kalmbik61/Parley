@@ -12,7 +12,7 @@ import { clearTimeout, setTimeout } from 'node:timers';
  * Возвращает `{ url, push(update), sent(), requests(), close() }`:
  * - `push(update)` кладёт апдейт в очередь и будит ожидающий `getUpdates`;
  * - `sent()` — журнал `sendMessage`/`editMessageText` (метод, chat_id, text, message_id);
- * - `requests()` — журнал всех вызовов Bot API (метод, тело, момент в мс), по нему проверяют, что опрос прекратился;
+ * - `requests()` — журнал вызовов Bot API (метод, тело, момент в мс и id сообщения из ответа, если есть);
  * - `close()` закрывает сервер и обрывает висящие соединения.
  */
 
@@ -28,7 +28,7 @@ export async function startFakeTelegram() {
   /** Ожидающие `getUpdates`: `wake()` отвечает на них, как только в очереди что-то появилось. */
   /** @type {Set<() => void>} */
   const waiters = new Set();
-  /** @type {Array<{ method: string; body: Record<string, unknown>; at: number }>} */
+  /** @type {Array<{ method: string; body: Record<string, unknown>; at: number; messageId: number | null }>} */
   const log = [];
   /** @type {Set<import('node:net').Socket>} */
   const sockets = new Set();
@@ -61,7 +61,9 @@ export async function startFakeTelegram() {
       } catch {
         // Не JSON (например, multipart с файлом) — тело в журнале останется пустым.
       }
-      log.push({ method, body, at: Date.now() });
+      /** @type {(typeof log)[number]} */
+      const entry = { method, body, at: Date.now(), messageId: null };
+      log.push(entry);
 
       if (method === 'getMe') return reply(res, BOT);
       if (method === 'getUpdates') {
@@ -84,9 +86,10 @@ export async function startFakeTelegram() {
         return;
       }
       if (MESSAGE_METHODS.has(method)) {
-        nextMessageId += 1;
+        const messageId = method === 'sendMessage' ? ++nextMessageId : Number(body.message_id);
+        entry.messageId = messageId;
         return reply(res, {
-          message_id: nextMessageId,
+          message_id: messageId,
           date: Math.floor(Date.now() / 1000),
           chat: { id: Number(body.chat_id ?? 777), type: 'private' },
           from: BOT,
@@ -121,11 +124,11 @@ export async function startFakeTelegram() {
           method: entry.method,
           chatId: Number(entry.body.chat_id ?? 0),
           text: typeof entry.body.text === 'string' ? entry.body.text : '',
-          messageId: entry.body.message_id ?? null,
+          messageId: entry.messageId,
         }));
     },
     requests() {
-      return log.map((entry) => ({ method: entry.method, body: entry.body, at: entry.at }));
+      return log.map((entry) => ({ ...entry }));
     },
     async close() {
       for (const wake of [...waiters]) wake();

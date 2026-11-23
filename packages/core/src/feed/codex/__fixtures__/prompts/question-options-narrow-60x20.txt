@@ -1,0 +1,20 @@
+
+  Question 1/1 (1 unanswered)
+  Which deployment strategy should we use for the staging
+  environment next week?
+
+  › 1. Blue-green deployment             Blue-green
+       (Recommended)                     deployment with a
+                                         gradual traffic
+                                         shift
+    2. Rolling update                    Rolling update
+                                         across all nodes
+    3. Canary release                    Canary release to
+                                         one percent of
+                                         users
+    4. None of the above                 Optionally, add
+                                         details in notes
+
+  option 1/4 | tab to add notes | enter to submit answer
+  esc to interrupt
+

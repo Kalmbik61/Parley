@@ -360,7 +360,9 @@ function List(props: IslandViewProps): JSX.Element {
 
 function Actions({ item, armed, api, onDecide }: { item: IslandRequest; armed: boolean; api: IslandApi; onDecide: IslandViewProps['onDecide'] }): JSX.Element {
   const { card } = item;
-  const open = (): void => api.open(item.inWindow && card !== null ? { kind: 'session', ref: item.ref, cardId: card.cardId } : { kind: 'session', ref: item.ref });
+  // Запись без карточки, которую хост показывает панелью вопроса терминала (`inWindow`), ведёт в Chat явно: уже открытая
+  // вкладка в виде Terminal иначе осталась бы в нём. Без метода хоста — как раньше, вид вкладки не трогаем.
+  const open = (): void => api.open(item.inWindow && card !== null ? { kind: 'session', ref: item.ref, cardId: card.cardId } : item.inWindow ? { kind: 'session', ref: item.ref, view: 'chat' } : { kind: 'session', ref: item.ref });
   // Решение выключено, пока оно уходит, и первые `CARD_ARM_MS` после показа запроса.
   const disabled = item.deciding || !armed;
   const openButton = (

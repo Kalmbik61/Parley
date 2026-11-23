@@ -1,0 +1,24 @@
+
+  >_ OpenAI Codex (v0.166.0)
+     /work/project
+
+⚠ Heads up, you have less than 25% of your weekly limit left. Run /status for a
+  breakdown.
+
+
+› Call your request_user_input tool once, asking me which color I prefer, with
+  three options: red, green, blue. Do nothing else.
+
+
+• request_user_input is only available in Plan mode.
+
+  Worked for 5s • 17:14
+
+
+
+                                             ⚠ weekly limit: 22% left · /status
+
+› Ask Codex to do anything
+
+  GPT-6.2-Sol default · /work/project…
+  ? for shortcuts                                      ⚠ 1 warning · f2 to view

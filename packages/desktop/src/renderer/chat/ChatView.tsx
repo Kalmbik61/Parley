@@ -66,6 +66,7 @@
 import { useCallback, useEffect, useMemo, useState, type DragEvent } from 'react';
 import { toast } from 'sonner';
 import type { FeedItem } from '@parley/core';
+import { needReason } from '@parley/core/stuck';
 import { HOST_ERROR_REASONS, refKey, type ModelOption, type PendingLetter, type SessionRef } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
@@ -123,6 +124,7 @@ import { useChatUiStore, type Queued } from './ui-store.js';
 import { useFeed } from './use-feed.js';
 import { SwitchBanner, switchBannerKind } from './SwitchBanner.js';
 import { WaitingBanner } from './WaitingBanner.js';
+import { TerminalPromptPanel } from './TerminalPromptPanel.js';
 
 export interface ChatViewProps {
   workKey: string;
@@ -226,7 +228,11 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
   );
   const sessionName = session === undefined ? null : sessionRowLabel(session.id, session.label);
   const waiting = blocked && !hasPendingCard(items);
-  const showBanner = useHeldFor(waiting, BANNER_DELAY_MS);
+  // Панель вопроса терминала: когда хост умеет читать экран; вопрос старта (доверие папке, вход) её тоже показывает.
+  const canReadScreen = useHostSupports('pty.screenText');
+  const need = useActivityStore((state) => activityFor(state.byRef, sessionRef)?.activity.need ?? null);
+  const startupWait = canReadScreen && need?.kind === 'startup' && !hasPendingCard(items);
+  const showBanner = useHeldFor(waiting || startupWait, BANNER_DELAY_MS);
   const canSwitch = useHostSupports('sessions.switchAgent');
   const providerMissing = useProviderMissing(provider);
   const providerList = useProvidersStore((state) => state.providers);
@@ -242,6 +248,8 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
   const [modeBusy, setModeBusy] = useState(false);
   const [choiceBusy, setChoiceBusy] = useState(false);
   const providerInfo = useProvidersStore((state) => state.providers.find((item) => item.id === provider));
+  // Текст ожидания без известной нужды: у Qwen и OpenCode свой (одобрения идут в терминале), у прочих общий.
+  const waitingText = providerInfo?.family === 'qwen' ? S.chat.waitingBanner.qwenApproval : providerInfo?.family === 'opencode' ? S.chat.waitingBanner.opencodeApproval : S.chat.waitingBanner.text;
   const models = providerInfo?.models ?? NO_MODELS;
   // Уровни модели из карты — тот же список, по которому хост проверит выбор; модели в карте нет — уровни «Default».
   const efforts = effortChoices(providerInfo, storedModel);
@@ -290,7 +298,6 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
   );
   // Письма, которые сессия ещё не забрала, — серыми за очередью окна. Причина та же, что в строке доставки комнаты, а пока
   // сжатие ждёт или идёт — сжатие: будильник тогда пишет просто `busy`.
-  const need = useActivityStore((state) => activityFor(state.byRef, sessionRef)?.activity.need ?? null);
   const letters = useMemo(() => {
     const pending = metrics?.pendingLetters ?? NO_PENDING;
     if (pending.length === 0) return NO_LETTERS;
@@ -586,7 +593,18 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
         </ImagePreviewHost>
         {showCard ? <NotRunningCard sessionRef={sessionRef} onResume={() => resumeSession(bridge, sessionRef)} /> : null}
         {switchKind !== null && session !== undefined ? <SwitchBanner session={session} kind={switchKind} sessionRef={sessionRef} label={providerLabel} /> : null}
-        {showBanner ? <WaitingBanner workKey={workKey} tabId={tab.id} {...(providerInfo?.family === 'qwen' ? { text: S.chat.waitingBanner.qwenApproval } : providerInfo?.family === 'opencode' ? { text: S.chat.waitingBanner.opencodeApproval } : {})} /> : null}
+        {showBanner && canReadScreen ? (
+          <TerminalPromptPanel
+            workKey={workKey}
+            tabId={tab.id}
+            sessionRef={sessionRef}
+            bridge={bridge}
+            title={need === null ? waitingText : needReason(need, new Date(), providerName(provider, providerInfo?.label ?? ''))}
+            active={visible}
+          />
+        ) : showBanner ? (
+          <WaitingBanner workKey={workKey} tabId={tab.id} {...(providerInfo?.family === 'qwen' || providerInfo?.family === 'opencode' ? { text: waitingText } : {})} />
+        ) : null}
         {trustCard === undefined ? null : <WaitingForTrust cardId={trustCard.id} testId="chat-waiting-for-trust" className="mx-3 mb-2" />}
         {showHooksHint ? (
           <div data-testid="codex-hooks-hint" className="mx-3 mb-2 flex min-w-0 items-center gap-2 rounded-lg bg-foreground/5 px-3 py-2 text-xs">

@@ -65,6 +65,9 @@ export function cardDetail(card: FeedCard, max = 1500): string | null {
   }
   const command = commandOf(card.toolInput);
   if (command !== null) return clip(command, max);
+  // Правка Codex из терминала (`apply_patch`): в карточке только путь файла — он и есть суть для решения.
+  const patchPath = card.toolInput.path;
+  if (card.toolName === 'apply_patch' && typeof patchPath === 'string') return clip(patchPath, max);
   const { old_string: before, new_string: after, content, edits, new_source: source } = card.toolInput;
   if (typeof before === 'string' && typeof after === 'string') return clip(`${before}\n→\n${after}`, max);
   if (typeof content === 'string') return clip(content, max);

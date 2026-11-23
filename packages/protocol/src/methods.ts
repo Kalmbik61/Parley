@@ -377,6 +377,8 @@ export const METHODS = {
   // байтов не видит, поэтому здесь только «не пусто».
   // `requestedAt` — как у `rooms.send`: метка нажатия Send для `queueMs` в журнале хоста.
   'pty.send': z.object({ ref: sessionRef, text: z.string().min(1), submit: z.boolean(), requestedAt: z.number().optional() }),
+  // Видимый экран терминала сессии (панель вопроса в Chat): без `rows` — весь экран, с `rows` — нижние строки; сессии нет — пустой список.
+  'pty.screenText': z.strictObject({ ref: sessionRef, rows: z.number().int().min(1).max(200).optional() }),
   // Отдельная ограниченная проекция острова: никаких renderer path/agentId/limit.
   'feed.progress': z.strictObject({ ref: sessionRef }),
   // Лента вида «Chat» (план 2026-10-01, Task 2, решение 14). `agentId` — лента субагента из его
@@ -653,6 +655,7 @@ export interface Results extends KimiMethodResults, AssistantMethodResults, Voic
   'changes.commitProject': { commit: string };
   'mail.markRead': { marked: number };
   'pty.send': SendResult;
+  'pty.screenText': { lines: string[] };
   'feed.progress': ProgressResult;
   /**
    * `schemaVersion` — `FEED_SCHEMA_VERSION` хоста; дальше дельты `feed.changed` по `revision`.

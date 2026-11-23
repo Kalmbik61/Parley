@@ -166,6 +166,8 @@ interface FeedCardBase extends FeedItemBase {
   agentId?: string;
   /** Когда карточка перестала ждать. */
   settledAt?: string;
+  /** Карточка заведена по экрану терминала (вопрос Codex), а не по хуку: решение хост вводит клавишей. У карточек хука поля нет. */
+  via?: 'terminal';
 }
 
 /** Запрос разрешения (`PermissionRequest`). */

@@ -8,7 +8,7 @@ import {
 } from './navigation.js';
 
 const ref: SessionRef = { projectPath: '/project', workId: 'work', sessionId: 'session' };
-const feed = (key: string, card: IslandRequest['card'] = null): IslandRequest => ({ key, ref, card, summary: 'pending', inWindow: true,
+const feed = (key: string, card: IslandRequest['card'] = null, inWindow = true): IslandRequest => ({ key, ref, card, summary: 'pending', inWindow,
   since: 0, deciding: false, note: null });
 const room = (roomId: string, proposalKey = roomId): PendingNavigationItem => pendingRoomNavigation([{
   kind: 'room', key: roomId, projectPath: '/project', workId: 'work', roomId, done: false, proposal: { key: proposalKey },
@@ -56,11 +56,12 @@ describe('pending navigation queue', () => {
   it('gives only feed and room entries targets; a consent without work/session identity has no target', () => {
     const question = { kind: 'question', cardId: 'q-1' } as IslandRequest['card'];
     const queue = pendingNavigation([{ id: 'c-1', requestedBy: { source: 'launch' } }],
-      [feed('f-question', question), feed('f-terminal')], [room('r-1')]);
+      [feed('f-question', question), feed('f-terminal', null, false), feed('f-chat')], [room('r-1')]);
     expect(queue.items[0]?.target).toBeUndefined();
     expect(queue.items[1]?.target).toEqual({ kind: 'session', ref, cardId: 'q-1' });
     expect(queue.items[2]?.target).toEqual({ kind: 'session', ref, view: 'terminal' });
-    expect(queue.items[3]?.target).toEqual({ kind: 'room', projectPath: '/project', workId: 'work', roomId: 'r-1' });
+    expect(queue.items[3]?.target).toEqual({ kind: 'session', ref, view: 'chat' });
+    expect(queue.items[4]?.target).toEqual({ kind: 'room', projectPath: '/project', workId: 'work', roomId: 'r-1' });
   });
 
   it('ignores editable fields, IME and repeated keydown while preserving native Enter/Space activation', () => {
