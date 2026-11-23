@@ -50,6 +50,8 @@ function renderRow(
     draggable?: boolean;
     selected?: boolean;
     onOpen?: () => void;
+    /** Слот цвета значка ветки (`sessionBranchColor`). */
+    branchColor?: number | null;
     /** Чего ждёт сессия от человека (в записи активности); нужна и `activity`. */
     need?: SessionNeed;
   } = {},
@@ -78,6 +80,7 @@ function renderRow(
       draggable={options.draggable ?? true}
       selected={options.selected ?? false}
       onOpen={options.onOpen ?? (() => {})}
+      {...(options.branchColor === undefined ? {} : { branchColor: options.branchColor })}
     />,
   );
 }
@@ -144,15 +147,33 @@ describe('SessionRow — девять состояний таблицы 4.2 (т�
     expect(row().hasAttribute('data-dimmed')).toBe(false);
   });
 
-  it('GitBranch 11px только у сессии со своим worktree, тултип «Own worktree · ветка»', () => {
+  it('GitBranch 11px только у сессии со своим worktree, тултип «Own worktree · ветка ← база»', () => {
     renderRow(makeSession('s-01', 'a'));
     expect(row().querySelector('[data-worktree]')).toBeNull();
     cleanup();
     renderRow(makeSession('s-01', 'a', { worktree: { path: '/tmp/wt', branch: 'harnas/s-01', base: 'main', createdAt: null } }));
     const branch = row().querySelector('[data-worktree]');
-    expect(branch?.getAttribute('title')).toBe('Own worktree · harnas/s-01');
+    expect(branch?.getAttribute('title')).toBe('Own worktree · harnas/s-01 ← main');
     expect(branch?.querySelector('svg.lucide-git-branch')?.classList.contains('size-[11px]')).toBe(true);
     expect(row().textContent).not.toContain('⎇');
+  });
+
+  it('цвет значка ветки: слот 2 — класс text-branch-3 и data-branch-color="3"; без пропса — вторичный цвет и без атрибута', () => {
+    const worktree = { path: '/tmp/wt', branch: 'harnas/s-01', base: 'main', createdAt: null };
+    renderRow(makeSession('s-01', 'a', { worktree }), { branchColor: 2 });
+    const colored = row().querySelector('[data-worktree]');
+    expect(colored?.className).toContain('text-branch-3');
+    expect(colored?.className).not.toContain('text-work-sidebar-muted-foreground');
+    expect(colored?.getAttribute('data-branch-color')).toBe('3');
+    cleanup();
+    renderRow(makeSession('s-01', 'a', { worktree }));
+    const plain = row().querySelector('[data-worktree]');
+    expect(plain?.hasAttribute('data-branch-color')).toBe(false);
+    expect(plain?.className).toContain('text-work-sidebar-muted-foreground');
+    expect(plain?.className).not.toContain('text-branch-');
+    cleanup();
+    renderRow(makeSession('s-01', 'a', { worktree }), { branchColor: null });
+    expect(row().querySelector('[data-worktree]')?.hasAttribute('data-branch-color')).toBe(false);
   });
 
   it('подкраска: needs-you — accent-200 (слово accent-800), unseen — accent-2-200 (слово accent-2-800), у работающей — нет; на строке data-session-id', () => {

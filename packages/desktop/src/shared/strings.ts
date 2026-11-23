@@ -603,7 +603,7 @@ export const S = {
     /** Тултип `#N` карточки: комнаты с непрочитанным сообщением. */
     roomsWithUnread: (n: number): string => (n === 1 ? '1 room with unread messages' : `${n} rooms with unread messages`),
     /** Тултип значка ветки в строке сессии со своим worktree; ветка — данные, идёт как есть. */
-    ownWorktree: (branch: string): string => `Own worktree · ${branch}`,
+    ownWorktree: (branch: string, base: string): string => `Own worktree · ${branch} ← ${base}`,
     trustWaitTooltip: 'Not responding since launch — may be waiting for folder trust',
     /** Тултип ⚠ строки сессии Codex, что за срок после запуска не показала статус: вход или доверие к папке — за человеком. */
     startupWaitTooltip: 'Waiting at startup — Codex may need sign-in or folder trust in its terminal',
@@ -2033,6 +2033,11 @@ export const S = {
     /** Сегмент тулбара вкладки «Chat | Terminal». */
     segment: { chat: 'Chat', terminal: 'Terminal' },
     viewLabel: 'Session view',
+    /** Тултип чипа ветки в шапке вкладки сессии; у worktree — `S.sidebar.ownWorktree`. */
+    branch: {
+      projectFolder: (branch: string): string => `Project folder · ${branch}`,
+      clone: (branch: string): string => `Own clone · ${branch}`,
+    },
     /** Подсказка выключенного сегмента: Codex, `claude` ниже порога версии ленты или версия неизвестна. */
     versionUnknown: 'Chat is unavailable because the CLI version could not be verified. Refresh providers to retry.',
     hostFeedUnsupported: 'This Parley host does not support Chat for this provider. Update Parley to enable it.',
