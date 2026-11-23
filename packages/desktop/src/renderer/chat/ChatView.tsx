@@ -607,6 +607,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
           codex={codex}
           qwen={providerInfo?.family === 'qwen'}
           opencode={providerInfo?.family === 'opencode'}
+          kimi={kimi}
           onPickFiles={pickFiles}
           onPasteImage={pasteImage}
           dictationId={`chat:${sessionKey}`}

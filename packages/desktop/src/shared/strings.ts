@@ -2249,6 +2249,8 @@ export const S = {
       qwenPlaceholder: 'Message Qwen Code — Enter to send',
       opencodeLabel: 'Message to OpenCode',
       opencodePlaceholder: 'Message OpenCode — Enter to send',
+      kimiLabel: 'Message to Kimi Code',
+      kimiPlaceholder: 'Message Kimi Code — Enter to send',
       send: 'Send',
       queue: 'Queue',
       attach: 'Attach a file',
