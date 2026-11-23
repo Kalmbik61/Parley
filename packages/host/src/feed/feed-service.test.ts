@@ -535,7 +535,7 @@ describe('feed.progress source, quota and lifecycle', () => {
     expect(ofKind((await service.snapshot(REF)).items, 'tool')).toHaveLength(1);
   });
 
-  it.each(['provider', 'providerSessionId', 'startedAtProcess'] as const)('invalidates existing state on %s change without resetting Chat', async (field) => {
+  it.each(['provider', 'providerSessionId', 'startedAtProcess'] as const)('invalidates progress on %s change; only provider takeover replaces Chat', async (field) => {
     const stamp = provenance();
     start();
     send(pre('old', 'Read', {}));
@@ -544,11 +544,11 @@ describe('feed.progress source, quota and lifecycle', () => {
     const previous = { ...stamp };
     stamp[field] = field === 'provider' ? 'codex' : 'SECRET-new';
     fakes.setSessions([{ ref: REF }]);
-    expect(await service.progress(REF, fakeClient())).toMatchObject({ availability: 'unavailable', recent: [], revision: before.revision });
+    expect(await service.progress(REF, fakeClient())).toMatchObject({ availability: 'unavailable', recent: [], revision: before.revision + (field === 'provider' ? 1 : 0) });
     Object.assign(stamp, previous);
     fakes.setSessions([{ ref: REF }]);
     expect(await service.progress(REF, fakeClient())).toMatchObject({ availability: 'unavailable', recent: [] });
-    expect(ofKind((await service.snapshot(REF)).items, 'tool')).toHaveLength(1);
+    expect(ofKind((await service.snapshot(REF)).items, 'tool')).toHaveLength(field === 'provider' ? 0 : 1);
   });
 
   it('invalidates a restart event even before the work map publishes a new process stamp', async () => {
