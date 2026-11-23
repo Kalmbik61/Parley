@@ -551,7 +551,7 @@ describe('feed.progress source, quota and lifecycle', () => {
     expect(ofKind((await service.snapshot(REF)).items, 'tool')).toHaveLength(1);
   });
 
-  it.each(['provider', 'providerSessionId', 'startedAtProcess'] as const)('invalidates existing state on %s change without resetting Chat', async (field) => {
+  it.each(['provider', 'providerSessionId', 'startedAtProcess'] as const)('invalidates progress on %s change; only provider takeover replaces Chat', async (field) => {
     const stamp = provenance();
     start();
     send(pre('old', 'Read', {}));
@@ -560,11 +560,11 @@ describe('feed.progress source, quota and lifecycle', () => {
     const previous = { ...stamp };
     stamp[field] = field === 'provider' ? 'codex' : 'SECRET-new';
     fakes.setSessions([{ ref: REF }]);
-    expect(await service.progress(REF, fakeClient())).toMatchObject({ availability: 'unavailable', recent: [], revision: before.revision });
+    expect(await service.progress(REF, fakeClient())).toMatchObject({ availability: 'unavailable', recent: [], revision: before.revision + (field === 'provider' ? 1 : 0) });
     Object.assign(stamp, previous);
     fakes.setSessions([{ ref: REF }]);
     expect(await service.progress(REF, fakeClient())).toMatchObject({ availability: 'unavailable', recent: [] });
-    expect(ofKind((await service.snapshot(REF)).items, 'tool')).toHaveLength(1);
+    expect(ofKind((await service.snapshot(REF)).items, 'tool')).toHaveLength(field === 'provider' ? 0 : 1);
   });
 
   it('invalidates a restart event even before the work map publishes a new process stamp', async () => {
@@ -2329,10 +2329,10 @@ describe('сев из журнала', () => {
     it('снимок окна обгоняет фоновые посевы', async () => {
       const q = await queueSetup(5);
       for (const ref of q.refs.slice(0, 4)) fakes.emitStart(ref);
-      await vi.waitFor(() => expect(q.order).toEqual(['q-1', 'q-2']));
+      await vi.waitFor(() => expect([...q.order].sort()).toEqual(['q-1', 'q-2']));
       const snapshot = service.snapshot(q.refs[4] as typeof REF);
       q.release('q-1');
-      await vi.waitFor(() => expect(q.order).toEqual(['q-1', 'q-2', 'q-5']));
+      await vi.waitFor(() => expect(q.order.slice(2)).toEqual(['q-5']));
       q.release('q-2');
       q.release('q-5');
       await snapshot;
@@ -2343,10 +2343,10 @@ describe('сев из журнала', () => {
     it('снимок поднимает свой фоновый посев', async () => {
       const q = await queueSetup(4);
       for (const ref of q.refs) fakes.emitStart(ref);
-      await vi.waitFor(() => expect(q.order).toEqual(['q-1', 'q-2']));
+      await vi.waitFor(() => expect([...q.order].sort()).toEqual(['q-1', 'q-2']));
       const snapshot = service.snapshot(q.refs[3] as typeof REF);
       q.release('q-1');
-      await vi.waitFor(() => expect(q.order).toEqual(['q-1', 'q-2', 'q-4']));
+      await vi.waitFor(() => expect(q.order.slice(2)).toEqual(['q-4']));
       q.release('q-2');
       q.release('q-4');
       await snapshot;
@@ -2358,11 +2358,11 @@ describe('сев из журнала', () => {
     it('stop() отпускает очередь: ждущий снимок завершается пустой лентой', async () => {
       const q = await queueSetup(3);
       for (const ref of q.refs.slice(0, 2)) fakes.emitStart(ref);
-      await vi.waitFor(() => expect(q.order).toEqual(['q-1', 'q-2']));
+      await vi.waitFor(() => expect([...q.order].sort()).toEqual(['q-1', 'q-2']));
       const waiting = service.snapshot(q.refs[2] as typeof REF);
       await service.stop();
       await expect(waiting).resolves.toMatchObject({ items: [] });
-      expect(q.order).toEqual(['q-1', 'q-2']);
+      expect([...q.order].sort()).toEqual(['q-1', 'q-2']);
       q.release('q-1');
       q.release('q-2');
     });

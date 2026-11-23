@@ -382,6 +382,10 @@ interface ProgressClient {
 
 interface SessionFeed {
   ref: SessionRef;
+  /** Provider owning this source; process starts and same-provider resumes do not replace it. */
+  provider: string | undefined;
+  /** Native output may arrive before the works cache publishes a newly created session. */
+  awaitingRegistration: boolean;
   state: FeedState;
   revision: number;
   /** Байты JSON каждого элемента кольца и их сумма. */
@@ -545,7 +549,7 @@ export function createFeedService(
 
   const feeds = new Map<string, SessionFeed>();
   // Это lock underlying cold seed, не кэш ответа. Removal/timeout не освобождают незавершённый I/O.
-  const coldReads = new Map<string, Promise<void>>();
+  const coldReads = new Map<string, { provider: string; run: Promise<void> }>();
   // Очередь посевов: не больше `FEED_SEED_CONCURRENCY` разом; впереди — посев для окна (`foreground`), затем по порядку.
   type SeedWaiter = { key: string; foreground: boolean; start: () => void };
   const seedWaiters: SeedWaiter[] = [];
@@ -641,14 +645,25 @@ export function createFeedService(
 
   const at = (): string => new Date(now()).toISOString();
 
-  function feedOf(ref: SessionRef): SessionFeed {
+  function feedOf(ref: SessionRef, nativeProvider?: string): SessionFeed {
     const key = refKey(ref);
     let feed = feeds.get(key);
+    let provider: string | undefined;
+    try { provider = sessionOf(ref).provider; } catch { /* A late hook can outlive the session. */ }
+    const owner = provider ?? nativeProvider ?? feed?.provider;
+    const previous = feed !== undefined && feed.provider !== owner ? feed : undefined;
+    if (previous !== undefined) {
+      invalidateProgress(previous);
+      dropFeed(key);
+      feed = undefined;
+    }
     if (feed === undefined) {
       feed = {
         ref: { ...ref },
+        provider: owner,
+        awaitingRegistration: provider === undefined,
         state: emptyFeedState(),
-        revision: 0,
+        revision: previous?.revision ?? 0,
         sizes: new Map(),
         bytes: 0,
         batch: { upsert: new Map(), removed: new Set() },
@@ -660,13 +675,26 @@ export function createFeedService(
         usedAt: now(),
         observedSource: sourceOf(ref),
         progressEpoch: null,
-        sourceGeneration: progressStarts.has(key) ? 1 : 0,
+        sourceGeneration: previous?.sourceGeneration ?? (progressStarts.has(key) ? 1 : 0),
         transcriptPath: null,
         decisions: null,
       };
       feeds.set(key, feed);
+      if (previous !== undefined) {
+        // Remove before seeding: clients upsert in place, then remove. One combined delta would delete colliding ids
+        // (or leave their previous positions), so the replacement transcript needs its own following revision.
+        for (const id of previous.batch.removed) feed.batch.removed.add(id);
+        for (const item of previous.state.items) feed.batch.removed.add(item.id);
+        feed.modeChanged = previous.state.permissionMode !== null;
+        flush(feed);
+      }
     }
+    if (provider !== undefined) feed.awaitingRegistration = false;
+    if (!stopped && (subscribers.get(key)?.size ?? 0) > 0 && provider !== undefined &&
+        byFamily(provider, { claude: false, codex: true, qwen: true, opencode: true, neutral: false })) startCodexPoll(feed);
     feed.usedAt = now();
+    // Whichever caller first observes takeover must publish the new history, even ahead of works.onChange.
+    if (previous !== undefined) void seedAside(ref);
     return feed;
   }
 
@@ -1288,7 +1316,10 @@ export function createFeedService(
     const key = refKey(feed.ref);
     if (foreground) promoteSeed(key);
     const existing = coldReads.get(key);
-    if (existing !== undefined) return existing;
+    if (existing !== undefined) return existing.run.then(() => {
+      // The old source still owns the cold-read slot, but may no longer own this SessionRef.
+      if (existing.provider !== provider && feedCurrent(feed) && !feed.live && !feed.seeded) return seed(feed, provider, foreground);
+    });
     const run = byFamily(provider, {
       claude: () => seedClaude(feed, provider, foreground),
       codex: () => seedCodex(feed, foreground),
@@ -1298,9 +1329,9 @@ export function createFeedService(
     })();
     if (feed.seeding === undefined) return run;
     const held = run.finally(() => {
-      if (coldReads.get(key) === held) coldReads.delete(key);
+      if (coldReads.get(key)?.run === held) coldReads.delete(key);
     });
-    coldReads.set(key, held);
+    coldReads.set(key, { provider, run: held });
     return held;
   }
 
@@ -1869,7 +1900,14 @@ export function createFeedService(
   }
 
   function feedCurrent(feed: SessionFeed): boolean {
-    return !stopped && feeds.get(refKey(feed.ref)) === feed;
+    if (stopped || feeds.get(refKey(feed.ref)) !== feed) return false;
+    try {
+      const current = sessionOf(feed.ref).provider;
+      feed.awaitingRegistration = false;
+      return current === feed.provider;
+    } catch {
+      return feed.awaitingRegistration;
+    }
   }
 
   function invalidateProgress(feed: SessionFeed): void {
@@ -2019,7 +2057,7 @@ export function createFeedService(
     if (feed.live || feed.seeded || feed.seeding !== undefined) return;
     const before = feed.state;
     await seed(feed, provider);
-    if (stopped || feed.live || feed.state === before) return;
+    if (!feedCurrent(feed) || feed.live || feed.state === before) return;
     const clients = subscribers.get(refKey(feed.ref));
     if (clients === undefined || clients.size === 0) return;
     for (const item of feed.state.items) feed.batch.upsert.set(item.id, item);
@@ -2228,7 +2266,8 @@ export function createFeedService(
     }
     for (const start of progressStarts.values()) confirmStart(start.ref);
     for (const feed of Array.from(feeds.values())) evictIfIdle(feed);
-    for (const feed of feeds.values()) {
+    for (const previous of Array.from(feeds.values())) {
+      const feed = previous.provider === sessionOf(previous.ref).provider ? previous : feedOf(previous.ref);
       const stamp = observeSource(feed);
       if (feed.codex !== undefined) {
         codexBindingCurrent(feed, stamp);
@@ -2389,7 +2428,8 @@ export function createFeedService(
     },
     kimiOutput(ref, event) {
       if (stopped) return;
-      const feed = feedOf(ref);
+      const feed = feedOf(ref, 'kimi');
+      if (feed.provider !== 'kimi') return;
       feed.live = true;
       const time = at();
       if (event.kind === 'end' && event.error === undefined) {
@@ -2403,8 +2443,8 @@ export function createFeedService(
     },
     kimiRequests(ref, requests) {
       if (stopped || options.kimiRespond === undefined) return;
-      const feed = requests.length === 0 ? feeds.get(refKey(ref)) : feedOf(ref);
-      if (feed === undefined || !feedCurrent(feed)) return;
+      const feed = requests.length === 0 ? feeds.get(refKey(ref)) : feedOf(ref, 'kimi');
+      if (feed?.provider !== 'kimi' || !feedCurrent(feed)) return;
       feed.live = true;
       setDecisions(feed, 'window');
       const live = (feed.kimiInteractions ??= new Map());
@@ -2513,7 +2553,7 @@ export function createFeedService(
       }
     },
 
-    async snapshot(ref, agentId, scope, client) {
+    snapshot: async function readSnapshot(ref, agentId, scope, client) {
       const startedAt = performance.now();
       const session = sessionOf(ref);
       if (agentId !== undefined) {
@@ -2539,6 +2579,8 @@ export function createFeedService(
         // OpenCode has no hooks: a snapshot of a seeded feed first takes what the server has by now.
         await pollOpencode(feed);
       }
+      // A provider takeover can replace the source while this snapshot is awaiting the previous cold read.
+      if (!stopped && !feedCurrent(feed)) return readSnapshot(ref, agentId, scope, client);
       // Накопленная пачка уходит до снимка: следующая дельта подписчику — ровно `revision + 1`.
       flush(feed);
       const snapshot: FeedSnapshot = {
