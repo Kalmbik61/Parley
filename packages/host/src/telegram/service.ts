@@ -652,7 +652,7 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
     }
     let result: Result<'feed.decide'>;
     try {
-      result = deps.feed.decide(record.ref, record.cardId, final);
+      result = await deps.feed.decide(record.ref, record.cardId, final);
     } catch (error) {
       if (error instanceof HostError && error.code === 'not_found') {
         closeCard(shortId, T.expired);

@@ -95,7 +95,12 @@ export function QuestionCard({ item }: { item: FeedQuestionCard }): JSX.Element 
       decide({ kind: 'question', answers: {}, values });
       return;
     }
-    decide({ kind: 'question', answers: Object.fromEntries(item.questions.map((entry, at) => [entry.question, answerOf(entry, at, draft)])) });
+    const answers = Object.fromEntries(item.questions.map((entry, at) => [entry.question, answerOf(entry, at, draft)]));
+    // Native multi-select uses each choice separately. Labels and the custom answer may themselves contain commas.
+    const values = item.id.startsWith('qwen-dialog:') && question.multiSelect
+      ? { choices: [...picked], other: otherOn ? (draft.otherText[step] ?? '').trim() : '' }
+      : undefined;
+    decide({ kind: 'question', answers, ...(values ? { values } : {}) });
   };
   const kind = question.multiSelect ? 'checkbox' : 'radio';
 

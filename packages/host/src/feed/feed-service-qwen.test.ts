@@ -44,6 +44,55 @@ describe('feed of a Qwen Code session', () => {
     expect(snapshot.decisions).toBe('terminal');
   });
 
+  const permission = [
+    '? WriteFile Writing to a.txt ←', '  Apply this change?', '  › 1. Yes, allow once',
+    '    2. No, suggest changes (esc)', ' Waiting for user confirmation...',
+  ];
+  const blocked = { state: 'blocked', kind: 'permission', msg: null };
+
+  it('keeps a live permission through a cold snapshot and accepts one explicit decision', async () => {
+    fakes.setScreen(permission);
+    fakes.emitStatus(REF, blocked);
+    const card = (await service.snapshot(REF)).items.find(item => item.kind === 'permission')!;
+    expect(card).toMatchObject({ state: 'pending', permissionOptions: [{ kind: 'allow_once' }, { kind: 'reject_once' }] });
+    const allow = { kind: 'permission', behavior: 'allow', optionId: '1' } as const;
+    expect(await service.decide(REF, card.id, { ...allow, optionId: '2' })).toMatchObject({ applied: false });
+    expect(await service.decide(REF, card.id, allow)).toMatchObject({ applied: true });
+    expect(await service.decide(REF, card.id, allow)).toMatchObject({ applied: false });
+    expect(fakes.writes).toEqual(['1']);
+  });
+
+  it('rejects a late click after a screen or process change and retires the card on exit', async () => {
+    await service.snapshot(REF);
+    fakes.setScreen(permission);
+    fakes.emitStatus(REF, blocked);
+    const card = (await service.snapshot(REF)).items.find(item => item.kind === 'permission')!;
+    const deny = { kind: 'permission', behavior: 'deny', optionId: '2' } as const;
+    fakes.setScreen(permission.map(line => line.replace('a.txt', 'b.txt')));
+    expect(await service.decide(REF, card.id, deny)).toMatchObject({ applied: false });
+    fakes.setScreen(permission);
+    fakes.setProcess({ pid: 9 });
+    expect(await service.decide(REF, card.id, deny)).toMatchObject({ applied: false });
+    fakes.emitExit(REF);
+    expect(await service.decide(REF, card.id, deny)).toMatchObject({ applied: false, state: 'stale' });
+    expect(fakes.writes).toEqual([]);
+  });
+
+  it('requires both a native wait and a complete matching menu, and follows a terminal answer', async () => {
+    fakes.setScreen(permission);
+    expect((await service.snapshot(REF)).items.some(item => item.kind === 'permission')).toBe(false);
+    fakes.setScreen(permission.slice(1));
+    fakes.emitStatus(REF, blocked);
+    expect((await service.snapshot(REF)).decisions).toBe('terminal');
+    fakes.emitStatus(REF, { state: 'idle', kind: null, msg: null });
+    fakes.setScreen(permission);
+    fakes.emitStatus(REF, blocked);
+    const card = (await service.snapshot(REF)).items.find(item => item.kind === 'permission')!;
+    fakes.emitStatus(REF, { state: 'working', kind: null, msg: null });
+    expect((await service.snapshot(REF)).items.find(i => i.id === card.id)).toMatchObject({ state: 'elsewhere' });
+    expect(fakes.writes).toEqual([]);
+  });
+
   it('an appended transcript record reaches subscribers after a hook prompts the read', async () => {
     const client = fakeClient();
     service.subscribe(REF, client);

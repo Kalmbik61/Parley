@@ -133,6 +133,16 @@ describe('qwen readiness', () => {
     expect(a.get(ref)?.activity.need).toBeNull();
   });
 
+  it.each([['permission', 'approval'], ['question', 'question']])('publishes the native %s wait for the Chat terminal panel', async (kind, need) => {
+    const { ref, a } = await started();
+    a.mcpListed(ref, a.processGeneration(ref));
+    a.qwenStatus(ref, IDLE);
+    a.qwenStatus(ref, { state: 'blocked', kind, msg: null });
+    expect(a.get(ref)?.activity).toMatchObject({ activity: 'blocked', need: { kind: need } });
+    a.qwenStatus(ref, IDLE);
+    expect(a.get(ref)?.activity.need).toBeNull();
+  });
+
   it('MCP listed before idle: ready on idle', async () => {
     const { ref, a } = await started();
     a.mcpListed(ref, a.processGeneration(ref));

@@ -4,7 +4,7 @@
  * at a ready prompt and `state=blocked:kind=auth` under the "Connect a Provider" picker; the CLI also writes `working`,
  * `blocked` with `kind=permission|question`, `error` and `clear`.
  *
- * Only readiness and the startup screens are read from it: the turn state, Chat and the journal stay with the hooks.
+ * Reports drive readiness and native prompt detection. The transcript supplies conversation history.
  * The stream is parsed by the host, which owns the pty, with the same chunk-safe OSC reader as Codex.
  */
 
