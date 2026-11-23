@@ -31,6 +31,7 @@ import {
   applyHookEvent,
   applyCodexHookEvent,
   applyCodexRecords,
+  applyCodexTerminalPrompt,
   applyOpencodeMessages,
   applyQwenRecords,
   feedFromOpencodeMessages,
@@ -38,6 +39,7 @@ import {
   claudeProjectRoots,
   closeFeedTurn,
   codexAgentMeta,
+  codexPromptKey,
   codexHooksWanted,
   emptyCodexAgentMeta,
   emptyCodexCursor,
@@ -53,6 +55,7 @@ import {
   isClaudeCode,
   loadConfig,
   parleyHome,
+  recogniseCodexPrompt,
   retryFromTranscript,
   settleCards,
   turnActive,
@@ -62,6 +65,7 @@ import type { KimiOutput } from '../kimi/sessions.js';
 import type {
   CodexAgentMeta,
   CodexCursor,
+  CodexPrompt,
   OpencodeCursor,
   QwenCursor,
   FeedCard,
@@ -75,8 +79,9 @@ import type {
   WorkSession,
 } from '@parley/core';
 import { FEED_MAIL_FEATURE, FEED_SCHEMA_VERSION, FEED_PROGRESS_RETRY_AFTER_MAX_MS, FEED_RESYNC_FEATURE, refKey, sessionRef } from '@parley/protocol';
-import type { FeedDecisions, KimiRequest, KimiResponse, ProgressResult, Result, SessionRef } from '@parley/protocol';
+import type { FeedDecisions, KimiRequest, KimiResponse, ProgressResult, Result, SendResult, SessionRef } from '@parley/protocol';
 import { projectProgress } from './progress.js';
+import { cleanAnswer, typeOwnAnswer } from './terminal-answer.js';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { LogChange } from '../activity/log-index.js';
 import type { MailJournalEntry } from '@parley/core';
@@ -154,6 +159,19 @@ export const CODEX_HOOK_GRACE_MS = 15_000;
  */
 export const CODEX_HOLD_MS = 590_000;
 
+/**
+ * Вопрос Codex на экране терминала (план слоя 2, задача 3): сколько и как часто хост ищет вопрос на экране после того,
+ * как сессия стала ждать человека, как часто сверяет экран, пока карточка ждёт, и через сколько после решения
+ * проверяет, что вопрос ушёл с экрана.
+ */
+export const TERMINAL_PROMPT_FIND_MS = 2_000;
+export const TERMINAL_PROMPT_FIND_STEP_MS = 100;
+export const TERMINAL_PROMPT_WATCH_MS = 1_000;
+export const TERMINAL_PROMPT_CONFIRM_MS = 1_500;
+/** Отказ с текстом: сколько после клавиши `3` ждать, пока сессия перестанет ждать (ход прерван), и как часто это сверять. */
+export const TERMINAL_MESSAGE_WAIT_MS = 5_000;
+export const TERMINAL_MESSAGE_POLL_MS = 100;
+
 export interface FeedServiceDeps {
   host: Pick<HostContext, 'log'>;
   works: Pick<WorksService, 'entry' | 'onChange'>;
@@ -162,6 +180,11 @@ export interface FeedServiceDeps {
     'onChange' | 'logFile' | 'childLogFile' | 'questionHeld' | 'permissionAnswered' | 'onLogChange'
   >;
   pty: Pick<PtyManager, 'on' | 'get' | 'write' | 'screenText'>;
+  /**
+   * Тот же отправитель, что у метода `pty.send` (вставка Codex и отдельный Enter): отказ с текстом уходит им обычным
+   * сообщением человека. Нет — текст отказа не отправляется.
+   */
+  send?: (params: { ref: SessionRef; text: string; submit: boolean }) => Promise<SendResult>;
 }
 
 export interface FeedServiceOptions {
@@ -195,6 +218,8 @@ export interface FeedServiceOptions {
   seedTailBytes?: number;
   /** Каталог файлов картинок ленты; по умолчанию `<дом Parley>/feed-images`. */
   imagesDir?: string;
+  /** Сроки карточек по вопросу терминала Codex; по умолчанию `TERMINAL_PROMPT_*`, тесты ставят короткие. */
+  terminalPrompt?: { findMs?: number; findStepMs?: number; watchMs?: number; confirmMs?: number };
 }
 
 export type FeedSnapshot = Result<'feed.snapshot'>;
@@ -400,6 +425,8 @@ interface SessionFeed {
   codexPoll?: NodeJS.Timeout | undefined;
   /** Кто отвечает на одобрения Codex: `null` — пока неизвестно (у Claude всегда). */
   decisions: FeedDecisions | null;
+  /** `decisions` вернулся к `null` с прошлой дельты: дельта несёт `decisions: null` явно (без поля подписчик оставил бы прежнее). */
+  decisionsReset?: true;
   /** Таймер ожидания первого хука Codex после старта процесса. */
   codexGrace?: NodeJS.Timeout | undefined;
 }
@@ -538,6 +565,30 @@ export function createFeedService(
   const graceWaiting = new Map<string, SessionRef>();
   /** Таймеры присмотра за Esc из чата. */
   const interruptTimers = new Set<NodeJS.Timeout>();
+  const terminalFindMs = options.terminalPrompt?.findMs ?? TERMINAL_PROMPT_FIND_MS;
+  const terminalFindStepMs = options.terminalPrompt?.findStepMs ?? TERMINAL_PROMPT_FIND_STEP_MS;
+  const terminalWatchMs = options.terminalPrompt?.watchMs ?? TERMINAL_PROMPT_WATCH_MS;
+  const terminalConfirmMs = options.terminalPrompt?.confirmMs ?? TERMINAL_PROMPT_CONFIRM_MS;
+  /** Карточки по вопросу терминала: ключ сессии → запись о вопросе, пока карточка ждёт (хук Codex такой записи не имеет). */
+  interface TerminalPrompt {
+    cardId: string;
+    fingerprint: string;
+    /** `feed.decisions` до карточки: вернуть при закрытии. */
+    decisionsBefore: FeedDecisions | null;
+    watch: NodeJS.Timeout;
+  }
+  const terminalPrompts = new Map<string, TerminalPrompt>();
+  /** Идущий поиск вопроса на экране (опрос раз в `terminalFindStepMs`) и проверка после решения. */
+  const terminalFinders = new Map<string, NodeJS.Timeout>();
+  const terminalConfirms = new Map<string, NodeJS.Timeout>();
+  /** Сессии, которые сейчас ждут одобрения или ответа (`blocked` с нуждой `approval`/`question`): только им ищется вопрос на экране. */
+  const terminalEligible = new Set<string>();
+  /** Сессии, в которые хост сейчас печатает свой ответ по шагам: поиск и новые карточки по экрану ждут. */
+  const terminalBusy = new Set<string>();
+  /** Идущая печать своего ответа по сессии: `cancel` снимает её ожидания и не даёт продолжиться после выхода процесса. */
+  const terminalTyping = new Map<string, { cancel(): void }>();
+  /** Ожидание конца ожидания сессии после отказа с текстом: затем текст уходит сообщением человека. */
+  const terminalMessages = new Map<string, NodeJS.Timeout>();
   let stopped = false;
 
   const rawPending: PendingHooks = createPendingHooks({
@@ -744,6 +795,8 @@ export function createFeedService(
     if (upsert.size === 0 && removed.size === 0 && !feed.modeChanged) return;
     feed.batch = { upsert: new Map(), removed: new Set() };
     feed.modeChanged = false;
+    const decisionsReset = feed.decisionsReset === true;
+    delete feed.decisionsReset;
     feed.revision += 1;
     // Журнал задержек (спека диагностики, A4): запись нужна и без открытого Chat, поэтому до проверки подписчиков.
     // Эхо промпта человека — не ответ агента: пачка только из промптов метку не снимает.
@@ -765,7 +818,7 @@ export function createFeedService(
       upsert: Array.from(upsert.values()),
       removed: Array.from(removed),
       mode: feed.state.permissionMode,
-      ...(feed.decisions === null ? {} : { decisions: feed.decisions }),
+      ...(feed.decisions === null ? (decisionsReset ? { decisions: null } : {}) : { decisions: feed.decisions }),
     };
     // Клиенту без `feed-mail` — то же событие без `mail` в `upsert` и `mail:` в `removed`; `revision` тот же, пустая пачка идёт.
     const plain = withoutMail(data);
@@ -864,9 +917,277 @@ export function createFeedService(
   function setDecisions(feed: SessionFeed, value: FeedDecisions): void {
     if (feed.decisions === value) return;
     feed.decisions = value;
+    delete feed.decisionsReset;
     // Дельта уходит и без элементов: окно должно узнать, кто отвечает на одобрения.
     feed.modeChanged = true;
     schedule(feed);
+  }
+
+  function restoreDecisions(feed: SessionFeed, before: FeedDecisions | null): void {
+    if (feed.decisions === before) return;
+    if (before !== null) {
+      setDecisions(feed, before);
+      return;
+    }
+    feed.decisions = null;
+    feed.decisionsReset = true;
+    feed.modeChanged = true;
+    schedule(feed);
+  }
+
+  function isCodexSession(ref: SessionRef): boolean {
+    try {
+      return byFamily(sessionOf(ref).provider, { claude: false, codex: true, qwen: false, opencode: false, neutral: false });
+    } catch {
+      return false;
+    }
+  }
+
+  /** Вопрос на экране сессии; `null` — экрана нет или вопрос не узнан. Строки экрана дальше этой функции не идут. */
+  function readTerminalPrompt(ref: SessionRef): CodexPrompt | null {
+    const lines = deps.pty.screenText(ref);
+    return lines === undefined ? null : recogniseCodexPrompt(lines);
+  }
+
+  function clearTerminalTimer(timers: Map<string, NodeJS.Timeout>, key: string, kind: 'interval' | 'timeout'): void {
+    const timer = timers.get(key);
+    if (timer === undefined) return;
+    if (kind === 'interval') clearInterval(timer);
+    else clearTimeout(timer);
+    timers.delete(key);
+  }
+
+  /** Снимает запись о вопросе терминала; `outcome` — во что перевести ждущую карточку (`null` — карточку не трогать). */
+  function closeTerminalPrompt(ref: SessionRef, outcome: 'elsewhere' | 'stale' | null): void {
+    const key = refKey(ref);
+    const record = terminalPrompts.get(key);
+    if (record === undefined) return;
+    clearInterval(record.watch);
+    terminalPrompts.delete(key);
+    const feed = feeds.get(key);
+    if (feed === undefined) return;
+    restoreDecisions(feed, record.decisionsBefore);
+    if (outcome !== null) settle(ref, outcome, [record.cardId]);
+  }
+
+  /** Всё, что хост держит по вопросам терминала сессии: поиск, проверку после решения и запись (карточка не меняется). */
+  function dropTerminalState(key: string): void {
+    clearTerminalTimer(terminalFinders, key, 'interval');
+    clearTerminalTimer(terminalConfirms, key, 'timeout');
+    clearTerminalTimer(terminalMessages, key, 'interval');
+    terminalTyping.get(key)?.cancel();
+    terminalTyping.delete(key);
+    terminalBusy.delete(key);
+    const record = terminalPrompts.get(key);
+    if (record === undefined) return;
+    clearInterval(record.watch);
+    terminalPrompts.delete(key);
+    const feed = feeds.get(key);
+    if (feed !== undefined) restoreDecisions(feed, record.decisionsBefore);
+  }
+
+  /** Заводит карточку по узнанному вопросу и берёт её под присмотр: экран сверяется раз в `terminalWatchMs`. */
+  function openTerminalPrompt(feed: SessionFeed, prompt: CodexPrompt): void {
+    const key = refKey(feed.ref);
+    if (!terminalEligible.has(key) || terminalBusy.has(key) || terminalPrompts.has(key) || feed.state.items.some(isPendingCard)) return;
+    const update = applyCodexTerminalPrompt(feed.state, prompt, at());
+    const card = update.changes.find((item): item is FeedCard => isPendingCard(item));
+    if (card === undefined) return;
+    const decisionsBefore = feed.decisions;
+    commit(feed, update);
+    setDecisions(feed, 'window');
+    const watch = setInterval(() => {
+      const record = terminalPrompts.get(key);
+      if (record === undefined) return;
+      // Карточку унёс сев ленты из журнала (он заменяет состояние): запись снята, вопрос на экране ищется заново.
+      const own = feed.state.items.find((item) => isCard(item) && item.cardId === record.cardId);
+      if (own === undefined || !isPendingCard(own)) {
+        closeTerminalPrompt(feed.ref, null);
+        findTerminalPrompt(feed.ref);
+        return;
+      }
+      const seen = readTerminalPrompt(feed.ref);
+      // Ответили в терминале, вопрос сменился или ушёл, сессия перестала ждать: карточка отвечена в другом месте.
+      if (!terminalEligible.has(key) || seen === null || seen.fingerprint !== record.fingerprint) {
+        closeTerminalPrompt(feed.ref, 'elsewhere');
+      }
+    }, terminalWatchMs);
+    watch.unref();
+    terminalPrompts.set(key, { cardId: card.cardId, fingerprint: prompt.fingerprint, decisionsBefore, watch });
+  }
+
+  /**
+   * Сессия Codex ждёт одобрения или ответа: ищет вопрос на экране (каждые `terminalFindStepMs` до `terminalFindMs`) и,
+   * узнав, заводит карточку. Нет ждущей карточки в ленте, нет записи о вопросе и второго поиска — иначе ничего.
+   */
+  function findTerminalPrompt(ref: SessionRef): void {
+    const key = refKey(ref);
+    if (stopped || !terminalEligible.has(key) || terminalBusy.has(key) || terminalPrompts.has(key) || terminalFinders.has(key)) return;
+    const feed = feedOf(ref);
+    if (feed.state.items.some(isPendingCard)) return;
+    const startedAt = now();
+    const finish = (): void => clearTerminalTimer(terminalFinders, key, 'interval');
+    const step = (): void => {
+      // Сессия перестала ждать до того, как вопрос узнали: поиск снят, карточку по экрану не заводим.
+      if (stopped || !terminalEligible.has(key)) return finish();
+      const found = readTerminalPrompt(ref);
+      if (found !== null) {
+        finish();
+        openTerminalPrompt(feed, found);
+        return;
+      }
+      if (now() - startedAt >= terminalFindMs) finish();
+    };
+    const timer = setInterval(step, terminalFindStepMs);
+    timer.unref();
+    terminalFinders.set(key, timer);
+    step();
+  }
+
+  /** После решения человека: через `terminalConfirmMs` вопрос должен уйти с экрана; не ушёл — запись в журнал, поиск заново. */
+  function confirmTerminalAnswer(ref: SessionRef, before: CodexPrompt): void {
+    const key = refKey(ref);
+    clearTerminalTimer(terminalConfirms, key, 'timeout');
+    const timer = setTimeout(() => {
+      terminalConfirms.delete(key);
+      if (stopped || !terminalEligible.has(key)) return;
+      const seen = readTerminalPrompt(ref);
+      // Строки экрана в журнал не идут: только вид вопроса и исход.
+      if (seen !== null && seen.fingerprint === before.fingerprint) {
+        log.info('вопрос терминала не снят ответом', { op: 'feed.terminalPrompt', outcome: 'not-applied', kind: before.kind, sessionId: ref.sessionId });
+      }
+      // Следующий вопрос из нескольких или тот же, если клавиша не сработала: карточка по новому поиску.
+      findTerminalPrompt(ref);
+    }, terminalConfirmMs);
+    timer.unref();
+    terminalConfirms.set(key, timer);
+  }
+
+  /** Свой ответ на вопрос: текст ответа, которого нет среди вариантов карточки; `null` — решение другого вида или пустое. */
+  function ownAnswerOf(prompt: CodexPrompt, decision: FeedDecision): string | null {
+    if (prompt.kind !== 'question' || decision.kind !== 'question') return null;
+    const entries = Object.entries(decision.answers);
+    const answer = decision.answers[prompt.question] ?? (entries.length === 1 ? entries[0]![1] : undefined);
+    return answer !== undefined && cleanAnswer(answer) !== '' ? answer : null;
+  }
+
+  /** Печатает свой ответ по шагам (`typeOwnAnswer`); исход не `done` — запись в журнал хоста без текста. */
+  function startOwnAnswer(ref: SessionRef, prompt: CodexPrompt & { kind: 'question' }, text: string): void {
+    const key = refKey(ref);
+    terminalBusy.add(key);
+    clearTerminalTimer(terminalFinders, key, 'interval');
+    // Ожидания шагов записаны: выход процесса, выгрузка ленты и `stop()` снимают их и печать не продолжается.
+    let cancelled = false;
+    const sleepers = new Set<() => void>();
+    const operation = {
+      cancel(): void {
+        cancelled = true;
+        for (const wake of Array.from(sleepers)) wake();
+      },
+    };
+    terminalTyping.set(key, operation);
+    const sleep = (ms: number): Promise<void> =>
+      new Promise((resolve) => {
+        const wake = (): void => {
+          clearTimeout(timer);
+          sleepers.delete(wake);
+          resolve();
+        };
+        const timer = setTimeout(wake, ms);
+        timer.unref();
+        sleepers.add(wake);
+      });
+    typeOwnAnswer({ pty: deps.pty, sleep, cancelled: () => cancelled || stopped }, ref, prompt, text)
+      .then((outcome) => {
+        // Печать отменена (процесс вышел, лента выгружена, хост остановлен): ни записи в журнал, ни нового поиска.
+        if (cancelled) return;
+        if (outcome !== 'done') {
+          log.info('свой ответ на вопрос терминала не доведён', { op: 'feed.terminalPrompt', outcome: `own-answer-${outcome}`, sessionId: ref.sessionId });
+          return;
+        }
+        // Следующий вопрос из нескольких: проверка и новый поиск, как после ответа клавишей.
+        confirmTerminalAnswer(ref, prompt);
+      })
+      .catch((error: unknown) => {
+        log.warn('свой ответ на вопрос терминала: ошибка', { op: 'feed.terminalPrompt', sessionId: ref.sessionId, error: String(error) });
+      })
+      .finally(() => {
+        if (terminalTyping.get(key) !== operation) return;
+        terminalTyping.delete(key);
+        terminalBusy.delete(key);
+      });
+  }
+
+  /**
+   * Отказ с текстом: клавиша `3` прервала ход Codex; когда сессия перестала ждать (до `TERMINAL_MESSAGE_WAIT_MS`), текст
+   * уходит обычным сообщением человека тем же отправителем, что у `pty.send`. Не дождались — текст не печатается, в журнал
+   * идёт исход без текста.
+   */
+  function sendDenialMessage(ref: SessionRef, message: string): void {
+    const key = refKey(ref);
+    clearTerminalTimer(terminalMessages, key, 'interval');
+    const outcome = (name: string, extra: Record<string, unknown> = {}): void => {
+      log.info('отказ с текстом по вопросу терминала', { op: 'feed.terminalPrompt', outcome: name, sessionId: ref.sessionId, ...extra });
+    };
+    const send = deps.send;
+    if (send === undefined) {
+      outcome('denial-message-unavailable');
+      return;
+    }
+    const startedAt = now();
+    const timer = setInterval(() => {
+      if (stopped) return clearTerminalTimer(terminalMessages, key, 'interval');
+      // Готов, когда сессия вовсе перестала быть `blocked`: другая нужда при `blocked` (startup, лимит) — ещё не готов.
+      const ready = lastActivity.get(key) !== 'blocked';
+      if (!ready && now() - startedAt < TERMINAL_MESSAGE_WAIT_MS) return;
+      clearTerminalTimer(terminalMessages, key, 'interval');
+      if (!ready) return outcome('denial-message-timeout');
+      send({ ref, text: message, submit: true }).then(
+        (result) => outcome(result.submitted ? 'denial-message-sent' : 'denial-message-not-sent', result.submitted ? {} : { reason: result.reason }),
+        (error: unknown) => outcome('denial-message-failed', { error: String(error) }),
+      );
+    }, TERMINAL_MESSAGE_POLL_MS);
+    timer.unref();
+    terminalMessages.set(key, timer);
+  }
+
+  /** Решение по карточке терминала: клавиша уходит, только если экран прямо сейчас даёт тот же отпечаток. */
+  function decideTerminalPrompt(feed: SessionFeed, record: TerminalPrompt, decision: FeedDecision, current: FeedCardState): Result<'feed.decide'> {
+    const seen = readTerminalPrompt(feed.ref);
+    if (seen === null || seen.fingerprint !== record.fingerprint) {
+      closeTerminalPrompt(feed.ref, 'elsewhere');
+      return { applied: false, state: 'elsewhere' };
+    }
+    const keyToPress = codexPromptKey(seen, decision);
+    const own = keyToPress === null ? ownAnswerOf(seen, decision) : null;
+    // Ни клавиши, ни своего ответа: решение этим вопросом не выражается.
+    if (keyToPress === null && own === null) return { applied: false, state: current };
+    const result = applyDecision(feed.state, record.cardId, decision, at());
+    if (!result.applied) return { applied: false, state: current };
+    if (keyToPress === null) {
+      // Свой ответ: карточка закрывается, текст печатается по шагам со сверкой экрана; ответ окну не ждёт конца печати.
+      const next = result.changes.find((item): item is FeedCard => isCard(item) && item.cardId === record.cardId);
+      commit(feed, result);
+      closeTerminalPrompt(feed.ref, null);
+      if (seen.kind === 'question') startOwnAnswer(feed.ref, seen, own as string);
+      return { applied: true, state: next?.state ?? current };
+    }
+    // Между сверкой экрана и записью нет `await`: клавиша уходит в тот вопрос, который только что видели.
+    try {
+      deps.pty.write(feed.ref, keyToPress);
+    } catch {
+      closeTerminalPrompt(feed.ref, 'stale');
+      return { applied: false, state: 'stale' };
+    }
+    const next = result.changes.find((item): item is FeedCard => isCard(item) && item.cardId === record.cardId);
+    commit(feed, result);
+    closeTerminalPrompt(feed.ref, null);
+    confirmTerminalAnswer(feed.ref, seen);
+    // Отказ с текстом: `3` прервал ход, текст пойдёт сообщением, когда Codex будет готов.
+    if (decision.kind === 'permission' && decision.behavior === 'deny' && decision.message !== undefined && decision.message.trim() !== '') {
+      sendDenialMessage(feed.ref, decision.message.trim());
+    }
+    return { applied: true, state: next?.state ?? current };
   }
 
   function clearCodexGrace(feed: SessionFeed): void {
@@ -882,6 +1203,8 @@ export function createFeedService(
     const { ref, body } = request;
     const feed = feedOf(ref);
     clearCodexGrace(feed);
+    // Карточка хука и карточка по экрану вместе не живут: ждущая карточка экрана уступает хуку.
+    if (body['hook_event_name'] === 'PermissionRequest') closeTerminalPrompt(ref, 'elsewhere');
     setDecisions(feed, 'window');
     const update = applyCodexHookEvent(feed.state, stashHookBody(body, saveImage), at());
     commit(feed, update);
@@ -1106,8 +1429,15 @@ export function createFeedService(
         const seeded = feedFromCodexRollout(stashCodex(records), { limit: maxItems });
         // Ход, оборванный в журнале, закрывается только без живого процесса: у живого он ещё идёт
         // (рестарт хоста — процесс умер с ним).
-        const state =
+        const replayed =
           deps.pty.get(feed.ref) === undefined ? closeBrokenTurn(seeded.state) : seeded.state;
+        // Журнал не содержит карточек по экрану: сохраняем их вместе с id, уже показанными в Chat.
+        const terminalCards = feed.state.items.filter((item) => isCard(item) && 'via' in item && item.via === 'terminal');
+        const state = terminalCards.length === 0 ? replayed : {
+          ...replayed,
+          items: [...replayed.items, ...terminalCards],
+          seq: Math.max(replayed.seq, feed.state.seq),
+        };
         feed.state = state;
         feed.codex = {
           tail, cursor: seeded.cursor, agents: new Map(), queue: Promise.resolve(),
@@ -1812,6 +2142,18 @@ export function createFeedService(
     const activity = value.activity.activity;
     const previous = lastActivity.get(key);
     lastActivity.set(key, activity);
+    if (!stopped) {
+      const need = value.activity.need?.kind;
+      if (activity === 'blocked' && (need === 'approval' || need === 'question')) {
+        terminalEligible.add(key);
+        if (isCodexSession(ref)) findTerminalPrompt(ref);
+      } else {
+        // Сессия перестала ждать (или ждёт не этого): идущий поиск снят, ждущая карточка — ответили в терминале.
+        terminalEligible.delete(key);
+        clearTerminalTimer(terminalFinders, key, 'interval');
+        if (terminalPrompts.has(key)) closeTerminalPrompt(ref, 'elsewhere');
+      }
+    }
     if (stopped || activity !== 'idle' || previous === 'idle') return;
     const feed = feeds.get(key);
     if (feed === undefined) return;
@@ -1854,6 +2196,7 @@ export function createFeedService(
     feed.timer = undefined;
     clearCodexGrace(feed);
     stopCodexPoll(feed);
+    dropTerminalState(key);
     pending.settle(feed.ref);
     feed.progressEpoch?.eligible.clear();
     feed.progressEpoch = null;
@@ -1904,6 +2247,7 @@ export function createFeedService(
     sentAt.delete(key);
     subscribers.delete(key);
     graceWaiting.delete(key);
+    terminalEligible.delete(key);
     clearProgress(key);
   }
 
@@ -1983,12 +2327,14 @@ export function createFeedService(
     // Ответа вышедшего процесса не будет: метка отправки не должна дожить до чужой пачки.
     sentAt.delete(refKey(ref));
     graceWaiting.delete(refKey(ref));
+    terminalEligible.delete(refKey(ref));
     const feed = feeds.get(refKey(ref));
     if (feed === undefined) {
       pending.settle(ref);
       return;
     }
     clearCodexGrace(feed);
+    dropTerminalState(refKey(ref));
     // Процесс вышел: висящим хукам `{}`, карточки — `stale` (терминал ответит уже новому процессу),
     // ход закрыт.
     const time = at();
@@ -2334,7 +2680,12 @@ export function createFeedService(
       // Решение без удержанного хука ушло бы в никуда: карточка в окне сказала бы «allowed», а CLI
       // ничего не получил. Такое решение не применяется (окно повторит, когда хук дойдёт).
       const held = pending.get(feed.ref, cardId);
-      if (held === undefined) return { applied: false, state: current };
+      if (held === undefined) {
+        // Карточка по вопросу терминала Codex: хука нет, клавишу вводит хост.
+        const record = terminalPrompts.get(refKey(feed.ref));
+        if (record !== undefined && record.cardId === cardId) return decideTerminalPrompt(feed, record, decision, current);
+        return { applied: false, state: current };
+      }
       const result = applyDecision(feed.state, cardId, decision, at());
       if (!result.applied) return { applied: false, state: current };
       const next =
@@ -2400,6 +2751,8 @@ export function createFeedService(
       clearInterval(evictSweep);
       // Ждущие посевы запускаются и сразу выходят (`stopped`): снимок, ждавший место, завершается пустой лентой.
       for (const waiter of seedWaiters.splice(0)) waiter.start();
+      // До снятия таймеров лент: возврат `decisions` ставит пачку дельты.
+      for (const key of new Set([...terminalFinders.keys(), ...terminalConfirms.keys(), ...terminalPrompts.keys(), ...terminalMessages.keys(), ...terminalTyping.keys()])) dropTerminalState(key);
       for (const feed of feeds.values()) {
         if (feed.timer !== undefined) clearTimeout(feed.timer);
         feed.timer = undefined;

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { FeedPermissionCard, FeedQuestionCard } from '@parley/core';
+import type { FeedDecision, FeedPermissionCard, FeedQuestionCard } from '@parley/core';
 import { answerOf as windowAnswerOf } from '../../../desktop/src/renderer/lib/question-answer';
 import {
   alwaysRules,
@@ -26,6 +26,7 @@ import {
   togglePick,
   toggleOther,
   uiOfDecide,
+  type DecideResult,
 } from './model';
 
 const perm = (suggestions: unknown[]): FeedPermissionCard =>
@@ -83,6 +84,21 @@ describe('questions', () => {
   });
   it('a settled card cannot be answered', () => {
     expect(questionDecision({ ...card, state: 'settled' } as unknown as FeedQuestionCard, EMPTY_QUESTION_DRAFT)).toBeNull();
+  });
+});
+
+describe('карточка по вопросу терминала Codex (via terminal, план слоя 2, задача 5)', () => {
+  const rules = [{ type: 'addRules', rules: [{ toolName: 'Bash', ruleContent: "Yes, and don't ask again for commands that start with `ls`" }] }];
+  const terminal = { ...perm(rules), via: 'terminal' } as unknown as FeedPermissionCard;
+  it('«Always» предлагается: у карточки есть правило из варианта 2', () => {
+    expect(canAlways(terminal)).toBe(true);
+    expect(alwaysRules(terminal.suggestions)).toEqual(["Bash(Yes, and don't ask again for commands that start with `ls`)"]);
+  });
+  it('решение уходит как есть — через тот же send, что и у карточки хука (feed.decide клиента)', async () => {
+    const send = vi.fn<(decision: FeedDecision) => Promise<DecideResult>>(async () => ({ outcome: 'applied' }));
+    const always = { kind: 'permission', behavior: 'allow', always: true } as const;
+    expect(await runDecision(always, send)).toEqual({ kind: 'done' });
+    expect(send).toHaveBeenCalledWith(always);
   });
 });
 

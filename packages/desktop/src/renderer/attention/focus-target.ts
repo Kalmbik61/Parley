@@ -50,7 +50,7 @@ function targetTab(target: FocusTarget, works: readonly WindowWorkEntry[]): { wo
     case 'session': {
       const { sessionId } = target.ref;
       if (!entry.map.sessions.some((session) => session.id === sessionId)) return null;
-      return { workKey: key, tab: { kind: 'terminal', id: tabId.terminal(sessionId), sessionId, ...(target.view === 'terminal' ? { view: 'terminal' as const } : {}) } };
+      return { workKey: key, tab: { kind: 'terminal', id: tabId.terminal(sessionId), sessionId, ...(target.view !== undefined ? { view: target.view } : {}) } };
     }
     case 'mail':
       return { workKey: key, tab: { kind: 'mail', id: tabId.mail() } };
@@ -151,7 +151,7 @@ export function buildFocusTargetDeps(signal?: AbortSignal): FocusTargetDeps {
     openTab: (key, tab) => {
       useLayoutStore.getState().apply(key, (layout) => {
         const next = openTab(layout, tab);
-        return tab.kind === 'terminal' && tab.view === 'terminal' ? updateTab(next, tab.id, { view: 'terminal' }) : next;
+        return tab.kind === 'terminal' && tab.view !== undefined ? updateTab(next, tab.id, { view: tab.view }) : next;
       });
     },
     whenShown: (key, tab) => whenShown(key, tab, signal),

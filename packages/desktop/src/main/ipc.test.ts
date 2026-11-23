@@ -341,13 +341,15 @@ describe('registerIpc', () => {
     ipcMain.invoke('app:island-shortcut-suspend', true);
     expect(suspend).toHaveBeenCalledWith(true);
   });
-  it('terminal session target is additive, while cardId+terminal and other view values are rejected', () => {
+  it('terminal and chat session targets are additive, while cardId+view and other view values are rejected', () => {
     const session = { kind: 'session', ref: { projectPath: '/p', workId: 'w-1', sessionId: 's-01' } };
     expect(isFocusTarget(session)).toBe(true);
     expect(isFocusTarget({ ...session, cardId: 'c-1' })).toBe(true);
     expect(isFocusTarget({ ...session, view: 'terminal' })).toBe(true);
-    for (const view of ['chat', null, false, 1]) expect(isFocusTarget({ ...session, view })).toBe(false);
+    expect(isFocusTarget({ ...session, view: 'chat' })).toBe(true);
+    for (const view of ['other', null, false, 1]) expect(isFocusTarget({ ...session, view })).toBe(false);
     expect(isFocusTarget({ ...session, view: 'terminal', cardId: 'c-1' })).toBe(false);
+    expect(isFocusTarget({ ...session, view: 'chat', cardId: 'c-1' })).toBe(false);
   });
   it('session-visibility preserves sender and main-frame identity for the guarded relay', () => {
     const reportSessionVisibility = vi.fn();

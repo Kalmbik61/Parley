@@ -56,7 +56,8 @@ interface IslandRequestsState {
   applied: number;
   bind(call: IslandBridge['call'] | null): void;
   select(index: number): void;
-  sync(entries: readonly WindowWorkEntry[], byRef: Readonly<Record<string, ActivityEntry>>): void;
+  /** `screenText` — хост знает `pty.screenText`: запись Codex без карточки ведёт в Chat сессии (панель вопроса терминала), а не в терминал. */
+  sync(entries: readonly WindowWorkEntry[], byRef: Readonly<Record<string, ActivityEntry>>, screenText?: boolean): void;
   revalidate(): void;
   decide(key: string, decision: FeedDecision): Promise<void>;
   clear(): void;
@@ -210,7 +211,7 @@ export const useIslandRequests = create<IslandRequestsState>((set, get) => {
       const item = get().items.find((candidate) => candidate.key === get().selectedKey);
       if (item !== undefined) void fetchCards(item.ref, 0, { retry: false });
     },
-    sync: (entries, byRef) => {
+    sync: (entries, byRef, screenText = false) => {
       const now = Date.now();
       const before = get().waitingSince;
       const waitingSince: Record<string, number> = {};
@@ -233,10 +234,10 @@ export const useIslandRequests = create<IslandRequestsState>((set, get) => {
             if (known === undefined) {
               terminalFallbacks.set(key, {
                 key: `${key}\u0000terminal:${waitingSince[key]}`, ref, card: null,
-                summary, inWindow: false, since: waitingSince[key], deciding: false, note: null,
+                summary, inWindow: screenText, since: waitingSince[key], deciding: false, note: null,
               });
-            } else if (known.summary !== summary) {
-              terminalFallbacks.set(key, { ...known, summary });
+            } else if (known.summary !== summary || known.inWindow !== screenText) {
+              terminalFallbacks.set(key, { ...known, summary, inWindow: screenText });
             }
           }
           if (before[key] === undefined || lastSeen.get(key) !== byRef[key]) toFetch.push(ref);
@@ -255,10 +256,12 @@ export const useIslandRequests = create<IslandRequestsState>((set, get) => {
       set((state) => {
         const items = state.items
           .filter((item) => waitingSince[refKey(item.ref)] !== undefined)
-          // Запрос терминала уже в очереди — обновляется только текст причины, остальное (ключ, since) как было.
+          // Запрос терминала уже в очереди — обновляются только текст причины и «ведёт в Chat», остальное (ключ, since) как было.
           .map((item) => {
             const fallback = terminalFallbacks.get(refKey(item.ref));
-            return fallback !== undefined && fallback.key === item.key && fallback.summary !== item.summary ? { ...item, summary: fallback.summary } : item;
+            return fallback !== undefined && fallback.key === item.key && (fallback.summary !== item.summary || fallback.inWindow !== item.inWindow)
+              ? { ...item, summary: fallback.summary, inWindow: fallback.inWindow }
+              : item;
           });
         for (const [key, fallback] of terminalFallbacks) {
           if (!items.some((item) => refKey(item.ref) === key)) items.push(fallback);

@@ -1,0 +1,20 @@
+
+  Would you like to run the following command?
+
+  Environment: local
+
+  Reason: Do you want to allow this touch command to write
+  in the workspace?
+
+  $ touch
+  a_very_long_file_name_that_forces_the_command_to_wrap_in
+  _a_narrow_window_0123456789.txt
+
+
+› 1. Yes, proceed (y)
+  2. Yes, and don't ask again for commands that start with
+     `touch
+     a_very_long_file_name_that_forces_the_command_to_wrap_i
+     n_a_narrow_window_0123456789.txt` (p)
+↓
+  Press enter to confirm or esc to cancel

@@ -81,7 +81,7 @@ const SITES: Record<string, string[]> = {
   'host/src/hooks/inline-mail.ts': ['true'],
   'host/src/hooks/hook-server.ts': ['NO_EVENTS'],
   'host/src/sessions/sessions-service.ts': ['null', 'false', 'false', 'false', 'false', 'false'],
-  'host/src/feed/feed-service.ts': ['true', 'null', 'false', '() => seedOpencode(feed, foreground)', 'false', 'true', 'true', 'false', 'true', 'true'],
+  'host/src/feed/feed-service.ts': ['true', 'false', 'null', 'false', '() => seedOpencode(feed, foreground)', 'false', 'true', 'true', 'false', 'true', 'true'],
 };
 
 describe('byFamily call sites name their opencode branch', () => {

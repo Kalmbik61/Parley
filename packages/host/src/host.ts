@@ -505,6 +505,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     works: worksService,
     activity: activityService,
     pty: ptyManager,
+    // Отказ с текстом по вопросу терминала Codex уходит тем же отправителем, что `pty.send` (он создаётся ниже и зовётся позже).
+    send: (params) => send(params, handle.context.log),
   }, {
     ...(options.codexHookGraceMs === undefined ? {} : { codexHookGraceMs: options.codexHookGraceMs }),
     // OpenCode Chat reads the messages of the session's own server (the supervisor is created further down; it is only called later).

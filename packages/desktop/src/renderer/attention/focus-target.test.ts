@@ -96,6 +96,9 @@ describe('applyFocusTarget (тест 4 куска 4.3)', () => {
     expect(applyFocusTarget({ kind: 'session', ref, view: 'terminal' }, { ...buildFocusTargetDeps(), whenShown: async () => false })).toBe(true);
     const tabs = groups(useLayoutStore.getState().layouts[key]!).flatMap((group) => group.tabs);
     expect(tabs).toEqual([{ kind: 'terminal', id: 'terminal:s-02', sessionId: 's-02', view: 'terminal' }]);
+    // Явный Chat возвращает уже открытую вкладку из Terminal в Chat.
+    expect(applyFocusTarget({ kind: 'session', ref, view: 'chat' }, { ...buildFocusTargetDeps(), whenShown: async () => false })).toBe(true);
+    expect(groups(useLayoutStore.getState().layouts[key]!).flatMap((group) => group.tabs)).toEqual([{ kind: 'terminal', id: 'terminal:s-02', sessionId: 's-02', view: 'chat' }]);
   });
   const target: FocusTarget = { kind: 'session', ref: { projectPath: '/tmp/p', workId: 'w-01', sessionId: 's-02' } };
 

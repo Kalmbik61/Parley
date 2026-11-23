@@ -22,7 +22,7 @@ export const silentLog = (): Log & { info: ReturnType<typeof vi.fn>; warn: Retur
 
 type ActivityListener = (
   ref: SessionRef,
-  value: { activity: { activity: string }; metrics: null },
+  value: { activity: { activity: string; need?: { kind: string } | null }; metrics: null },
 ) => void;
 type ExitListener = (ref: SessionRef) => void;
 /** `lifecycle` — жизненный цикл сессии в карте; `archived` — работа сессии в архиве (`work.status`). */
@@ -40,7 +40,8 @@ export interface FakeFeedDeps {
   setSessionLogFile(sessionId: string, file: string | null): void;
   /** Журнал субагента Codex по id его треда (`activity.childLogFile`); `null` — убрать. */
   setChildLogFile(threadId: string, file: string | null): void;
-  emitActivity(ref: SessionRef, activity: string): void;
+  /** `need` — чего сессия ждёт от человека (`approval`, `question`…); без него — `null`. */
+  emitActivity(ref: SessionRef, activity: string, need?: string | null): void;
   emitExit(ref: SessionRef): void;
   /** Процесс сессии запущен (`pty.on('start')`): запуск или возобновление. */
   emitStart(ref: SessionRef): void;
@@ -163,9 +164,9 @@ export function fakeFeedDeps(initial: FakeSession[] = [{ ref: REF }]): FakeFeedD
       if (file === null) childLogFiles.delete(threadId);
       else childLogFiles.set(threadId, file);
     },
-    emitActivity(ref, activity) {
+    emitActivity(ref, activity, need = null) {
       for (const listener of activityListeners)
-        listener(ref, { activity: { activity }, metrics: null });
+        listener(ref, { activity: { activity, ...(need === null ? {} : { need: { kind: need } }) }, metrics: null });
     },
     emitExit(ref) {
       for (const listener of exitListeners) listener(ref);

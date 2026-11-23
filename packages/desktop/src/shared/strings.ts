@@ -2311,6 +2311,19 @@ export const S = {
       opencodeApproval: 'Waiting for approval in the terminal',
       open: 'Open terminal',
     },
+    /** Панель над полем ввода: вопрос агента с экрана терминала и ответ на него из Chat. */
+    terminalPrompt: {
+      keysHint: 'Keys go to the terminal',
+      focusHint: 'Click here to answer with the keyboard',
+      typeAnswer: 'Type an answer',
+      send: 'Send',
+      empty: 'The terminal shows nothing yet',
+      up: 'Up',
+      down: 'Down',
+      enter: 'Enter',
+      escape: 'Esc',
+      open: 'Open terminal',
+    },
     /** Баннер замены агента над полем ввода (спека 2026-10-30, 5.7). */
     switchBanner: {
       limit: (provider: string, until: string | null): string => (until === null ? `Out of ${provider} usage` : `Out of ${provider} usage until ${until}`),

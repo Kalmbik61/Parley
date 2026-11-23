@@ -4,6 +4,13 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
+## Unreleased
+
+### Added
+
+- Codex: command approvals, edit approvals and questions that Codex shows in its terminal now appear as cards with buttons in Chat, on the island, in Telegram and on the phone, in every approvals mode. Other terminal prompts are answered in the Chat panel.
+- Chat: when an agent waits at a prompt in its terminal, the prompt is shown in Chat and you can answer it there with keys or text, without opening the terminal. Works for Codex, Claude Code, Qwen Code and OpenCode.
+
 ## 0.38.0
 
 ### Added

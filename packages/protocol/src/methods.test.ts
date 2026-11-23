@@ -186,6 +186,25 @@ describe('pty.send', () => {
   });
 });
 
+describe('pty.screenText', () => {
+  const ref = { projectPath: '/p', workId: 'w-0001', sessionId: 's-01' };
+
+  it('rows необязателен, а если есть — целое от 1 до 200; лишние ключи и пропуск ref отвергаются', () => {
+    expect(METHODS['pty.screenText'].safeParse({ ref }).success).toBe(true);
+    expect(METHODS['pty.screenText'].safeParse({ ref, rows: 1 }).success).toBe(true);
+    expect(METHODS['pty.screenText'].safeParse({ ref, rows: 200 }).success).toBe(true);
+    expect(METHODS['pty.screenText'].safeParse({ ref, rows: 0 }).success).toBe(false);
+    expect(METHODS['pty.screenText'].safeParse({ ref, rows: 201 }).success).toBe(false);
+    expect(METHODS['pty.screenText'].safeParse({ ref, rows: 2.5 }).success).toBe(false);
+    expect(METHODS['pty.screenText'].safeParse({ ref, rows: 24, extra: 1 }).success).toBe(false);
+    expect(METHODS['pty.screenText'].safeParse({ rows: 24 }).success).toBe(false);
+  });
+
+  it('результат — строки экрана', () => {
+    expectTypeOf<Result<'pty.screenText'>>().toEqualTypeOf<{ lines: string[] }>();
+  });
+});
+
 describe('ревью изменений (кусок 8.1)', () => {
   const ref = { projectPath: '/p', workId: 'w-0001', sessionId: 's-01' };
 

@@ -852,6 +852,98 @@ describe('ChatView — баннер ожидания в терминале (ку
   });
 });
 
+describe('ChatView — панель вопроса терминала (план 2026-11-18, задача 2)', () => {
+  const card = (): FeedItem => ({
+    id: 'card-1',
+    at: AT,
+    kind: 'permission',
+    cardId: 'card-1',
+    state: 'pending',
+    toolUseId: null,
+    toolName: 'Bash',
+    toolInput: { command: 'ls' },
+    suggestions: [],
+    notified: false,
+  });
+  const need = (kind: 'approval' | 'startup') => ({ kind, since: AT, detail: null, resetsAt: null, window: null, account: null }) as const;
+  const wait = (value: 'blocked' | 'idle', withNeed?: 'approval' | 'startup'): void =>
+    useActivityStore.setState({ byRef: activityMap([makeActivity(REF, value, withNeed === undefined ? {} : { need: need(withNeed) })]) });
+  const settle = async (ms = 300): Promise<void> => {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    bridge.setHandler('pty.screenText', () => ({ lines: ['', 'Trust this folder?', ''] }));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('хост знает pty.screenText: при ожидании — панель с текстом экрана, прежнего баннера нет', async () => {
+    hostWith([...FEED_METHODS, 'pty.screenText']);
+    wait('blocked');
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([prompt('p1', 'hi')]);
+    await settle();
+    expect(screen.getByTestId('chat-terminal-prompt')).not.toBeNull();
+    expect(screen.queryByTestId('chat-waiting-banner')).toBeNull();
+    expect(screen.getByTestId('chat-terminal-prompt-screen').textContent).toBe('Trust this folder?');
+    expect(screen.getByTestId('chat-terminal-prompt-title').textContent).toBe(S.chat.waitingBanner.text);
+  });
+
+  it('заголовок — причина ожидания из needReason, когда нужда известна', async () => {
+    hostWith([...FEED_METHODS, 'pty.screenText']);
+    wait('blocked', 'approval');
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([prompt('p1', 'hi')]);
+    await settle();
+    expect(screen.getByTestId('chat-terminal-prompt-title').textContent).toBe('Waiting for your approval in its terminal');
+  });
+
+  it('хост без pty.screenText: прежний баннер, панели нет, запросов экрана нет', async () => {
+    hostWith(FEED_METHODS);
+    wait('blocked');
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([prompt('p1', 'hi')]);
+    await settle(1000);
+    expect(screen.getByTestId('chat-waiting-banner').textContent).toContain(S.chat.waitingBanner.text);
+    expect(screen.queryByTestId('chat-terminal-prompt')).toBeNull();
+    expect(bridge.calls.filter((c) => c.method === 'pty.screenText')).toHaveLength(0);
+  });
+
+  it('ждущая карточка в ленте — нет ни панели, ни баннера', async () => {
+    hostWith([...FEED_METHODS, 'pty.screenText']);
+    wait('blocked');
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([card()]);
+    await settle(1000);
+    expect(screen.queryByTestId('chat-terminal-prompt')).toBeNull();
+    expect(screen.queryByTestId('chat-waiting-banner')).toBeNull();
+  });
+
+  it('нужда вида startup показывает панель, даже если активность не blocked', async () => {
+    hostWith([...FEED_METHODS, 'pty.screenText']);
+    wait('idle', 'startup');
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([prompt('p1', 'hi')]);
+    await settle();
+    expect(screen.getByTestId('chat-terminal-prompt-title').textContent).toBe('Waiting in its terminal since launch (sign-in, folder trust or another startup screen)');
+  });
+
+  it('нужда startup без pty.screenText баннера не добавляет', async () => {
+    hostWith(FEED_METHODS);
+    wait('idle', 'startup');
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([prompt('p1', 'hi')]);
+    await settle(1000);
+    expect(screen.queryByTestId('chat-terminal-prompt')).toBeNull();
+    expect(screen.queryByTestId('chat-waiting-banner')).toBeNull();
+  });
+});
+
 describe('ChatView — меню режима (кусок 4a, решения К и Л)', () => {
   const MODE_METHODS = [...FEED_METHODS, 'sessions.setMode'];
   const trigger = (): HTMLElement => screen.getByTestId('chat-mode');
