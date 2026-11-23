@@ -31,6 +31,7 @@ interface KimiAcpOptions {
   sessionId?: string;
   clientVersion?: string;
   elicitationForm?: boolean;
+  canShowElicitation?: (request: Extract<KimiRequest, { kind: 'elicitation' }>) => boolean;
   /** Replays previous messages when the host has no conversation to show. */
   loadHistory?: boolean;
   onText?: (text: string, history: boolean, author: 'agent' | 'user') => void;
@@ -297,10 +298,13 @@ export function createKimiAcp(options: KimiAcpOptions) {
         const message = params['message'];
         const toolCallId = params['toolCallId'];
         if (!options.elicitationForm || params['mode'] !== 'form' || typeof message !== 'string' || !schema.success) return invalid();
-        pending.set(requestId, {
-          rpcId: id,
-          request: { kind: 'elicitation', id: requestId, message, requestedSchema: schema.data, ...(typeof toolCallId === 'string' ? { toolCallId } : {}) },
-        });
+        const request = {
+          kind: 'elicitation' as const, id: requestId, message, requestedSchema: schema.data,
+          ...(typeof toolCallId === 'string' ? { toolCallId } : {}),
+        };
+        // An RPC error allows Kimi to retry this question over request_permission.
+        if (options.canShowElicitation?.(request) === false) return invalid();
+        pending.set(requestId, { rpcId: id, request });
       }
       publish();
       return;

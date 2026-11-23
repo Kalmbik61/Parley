@@ -75,7 +75,7 @@ import type {
   WorkSession,
 } from '@parley/core';
 import { FEED_MAIL_FEATURE, FEED_SCHEMA_VERSION, FEED_PROGRESS_RETRY_AFTER_MAX_MS, FEED_RESYNC_FEATURE, refKey, sessionRef } from '@parley/protocol';
-import type { FeedDecisions, ProgressResult, Result, SessionRef } from '@parley/protocol';
+import type { FeedDecisions, KimiRequest, KimiResponse, ProgressResult, Result, SessionRef } from '@parley/protocol';
 import { projectProgress } from './progress.js';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { LogChange } from '../activity/log-index.js';
@@ -94,6 +94,7 @@ import { createRolloutTail } from './codex-source.js';
 import { createQwenTail } from './qwen-source.js';
 import { fetchOpencodeMessages, readOpencodeCache, writeOpencodeCache, type OpencodeAddress } from './opencode-source.js';
 import { createFeedImageStore } from './image-store.js';
+import { kimiInteraction, type KimiInteraction } from './kimi-interactions.js';
 import { stashClaudeRecord, stashCodexRecord, stashHookBody } from './stash.js';
 
 /** Сколько элементов лента сессии держит (решение 2). */
@@ -164,6 +165,7 @@ export interface FeedServiceDeps {
 }
 
 export interface FeedServiceOptions {
+  kimiRespond?: (ref: SessionRef, requestId: string, response: KimiResponse) => void;
   maxItems?: number;
   maxBytes?: number;
   batchMs?: number;
@@ -212,6 +214,7 @@ export function withoutMail<D extends { upsert: FeedItem[]; removed: string[] }>
 export interface FeedService {
   kimiHasHistory(ref: SessionRef): boolean;
   kimiOutput(ref: SessionRef, event: KimiOutput): void;
+  kimiRequests(ref: SessionRef, requests: readonly KimiRequest[]): void;
   /**
    * OpenCode: poll the session's messages now (called on its SSE events); joins the poll in flight. A session without a
    * feed in memory, a server or a seeded feed does nothing.
@@ -382,6 +385,8 @@ interface SessionFeed {
   qwen?: QwenFeed;
   /** OpenCode 2.x: state of the feed read from the session's server or cache. */
   opencode?: OpencodeFeed;
+  /** Only the live ACP process may resolve these cards. */
+  kimiInteractions?: Map<string, KimiInteraction>;
   /**
    * Qwen Code: when its last turn ended (Stop hook or the journal going idle). The transcript has no end-of-turn record, so
    * this closes the turn it leaves open; it survives reseeding and a reconnect.
@@ -640,6 +645,24 @@ export function createFeedService(
     feed.state = { ...feed.state, items: items.slice(drop) };
     // Ждущая карточка ушла из ленты — решить её окну уже нечем: хуку `{}`, диалог остаётся в терминале.
     if (evicted.length > 0) pending.settle(feed.ref, evicted);
+    for (const id of evicted) {
+      const interaction = feed.kimiInteractions?.get(id);
+      if (interaction === undefined) continue;
+      // Responding publishes a new pending set. Wait until this feed update has finished.
+      queueMicrotask(() => {
+        if (!feedCurrent(feed) || feed.kimiInteractions?.get(id) !== interaction) return;
+        const { request } = interaction;
+        const response: KimiResponse = request.kind === 'permission'
+          ? { kind: 'permission', optionId: null }
+          : { kind: 'elicitation', action: 'cancel' };
+        try {
+          options.kimiRespond?.(feed.ref, request.id, response);
+        } catch {
+          // A transport that has already gone away has nothing left to cancel.
+          feed.kimiInteractions.delete(id);
+        }
+      });
+    }
     pruneProgress(feed);
   }
 
@@ -1757,9 +1780,11 @@ export function createFeedService(
     // У Codex запрос одобрения идёт из ячейки code mode, а она живёт дольше хода и приглашения: снятая карточка
     // отдала бы хуку `{}`, Codex ушёл бы в окно TUI, и `exec` ждал бы там без срока (разбор 2026-10-16).
     try {
-      if (sessionOf(feed.ref).provider === 'codex') return;
+      const provider = sessionOf(feed.ref).provider;
+      // Kimi's ACP pending set is authoritative even if activity goes idle.
+      if (provider === 'codex' || provider === 'kimi') return;
       // Qwen Code has no feed cards to settle (approvals are answered in the terminal). Its journal going idle ends the turn.
-      if (byFamily(sessionOf(feed.ref).provider, { claude: false, codex: false, qwen: true, opencode: false, neutral: false })) {
+      if (byFamily(provider, { claude: false, codex: false, qwen: true, opencode: false, neutral: false })) {
         if (turnActive(feed.state.items)) {
           feed.qwenStoppedAt = at();
           void seedAside(feed.ref);
@@ -2030,6 +2055,36 @@ export function createFeedService(
         : { hook_event_name: 'StopFailure', error: event.reason, last_assistant_message: event.error };
       commit(feed, applyHookEvent(feed.state, body, time));
     },
+    kimiRequests(ref, requests) {
+      if (stopped || options.kimiRespond === undefined) return;
+      const feed = requests.length === 0 ? feeds.get(refKey(ref)) : feedOf(ref);
+      if (feed === undefined || !feedCurrent(feed)) return;
+      feed.live = true;
+      setDecisions(feed, 'window');
+      const live = (feed.kimiInteractions ??= new Map());
+      const ids = new Set(requests.map((request) => request.id));
+      const removed: string[] = [];
+      for (const [id, interaction] of live) {
+        if (ids.has(interaction.request.id)) continue;
+        live.delete(id);
+        removed.push(id);
+      }
+      const time = at();
+      const settled = settleCards(feed.state, 'stale', time, removed);
+      const added = requests.flatMap((request) => {
+        const id = `kimi:${request.id}`;
+        if (live.has(id)) return [];
+        const interaction = kimiInteraction(request, time);
+        if (interaction === undefined) return [];
+        live.set(id, interaction);
+        return [interaction.card];
+      });
+      if (added.length === 0 && settled.changes.length === 0) return;
+      commit(feed, {
+        state: { ...settled.state, items: [...settled.state.items, ...added] },
+        changes: [...settled.changes, ...added],
+      });
+    },
     opencodePoll(ref) {
       const feed = feeds.get(refKey(ref));
       if (stopped || feed === undefined || feed.opencode === undefined) return Promise.resolve();
@@ -2214,10 +2269,30 @@ export function createFeedService(
         throw new HostError('not_found', `no card ${cardId} in the session feed`);
       }
       const current: FeedCardState = card.state;
+      if (current !== 'pending') return { applied: false, state: current };
+      const interaction = feed.kimiInteractions?.get(cardId);
+      if (interaction !== undefined && options.kimiRespond !== undefined) {
+        const answer = interaction.answer(decision);
+        if (answer === undefined) return { applied: false, state: current };
+        const time = at();
+        // The transport publishes its new pending set synchronously while responding.
+        // Unlink this card first so that publication does not mark a valid answer stale.
+        feed.kimiInteractions?.delete(cardId);
+        try {
+          options.kimiRespond(feed.ref, interaction.request.id, answer.response);
+        } catch (error) {
+          commit(feed, settleCards(feed.state, 'stale', time, [cardId]));
+          throw error;
+        }
+        const result = applyDecision(feed.state, cardId, answer.decision, time);
+        commit(feed, result);
+        const next = result.changes.find((item): item is FeedCard => isCard(item) && item.cardId === cardId);
+        return { applied: result.applied, state: next?.state ?? current };
+      }
       // Решение без удержанного хука ушло бы в никуда: карточка в окне сказала бы «allowed», а CLI
       // ничего не получил. Такое решение не применяется (окно повторит, когда хук дойдёт).
       const held = pending.get(feed.ref, cardId);
-      if (held === undefined || current !== 'pending') return { applied: false, state: current };
+      if (held === undefined) return { applied: false, state: current };
       const result = applyDecision(feed.state, cardId, decision, at());
       if (!result.applied) return { applied: false, state: current };
       const next =

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { stripEscapes, type LaunchPlan } from '@parley/core';
-import { refKey, type KimiResponse, type KimiState, type SendResult, type SessionRef } from '@parley/protocol';
+import { refKey, type KimiRequest, type KimiResponse, type KimiState, type SendResult, type SessionRef } from '@parley/protocol';
 import type { HostContext } from '../context.js';
 import { HostError } from '../errors.js';
 import type { PtyProcess } from '../pty/pty-process.js';
@@ -17,6 +17,7 @@ interface KimiSessionHooks {
   hasHistory(ref: SessionRef): boolean;
   activity(ref: SessionRef, state: 'ready' | 'working' | 'blocked' | 'ended', detail?: string): void;
   requestsChanged?(ref: SessionRef, requests: KimiState['requests']): void;
+  canShowElicitation?(request: Extract<KimiRequest, { kind: 'elicitation' }>): boolean;
   authChanged?(signedIn: boolean): void;
 }
 
@@ -101,6 +102,7 @@ export function createKimiSessions(host: HostContext, hooks: KimiSessionHooks) {
       ...launch,
       clientVersion: host.version,
       elicitationForm: hooks.requestsChanged !== undefined,
+      ...(hooks.canShowElicitation === undefined ? {} : { canShowElicitation: hooks.canShowElicitation }),
       loadHistory: launch.sessionId !== undefined && !hooks.hasHistory(ref),
       onState: (state) => { if (session.ready) publishState(state); },
       onText(text, history, author) {

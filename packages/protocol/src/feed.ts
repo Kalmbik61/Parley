@@ -168,6 +168,10 @@ const cardBase = {
   settledAt: z.string().exactOptional(),
 };
 
+// Вопросы и план core берёт из уже усечённого входа карточки — тот же предел.
+const inputText = z.string().max(FEED_INPUT_LIMIT);
+const optionId = z.string().min(1).max(FEED_INPUT_LIMIT);
+
 const permission = z.strictObject({
   ...cardBase,
   kind: z.literal('permission'),
@@ -175,10 +179,16 @@ const permission = z.strictObject({
   always: z.boolean().exactOptional(),
   message: z.string().max(FEED_DECISION_MESSAGE_LIMIT).exactOptional(),
   notified: z.boolean(),
+  permissionOptions: z.array(z.strictObject({
+    optionId,
+    name: inputText,
+    kind: z.enum(['allow_once', 'allow_always', 'reject_once', 'reject_always']),
+  })).exactOptional(),
+  permissionPreview: z.array(z.discriminatedUnion('type', [
+    z.strictObject({ type: z.literal('text'), text: inputText }),
+    z.strictObject({ type: z.literal('diff'), path: inputText, oldText: inputText.nullable(), newText: inputText }),
+  ])).exactOptional(),
 });
-
-// Вопросы и план core берёт из уже усечённого входа карточки — тот же предел.
-const inputText = z.string().max(FEED_INPUT_LIMIT);
 
 const question = z.strictObject({
   ...cardBase,
@@ -187,10 +197,19 @@ const question = z.strictObject({
     z.strictObject({
       question: inputText,
       header: inputText.nullable(),
-      options: z.array(z.strictObject({ label: inputText, description: inputText.nullable() })),
+      options: z.array(z.strictObject({ label: inputText, description: inputText.nullable(), value: inputText.exactOptional() })),
       multiSelect: z.boolean(),
+      field: z.strictObject({
+        id: optionId,
+        type: z.enum(['choice', 'text', 'number', 'integer', 'boolean']),
+        required: z.boolean(),
+        description: inputText.exactOptional(),
+        min: z.number().exactOptional(),
+        max: z.number().exactOptional(),
+      }).exactOptional(),
     }),
   ),
+  formPrompt: inputText.exactOptional(),
   // Ответ из терминала (`PostToolUse`) core не усекает, поэтому пределов `feed.decide` здесь нет.
   answers: z.record(z.string(), z.string()).exactOptional(),
 });
@@ -317,12 +336,19 @@ export const feedDecision: z.ZodType<FeedDecision> = z.discriminatedUnion('kind'
     behavior: z.enum(['allow', 'deny']),
     always: z.literal(true).exactOptional(),
     message: z.string().max(FEED_DECISION_MESSAGE_LIMIT).exactOptional(),
+    optionId: optionId.exactOptional(),
   }),
   z.object({
     kind: z.literal('question'),
     answers: z
       .record(z.string().max(FEED_INPUT_LIMIT), z.string().max(FEED_DECISION_ANSWER_LIMIT))
       .refine((answers) => Object.keys(answers).length <= FEED_DECISION_ANSWERS),
+    values: z.record(optionId, z.union([
+      z.string().max(FEED_DECISION_ANSWER_LIMIT),
+      z.number(),
+      z.boolean(),
+      z.array(inputText).max(FEED_DECISION_ANSWERS),
+    ])).refine((values) => Object.keys(values).length <= FEED_DECISION_ANSWERS).exactOptional(),
   }),
   z.object({ kind: z.literal('plan'), choice: z.enum(['auto-accept', 'manual']) }),
 ]);

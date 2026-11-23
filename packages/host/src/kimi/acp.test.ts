@@ -85,7 +85,10 @@ describe('Kimi Code ACP subprocess', () => {
     expect(question).toMatchObject({
       kind: 'permission', title: 'AskUserQuestion',
       content: [{ type: 'content', content: { type: 'text', text: 'Which release?' } }],
-      options: [{ optionId: 'option:stable', kind: 'allow_once', name: 'Stable' }],
+      options: [
+        { optionId: 'option:stable', kind: 'allow_once', name: 'Stable' },
+        { optionId: 'q0_skip', kind: 'reject_once', name: 'Skip' },
+      ],
     });
     acp.respond(question!.id, { kind: 'permission', optionId: 'option:stable' });
     expect(await prompt).toBe('end_turn');

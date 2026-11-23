@@ -116,6 +116,7 @@ import { createKimiAuth } from './providers/kimi-auth.js';
 import { createProcessMonitor } from './pty/process-monitor.js';
 import { createSender } from './pty/send.js';
 import { createFeedService } from './feed/feed-service.js';
+import { canShowKimiElicitation } from './feed/kimi-interactions.js';
 import { ensureCodexHookLauncher } from './feed/codex-hook-launcher.js';
 import { createBacklogService } from './backlog/backlog-service.js';
 import { createPlanEffectsService } from './rooms/plan-effects.js';
@@ -508,6 +509,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     ...(options.codexHookGraceMs === undefined ? {} : { codexHookGraceMs: options.codexHookGraceMs }),
     // OpenCode Chat reads the messages of the session's own server (the supervisor is created further down; it is only called later).
     opencodeServer: (ref) => opencodeSupervisor.get(ref),
+    kimiRespond: (ref, requestId, response) => kimi.respond(ref, requestId, response),
   });
   // Канал агента к браузеру окна (спека браузера 2026-10-07, 3.7): путь `/agent/browser` на сервере хуков и свой
   // реестр токенов — у всех провайдеров. Операцию исполняет окно с возможностью `browser-agent`.
@@ -817,6 +819,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   const kimiAuth = createKimiAuth(() => handle.context.broadcast('providers.changed', { provider: 'kimi' }));
   const kimi = createKimiSessions(handle.context, {
     output: feedService.kimiOutput,
+    requestsChanged: feedService.kimiRequests,
+    canShowElicitation: canShowKimiElicitation,
     hasHistory: feedService.kimiHasHistory,
     activity: activityService.kimiActivity,
     authChanged: kimiAuth.observe,

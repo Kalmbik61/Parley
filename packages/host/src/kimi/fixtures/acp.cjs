@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 const readline = require('node:readline');
-const { realpathSync } = require('node:fs');
+const { realpathSync, writeFileSync } = require('node:fs');
 const { spawn } = require('node:child_process');
 
 async function parleyMap(server) {
@@ -41,13 +41,28 @@ const config = (currentValue = 'default') => [{
 const reply = (id, result) => write({ id, result });
 const update = (sessionId, fields) => write({ method: 'session/update', params: { sessionId, update: fields } });
 const chunk = (sessionId, text) => update(sessionId, { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } });
+const askFallback = (sessionId) => write({ id: 702, method: 'session/request_permission', params: {
+  sessionId,
+  toolCall: {
+    toolCallId: 'question-tool', title: 'AskUserQuestion',
+    content: [{ type: 'content', content: { type: 'text', text: 'Which release?' } }],
+  },
+  options: [
+    { optionId: 'option:stable', kind: 'allow_once', name: 'Stable' },
+    { optionId: 'q0_skip', kind: 'reject_once', name: 'Skip' },
+  ],
+} });
 let prompt;
 let mode = 'default';
 let parleyServer;
+let writeWhenAllowed = false;
+let forms = false;
+const concurrentAnswers = new Map();
 readline.createInterface({ input: process.stdin }).on('line', (line) => {
-  const { id, method, params, result } = JSON.parse(line);
+  const { id, method, params, result, error } = JSON.parse(line);
   switch (method) {
     case 'initialize':
+      forms = params.clientCapabilities.elicitation?.form !== undefined;
       if (params.protocolVersion !== 1 || (process.env.KIMI_FIXTURE_EXPECT_FORMS && params.clientCapabilities.elicitation?.form === undefined)) process.exit(3);
       return reply(id, { protocolVersion: 1, agentInfo: { name: 'Kimi Code CLI' }, agentCapabilities: { loadSession: true, sessionCapabilities: { resume: {}, list: {} } } });
     case 'session/list':
@@ -59,7 +74,7 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
     case 'session/resume': {
       if (process.env.KIMI_FIXTURE_LOGGED_OUT) return write({ id, error: { code: -32000, message: 'Authentication required' } });
       const server = params.mcpServers[0];
-      if (realpathSync(params.cwd) !== process.cwd() || server.name !== 'parley' || server.env.find(({ name }) => name === 'PARLEY_SESSION_ID')?.value !== 's-01') process.exit(4);
+      if (realpathSync(params.cwd) !== process.cwd() || server.name !== 'parley' || !/^s-0[12]$/.test(server.env.find(({ name }) => name === 'PARLEY_SESSION_ID')?.value ?? '')) process.exit(4);
       parleyServer = server;
       if (method === 'session/load') {
         update(params.sessionId, { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'Old question' } });
@@ -76,7 +91,8 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
       if (params.sessionId !== 'acp-session') process.exit(6);
       prompt = id;
       if (params.prompt[0].text === 'disconnect') process.exit(7);
-      if (['approve', 'large approval'].includes(params.prompt[0].text)) {
+      writeWhenAllowed = params.prompt[0].text === 'approve and write';
+      if (['approve', 'large approval', 'approve and write'].includes(params.prompt[0].text)) {
         const before = params.prompt[0].text === 'large approval' ? 'x'.repeat(70 * 1024) : 'before';
         return write({ id: 700, method: 'session/request_permission', params: {
           sessionId: params.sessionId,
@@ -91,19 +107,45 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
         } });
       }
       if (params.prompt[0].text === 'fallback question') {
-        return write({ id: 702, method: 'session/request_permission', params: {
-          sessionId: params.sessionId,
-          toolCall: {
-            toolCallId: 'question-tool', title: 'AskUserQuestion',
-            content: [{ type: 'content', content: { type: 'text', text: 'Which release?' } }],
-          },
-          options: [{ optionId: 'option:stable', kind: 'allow_once', name: 'Stable' }],
-        } });
+        return askFallback(params.sessionId);
       }
       if (params.prompt[0].text === 'question') {
         return write({ id: 701, method: 'elicitation/create', params: {
           sessionId: params.sessionId, mode: 'form', message: 'Name?', requestedSchema: {
             type: 'object', properties: { name: { type: 'string' } }, required: ['name'],
+          },
+        } });
+      }
+      if (params.prompt[0].text === 'mixed form') {
+        if (!forms) process.exit(10);
+        return write({ id: 703, method: 'elicitation/create', params: {
+          sessionId: params.sessionId, mode: 'form', message: 'Release details', requestedSchema: {
+            type: 'object',
+            properties: {
+              channels: { title: 'Channels', type: 'array', minItems: 1, items: { anyOf: [
+                { title: 'Stable, stable', const: 'stable' }, { title: 'Beta', const: 'beta' },
+              ] } },
+              note: { title: 'Note', type: 'string' },
+            },
+            required: ['channels', 'note'],
+          },
+        } });
+      }
+      if (params.prompt[0].text === 'parallel questions') {
+        if (!forms) process.exit(10);
+        for (const [id, message] of [[705, 'First question'], [706, 'Second question']]) {
+          write({ id, method: 'elicitation/create', params: {
+            sessionId: params.sessionId, mode: 'form', message, requestedSchema: {
+              type: 'object', properties: { answer: { type: 'string' } }, required: ['answer'],
+            },
+          } });
+        }
+        return;
+      }
+      if (params.prompt[0].text === 'unsupported form') {
+        return write({ id: 704, method: 'elicitation/create', params: {
+          sessionId: params.sessionId, mode: 'form', message: 'Unsupported form', requestedSchema: {
+            type: 'object', properties: { nested: { type: 'object' } },
           },
         } });
       }
@@ -124,8 +166,16 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
     case 'session/close':
       return reply(id, {});
     case undefined:
+      if (id === 705 || id === 706) {
+        concurrentAnswers.set(id, result.content.answer);
+        if (concurrentAnswers.size < 2) return;
+        chunk('acp-session', `${concurrentAnswers.get(705)} / ${concurrentAnswers.get(706)}`);
+      }
+      if (id === 704 && error) return askFallback('acp-session');
+      if (id === 700 && writeWhenAllowed && result.outcome.optionId === 'allow') writeFileSync('notes.md', 'after');
       if ((id === 700 || id === 702) && result.outcome.optionId) chunk('acp-session', result.outcome.optionId);
       if (id === 701 && result.action === 'accept') chunk('acp-session', result.content.name);
+      if (id === 703 && result.action === 'accept') chunk('acp-session', JSON.stringify(result.content));
       return reply(prompt, { stopReason: 'end_turn' });
   }
 });
