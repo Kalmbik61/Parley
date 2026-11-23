@@ -106,7 +106,7 @@ export function recogniseQwenPrompt(lines: readonly string[], kind: QwenPromptKi
     const options = choices.map(row => ({ label: row.label, description: row.description }));
     // Qwen also offers the left arrow on its review tab. It can skip a tab after a custom answer on 0.27.2.
     if (review && prefix.some(line => line.includes('▸'))) {
-      previous = rows[0]!.label === 'Submit answers' ? 'Previous question' : 'Предыдущий вопрос';
+      previous = 'Previous question';
       options.push({ label: previous, description: null });
     }
     card = { ...base, kind: 'question', questions: [{ question: title, header: null, options, multiSelect: multi,
