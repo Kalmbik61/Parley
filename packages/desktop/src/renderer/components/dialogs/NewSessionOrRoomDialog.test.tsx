@@ -2573,6 +2573,24 @@ describe('OpenCode in the dialog (spec 2026-11-12, 4.8)', () => {
   });
 });
 
+describe('Kimi Code in the dialog', () => {
+  it('launches native Kimi and directs model selection to the active chat', async () => {
+    bridge.setHandler('providers.list', async () => ({ providers: [...PROVIDERS, {
+      id: 'kimi', label: 'Kimi Code', available: true, version: '2.1.1',
+      models: [{ id: 'static-model', label: 'Static model' }],
+    }] }));
+    await renderDialog();
+    fireEvent.click(providerRadio(0, 'Kimi Code'));
+    expect(screen.getByText(S.providerCard.kimi.chooseInChat)).toBeTruthy();
+    expect(within(rows()[0]!).queryByLabelText('Model')).toBeNull();
+    fireEvent.click(button('Start session'));
+    await waitFor(() => expect(callsOf('sessions.create')).toHaveLength(1));
+    expect(callsOf('sessions.create')[0]).toMatchObject({ provider: 'kimi' });
+    expect(callsOf('sessions.create')[0]).not.toHaveProperty('model');
+    expect(callsOf('sessions.create')[0]).not.toHaveProperty('effort');
+  });
+});
+
 describe('Qwen Code in the dialog', () => {
   const QWEN = { id: 'qwen', label: 'Qwen Code', available: true, family: 'qwen' as const, version: '0.27.2' };
   const roles = [

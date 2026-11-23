@@ -113,6 +113,7 @@ import { Composer } from './Composer.js';
 import { currentModel, hasPendingCard, runningAgents, switchDividers, turnActive, type SwitchDivider } from './feed-model.js';
 import { FeedList, type PendingLetterRow } from './FeedList.js';
 import { ImagePreviewHost } from './ImagePreview.js';
+import { KimiConfigMenu } from './KimiConfigMenu.js';
 import { pasteClipboardImage } from './paste-image.js';
 import { isSlashCommand, withQuote } from './reply.js';
 import { ReplyPlate } from './ReplyPlate.js';
@@ -211,6 +212,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
   const feed = useFeed(sessionRef);
   const chatFold = useUiStore((state) => state.ui.chatFold);
   const codex = provider === 'codex';
+  const kimi = provider === 'kimi';
   const items = feed?.items ?? NO_ITEMS;
   const sent = useAssistantSent(bridge, sessionRef, useHostSupports('assistant.sent'));
   const viaIds = useMemo(() => viaAssistantIds(items, sent), [items, sent]);
@@ -235,6 +237,8 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
   const canInterrupt = useHostSupports('feed.interrupt');
   const canSetModel = useHostSupports('sessions.setModel');
   const canSetEffort = useHostSupports('sessions.setEffort');
+  const canReadKimiConfig = useHostSupports('kimi.getState');
+  const canSetKimiConfig = useHostSupports('kimi.setConfig');
   const [modeBusy, setModeBusy] = useState(false);
   const [choiceBusy, setChoiceBusy] = useState(false);
   const providerInfo = useProvidersStore((state) => state.providers.find((item) => item.id === provider));
@@ -242,14 +246,15 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
   // Уровни модели из карты — тот же список, по которому хост проверит выбор; модели в карте нет — уровни «Default».
   const efforts = effortChoices(providerInfo, storedModel);
   // Подпись модели: что CLI запустил на деле (лента), иначе выбор из карты подписью каталога.
-  const modelLabel = currentModel(items) ?? (storedModel === null ? null : modelCaption(models, storedModel));
+  const modelLabel = kimi ? null : currentModel(items) ?? (storedModel === null ? null : modelCaption(models, storedModel));
   const occupied = useActivityStore((state) => occupation(activityFor(state.byRef, sessionRef)?.activity));
   const busyReason = occupied === 'agent' ? S.chat.choice.agentWorking : occupied === 'background' ? S.chat.choice.backgroundTasks : null;
+  const kimiDisabled = canSetKimiConfig ? (active ? S.chat.choice.agentWorking : busyReason) : S.chat.kimi.readOnly;
   // Модель неживой сессии меняется только в карте (хост ответит `restarted: false`), уровень — только у живой: его ставит
   // ползунок самого CLI.
   const modelDisabled = live ? busyReason : null;
   const effortDisabled = live ? busyReason : S.chat.choice.notLive;
-  const showChoice = !codex && canSetModel && canSetEffort && (models.length > 0 || efforts !== null);
+  const showChoice = !codex && !kimi && canSetModel && canSetEffort && (models.length > 0 || efforts !== null);
   // Карточка неживой сессии — то же правило, что у `TerminalSurface`.
   const showCard = useWorksStore((state) => {
     const entry = state.entries.find((item) => item.projectPath === sessionRef.projectPath && item.map.work.id === sessionRef.workId);
@@ -534,8 +539,12 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
             )
           }
           model={codex && modelLabel !== null && storedEffort !== null ? `${modelLabel} · ${storedEffort}` : modelLabel}
+          sessionConfig={kimi && live && canReadKimiConfig ? (
+            <KimiConfigMenu key={sessionKey} bridge={bridge} sessionRef={sessionRef}
+              disabledReason={kimiDisabled} />
+          ) : undefined}
           {...(codex && feed?.mode != null ? { modeLabelText: modeLabel(feed.mode) } : {})}
-          {...(canSetMode && !codex ? { modeMenu: { mode: feed?.mode ?? null, busy: modeBusy || !live, onSelect: setMode } } : {})}
+          {...(canSetMode && !codex && !kimi ? { modeMenu: { mode: feed?.mode ?? null, busy: modeBusy || !live, onSelect: setMode } } : {})}
           {...(showChoice
             ? {
                 choiceMenu: {

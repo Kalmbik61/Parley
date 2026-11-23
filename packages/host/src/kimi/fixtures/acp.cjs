@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-const readline = require('node:readline');
-const { realpathSync, writeFileSync } = require('node:fs');
-const { spawn } = require('node:child_process');
+const readline = process.getBuiltinModule('node:readline');
+const { existsSync, readFileSync, realpathSync, writeFileSync } = process.getBuiltinModule('node:fs');
+const { spawn } = process.getBuiltinModule('node:child_process');
 
 async function parleyMap(server) {
   const env = { ...process.env, ...Object.fromEntries(server.env.map(({ name, value }) => [name, value])) };
@@ -34,10 +34,18 @@ async function parleyMap(server) {
 }
 
 const write = (message) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...message }) + '\n');
+const booleanConfig = process.env.KIMI_FIXTURE_BOOLEAN_CONFIG === '1';
+const modelFile = process.env.KIMI_FIXTURE_MODEL_FILE;
+let model = modelFile && existsSync(modelFile) ? readFileSync(modelFile, 'utf8') : 'alpha';
+let thinking = false;
 const config = (currentValue = 'default') => [{
   id: 'mode', name: 'Mode', category: 'mode', type: 'select', currentValue,
   options: [{ value: 'default', name: 'Default' }, { value: 'plan', name: 'Plan' }],
-}];
+}, ...(booleanConfig ? [{ id: 'thinking', name: 'Thinking', type: 'boolean', currentValue: thinking }] : []),
+...(modelFile ? [{
+  id: 'model', name: 'Model', category: 'model', type: 'select', currentValue: model,
+  options: [{ value: 'alpha', name: 'Alpha' }, { value: 'beta', name: 'Beta' }],
+}] : [])];
 const reply = (id, result) => write({ id, result });
 const update = (sessionId, fields) => write({ method: 'session/update', params: { sessionId, update: fields } });
 const chunk = (sessionId, text) => update(sessionId, { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } });
@@ -64,6 +72,7 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
     case 'initialize':
       forms = params.clientCapabilities.elicitation?.form !== undefined;
       if (params.protocolVersion !== 1 || (process.env.KIMI_FIXTURE_EXPECT_FORMS && params.clientCapabilities.elicitation?.form === undefined)) process.exit(3);
+      if (booleanConfig && params.clientCapabilities.session?.configOptions?.boolean === undefined) process.exit(3);
       return reply(id, { protocolVersion: 1, agentInfo: { name: 'Kimi Code CLI' }, agentCapabilities: { loadSession: true, sessionCapabilities: { resume: {}, list: {} } } });
     case 'session/list':
       return process.env.KIMI_FIXTURE_LOGGED_OUT
@@ -83,8 +92,16 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
       return reply(id, { sessionId: params.sessionId ?? 'acp-session', configOptions: config(mode) });
     }
     case 'session/set_config_option':
-      if (params.sessionId !== 'acp-session' || params.configId !== 'mode') process.exit(5);
-      mode = params.value;
+      if (params.sessionId !== 'acp-session') process.exit(5);
+      if (process.env.KIMI_FIXTURE_REJECT_CONFIG) {
+        return write({ id, error: { code: -32602, message: '\x1b[31mPlan mode is unavailable for this session.\x1b[0m\nInternal detail' } });
+      }
+      if (params.configId === 'mode') mode = params.value;
+      else if (booleanConfig && params.configId === 'thinking' && params.type === 'boolean') thinking = params.value;
+      else if (modelFile && params.configId === 'model' && ['alpha', 'beta'].includes(params.value)) {
+        model = params.value;
+        writeFileSync(modelFile, model);
+      } else process.exit(5);
       update(params.sessionId, { sessionUpdate: 'config_option_update', configOptions: config(mode) });
       return reply(id, { configOptions: config(mode) });
     case 'session/prompt':

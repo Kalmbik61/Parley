@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { constants } from 'node:os';
 import { StringDecoder } from 'node:string_decoder';
+import { stripVTControlCharacters } from 'node:util';
 import {
   kimiConfigOption, kimiElicitationSchema, kimiPermissionOption,
   type KimiConfigOption, type KimiPermissionContent, type KimiRequest, type KimiResponse, type KimiState,
@@ -50,6 +51,7 @@ const RPC_TIMEOUT_MS = 15_000;
 const CANCEL_TIMEOUT_MS = 5_000;
 const MAX_PERMISSION_BLOCKS = 4;
 const MAX_PREVIEW_CHARS = 4096;
+const SET_CONFIG_METHOD = 'session/set_config_option';
 
 function permissionContent(raw: unknown): KimiPermissionContent[] {
   if (!Array.isArray(raw)) return [];
@@ -80,6 +82,7 @@ function permissionContent(raw: unknown): KimiPermissionContent[] {
 
 
 interface Waiter {
+  method: string;
   resolve(value: JsonObject): void;
   reject(error: KimiAcpError): void;
 }
@@ -204,7 +207,7 @@ export function createKimiAcp(options: KimiAcpOptions) {
         clearTimeout(timer);
         settle(value);
       };
-      outgoing.set(id, { resolve: finish(resolve), reject: finish(reject) });
+      outgoing.set(id, { method, resolve: finish(resolve), reject: finish(reject) });
       try {
         write({ id, method, params });
       } catch (error) {
@@ -236,10 +239,19 @@ export function createKimiAcp(options: KimiAcpOptions) {
       if (message['error'] === undefined) {
         waiter.resolve(record(message['result']));
       } else {
-        const code = record(message['error'])['code'];
-        waiter.reject(code === -32000
-          ? new KimiAcpError('Kimi Code is not signed in. Run kimi login and try again.', 'sign-in', code)
-          : new KimiAcpError('Kimi Code rejected the ACP request', 'protocol', typeof code === 'number' ? code : undefined));
+        const { code, message: reason } = record(message['error']);
+        if (code === -32000) {
+          waiter.reject(new KimiAcpError('Kimi Code is not signed in. Run kimi login and try again.', 'sign-in', code));
+        } else if (waiter.method === SET_CONFIG_METHOD && code === -32602) {
+          const detail = typeof reason === 'string'
+            ? stripVTControlCharacters(reason).split(/[\r\n\u2028\u2029]/u, 1)[0]?.replace(/[\p{Cc}\p{Cf}]/gu, '').trim().slice(0, 240)
+            : undefined;
+          waiter.reject(new KimiAcpError(detail || 'Kimi Code rejected that setting or value', 'invalid', code));
+        } else if (waiter.method === SET_CONFIG_METHOD && code === -32601) {
+          waiter.reject(new KimiAcpError('This Kimi Code CLI does not support changing session settings', 'protocol', code));
+        } else {
+          waiter.reject(new KimiAcpError('Kimi Code rejected the ACP request', 'protocol', typeof code === 'number' ? code : undefined));
+        }
       }
       return;
     }
@@ -350,7 +362,10 @@ export function createKimiAcp(options: KimiAcpOptions) {
     const result = await request('initialize', {
       protocolVersion: 1,
       ...(options.clientVersion === undefined ? {} : { clientInfo: { name: 'Parley', version: options.clientVersion } }),
-      clientCapabilities: options.elicitationForm ? { elicitation: { form: {} } } : {},
+      clientCapabilities: {
+        session: { configOptions: { boolean: {} } },
+        ...(options.elicitationForm ? { elicitation: { form: {} } } : {}),
+      },
     }, timeoutMs);
     const agent = record(result['agentInfo']);
     if (result['protocolVersion'] !== 1 || agent['name'] !== 'Kimi Code CLI') {
@@ -445,7 +460,10 @@ export function createKimiAcp(options: KimiAcpOptions) {
     const revision = configRevision;
     changingConfig = true;
     try {
-      const result = await request('session/set_config_option', { sessionId, configId, value });
+      const result = await request(SET_CONFIG_METHOD, {
+        sessionId, configId, value,
+        ...(typeof value === 'boolean' ? { type: 'boolean' } : {}),
+      });
       if (revision === configRevision && !setOptions(result['configOptions'])) {
         throw new KimiAcpError('Kimi Code did not confirm the configuration', 'protocol');
       }

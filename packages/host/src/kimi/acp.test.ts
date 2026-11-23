@@ -34,6 +34,23 @@ describe('Kimi Code ACP subprocess', () => {
     expect(acp.state().config).toMatchObject([{ id: 'mode', currentValue: 'plan' }]);
   });
 
+  it('shows a bounded CLI validation reason and keeps the confirmed configuration on refusal', async () => {
+    const { acp } = start(undefined, { KIMI_FIXTURE_REJECT_CONFIG: '1' });
+    await acp.connect();
+    await expect(acp.setConfig('mode', 'plan')).rejects.toMatchObject({
+      code: 'invalid', message: 'Plan mode is unavailable for this session.',
+    });
+    expect(acp.state().config).toMatchObject([{ id: 'mode', currentValue: 'default' }]);
+  });
+
+  it('advertises and sends boolean configuration when the CLI exposes it', async () => {
+    const { acp } = start(undefined, { KIMI_FIXTURE_BOOLEAN_CONFIG: '1' });
+    await acp.connect();
+    await expect(acp.setConfig('thinking', true)).resolves.toContainEqual(expect.objectContaining({
+      id: 'thinking', type: 'boolean', currentValue: true,
+    }));
+  });
+
   it('cancels the bound session, clears pending work on disconnect and reconnects using its provider id', async () => {
     const { acp } = start();
     const sessionId = await acp.connect();

@@ -36,6 +36,7 @@ async function setup(loggedOut = false): Promise<string> {
   await mkdir(project);
   await writeFile(binary, await readFile(new URL('./fixtures/acp.cjs', import.meta.url)), { mode: 0o755 });
   vi.stubEnv('PARLEY_KIMI_BIN', binary);
+  vi.stubEnv('KIMI_FIXTURE_MODEL_FILE', path.join(home, 'fixture-model'));
   if (loggedOut) vi.stubEnv('KIMI_FIXTURE_LOGGED_OUT', '1');
   running = await startHost({ home });
   const paths = hostPaths(home);
@@ -69,9 +70,18 @@ it('uses ordinary session and Chat RPC, calls the real Parley MCP, then cancels 
   expect(providers.providers.find(({ id }) => id === 'kimi')).toMatchObject({ label: 'Kimi Code', available: true });
   const { ref } = await call('sessions.create', input(projectPath));
   expect(await session(ref)).toMatchObject({ lifecycle: 'active', provider: 'kimi', providerSessionId: 'acp-session' });
-  expect((await call('kimi.getState', { ref })).config).toMatchObject([{ id: 'mode', currentValue: 'default' }]);
-  expect(await call('kimi.setConfig', { ref, configId: 'mode', value: 'plan' })).toMatchObject({ config: [{ id: 'mode', currentValue: 'plan' }] });
-  expect(events.some((message) => message.event === 'kimi.configChanged')).toBe(true);
+  expect((await call('kimi.getState', { ref })).config).toMatchObject([
+    { id: 'mode', currentValue: 'default' }, { id: 'model', currentValue: 'alpha' },
+  ]);
+  expect(await call('kimi.setConfig', { ref, configId: 'mode', value: 'plan' })).toMatchObject({
+    config: [{ id: 'mode', currentValue: 'plan' }, { id: 'model', currentValue: 'alpha' }],
+  });
+  expect(await call('kimi.setConfig', { ref, configId: 'model', value: 'beta' })).toMatchObject({
+    config: [{ id: 'mode', currentValue: 'plan' }, { id: 'model', currentValue: 'beta' }],
+  });
+  expect(events).toContainEqual(expect.objectContaining({
+    event: 'kimi.configChanged', data: { ref, config: expect.arrayContaining([expect.objectContaining({ id: 'model', currentValue: 'beta' })]) },
+  }));
   expect(await call('pty.send', { ref, text: 'call Parley', submit: true })).toMatchObject({ submitted: true });
   await expect.poll(() => call('feed.snapshot', { ref })).toMatchObject({
     items: expect.arrayContaining([expect.objectContaining({ kind: 'text', text: 'Parley session: s-01', streaming: false })]),
@@ -85,6 +95,7 @@ it('uses ordinary session and Chat RPC, calls the real Parley MCP, then cancels 
   await expect.poll(() => session(ref)).toMatchObject({ lifecycle: 'sleeping', providerSessionId: 'acp-session' });
   await call('sessions.resume', { ref });
   expect(await session(ref)).toMatchObject({ lifecycle: 'active', providerSessionId: 'acp-session' });
+  expect((await call('kimi.getState', { ref })).config).toContainEqual(expect.objectContaining({ id: 'model', currentValue: 'beta' }));
   expect(await call('pty.send', { ref, text: 'hello', submit: true })).toMatchObject({ submitted: true });
   await expect.poll(() => call('feed.snapshot', { ref })).toMatchObject({
     items: expect.arrayContaining([expect.objectContaining({ kind: 'text', text: 'Hello Parley', streaming: false })]),

@@ -831,6 +831,12 @@ export const S = {
   /** Общая карточка подключения: строка статуса и диалог новой сессии. */
   providerCard: {
     /** Qwen Code card (spec 2026-11-11, 3.6): sign-in hints, never a verdict. */
+    kimi: {
+      missingCli: 'Install the Node-based Kimi Code CLI and make sure kimi is on the host’s PATH.',
+      signIn: 'Run kimi login in a terminal on the host, then refresh the provider.',
+      chooseInChat: 'Choose the model, thinking level, and mode in the active Kimi Code chat.',
+      refresh: 'Refresh connection',
+    },
     qwen: {
       hint: {
         configured: (type: string): string => `Configured: ${type}`,
@@ -2276,6 +2282,12 @@ export const S = {
       /** `sessions.setModel` вернул effort `null`: у новой модели нет уровня, выбранного раньше. */
       effortReset: (model: string, level: string): string => `${model} has no ${level} effort — effort is back to Default`,
     },
+    kimi: {
+      settings: (current: string): string => `Kimi Code settings (${current})`,
+      booleanValue: (name: string, enabled: boolean): string => `${name} ${enabled ? 'on' : 'off'}`,
+      readOnly: 'This host cannot change Kimi Code settings',
+      refused: (reason: string): string => `Could not change Kimi Code settings (${reason})`,
+    },
     /** Меню режима разрешений в тулбаре (кусок 4a, решение 9); режим вне списка показывается сырой строкой. */
     mode: {
       label: 'Permission mode',
@@ -3468,6 +3480,12 @@ function budgetSettingName(reason: string, scope: string): string | null {
  */
 export function startErrorText(failure: IpcErrorInfo, action: string): string {
   const data = failure.data;
+  switch (data?.['reason']) {
+    case 'kimi-missing-cli': return S.providerCard.kimi.missingCli;
+    case 'kimi-sign-in': return S.providerCard.kimi.signIn;
+    case 'kimi-config-in-chat': return S.providerCard.kimi.chooseInChat;
+    case 'kimi-protocol': return failure.message || errorText(failure.code, action);
+  }
   // Отказ из-за роли после замены агента (спека 2026-11-12, 2.6): текст хоста сам называет выход — показываем его.
   if (failure.code === 'conflict' && data?.['reason'] === HOST_ERROR_REASONS.roleChange && failure.message !== '') return failure.message;
   if (data?.['code'] !== 'resource-budget') return errorText(failure.code, action);

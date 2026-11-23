@@ -46,6 +46,7 @@ export type FeedUnavailableReason = 'host-unsupported' | 'provider-unsupported' 
 
 export function feedUnavailableReason({ hostMethods: methods, features, provider, family, version }: FeedAvailabilityInput): FeedUnavailableReason | null {
   if (!methods.has('feed.snapshot')) return 'host-unsupported';
+  if (provider === 'kimi') return methods.has('kimi.getState') ? null : 'host-unsupported';
   if (provider === 'codex') {
     if (!features?.has(FEED_CODEX_FEATURE)) return 'host-unsupported';
   } else if (family === 'qwen') {
@@ -78,6 +79,7 @@ export function feedAvailability(
   input: FeedAvailabilityInput & { loaded: boolean },
 ): boolean | null {
   if (!input.hostMethods.has('feed.snapshot')) return false;
+  if (input.provider === 'kimi') return feedAvailable(input);
   if (
     !input.loaded &&
     (input.provider === 'claude' ||
@@ -164,12 +166,11 @@ export function useHostHasFeed(): boolean {
  * именно её записи, в том числе у GLM.
  */
 export function useFeedAvailability(): (provider: string) => boolean | null {
-  const hasFeed = useHostHasFeed();
   const providers = useProvidersStore((state) => state.providers);
   const loaded = useProvidersStore((state) => state.loaded);
   const status = useHostStore((state) => state.status);
   const features = useMemo(() => hostFeatures(status), [status]);
-  const methods = hasFeed ? FEED_METHODS : NO_METHODS;
+  const methods = useMemo(() => hostMethods(status), [status]);
   return (provider) => {
     const info = providers.find((entry) => entry.id === provider);
     return feedAvailability({
@@ -182,9 +183,6 @@ export function useFeedAvailability(): (provider: string) => boolean | null {
     });
   };
 }
-
-const FEED_METHODS: ReadonlySet<string> = new Set(['feed.snapshot']);
-const NO_METHODS: ReadonlySet<string> = new Set();
 
 /** Та же проверка вне React — для действия палитры `chat.toggleView`. */
 export function feedAvailableNow(provider: string): boolean {
