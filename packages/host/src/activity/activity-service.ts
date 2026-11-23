@@ -179,6 +179,8 @@ export interface ActivityService {
    * экран старта ловится по тому, что с запуска нынешнего процесса ничего не прибавилось.
    */
   processStarted(ref: SessionRef, spawnedAt?: number): void;
+  /** Lifecycle and turn boundaries delivered by the current Kimi ACP process. */
+  kimiActivity(ref: SessionRef, state: 'ready' | 'working' | 'blocked' | 'ended', detail?: string): void;
   /** Qwen Code program status (OSC 7501) of the session's current process (spec 2026-11-11, 3.4 amendment). */
   qwenStatus(ref: SessionRef, status: QwenStatus): void;
   /**
@@ -579,6 +581,7 @@ export function createActivityService(
    */
   const turnBoundaries = new Map<string, string>();
   const journals = new Map<string, readonly EventRecord[] | null>();
+  const kimiEvents = new Map<string, EventRecord[]>();
   const seenAt = new Map<string, string>();
   const silenceTimers = new Map<string, NodeJS.Timeout>();
   const autoTitled = new Set<string>();
@@ -737,6 +740,7 @@ export function createActivityService(
    * нового процесса (`withLaunchBoundary`).
    */
   function eventsFor(session: WorkSession, key: string): readonly EventRecord[] | null {
+    if (session.provider === 'kimi') return kimiEvents.get(key) ?? null;
     const journal = journals.get(key) ?? null;
     const terminal = terminals.get(key);
     // Qwen states `starting` and `started` (spec 3.4): until the current process shows readiness, its lines stay out of
@@ -1996,6 +2000,18 @@ export function createActivityService(
       terminals.set(key, state);
       recomputeOnStart(ref);
     },
+    kimiActivity(ref, state, detail) {
+      if (stopped) return;
+      const key = refKey(ref);
+      const at = new Date(nowFn()).toISOString();
+      const events = kimiEvents.get(key) ?? [];
+      const event = state === 'ready' ? bareEvent(at, 'SessionStart')
+        : state === 'ended' ? bareEvent(at, 'Stop')
+        : state === 'blocked' ? { ...bareEvent(at, 'Notification'), notificationType: 'permission_prompt', message: detail ?? null }
+        : bareEvent(at, events.at(-1)?.name === 'Notification' ? PERMISSION_ANSWERED_EVENT : 'UserPromptSubmit');
+      kimiEvents.set(key, [...events.slice(-15), event]);
+      recompute(ref);
+    },
     qwenStatus(ref, status) {
       if (stopped) return;
       const key = refKey(ref);
@@ -2079,6 +2095,7 @@ export function createActivityService(
       const key = refKey(ref);
       // Запись о запуске относится к процессу: у Claude и GLM состояния терминала нет, и выход иначе её не снимал бы.
       launches.delete(key);
+      if (kimiEvents.delete(key)) recompute(ref);
       if (!terminals.has(key)) return;
       clearTerminal(key);
       clearCodexCallTimer(key);

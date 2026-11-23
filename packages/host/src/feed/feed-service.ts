@@ -58,6 +58,7 @@ import {
   turnActive,
   withCodexAgentMeta,
 } from '@parley/core';
+import type { KimiOutput } from '../kimi/sessions.js';
 import type {
   CodexAgentMeta,
   CodexCursor,
@@ -209,6 +210,8 @@ export function withoutMail<D extends { upsert: FeedItem[]; removed: string[] }>
 }
 
 export interface FeedService {
+  kimiHasHistory(ref: SessionRef): boolean;
+  kimiOutput(ref: SessionRef, event: KimiOutput): void;
   /**
    * OpenCode: poll the session's messages now (called on its SSE events); joins the poll in flight. A session without a
    * feed in memory, a server or a seeded feed does nothing.
@@ -2010,6 +2013,23 @@ export function createFeedService(
 
   return {
     onHook,
+    kimiHasHistory(ref) {
+      return feeds.get(refKey(ref))?.state.items.some((item) => item.kind === 'prompt' || item.kind === 'text') ?? false;
+    },
+    kimiOutput(ref, event) {
+      if (stopped) return;
+      const feed = feedOf(ref);
+      feed.live = true;
+      const time = at();
+      if (event.kind === 'end' && event.error === undefined) {
+        commit(feed, closeFeedTurn(feed.state, time, { interrupted: event.reason === 'cancelled' }));
+        return;
+      }
+      const body = event.kind === 'prompt' ? { hook_event_name: 'UserPromptSubmit', prompt: event.text }
+        : event.kind === 'text' ? { hook_event_name: 'MessageDisplay', message_id: event.messageId, delta: event.text }
+        : { hook_event_name: 'StopFailure', error: event.reason, last_assistant_message: event.error };
+      commit(feed, applyHookEvent(feed.state, body, time));
+    },
     opencodePoll(ref) {
       const feed = feeds.get(refKey(ref));
       if (stopped || feed === undefined || feed.opencode === undefined) return Promise.resolve();
@@ -2231,7 +2251,7 @@ export function createFeedService(
       deps.pty.write(ref, ESC);
       // У Codex приглашения `❯` и возвращённого в поле промпта нет: ход закроет запись `turn_aborted`.
       // Qwen Code: no `❯` prompt check as Claude's; the next transcript record or hook settles the turn.
-      if (sessionOf(ref).provider === 'codex' || byFamily(sessionOf(ref).provider, { claude: false, codex: false, qwen: true, opencode: true, neutral: false })) return;
+      if (sessionOf(ref).provider === 'kimi' || sessionOf(ref).provider === 'codex' || byFamily(sessionOf(ref).provider, { claude: false, codex: false, qwen: true, opencode: true, neutral: false })) return;
       const feed = feeds.get(refKey(ref));
       // Хода в ленте нет — присматривать не за чем: Esc ушёл, остальное за CLI.
       if (stopped || feed === undefined || feed.state.turnStartedAt === null) return;

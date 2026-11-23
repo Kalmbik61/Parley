@@ -55,7 +55,7 @@ import { leadRecipeBlock } from './recipe-lead.js';
 import { buildSessionLayer, developerInstructions, validateLayerArguments, type SessionLayerInput, type SessionLayerWarning } from './session-layer.js';
 import { addSession, isCodexThreadBinding, removeSession, transitionSession, type NewSession } from './map.js';
 import { NEW_LABEL } from './names.js';
-import { CLAUDE_MCP_AUTO_BACKGROUND_MS, mcpConfigValue, writeMcpConfig, type AgentChannel } from './mcp-config.js';
+import { CLAUDE_MCP_AUTO_BACKGROUND_MS, mcpConfig, mcpConfigValue, writeMcpConfig, type AgentChannel } from './mcp-config.js';
 import { finishSession, linkProviderSession, type FinishOptions, type MetricsRoots } from './metrics.js';
 import { packetBridgeCommand, writeSessionSettings, writeWorkSettings } from './settings-file.js';
 import { ensureStateDir } from './state-dir.js';
@@ -177,6 +177,12 @@ export interface LaunchPlan {
    * host puts the server's address; the password is the host's own and never in the plan.
    */
   opencodeServer?: { env: Record<string, string> };
+  /** Kimi Code owns the session id and receives the Parley MCP server over ACP. */
+  kimiAcp?: {
+    sessionId?: string;
+    mcpServers: Array<{ type: 'stdio'; name: string; command: string; args: string[]; env: Array<{ name: string; value: string }> }>;
+    prompt?: string;
+  };
 }
 
 async function entryOf(provider: string): Promise<ProviderEntry> {
@@ -371,7 +377,8 @@ async function plan(
   // Сервер `parley`, а с ним `find_skill`, доходит до агента по виду маршрута: файл конфига и `-c` Codex — шаблоном с
   // `{mcpConfig}`, системный файл настроек Qwen Code — окружением процесса, без подстановки.
   const opencode = entry.runner.mcpConfig === 'opencode-server';
-  const mcpRoute = entry.runner.mcpConfig === 'qwen-system-settings' || opencode
+  const kimi = entry.runner.mcpConfig === 'kimi-acp';
+  const mcpRoute = entry.runner.mcpConfig === 'qwen-system-settings' || opencode || kimi
     || (entry.runner.mcpConfig !== undefined && template.includes('{mcpConfig}'));
 
   // Доверие к папке — только Codex, только то, что выдал хост (`options.trust`), и только если шаблон несёт `{trust}`:
@@ -680,14 +687,14 @@ async function plan(
     // комнаты, роли, решения) — одна строка с новой ревизией и отсылкой к карте. Без изменений и без нового
     // поручения указатель на письма уходит как был, и повторного подбора скилла ему не навязывают.
     let notice = '';
-    if (!quiet && template.includes('{prompt}')) {
+    if (!quiet && (template.includes('{prompt}') || kimi)) {
       const loaded = await loadBrief(projectPath, workId, session.id, { create: false });
       if (loaded?.refreshed) {
         notice = `Your brief changed (revision ${loaded.previous ?? 'none'} is outdated): the task, rooms, roles or decisions were amended. Call get_map for the current state before continuing.`;
       }
     }
     const prompt = [notice, options.prompt ?? ''].filter((part) => part !== '').join('\n\n');
-    if (prompt !== '' && template.includes('{prompt}')) subs.prompt = prompt;
+    if (prompt !== '' && (template.includes('{prompt}') || kimi)) subs.prompt = prompt;
   } else {
     // Быстрая сессия стартует без промпта: карту и правила агент получает
     // через MCP, бриф ей не пишется (5.1). Тихая — тоже: её бриф уже уехал
@@ -722,6 +729,14 @@ async function plan(
       ...(instructionsFile === undefined ? {} : { instructions: [instructionsFile] }),
     }) };
   }
+
+  const kimiAcp: LaunchPlan['kimiAcp'] = kimi ? {
+    ...(resuming && subs.providerSessionId !== undefined ? { sessionId: subs.providerSessionId } : {}),
+    mcpServers: Object.entries(mcpConfig(params).mcpServers).map(([name, server]) => ({
+      ...server, name, env: Object.entries(server.env).map(([name, value]) => ({ name, value })),
+    })),
+    ...(subs.prompt === undefined ? {} : { prompt: subs.prompt }),
+  } : undefined;
 
   const { command, args } = resuming ? resumeCommand(entry, subs) : startCommand(entry, subs);
   const deferredPrompt = (entry.runner.mcpConfig === 'qwen-system-settings' || opencode) && !resuming && subs.prompt !== undefined && !template.includes('{prompt}')
@@ -766,6 +781,7 @@ async function plan(
     diagnostics,
     ...(deferredPrompt === undefined ? {} : { deferredPrompt }),
     ...(opencodeServer === undefined ? {} : { opencodeServer }),
+    ...(kimiAcp === undefined ? {} : { kimiAcp }),
   };
 }
 

@@ -37,6 +37,8 @@ import type { CliUpdateRunner } from '../providers/update-run.js';
 import type { CliInstaller } from '../providers/install-run.js';
 import type { PtyManager } from '../pty/pty-manager.js';
 import type { SessionsService } from '../sessions/sessions-service.js';
+import type { KimiSessions } from '../kimi/sessions.js';
+import type { KimiAuth } from '../providers/kimi-auth.js';
 import type { SwarmsService } from '../swarms/swarms-service.js';
 import type { WakeService } from '../wake/wake-service.js';
 import type { WorksService } from '../works/works-service.js';
@@ -106,6 +108,8 @@ export interface MethodDeps {
   activity: ActivityService;
   pty: PtyManager;
   sessions: SessionsService;
+  kimi?: Pick<KimiSessions, 'state' | 'setConfig'>;
+  kimiAuth?: KimiAuth;
   /** Жизненный цикл роя: `sessions.close` сообщает ему о закрытии королевы человеком; без него закрытая королева — упавший рой. */
   swarms?: Pick<SwarmsService, 'humanClosed'>;
   wake: WakeService;
@@ -239,6 +243,8 @@ export const WORKS_GATED_METHODS = [
   'feed.unsubscribe',
   'feed.decide',
   'feed.interrupt',
+  'kimi.getState',
+  'kimi.setConfig',
 ] as const satisfies readonly MethodName[];
 
 /** Уведомления того же рода: activity.seen сверяет сессию со снимком работ. */
@@ -268,6 +274,7 @@ export interface HostHandlers {
 export function createHostHandlers(deps: MethodDeps): HostHandlers {
   const pty = createPtyHandlers(deps);
   const sessions = createSessionHandlers(deps);
+  const { kimi } = deps;
   const wake = createWakeHandlers(deps);
   const worktrees = createWorktreesHandlers(deps);
   const changes = createChangesHandlers(deps);
@@ -308,7 +315,7 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     'works.rename': worksRename as AnyHandler,
     'works.setStatus': worksSetStatus as AnyHandler,
     'works.setCloseFinished': worksSetCloseFinished as AnyHandler,
-    'providers.list': createProvidersList(deps.providerVersions, deps.limits, deps.glmCheck, deps.codexCatalog, deps.customCheck, deps.auth, deps.cliUpdates, deps.qwenCatalog, deps.opencodeCatalog, deps.opencodeAuth) as AnyHandler,
+    'providers.list': createProvidersList(deps.providerVersions, deps.limits, deps.glmCheck, deps.codexCatalog, deps.customCheck, deps.auth, deps.cliUpdates, deps.qwenCatalog, deps.opencodeCatalog, deps.opencodeAuth, deps.kimiAuth) as AnyHandler,
     'providers.setKey': createProvidersSetKey(deps.limits, deps.glmCheck, deps.customCheck) as AnyHandler,
     'providers.clearKey': createProvidersClearKey(deps.limits, deps.glmCheck, deps.customCheck) as AnyHandler,
     // Метод есть всегда (hello перечисляет все METHODS); без службы проверки пропускать нечего.
@@ -358,6 +365,12 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
           'sessions.cancelCompact': compaction.cancel as AnyHandler,
         }),
     'sessions.setModel': sessions.sessionsSetModel as AnyHandler,
+    ...(kimi === undefined ? {} : {
+      'kimi.getState': async ({ ref }: Params<'kimi.getState'>) => kimi.state(ref),
+      'kimi.setConfig': async ({ ref, configId, value }: Params<'kimi.setConfig'>) => ({
+        config: await kimi.setConfig(ref, configId, value),
+      }),
+    }),
     'sessions.switchOptions': sessions.sessionsSwitchOptions as AnyHandler,
     'sessions.switchAgent': sessions.sessionsSwitchAgent as AnyHandler,
     'sessions.resumeInterrupted': sessions.sessionsResumeInterrupted as AnyHandler,
