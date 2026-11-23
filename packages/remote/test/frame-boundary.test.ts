@@ -40,6 +40,7 @@ describe('белый список против запретного списка
   it('то, что телефону нельзя никогда, не лежит ни в одном этапе (в том числе `settings.set`)', () => {
     const mustBeForbidden = [
       'settings.set', 'settings.get', 'host.shutdown', 'wake.now', 'pty.input', 'pty.resize', 'works.create', 'works.delete',
+      'pty.screenText',
       'sessions.delete', 'sessions.rename', 'rooms.reopen', 'rooms.setMode', 'worktrees.merge', 'changes.commitProject',
       'providers.setKey', 'providers.update', 'providers.checkUpdates', 'providers.install', 'trust.grant', 'memory.write', 'backlog.add', 'plans.resumeAutonomous', 'assistant.send', 'browser.agentResult',
     ];

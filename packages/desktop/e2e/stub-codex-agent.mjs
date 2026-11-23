@@ -15,7 +15,8 @@
 //     STUB_APPROVAL   — вопрос человеку: OSC 9 `Approval requested: …` и заголовок Action Required
 //     STUB_QUESTION   — неузнанная форма вопроса для сырой панели: цифра 1–3 (`picked: <цифра>`), Enter без текста
 //                       (`picked: default`) или текст с Enter (`enter: <текст>`), затем заголовок `Ready`
-//     STUB_QUESTION_SCREEN — экран `request_user_input` Codex 0.166 по замеру; цифра сразу отправляет выбранный ответ
+//     STUB_QUESTION_SCREEN — экран `request_user_input` Codex 0.166 по замеру; цифра отправляет вариант, стрелка вниз
+//                       и Tab на последнем варианте открывают заметки, Enter отправляет введённый текст
 //     STUB_APPROVAL_SCREEN [команда] — экран одобрения команды Codex 0.166 (форма с образца спайка: заголовок, `$ команда`,
 //                       три пронумерованных варианта, строка-подсказка), OSC 9 `Approval requested` и заголовок Action Required;
 //                       ждёт цифру 1–3 одним нажатием (`approved: <команда>`, `approved-always: <команда>`, `denied: <команда>`),
@@ -109,6 +110,7 @@ function callHook(event, extra) {
 
 const PASTE_START = '\x1b[200~';
 const PASTE_END = '\x1b[201~';
+const ARROW_DOWN = '\x1b[B';
 const THREAD = process.env.STUB_CODEX_THREAD ?? '019ce3d5-584a-7be2-922e-b8185a8d7c19';
 const FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
@@ -118,24 +120,53 @@ const line = (text) => out(`${text.replace(/\r?\n/g, '\r\n')}\r\n`);
 
 let spinner = null;
 const questionOptions = ['Red (Recommended)', 'Green', 'Blue', 'None of the above'];
+const questionDescriptions = [
+  'Select red as your preferred color.',
+  'Select green as your preferred color.',
+  'Select blue as your preferred color.',
+  'Optionally, add details in notes (tab)',
+];
 /** Открыт вопрос: упрощённая форма для сырой панели или узнанная форма для карточки. */
 let questionOpen = null;
+let questionSelected = 0;
+let questionNotes = '';
+let questionRows = 0;
+
+function clearQuestionScreen() {
+  if (questionRows === 0) return;
+  out(`\x1b[${questionRows}A\r\x1b[J`);
+  questionRows = 0;
+}
+
+/** Перерисовка вопроса и поля заметок по замерам question-options и question-notes-open. */
+function drawQuestionScreen() {
+  clearQuestionScreen();
+  const rows = ['  Question 1/1 (1 unanswered)', '  Which color do you prefer?', ''];
+  for (const [index, option] of questionOptions.entries()) {
+    const cursor = index === questionSelected ? '› ' : '  ';
+    rows.push(`  ${cursor}${index + 1}. ${option.padEnd(22)}${questionDescriptions[index]}`);
+  }
+  rows.push('');
+  if (questionOpen === 'notes') {
+    rows.push(`  › ${questionNotes || 'Add notes'}`, '', '  tab or esc to clear notes | enter to submit answer');
+  } else {
+    rows.push('  tab to add notes | enter to submit answer | esc to interrupt');
+  }
+  const columns = process.stdout.columns ?? 80;
+  questionRows = rows.reduce((count, row) => count + Math.max(1, Math.ceil(row.length / columns)), 0);
+  line(rows.join('\n'));
+}
 
 function printQuestionScreen() {
   questionOpen = 'options';
-  line('  Question 1/1 (1 unanswered)');
-  line('  Which color do you prefer?');
-  line('');
-  line('  › 1. Red (Recommended)  Select red as your preferred color.');
-  line('    2. Green              Select green as your preferred color.');
-  line('    3. Blue               Select blue as your preferred color.');
-  line('    4. None of the above  Optionally, add details in notes (tab)');
-  line('');
-  line('  tab to add notes | enter to submit answer | esc to interrupt');
+  questionSelected = 0;
+  questionNotes = '';
+  drawQuestionScreen();
   title(`[ ! ] Action Required | ${THREAD}`);
 }
 
 function closeQuestion(answer) {
+  clearQuestionScreen();
   questionOpen = null;
   if (answer !== null) line(answer);
   title(`Ready | ${THREAD}`);
@@ -498,12 +529,34 @@ function interrupt() {
 
 /** Нажатия вне вставки: Enter отправляет, Tab — в очередь, остальное — набор. */
 function typed(text) {
+  const [first, ...rest] = text.split(ARROW_DOWN);
+  typeCharacters(first);
+  for (const chunk of rest) {
+    if (questionOpen === 'options') {
+      questionSelected = Math.min(questionSelected + 1, questionOptions.length - 1);
+      drawQuestionScreen();
+    } else typeCharacters(ARROW_DOWN);
+    typeCharacters(chunk);
+  }
+}
+
+function typeCharacters(text) {
+  let notesChanged = false;
   for (const char of text) {
     // Одобрение открыто, поле пусто: цифра отвечает на него одним нажатием, как у Codex.
     if (approvalCommand !== null && composer === '' && char >= '1' && char <= '3') {
       answerApproval(char);
+    } else if (questionOpen === 'notes') {
+      if (char === '\r' || char === '\n') closeQuestion(`answer: ${questionNotes}`);
+      else {
+        questionNotes += char;
+        notesChanged = true;
+      }
     } else if (questionOpen === 'options' && composer === '' && /^[1-4]$/.test(char)) {
       closeQuestion(`answer: ${questionOptions[Number(char) - 1]}`);
+    } else if (questionOpen === 'options' && char === '\t' && questionSelected === questionOptions.length - 1) {
+      questionOpen = 'notes';
+      drawQuestionScreen();
     } else if (questionOpen === 'raw' && composer === '' && char >= '1' && char <= '3') {
       // Вопрос открыт, поле пусто: цифра выбирает вариант, Enter — вариант по умолчанию.
       closeQuestion(`picked: ${char}`);
@@ -521,6 +574,7 @@ function typed(text) {
       composer += char;
     }
   }
+  if (notesChanged && questionOpen === 'notes') drawQuestionScreen();
 }
 
 process.on('SIGHUP', () => process.exit(129));
