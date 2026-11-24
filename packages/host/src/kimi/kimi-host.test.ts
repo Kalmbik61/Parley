@@ -245,17 +245,28 @@ it('answers the correct request when two live cards use the same form key', asyn
 
 it('recovers from idle child exit before the first send without replaying the unsent message', async () => {
   const projectPath = await setup();
+  const traceFile = path.join(home!, 'recovery-trace');
+  await writeFile(traceFile, '');
+  vi.stubEnv('KIMI_FIXTURE_TRACE', traceFile);
+  const prompts = async () => (await readFile(traceFile, 'utf8')).split('\n')
+    .filter(Boolean).map((line) => JSON.parse(line)).filter((entry) => 'prompt' in entry);
   const { ref } = await call('sessions.create', input(projectPath));
   const created = await session(ref);
   expect(created?.pid).toBeTypeOf('number');
   process.kill(created!.pid!, 'SIGKILL');
   await expect.poll(() => session(ref)).toMatchObject({ lifecycle: 'sleeping' });
   expect((await request('pty.send', { ref, text: 'проверка', submit: true })).error).toMatchObject({ code: 'not_found' });
-  expect((await call('feed.snapshot', { ref })).items).not.toContainEqual(expect.objectContaining({ kind: 'prompt', text: 'проверка' }));
+  // A sleeping session need not be present in the works cache used by feed.snapshot.
+  expect(await prompts()).toEqual([]);
   await call('sessions.resume', { ref });
-  expect((await call('feed.snapshot', { ref })).items).not.toContainEqual(expect.objectContaining({ kind: 'prompt', text: 'проверка' }));
+  expect(await session(ref)).toMatchObject({ lifecycle: 'active', providerSessionId: 'acp-session' });
+  await expectReply(ref, 'Old answer');
+  expect((await call('feed.snapshot', { ref })).items).toContainEqual(expect.objectContaining({ kind: 'prompt', text: 'Old question' }));
+  expect(await prompts()).toEqual([]);
   expect(await call('pty.send', { ref, text: 'проверка', submit: true })).toMatchObject({ submitted: true });
   await expectReply(ref, 'Hello Parley');
+  expect(await prompts()).toEqual([{ prompt: 'проверка', model: 'alpha', effort: 'low' }]);
+  expect((await call('feed.snapshot', { ref })).items.filter((item) => item.kind === 'prompt' && item.text === 'проверка')).toHaveLength(1);
 }, 15_000);
 
 
