@@ -145,6 +145,7 @@ const buttons = defineCatalog(
     close: 'Close',
     wake: 'Wake',
     add: 'Add',
+    doAll: 'Do all ({count})',
   },
   {
     allow: 'Разрешить',
@@ -167,6 +168,7 @@ const buttons = defineCatalog(
     close: 'Закрыть',
     wake: 'Разбудить',
     add: 'Добавить',
+    doAll: 'Выполнить всё ({count})',
   },
 );
 
@@ -299,7 +301,8 @@ function makeTelegramTexts(locale: AppLocale) {
 }
 
 export function telegramButtons(locale: AppLocale) {
-  return { ...buttons[locale], doAll: (n: number) => locale === 'ru' ? `Выполнить всё (${n})` : `Do all (${n})` };
+  const t = createTranslator(locale, buttons);
+  return { ...buttons[locale], doAll: (count: number) => t('doAll', { count }) };
 }
 
 const telegram = { en: makeTelegramTexts('en'), ru: makeTelegramTexts('ru') };

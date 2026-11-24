@@ -139,5 +139,8 @@ describe('Покрытие desktop и системных поверхносте�
     expect(S.backlog.suggestedLabel).toBe('Предложения');
     expect(noticeText({ kind: 'launch-failed', ref: null, at: '', text: 'technical detail' }, 'S01 Alpha'))
       .toBe('S01 Alpha: не удалось запустить сессию.');
+    const roleNotice = 'Сохранённая роль недоступна у провайдера Qwen Code.';
+    expect(noticeText({ kind: 'role-missing', ref: null, at: '', text: roleNotice }, 'S01 Alpha'))
+      .toBe(`S01 Alpha: ${roleNotice}`);
   });
 });

@@ -1150,7 +1150,7 @@ export function createSessionsService(
             ? hostText('roleAnotherProvider').in(locale)
             : hostText('roleOnProvider', { provider: labelOf(await loadProviders(), last.provider) }).in(locale);
           const target = providerLabel(entry);
-          const [cause = change.text] = change.text.split(locale === 'ru' ? ' Сессия продолжится' : ' The session will continue');
+          const [cause = change.text] = change.text.split(hostText('roleContinuationMarker').in(locale));
           const text = hostText('roleReadOnlyResume', { cause, session: sessionMention(ref.sessionId), back, target }).in(locale);
           // Окно показывает текст хоста только у `role-missing` (у `launch-failed` — общий): тот же текст и туда.
           host.broadcast('host.notice', { kind: 'role-missing', ref, text, at: new Date().toISOString() });

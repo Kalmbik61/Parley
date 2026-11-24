@@ -505,9 +505,9 @@ function noticeDetails(): Readonly<Record<NoticeKind, string>> {
 export function noticeText(notice: HostNotice, label?: string): string {
   // `role-missing`: the host's own sentence names the provider and what changed (spec 2026-11-12, 2.5). A text that starts
   // with the session (`@s02 …`, `S02 …`) is shown as is; other texts (the launch warning "The saved role is no longer
-  // available…") get the label in front. An empty text falls back to the generic phrase below.
+  // available…") get the label in front. English windows fall back to the generic phrase for Cyrillic from older hosts.
   const own = notice.kind === 'role-missing' ? notice.text.trim() : '';
-  if (own !== '') {
+  if (own !== '' && (appI18n.locale === 'ru' || !/[А-Яа-яЁё]/.test(own))) {
     const sentence = /[.!?]$/.test(own) ? own : `${own}.`;
     return label === undefined || /^(@s|S)\d+\b/.test(own) ? sentence : `${label}: ${sentence}`;
   }
