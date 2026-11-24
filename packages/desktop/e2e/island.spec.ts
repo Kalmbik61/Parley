@@ -295,7 +295,8 @@ test.describe('остров одобрений', () => {
     { locale: 'en', title: 'Parley Island', command: 'Run', allow: 'Allow' },
     { locale: 'ru', title: 'Остров Parley', command: 'Запустить', allow: 'Разрешить' },
   ]) {
-    test(`${labels.locale}: Остров показывает длинную команду и принимает разрешение`, async ({}, testInfo) => {
+    test(`${labels.locale}: Остров показывает длинную команду и принимает разрешение`, async () => {
+      const testInfo = test.info();
       const ui = path.join(home, 'desktop');
       await mkdir(ui, { recursive: true });
       await writeFile(path.join(ui, 'ui.json'), JSON.stringify({ version: 1, locale: labels.locale }));

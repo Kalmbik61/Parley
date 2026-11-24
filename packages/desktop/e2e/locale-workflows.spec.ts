@@ -55,7 +55,8 @@ const cases = [
 ] as const;
 
 for (const labels of cases) {
-  test(`${labels.locale}: create workspace, session and room, read chat and accept a plan`, async ({}, testInfo) => {
+  test(`${labels.locale}: create workspace, session and room, read chat and accept a plan`, async () => {
+    const testInfo = test.info();
     test.setTimeout(90_000);
     const home = await makeTempHome('locale-workflows');
     const projectPath = await makeTempProject('locale-workflows');

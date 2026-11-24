@@ -45,7 +45,7 @@ import {
 } from '@parley/core';
 import type { AppLocale } from '@parley/core/i18n';
 import { createMoodStripper, matchConfirm, type AssistantGender, type AssistantMood, type MoodMark, type MoodStrip } from '@parley/core/assistant';
-import { feedDecision, refKey, type ActionsReport, type AssistantCardChanged, type AssistantDetail, type AssistantJournalItem, type AssistantProposal, type AssistantOrigin, type HumanOverviewV1, type AssistantSettings, type AssistantState, type EventData, type CardDecideResult, type EventName, type Params, type SendResult, type SessionRef } from '@parley/protocol';
+import { feedDecision, type ActionsReport, type AssistantCardChanged, type AssistantDetail, type AssistantJournalItem, type AssistantProposal, type AssistantOrigin, type HumanOverviewV1, type AssistantSettings, type AssistantState, type EventData, type CardDecideResult, type EventName, type Params, type SendResult, type SessionRef } from '@parley/protocol';
 import { projectPhoneCard, type PhoneCard } from '@parley/protocol/remote';
 import { hostText } from '../host-text.js';
 import { hostLocaleReader } from '../locale.js';

@@ -488,7 +488,7 @@ const ru = {
     markdownTitle: (title, roomId) => `Комната «${title}» (${roomId}) — расход токенов`,
     copy: 'Копировать', refresh: 'Обновить', copied: 'Скопировано', unavailable: 'Расход недоступен', counting: 'Считаем…',
     segmentLine: (head: string, from: string, to: string, tokens: string, cost: number | null): string =>
-      `${head} · ${from}–${to} — ${tokens}${cost === null ? '' : `, ≈ \$${cost.toFixed(2)} (по прайсу)`}`,
+      `${head} · ${from}–${to} — ${tokens}${cost === null ? '' : `, ≈ $${cost.toFixed(2)} (по прайсу)`}`,
     segmentNow: "сейчас",
     segmentUnknown: '?',
     segments: (n: number): string => `Сегментов: ${n}`,

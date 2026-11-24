@@ -24,7 +24,6 @@ import { russianNeedWords, workspaceStrings } from './catalogs/workspace.js';
 import { collaborationStrings } from './catalogs/collaboration.js';
 import { conversationStrings } from './catalogs/conversation.js';
 import type { ContextKind } from './context-markdown.js';
-import type { UpdateFailure, UpdateResultFailure } from './bridge.js';
 import type { IpcErrorInfo } from './ipc-error.js';
 
 /** Что за файл-контекст — для строки в ввод CLI (`S.contextFile.terminalLine`). */

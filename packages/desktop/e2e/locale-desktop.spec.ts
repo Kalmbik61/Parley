@@ -24,7 +24,8 @@ const cases = [
 ] as const;
 
 for (const labels of cases) {
-  test(`${labels.locale}: desktop menus, accessible names and search at minimum size`, async ({}, testInfo) => {
+  test(`${labels.locale}: desktop menus, accessible names and search at minimum size`, async () => {
+    const testInfo = test.info();
     test.setTimeout(60_000);
     const home = await makeTempHome('locale-desktop');
     const projectPath = await makeTempProject('locale-desktop');
