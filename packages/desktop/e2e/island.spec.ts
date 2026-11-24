@@ -66,20 +66,20 @@ async function call<T>(window: Page, method: string, params: unknown): Promise<T
 
 /** Страница острова, если его окно есть; нет окна — `undefined`. */
 function islandPage(app: ElectronApplication): Page | undefined {
-  return app.windows().find((page) => page.url().endsWith('/island.html'));
+  return app.windows().find((page) => page.url().split('?', 1)[0]?.endsWith('/island.html'));
 }
 
 /** Окно острова показано на экране (`showInactive`); нет окна — `false`. Читается в main: скрытое окно страницей не проверить. */
 async function islandVisible(app: ElectronApplication): Promise<boolean> {
   return app.evaluate(
-    ({ BrowserWindow }) => BrowserWindow.getAllWindows().find((window) => window.webContents.getURL().endsWith('/island.html'))?.isVisible() ?? false,
+    ({ BrowserWindow }) => BrowserWindow.getAllWindows().find((window) => window.webContents.getURL().split('?', 1)[0]?.endsWith('/island.html'))?.isVisible() ?? false,
   );
 }
 
 /** Главное окно: страница загружена и это не остров (остров создаётся вместе с ним и мог оказаться первым). */
 async function mainWindowOf(app: ElectronApplication): Promise<Page> {
   const found = (): Page | undefined =>
-    app.windows().find((page) => page.url() !== '' && page.url() !== 'about:blank' && !page.url().endsWith('/island.html'));
+    app.windows().find((page) => page.url() !== '' && page.url() !== 'about:blank' && !page.url().split('?', 1)[0]?.endsWith('/island.html'));
   await expect.poll(() => found() !== undefined, { message: 'главное окно загрузилось', timeout: 30_000 }).toBe(true);
   return found()!;
 }
@@ -89,7 +89,7 @@ async function resizeMain(app: ElectronApplication, width: number, height: numbe
   await app.evaluate(
     ({ BrowserWindow }, size) =>
       BrowserWindow.getAllWindows()
-        .find((window) => !window.webContents.getURL().endsWith('/island.html'))
+        .find((window) => !window.webContents.getURL().split('?', 1)[0]?.endsWith('/island.html'))
         ?.setBounds({ x: 0, y: 0, ...size }),
     { width, height },
   );
@@ -187,7 +187,7 @@ async function hoverIsland(app: ElectronApplication, hovered: boolean): Promise<
   await app.evaluate(
     ({ BrowserWindow }, over) =>
       BrowserWindow.getAllWindows()
-        .find((window) => window.webContents.getURL().endsWith('/island.html'))
+        .find((window) => window.webContents.getURL().split('?', 1)[0]?.endsWith('/island.html'))
         ?.webContents.send('island:hover', over),
     hovered,
   );
@@ -196,7 +196,7 @@ async function hoverIsland(app: ElectronApplication, hovered: boolean): Promise<
 /** Центр дисплея острова в координатах его кадра (окна): там стоит подменный вырез `PARLEY_NOTCH`. */
 async function notchCenterX(app: ElectronApplication): Promise<number> {
   return app.evaluate(({ BrowserWindow, screen }) => {
-    const window = BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL().endsWith('/island.html'))!;
+    const window = BrowserWindow.getAllWindows().find((candidate) => candidate.webContents.getURL().split('?', 1)[0]?.endsWith('/island.html'))!;
     const frame = window.getBounds();
     const display = screen.getDisplayMatching(frame);
     return display.bounds.x + display.bounds.width / 2 - frame.x;
