@@ -1,15 +1,22 @@
 /** Форматирование текста для Telegram (parse_mode HTML): экранирование, обрезка, разбиение на сообщения. */
 
-export const TRUNCATED_TAIL = '… (truncated, open in Parley)';
+import { defineCatalog, type AppLocale } from '@parley/core/i18n';
+
+const clipping = defineCatalog(
+  { tail: '… (truncated, open in Parley)' },
+  { tail: '… (текст сокращён, откройте его в Parley)' },
+);
+export const TRUNCATED_TAIL = clipping.en.tail;
 
 export function escapeHtml(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 /** Обрезает до `max` знаков вместе с хвостом. */
-export function clipText(text: string, max = 1500): string {
+export function clipText(text: string, max = 1500, locale: AppLocale = 'en'): string {
   if (text.length <= max) return text;
-  return `${text.slice(0, Math.max(0, max - TRUNCATED_TAIL.length))}${TRUNCATED_TAIL}`;
+  const tail = clipping[locale].tail;
+  return `${text.slice(0, Math.max(0, max - tail.length))}${tail}`;
 }
 
 /** Режет по `\n\n`, затем по `\n`, затем жёстко; каждый кусок не длиннее `max`. */

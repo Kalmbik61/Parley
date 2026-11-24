@@ -1,3 +1,5 @@
+import type { AppLocale } from '@parley/core/i18n';
+import type { HostText } from './host-text.js';
 import type { ErrorCode } from '@parley/protocol';
 
 /**
@@ -10,10 +12,17 @@ export class HostError extends Error {
   readonly code: ErrorCode;
   readonly data?: Record<string, unknown>;
 
-  constructor(code: ErrorCode, message: string, data?: Record<string, unknown>) {
-    super(message);
+  private readonly display?: HostText;
+
+  constructor(code: ErrorCode, message: string | HostText, data?: Record<string, unknown>) {
+    super(typeof message === 'string' ? message : message.english);
+    if (typeof message !== 'string') this.display = message;
     this.name = 'HostError';
     this.code = code;
     if (data !== undefined) this.data = data;
+  }
+
+  displayMessage(locale?: AppLocale): string {
+    return this.display?.in(locale) ?? this.message;
   }
 }

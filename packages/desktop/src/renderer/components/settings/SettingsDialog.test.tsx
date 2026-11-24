@@ -70,12 +70,28 @@ function switchTo(section: string): void {
 }
 
 describe('SettingsDialog — тест 1 куска 1.4: секции спеки 4.10', () => {
+  it('сохраняет язык интерфейса отдельным патчем и сообщает о перезапуске', async () => {
+    const bridge = createFakeBridge();
+    const saveUi = vi.spyOn(bridge.app, 'saveUi');
+    openSettings(bridge);
+
+    const select = await screen.findByRole('combobox', { name: 'Interface language' });
+    expect((select as HTMLSelectElement).value).toBe('system');
+    expect(within(select).getByRole('option', { name: 'English' })).toBeTruthy();
+    expect(within(select).getByRole('option', { name: 'Русский' })).toBeTruthy();
+    fireEvent.change(select, { target: { value: 'ru' } });
+
+    await waitFor(() => expect((select as HTMLSelectElement).value).toBe('ru'));
+    expect(saveUi).toHaveBeenCalledWith({ locale: 'ru' });
+    expect(screen.getByText('Restart Parley to apply language changes.')).toBeTruthy();
+  });
+
   it('поля темы TUI нет ни на одной секции', async () => {
     const bridge = createFakeBridge();
     openSettings(bridge);
 
     // «Вид» — активная секция по умолчанию.
-    await screen.findByText('System');
+    await screen.findByRole('radio', { name: 'System' });
     expect(screen.queryByText('Theme')).toBeNull();
 
     switchTo('Terminal');

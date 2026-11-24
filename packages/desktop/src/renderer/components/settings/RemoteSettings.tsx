@@ -2,6 +2,7 @@
  * Settings → Remote access (mobile app plan A10, spec 12): the switch, the relay, pairing, devices, activity.
  * The screen talks to the bridge only through main (`bridge.remote`, the local control socket) — never the relay.
  */
+import { displayLocale } from '../../../shared/app-locale.js';
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import type { ParleyConfig } from '@parley/core';
 import type { ParleyBridge } from '../../../shared/bridge.js';
@@ -33,12 +34,12 @@ const REISSUE_MARGIN_MS = 3000;
 const TEXT = S.settings.remote;
 
 function whenText(ms: number | null): string {
-  return ms === null ? TEXT.devices.neverSeen : new Date(ms).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' });
+  return ms === null ? TEXT.devices.neverSeen : new Date(ms).toLocaleString(displayLocale(), { dateStyle: 'medium', timeStyle: 'short' });
 }
 
 function timeText(iso: string): string {
   const ms = Date.parse(iso);
-  return Number.isNaN(ms) ? iso : new Date(ms).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'medium' });
+  return Number.isNaN(ms) ? iso : new Date(ms).toLocaleString(displayLocale(), { dateStyle: 'medium', timeStyle: 'medium' });
 }
 
 export function RemoteSettings({ bridge, config, locked, save, error }: RemoteSettingsProps): JSX.Element {
@@ -296,7 +297,7 @@ export function RemoteSettings({ bridge, config, locked, save, error }: RemoteSe
             {pair.connected ? <p data-testid="remote-connected" className="text-xs">{TEXT.pair.connected}</p> : null}
             {pair.failedReason !== null ? (
               <p data-testid="remote-pair-failed" className="text-xs text-destructive">
-                {TEXT.pair.failed[pair.failedReason] ?? TEXT.pair.failedOther}
+                {(TEXT.pair.failed as Readonly<Partial<Record<string, string>>>)[pair.failedReason] ?? TEXT.pair.failedOther}
               </p>
             ) : null}
             {pair.wrongCode ? <p data-testid="remote-wrong-code" className="text-xs text-destructive">{TEXT.pair.wrongCode}</p> : null}

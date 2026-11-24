@@ -1,3 +1,4 @@
+import { hostText } from '../host-text.js';
 import {
   accountLabel,
   baseUrlError,
@@ -98,10 +99,10 @@ export function createCustomProviderHandlers(
   const saveCustom: Handler<'providers.saveCustom'> = (params, request) =>
     serialized(async () => {
       // Аккаунт Codex — этап 3 спеки подписок: хост его пока не хранит и не запускает.
-      if (params.kind === 'codex-account') throw new HostError('bad_request', 'Codex accounts are not supported by this host yet');
+      if (params.kind === 'codex-account') throw new HostError('bad_request', hostText('codexAccountsUnsupported'));
       // Вид и префикс id сходятся: аккаунт Claude и запись с адресом живут под `custom-`, `codex-` — только Codex (К8).
       if (params.id !== null && !isCustomProviderId(params.id)) {
-        throw new HostError('bad_request', 'The id does not match the kind of the provider');
+        throw new HostError('bad_request', hostText('providerKindMismatch'));
       }
       if (!isAccountParams(params)) {
         const urlError = baseUrlError(params.baseUrl);
@@ -116,9 +117,9 @@ export function createCustomProviderHandlers(
         id = params.id;
         // Id при правке не меняется и должен принадлежать существующей записи (Review Focus 3); вид записи тоже.
         const existing = records.find((record) => record.id === id);
-        if (existing === undefined) throw new HostError('bad_request', 'Unknown custom provider');
+        if (existing === undefined) throw new HostError('bad_request', hostText('unknownCustomProvider'));
         if ((existing.kind ?? 'endpoint') !== (params.kind ?? 'endpoint')) {
-          throw new HostError('bad_request', 'The kind of a provider cannot be changed');
+          throw new HostError('bad_request', hostText('providerKindImmutable'));
         }
       }
       const record: CustomProviderRecord = isAccountParams(params) ? accountRecordOf(params, id, records) : endpointRecordOf(params, id);
@@ -130,7 +131,7 @@ export function createCustomProviderHandlers(
         // Режим bearer: хвост ключа, одобренный раньше в api-key, в папке не остаётся (К17).
         if (!isAccountRecord(record) && record.auth === 'bearer') await syncApiKeyApproval(id, null);
       } catch {
-        throw new HostError('internal', 'Unable to save the custom provider');
+        throw new HostError('internal', hostText('customProviderSaveFailed'));
       }
       customCheck?.forget(id);
       request.host.broadcast('providers.changed', { provider: id });
@@ -143,11 +144,11 @@ export function createCustomProviderHandlers(
     serialized(async () => {
       const records = await readCustomProviders();
       const existing = records.find((record) => record.id === id);
-      if (existing === undefined) throw new HostError('bad_request', 'Unknown custom provider');
+      if (existing === undefined) throw new HostError('bad_request', hostText('unknownCustomProvider'));
       // Папка с живыми сессиями не удаляется (спека подписок 10); запись без папки — как прежде, сессии дорабатывают ход.
       if (removeFolder && liveProvider?.(id) === true) {
         const name = isAccountRecord(existing) ? accountLabel(existing, records) : existing.label;
-        throw new HostError('conflict', `${name} has running sessions: stop them before deleting its folder`);
+        throw new HostError('conflict', hostText('providerHasRunningSessions', { name }));
       }
       // Вход аккаунта лежит в связке ключей под именем его папки, и новый аккаунт на том же id унаследовал бы его: выход
       // идёт до удаления записи (спека подписок 10, решение 12). Сбой выхода журналируется и удалению не мешает.
@@ -162,7 +163,7 @@ export function createCustomProviderHandlers(
         if (hasKey) await syncApiKeyApproval(id, null);
         if (removeFolder) await removeCustomProviderDir(id);
       } catch {
-        throw new HostError('internal', 'Unable to delete the custom provider');
+        throw new HostError('internal', hostText('customProviderDeleteFailed'));
       }
       customCheck?.forget(id);
       // Новый аккаунт на освободившемся id не должен унаследовать прежнее состояние входа (и вход, если он идёт).

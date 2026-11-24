@@ -21,6 +21,7 @@
  * Они идут той же пачкой, что и смешанная запись: после снимка, который их включает; комнаты с ними получают `reread`.
  */
 
+import { hostText } from '../host-text.js';
 import {
   compactWorkMap,
   captureWindowMail,
@@ -506,7 +507,7 @@ export function createWorksService(
     if (!fits) {
       if (!oversizeNotified) {
         oversizeNotified = true;
-        notice('snapshot-too-large', 'the workspace snapshot does not fit into one frame even in compact form');
+        notice('snapshot-too-large', hostText('compactSnapshotTooLarge').in(host.locale?.()));
       }
     } else oversizeNotified = false;
 
@@ -585,7 +586,7 @@ export function createWorksService(
         if (notifiedCorrupt.has(key)) continue;
         notifiedCorrupt.add(key);
         const reason = error instanceof Error ? error.message : String(error);
-        notice('map-corrupt', `workspace ${item.id} in ${item.projectPath} cannot be loaded: ${reason}`);
+        notice('map-corrupt', hostText('mapCorrupt', { id: item.id, path: item.projectPath, reason }).in(host.locale?.()));
       }
     }
   }

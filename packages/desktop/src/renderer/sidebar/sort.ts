@@ -6,6 +6,7 @@
  * от родителя к дочерним сессиям (`treeGuides`) считаются по этим же строкам.
  */
 
+import { displayLocale } from '../../shared/app-locale.js';
 import type { Room, WindowWorkEntry, WindowWorkMap, WorkSession, WorkSwarm } from '@parley/core';
 import { swarmMemberIds } from '@parley/core/swarms';
 import { S } from '../../shared/strings.js';
@@ -167,7 +168,7 @@ export function buildSections(input: {
     .sort((a, b) => {
       const byRank = b.rank - a.rank;
       if (byRank !== 0) return byRank;
-      const byName = a.section.title.localeCompare(b.section.title, 'en-US');
+      const byName = a.section.title.localeCompare(b.section.title, displayLocale());
       if (byName !== 0) return byName;
       // Две папки с одним именем в разных местах — порядок всё равно устойчивый.
       return a.section.key < b.section.key ? -1 : a.section.key > b.section.key ? 1 : 0;

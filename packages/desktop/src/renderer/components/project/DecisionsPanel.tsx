@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { DECISIONS_LIST_DEFAULT_LIMIT, decisionsListResult } from '@parley/protocol';
 import type { DecisionRef, DecisionsListResult } from '@parley/protocol';
+import { displayCalendarDay } from '../../../shared/app-locale.js';
 import type { ParleyBridge } from '../../../shared/bridge.js';
 import { S } from '../../../shared/strings.js';
 import { Button } from '../../ui/button.js';
@@ -77,7 +78,7 @@ export function DecisionsPanel({ bridge, projectPath, supported, connection, onO
             <p className="break-words font-medium">{row.title === '' ? row.proposalId : row.title}{row.kind === 'completion' ? ` · ${S.decisions.completion}` : ''}</p>
             <p className="text-xs text-muted-foreground">{S.decisions.states[row.state]}</p>
             <p className="break-all text-xs text-muted-foreground">
-              {[row.workId, row.roomId, row.proposalId, S.decisions.revision(row.rev), (row.acceptedAt ?? row.file.slice(0, 10)).slice(0, 10)].join(' · ')}
+              {[row.workId, row.roomId, row.proposalId, S.decisions.revision(row.rev), displayCalendarDay(row.acceptedAt ?? row.file)].join(' · ')}
             </p>
           </div>
           {row.openable && <Button type="button" variant="outline" aria-label={`${S.decisions.open}: ${row.title === '' ? row.proposalId : row.title}`}

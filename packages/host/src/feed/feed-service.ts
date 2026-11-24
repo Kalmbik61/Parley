@@ -23,6 +23,7 @@
  * редьюсер не идёт — из него читаются только ретраи и прерывания, — поэтому картинок там не ищут.
  */
 
+import { hostText } from '../host-text.js';
 import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
 import { lstat, open, readdir, rm, stat, writeFile } from 'node:fs/promises';
@@ -2036,7 +2037,7 @@ export function createFeedService(
     const session = deps.works
       .entry(ref.projectPath, ref.workId)
       ?.map.sessions.find((candidate) => candidate.id === ref.sessionId);
-    if (session === undefined) throw new HostError('not_found', `no session ${ref.sessionId}`);
+    if (session === undefined) throw new HostError('not_found', hostText('noSession', { sessionId: ref.sessionId }));
     return session;
   }
 
@@ -2271,7 +2272,7 @@ export function createFeedService(
 
   async function agentSnapshot(ref: SessionRef, agentId: string): Promise<FeedSnapshot> {
     const notFound = (): HostError =>
-      new HostError('not_found', `no transcript for agent ${agentId}`);
+      new HostError('not_found', hostText('noTranscript', { agentId }));
     if (!SAFE_AGENT_ID.test(agentId)) throw notFound();
     // Qwen Code has no subagent transcripts in the feed: never fall through to the Claude layout.
     if (byFamily(sessionOf(ref).provider, { claude: false, codex: false, qwen: true, opencode: true, neutral: false })) throw notFound();
@@ -3104,7 +3105,7 @@ export function createFeedService(
 
     async progress(ref, client) {
       const parsed = sessionRef.safeParse(ref);
-      if (!parsed.success) throw new HostError('bad_request', 'invalid session ref');
+      if (!parsed.success) throw new HostError('bad_request', hostText('invalidSessionRef'));
       const session = sessionOf(parsed.data);
       const key = refKey(parsed.data);
       if (stopped) return unavailableProgress(feeds.get(key));
@@ -3117,7 +3118,7 @@ export function createFeedService(
       quota.calls = quota.calls.filter((call) => call.at > time - 1000);
       if (quota.active !== null || quota.calls.length >= 4) {
         const wait = quota.active !== null ? FEED_PROGRESS_RETRY_AFTER_MAX_MS : (quota.calls[0]?.at ?? time) + 1000 - time;
-        throw new HostError('conflict', 'progress request rate limited', {
+        throw new HostError('conflict', hostText('progressRateLimit'), {
           reason: 'island-progress-rate-limit',
           retryAfterMs: Math.max(0, Math.min(FEED_PROGRESS_RETRY_AFTER_MAX_MS, Math.ceil(wait))),
         });
@@ -3253,7 +3254,7 @@ export function createFeedService(
       const feed = feeds.get(refKey(ref));
       const card = feed?.state.items.find((item) => isCard(item) && item.cardId === cardId);
       if (feed === undefined || card === undefined || !isCard(card)) {
-        throw new HostError('not_found', `no card ${cardId} in the session feed`);
+        throw new HostError('not_found', hostText('cardMissing', { cardId }));
       }
       const current: FeedCardState = card.state;
       if (current !== 'pending') return { applied: false, state: current };
@@ -3321,7 +3322,7 @@ export function createFeedService(
     interrupt(ref) {
       if (options.kimiBlocksChat?.(ref)) throw new HostError('conflict', 'Use the Kimi Terminal to interrupt the native process');
       const handle = deps.pty.get(ref);
-      if (handle === undefined) throw new HostError('not_found', 'session is not running');
+      if (handle === undefined) throw new HostError('not_found', hostText('sessionNotRunning'));
       deps.pty.write(ref, ESC);
       // У Codex приглашения `❯` и возвращённого в поле промпта нет: ход закроет запись `turn_aborted`.
       // Qwen Code: no `❯` prompt check as Claude's; the next transcript record or hook settles the turn.

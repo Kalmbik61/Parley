@@ -54,6 +54,7 @@ import {
 import { refKey } from '@parley/protocol';
 import type { MailWait, NoticeKind, SessionRef } from '@parley/protocol';
 import type { ActivityService } from '../activity/activity-service.js';
+import { hostText, type HostText } from '../host-text.js';
 import type { HostContext } from '../context.js';
 import type { WindowCounters } from '../health/window-counters.js';
 import { HostError } from '../errors.js';
@@ -681,13 +682,13 @@ export function createWakeService(
   }
 
   /** Лимит подъёмов исчерпан — письма ждут, человеку уведомление раз в час. */
-  function limitNotice(ref: SessionRef, reason = 'the hourly resume limit is reached'): void {
+  function limitNotice(ref: SessionRef, reason: HostText = hostText('resumeHourlyLimit')): void {
     const key = refKey(ref);
     const at = Date.now();
     const last = limitNoticedAt.get(key);
     if (last !== undefined && at - last < LIMIT_NOTICE_EVERY_MS) return;
     limitNoticedAt.set(key, at);
-    notice('resume-limit', ref, `${sessionTag(ref.sessionId)} was not resumed: ${reason}, messages are waiting`);
+    notice('resume-limit', ref, hostText('resumeLimit', { session: sessionTag(ref.sessionId), reason: reason.in(host.locale?.()) }).in(host.locale?.()));
   }
 
   /**
@@ -707,7 +708,7 @@ export function createWakeService(
       await enterBlocked(ref, state, reason);
       return;
     }
-    const text = `${sessionTag(ref.sessionId)} did not resume: ${reason}`;
+    const text = hostText('resumeFailed', { session: sessionTag(ref.sessionId), reason });
     const ids = new Set(letterIds);
     try {
       // Только письма: отправители ожидавших писем читаются запросом, карта целиком не разбирается (спека хранилища 6.2).
@@ -720,13 +721,13 @@ export function createWakeService(
         senders.delete(ref.sessionId);
         for (const sender of senders) {
           if (!map.sessions.some((session) => session.id === sender)) continue;
-          letters.add({ roomId: null, from: SYSTEM, to: [sender], text, kind: 'note' });
+          letters.add({ roomId: null, from: SYSTEM, to: [sender], text: text.english, kind: 'note' });
         }
       });
     } catch (error) {
       host.log.error('письмо о сбое подъёма не записалось', { ref, error: String(error) });
     }
-    notice('resume-failed', ref, text);
+    notice('resume-failed', ref, text.in(host.locale?.()));
   }
 
   /**
@@ -895,7 +896,7 @@ export function createWakeService(
         state.fresh = wasFresh;
         state.freshRunning = false;
         state.budgetDeniedAt = Date.now();
-        limitNotice(ref, `the workspace budget is exhausted (${(error as Error).message})`);
+        limitNotice(ref, hostText('resumeBudgetExhausted', { detail: (error as Error).message }));
         publishWaiting(ref, state, 'resume-limit');
       } else {
         failed = true;
@@ -1128,7 +1129,7 @@ export function createWakeService(
         clearTimers(state);
         state.inFlight = false;
         abandonReturn(state);
-        notice('pointer-timeout', ref, `session ${ref.sessionId} did not start a turn after the pointer`);
+        notice('pointer-timeout', ref, hostText('pointerTimeout', { sessionId: ref.sessionId }).in(host.locale?.()));
         // Таймаут бывает только после записанного Enter: поле пусто, и указатель можно набрать снова — через паузу.
         state.timeouts += 1;
         const rearmMs = pointerRearmMs[state.timeouts - 1];
@@ -1141,7 +1142,7 @@ export function createWakeService(
           // Таймер повтора не держит процесс хоста на выходе.
           state.rearmTimer.unref();
         } else {
-          void enterBlocked(ref, state, `no turn after ${pointerRearmMs.length + 1} message pointers`);
+          void enterBlocked(ref, state, hostText('noTurnAfterPointers', { count: pointerRearmMs.length + 1 }).in(host.locale?.()));
         }
     }
 
@@ -1201,7 +1202,7 @@ export function createWakeService(
         state.inFlight = false;
         abandonReturn(state);
         leaveText(ref, state, action.letterIds, true);
-        notice('pointer-cancelled', ref, `the pointer for session ${ref.sessionId} was cancelled by human input`);
+        notice('pointer-cancelled', ref, hostText('pointerCancelled', { sessionId: ref.sessionId }).in(host.locale?.()));
       } else if (outcome === 'blocked') {
         if (turnStarted) {
           // The pointer stays in the field and its letters pointed; after that turn the host presses Enter once.
@@ -1240,8 +1241,8 @@ export function createWakeService(
           'pointer-cancelled',
           ref,
           choiceNow(ref)
-            ? `the pointer for session ${ref.sessionId} was left without Enter — a model or effort change is in progress`
-            : `the pointer for session ${ref.sessionId} was left without Enter — the session is waiting for an answer`,
+            ? hostText('pointerModelChange', { sessionId: ref.sessionId }).in(host.locale?.())
+            : hostText('pointerAnswerWaiting', { sessionId: ref.sessionId }).in(host.locale?.()),
         );
       }
     }, (error: unknown) => {
@@ -1481,7 +1482,7 @@ export function createWakeService(
       notice(
         'limit-return-blocked',
         ref,
-        `The limit has reset, but ${sessionTag(ref.sessionId)} could not continue: ${returnBlockReason(block)}`,
+        hostText('limitReturnBlocked', { session: sessionTag(ref.sessionId), reason: returnBlockReason(block, host.locale?.()) }).in(host.locale?.()),
       );
       return;
     }

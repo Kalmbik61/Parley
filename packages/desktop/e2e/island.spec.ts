@@ -291,22 +291,38 @@ test.describe('остров одобрений', () => {
     return { app, window, ref, hooks: new Hooks(window, ref, logFile) };
   }
 
-  test('разрешение: остров с карточкой → Allow на острове → стаб получает allow', async () => {
-    const { app, hooks } = await open({ PARLEY_ISLAND: '' });
-    await hooks.fire('SessionStart', { source: 'startup', model: MODEL, permission_mode: 'default', cwd: project });
-    await hooks.hold('PermissionRequest', { tool_name: 'Bash', tool_input: { command: 'touch /tmp/island-e2e' }, permission_mode: 'default', permission_suggestions: [] });
+  for (const labels of [
+    { locale: 'en', title: 'Parley Island', command: 'Run', allow: 'Allow' },
+    { locale: 'ru', title: 'Остров Parley', command: 'Запустить', allow: 'Разрешить' },
+  ]) {
+    test(`${labels.locale}: Остров показывает длинную команду и принимает разрешение`, async ({}, testInfo) => {
+      const ui = path.join(home, 'desktop');
+      await mkdir(ui, { recursive: true });
+      await writeFile(path.join(ui, 'ui.json'), JSON.stringify({ version: 1, locale: labels.locale }));
+      const { app, hooks } = await open({ PARLEY_ISLAND: '' });
+      await hooks.fire('SessionStart', { source: 'startup', model: MODEL, permission_mode: 'default', cwd: project });
+      const command = `echo '${'Проверка Alpha '.repeat(12)}'`;
+      await hooks.hold('PermissionRequest', { tool_name: 'Bash', tool_input: { command }, permission_mode: 'default', permission_suggestions: [] });
 
-    // Окно острова создано при старте скрытым — ждём не его появления, а показа: остров виден, только когда есть запрос.
-    await expect.poll(() => islandVisible(app), { message: 'остров показан' }).toBe(true);
-    const island = islandPage(app)!;
-    await expect(island.getByTestId('island-card')).toContainText('Run: touch /tmp/island-e2e');
-    // Кнопки новой карточки выключены первые 500 мс (защита от случайного клика) — клик Playwright ждёт включения.
-    await clickUntil(island.getByTestId('island-allow'), async () => (await hooks.lines('PermissionRequest')).length >= 1);
-    const allowed = await hooks.answer('PermissionRequest', 0);
-    expect(allowed.status).toBe(200);
-    expect(allowed.response).toMatchObject({ hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } } });
-    await expect(island.getByTestId('island-card')).toHaveCount(0);
-  });
+      await expect.poll(() => islandVisible(app), { message: 'остров показан' }).toBe(true);
+      const island = islandPage(app)!;
+      await expect(island.locator('html')).toHaveAttribute('lang', labels.locale);
+      await expect(island).toHaveTitle(labels.title);
+      const card = island.getByTestId('island-card');
+      const summary = card.getByTitle(`${labels.command}: ${command}`, { exact: true });
+      await expect(summary).toBeVisible();
+      const allow = card.getByRole('button', { name: labels.allow, exact: true });
+      await expect(allow).toBeEnabled();
+      expect(await card.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+      await island.screenshot({ path: testInfo.outputPath(`island-${labels.locale}.png`), animations: 'disabled' });
+
+      await clickUntil(allow, async () => (await hooks.lines('PermissionRequest')).length >= 1);
+      const allowed = await hooks.answer('PermissionRequest', 0);
+      expect(allowed.status).toBe(200);
+      expect(allowed.response).toMatchObject({ hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } } });
+      await expect(card).toHaveCount(0);
+    });
+  }
 
   test('стрелка ⌃ убирает остров в язычок до следующего запроса', async () => {
     // Кнопки «×» у острова больше нет: остров не пропадает, а убирается стрелкой ⌃ (видна под курсором), окно остаётся.
@@ -455,7 +471,7 @@ test.describe('остров одобрений', () => {
     test.skip(screens.length > 0 && plain === undefined, 'у всех дисплеев есть вырез — полосу без выреза проверить негде');
     if (plain !== undefined) {
       await mkdir(path.join(home, 'desktop'), { recursive: true });
-      await writeFile(path.join(home, 'desktop', 'ui.json'), JSON.stringify({ version: 1, island: { displayId: plain.id } }));
+      await writeFile(path.join(home, 'desktop', 'ui.json'), JSON.stringify({ version: 1, locale: 'en', island: { displayId: plain.id } }));
     }
     const { app, hooks } = await open({ PARLEY_ISLAND: '' });
     await expect.poll(() => islandVisible(app), { message: 'остров показан' }).toBe(true);

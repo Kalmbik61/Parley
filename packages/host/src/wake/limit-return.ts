@@ -4,6 +4,8 @@
  * снимку: когда пора, что мешает печатать и что сказать человеку, если печатать нельзя.
  */
 
+import type { AppLocale } from '@parley/core/i18n';
+import { hostText } from '../host-text.js';
 import { envValue, LIMIT_RETURNS_MAX, type ProviderLimits, type SessionNeed } from '@parley/core';
 
 /**
@@ -51,14 +53,14 @@ export function returnBlock(input: {
 }
 
 /** Причина для уведомления `limit-return-blocked`: «The limit has reset, but S03 could not continue: <причина>» (7.4). */
-export function returnBlockReason(block: ReturnBlock): string {
+export function returnBlockReason(block: ReturnBlock, locale?: AppLocale): string {
   switch (block) {
     case 'draft':
-      return 'unsent text in its terminal';
+      return hostText('limitReturnDraft').in(locale);
     case 'menu':
-      return 'a menu is open in its terminal';
+      return hostText('limitReturnMenu').in(locale);
     case 'repeated':
-      return 'it hit the limit again twice';
+      return hostText('limitReturnRepeated').in(locale);
   }
 }
 

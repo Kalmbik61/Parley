@@ -28,9 +28,9 @@
 
 import type { Message, MessageKind, MessageVia, SessionLifecycle, SessionNeed, WindowWorkEntry, WindowWorkMap, RoomMode, RoomPlan } from '@parley/core';
 import { planSummary, type AgentPlan } from '@parley/core/agent-plan';
-import { sessionDotStateWithNeed, stateWord, type DotState } from '@parley/core/session-state';
+import { sessionDotStateWithNeed, type DotState } from '@parley/core/session-state';
 import { refKey, type LiveTask, type MailWait } from '@parley/protocol';
-import { S, providerName } from '../../../shared/strings.js';
+import { S, providerName, sessionStateText } from '../../../shared/strings.js';
 import {
   isHumanMention,
   isHumanUnread,
@@ -322,7 +322,7 @@ export function buildRoomModel(input: RoomModelInput): RoomModel | null {
       model: model !== null && model.toLowerCase() !== providerDisplay.toLowerCase() ? model : null,
       state,
       lifecycle: session.lifecycle,
-      word: stateWord(state, session.lifecycle),
+      word: sessionStateText(state, session.lifecycle),
       need,
       attention: sessionAttention(session, live),
       task: session.task,

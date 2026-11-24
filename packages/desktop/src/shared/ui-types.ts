@@ -6,6 +6,7 @@
  */
 
 import type { AssistantLanguage } from '@parley/core/assistant';
+import { isLocalePreference, type LocalePreference } from '@parley/core/i18n';
 import { DEFAULT_VOICE, isOpenAiVoice, type AssistantVoiceId, type VoiceGender } from './tts-types.js';
 import { isVoiceLanguage, isVoiceModelId, type VoiceModelId } from './voice-types.js';
 
@@ -89,6 +90,7 @@ export type RightSidebarTab = 'files' | 'changes' | 'agents';
 export interface UiFile {
   version: 1;
   appearance: Appearance;
+  locale: LocalePreference;
   leftSidebar: { open: boolean; width: number };
   rightSidebar: { open: boolean; width: number; tab: RightSidebarTab };
   activeWorkKey: string | null;
@@ -136,6 +138,7 @@ export interface UiFile {
 export const DEFAULT_UI: UiFile = {
   version: 1,
   appearance: 'system',
+  locale: 'system',
   leftSidebar: { open: true, width: 288 },
   rightSidebar: { open: true, width: 320, tab: 'files' },
   activeWorkKey: null,
@@ -380,6 +383,7 @@ export function normalizeUi(raw: unknown): UiFile {
   return {
     version: 1,
     appearance: isAppearance(source.appearance) ? source.appearance : DEFAULT_UI.appearance,
+    locale: isLocalePreference(source.locale) ? source.locale : DEFAULT_UI.locale,
     leftSidebar: normalizeLeftSidebar(source.leftSidebar),
     rightSidebar: normalizeRightSidebar(source.rightSidebar),
     activeWorkKey:

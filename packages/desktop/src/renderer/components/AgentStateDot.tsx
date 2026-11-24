@@ -29,7 +29,8 @@
 
 import { CircleCheck, CircleX, MessageCircleQuestion, Moon } from 'lucide-react';
 import type { SessionLifecycle } from '@parley/core';
-import { stateWord, type DotState } from '@parley/core/session-state';
+import type { DotState } from '@parley/core/session-state';
+import { sessionStateText } from '../../shared/strings.js';
 import { cn } from '../lib/cn.js';
 import { AgentWorkingSpinner } from './AgentWorkingSpinner.js';
 
@@ -59,7 +60,7 @@ export function AgentStateDot({
   const effectiveLifecycle = state === 'exited' ? (lifecycle ?? 'sleeping') : undefined;
   // Для не-`exited` состояний `stateWord` игнорирует второй аргумент —
   // подставляем любое валидное значение просто чтобы удовлетворить сигнатуру.
-  const ariaLabel = stateWord(state, effectiveLifecycle ?? 'active');
+  const ariaLabel = sessionStateText(state, effectiveLifecycle ?? 'active');
 
   return (
     <span

@@ -1,3 +1,4 @@
+import { hostText } from '../host-text.js';
 import {
   DEFAULT_CONFIG,
   ENV_NAMES,
@@ -26,7 +27,7 @@ export const settingsGet: Handler<'settings.get'> = async () => {
 
 export const settingsSet: Handler<'settings.set'> = async (params) => {
   if (!isConfigKey(params.key)) {
-    throw new HostError('bad_request', `unknown setting: ${params.key}`);
+    throw new HostError('bad_request', hostText('unknownSetting', { key: params.key }));
   }
   const parsed = parseSetting(params.key, params.value);
   if ('error' in parsed) {

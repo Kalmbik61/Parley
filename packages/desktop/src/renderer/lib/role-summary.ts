@@ -1,7 +1,9 @@
+import { roleDisplay } from '@parley/core/builtin-display';
 import { createElement, useEffect } from 'react';
 import type { SessionRole } from '@parley/core';
 import type { RoleSummary, SessionRef } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
+import { appI18n } from '../../shared/app-locale.js';
 import { S } from '../../shared/strings.js';
 import { useRolesStore } from '../store/roles.js';
 
@@ -44,8 +46,10 @@ export interface RoleChipProps { role: SessionRole | null | undefined; sessionRe
 export function RoleChip({ role, sessionRef, bridge, cwd }: RoleChipProps): ReturnType<typeof createElement> | null {
   const current = useRoleSummary(bridge ?? window.parley, sessionRef, role, cwd);
   if (!role) return null;
-  const label = S.roles.option(current?.name ?? role.name, role.source);
-  return createElement('span', { 'data-role-chip': '', className: 'inline-grid grid-cols-[auto_minmax(0,max-content)] items-center rounded bg-foreground/5 px-1.5 text-[10px]', title: [label, current?.description ?? S.roles.unavailable].filter(Boolean).join('\n') },
+  const display = roleDisplay(current ?? { id: `${role.source}:${role.name}`, name: role.name, source: role.source }, appI18n.locale);
+  const label = S.roles.option(display.name, role.source);
+  const description = current === null && display.description === '' ? S.roles.unavailable : display.description;
+  return createElement('span', { 'data-role-chip': '', className: 'inline-grid grid-cols-[auto_minmax(0,max-content)] items-center rounded bg-foreground/5 px-1.5 text-[10px]', title: [label, description].filter(Boolean).join('\n') },
     current?.readOnly ? createElement('span', { 'aria-label': S.roles.readOnly, title: S.roles.readOnly, className: 'mr-1' }, '🔒') : null,
     createElement('span', { className: 'col-start-2 truncate' }, label));
 }

@@ -17,6 +17,7 @@ const subscribed: string[] = [];
 let exposed: IslandBridge | null = null;
 let exposedKey: string | null = null;
 const send = vi.fn();
+const sendSync = vi.fn();
 const invoke = vi.fn();
 
 vi.mock('electron', () => ({
@@ -26,6 +27,7 @@ vi.mock('electron', () => ({
       handlers.set(channel, handler);
     },
     send,
+    sendSync,
     invoke,
   },
   contextBridge: {
@@ -90,12 +92,13 @@ describe('preload острова', () => {
   });
   beforeEach(() => {
     send.mockClear();
+    sendSync.mockReset();
     invoke.mockClear();
   });
 
   it('в мосте только узкий набор: ни app, ни files, ни browser, ни voice, ни notify', async () => {
     const bridge = await loadPreload();
-    expect(Object.keys(bridge).sort()).toEqual(['activitySnapshot', 'call', 'island', 'on', 'onStatus', 'worksSync']);
+    expect(Object.keys(bridge).sort()).toEqual(['activitySnapshot', 'call', 'island', 'locale', 'on', 'onStatus', 'worksSync']);
     expect(Object.keys(bridge.island).sort()).toEqual(
       [
         'config', 'dragEnd', 'dragMove', 'dragStart', 'failed', 'keyboard', 'markSeen', 'onKeyboardBlur', 'onAssistantOpen', 'onConfig',
@@ -103,6 +106,13 @@ describe('preload острова', () => {
       ].sort(),
     );
     expect(Object.keys(bridge.island.speech).sort()).toEqual(['cancel', 'connect', 'setSpeak', 'speak', 'warmup']);
+  });
+
+  it('язык интерфейса доступен синхронно до отрисовки', async () => {
+    sendSync.mockReturnValue('ru');
+    const bridge = await loadPreload();
+    expect(bridge.locale()).toBe('ru');
+    expect(sendSync).toHaveBeenCalledWith('app:locale');
   });
 
   it('события хоста раскладываются по подписчикам, статус отдаётся и опоздавшему', async () => {

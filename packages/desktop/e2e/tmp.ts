@@ -1,5 +1,5 @@
 import { realpathSync } from 'node:fs';
-import { appendFile, mkdtemp, realpath } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -42,10 +42,18 @@ export async function trackRunHome(home: string): Promise<void> {
   if (list !== undefined) await appendFile(list, `${home}\n`);
 }
 
+/** Обычные спеки сверяют английские подписи независимо от языка машины. */
+export async function seedTestLocale(home: string): Promise<void> {
+  const directory = path.join(home, 'desktop');
+  await mkdir(directory, { recursive: true });
+  await writeFile(path.join(directory, 'ui.json'), JSON.stringify({ version: 1, locale: 'en' }));
+}
+
 /** Свой `PARLEY_HOME` на каждый тест (дом попадает в список прогона: `trackRunHome`). */
 export async function makeTempHome(spec: string): Promise<string> {
   const home = await mkdtemp(path.join(tmpdir(), `hh-e2e-${spec}-`));
   assertUnderTmpdir(home);
   await trackRunHome(home);
+  await seedTestLocale(home);
   return home;
 }

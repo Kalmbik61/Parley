@@ -1,3 +1,6 @@
+import { createTranslator, type AppLocale } from '../i18n/index.js';
+import { planExportCatalog } from '../i18n/export-catalog.js';
+import { exportLocale } from './export-locale.js';
 import { ImmutableMarkdownError, publishImmutableMarkdown } from "./shared-markdown.js";
 import {
   prepareSharedIgnore,
@@ -32,76 +35,67 @@ const valid = (intent: PlanExportIntent): boolean =>
     (typeof intent.content === "string" &&
       Buffer.byteLength(intent.content) <= 1024 * 1024 &&
       Buffer.from(intent.content, "utf8").toString("utf8") === intent.content));
-const metadata = (value: string): string =>
-  JSON.stringify(
-    value.length <= 512
-      ? value
-      : `${value.slice(0, 512)}… [metadata truncated]`,
-  );
+function renderPlanSnapshot(
+  map: WorkMap,
+  plan: RoomPlan,
+  event: PlanExportIntent["event"],
+  removedItems: readonly PlanItem[],
+  locale: AppLocale,
+): string {
+  const t = createTranslator(locale, planExportCatalog);
+  const metadata = (value: string): string =>
+    JSON.stringify(value.length <= 512 ? value : t('metadataTruncated', { prefix: value.slice(0, 512) }));
+  const lines = [
+    `# ${t('title', { id: plan.id, rev: plan.rev, event })}`,
+    "",
+    t('workspace', { workId: map.work.id, roomId: plan.roomId }),
+    t('status', { mode: plan.mode, status: plan.status }),
+    t('dates', { accepted: plan.acceptedAt ?? "—", completed: plan.completedAt ?? "—", cancelled: plan.cancelledAt ?? "—" }),
+    "",
+    `## ${t('goal')}`,
+    plan.goal,
+    "",
+    `## ${t('items')}`,
+  ];
+  for (const [removed, items] of [[false, plan.items], [true, removedItems]] as const) {
+    if (removed && items.length) lines.push("", `## ${t('removed')}`);
+    for (const item of items) {
+      const owner = map.sessions.find((session) => session.id === item.owner);
+      const role = owner?.role ? `${owner.role.source}:${owner.role.name}` : "—";
+      lines.push(
+        "",
+        `### ${item.id}. ${item.title}`,
+        t('owner', { owner: item.owner, label: metadata(owner?.label ?? t('deleted')), role: metadata(role) }),
+        t('itemStatus', { status: item.status, after: item.after.join(", ") || "—", verifier: item.verifier ?? "—" }),
+        "",
+        t('scope'),
+        item.scope,
+      );
+      if (item.acceptedChecklistRevision !== undefined)
+        lines.push("", t('acceptedChecklist', { rev: item.acceptedChecklistRevision }));
+      if (item.criteria.length)
+        lines.push("", t('criteria'), ...item.criteria.map((value) => `- ${value}`));
+      if (item.evidence)
+        lines.push("", t('evidence'), item.evidence.text, ...item.evidence.artifacts.map((value) => `- ${value}`));
+      if (item.note) lines.push("", t('note'), item.note);
+    }
+  }
+  if (plan.backlog.length)
+    lines.push("", t('backlog', { ids: plan.backlog.join(", ") }));
+  if (plan.completionSummary)
+    lines.push("", `## ${t('completion')}`, plan.completionSummary);
+  return `${lines.join("\n")}\n`;
+}
+
 export function capturePlanSnapshot(
   map: WorkMap,
   plan: RoomPlan,
   event: PlanExportIntent["event"],
   removedItems: readonly PlanItem[] = [],
+  locale = exportLocale(),
 ): PlanExportIntent {
   const file = `${map.work.id}-${plan.roomId}-${plan.id}-rev-${plan.rev}-${event}.md`;
-  const lines = [
-    `# Plan ${plan.id} — revision ${plan.rev} (${event})`,
-    "",
-    `Work: ${map.work.id}; room: ${plan.roomId}`,
-    `Mode: ${plan.mode}; status: ${plan.status}`,
-    `Accepted: ${plan.acceptedAt ?? "—"}; completed: ${plan.completedAt ?? "—"}; cancelled: ${plan.cancelledAt ?? "—"}`,
-    "",
-    "## Goal",
-    plan.goal,
-    "",
-    "## Items",
-  ];
-  for (const [heading, items] of [
-    ["Items", plan.items],
-    ["Removed items at this amendment", removedItems],
-  ] as const) {
-    if (heading !== "Items" && items.length) lines.push("", `## ${heading}`);
-    for (const item of items) {
-      const owner = map.sessions.find((session) => session.id === item.owner);
-      const role = owner?.role
-        ? `${owner.role.source}:${owner.role.name}`
-        : "—";
-      lines.push(
-        "",
-        `### ${item.id}. ${item.title}`,
-        `Owner: ${item.owner}; label: ${metadata(owner?.label ?? "[deleted]")}; role: ${metadata(role)}`,
-        `Status: ${item.status}; after: ${item.after.join(", ") || "—"}; verifier: ${item.verifier ?? "—"}`,
-        "",
-        "Scope:",
-        item.scope,
-      );
-      if (item.acceptedChecklistRevision !== undefined)
-        lines.push(
-          "",
-          `Completion basis: accepted Checklist revision ${item.acceptedChecklistRevision}; no verification claimed.`,
-        );
-      if (item.criteria.length)
-        lines.push(
-          "",
-          "Criteria:",
-          ...item.criteria.map((value) => `- ${value}`),
-        );
-      if (item.evidence)
-        lines.push(
-          "",
-          "Evidence:",
-          item.evidence.text,
-          ...item.evidence.artifacts.map((value) => `- ${value}`),
-        );
-      if (item.note) lines.push("", "Note:", item.note);
-    }
-  }
-  if (plan.backlog.length)
-    lines.push("", `Backlog: ${plan.backlog.join(", ")}`);
-  if (plan.completionSummary)
-    lines.push("", "## Completion", plan.completionSummary);
-  const content = `${lines.join("\n")}\n`;
+  const content = renderPlanSnapshot(map, plan, event, removedItems, locale);
   const intent: PlanExportIntent = {
     file,
     planId: plan.id,
@@ -110,16 +104,19 @@ export function capturePlanSnapshot(
     content,
     status: "pending",
   };
-  if (!valid(intent)) throw new PlanSnapshotError("snapshot-invalid");
-  map.planExports ??= [];
-  const previous = map.planExports.find((entry) => entry.file === file);
+  const previous = map.planExports?.find((entry) => entry.file === file);
   if (previous) {
-    // Записанный экспорт текста уже не держит: тот же текст узнаётся по sha256 (спека хранилища 6.2).
-    if (exportSha256(previous) !== sha256Hex(content))
-      throw new PlanSnapshotError("snapshot-conflict");
+    const digest = exportSha256(previous);
+    // Повтор с другой настройкой языка сохраняет ранее захваченный текст или хеш.
+    if (digest !== sha256Hex(content)) {
+      const priorLocale = locale === 'en' ? 'ru' : 'en';
+      if (digest !== sha256Hex(renderPlanSnapshot(map, plan, event, removedItems, priorLocale)))
+        throw new PlanSnapshotError("snapshot-conflict");
+    }
     return previous;
   }
-  map.planExports.push(intent);
+  if (!valid(intent)) throw new PlanSnapshotError("snapshot-invalid");
+  (map.planExports ??= []).push(intent);
   return intent;
 }
 

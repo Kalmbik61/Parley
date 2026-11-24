@@ -58,3 +58,5 @@ process.env['PARLEY_SKIP_VERSION_PROBE'] = '1';
 // переменной ничему не мешает.
 process.env['PARLEY_SLEEP_AFTER_MINUTES'] = '0';
 process.env['PARLEY_MACHINE_CONCURRENT'] = 'off';
+// Базовый язык тестов задан явно. Проверки локализации выбирают язык в своём desktop/ui.json.
+process.env['PARLEY_SYSTEM_LOCALE'] = 'en-US';

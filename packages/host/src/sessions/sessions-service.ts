@@ -12,6 +12,7 @@
  * ручной `resume`, а живой PTY закрытой в карте сессии хост гасит сам.
  */
 
+import { hostText } from '../host-text.js';
 import { randomBytes, randomInt, randomUUID } from 'node:crypto';
 import { realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
@@ -577,7 +578,7 @@ export function createSessionsService(
       host.log.warn('Git connectivity check failed', { ref, error: String(error) });
       host.broadcast('host.notice', {
         kind: 'git-connectivity-failed', ref,
-        text: 'Git repository connectivity check failed; inspect the host log before continuing.',
+        text: hostText('gitConnectivityFailed').in(host.locale?.()),
         at: new Date().toISOString(),
       });
     }
@@ -757,14 +758,14 @@ export function createSessionsService(
   ): Promise<never> {
     host.log.warn('launch refused by the resource budget', { ref, by, code: error.code, scope: error.scope });
     if (by === 'auto') {
-      const text = `${sessionTag(ref.sessionId)} was not started: ${error.message}`;
-      host.broadcast('host.notice', { kind: 'launch-failed', ref, text, at: new Date().toISOString() });
+      const text = hostText('launchRefused', { session: sessionTag(ref.sessionId), detail: error.message });
+      host.broadcast('host.notice', { kind: 'launch-failed', ref, text: text.in(host.locale?.()), at: new Date().toISOString() });
       if (parentId !== null) {
         try {
           // Только письмо: без разбора карты (спека хранилища 6.2).
           await writeLettersAsync(ref.projectPath, ref.workId, (letters, current) => {
             if (current.sessions.some((candidate) => candidate.id === parentId)) {
-              letters.add({ roomId: null, from: SYSTEM, to: [parentId], text, kind: 'note' });
+              letters.add({ roomId: null, from: SYSTEM, to: [parentId], text: text.english, kind: 'note' });
             }
           });
         } catch (mapError) {
@@ -963,7 +964,7 @@ export function createSessionsService(
         host.broadcast('host.notice', {
           kind: 'codex-auto-unsupported',
           ref,
-          text: `Codex ${version} is older than ${CODEX_AUTO_MIN_VERSION}: Auto-review is unavailable, approvals are asked in the terminal. Update Codex to use it.`,
+          text: hostText('autoReviewUnavailable', { version, minimum: CODEX_AUTO_MIN_VERSION }).in(host.locale?.()),
           at: new Date().toISOString(),
         });
       }
@@ -976,9 +977,9 @@ export function createSessionsService(
     // Записанная сессия удалённого провайдера — не ошибка ввода: она цела и ждёт, пока человек продолжит её на другом
     // провайдере. `conflict`: состояние сессии не даёт запуск, а не запрос сломан.
     if (entry === undefined && recorded) {
-      throw new HostError('conflict', `${provider} is not in Parley: continue the session on another provider`);
+      throw new HostError('conflict', hostText('removedProviderSwitch', { provider }));
     }
-    if (entry === undefined) throw new HostError('bad_request', `unknown provider ${provider}; see get_map {field: "providers"}`);
+    if (entry === undefined) throw new HostError('bad_request', hostText('unknownProvider', { provider, lookup: 'get_map {field: "providers"}' }));
     const readiness = await providerReadiness(entry, {
       ...(providerVersions === undefined ? {} : { probeVersion: (command) => providerVersions.fresh(command) }),
       signedIn: entry.account === undefined ? null : ((await feed.signedIn?.(entry.id)) ?? null),
@@ -1110,7 +1111,7 @@ export function createSessionsService(
       }
       // Архив освобождает процессы агентов: до Reopen сессии работы не поднимает ни письмо, ни человек.
       if (map.work.status === 'archived') {
-        throw new HostError('conflict', `workspace ${ref.workId} is archived: reopen it to resume its sessions`);
+        throw new HostError('conflict', hostText('reopenWorkspace', { workId: ref.workId }));
       }
       // Первый запуск нового агента после замены (спека замены агента, 5.3): новый разговор с пакетом передачи — и у
       // самой замены, и у Resume после отказа, и после согласия на папку Codex.
@@ -1144,11 +1145,13 @@ export function createSessionsService(
         const { change } = await timer.step('roleFit', () => roleChangeAt(roleCwd(ref, session), entry, before));
         if (change?.readOnlyLost === true) {
           const last = session.previousAgents?.at(-1);
-          const back = last === undefined ? 'on another provider' : `on ${labelOf(await loadProviders(), last.provider)}`;
+          const locale = host.locale?.();
+          const back = last === undefined
+            ? hostText('roleAnotherProvider').in(locale)
+            : hostText('roleOnProvider', { provider: labelOf(await loadProviders(), last.provider) }).in(locale);
           const target = providerLabel(entry);
-          // Первая фраза — та же, что в тексте смены (`<Name> is|may be a read-only role and does not run on <Target>.`).
-          const cause = change.text.slice(0, change.text.indexOf(' The session will continue'));
-          const text = `${cause} Continue ${sessionMention(ref.sessionId)} ${back} again to keep the role; from there you can continue it on ${target} without the role.`;
+          const [cause = change.text] = change.text.split(locale === 'ru' ? ' Сессия продолжится' : ' The session will continue');
+          const text = hostText('roleReadOnlyResume', { cause, session: sessionMention(ref.sessionId), back, target }).in(locale);
           // Окно показывает текст хоста только у `role-missing` (у `launch-failed` — общий): тот же текст и туда.
           host.broadcast('host.notice', { kind: 'role-missing', ref, text, at: new Date().toISOString() });
           throw new HostError('conflict', text, { reason: HOST_ERROR_REASONS.roleChange });
@@ -1168,7 +1171,10 @@ export function createSessionsService(
           host.broadcast('host.notice', {
             kind: 'role-missing',
             ref,
-            text: `${sessionTag(ref.sessionId)} role ${roleId(before)} does not run on ${providerLabel(entry)}: it starts ${after === null ? 'without a role' : `as ${roleId(after)}`}`,
+            text: hostText('roleLaunchChanged', {
+              session: sessionTag(ref.sessionId), role: roleId(before) ?? change.from, target: providerLabel(entry),
+              after: after === null ? hostText('roleWithout').in(host.locale?.()) : hostText('roleAs', { role: roleId(after)! }).in(host.locale?.()),
+            }).in(host.locale?.()),
             at: new Date().toISOString(),
           });
         }
@@ -1312,11 +1318,11 @@ export function createSessionsService(
         try {
           await timer.step('worktree', () => createWorktree(ref.projectPath, worktree, { reuseBranch }));
         } catch (error) {
-          const text = `worktree for ${sessionTag(ref.sessionId)} was not created: ${(error as Error).message}`;
+          const text = hostText('worktreeCreateFailed', { session: sessionTag(ref.sessionId), detail: (error as Error).message });
           host.broadcast('host.notice', {
             kind: 'launch-failed',
             ref,
-            text,
+            text: text.in(host.locale?.()),
             at: new Date().toISOString(),
           });
           const parentId = session.parent;
@@ -1324,7 +1330,7 @@ export function createSessionsService(
             try {
               await writeLettersAsync(ref.projectPath, ref.workId, (letters, current) => {
                 if (current.sessions.some((candidate) => candidate.id === parentId)) {
-                  letters.add({ roomId: null, from: SYSTEM, to: [parentId], text, kind: 'note' });
+                  letters.add({ roomId: null, from: SYSTEM, to: [parentId], text: text.english, kind: 'note' });
                 }
               });
             } catch (mapError) {
@@ -1391,7 +1397,7 @@ export function createSessionsService(
         }
         if (result.created) host.broadcast('host.notice', {
           kind: 'parley-md-created', ref,
-          text: 'Parley added PARLEY.md — team rules for your agents', at: new Date().toISOString(),
+          text: hostText('teamRulesAdded').in(host.locale?.()), at: new Date().toISOString(),
         });
       } catch {
         if (!creationWarnings.has(ref.projectPath)) {
@@ -1471,7 +1477,7 @@ export function createSessionsService(
         host.broadcast('host.notice', {
           kind: 'launch-failed',
           ref,
-          text: `session ${ref.sessionId} failed to launch: ${(error as Error).message}`,
+          text: hostText('launchFailed', { sessionId: ref.sessionId, detail: (error as Error).message }).in(host.locale?.()),
           at: new Date().toISOString(),
         });
         throw error;
@@ -1516,10 +1522,10 @@ export function createSessionsService(
           host.log.warn('custom provider folder could not be prepared', { ref, provider: record.id, error: String(error) });
           host.broadcast('host.notice', {
             kind: 'launch-failed', ref,
-            text: `session ${ref.sessionId} failed to launch: ${entry.label} folder could not be prepared`,
+            text: hostText('launchFolderFailed', { sessionId: ref.sessionId, provider: entry.label }).in(host.locale?.()),
             at: new Date().toISOString(),
           });
-          throw new HostError('bad_request', `${entry.label} folder could not be prepared (${(error as Error).message})`);
+          throw new HostError('bad_request', hostText('providerFolderFailed', { label: entry.label, detail: (error as Error).message }));
         }
       }
       // История своего провайдера и аккаунта пишется в `<папка>/projects` (создана `prepareCustomProviderDir`): индекс
@@ -1747,7 +1753,7 @@ export function createSessionsService(
       // встал бы первым в строке статуса и спрятал его.
       if (notify && error instanceof HostError && error.data?.['reason'] !== HOST_ERROR_REASONS.roleChange) host.broadcast('host.notice', {
         kind: 'launch-failed', ref,
-        text: `session ${ref.sessionId} failed to launch: ${error.message}`,
+        text: hostText('launchFailed', { sessionId: ref.sessionId, detail: error.displayMessage(host.locale?.()) }).in(host.locale?.()),
         at: new Date().toISOString(),
       });
       // Запуск нового агента вне оркестратора (после согласия на папку Codex) отказал: замена окончена, сессия спит с
@@ -1882,12 +1888,12 @@ export function createSessionsService(
   ): Promise<CreatedSession> {
     const { projectPath, provider, label, task, parent, worktree, lean, kimiPermissionMode } = input;
     let { workId } = input;
-    if (input.workspace !== undefined && (input.requestedBy !== ENGINE || worktree === true || !input.workspace || !['clone', 'artifacts'].includes(input.workspace.kind) || !path.isAbsolute(input.workspace.path) || input.workspace.kind === 'clone' && (!input.workspace.branch || !input.workspace.sha))) throw new HostError('bad_request', 'Only the engine may assign an autonomous workspace.');
-    if (input.deferLaunch && input.requestedBy !== ENGINE) throw new HostError('bad_request', 'Only the engine may defer a session launch.');
-    if (input.requestedBy !== undefined && (workId === null || !task.trim())) throw new HostError('bad_request', 'Agent-created sessions require a workspace and task.');
-    if (input.swarm !== undefined && (input.requestedBy === ENGINE || workId === null || !task.trim() || input.swarm.kind === 'add' && input.requestedBy === undefined)) throw new HostError('bad_request', 'Swarm sessions require a workspace, a task and a human or agent caller.');
+    if (input.workspace !== undefined && (input.requestedBy !== ENGINE || worktree === true || !input.workspace || !['clone', 'artifacts'].includes(input.workspace.kind) || !path.isAbsolute(input.workspace.path) || input.workspace.kind === 'clone' && (!input.workspace.branch || !input.workspace.sha))) throw new HostError('bad_request', hostText('engineAssignWorkspace'));
+    if (input.deferLaunch && input.requestedBy !== ENGINE) throw new HostError('bad_request', hostText('engineDeferLaunch'));
+    if (input.requestedBy !== undefined && (workId === null || !task.trim())) throw new HostError('bad_request', hostText('agentSessionNeedsTask'));
+    if (input.swarm !== undefined && (input.requestedBy === ENGINE || workId === null || !task.trim() || input.swarm.kind === 'add' && input.requestedBy === undefined)) throw new HostError('bad_request', hostText('swarmSessionNeedsCaller'));
     const agentConfig = input.requestedBy === undefined && input.swarm === undefined ? undefined : (await loadConfig()).config;
-    if (parent !== null) throw new HostError('bad_request', 'Child sessions are no longer supported. Create a root session and add it to a room.');
+    if (parent !== null) throw new HostError('bad_request', hostText('childSessionsUnsupported'));
     // Secret-dependent GLM must refuse before every create branch. Other providers keep their
     // existing create/launch failure behavior; all launches still use the shared preflight below.
     // Аккаунт подписки отказывает так же рано: своя папка вместо ключа (спека подписок 5.5), и без входа
@@ -1905,7 +1911,7 @@ export function createSessionsService(
     const registry = await timer.step('providers', () => loadProviders());
     // Own-key: «constructor» и «toString» с провода не должны находить прототипные свойства реестра.
     const entry = Object.hasOwn(registry, provider) ? registry[provider] : undefined;
-    if (!entry) throw new HostError('bad_request', `unknown provider ${provider}; see get_map {field: "providers"}`);
+    if (!entry) throw new HostError('bad_request', hostText('unknownProvider', { provider, lookup: 'get_map {field: "providers"}' }));
     if (kimiPermissionMode !== undefined && (provider !== 'kimi' || entry.runner.mcpConfig !== 'kimi-native' || !isKimiPermissionMode(kimiPermissionMode) || input.requestedBy !== undefined)) {
       throw new HostError('bad_request', 'Invalid launch permission mode for this provider');
     }
@@ -1925,7 +1931,7 @@ export function createSessionsService(
 
     // Проверка до создания сессии — иначе в карте осталась бы pending-сессия, которую нечем завести.
     if (worktree === true && !(await timer.step('git', () => isGitRepo(projectPath)))) {
-      throw new HostError('bad_request', 'the project has no git — a worktree cannot be created');
+      throw new HostError('bad_request', hostText('gitRequiredForWorktree'));
     }
 
     // Новая работа с задачей (New session с телефона, спека мобильного приложения 4.2): сначала работа — так же, как окно
@@ -1989,8 +1995,8 @@ export function createSessionsService(
           return;
         }
         const caller = map.sessions.find(s => s.id === input.requestedBy);
-        if (input.requestedBy !== ENGINE && (!caller || caller.lifecycle === 'closed')) throw new HostError('bad_request', 'The caller session is no longer available.');
-        if (map.work.status === 'archived') throw new HostError('bad_request', 'The workspace is archived.');
+        if (input.requestedBy !== ENGINE && (!caller || caller.lifecycle === 'closed')) throw new HostError('bad_request', hostText('callerUnavailable'));
+        if (map.work.status === 'archived') throw new HostError('bad_request', hostText('workspaceArchived'));
         // Участник роя сессий не создаёт (спека роя, 4): проверка на хосте по карте, текст роли её не заменяет.
         if (input.requestedBy !== ENGINE && swarmOfSession(map, caller!.id) !== null) throw swarmMemberRefusal(caller!.id, 'create sessions');
         const room = input.requestedBy === ENGINE
@@ -2032,7 +2038,10 @@ export function createSessionsService(
         await settleLaunch(admitted.ref, admitted.attemptId, 'released');
         throw new HostError(
           error instanceof HostError ? error.code : 'internal',
-          `Session ${admitted.ref.sessionId} could not be started: ${error instanceof Error ? error.message : String(error)}. Check get_map before retrying create_session.`,
+          hostText('startAfterReserveFailed', {
+            sessionId: admitted.ref.sessionId, detail: error instanceof Error ? error.message : String(error),
+            lookup: 'get_map', command: 'create_session',
+          }),
           { ...(error instanceof HostError ? error.data : {}), ref: admitted.ref },
         );
       }
@@ -2059,7 +2068,7 @@ export function createSessionsService(
     await updateMap(ref.projectPath, ref.workId, (map) => {
       const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
       if (session === undefined) {
-        throw new HostError('not_found', `session ${ref.sessionId} is not in the map of workspace ${ref.workId}`);
+        throw new HostError('not_found', hostText('sessionNotInWorkspace', { sessionId: ref.sessionId, workId: ref.workId }));
       }
       // `null` — явный «Default» из меню чата: пишется как `null`, а не удаляет поле, иначе после смены
       // вернулось бы умолчание роли.
@@ -2086,15 +2095,15 @@ export function createSessionsService(
         (candidate) => candidate.id === ref.sessionId,
       );
       if (session === undefined) {
-        throw new HostError('not_found', `session ${ref.sessionId} is not in the map of workspace ${ref.workId}`);
+        throw new HostError('not_found', hostText('sessionNotInWorkspace', { sessionId: ref.sessionId, workId: ref.workId }));
       }
       const entry = (await loadProviders())[session.provider];
       if (entry === undefined || !isClaudeCode(entry)) {
-        throw new HostError('bad_request', 'the model of a session can be changed only for Claude Code sessions');
+        throw new HostError('bad_request', hostText('modelChangeClaudeOnly'));
       }
       const next = (await resolveModelChoice(session.provider, model)).model;
       // Шаблон запуска без `{model}` (свои `args` в providers.json): модель до CLI не доедет — менять нечего.
-      if (next === undefined) throw new HostError('bad_request', `provider ${entry.id} does not accept a model`);
+      if (next === undefined) throw new HostError('bad_request', hostText('providerNoModel', { id: entry.id }));
       // Та же модель — ни записи, ни перезапуска: меню отмечает её и так.
       if (next === session.model) return { model: next, effort: session.effort ?? null, restarted: false };
       // Нет выбора effort — его нет и после смены (умолчание роли не вытесняется); выбор, которого у новой модели
@@ -2171,7 +2180,7 @@ export function createSessionsService(
     const catalog = feed.roleCatalog
       ? await feed.roleCatalog(cwd)
       : await sessionRoleCatalog(cwd, { codex: role.source === 'codex' || entry.id === 'codex', provider: entry });
-    return { change: await roleChangeOnSwitch(cwd, entry, providerLabel(entry), role, catalog), catalog };
+    return { change: await roleChangeOnSwitch(cwd, entry, providerLabel(entry), role, catalog, host.locale?.()), catalog };
   }
 
   const roleAfter = (change: RoleChange): SessionRole | null => (change.to === null ? null : roleFromId(change.to));
@@ -2180,11 +2189,13 @@ export function createSessionsService(
   function roleChangeNotice(ref: SessionRef, change: RoleChange, catalog: RoleCatalog | null, targetLabel: string): void {
     const name = catalog?.roles.find((role) => role.id === change.from)?.name ?? change.from;
     const next = roleAfter(change);
-    const after = next === null ? 'without a role' : `as ${next.name} (${next.source})`;
+    const locale = host.locale?.();
+    const after = next === null ? hostText('roleWithout').in(locale) : hostText('roleAs', { role: `${next.name} (${next.source})` }).in(locale);
+    const restriction = change.readOnlyLost ? hostText('roleRestrictionLifted').in(locale) : '';
     host.broadcast('host.notice', {
       kind: 'role-missing',
       ref,
-      text: `${sessionMention(ref.sessionId)} continues on ${targetLabel} ${after}: ${name} no longer applies${change.readOnlyLost ? ', and the read-only restriction is lifted' : ''}.`,
+      text: hostText('roleSwitchNotice', { session: sessionMention(ref.sessionId), target: targetLabel, after, name, restriction }).in(locale),
       at: new Date().toISOString(),
     });
   }
@@ -2442,10 +2453,10 @@ export function createSessionsService(
     if (roleChange !== null) {
       const ack = request.roleChange;
       if (ack !== undefined && (ack.from !== roleChange.from || ack.to !== roleChange.to)) {
-        throw new HostError('conflict', `The role change has changed since it was shown: ${roleChange.text} Open the dialog again.`);
+        throw new HostError('conflict', hostText('roleAckStale', { change: roleChange.text }));
       }
       if (ack === undefined && roleChange.readOnlyLost) {
-        throw new HostError('conflict', `${roleChange.text} Confirm the role change in the Parley window to continue.`);
+        throw new HostError('conflict', hostText('roleAckRequired', { change: roleChange.text }));
       }
     }
     const roleChanged = roleChange !== null;
@@ -2689,7 +2700,7 @@ export function createSessionsService(
     const roleChangeOf = async (entry: ProviderEntry): Promise<RoleChange | null> => {
       if (role === null) return null;
       try {
-        return await roleChangeOnSwitch(cwd, entry, providerLabel(entry), role, catalog);
+        return await roleChangeOnSwitch(cwd, entry, providerLabel(entry), role, catalog, host.locale?.());
       } catch {
         return null;
       }

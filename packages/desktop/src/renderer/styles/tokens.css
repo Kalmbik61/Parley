@@ -519,3 +519,9 @@
   --markdown-search-match: #facc15;
   --markdown-search-match-active: #fb923c;
 }
+
+/* У системного семейства есть латиница и кириллица с одинаковой метрикой. */
+:root[lang='ru'] {
+  --app-font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-heading: var(--app-font-family);
+}

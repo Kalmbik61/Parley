@@ -24,6 +24,7 @@
  * У остальных провайдеров без карточки уведомление остаётся.
  */
 
+import { appI18n } from '../../shared/app-locale.js';
 import type { Message, Proposal, Room, SessionActivity, SessionNeed, WindowWorkEntry, WorkSession } from '@parley/core';
 import { localClock, needReason } from '@parley/core/stuck';
 import { refKey, type HostNotice, type RoomsMailEvent, type SessionRef } from '@parley/protocol';
@@ -134,7 +135,7 @@ const NOTICE_EVENT: Partial<Record<HostNotice['kind'], string>> = {
  * по-английски (`wake/wake-service.ts`); пустой текст — таблица окна. У прочих видов хостовый текст в тело не идёт.
  */
 function noticeBody(notice: HostNotice): string {
-  if (notice.kind !== 'limit-return-blocked') return noticeText(notice);
+  if (notice.kind !== 'limit-return-blocked' || appI18n.locale === 'ru') return noticeText(notice);
   const text = notice.text.trim();
   return text === '' ? noticeText(notice) : text;
 }
@@ -575,10 +576,9 @@ export function createAttentionNotifier(deps: NotifyDeps): {
         const islandShows = deps.islandOn() && deps.islandAudible() && entry.map.work.status === 'active';
         send(
           {
-            title: S.notifications.sessionTitle(
+            title: S.notifications.sessionFinished(
               workTitleText(entry.map.work.title),
               sessionRowLabel(session.id, session.label),
-              S.notifications.finished,
             ),
             // В `result` только done или failed, текста там нет — итог хода в `summary`.
             body: firstLine(session.summary),

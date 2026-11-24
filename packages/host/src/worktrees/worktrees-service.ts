@@ -5,6 +5,7 @@
  * протокола и правила отказа, которых у core нет (там нет понятия «сессии»).
  */
 
+import { hostText } from '../host-text.js';
 import { stat } from 'node:fs/promises';
 import {
   commitProject,
@@ -77,7 +78,7 @@ export function gitFailure(error: unknown): HostError {
     // satisfies — причина core обязана быть в общем списке протокола: новая причина git без него не соберётся.
     return new HostError(code, error.message, { reason: error.reason satisfies HostErrorReason });
   }
-  if (error instanceof NothingToCommitError) return new HostError('conflict', 'nothing to commit');
+  if (error instanceof NothingToCommitError) return new HostError('conflict', hostText('nothingToCommit'));
   if (error instanceof InvalidRevisionError) return new HostError('bad_request', error.message);
   return new HostError('internal', error instanceof Error ? error.message : String(error));
 }
@@ -94,7 +95,7 @@ async function viaGit<T>(action: () => Promise<T>): Promise<T> {
 async function requireSession(ref: SessionRef): Promise<WorkSession> {
   const map = await readMap(ref.projectPath, ref.workId);
   const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
-  if (session === undefined) throw new HostError('not_found', `session ${ref.sessionId} is not in the map`);
+  if (session === undefined) throw new HostError('not_found', hostText('sessionNotInMap', { sessionId: ref.sessionId }));
   return session;
 }
 
@@ -104,7 +105,7 @@ async function requireWorktree(
 ): Promise<{ label: string; worktree: WorktreeInfo }> {
   const session = await requireSession(ref);
   if (session.worktree === null) {
-    throw new HostError('bad_request', `session ${ref.sessionId} has no worktree of its own`);
+    throw new HostError('bad_request', hostText('sessionNoWorktree', { sessionId: ref.sessionId }));
   }
   return { label: session.label, worktree: session.worktree };
 }
@@ -135,7 +136,7 @@ async function requirePresentWorktree(
       },
     );
     if (!present) {
-      throw new HostError('bad_request', `worktree of session ${ref.sessionId} is missing: ${found.worktree.path}`, {
+      throw new HostError('bad_request', hostText('worktreeMissing', { sessionId: ref.sessionId, path: found.worktree.path }), {
         reason: HOST_ERROR_REASONS.worktreeMissing,
       });
     }
@@ -147,7 +148,7 @@ async function requirePresentWorktree(
 async function requireNoWorktree(ref: SessionRef): Promise<void> {
   const session = await requireSession(ref);
   if (session.worktree !== null) {
-    throw new HostError('bad_request', `session ${ref.sessionId} has its own worktree — see worktrees.diff`);
+    throw new HostError('bad_request', hostText('sessionOwnWorktree', { sessionId: ref.sessionId }));
   }
 }
 

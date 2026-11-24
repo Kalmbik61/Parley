@@ -4,6 +4,7 @@
  * здесь только разбор параметров протокола и форма ответа.
  */
 
+import { hostText } from '../host-text.js';
 import {
   effortsFor,
   hookedSince,
@@ -111,7 +112,7 @@ export function createSessionHandlers(deps: SessionMethodDeps): SessionHandlers 
     // на месте, иначе карточка всплыла бы в начало своего ранга. Закрытую сессию тоже можно переименовать.
     sessionsRename: async ({ ref, label }) => {
       if (!workExists(ref.projectPath, ref.workId)) {
-        throw new HostError('bad_request', `workspace ${ref.workId} does not exist`);
+        throw new HostError('bad_request', hostText('workspaceDoesNotExist', { workId: ref.workId }));
       }
       await updateMap(
         ref.projectPath,
@@ -168,23 +169,23 @@ export function createSessionHandlers(deps: SessionMethodDeps): SessionHandlers 
     sessionsSetEffort: async ({ ref, effort }) =>
       deps.sessions.exclusive(ref, async () => {
         const handle = deps.pty.get(ref);
-        if (handle === undefined) throw new HostError('not_found', `no live PTY for session ${ref.sessionId}`);
+        if (handle === undefined) throw new HostError('not_found', hostText('noLivePty', { sessionId: ref.sessionId }));
         const session = (await readMap(ref.projectPath, ref.workId)).sessions.find(
           (candidate) => candidate.id === ref.sessionId,
         );
         if (session === undefined) {
-          throw new HostError('not_found', `session ${ref.sessionId} is not in the map of workspace ${ref.workId}`);
+          throw new HostError('not_found', hostText('sessionNotInWorkspace', { sessionId: ref.sessionId, workId: ref.workId }));
         }
         const entry = (await loadProviders())[session.provider];
         if (entry === undefined || !isClaudeCode(entry)) {
-          throw new HostError('bad_request', 'effort of a running session can be changed only for Claude Code sessions');
+          throw new HostError('bad_request', hostText('effortChangeClaudeOnly'));
         }
         // `null` — явный «Default»: уровни те же, что у модели по умолчанию.
         const model = session.model ?? undefined;
         const resolved = resolveModelEffort(entry, { ...(model === undefined ? {} : { model }), effort });
         if ('error' in resolved) throw new HostError('bad_request', resolved.error);
         const levels = effortsFor(entry, model);
-        if (levels === null) throw new HostError('bad_request', `provider ${entry.id} does not accept effort`);
+        if (levels === null) throw new HostError('bad_request', hostText('providerNoEffort', { id: entry.id }));
 
         // Дальше — только то, что видно на экране и в журнале; при любом отказе в PTY не уходит ни одной клавиши.
         const live = deps.activity.get(ref);

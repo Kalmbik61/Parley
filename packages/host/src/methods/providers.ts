@@ -1,3 +1,4 @@
+import { hostText } from '../host-text.js';
 import {
   CLI_INSTALL_TOOLS,
   clearSecret,
@@ -135,7 +136,7 @@ export function createProvidersList(
           try {
             key = await readSecret(entry.runner.secret);
           } catch {
-            throw new HostError('internal', 'Unable to read provider key');
+            throw new HostError('internal', hostText('providerKeyReadFailed'));
           }
         }
         // Состояние входа спрашивается только у аккаунта подписки.
@@ -318,7 +319,7 @@ async function providerSecret(provider: string): Promise<{ secret: SecretId; ent
   const registry = await loadProviders();
   const entry = Object.hasOwn(registry, provider) ? registry[provider] : undefined;
   if (entry?.id !== provider || entry.runner.secret === undefined) {
-    throw new HostError('bad_request', 'Provider does not support a saved key');
+    throw new HostError('bad_request', hostText('savedKeyUnsupported'));
   }
   return { secret: entry.runner.secret, entry };
 }
@@ -338,7 +339,7 @@ export function createProvidersSetKey(
         return await writeSecret(secret, key);
       } catch (error) {
         if (error instanceof SecretFormatError) throw new HostError('bad_request', error.message);
-        throw new HostError('internal', 'Unable to save provider key');
+        throw new HostError('internal', hostText('providerKeySaveFailed'));
       }
     };
     const keyHint = entry.custom !== undefined ? await serialized(save) : await save();
@@ -368,13 +369,13 @@ export function createProvidersClearKey(
         try {
           await clearSecret(secret);
         } catch {
-          throw new HostError('internal', 'Unable to clear provider key');
+          throw new HostError('internal', hostText('providerKeyClearFailed'));
         }
         // Режим api-key: Claude Code помнит хвост ключа в своей папке; без ключа этой записи быть не должно (К17).
         try {
           await syncApiKeyApproval(entry.id, null);
         } catch {
-          throw new HostError('internal', 'Unable to clear provider key approval');
+          throw new HostError('internal', hostText('providerKeyApprovalClearFailed'));
         }
       });
       customCheck?.forget(entry.id);
@@ -382,7 +383,7 @@ export function createProvidersClearKey(
       try {
         await clearSecret(secret);
       } catch {
-        throw new HostError('internal', 'Unable to clear provider key');
+        throw new HostError('internal', hostText('providerKeyClearFailed'));
       }
       limits?.invalidateGlm();
       // Удалённый ключ уносит и исход своей проверки: отпечаток не должен пережить сам ключ.
@@ -415,13 +416,13 @@ export function createProvidersCheck(
       entry.runner.secret === undefined ||
       (isCustom ? customCheck === undefined : entry.runner.secret !== 'zai' || glmCheck === undefined)
     ) {
-      throw new HostError('bad_request', 'Provider does not support a key check');
+      throw new HostError('bad_request', hostText('keyCheckUnsupported'));
     }
     let key: string | null;
     try {
       key = await readSecret(entry.runner.secret);
     } catch {
-      throw new HostError('internal', 'Unable to read provider key');
+      throw new HostError('internal', hostText('providerKeyReadFailed'));
     }
     await versions?.ready;
     const readiness = await providerReadiness(entry, {
@@ -457,7 +458,7 @@ export function createProvidersRefreshLimits(
         })(),
       ]);
     } catch (error) {
-      throw new HostError('internal', 'Unable to refresh GLM quota', {
+      throw new HostError('internal', hostText('glmQuotaFailed'), {
         provider: 'glm', reason: error instanceof ZaiQuotaError ? error.reason : 'unavailable',
       });
     }

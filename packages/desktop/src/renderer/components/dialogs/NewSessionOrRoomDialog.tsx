@@ -78,6 +78,8 @@
  * к фону диалога 2.69:1, ниже порога 3:1 для признака состояния.
  */
 
+import { recipeDisplay } from '@parley/core/builtin-display';
+import { appI18n } from '../../../shared/app-locale.js';
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import type { RecipeAgent, RecipeCatalogView, RecipeEntryView, WindowWorkEntry } from '@parley/core';
 import {
@@ -543,12 +545,14 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, backlog = nul
                 <SelectTrigger aria-label={S.recipes.field}><SelectValue /></SelectTrigger>
                 <SelectContent className={LIST_HEIGHT}>
                   <SelectItem value={NO_RECIPE}>{S.recipes.none}</SelectItem>
-                  {recipes.entries.map((entry) => entry.status === 'valid'
-                    ? <SelectItem key={entry.recipe.id} value={entry.recipe.id} title={entry.recipe.name} className={ITEM_CLIP}>{entry.recipe.name}</SelectItem>
-                    : <SelectItem key={entry.id} value={entry.id} disabled title={entry.file} className={ITEM_CLIP}>{S.recipes.invalidOption(entry.file, S.recipes.reason[entry.diagnostic.code] ?? entry.diagnostic.code)}</SelectItem>)}
+                  {recipes.entries.map((entry) => {
+                    if (entry.status === 'invalid') return <SelectItem key={entry.id} value={entry.id} disabled title={entry.file} className={ITEM_CLIP}>{S.recipes.invalidOption(entry.file, S.recipes.reason[entry.diagnostic.code] ?? entry.diagnostic.code)}</SelectItem>;
+                    const { name } = recipeDisplay(entry.recipe, appI18n.locale);
+                    return <SelectItem key={entry.recipe.id} value={entry.recipe.id} title={name} className={ITEM_CLIP}>{name}</SelectItem>;
+                  })}
                 </SelectContent>
               </Select>
-              {chosenRecipe === null ? null : <p data-recipe-description className="m-0 break-words text-xs text-neutral-700">{chosenRecipe.recipe.description}</p>}
+              {chosenRecipe === null ? null : <p data-recipe-description className="m-0 break-words text-xs text-neutral-700">{recipeDisplay(chosenRecipe.recipe, appI18n.locale).description}</p>}
             </div>
           ) : null}
           <div className={cn('grid gap-3', showName ? 'grid-cols-2' : 'grid-cols-1')}>
@@ -694,7 +698,7 @@ export function NewSessionOrRoomDialog({ open, bridge, work, room, backlog = nul
           </div>
           <DialogClose asChild>
             <Button type="button" variant="outline">
-              {S.common.cancel}
+              {text.cancel}
             </Button>
           </DialogClose>
           <Button type="button" disabled={busy || providers === null || providersLoading || providersError !== null || availabilityError !== null || selected === null || budgetBlocked !== null || agents.some((row) => row.roleMissing !== null)} onClick={() => void submit()}>

@@ -6,6 +6,7 @@
  * в хвосте rollout после печати (опрос раз в 2 с, Codex), выход процесса или таймаут.
  */
 
+import { hostText } from '../host-text.js';
 import { byFamily, hookedSince, type RolloutRecord } from '@parley/core';
 import { COMPACT_MAX_INSTRUCTIONS, refKey } from '@parley/protocol';
 import type { CompactResult, NoticeKind, SessionRef } from '@parley/protocol';
@@ -45,7 +46,7 @@ export function compactCommand(provider: string | null, instructions: string | n
   const line = stripEscapes(instructions).replace(CONTROL, ' ').replace(/\s+/g, ' ').trim();
   // Предел (спека 5.3): `/compact ` + 350 знаков кириллицы ≤ 709 байт — ниже порога «вставки» Claude Code.
   if (line.length > COMPACT_MAX_INSTRUCTIONS) {
-    throw new HostError('bad_request', `instructions are longer than ${COMPACT_MAX_INSTRUCTIONS} characters`);
+    throw new HostError('bad_request', hostText('instructionsTooLong', { limit: COMPACT_MAX_INSTRUCTIONS }));
   }
   if (line === '') return '/compact';
   // Хвостовой `@`/`/`-токен открывает меню автодополнения Claude Code, и оно забирает Enter: закрываем пробелом.
@@ -65,7 +66,7 @@ export interface CompactionService {
 }
 
 export interface CompactionDeps {
-  host: Pick<HostContext, 'log' | 'broadcast'>;
+  host: Pick<HostContext, 'log' | 'broadcast' | 'locale'>;
   pty: PtyManager;
   activity: Pick<ActivityService, 'get' | 'onChange' | 'setCompaction' | 'logFile' | 'qwenBlocked'>;
   exclusive: SwitchLock;
@@ -191,11 +192,11 @@ export function createCompactionService(deps: CompactionDeps): CompactionService
       });
       const outcome = await attempt.done;
       if (outcome !== 'submitted') {
-        notice('compact-failed', ref, `compaction of ${ref.sessionId} was not sent (${outcome})`);
+        notice('compact-failed', ref, hostText('compactSendFailed', { sessionId: ref.sessionId, outcome }).in(deps.host.locale?.()));
         return;
       }
       const timer = setTimeout(() => {
-        notice('compact-failed', ref, `compaction of ${ref.sessionId} did not report back`);
+        notice('compact-failed', ref, hostText('compactNoResponse', { sessionId: ref.sessionId }).in(deps.host.locale?.()));
         release();
       }, entry.codex ? codexTimeoutMs : timeoutMs);
       const stopPolling = entry.codex ? await pollCodex(entry) : () => undefined;
@@ -230,7 +231,7 @@ export function createCompactionService(deps: CompactionDeps): CompactionService
     if (handle === undefined) {
       pending.delete(key);
       publish(ref, null);
-      notice('compact-cancelled', ref, `${ref.sessionId} stopped — compaction cancelled`);
+      notice('compact-cancelled', ref, hostText('compactCancelled', { sessionId: ref.sessionId }).in(deps.host.locale?.()));
       return false;
     }
     if (!ready(ref, handle)) return false;
@@ -288,7 +289,7 @@ export function createCompactionService(deps: CompactionDeps): CompactionService
           const key = refKey(ref);
           if (pending.delete(key)) {
             publish(ref, null);
-            notice('compact-cancelled', ref, `${ref.sessionId} stopped — compaction cancelled`);
+            notice('compact-cancelled', ref, hostText('compactCancelled', { sessionId: ref.sessionId }).in(deps.host.locale?.()));
           }
           running.get(key)?.done();
         }),

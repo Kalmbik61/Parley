@@ -1,3 +1,4 @@
+import { hostText } from '../host-text.js';
 import { realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { HistorySearchError, SharedStateError, searchHistory, sharedProjectPaths } from '@parley/core';
@@ -43,7 +44,7 @@ export function createHistoryHandlers(): HistoryHandlers {
   return {
     'history.search': async params => {
       const parsed = historyMethodSchemas['history.search'].safeParse(params);
-      if (!parsed.success || !path.isAbsolute(parsed.data.projectPath)) throw new HostError('bad_request', 'Invalid history search request.');
+      if (!parsed.success || !path.isAbsolute(parsed.data.projectPath)) throw new HostError('bad_request', hostText('invalidHistorySearch'));
       const { projectPath, query, scope, limit } = parsed.data;
       try {
         const found = await searchHistory(projectPath, { query, ...(scope === undefined ? {} : { scope }), limit: limit ?? HISTORY_SEARCH_DEFAULT_LIMIT });
@@ -56,9 +57,9 @@ export function createHistoryHandlers(): HistoryHandlers {
         return projected.data;
       } catch (error) {
         if (error instanceof HostError) throw error;
-        if (error instanceof HistorySearchError) throw new HostError('bad_request', 'Invalid history search request.', { code: error.code });
+        if (error instanceof HistorySearchError) throw new HostError('bad_request', hostText('invalidHistorySearch'), { code: error.code });
         const code = error instanceof SharedStateError ? error.code : 'history-search-failed';
-        throw new HostError('internal', 'The history search could not be completed.', { code });
+        throw new HostError('internal', hostText('historySearchFailed'), { code });
       }
     },
   };

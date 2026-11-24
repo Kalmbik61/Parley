@@ -20,9 +20,9 @@ import {
   sessionNeed,
   type Attention,
 } from '@parley/core/attention';
-import { needWord } from '@parley/core/session-state';
+import { appI18n } from '../../shared/app-locale.js';
 import { refKey, type MailWait } from '@parley/protocol';
-import { S } from '../../shared/strings.js';
+import { S, sessionNeedText } from '../../shared/strings.js';
 import { hasHumanMention } from '../components/rooms/room-remark.js';
 import { isoMs } from '../lib/iso-time.js';
 import { archivedRoomIds, isRoomArchived } from '../lib/room-archive.js';
@@ -49,7 +49,7 @@ function limitReset(need: SessionNeed, now: number): { when: string; reset: bool
   if (at === null) return null;
   const date = new Date(at);
   const clock = CLOCK.format(date);
-  const when = date.toDateString() === new Date(now).toDateString() ? clock : `${DAY.format(date)}, ${clock}`;
+  const when = date.toDateString() === new Date(now).toDateString() ? clock : `${appI18n.locale === 'ru' ? appI18n.formatDate(date, { month: 'short', day: 'numeric' }) : DAY.format(date)}, ${clock}`;
   return { when, reset: at <= now };
 }
 
@@ -58,7 +58,7 @@ function limitReset(need: SessionNeed, now: number): { when: string; reset: bool
  * лимита рядом время сброса. Обрамление — `S.need`.
  */
 export function needLabel(need: SessionNeed, now: number): string {
-  const word = needWord(need.kind);
+  const word = sessionNeedText(need.kind);
   if (need.kind !== 'limit') return word;
   const limit = limitReset(need, now);
   if (limit === null) return word;
@@ -70,7 +70,7 @@ export function needTooltip(need: SessionNeed): string {
   const lead =
     need.kind === 'sign-in' && need.account === 'account'
       ? S.need.accountLead
-      : S.need.lead[need.kind](needWord(need.kind));
+      : S.need.lead[need.kind](sessionNeedText(need.kind));
   return need.detail === null ? lead : S.need.withDetail(lead, need.detail);
 }
 
@@ -82,7 +82,7 @@ export function needTooltip(need: SessionNeed): string {
 export function mailWaitText(reason: MailWait | null, need: SessionNeed | null, now: number): string | null {
   if (reason === null) return null;
   if (reason === 'stuck' && need !== null) {
-    const word = needWord(need.kind);
+    const word = sessionNeedText(need.kind);
     switch (need.kind) {
       case 'approval':
         return S.need.mail.approval(word);

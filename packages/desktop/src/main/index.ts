@@ -24,8 +24,12 @@ import {
 import type { WebContents } from 'electron';
 import { configPath, envValue, loadConfig, migrateHome, parleyHome, readSecret } from '@parley/core';
 import type { AssistantLanguage } from '@parley/core/assistant';
-import { systemAssistantLanguage } from '../shared/assistant-language.js';
+import { SYSTEM_LOCALE_ENV } from '@parley/core/desktop-locale';
+import { resolveAppLocale } from '@parley/core/i18n';
 import { AGENT_LIMITS, type WorksSnapshot } from '@parley/protocol';
+import { appI18n, setAppLocale } from '../shared/app-locale.js';
+import { nativeWindowStrings } from '../shared/catalogs/system.js';
+import { systemAssistantLanguage } from '../shared/assistant-language.js';
 import type { AboutInfo, FocusTarget, UpdateCheckResult, HostStatus, UpdateResult } from '../shared/bridge.js';
 import { BROWSER_PARTITION, type AgentActivity } from '../shared/browser-types.js';
 import { ISLAND_EVENTS, ttsAvailable, type AssistantOpenRequest, type IslandConfig } from '../shared/island.js';
@@ -241,6 +245,16 @@ if (!gotLock) {
         log: (message, error) => console.warn(`[parley] ${message}`, error ?? ''),
       });
     }
+    // Читаем выбор после переноса дома и до запуска хоста, меню и обоих окон.
+    const uiStore = createUiStore(desktopUiPath());
+    const ui = await uiStore.load();
+    const systemLocale = app.getPreferredSystemLanguages()[0] ?? app.getLocale();
+    const locale = resolveAppLocale(ui.locale, systemLocale);
+    setAppLocale(locale);
+    ipcMain.on('app:locale', (event) => {
+      event.returnValue = locale;
+    });
+    nativeTheme.themeSource = ui.appearance;
 
     const paths = hostPaths();
     const connection = new HostConnection({
@@ -275,7 +289,7 @@ if (!gotLock) {
             isFile: isFileSync,
           });
           return spawnHost({
-            env: { ...shellEnv.env, ...hostExtraEnv({ engine }) },
+            env: { ...shellEnv.env, ...hostExtraEnv({ engine }), [SYSTEM_LOCALE_ENV]: systemLocale },
             entry,
             nodeBin,
             stderrFile: path.join(paths.dir, 'host.err'),
@@ -294,7 +308,7 @@ if (!gotLock) {
     let agentOps: AgentOps | null = null;
     answerBrowserAgentOps(connection, async (event) =>
       agentOps === null
-        ? { ok: false, error: { code: 'window_not_connected', message: "Parley's window is still starting: try again in a moment." } }
+        ? { ok: false, error: { code: 'window_not_connected', message: nativeWindowStrings[appI18n.locale].windowStarting } }
         : agentOps.run(event),
     );
 
@@ -350,13 +364,6 @@ if (!gotLock) {
       quitGuard.systemShutdown();
       app.quit();
     });
-
-    // `ui.json` и `themeSource` — до первого окна: `nativeTheme.shouldUseDarkColors`
-    // ниже должен уже отражать выбор пользователя, иначе `backgroundColor` возьмёт
-    // системную тему вместо сохранённой (спека 4.7, «Старт»).
-    const uiStore = createUiStore(desktopUiPath());
-    const ui = await uiStore.load();
-    nativeTheme.themeSource = ui.appearance;
 
     const preloadPath = path.join(dirname, '../preload/index.js');
     const indexHtmlPath = path.join(dirname, '../renderer/index.html');

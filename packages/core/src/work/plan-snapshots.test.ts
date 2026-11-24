@@ -74,6 +74,21 @@ afterEach(async () => {
 const snapshotDir = () => path.join(project, ".parley", "plans");
 
 describe("captured immutable plan exports", () => {
+  it("keeps an existing intent and digest when only the display locale changes", async () => {
+    const map = await readMap(project, workId);
+    const plan = map.plans![0]!;
+    const original = map.planExports![0]!;
+    expect(original.content).toContain("## Goal\nOriginal exact goal");
+    expect(capturePlanSnapshot(map, plan, "accepted", [], "ru")).toBe(original);
+    expect((await flushPlanSnapshots(project, workId)).failed).toEqual([]);
+    const persisted = await readMap(project, workId);
+    const digest = persisted.planExports![0]!;
+    expect(digest.content).toBeUndefined();
+    expect(capturePlanSnapshot(persisted, persisted.plans![0]!, "accepted", [], "ru")).toBe(digest);
+    persisted.plans![0]!.goal = "A changed author goal";
+    expect(() => capturePlanSnapshot(persisted, persisted.plans![0]!, "accepted", [], "ru")).toThrow("snapshot-conflict");
+  });
+
   it("writes the accepted payload even after a later revision and completion; replay is idempotent", async () => {
     const captured = (await readMap(project, workId)).planExports![0]!;
     await updateMap(project, workId, (map, letters) => {
@@ -139,7 +154,20 @@ describe("captured immutable plan exports", () => {
     expect((await flushPlanSnapshots(project, workId)).failed).toEqual([]);
     expect(await readFile(file, "utf8")).toBe(intent.content);
   });
-  it("a failed publication retains the exact payload; retry after a later live edit uses captured bytes", async () => {
+  it("rejects a stored pending snapshot whose filename and revision disagree", async () => {
+    const original = (await readMap(project, workId)).planExports![0]!;
+    const invalid = { ...original, rev: original.rev + 1 };
+    await updateMap(project, workId, (map) => {
+      map.planExports![0] = invalid;
+    });
+
+    const result = await flushPlanSnapshots(project, workId);
+    expect(result.written).toEqual([]);
+    expect(result.failed).toEqual([{ file: invalid.file, code: "snapshot-invalid" }]);
+    await expect(readFile(path.join(snapshotDir(), invalid.file), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    expect((await readMap(project, workId)).planExports![0]).toEqual(invalid);
+  });
+  it("a failed publication keeps captured bytes through a live edit and a locale change", async () => {
     const intent = (await readMap(project, workId)).planExports![0]!;
     expect(
       (
@@ -150,6 +178,10 @@ describe("captured immutable plan exports", () => {
         })
       ).failed,
     ).toHaveLength(1);
+    const desktop = path.join(root, "home", "desktop");
+    await mkdir(desktop);
+    await writeFile(path.join(desktop, "ui.json"), JSON.stringify({ locale: "ru" }));
+    expect(intent.content).toContain("## Goal\nOriginal exact goal");
     await updateMap(project, workId, (map) => {
       map.plans![0]!.goal = "Later live goal";
     });

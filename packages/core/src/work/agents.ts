@@ -9,6 +9,7 @@ import { findRunnerBinary } from './find-binary.js';
 import { byFamily, claudeConfigDirFor, isClaudeCode, loadProviders, providerFamily, type ProviderEntry } from '../providers.js';
 import type { RoleCatalog } from '../roles/types.js';
 import type { SessionRole, WorkSession } from './types.js';
+import type { AppLocale } from '../i18n/index.js';
 
 export function agentDirs(projectPath: string, claudeHome = path.join(homedir(), '.claude')): string[] {
   return [path.join(projectPath, '.claude', 'agents'), path.join(claudeHome, 'agents')];
@@ -259,10 +260,9 @@ export interface RoleChange { from: string; to: string | null; readOnlyLost: boo
 
 /**
  * The change of a session role when it continues on `entry` (spec 2026-11-12, 2.2): `null` when the role stays the same
- * or the session has none. `readOnlyLost` compares the catalog's resolved `readOnly` of both roles. `text` is one English
- * sentence for people, the same on every surface.
+ * or the session has none. `readOnlyLost` compares the catalog's resolved `readOnly` of both roles. `text` describes the change in the selected interface language.
  */
-export async function roleChangeOnSwitch(cwd: string, entry: ProviderEntry, targetLabel: string, role: SessionRole | null, catalog?: RoleCatalog): Promise<RoleChange | null> {
+export async function roleChangeOnSwitch(cwd: string, entry: ProviderEntry, targetLabel: string, role: SessionRole | null, catalog?: RoleCatalog, locale: AppLocale = 'en'): Promise<RoleChange | null> {
   if (role === null) return null;
   const current = catalog ?? await sessionRoleCatalog(cwd, { codex: role.source === 'codex' || entry.id === 'codex', provider: entry });
   const next = await roleForProvider(cwd, entry, role, current);
@@ -275,6 +275,14 @@ export async function roleChangeOnSwitch(cwd: string, entry: ProviderEntry, targ
   const unverified = role.source === 'codex' && (!current.roles.some(item => item.id === from) || current.diagnostics.some(item => item.source === 'codex'));
   const readOnlyLost = (readOnly(from) || unverified) && !readOnly(to);
   const fromName = current.roles.find(item => item.id === from)?.name ?? from;
+  if (locale === 'ru') {
+    const after = next === null ? 'без роли' : `с ролью ${next.name} (${next.source})`;
+    const kind = readOnly(from) ? 'Роль только для чтения' : 'Возможно, это роль только для чтения. Настройки Codex проверить не удалось';
+    const text = readOnlyLost
+      ? `${kind}: ${fromName}. Провайдер ${targetLabel} её не поддерживает. Сессия продолжится ${after}, с возможностью редактировать файлы и запускать команды.`
+      : `Провайдер ${targetLabel} не поддерживает роль ${fromName}. Сессия продолжится ${after}.`;
+    return { from, to, readOnlyLost, text };
+  }
   const after = next === null ? 'without a role' : `as ${next.name} (${next.source})`;
   const kind = readOnly(from) ? 'is a read-only role' : 'may be a read-only role (its Codex settings could not be verified)';
   const text = readOnlyLost

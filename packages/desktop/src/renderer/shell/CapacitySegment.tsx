@@ -8,7 +8,7 @@
 
 import { useState } from 'react';
 import { Bot } from 'lucide-react';
-import { queuedWord } from '@parley/core/session-state';
+import { queuedSessionText } from '../lib/session-word.js';
 import { S } from '../../shared/strings.js';
 import { cn } from '../lib/cn.js';
 import { projectName } from '../lib/project-name.js';
@@ -59,7 +59,7 @@ export function CapacitySegment(): JSX.Element | null {
                     <span className="text-neutral-700"> · {projectName(ref.projectPath)}</span>
                   </span>
                   <span className="truncate text-neutral-700">
-                    {queuedWord(queued)} · {S.capacity.waited(now - Date.parse(queued.at))}
+                    {queuedSessionText(queued)} · {S.capacity.waited(now - Date.parse(queued.at))}
                   </span>
                 </li>
               ))}

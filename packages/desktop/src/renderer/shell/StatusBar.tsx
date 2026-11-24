@@ -21,6 +21,7 @@
  * видит и `notice.text` хоста показать не может, даже случайно.
  */
 
+import { displayLocale } from '../../shared/app-locale.js';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Ellipsis, Hourglass, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
@@ -85,8 +86,8 @@ const MIN_REFRESH_FEEDBACK_MS = 600;
 const wholePercent = (limit: LimitWindow | null): number | null => (limit === null ? null : Math.floor(limit.usedPercent));
 
 // Время в тултипе — местное и короткое, по-английски, как в `review/notes/NoteZone.tsx`: «9:30 PM», день — «Sat».
-const clock = (iso: string): string => new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
-const weekday = (iso: string): string => new Date(iso).toLocaleDateString('en-US', { weekday: 'short' });
+const clock = (iso: string): string => new Date(iso).toLocaleTimeString(displayLocale(), { hour: 'numeric', minute: '2-digit' });
+const weekday = (iso: string): string => new Date(iso).toLocaleDateString(displayLocale(), { weekday: 'short' });
 
 /**
  * Одно окно в тексте: процент и (если сброс известен) время сброса отдельными спанами. Процент не сжимается; сброс с

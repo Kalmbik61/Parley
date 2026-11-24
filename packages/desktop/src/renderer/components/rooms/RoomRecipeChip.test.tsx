@@ -5,6 +5,7 @@
 
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { setAppLocale } from '../../../shared/app-locale.js';
 import { REQUIRED_METHODS } from '../../lib/capabilities.js';
 import { useHostStore } from '../../store/host.js';
 import { useUiStore } from '../../store/ui.js';
@@ -20,7 +21,7 @@ beforeEach(() => {
   useHostStore.setState({ status: { state: 'connected', hostVersion: 'test', methods: [...REQUIRED_METHODS] } });
   Element.prototype.scrollIntoView = vi.fn();
 });
-afterEach(() => { cleanup(); Reflect.deleteProperty(Element.prototype, 'scrollIntoView'); });
+afterEach(() => { cleanup(); setAppLocale('en'); Reflect.deleteProperty(Element.prototype, 'scrollIntoView'); });
 
 function panel(recipe: { id: string; name: string; playbook: string } | null) {
   const entry = makeWork('w-01', {
@@ -33,6 +34,15 @@ function panel(recipe: { id: string; name: string; playbook: string } | null) {
 }
 
 describe('RoomRecipeChip', () => {
+  it('localizes a builtin snapshot label and shows the original playbook', async () => {
+    setAppLocale('ru');
+    const recipe = { id: 'builtin:plan-build', name: 'Plan & build', playbook: PLAYBOOK };
+    render(<RoomRecipeChip recipe={recipe} />);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Планирование и реализация' })); });
+    expect(screen.getByText(/Ask the human/).textContent).toBe(PLAYBOOK);
+    expect(recipe.name).toBe('Plan & build');
+  });
+
   it('shows the recipe name; a click opens the playbook as read-only text', async () => {
     render(<RoomRecipeChip recipe={{ id: 'builtin:plan-build', name: 'Plan & build', playbook: PLAYBOOK }} />);
     const chip = screen.getByRole('button', { name: 'Plan & build' });

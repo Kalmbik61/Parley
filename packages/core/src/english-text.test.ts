@@ -5,11 +5,12 @@
  * предупреждения и ошибки, которые хост пересылает окну). Комментарии не проверяются: парсер не отдаёт их
  * узлами, поэтому кириллица в `//` и `/* … *\/` находкой не считается.
  *
- * Исключение — `// cyrillic-ok: <почему>` на той же исходной строке: метка-страж, лежащая в картах на
+ * Русские переводы в `core/src/i18n` разрешены во втором аргументе общего `defineCatalog`.
+ * Остальное исключение — `// cyrillic-ok: <почему>` на той же исходной строке: метка-страж, лежащая в картах на
  * диске, или метка в файле, которую надо узнавать по прежнему тексту. Тесты не сканируются: их данные и
  * названия по-русски. Устройство — как у `packages/desktop/src/english-ui.test.ts`.
  */
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -63,6 +64,19 @@ function scanFile(absPath: string, relPath: string): Violation[] {
     true,
     ts.ScriptKind.TS,
   );
+  const localeIndex = relPath === path.join('i18n', 'index.ts');
+  const catalogImport = localeIndex ? './catalog.js' : './index.js';
+  const importsCatalog = path.dirname(relPath) === 'i18n' &&
+    sourceFile.statements.some(
+      (statement) => ts.isImportDeclaration(statement) &&
+        ts.isStringLiteral(statement.moduleSpecifier) &&
+        statement.moduleSpecifier.text === catalogImport &&
+        statement.importClause?.namedBindings !== undefined &&
+        ts.isNamedImports(statement.importClause.namedBindings) &&
+        statement.importClause.namedBindings.elements.some(
+          (item) => item.propertyName === undefined && item.name.text === 'defineCatalog',
+        ),
+    );
   const lines = sourceText.split('\n');
   const exempt = new Set<number>();
   lines.forEach((lineText, index) => {
@@ -78,8 +92,23 @@ function scanFile(absPath: string, relPath: string): Violation[] {
     node.kind === ts.SyntaxKind.TemplateMiddle ||
     node.kind === ts.SyntaxKind.TemplateTail;
 
+  const isRussianCatalogTranslation = (node: ts.Node): boolean => {
+    if (!importsCatalog) return false;
+    const property = node.parent;
+    const object = property.parent;
+    const call = object.parent;
+    if (!ts.isPropertyAssignment(property) || property.initializer !== node ||
+      !ts.isObjectLiteralExpression(object) || !ts.isCallExpression(call) ||
+      !ts.isIdentifier(call.expression) || call.expression.text !== 'defineCatalog') return false;
+    if (call.arguments[1] === object) return true;
+    // Language names in the picker are written in their own language in both locales.
+    return localeIndex && call.arguments[0] === object &&
+      ts.isStringLiteral(property.name) && property.name.text === 'settings.language.ru' &&
+      ts.isStringLiteral(node) && node.text === 'Русский';
+  };
+
   const visit = (node: ts.Node): void => {
-    if (isText(node)) {
+    if (isText(node) && !isRussianCatalogTranslation(node)) {
       const start = node.getStart(sourceFile);
       const raw = sourceText.slice(start, node.getEnd());
       for (let i = 0; i < raw.length; i += 1) {
@@ -109,7 +138,7 @@ const report = (violations: Violation[]): string =>
     .join('\n');
 
 describe('english-text: страж кириллицы в текстах core и protocol', () => {
-  it('packages/core/src не содержит кириллицы в строковых литералах (кроме cyrillic-ok)', () => {
+  it('packages/core/src не содержит кириллицы в строковых литералах (кроме каталогов и cyrillic-ok)', () => {
     const violations = scanDir(coreSrc);
     expect(violations, report(violations)).toEqual([]);
   });
@@ -150,11 +179,23 @@ describe('scanDir: сам сканер (временный каталог)', () 
       );
       await writeFile(path.join(dir, 'bad.test.ts'), "export const skipped = 'Привет';\n");
 
+      const catalogs = path.join(dir, 'i18n');
+      await mkdir(catalogs);
+      await writeFile(
+        path.join(catalogs, 'catalog.ts'),
+        [
+          "import { defineCatalog } from './index.js';",
+          "defineCatalog({ title: 'English' }, { title: 'Русский' });",
+          "defineCatalog({ title: 'Русский' }, { title: 'Русский' });",
+        ].join('\n'),
+      );
+
       const violations = scanDir(dir);
 
       expect(violations.map((violation) => `${violation.file}:${violation.line}`)).toEqual([
         'bad.ts:1',
         'bad.ts:2',
+        path.join('i18n', 'catalog.ts:3'),
       ]);
     } finally {
       await rm(dir, { recursive: true, force: true });

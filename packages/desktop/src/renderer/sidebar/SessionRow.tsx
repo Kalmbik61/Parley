@@ -60,9 +60,9 @@ import { memo, useCallback, useEffect, useRef, useState, type PointerEvent } fro
 import { GitBranch, Mail } from 'lucide-react';
 import { useDndContext, useDraggable } from '@dnd-kit/core';
 import type { WorkSession } from '@parley/core';
-import { sessionDotStateWithNeed, stateWord } from '@parley/core/session-state';
+import { sessionDotStateWithNeed } from '@parley/core/session-state';
 import type { ParleyBridge } from '../../shared/bridge.js';
-import { S } from '../../shared/strings.js';
+import { S, sessionStateText } from '../../shared/strings.js';
 import { needTooltip, sessionAttention, sessionNeed } from '../attention/derive.js';
 import { openAgentInPanel } from '../agents/open-agents.js';
 import { AgentIcon } from '../components/AgentIcon.js';
@@ -447,7 +447,7 @@ function SessionTooltip({
   const task = session.task.length > TASK_PREVIEW ? `${session.task.slice(0, TASK_PREVIEW)}…` : session.task;
   // Слово итога: у сессии с итогом — он сам (`result` — только 'done' | 'failed'), иначе
   // текущее состояние строки (при `need` — слово причины).
-  const outcome = session.result === null ? word : stateWord(session.result, session.lifecycle);
+  const outcome = session.result === null ? word : sessionStateText(session.result, session.lifecycle);
   const metrics = activity?.metrics ?? null;
   return (
     <div data-session-tooltip className="space-y-1.5">

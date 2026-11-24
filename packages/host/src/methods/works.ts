@@ -1,3 +1,4 @@
+import { hostText } from '../host-text.js';
 import {
   createWork,
   deleteWorkFiles,
@@ -25,7 +26,7 @@ import type { HistoryService } from '../rooms/history-service.js';
 export function worksList(works: WorksService): Handler<'works.list'> {
   const required = (snapshot: WorksSnapshot | null): WorksSnapshot => {
     if (snapshot === null) {
-      throw new HostError('internal', 'The workspace snapshot does not fit into one frame.', { reason: HOST_ERROR_REASONS.snapshotTooLarge });
+      throw new HostError('internal', hostText('workspaceSnapshotTooLarge'), { reason: HOST_ERROR_REASONS.snapshotTooLarge });
     }
     return snapshot;
   };
@@ -40,7 +41,7 @@ export function worksList(works: WorksService): Handler<'works.list'> {
     // а не строка, на которой декодер окна оборвёт соединение и начнёт переподключаться по кругу.
     const legacy = works.legacySnapshot();
     if (legacy === null) {
-      throw new HostError('conflict', 'The workspace data is too large for this version of the window: update Parley.', {
+      throw new HostError('conflict', hostText('workspaceUpdateRequired'), {
         reason: HOST_ERROR_REASONS.clientUpgradeRequired,
       });
     }
@@ -76,7 +77,7 @@ export function createWorksDelete(history?: Pick<HistoryService, 'removeWork'>):
     (session) => session.lifecycle === 'active' && session.pid !== null && isAlive(session.pid),
   );
   if (busy === true) {
-    throw new HostError('conflict', `workspace ${params.workId} has a live session`);
+    throw new HostError('conflict', hostText('workspaceHasLiveSession', { workId: params.workId }));
   }
   await deleteWorkFiles(params.projectPath, params.workId);
   // Cleanup is a derivative effect: deletion has already committed and cannot be retried as a mutation.
@@ -94,7 +95,7 @@ export const worksDelete: Handler<'works.delete'> = createWorksDelete();
  * она всплывает как `internal` из последующего чтения или записи.
  */
 export function requireWork(projectPath: string, workId: string): void {
-  if (!workExists(projectPath, workId)) throw new HostError('not_found', `workspace ${workId} does not exist`);
+  if (!workExists(projectPath, workId)) throw new HostError('not_found', hostText('workspaceDoesNotExist', { workId }));
 }
 
 export function notFoundOnGone(error: unknown): never {

@@ -1,10 +1,10 @@
+import { builtinText } from '../i18n/builtin-display.js';
 import type { RecipeDefinition } from './types.js';
 
 /** Original short Lead playbooks; native minimal-development body stays on demand. */
 export const BUILTIN_RECIPES: readonly RecipeDefinition[] = [
   {
-    id: 'builtin:plan-build', source: 'builtin', name: 'Plan & build',
-    description: 'Clarify, challenge, implement and independently assess a bounded change.', mode: 'verified',
+    id: 'builtin:plan-build', source: 'builtin', ...builtinText('builtin:plan-build', 'en'), mode: 'verified',
     agents: [
       { role: 'builtin:planner', lead: true, worktree: false, count: 1 },
       { role: 'builtin:critic', lead: false, worktree: false, count: 1 },
@@ -21,8 +21,7 @@ Resolve blockers and questions, then propose_completion only when the accepted v
 Suggest remaining work for the backlog.`,
   },
   {
-    id: 'builtin:review', source: 'builtin', name: 'Review',
-    description: 'Review correctness and design without changing the submitted code.', mode: 'free',
+    id: 'builtin:review', source: 'builtin', ...builtinText('builtin:review', 'en'), mode: 'free',
     agents: [
       { role: 'builtin:reviewer', lead: true, worktree: false, count: 1 },
       { role: 'builtin:architect', lead: false, worktree: false, count: 1 },
@@ -35,8 +34,7 @@ Combine findings into one decision with proposed actions and practical review li
 After human acceptance, suggest unfinished follow-up work through backlog_suggest.`,
   },
   {
-    id: 'builtin:debug', source: 'builtin', name: 'Debug',
-    description: 'Reproduce a failure, isolate its cause and prove a minimal repair.', mode: 'checklist',
+    id: 'builtin:debug', source: 'builtin', ...builtinText('builtin:debug', 'en'), mode: 'checklist',
     agents: [
       { role: 'builtin:debugger', lead: true, worktree: true, count: 1 },
       { role: 'builtin:researcher', lead: false, worktree: false, count: 1 },

@@ -14,6 +14,7 @@
  * после `/effort` сохранил бы уровень этого ползунка умолчанием человека.
  */
 
+import { hostText } from '../host-text.js';
 import { HOST_ERROR_REASONS, refKey } from '@parley/protocol';
 import type { SessionRef } from '@parley/protocol';
 import { HostError } from '../errors.js';
@@ -105,7 +106,7 @@ export async function switchEffort(
   const clearTimer = deps.clearTimer ?? clearTimeout;
   const { pty } = deps;
   if (pty.get(ref) === undefined) {
-    throw new HostError('not_found', `no live PTY for session ${ref.sessionId}`);
+    throw new HostError('not_found', hostText('noLivePty', { sessionId: ref.sessionId }));
   }
   const key = refKey(ref);
 
@@ -154,7 +155,7 @@ export async function switchEffort(
 
   await waitQuiet();
   if (sliderOpen()) {
-    throw new HostError('conflict', 'The /effort slider is already open in the terminal; close it first', {
+    throw new HostError('conflict', hostText('effortSliderOpen'), {
       reason: HOST_ERROR_REASONS.busy,
     });
   }

@@ -3,6 +3,7 @@
  * Правила живут в `rooms/rooms-service.ts` — здесь только форма ответа.
  */
 
+import { hostText } from '../host-text.js';
 import { performance } from 'node:perf_hooks';
 import type { Handler } from '../context.js';
 import {
@@ -108,7 +109,7 @@ class NoChange extends Error {}
 export function createPlanHandlers(effects: PlanEffectsService, engine?: Pick<import('../rooms/autonomous-engine.js').AutonomousEngine, 'cancel'>): { [M in PlanMethodName]: Handler<M> } {
   async function mutate<M extends PlanMethodName>(name: M, params: PlanMethodParams<M>): Promise<PlanActionResult> {
     const { projectPath, workId } = params;
-    if (!workExists(projectPath, workId)) throw new HostError('not_found', 'Workspace is unavailable.');
+    if (!workExists(projectPath, workId)) throw new HostError('not_found', hostText('workspaceUnavailable'));
     let messageId: string | null = null;
     if (name !== 'plans.retryEffects') {
       try {
@@ -116,7 +117,7 @@ export function createPlanHandlers(effects: PlanEffectsService, engine?: Pick<im
           const input = params as PlanMethodParams<'plans.cancel'>;
           const plan = (await readMap(projectPath, workId)).plans?.find(plan => plan.id === input.planId);
           if (plan?.mode === 'autonomous') {
-            if (!engine) throw new HostError('internal', 'Autonomous engine is unavailable.');
+            if (!engine) throw new HostError('internal', hostText('engineUnavailable'));
             await engine.cancel(input);
           }
         }
@@ -178,9 +179,9 @@ export function createPlanHandlers(effects: PlanEffectsService, engine?: Pick<im
         });
       } catch (error) {
         if (!(error instanceof NoChange)) {
-          if (error instanceof PlanConflictError) throw new HostError('conflict', 'Plan revision or item changed.');
-          if (error instanceof RoomRuleError) throw new HostError('bad_request', error.message.startsWith('autonomous-plan-needs-engine-cancel:') ? 'Cancel the autonomous plan first.' : 'Plan action is not allowed.');
-          throw new HostError('internal', 'Plan action could not be saved.');
+          if (error instanceof PlanConflictError) throw new HostError('conflict', hostText('planChanged'));
+          if (error instanceof RoomRuleError) throw new HostError('bad_request', error.message.startsWith('autonomous-plan-needs-engine-cancel:') ? hostText('cancelAutonomousFirst') : hostText('planActionForbidden'));
+          throw new HostError('internal', hostText('planSaveFailed'));
         }
       }
     }
@@ -188,7 +189,7 @@ export function createPlanHandlers(effects: PlanEffectsService, engine?: Pick<im
     try { return { messageId, effects: await effects.flush(projectPath,workId) }; }
     catch {
       try { return { messageId, effects: summarizePlanEffects(await readMap(projectPath, workId)) }; }
-      catch { throw new HostError('internal', 'Plan action was saved; delivery remains pending. Retry plan effects.'); }
+      catch { throw new HostError('internal', hostText('planDeliveryPending')); }
     }
   }
   return {

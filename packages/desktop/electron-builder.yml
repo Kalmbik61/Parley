@@ -25,6 +25,10 @@ files:
 # не грузит, поэтому пересобирать нативные модули под ABI Electron незачем.
 npmRebuild: false
 extraResources:
+  - from: build/locales/en.lproj/InfoPlist.strings
+    to: en.lproj/InfoPlist.strings
+  - from: build/locales/ru.lproj/InfoPlist.strings
+    to: ru.lproj/InfoPlist.strings
   - from: out/host
     to: host
   # `createFilter` в electron-builder жёстко режет каталог `node_modules`,
@@ -74,6 +78,7 @@ mac:
   hardenedRuntime: false
   # Текст системного запроса доступа к микрофону (голосовой ввод): без него macOS показала бы заглушку Electron.
   extendInfo:
+    CFBundleLocalizations: [en, ru]
     NSMicrophoneUsageDescription: Parley uses the microphone for voice dictation. Audio is transcribed on this Mac and never leaves it.
   # Один шаблон для dmg и zip, без версии: так работают ссылки `releases/latest/download/<имя>`.
   artifactName: parley-macos-${arch}.${ext}

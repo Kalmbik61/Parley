@@ -12,6 +12,7 @@
  * терминал разбирает `AppShell` через `sendWithToast`.
  */
 
+import { appI18n } from '../../shared/app-locale.js';
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { useDraggable } from '@dnd-kit/core';
 import { useVirtualizer } from '@tanstack/react-virtual';
@@ -50,7 +51,10 @@ const GIT_COLOR: Record<GitStatusLetter, string> = {
 };
 
 const EMPTY_SET: ReadonlySet<string> = new Set();
-const COLLATOR = new Intl.Collator('en', { sensitivity: 'base', numeric: true });
+const COLLATOR = {
+  en: new Intl.Collator('en', { sensitivity: 'base', numeric: true }),
+  ru: new Intl.Collator('ru', { sensitivity: 'base', numeric: true }),
+};
 
 export interface TreeRow {
   path: string;
@@ -84,7 +88,7 @@ export function flattenTree(
     visible.sort((a, b) => {
       const byKind = Number(isDir(b)) - Number(isDir(a));
       if (byKind !== 0) return byKind;
-      return COLLATOR.compare(a.name, b.name) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+      return COLLATOR[appI18n.locale].compare(a.name, b.name) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
     });
     for (const entry of visible) {
       const path = joinPath(dir, entry.name);

@@ -5,6 +5,7 @@
  * одновременно с будильником (`busy`). Автоповторов нет: исход решает человек.
  */
 
+import { hostText } from '../host-text.js';
 import { performance } from 'node:perf_hooks';
 import { byFamily, cleanMultiline, hookedSince } from '@parley/core';
 import { refKey } from '@parley/protocol';
@@ -26,9 +27,9 @@ export const KIMI_ENTER_DELAY_MS = 150;
 /** Очистка спеки 8.6, шаг 2; пусто или > 64 КиБ — HostError('bad_request'). */
 export function sanitizeForSend(text: string): string {
   const clean = cleanMultiline(text);
-  if (clean.length === 0) throw new HostError('bad_request', 'empty text');
+  if (clean.length === 0) throw new HostError('bad_request', hostText('emptyText'));
   if (Buffer.byteLength(clean, 'utf8') > MAX_SEND_BYTES) {
-    throw new HostError('bad_request', 'text is longer than 64 KiB');
+    throw new HostError('bad_request', hostText('textLimit'));
   }
   return clean;
 }
@@ -63,7 +64,7 @@ export function createSender(deps: {
     // (расхождение часов) даёт 0, а не отрицательное ожидание.
     const queueMs = requestedAt === undefined ? null : Math.max(0, Date.now() - requestedAt);
     const handle = deps.pty.get(ref);
-    if (handle === undefined) throw new HostError('not_found', 'session is not running');
+    if (handle === undefined) throw new HostError('not_found', hostText('sessionNotRunning'));
     const codex = handle.provider === 'codex';
     const kimi = handle.kimiNative === true;
     const clean = sanitizeForSend(text);

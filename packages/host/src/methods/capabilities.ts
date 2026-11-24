@@ -1,3 +1,4 @@
+import { hostText } from '../host-text.js';
 import { createCapabilitiesSkillActions } from '../capabilities/skill-actions.js';
 import { createProviderScheduler } from '../capabilities/scheduler.js';
 import { createCapabilitiesPluginActions } from '../capabilities/plugin-actions.js';
@@ -18,7 +19,7 @@ type Scan = (options: { home: string; projectPath: string }) => Promise<Capabili
 export function createCapabilitiesList(scan: Scan = scanClaudeCapabilities): Handler<'capabilities.list'> {
   return async (params) => {
     if (!path.isAbsolute(params.projectPath)) {
-      throw new HostError('bad_request', 'projectPath must be an absolute path');
+      throw new HostError('bad_request', hostText('projectPathMustBeAbsolute'));
     }
     if (!isClaudeCode(params.provider)) return { commands: [], skills: [], agents: [] };
     return scan({ home: homedir(), projectPath: params.projectPath });
@@ -50,7 +51,7 @@ export function createCapabilitiesHandlers(options: CapabilitiesHandlersOptions 
     if (!host) { host = context; host.onShutdown(async () => { scheduler.dispose(); actions.dispose(); plugins.dispose(); skills.dispose(); service.dispose(); }); }
   };
   const handler = (refresh: boolean): Handler<'capabilities.get'> => async (params, request) => {
-    if (!path.isAbsolute(params.projectPath)) throw new HostError('bad_request', 'projectPath must be an absolute path');
+    if (!path.isAbsolute(params.projectPath)) throw new HostError('bad_request', hostText('projectPathMustBeAbsolute'));
     bind(request.host);
     return refresh ? service.refresh(params.projectPath) : service.get(params.projectPath);
   };

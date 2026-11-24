@@ -1,3 +1,4 @@
+import { builtinText } from '../i18n/builtin-display.js';
 import { CLAUDE_MODELS, CODEX_MODELS } from '../provider-models.js';
 import type { BuiltinRole, RoleTier } from './types.js';
 
@@ -18,8 +19,7 @@ export const BUILTIN_ROLES: readonly BuiltinRole[] = [
   {
     id: 'builtin:feature-lead',
     source: 'builtin',
-    name: 'Feature Lead',
-    description: "Coordinate room leads to deliver a feature's agreed outcome, resolve dependencies and blockers, and validate the combined result without writing code.",
+    ...builtinText('builtin:feature-lead', 'en'),
     provider: 'codex',
     tier: 'strong',
     effort: 'high',
@@ -39,8 +39,7 @@ In your report, state combined readiness, evidence, unresolved dependencies and 
   {
     id: 'builtin:planner',
     source: 'builtin',
-    name: 'Planner',
-    description: 'Turn an agreed goal into an assignable plan with clear scope, dependencies, risks, and acceptance criteria.',
+    ...builtinText('builtin:planner', 'en'),
     provider: 'claude',
     tier: 'strong',
     effort: 'high',
@@ -55,8 +54,7 @@ Ask the lead or human when missing scope or authority changes the plan.`,
   {
     id: 'builtin:architect',
     source: 'builtin',
-    name: 'Architect',
-    description: 'Define a viable technical design with clear boundaries, interfaces, constraints, and quality tradeoffs.',
+    ...builtinText('builtin:architect', 'en'),
     provider: 'claude',
     tier: 'strong',
     effort: 'high',
@@ -72,8 +70,7 @@ Ask the lead or human when a product decision or unresolved constraint affects t
   {
     id: 'builtin:critic',
     source: 'builtin',
-    name: 'Critic',
-    description: 'Challenge plans and decisions with evidence, credible failure scenarios, and prioritized actionable findings.',
+    ...builtinText('builtin:critic', 'en'),
     provider: 'codex',
     tier: 'strong',
     effort: 'high',
@@ -89,8 +86,7 @@ Ask the lead or human to resolve conflicting requirements or decisions outside y
   {
     id: 'builtin:executor',
     source: 'builtin',
-    name: 'Executor',
-    description: 'Implement the assigned scope, maintain relevant tests and documentation, and verify the resulting behavior.',
+    ...builtinText('builtin:executor', 'en'),
     provider: 'claude',
     tier: 'standard',
     effort: 'medium',
@@ -105,8 +101,7 @@ Ask the lead or human when shared ownership, scope or an irreversible action nee
   {
     id: 'builtin:reviewer',
     source: 'builtin',
-    name: 'Reviewer',
-    description: 'Review submitted changes for correctness, design quality, maintainability, and relevant risks without modifying them.',
+    ...builtinText('builtin:reviewer', 'en'),
     provider: 'codex',
     tier: 'strong',
     effort: 'high',
@@ -122,8 +117,7 @@ Ask the lead or human when an unclear requirement prevents a reliable verdict.`,
   {
     id: 'builtin:verifier',
     source: 'builtin',
-    name: 'Verifier',
-    description: 'Check the delivered result against acceptance criteria and report pass, fail, or not verified with evidence.',
+    ...builtinText('builtin:verifier', 'en'),
     provider: 'codex',
     tier: 'standard',
     effort: 'medium',
@@ -138,8 +132,7 @@ Ask the lead or human when the environment or a missing criterion prevents verif
   {
     id: 'builtin:debugger',
     source: 'builtin',
-    name: 'Debugger',
-    description: 'Investigate a failure, establish its cause where evidence permits, and verify a focused repair.',
+    ...builtinText('builtin:debugger', 'en'),
     provider: 'claude',
     tier: 'strong',
     effort: 'high',
@@ -154,8 +147,7 @@ Ask the lead or human when the expected behavior or ownership of the fix is unce
   {
     id: 'builtin:researcher',
     source: 'builtin',
-    name: 'Researcher',
-    description: 'Answer a scoped question using traceable evidence, distinguishing findings, inference, and uncertainty.',
+    ...builtinText('builtin:researcher', 'en'),
     provider: 'claude',
     tier: 'light',
     effort: 'low',

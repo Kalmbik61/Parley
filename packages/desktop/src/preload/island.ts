@@ -70,6 +70,7 @@ ipcRenderer.on('island:tts-port', (event) => {
 
 const bridge = {
   worksSync: createWorksSyncBridge(ipcRenderer),
+  locale: (): unknown => ipcRenderer.sendSync('app:locale'),
   call: (method: MethodName, params: unknown) => ipcRenderer.invoke('host:call', method, params),
   on: (event: EventName, listener: (data: unknown) => void) => {
     let set = eventListeners.get(event);

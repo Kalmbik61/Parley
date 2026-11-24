@@ -4,10 +4,11 @@
  * не знает, только его интерфейс.
  */
 
+import type { AppLocale } from '@parley/core/i18n';
 import { reportLine, type AssistantCardChanged, type AssistantProposal, type AssistantState } from '@parley/protocol';
 import type { AssistantService } from '../assistant/assistant-service.js';
 import { splitText } from './format.js';
-import { T } from './texts.js';
+import { telegramTexts } from './texts.js';
 
 const MAX_TEXT = 4000;
 const TYPING_MS = 4000;
@@ -26,6 +27,7 @@ export interface BridgeDeps {
   /** `telegramCards`: карточки и для ходов с острова. */
   cardsToggle(): boolean;
   log(line: string): void;
+  locale?(): AppLocale;
   now?(): number;
   setInterval?: typeof setInterval;
 }
@@ -43,6 +45,7 @@ const TERMINAL = new Set<AssistantState['phase']>(['idle', 'awaiting-confirm', '
 const toChat = (state: AssistantState): boolean => state.origin === 'telegram' || state.origin === 'reminder';
 
 export function createAssistantBridge(deps: BridgeDeps): AssistantBridge {
+  const texts = () => telegramTexts(deps.locale?.() ?? 'en');
   const now = deps.now ?? Date.now;
   const every = deps.setInterval ?? setInterval;
   let typingTimer: ReturnType<typeof setInterval> | null = null;
@@ -133,9 +136,9 @@ export function createAssistantBridge(deps: BridgeDeps): AssistantBridge {
   const unsubscribeCards = deps.assistant.onCardChanged(onCard);
 
   async function onText(text: string): Promise<void> {
-    if (text.length > MAX_TEXT) return deps.sendText(T.tooLong);
+    if (text.length > MAX_TEXT) return deps.sendText(texts().tooLong);
     const settings = deps.assistant.settings();
-    if (settings === null || !settings.enabled) return deps.sendText(T.assistantOff);
+    if (settings === null || !settings.enabled) return deps.sendText(texts().assistantOff);
     const current = deps.assistant.state();
     if (RUNNING.has(current.phase)) {
       cancelledTurn = current.turn;
@@ -150,14 +153,14 @@ export function createAssistantBridge(deps: BridgeDeps): AssistantBridge {
     async onCommand(name) {
       if (name === 'status') return onText(STATUS_QUESTION);
       deps.assistant.reset();
-      await deps.sendText(T.newConversation);
+      await deps.sendText(texts().newConversation);
     },
     async onCallback(proposalId, code) {
       // Карточка плана подтверждается только с `action: 'actions'`: хост без него план не выполнит. Вид берём из
       // durable-карточки ядра, а не из того, что сейчас показывает остров. Решение идёт через ядро, канал — telegram.
       const forPlan = deps.assistant.card(proposalId)?.kind === 'actions';
       const result = await deps.assistant.decide(proposalId, code, forPlan ? 'actions' : undefined, 'telegram');
-      return result.applied ? (result.error ?? '') : (result.error ?? T.noLongerCurrent);
+      return result.applied ? (result.error ?? '') : (result.error ?? texts().noLongerCurrent);
     },
     stop() {
       unsubscribe();

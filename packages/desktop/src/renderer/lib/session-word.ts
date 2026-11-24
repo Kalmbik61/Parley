@@ -15,8 +15,23 @@
  */
 
 import type { SessionActivity, WorkSession } from '@parley/core';
-import { agentStatus, autoSleepWord, queuedWord, sessionDotStateWithNeed, stateWord } from '@parley/core/session-state';
+import { agentStatus, autoSleepWord, queuedWord, sessionDotStateWithNeed } from '@parley/core/session-state';
+import { appI18n } from '../../shared/app-locale.js';
+import { sessionStateText } from '../../shared/strings.js';
 import { needLabel, sessionNeed } from '../attention/derive.js';
+
+export function queuedSessionText(entry: Parameters<typeof queuedWord>[0]): string {
+  if (appI18n.locale === 'en') return queuedWord(entry);
+  if (entry.reason === 'memory-critical') return 'в очереди · мало памяти';
+  return entry.limit === null ? 'в очереди · лимит' : `в очереди · лимит ${entry.live}/${entry.limit}`;
+}
+
+const russianSleep = {
+  idle: 'спит · бездействие',
+  'swarm-done': 'спит · рой завершён',
+  pressure: 'спит · не хватало памяти',
+  slot: 'спит · освободила место',
+} satisfies Record<Parameters<typeof autoSleepWord>[0], string>;
 
 export function sessionWord(session: WorkSession, live: SessionActivity | null, now: Date): string {
   const need = sessionNeed(session, live);
@@ -26,8 +41,8 @@ export function sessionWord(session: WorkSession, live: SessionActivity | null, 
   return need !== null
     ? needLabel(need, now.getTime())
     : queued !== null && agentStatus(session) === 'queued'
-      ? queuedWord(queued)
+      ? queuedSessionText(queued)
       : hostSleep !== null && agentStatus(session) === 'asleep'
-        ? autoSleepWord(hostSleep.reason)
-        : stateWord(state, session.lifecycle);
+        ? (appI18n.locale === 'ru' ? russianSleep[hostSleep.reason] : autoSleepWord(hostSleep.reason))
+        : sessionStateText(state, session.lifecycle);
 }

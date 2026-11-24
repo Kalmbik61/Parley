@@ -1,3 +1,4 @@
+import { hostText } from '../host-text.js';
 import path from 'node:path';
 import {
   DecisionJournalError, RoomHistoryError, SharedStateError, classifyDecisionFile, readDecisionJournalFiles,
@@ -27,13 +28,13 @@ function safeError(error: unknown, subject: 'history' | 'journal'): HostError {
   const category = ['history-conflict', 'history-stale', 'backlog-lock-timeout'].includes(code) ? 'conflict'
     : code === 'history-invalid' ? 'bad_request'
       : ['project-unavailable', 'git-context-unverified', 'main-project-unavailable', 'history-not-found'].includes(code) ? 'not_found' : 'internal';
-  return new HostError(category, subject === 'journal' ? 'The decision journal could not be read.' : 'The history operation could not be completed.', { code });
+  return new HostError(category, subject === 'journal' ? hostText('journalReadFailed') : hostText('historyFailed'), { code });
 }
 function validate<M extends JournalMethodName>(method: M, params: JournalMethodParams<M>): JournalMethodParams<M> {
   const parsed = journalMethodSchemas[method].safeParse(params);
-  if (!parsed.success) throw new HostError('bad_request', 'Invalid history request.');
+  if (!parsed.success) throw new HostError('bad_request', hostText('invalidHistory'));
   const projectPath = (parsed.data as { projectPath: string }).projectPath;
-  if (!path.isAbsolute(projectPath)) throw new HostError('bad_request', 'An absolute project path is required.');
+  if (!path.isAbsolute(projectPath)) throw new HostError('bad_request', hostText('absoluteProjectPath'));
   return parsed.data as JournalMethodParams<M>;
 }
 
@@ -123,9 +124,9 @@ async function listDecisions(works: WorksService, params: JournalMethodParams<'d
 /** Работа и комната существуют в свежей карте: окну на слово не верим. */
 async function knownRoom(params: { projectPath: string; workId: string; roomId: string }): Promise<void> {
   const map = await freshMap(params.projectPath, params.workId);
-  if (!map.rooms.some(room => room.id === params.roomId)) throw new HostError('not_found', 'The room was not found.', { code: 'history-not-found' });
+  if (!map.rooms.some(room => room.id === params.roomId)) throw new HostError('not_found', hostText('roomNotFound'), { code: 'history-not-found' });
 }
-const conflict = (): HostError => new HostError('conflict', 'The shared history changed. Refresh and try again.', { code: 'history-conflict' });
+const conflict = (): HostError => new HostError('conflict', hostText('historyChanged'), { code: 'history-conflict' });
 const view = async (params: { projectPath: string; workId: string; roomId: string }, diagnostics: { code: 'parley-gitignore-custom' | 'parley-dir-ignored' }[] = []): Promise<RoomHistoryStatusView> => {
   const projected = roomHistoryStatus.safeParse({ ...await readRoomHistoryStatus(params.projectPath, params.workId, params.roomId), diagnostics });
   if (!projected.success) throw new RoomHistoryError('history-invalid');
