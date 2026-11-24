@@ -4,12 +4,18 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
-## Unreleased
+## 0.39.0
 
 ### Added
 
+- **Kimi Code as a built-in provider.** Parley runs the official `kimi` CLI (`kimi acp`) as a native session and shows it in Chat: tool requests arrive as permission cards you can grant or deny, questions as question cards you can answer, and the session settings Kimi supports can be changed in Chat while no turn is running. A disconnected session resumes with its identity and the model Kimi confirmed. Kimi must be signed in (`kimi login`); a signed-out Kimi refuses to launch and says so. Not in this version: transcript history of past turns in Chat. Verified against a separate ACP test process; a live Kimi account was not available at acceptance.
 - Codex: command approvals, edit approvals and questions that Codex shows in its terminal now appear as cards with buttons in Chat, on the island, in Telegram and on the phone, in every approvals mode. Other terminal prompts are answered in the Chat panel.
+- Qwen Code: questions and permission requests now open the question and permission cards in Chat, with the options of the native dialog: pick one or more options, type a custom answer, review the answers, and approve or deny the operation. A layout Parley does not recognize is answered in the in-chat terminal panel. Verified against Qwen Code 0.27.2 with the English layout.
 - Chat: when an agent waits at a prompt in its terminal, the prompt is shown in Chat and you can answer it there with keys or text, without opening the terminal. Works for Codex, Claude Code, Qwen Code and OpenCode.
+
+### Fixed
+
+- An open Chat keeps receiving replies when its session continues on Qwen Code: the messages Qwen has already written and its next replies appear without reopening the Chat.
 
 ## 0.38.0
 
