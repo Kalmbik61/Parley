@@ -4,6 +4,19 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
+## 0.39.1
+
+### Added
+
+- Kimi Code: install the official standalone CLI from Settings → Providers. Parley also detects the standalone installation when the desktop's PATH does not include it.
+- Kimi Code: **Sign in** opens an interactive login terminal in provider settings and refreshes the sign-in status when it closes.
+- Kimi Code: choose an available model and supported effort when creating a session. Parley applies both choices before the first prompt.
+
+### Fixed
+
+- Kimi Code now sends Chat messages independently of an unfinished terminal draft. The draft stays available until submitted or cleared with Ctrl+C.
+- Kimi Code: an unexpected process exit during startup is detected even if it happens before registration finishes, so a disconnected session no longer remains marked as running and can be started again.
+
 ## 0.39.0
 
 ### Added
