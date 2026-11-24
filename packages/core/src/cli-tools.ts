@@ -194,3 +194,21 @@ const opencode: CliDescriptor = {
 };
 
 export const CLI_TOOLS: Readonly<Record<CliTool, CliDescriptor>> = { claude, codex, qwen, opencode };
+
+/** Установка поддерживается отдельно от проверки и обновления версий. */
+export type CliInstallTool = CliTool | 'kimi';
+export type CliInstallDescriptor = Pick<CliDescriptor, 'expectedBinary' | 'smokeArgs' | 'install'>;
+
+export const CLI_INSTALL_TOOLS: Readonly<Record<CliInstallTool, CliInstallDescriptor>> = {
+  ...CLI_TOOLS,
+  kimi: {
+    expectedBinary: '.kimi-code/bin/kimi',
+    smokeArgs: ['--version'],
+    install: {
+      url: 'https://code.kimi.com/kimi-code/install.sh',
+      interpreter: ['/bin/bash', '--noprofile', '--norc'],
+      args: [],
+      redirectHosts: ['cdn.kimi.com'],
+    },
+  },
+};

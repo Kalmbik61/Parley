@@ -1,6 +1,6 @@
 import type { Handler } from '../context.js';
 import { HostError } from '../errors.js';
-import { accountEntry } from '../providers/auth-service.js';
+import { accountEntry, signInEntry } from '../providers/auth-service.js';
 import type { AuthService } from '../providers/auth-service.js';
 
 /** Вход этого аккаунта не идёт: ввод, размер и отмена принимать некому (`bad_request`, спека подписок 5.5). */
@@ -13,6 +13,7 @@ function requireSignIn(auth: AuthService, provider: string): void {
  * из браузера, размер терминала, отмена и выход. Состояние, вход и выход берут аккаунт из реестра: встроенный `claude`,
  * GLM, свой провайдер с адресом и неизвестный id получают `bad_request` (`<id> is not an account`). Ввод, размер и
  * отмена реестр не читают: им нужен идущий вход этого id, иначе `bad_request` (`no sign-in is running for <id>`). Вывод
+ * Native Kimi additionally supports status and sign-in; sign-out stays account-only.
  * и выход процесса входа окно получает событиями `providers.signInOutput` и `providers.signInExit`, не ответом.
  */
 export function createAuthHandlers(auth: AuthService): {
@@ -25,12 +26,12 @@ export function createAuthHandlers(auth: AuthService): {
 } {
   return {
     'providers.authStatus': async ({ provider }) => {
-      await accountEntry(provider);
+      await signInEntry(provider);
       const signedIn = await auth.refresh(provider);
       return { signedIn, detail: signedIn ? auth.detail(provider) : null };
     },
     'providers.signIn': async ({ provider }) => {
-      await accountEntry(provider);
+      await signInEntry(provider);
       await auth.signIn(provider);
       return { ok: true };
     },

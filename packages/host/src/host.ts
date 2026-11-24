@@ -99,6 +99,7 @@ import { createCustomCheckService } from './providers/custom-check.js';
 import type { CustomCheckOptions } from './providers/custom-check.js';
 import { createLimitsService } from './limits/limits-service.js';
 import type { LimitsServiceOptions } from './limits/limits-service.js';
+import { startKimiCatalog, type KimiModelsProbe } from './providers/kimi-catalog.js';
 import { startCodexCatalog } from './providers/codex-catalog.js';
 import { startOpencodeAuthHint, type OpencodeAuthProbe } from './providers/opencode-auth-hint.js';
 import { startOpencodeCatalog, type OpencodeModelsProbe } from './providers/opencode-catalog.js';
@@ -191,6 +192,7 @@ export interface HostOptions {
    * зовут `startHost` без пробы или с подменой.
    */
   probeCodexCatalog?: CatalogProbe;
+  probeKimiCatalog?: KimiModelsProbe;
   /**
    * Проба каталога моделей Qwen Code на старте (`qwen --acp`, спека 2026-11-12, 8.4). Без неё каталога нет и `models` у
    * `qwen` остаётся как есть: подключает её только `main.ts`, тесты настоящий qwen не запускают.
@@ -472,11 +474,19 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   const opencodeAuth = startOpencodeAuthHint(options.probeOpencodeAuth, () => {
     handle.context.broadcast('providers.changed', { provider: 'opencode' });
   });
+  const kimiCatalog = startKimiCatalog(options.probeKimiCatalog, log, () => {
+    handle.context.broadcast('providers.changed', { provider: 'kimi' });
+  });
   const authService = createAuthService(handle.context, {
     ...options.auth,
+    refreshKimi: options.auth?.refreshKimi ?? (async () => {
+      const entry = (await loadProviders()).kimi;
+      return entry === undefined ? false : kimiAuth.refreshNow(entry.runner.command);
+    }),
     onSignInExit: (provider, signedIn) => {
       options.auth?.onSignInExit?.(provider, signedIn);
       if (provider === 'qwen') void qwenCatalog.refresh();
+      if (provider === 'kimi') void kimiCatalog.invalidate();
     },
   });
   handle.context.onShutdown(async () => authService.stop());
@@ -1354,6 +1364,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     codexCatalog,
     qwenCatalog,
     opencodeCatalog,
+    kimiCatalog,
     opencodeAuth,
     limits: limitsService,
     glmCheck,

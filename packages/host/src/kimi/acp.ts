@@ -119,6 +119,7 @@ export function createKimiAcp(options: KimiAcpOptions) {
   let instructions = options.instructions;
   let embeddedContext = false;
   let connected = false;
+  let exitInfo: ExitInfo | undefined;
   let dead: KimiAcpError | undefined;
   let closing: Promise<void> | undefined;
   let turn: PromptTurn | undefined;
@@ -157,6 +158,7 @@ export function createKimiAcp(options: KimiAcpOptions) {
     child.once('close', (exitCode, signal) => {
       disconnect(new KimiAcpError('Kimi Code ACP disconnected', 'disconnected'));
       const exit = { exitCode: exitCode ?? (signal === null ? 1 : 128 + constants.signals[signal]), signal: signal === null ? null : constants.signals[signal] };
+      exitInfo = exit;
       for (const listener of exitListeners) listener(exit);
       exitListeners.clear();
       resolve();
@@ -380,8 +382,14 @@ export function createKimiAcp(options: KimiAcpOptions) {
   async function checkAuth(): Promise<boolean | null> {
     try {
       const result = await initialize(3_000);
+      const methods = result['authMethods'];
+      if (Array.isArray(methods) && methods.some((method) => record(method)['id'] === 'login')) {
+        // Kimi 2.7.3 allows session/list before login; authenticate also accepts configured third-party providers.
+        await request('authenticate', { methodId: 'login' }, 2_000);
+        return true;
+      }
       if (record(record(result['agentCapabilities'])['sessionCapabilities'])['list'] == null) return null;
-      // Use a read-only session method so the CLI applies the same authentication policy it uses for sessions.
+      // Compatibility fallback for older CLIs without an advertised login method.
       await request('session/list', { cwd: options.cwd }, 2_000);
       return true;
     } catch (error) {
@@ -509,10 +517,17 @@ export function createKimiAcp(options: KimiAcpOptions) {
 
   return {
     get pid() { return child.pid; },
+    connected: () => connected && dead === undefined && closing === undefined,
     busy: () => turn !== undefined || changingConfig,
     checkAuth, connect, prompt, cancel, respond, setConfig, state, close, kill,
     onExit(listener: (exit: ExitInfo) => void) {
       exitListeners.add(listener);
+      // Registration can follow an awaited map write after the child has already exited.
+      // Defer delivery so lifecycle owners finish registering their process first.
+      if (exitInfo !== undefined) {
+        const exit = exitInfo;
+        queueMicrotask(() => { if (exitListeners.delete(listener)) listener(exit); });
+      }
       return () => exitListeners.delete(listener);
     },
   };

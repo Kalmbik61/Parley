@@ -5,7 +5,7 @@
  */
 
 import { spawn } from 'node:child_process';
-import { agentEnv, type CliTool } from '@parley/core';
+import { agentEnv, type CliInstallTool } from '@parley/core';
 
 /** Сколько последних байт вывода (stdout и stderr вместе) уходит в ответ и журнал. */
 export const CLI_RUN_OUTPUT_BYTES = 4096;
@@ -23,7 +23,7 @@ export interface CliRun {
    * Работа с CLI под флагом занятости: пока идёт одна (обновление или установка этого CLI), другая сразу получает
    * `busy`. Флаг ставится синхронно в момент вызова и снимается по завершении работы, в том числе по исключению.
    */
-  exclusive<T>(tool: CliTool, work: () => Promise<T>): Promise<T | { state: 'busy' }>;
+  exclusive<T>(tool: CliInstallTool, work: () => Promise<T>): Promise<T | { state: 'busy' }>;
   /** Остановка хоста: идущие процессы убиваются целыми группами, новые после этого не запускаются. */
   stop(): void;
 }
@@ -111,7 +111,7 @@ function exec(binary: string, args: readonly string[], env: NodeJS.ProcessEnv, t
 }
 
 export function createCliRun(): CliRun {
-  const running = new Set<CliTool>();
+  const running = new Set<CliInstallTool>();
   /** Группы живых процессов (`pid` лидера): их добивает `stop()`. */
   const groups = new Set<number>();
   let stopped = false;

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -88,5 +88,37 @@ describe('resolveRunnerBinary: точный ожидаемый бинарь (с�
   it('без HOME запасного пути нет', async () => {
     expect(expectedRunnerBinary('claude', { PATH: '' })).toBeNull();
     await expect(findRunnerBinary('qwen', { PATH: '' })).rejects.toBeInstanceOf(BinaryNotFoundError);
+  });
+});
+
+
+describe('Kimi standalone discovery', () => {
+  it('uses the official binary under a desktop PATH, with PATH and explicit overrides taking precedence', async () => {
+    const home = await mkdtemp(path.join(tmpdir(), 'parley-kimi-discovery-'));
+    try {
+      const bin = path.join(home, '.kimi-code/bin');
+      const other = path.join(home, 'other');
+      await mkdir(bin, { recursive: true });
+      await mkdir(other);
+      const expected = path.join(bin, 'kimi');
+      const alternative = path.join(other, 'kimi');
+      await writeFile(expected, '#!/bin/sh\n', { mode: 0o755 });
+      await writeFile(alternative, '#!/bin/sh\n', { mode: 0o755 });
+      const env = { HOME: home, PATH: '/usr/bin:/bin' };
+      expect(expectedRunnerBinary('kimi', env)).toBe(expected);
+      expect(await resolveRunnerBinary('kimi', env)).toEqual({ path: expected, source: 'expected' });
+      expect(env.PATH).toBe('/usr/bin:/bin');
+      expect(await resolveRunnerBinary('kimi', { ...env, PATH: other })).toEqual({ path: alternative, source: 'path' });
+      expect(await resolveRunnerBinary('kimi', { ...env, PATH: other, PARLEY_KIMI_BIN: expected })).toEqual({ path: expected, source: 'override' });
+      expect(await resolveRunnerBinary('kimi', { ...env, HARNAS_KIMI_BIN: alternative })).toEqual({ path: alternative, source: 'override' });
+      for (const override of ['', path.join(home, 'missing')]) {
+        await expect(resolveRunnerBinary('kimi', { ...env, PARLEY_KIMI_BIN: override })).rejects.toBeInstanceOf(BinaryNotFoundError);
+      }
+      await chmod(expected, 0o644);
+      await expect(resolveRunnerBinary('kimi', env)).rejects.toBeInstanceOf(BinaryNotFoundError);
+      for (const invalidHome of ['', 'relative']) expect(expectedRunnerBinary('kimi', { HOME: invalidHome })).toBeNull();
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
   });
 });

@@ -1,6 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { INSTALL_CONFIRM, installableId, manualUpdateCommand } from './provider-install.js';
 
+describe('provider-install: Kimi', () => {
+  it('uses the official standalone installer command and source', () => {
+    expect(installableId('kimi')).toBe('kimi');
+    expect(INSTALL_CONFIRM.kimi).toEqual({
+      command: 'curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash',
+      source: 'https://code.kimi.com/kimi-code/install.sh',
+      profile: true,
+    });
+  });
+});
+
 describe('provider-install: opencode (spec 2026-11-12, 4.9)', () => {
   it('opencode is installable from the window; the confirmation shows the constant curl command and source', () => {
     expect(installableId('opencode')).toBe('opencode');

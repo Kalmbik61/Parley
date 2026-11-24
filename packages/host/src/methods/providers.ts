@@ -1,5 +1,5 @@
 import {
-  CLI_TOOLS,
+  CLI_INSTALL_TOOLS,
   clearSecret,
   syncApiKeyApproval,
   loadProviders,
@@ -13,7 +13,7 @@ import {
   writeSecret,
 } from '@parley/core';
 import type { KimiAuth } from '../providers/kimi-auth.js';
-import type { CliTool, ProviderEntry, SecretId } from '@parley/core';
+import type { CliInstallTool, ProviderEntry, SecretId } from '@parley/core';
 import type { CustomProviderInfo } from '@parley/protocol';
 import type { Handler } from '../context.js';
 import { HostError } from '../errors.js';
@@ -109,11 +109,13 @@ export function createProvidersList(
   opencodeCatalog?: Pick<OpencodeCatalog, 'refreshIfStale'>,
   opencodeAuth?: Pick<OpencodeAuthHint, 'current' | 'refreshIfStale'>,
   kimiAuth?: Pick<KimiAuth, 'current' | 'refreshIfStale'>,
+  kimiCatalog?: Pick<import('../providers/kimi-catalog.js').KimiCatalog, 'refreshIfStale'>,
 ): Handler<'providers.list'> {
   return async () => {
     catalog?.refreshIfStale();
     qwenCatalog?.refreshIfStale();
     opencodeCatalog?.refreshIfStale();
+    kimiCatalog?.refreshIfStale();
     const registry = await loadProviders();
     await versions?.ready;
     const probes = new Map<string, Promise<string | null>>();
@@ -167,6 +169,7 @@ export function createProvidersList(
           argsOverridden: entry.argsOverridden === true,
           ...(check === undefined ? {} : { check }),
           ...(custom === undefined ? {} : { custom }),
+          ...(entry.id === 'kimi' ? { kimiAuth: { signingIn: auth?.signingIn(entry.id) ?? false } } : {}),
           // Hints only, from `qwenAuthHints`: presence and two non-secret strings (spec 2026-11-11, 3.6).
           ...(entry.family === 'qwen' && entry.custom === undefined ? { qwenAuth: await qwenAuthHints() } : {}),
           // A count from `opencode auth list` (spec 2026-11-12, 4.12), asked for an installed 2.x only; the answer never waits for the probe.
@@ -252,12 +255,12 @@ export function createProvidersInstall(installer?: CliInstaller): Handler<'provi
     const registry = await loadProviders();
     const entry = Object.hasOwn(registry, provider) ? registry[provider] : undefined;
     const command = entry?.runner.command ?? provider;
-    if (installer === undefined || !Object.hasOwn(CLI_TOOLS, command)) {
+    if (installer === undefined || !Object.hasOwn(CLI_INSTALL_TOOLS, command)) {
       throw new HostError('bad_request', 'Provider CLI cannot be installed from Parley');
     }
     let result;
     try {
-      result = await installer.install(command as CliTool, `${request.client.name} (${request.client.id})`);
+      result = await installer.install(command as CliInstallTool, `${request.client.name} (${request.client.id})`);
     } catch {
       throw new HostError('internal', 'Unable to start the provider install');
     }

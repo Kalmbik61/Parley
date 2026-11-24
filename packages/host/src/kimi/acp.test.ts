@@ -153,3 +153,25 @@ describe('Kimi Code ACP subprocess', () => {
     await expect(start(undefined, loggedOut).acp.connect()).rejects.toMatchObject({ code: 'sign-in' });
   });
 });
+
+
+it('uses advertised login auth even when session/list succeeds for a fresh signed-out CLI', async () => {
+  const { acp } = start(undefined, { KIMI_FIXTURE_ADVERTISE_LOGIN: '1', KIMI_FIXTURE_AUTH_REQUIRED: '1' });
+  await expect(acp.checkAuth()).resolves.toBe(false);
+});
+
+it('accepts configured third-party access through the advertised login method', async () => {
+  const { acp } = start(undefined, { KIMI_FIXTURE_ADVERTISE_LOGIN: '1', KIMI_FIXTURE_LOGGED_OUT: '1' });
+  await expect(acp.checkAuth()).resolves.toBe(true);
+});
+
+
+it('replays a completed child exit to a late lifecycle subscriber', async () => {
+  const { acp } = start();
+  await acp.connect();
+  await acp.close();
+  let exits = 0;
+  acp.onExit(() => { exits += 1; });
+  await Promise.resolve();
+  expect(exits).toBe(1);
+});

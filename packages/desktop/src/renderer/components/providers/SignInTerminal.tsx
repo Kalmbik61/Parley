@@ -16,6 +16,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import { S } from '../../../shared/strings.js';
 import { useProvidersStore } from '../../store/providers.js';
 import { useUiStore } from '../../store/ui.js';
+import { createLinkProvider, createStatCache, isHttpUrl } from '../../terminal/links.js';
 import { minimumContrastRatio, XTERM_OPTIONS, xtermTheme } from '../../terminal/xterm-themes.js';
 
 /** Тишина после последнего изменения контейнера, прежде чем уйдёт `providers.signInResize` (как `pty.resize`, спека 5.2). */
@@ -47,6 +48,9 @@ export function SignInTerminal({ provider, running }: SignInTerminalProps): JSX.
     const container = containerRef.current;
     if (container === null) return;
     const bridge = window.parley;
+    const openLink = (url: string): void => {
+      if (isHttpUrl(url)) void bridge.app.openExternal(url).catch(() => {});
+    };
     const term = new Terminal({
       ...XTERM_OPTIONS,
       theme: xtermTheme(useUiStore.getState().dark),
@@ -54,7 +58,13 @@ export function SignInTerminal({ provider, running }: SignInTerminalProps): JSX.
       fontFamily: FONT_FAMILY,
       fontSize: FONT_SIZE,
       scrollback: 1_000,
+      linkHandler: { activate: (_event, text) => openLink(text) },
     });
+    const links = term.registerLinkProvider(createLinkProvider(term, {
+      workKey: () => '', cwd: () => '',
+      cache: createStatCache(async (_key, paths) => paths.map(() => null)),
+      onLink: (link) => { if (link.kind === 'url') openLink(link.url); },
+    }));
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(container);
@@ -111,6 +121,7 @@ export function SignInTerminal({ provider, running }: SignInTerminalProps): JSX.
       sendSizeRef.current = null;
       onData.dispose();
       offOutput();
+      links.dispose();
       term.dispose();
     };
   }, [provider]);

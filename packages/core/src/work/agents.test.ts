@@ -314,6 +314,7 @@ describe('roleProvider и roleModel', () => {
   it('модель роли по провайдеру', () => {
     expect(roleModel(builtin, 'codex')).toBe('gpt-5.5');
     expect(roleModel(builtin, 'glm')).toBe('opus');
+    expect(roleModel(builtin, 'kimi')).toBeNull();
     expect(roleModel(codexRole, 'codex')).toBe('gpt-5.5');
     expect(roleModel(undefined, 'claude')).toBeNull();
   });

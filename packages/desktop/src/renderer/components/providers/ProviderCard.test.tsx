@@ -12,6 +12,8 @@ import { createFakeBridge } from '../../test-utils/fake-bridge.js';
 import { ProviderCard } from './ProviderCard.js';
 import { ProviderInstall } from './ProviderInstall.js';
 
+vi.mock('./SignInTerminal.js', () => ({ SignInTerminal: () => <div data-sign-in-terminal="" /> }));
+
 type Provider = Result<'providers.list'>['providers'][number];
 const glm = (patch: Partial<Provider> = {}): Provider => ({
   id: 'glm',
@@ -790,6 +792,69 @@ describe('ProviderCard: Qwen Code (spec 2026-11-11, 3.6)', () => {
 });
 
 describe('ProviderCard: Kimi Code', () => {
+  const kimi = (patch: Partial<Provider> = {}): Provider => ({
+    id: 'kimi', label: 'Kimi Code', available: false, needs: 'cli', version: null, ...patch,
+  });
+  const withInstall = (): void => {
+    useHostStore.setState({ status: { state: 'connected', hostVersion: '0.4.0', methods: [...REQUIRED_METHODS, 'providers.install'] } });
+  };
+
+  it('a supporting host offers confirmation before installing the missing CLI, then refreshes', async () => {
+    withInstall();
+    const onReload = vi.fn(async () => {});
+    bridge.setHandler('providers.install', () => ({ state: 'done', ok: true, version: '2.7.3', output: '' }));
+    const { rerender } = render(<ProviderCard provider={kimi()} onReload={onReload} onRestartHost={() => {}} />);
+    expect(screen.getByText(S.providerCard.kimi.missingCli)).toBeTruthy();
+    expect(screen.queryByText(S.providerCard.kimi.signIn)).toBeNull();
+    expect(screen.getAllByRole('button', { name: S.providerCard.checkAgain })).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Install…' }));
+    const dialog = screen.getByRole('dialog');
+    expect(dialog.querySelector('[data-install-command]')!.textContent).toBe('curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash');
+    expect(dialog.querySelector('[data-install-source]')!.textContent).toBe('https://code.kimi.com/kimi-code/install.sh');
+    expect(dialog.querySelector('[data-install-profile]')).not.toBeNull();
+    expect(bridge.calls).toEqual([]);
+    fireEvent.click(screen.getByRole('button', { name: 'Install' }));
+    await screen.findByText('Kimi Code installed · 2.7.3');
+    expect(bridge.calls).toEqual([{ method: 'providers.install', params: { provider: 'kimi' } }]);
+    expect(onReload).toHaveBeenCalledOnce();
+    rerender(<ProviderCard provider={kimi({ available: true, needs: null, version: '2.7.3' })}
+      onReload={onReload} onRestartHost={() => {}} />);
+    expect(screen.getByText('Kimi Code installed · 2.7.3')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Install…' })).toBeNull();
+    expect(screen.queryByText(S.providerCard.kimi.missingCli)).toBeNull();
+  });
+
+  it('canceling the Kimi install confirmation does not call the host', async () => {
+    withInstall();
+    render(<ProviderCard provider={kimi()} onReload={async () => {}} onRestartHost={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Install…' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(bridge.calls).toEqual([]);
+  });
+
+  it.each([false, true])('keeps the guide available with install support %s', async (supportsInstall) => {
+    if (supportsInstall) withInstall();
+    const openExternal = vi.spyOn(bridge.app, 'openExternal').mockResolvedValue(undefined);
+    render(<ProviderCard provider={kimi()} onReload={async () => {}} onRestartHost={() => {}} />);
+    expect(screen.queryByRole('button', { name: 'Install…' }) !== null).toBe(supportsInstall);
+    fireEvent.click(screen.getByRole('button', { name: S.providerCard.installationGuide }));
+    await waitFor(() => expect(openExternal).toHaveBeenCalledWith('https://www.kimi.com/code/docs/en/kimi-code-cli/guides/getting-started#installation'));
+  });
+
+  it.each([
+    [false, 'sign-in'],
+    [true, null],
+  ] as const)('installed CLI (available %s) has no install action or missing-CLI guidance', (available, needs) => {
+    withInstall();
+    render(<ProviderCard provider={kimi({ available, needs, version: '2.7.3' })}
+      onReload={async () => {}} onRestartHost={() => {}} />);
+    expect(screen.queryByRole('button', { name: 'Install…' })).toBeNull();
+    expect(screen.queryByText(S.providerCard.kimi.missingCli)).toBeNull();
+    expect(screen.queryByText(S.providerCard.kimi.signIn) !== null).toBe(!available);
+    expect(screen.getAllByRole('button', { name: S.providerCard.checkAgain })).toHaveLength(1);
+  });
+
   it.each([
     ['cli', S.providerCard.kimi.missingCli],
     ['sign-in', S.providerCard.kimi.signIn],
@@ -798,7 +863,9 @@ describe('ProviderCard: Kimi Code', () => {
     render(<ProviderCard provider={{ id: 'kimi', label: 'Kimi Code', available: false, needs }}
       onReload={onReload} onRestartHost={() => {}} />);
     expect(screen.getByText(copy)).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: S.providerCard.kimi.refresh }));
+    expect(screen.getAllByRole('button', { name: S.providerCard.checkAgain })).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: 'Install…' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: S.providerCard.checkAgain }));
     expect(onReload).toHaveBeenCalledOnce();
   });
 });
@@ -852,4 +919,19 @@ describe('ProviderCard: OpenCode (spec 2026-11-12, 4.9, 4.12)', () => {
     show(glm());
     expect(document.querySelector('[data-opencode-auth]')).toBeNull();
   });
+});
+
+
+it('offers native Kimi sign-in only for an installed CLI on a host advertising the terminal', async () => {
+  const provider: Provider = { id: 'kimi', label: 'Kimi Code', available: false, needs: 'sign-in', version: '2.7.3' };
+  useProvidersStore.setState({ providers: [], signInOutput: {}, signInResult: {} });
+  bridge.setHandler('providers.signIn', () => ({ ok: true }));
+  const { rerender } = render(<ProviderCard provider={provider} onReload={async () => {}} onRestartHost={() => {}} />);
+  expect(screen.queryByText(S.accounts.signIn)).toBeNull();
+  rerender(<ProviderCard provider={{ ...provider, kimiAuth: { signingIn: false } }} onReload={async () => {}} onRestartHost={() => {}} />);
+  expect(screen.queryByText(S.providerCard.kimi.signIn)).toBeNull();
+  fireEvent.click(screen.getByText(S.accounts.signIn));
+  await waitFor(() => expect(bridge.calls.some(call => call.method === 'providers.signIn' && call.params.provider === 'kimi')).toBe(true));
+  rerender(<ProviderCard provider={{ ...provider, needs: 'cli', kimiAuth: { signingIn: false } }} onReload={async () => {}} onRestartHost={() => {}} />);
+  expect(screen.queryByText(S.accounts.signIn)).toBeNull();
 });

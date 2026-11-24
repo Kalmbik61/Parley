@@ -13,6 +13,7 @@ import { Input } from '../../ui/input.js';
 import { AgentIcon } from '../AgentIcon.js';
 import { CheckLine, knownReason, maskedHint, newerCheck } from './check-line.js';
 import { accountOf } from './custom-provider-draft.js';
+import { NativeKimiSignIn } from './NativeKimiSignIn.js';
 import { ProviderInstall } from './ProviderInstall.js';
 import { GLM_KEY_URL, installableId, PROVIDER_INSTALL } from './provider-install.js';
 
@@ -73,7 +74,8 @@ export function ProviderCard({
   // OpenCode: not installed (no version), or a 1.x found (a version, but readiness refuses it): both offer the host's `Install…`.
   const opencodeMissing = provider.id === 'opencode' && !provider.available && provider.version == null;
   const opencodeLegacy = provider.id === 'opencode' && !provider.available && provider.version != null;
-  const missingCli = (showInstall && !isGlm) || qwenMissing || opencodeMissing || opencodeLegacy;
+  const kimiMissing = provider.id === 'kimi' && !provider.available && provider.needs === 'cli';
+  const missingCli = (showInstall && !isGlm) || qwenMissing || opencodeMissing || opencodeLegacy || kimiMissing;
   const qwenAuth = provider.id === 'qwen' ? (provider.qwenAuth ?? null) : null;
   const opencodeConnected = provider.id === 'opencode' ? (provider.opencodeAuth?.connected ?? null) : null;
   const latest = provider.cli?.latest ?? null;
@@ -394,20 +396,19 @@ export function ProviderCard({
           {provider.needs === 'cli' ? (
             <>
               <p className="text-xs text-muted-foreground">{S.providerCard.kimi.missingCli}</p>
-              <Button type="button" size="xs" variant="link"
+              <Button type="button" size="xs" variant="link" disabled={busy}
                 onClick={() => openGuide('https://www.kimi.com/code/docs/en/kimi-code-cli/guides/getting-started#installation')}>
                 {S.providerCard.installationGuide}
               </Button>
             </>
           ) : null}
-          {provider.needs === 'sign-in' ? (
+          {provider.needs === 'sign-in' && provider.kimiAuth === undefined ? (
             <p className="text-xs text-muted-foreground">{S.providerCard.kimi.signIn}</p>
           ) : null}
-          <Button type="button" size="xs" variant="outline" disabled={busy}
-            onClick={() => void run(S.errors.actions.loadProviders, onReload)}>
-            {S.providerCard.kimi.refresh}
-          </Button>
         </div>
+      ) : null}
+      {provider.id === 'kimi' && provider.kimiAuth !== undefined && provider.needs !== 'cli' && (!provider.available || provider.kimiAuth.signingIn) ? (
+        <NativeKimiSignIn running={provider.kimiAuth.signingIn} onReload={onReload} />
       ) : null}
       {provider.id === 'opencode' && provider.available ? (
         // OpenCode signs in inside its own TUI: the card shows how many integrations `opencode auth list` reports, never a verdict.

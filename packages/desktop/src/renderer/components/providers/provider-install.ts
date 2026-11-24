@@ -34,6 +34,12 @@ export const INSTALL_CONFIRM = {
     source: 'https://chatgpt.com/codex/install.sh',
     profile: false,
   },
+  kimi: {
+    command: 'curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash',
+    source: 'https://code.kimi.com/kimi-code/install.sh',
+    // The installer may update the shell profile to expose the standalone CLI.
+    profile: true,
+  },
   qwen: {
     command:
       'curl -fsSL https://qwen-code-assets.oss-cn-hangzhou.aliyuncs.com/installation/install-qwen-standalone.sh | bash -s -- --method standalone',
@@ -52,7 +58,7 @@ export const INSTALL_CONFIRM = {
 export type InstallableId = keyof typeof INSTALL_CONFIRM;
 
 export function installableId(id: string): InstallableId | null {
-  return id === 'claude' || id === 'codex' || id === 'qwen' || id === 'opencode' ? id : null;
+  return id === 'claude' || id === 'codex' || id === 'qwen' || id === 'opencode' || id === 'kimi' ? id : null;
 }
 
 /** Обновление руками там, где хост ничего не запускает (спека §4.1): способ установки → команда. */

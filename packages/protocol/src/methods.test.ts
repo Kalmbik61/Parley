@@ -405,6 +405,7 @@ describe('providers.skipUpdate и providers.list.update (спека 2026-11-02)'
 
   it('providers.install: {provider}, ответ busy или done с итогом установки', () => {
     expect(METHODS['providers.install'].safeParse({ provider: 'qwen' }).success).toBe(true);
+    expect(METHODS['providers.install'].parse({ provider: 'kimi', args: ['--evil'], url: 'https://x' })).toEqual({ provider: 'kimi' });
     expect(METHODS['providers.install'].safeParse({}).success).toBe(false);
     expect(METHODS['providers.install'].safeParse({ provider: 7 }).success).toBe(false);
     // Лишние поля не проходят в обработчик: ни URL, ни аргументы из запроса.

@@ -10,13 +10,15 @@
  * все запуски.
  */
 
+import { homedir } from 'node:os';
 import { execFile } from 'node:child_process';
-import { commandBinary, isManagedProviderId, loadProviders } from '@parley/core';
+import { commandBinary, findRunnerBinary, isManagedProviderId, loadProviders } from '@parley/core';
 import type { ProviderEntry } from '@parley/core';
 import type { HostContext } from '../context.js';
 import { HostError } from '../errors.js';
 import { spawnPty } from '../pty/pty-process.js';
 import type { ExitInfo, PtyLaunch, PtyProcess } from '../pty/pty-process.js';
+import { kimiLoginEnv } from './kimi-env.js';
 import { providerLaunchEnv } from '../sessions/provider-env.js';
 
 /** Тот же спавн node-pty, что у сессий; подмена — в тестах. */
@@ -32,6 +34,8 @@ export type AuthExec = (
 
 export interface AuthServiceOptions {
   spawn?: PtySpawn;
+  /** Force the native Kimi ACP authentication probe after login exits. */
+  refreshKimi?: () => Promise<boolean>;
   exec?: AuthExec;
   now?: () => number;
   /** Сколько ждать входа, мс; потом процесс убивается, как по `cancel`. По умолчанию десять минут (спека подписок 5.5). */
@@ -140,6 +144,16 @@ export async function accountEntry(id: string): Promise<ProviderEntry> {
   return entry;
 }
 
+/** Native Kimi alone shares the login terminal; other built-ins still require an account. */
+export async function signInEntry(id: string): Promise<ProviderEntry> {
+  if (id !== 'kimi') return accountEntry(id);
+  const entry = (await loadProviders()).kimi;
+  if (entry === undefined || entry.custom !== undefined || entry.runner.mcpConfig !== 'kimi-acp') {
+    throw new HostError('bad_request', 'native Kimi is unavailable');
+  }
+  return entry;
+}
+
 /** Команда, папка и окружение аккаунта: без ключей и токена хоста, с `CLAUDE_CONFIG_DIR` его папки (спека подписок 5.3). */
 function launchOf(entry: ProviderEntry): { binary: string; cwd: string; env: NodeJS.ProcessEnv } {
   const cwd = entry.runner.configDir;
@@ -209,6 +223,13 @@ export function createAuthService(host: HostContext, options: AuthServiceOptions
   async function run(id: string): Promise<boolean> {
     // До чтения реестра: `forget` во время чтения тоже должен отменить запись исхода.
     const started = generation(id);
+    if (id === 'kimi') {
+      const signedIn = await options.refreshKimi?.() ?? false;
+      if (!stopped && started === generation(id)) {
+        states.set(id, { signedIn, detail: null, at: now() });
+      }
+      return signedIn;
+    }
     const entry = await findAccount(id);
     if (entry === undefined) {
       states.delete(id);
@@ -260,9 +281,10 @@ export function createAuthService(host: HostContext, options: AuthServiceOptions
     finished.exited = true;
     clearTimeout(finished.timer);
     clearTimeout(finished.killTimer);
-    if (lock === finished) lock = null;
+    if (finished.id !== 'kimi' && lock === finished) lock = null;
     if (stopped) return;
     const signedIn = await check(finished.id, true);
+    if (lock === finished) lock = null;
     host.broadcast('providers.signInExit', { provider: finished.id, exitCode: exitCodeOf(exit), signedIn });
     try {
       options.onSignInExit?.(finished.id, signedIn);
@@ -327,10 +349,13 @@ export function createAuthService(host: HostContext, options: AuthServiceOptions
       lock = started;
       let child: PtyProcess;
       try {
-        const entry = await accountEntry(id);
+        const entry = await signInEntry(id);
         if (lock !== started) throw new HostError('conflict', 'the sign-in was cancelled');
-        const { binary, cwd, env } = launchOf(entry);
-        child = spawn({ command: binary, args: authCommands(entry).login, cwd, env }, size);
+        const { binary, cwd, env } = id === 'kimi'
+          ? { binary: await findRunnerBinary(entry.runner.command), cwd: homedir(), env: kimiLoginEnv(process.env) }
+          : launchOf(entry);
+        if (lock !== started || stopped) throw new HostError('conflict', 'the sign-in was cancelled');
+        child = spawn({ command: binary, args: id === 'kimi' ? ['login'] : authCommands(entry).login, cwd, env }, size);
       } catch (error) {
         if (lock === started) lock = null;
         if (error instanceof HostError) throw error;

@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -16,7 +16,7 @@ const SIGNED_OUT = JSON.stringify({ loggedIn: false, authMethod: 'none' });
 
 let home = '';
 const saved: Record<string, string | undefined> = {};
-const ENV_KEYS = ['PARLEY_HOME', 'PARLEY_CLAUDE_BIN', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CONFIG_DIR'];
+const ENV_KEYS = ['PARLEY_HOME', 'PARLEY_CLAUDE_BIN', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CONFIG_DIR', 'PARLEY_KIMI_BIN', 'PARLEY_AGENT_TOKEN', 'HARNAS_HOOK_TOKEN', 'CLAUDE_CODE_CHILD_SESSION', 'KIMI_CODE_HOME'];
 let stoppers: Array<() => void> = [];
 
 const folder = (id: string): string => path.join(home, 'providers', id);
@@ -726,4 +726,64 @@ describe('logout — выход перед удалением аккаунта (
     // Первой идёт команда выхода; проверка после выхода процесса входа (finishSignIn) приходит позже.
     expect(calls[0]!.args).toEqual(['auth', 'logout']);
   });
+});
+
+describe('native Kimi sign-in', () => {
+  it('runs fixed login in the real user environment, forwards IO and refreshes auth after cancellation/retry', async () => {
+    const { spawn, processes } = fakeSpawn();
+    process.env.PARLEY_AGENT_TOKEN = 'parent-token';
+    process.env.HARNAS_HOOK_TOKEN = 'parent-hook';
+    process.env.CLAUDE_CODE_CHILD_SESSION = 'parent-session';
+    process.env.KIMI_CODE_HOME = '/user/kimi-settings';
+    process.env.PARLEY_KIMI_BIN = process.execPath;
+    const refreshKimi = vi.fn(async () => false);
+    const { auth, events } = boot({ spawn, refreshKimi });
+    await auth.signIn('kimi');
+    expect(processes[0]!.launch.args).toEqual(['login']);
+    expect(processes[0]!.launch.cwd).toBe((await import('node:os')).homedir());
+    expect(processes[0]!.launch.env.HOME).toBe(process.env.HOME);
+    expect(processes[0]!.launch.env.KIMI_CODE_HOME).toBe('/user/kimi-settings');
+    expect(processes[0]!.launch.env.PARLEY_AGENT_TOKEN).toBeUndefined();
+    expect(processes[0]!.launch.env.HARNAS_HOOK_TOKEN).toBeUndefined();
+    expect(processes[0]!.launch.env.CLAUDE_CODE_CHILD_SESSION).toBeUndefined();
+    auth.input('kimi', 'device-code\r');
+    auth.resize('kimi', 90, 28);
+    expect(processes[0]!.written).toEqual(['device-code\r']);
+    expect(processes[0]!.resizes).toEqual([[90, 28]]);
+    processes[0]!.emit('https://example.test/device');
+    auth.cancel('kimi');
+    await exited(events);
+    expect(refreshKimi).toHaveBeenCalledOnce();
+    expect(auth.signingIn('kimi')).toBe(false);
+    refreshKimi.mockResolvedValue(true);
+    await auth.signIn('kimi');
+    processes[1]!.exit();
+    await exited(events, 2);
+    expect(eventsOf(events, 'providers.signInExit')[1]).toEqual({ provider: 'kimi', exitCode: 0, signedIn: true });
+  });
+});
+
+
+it('native Kimi login runs interactively in an actual PTY', async () => {
+  const executable = path.join(home, 'fixture-kimi');
+  await writeFile(executable, `#!/bin/sh
+[ "$1" = "login" ] && [ "$#" = "1" ] || exit 21
+[ -t 0 ] && [ -t 1 ] || exit 22
+stty size
+printf 'fixture-device-code: '
+read code
+[ "$code" = "fixture-approved" ] || exit 23
+printf 'fixture-login-complete\n'
+`);
+  await chmod(executable, 0o755);
+  process.env.PARLEY_KIMI_BIN = executable;
+  const { auth, events } = boot({ refreshKimi: async () => true });
+  await auth.signIn('kimi', { cols: 91, rows: 27 });
+  const output = () => eventsOf(events, 'providers.signInOutput').map((event) => (event as { data: string }).data).join('');
+  await vi.waitFor(() => expect(output()).toContain('fixture-device-code:'));
+  expect(output()).toContain('27 91');
+  auth.input('kimi', 'fixture-approved\r');
+  await exited(events);
+  expect(output()).toContain('fixture-login-complete');
+  expect(eventsOf(events, 'providers.signInExit')).toEqual([{ provider: 'kimi', exitCode: 0, signedIn: true }]);
 });

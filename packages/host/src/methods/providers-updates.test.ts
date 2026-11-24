@@ -188,6 +188,9 @@ describe('providers.install', () => {
     expect(await handler({ provider: 'qwen' }, req)).toEqual(done);
     expect(install).toHaveBeenLastCalledWith('qwen', 'window (c-1)');
     expect(broadcast).toHaveBeenCalledWith('providers.changed', { provider: 'qwen' });
+    expect(await handler({ provider: 'kimi' }, req)).toEqual(done);
+    expect(install).toHaveBeenLastCalledWith('kimi', 'window (c-1)');
+    expect(broadcast).toHaveBeenCalledWith('providers.changed', { provider: 'kimi' });
   });
 
   it('в установку уходит только команда: лишние поля запроса не доходят', async () => {

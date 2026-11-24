@@ -49,7 +49,7 @@ beforeAll(async () => {
   );
   await writeFile(
     path.join(pki, 'leaf.cnf'),
-    'basicConstraints=CA:FALSE\nkeyUsage=digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\nsubjectAltName=DNS:claude.ai,DNS:downloads.claude.ai,DNS:evil.example,DNS:chatgpt.com,DNS:releases.openai.com,DNS:qwen-code-assets.oss-cn-hangzhou.aliyuncs.com,DNS:opencode.ai\n',
+    'basicConstraints=CA:FALSE\nkeyUsage=digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\nsubjectAltName=DNS:claude.ai,DNS:downloads.claude.ai,DNS:evil.example,DNS:chatgpt.com,DNS:releases.openai.com,DNS:qwen-code-assets.oss-cn-hangzhou.aliyuncs.com,DNS:opencode.ai,DNS:code.kimi.com,DNS:cdn.kimi.com\n',
   );
   run('req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'ca.key', '-out', 'ca.pem', '-days', '2', '-config', 'ca.cnf');
   run('req', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'leaf.key', '-out', 'leaf.csr', '-subj', '/CN=parley-test-stub');
@@ -157,6 +157,26 @@ const alive = (pid: number): boolean => {
 };
 
 describe('установка CLI: успех', () => {
+  it('installs Kimi using the isolated vendor script and checks the official fallback without authentication or update checks', async () => {
+    routes.set('code.kimi.com/kimi-code/install.sh', { status: 302, headers: { location: 'https://cdn.kimi.com/kimi-code/install.sh' } });
+    routes.set('cdn.kimi.com/kimi-code/install.sh', {
+      body: installerScript('kimi', '2.7.3').replaceAll('.local/bin', '.kimi-code/bin'),
+    });
+    const { instance, fresh, checkOne, exec } = installer({ version: '2.7.3' });
+    expect(await instance.install('kimi', 'window (c-1)')).toMatchObject({
+      state: 'done', ok: true, version: '2.7.3',
+      pathNote: `${path.join(home, '.kimi-code/bin')} is not on your shell PATH; Parley finds kimi there`,
+      smoke: { ok: true },
+    });
+    expect(requests).toEqual(['code.kimi.com/kimi-code/install.sh', 'cdn.kimi.com/kimi-code/install.sh']);
+    expect(exec.mock.calls[0]?.[0]).toBe('/bin/bash');
+    expect(exec.mock.calls[0]?.[1].slice(0, 2)).toEqual(['--noprofile', '--norc']);
+    expect(exec.mock.calls[0]?.[1]).toHaveLength(3);
+    expect(exec.mock.calls[1]?.slice(0, 2)).toEqual([path.join(home, '.kimi-code/bin/kimi'), ['--version']]);
+    expect(fresh).toHaveBeenCalledWith('kimi', { force: true });
+    expect(checkOne).not.toHaveBeenCalled();
+  });
+
   it('скачивание, запуск константным argv, бинарь по ожидаемому пути с pathNote, версия, проба, перепроверка', async () => {
     const body = installerScript('claude');
     routes.set('claude.ai/install.sh', { body });
@@ -481,6 +501,7 @@ describe('установка CLI: занятость и платформа', () 
     });
     expect(await instance.install('qwen', 'w')).toMatchObject({ manualCommand: 'npm install -g @qwen-code/qwen-code@latest' });
     expect(await instance.install('opencode', 'w')).toMatchObject({ manualCommand: 'npm install -g @opencode/cli@latest' });
+    expect(await instance.install('kimi', 'w')).toMatchObject({ manualCommand: 'irm https://code.kimi.com/kimi-code/install.ps1 | iex' });
     expect(requests).toEqual([]);
     expect(exec).not.toHaveBeenCalled();
   });

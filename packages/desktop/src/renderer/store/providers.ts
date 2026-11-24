@@ -37,6 +37,10 @@ function patchAccount(
 ): ProviderInfo[] {
   let changed = false;
   const next = providers.map((provider) => {
+    if (provider.id === 'kimi' && id === 'kimi') {
+      changed = true;
+      return { ...provider, kimiAuth: { signingIn: patch.signingIn ?? provider.kimiAuth?.signingIn ?? false } };
+    }
     const custom = provider.custom;
     if (provider.id !== id || custom == null || (custom.kind !== 'claude-account' && custom.kind !== 'codex-account')) return provider;
     const keys = Object.keys(patch) as Array<keyof typeof patch>;

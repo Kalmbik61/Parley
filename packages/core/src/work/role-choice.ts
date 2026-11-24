@@ -15,15 +15,15 @@ export function roleProvider(role: Pick<RoleSummary, 'source' | 'provider'> | un
 }
 
 /**
- * Модель роли на провайдере. У встроенной роли своя модель на каждого из двух рантаймов (все провайдеры, кроме Codex
- * и Qwen Code, идут по рантайму Claude Code); у Qwen Code модели роли нет; у остальных — модель из самой роли.
+ * Модель роли на провайдере. У встроенной роли своя модель для Claude Code и Codex; у Qwen Code, OpenCode и Kimi
+ * модели роли нет. У остальных ролей — модель из самой роли.
  */
 export function roleModel(role: Pick<RoleSummary, 'source' | 'model' | 'models'> | undefined, provider: string | null): string | null {
   if (role === undefined) return null;
   // Qwen Code has no model tiers (`modelForTier` → null): its built-in roles run on the session's model, never Claude's.
   // The module stays import-free, so the built-in id is matched here.
-  // OpenCode likewise: no model tiers, its roles run on the session's model (spec 2026-11-12, 4.8).
-  if ((provider === 'qwen' || provider === 'opencode') && role.source === 'builtin') return null;
+  // OpenCode and Kimi likewise: built-in roles use the session's model without Claude tiers.
+  if ((provider === 'qwen' || provider === 'opencode' || provider === 'kimi') && role.source === 'builtin') return null;
   if (role.source === 'builtin') return (provider === 'codex' ? role.models?.codex : role.models?.claude) ?? null;
   return role.model ?? null;
 }

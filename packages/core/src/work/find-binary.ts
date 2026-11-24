@@ -1,7 +1,7 @@
 import { access, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import path from 'node:path';
-import { CLI_TOOLS, type CliTool } from '../cli-tools.js';
+import { CLI_INSTALL_TOOLS, type CliInstallTool } from '../cli-tools.js';
 import { ENV_PREFIX, envRaw } from '../names.js';
 
 /**
@@ -99,10 +99,10 @@ export interface RunnerBinary {
  * исполняемые файлы рядом на поиск не влияют.
  */
 export function expectedRunnerBinary(command: string, env: NodeJS.ProcessEnv = process.env): string | null {
-  if (!Object.hasOwn(CLI_TOOLS, command)) return null;
+  if (!Object.hasOwn(CLI_INSTALL_TOOLS, command)) return null;
   const home = env['HOME'];
   if (home === undefined || home === '' || !path.isAbsolute(home)) return null;
-  return path.join(home, CLI_TOOLS[command as CliTool].expectedBinary);
+  return path.join(home, CLI_INSTALL_TOOLS[command as CliInstallTool].expectedBinary);
 }
 
 /**
