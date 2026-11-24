@@ -415,6 +415,18 @@ describe('roleChangeOnSwitch', () => {
     expect(await roleChangeOnSwitch(project, PROVIDERS.codex, 'Codex', { source: 'claude', name: 'reviewer' }, cat(mk('claude', 'reviewer', false)))).toMatchObject({ to: null, readOnlyLost: false,
       text: 'Role reviewer does not run on Codex. The session will continue without a role.' });
   });
+  it('localizes the role-change wording while preserving the role and provider data', async () => {
+    const catalog = unverifiedCodex(mk('codex', 'reviewer', false), mk('claude', 'reviewer', false));
+    expect(await roleChangeOnSwitch(project, PROVIDERS.claude, 'Claude Code', codexReviewer, catalog, 'ru')).toEqual({
+      from: 'codex:reviewer', to: 'claude:reviewer', readOnlyLost: true,
+      text: 'Возможно, это роль только для чтения. Настройки Codex проверить не удалось: reviewer. Провайдер Claude Code её не поддерживает. Сессия продолжится с ролью reviewer (claude), с возможностью редактировать файлы и запускать команды.',
+    });
+    const claudeReviewer = { source: 'claude', name: 'reviewer' } as const;
+    expect(await roleChangeOnSwitch(project, PROVIDERS.codex, 'Codex Alpha', claudeReviewer, cat(mk('claude', 'reviewer', false)), 'ru')).toEqual({
+      from: 'claude:reviewer', to: null, readOnlyLost: false,
+      text: 'Провайдер Codex Alpha не поддерживает роль reviewer. Сессия продолжится без роли.',
+    });
+  });
   it('no change: no role, or a role the target keeps', async () => {
     expect(await roleChangeOnSwitch(project, PROVIDERS.qwen, 'Qwen Code', null, buildRoleCatalog())).toBeNull();
     expect(await roleChangeOnSwitch(project, PROVIDERS.codex, 'Codex', { source: 'builtin', name: 'architect' }, buildRoleCatalog())).toBeNull();

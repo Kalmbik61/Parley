@@ -9,7 +9,8 @@ import { findRunnerBinary } from './find-binary.js';
 import { byFamily, claudeConfigDirFor, isClaudeCode, loadProviders, providerFamily, type ProviderEntry } from '../providers.js';
 import type { RoleCatalog } from '../roles/types.js';
 import type { SessionRole, WorkSession } from './types.js';
-import type { AppLocale } from '../i18n/index.js';
+import { createTranslator, type AppLocale } from '../i18n/index.js';
+import { roleChangeCatalog } from '../i18n/role-change-catalog.js';
 
 export function agentDirs(projectPath: string, claudeHome = path.join(homedir(), '.claude')): string[] {
   return [path.join(projectPath, '.claude', 'agents'), path.join(claudeHome, 'agents')];
@@ -273,21 +274,15 @@ export async function roleChangeOnSwitch(cwd: string, entry: ProviderEntry, targ
   // Fail closed: a native Codex role can be read-only (`sandbox_mode = "read-only"`); when its settings could not be read
   // (role missing from the catalog or any Codex diagnostic), it counts as read-only and the switch needs the ack.
   const unverified = role.source === 'codex' && (!current.roles.some(item => item.id === from) || current.diagnostics.some(item => item.source === 'codex'));
-  const readOnlyLost = (readOnly(from) || unverified) && !readOnly(to);
+  const wasReadOnly = readOnly(from);
+  const readOnlyLost = (wasReadOnly || unverified) && !readOnly(to);
   const fromName = current.roles.find(item => item.id === from)?.name ?? from;
-  if (locale === 'ru') {
-    const after = next === null ? 'без роли' : `с ролью ${next.name} (${next.source})`;
-    const kind = readOnly(from) ? 'Роль только для чтения' : 'Возможно, это роль только для чтения. Настройки Codex проверить не удалось';
-    const text = readOnlyLost
-      ? `${kind}: ${fromName}. Провайдер ${targetLabel} её не поддерживает. Сессия продолжится ${after}, с возможностью редактировать файлы и запускать команды.`
-      : `Провайдер ${targetLabel} не поддерживает роль ${fromName}. Сессия продолжится ${after}.`;
-    return { from, to, readOnlyLost, text };
-  }
-  const after = next === null ? 'without a role' : `as ${next.name} (${next.source})`;
-  const kind = readOnly(from) ? 'is a read-only role' : 'may be a read-only role (its Codex settings could not be verified)';
+  const t = createTranslator(locale, roleChangeCatalog);
+  const after = next === null ? t('withoutRole') : t('withRole', { name: next.name, source: next.source });
+  const details = { name: fromName, target: targetLabel, after };
   const text = readOnlyLost
-    ? `${fromName} ${kind} and does not run on ${targetLabel}. The session will continue ${after}, and can edit files and run commands.`
-    : `Role ${fromName} does not run on ${targetLabel}. The session will continue ${after}.`;
+    ? t('readOnlyLost', { ...details, kind: t(wasReadOnly ? 'readOnly' : 'unverified') })
+    : t('changed', details);
   return { from, to, readOnlyLost, text };
 }
 
