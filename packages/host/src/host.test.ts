@@ -9,7 +9,7 @@ import { connect } from 'node:net';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { connectRaw, hello, removeHome, tempHome, waitConnected } from '../test/helpers.js';
-import { processStartedAt } from '@parley/core';
+import { processStartedAt, readGlobalParleyMd } from '@parley/core';
 import { HostAlreadyRunning, SocketPathTooLong, startHost } from './host.js';
 import type { RunningHost } from './host.js';
 import { hostPaths } from './paths.js';
@@ -36,6 +36,32 @@ afterEach(async () => {
 });
 
 describe('startHost', () => {
+  it('creates a private global PARLEY.md template on the first launch', async () => {
+    const home = path.join(await tempTrackedHome(), 'parley');
+    const running = await startHost({ home });
+    hosts.push(running);
+
+    const rulesPath = path.join(home, 'PARLEY.md');
+    expect(await readFile(rulesPath, 'utf8')).toMatch(/^# PARLEY\.md\n\n<!--/);
+    expect((await stat(rulesPath)).mode & 0o077).toBe(0);
+    expect((await readGlobalParleyMd(home)).text).toBe('');
+  });
+
+  it('preserves edits to global PARLEY.md across host restarts', async () => {
+    const home = await tempTrackedHome();
+    const first = await startHost({ home });
+    hosts.push(first);
+    const rulesPath = path.join(home, 'PARLEY.md');
+    const rules = '# My rules\n\nUse the surrounding language.\n';
+    await writeFile(rulesPath, rules);
+    await first.context.shutdown('test');
+    await first.closed;
+
+    hosts.push(await startHost({ home }));
+    expect(await readFile(rulesPath, 'utf8')).toBe(rules);
+    expect((await readGlobalParleyMd(home)).text).toContain('Use the surrounding language.');
+  });
+
   it('создаёт каталог 0700, сокет 0600, токен 0600, pid с process.pid', async () => {
     const home = await tempTrackedHome();
     const running = await startHost({ home });

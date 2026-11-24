@@ -73,7 +73,7 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
       forms = params.clientCapabilities.elicitation?.form !== undefined;
       if (params.protocolVersion !== 1 || (process.env.KIMI_FIXTURE_EXPECT_FORMS && params.clientCapabilities.elicitation?.form === undefined)) process.exit(3);
       if (booleanConfig && params.clientCapabilities.session?.configOptions?.boolean === undefined) process.exit(3);
-      return reply(id, { protocolVersion: 1, agentInfo: { name: 'Kimi Code CLI' }, agentCapabilities: { loadSession: true, sessionCapabilities: { resume: {}, list: {} } } });
+      return reply(id, { protocolVersion: 1, agentInfo: { name: 'Kimi Code CLI' }, agentCapabilities: { loadSession: true, promptCapabilities: { embeddedContext: true }, sessionCapabilities: { resume: {}, list: {} } } });
     case 'session/list':
       return process.env.KIMI_FIXTURE_LOGGED_OUT
         ? write({ id, error: { code: -32000, message: 'Authentication required' } })
@@ -167,6 +167,10 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
         } });
       }
       if (params.prompt[0].text === 'wait') return chunk(params.sessionId, '');
+      if (params.prompt[0].text === 'inspect context') {
+        chunk(params.sessionId, JSON.stringify(params.prompt.slice(1)));
+        return reply(id, { stopReason: 'end_turn' });
+      }
       if (params.prompt[0].text === 'call Parley') {
         return parleyMap(parleyServer).then((id) => {
           chunk(params.sessionId, `Parley session: ${id}`);

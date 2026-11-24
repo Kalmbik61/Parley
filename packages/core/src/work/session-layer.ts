@@ -24,6 +24,8 @@ export interface SessionLayerInput {
   playbook?: string;
   isLead?: boolean;
   brief?: string;
+  /** Formatted by readGlobalParleyMd. */
+  globalParleyMd?: string;
   /** Already preprocessed by processParleyMd. */
   parleyMd?: string;
   memoryFacts?: string;
@@ -32,7 +34,7 @@ export interface SessionLayerInput {
 }
 
 export type LayerBlockBytes = Record<
-  'guidance' | 'assignments' | 'browser' | 'bridge' | 'links' | 'role' | 'playbook' | 'brief' | 'parleyMd' | 'memoryFacts',
+  'guidance' | 'assignments' | 'browser' | 'bridge' | 'links' | 'role' | 'playbook' | 'brief' | 'globalParleyMd' | 'parleyMd' | 'memoryFacts',
   number
 >;
 export interface SessionLayer {
@@ -124,6 +126,7 @@ export function buildSessionLayer(input: SessionLayerInput): SessionLayer {
     role: role.text,
     playbook: playbook.text,
     brief: input.brief ?? '',
+    globalParleyMd: input.globalParleyMd ?? '',
     parleyMd: input.parleyMd ?? '',
     memoryFacts: memory?.text ?? input.memoryFacts ?? '',
   };
@@ -141,6 +144,7 @@ export function buildSessionLayer(input: SessionLayerInput): SessionLayer {
     parts.role,
     parts.playbook,
     parts.brief,
+    parts.globalParleyMd,
     parts.parleyMd.trim() === ''
       ? ''
       : `Team rules of this project (PARLEY.md):\n${parts.parleyMd}`,

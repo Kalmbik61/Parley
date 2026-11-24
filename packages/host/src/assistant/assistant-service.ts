@@ -28,6 +28,7 @@ import {
   pendingCards,
   silentTurnEnd,
   planRefOf,
+  readGlobalParleyMd,
   readLetters,
   sessionMention,
   WorkNotFoundError,
@@ -810,13 +811,13 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
   const modeOf = (credentials: TurnRun) => (credentials.admission.autoAtStart ? ({ mode: 'auto' } as const) : {});
   const promptOptions = (credentials: TurnRun) => (credentials.admission.autoAtStart ? { autonomy: true } : undefined);
 
-  async function files(current: Conversation, url: string, gender: AssistantGender, credentials: TurnRun): Promise<{ mcpFile: string; promptFile: string }> {
+  async function files(current: Conversation, url: string, systemPrompt: string, credentials: TurnRun): Promise<{ mcpFile: string; promptFile: string }> {
     await mkdir(dir, { recursive: true, mode: 0o700 });
     const mcpFile = path.join(dir, 'mcp.json');
     const promptFile = path.join(dir, `prompt-${current.language}.md`);
     await writeFile(mcpFile, assistantMcpJson({ url, token: credentials.token, ...modeOf(credentials) }), { mode: 0o600 });
     await chmod(mcpFile, 0o600);
-    await writeFile(promptFile, assistantPrompt(current.language, gender, promptOptions(credentials)), { mode: 0o600 });
+    await writeFile(promptFile, systemPrompt, { mode: 0o600 });
     return { mcpFile, promptFile };
   }
 
@@ -865,7 +866,10 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     const next = state.turn + 1;
     const askId = ask.id;
     const gender = voiceGender();
-    const { mcpFile, promptFile } = await files(current, url, gender, credentials);
+    const globalRules = await readGlobalParleyMd(deps.home);
+    for (const warning of globalRules.warnings) deps.log(warning.message);
+    const systemPrompt = [assistantPrompt(language, gender, promptOptions(credentials)), globalRules.text].filter(Boolean).join('\n\n');
+    const { mcpFile, promptFile } = await files(current, url, systemPrompt, credentials);
     const codex = entry.runner.mcpConfig === 'codex-override';
     // Сессия CLI живёт дольше хода, а род в зеркале сменился: новый род — со следующего ответа, разговор тот же (Р3).
     const voiceNote = current.sessionId !== null && current.gender !== gender ? `[system: voice changed — speak as ${gender}]` : null;
@@ -880,7 +884,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       {
         prompt,
         mcpConfig: codex ? assistantCodexMcp({ url, token: credentials.token, ...modeOf(credentials) }) : mcpFile,
-        systemPrompt: assistantPrompt(language, gender, promptOptions(credentials)),
+        systemPrompt,
         developerInstructions: codexInstructionsFile(promptFile),
         ...(model === null ? {} : { model }),
         ...(current.sessionId === null ? {} : { providerSessionId: current.sessionId }),

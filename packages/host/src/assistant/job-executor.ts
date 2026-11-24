@@ -15,8 +15,10 @@ import {
   assistantMcpJson,
   classifyAssistantError,
   codexInstructionsFile,
+  parleyHome,
   parseClaudeLine,
   parseCodexLine,
+  readGlobalParleyMd,
   type ProviderEntry,
 } from '@parley/core';
 import { normalizeHumanText } from '@parley/core/assistant';
@@ -96,6 +98,7 @@ export interface JobExecutorDeps {
   /** База маршрута помощника (`<origin>/assistant`); `null` — сервер хуков ещё не поднят. */
   endpointUrl(): string | null;
   run?(spec: TurnSpec, onEvent: Parameters<typeof runTurn>[1]): TurnHandle;
+  log?(line: string): void;
   timeoutMs?: number;
   now?(): number;
 }
@@ -129,15 +132,18 @@ export function createJobExecutor(deps: JobExecutorDeps): (job: Job) => JobRun {
         dir = await mkdtemp(path.join(deps.cwd, 'job-'));
         const mcpFile = path.join(dir, 'mcp.json');
         const promptFile = path.join(dir, 'prompt.md');
+        const globalRules = summary ? null : await readGlobalParleyMd(parleyHome());
+        for (const warning of globalRules?.warnings ?? []) deps.log?.(warning.message);
+        const systemPrompt = [prompt, globalRules?.text].filter(Boolean).join('\n\n');
         if (!summary) await writeFile(mcpFile, assistantMcpJson({ url, token, ...mode }), { mode: 0o600 });
-        await writeFile(promptFile, prompt, { mode: 0o600 });
+        await writeFile(promptFile, systemPrompt, { mode: 0o600 });
         const command = assistantCommand(
           entry,
           {
             prompt: deps.promptOf?.(job) ?? job.requestText,
             // Без `mcpConfig` подстановка выпадает вместе с флагом `--mcp-config` / `-c`; `--strict-mcp-config` Claude остаётся.
             ...(summary ? {} : { mcpConfig: codex ? assistantCodexMcp({ url, token, ...mode }) : mcpFile }),
-            systemPrompt: prompt,
+            systemPrompt,
             developerInstructions: codexInstructionsFile(promptFile),
           },
           false,

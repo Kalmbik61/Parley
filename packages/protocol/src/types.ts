@@ -258,6 +258,8 @@ export type NoticeKind =
   | 'parley-md-created'
   | 'parley-md-unreadable'
   | 'parley-md-truncated'
+  | 'global-parley-md-unreadable'
+  | 'global-parley-md-truncated'
   | 'provider-override-gap'
   | 'role-missing'
   | 'memory-truncated'

@@ -1122,6 +1122,20 @@ describe('assistant-service: род голоса (G1)', () => {
     await flush();
   }
 
+  it('reads global Parley rules again on resume', async () => {
+    const rules = path.join(home, 'PARLEY.md');
+    await writeFile(rules, 'First assistant rule.');
+    const service = prompted();
+    await service.ask(ASK);
+    expect(systemPrompt(0)).toContain('Global user rules (PARLEY.md):\nFirst assistant rule.');
+    await answered(service, 0);
+    await writeFile(rules, 'Revised assistant rule.');
+    await service.ask({ ...ASK, text: 'дальше' });
+    expect(turns[1]?.spec.args).toContain('--resume');
+    expect(systemPrompt(1)).toContain('Global user rules (PARLEY.md):\nRevised assistant rule.');
+    expect(systemPrompt(1)).not.toContain('First assistant rule.');
+  });
+
   it('без voiceGender в зеркале (и без зеркала) — род female', async () => {
     const service = prompted();
     await service.ask(ASK);

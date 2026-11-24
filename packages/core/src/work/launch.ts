@@ -48,7 +48,7 @@ import { CHANNEL_VALUE, NO_CHANNEL_WARNING } from './channel.js';
 import { loadBrief, writeBrief } from './brief.js';
 import { BROWSER_PRIORITY_RULE, CODEX_APPROVAL_GUIDANCE, CODEX_TOOL_EXAMPLES, OPENCODE_TOOL_EXAMPLES, linkedSettingsRule, systemGuidance } from './guidance.js';
 import { assignmentsBlock } from './plan-tasks.js';
-import { readParleyMd } from './parley-md.js';
+import { readGlobalParleyMd, readParleyMd } from './parley-md.js';
 import { readProjectMemory } from './project-memory.js';
 import type { MemoryItem } from './project-memory.js';
 import { leadRecipeBlock } from './recipe-lead.js';
@@ -64,7 +64,7 @@ import { OPENCODE_SERVER_URL_SLOT, opencodeServerEnv } from './opencode-config.j
 import { opencodeRoleLaunch } from './opencode-role.js';
 import { CLAUDE_SKILL_BUDGET_ENV, CODEX_SKILL_CATALOG_OVERRIDE, claudeSkillReduction, codexSkillRoute } from './skill-reduction.js';
 import { isPointerText } from './delivery.js';
-import { createWork, deleteSessionFiles, readMap, SharedStateError, updateMap, workPaths } from './store.js';
+import { createWork, deleteSessionFiles, parleyHome, readMap, SharedStateError, updateMap, workPaths } from './store.js';
 import { withTrialAssignment, type TrialProtocolOptions } from './trial-ledger.js';
 import type { LaunchedBy, WorkMap, WorkSession } from './types.js';
 
@@ -182,6 +182,7 @@ export interface LaunchPlan {
     sessionId?: string;
     mcpServers: Array<{ type: 'stdio'; name: string; command: string; args: string[]; env: Array<{ name: string; value: string }> }>;
     prompt?: string;
+    instructions?: string;
   };
 }
 
@@ -605,11 +606,15 @@ async function plan(
   // One current layer for launch/new/resume; only its provider channel differs.
   let blockBytes;
   let instructionsFile: string | undefined;
-  if (hasSystemLayer || hasDeveloperLayer || hasInstructionsLayer) {
+  const hasSessionLayer = hasSystemLayer || hasDeveloperLayer || hasInstructionsLayer;
+  const [globalParley, parley] = hasSessionLayer || kimi
+    ? await Promise.all([readGlobalParleyMd(parleyHome()), readParleyMd(projectPath)])
+    : [];
+  diagnostics.push(...(globalParley?.warnings ?? []), ...(parley?.warnings ?? []));
+  const fileRules = { globalParleyMd: globalParley?.text ?? '', parleyMd: parley?.text ?? '' };
+  if (hasSessionLayer) {
     const map = await readMap(projectPath, workId);
     const brief = quiet ? await writtenBrief(projectPath, workId, session.id) : null;
-    const parley = await readParleyMd(projectPath);
-    diagnostics.push(...parley.warnings);
     let memoryItems: MemoryItem[] = [];
     try { memoryItems = (await readProjectMemory(projectPath)).items; }
     catch (error) {
@@ -655,7 +660,7 @@ async function plan(
       // Правило — только там, где у агента есть `browser_open`: канал выдан и сервер MCP доходит шаблоном с `{mcpConfig}`.
       ...(options.agent !== undefined && mcpRoute ? { browser: BROWSER_PRIORITY_RULE } : {}),
       ...(brief === null ? {} : { brief }),
-      parleyMd: parley.text,
+      ...fileRules,
       memoryItems,
     });
     blockBytes = layer.blockBytes;
@@ -730,12 +735,14 @@ async function plan(
     }) };
   }
 
+  const kimiInstructions = kimi ? buildSessionLayer({ guidance: '', ...fileRules }).text : '';
   const kimiAcp: LaunchPlan['kimiAcp'] = kimi ? {
     ...(resuming && subs.providerSessionId !== undefined ? { sessionId: subs.providerSessionId } : {}),
     mcpServers: Object.entries(mcpConfig(params).mcpServers).map(([name, server]) => ({
       ...server, name, env: Object.entries(server.env).map(([name, value]) => ({ name, value })),
     })),
     ...(subs.prompt === undefined ? {} : { prompt: subs.prompt }),
+    ...(kimiInstructions === '' ? {} : { instructions: kimiInstructions }),
   } : undefined;
 
   const { command, args } = resuming ? resumeCommand(entry, subs) : startCommand(entry, subs);
