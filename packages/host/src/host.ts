@@ -217,6 +217,14 @@ export class SocketPathTooLong extends Error {
 
 const DEFAULT_IDLE_MS = 300_000;
 const DEFAULT_HELLO_TIMEOUT_MS = 5_000;
+const GLOBAL_PARLEY_MD_TEMPLATE = `# PARLEY.md
+
+<!--
+Add your personal rules below this comment. Parley loads them for agents across
+all your projects. For example, you can set a preferred response language or
+say which checks to run before reporting a change.
+-->
+`;
 
 export async function startHost(options: HostOptions = {}): Promise<RunningHost> {
   const resolvedHome = options.home ?? parleyHome();
@@ -258,6 +266,13 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     throw new HostAlreadyRunning();
   }
   await Promise.all([paths.socket, paths.token].map((file) => rm(file, { force: true })));
+
+  try {
+    await writeFile(path.join(resolvedHome, 'PARLEY.md'), GLOBAL_PARLEY_MD_TEMPLATE, { flag: 'wx', mode: 0o600 });
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== 'EEXIST') log.warn('Could not create the global PARLEY.md', { code });
+  }
 
   // 4. Токен рукопожатия — новый на каждый запуск, права 0600 гарантируются chmod,
   //    а не только `mode` у writeFile (тот режется umask).

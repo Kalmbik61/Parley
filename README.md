@@ -160,11 +160,12 @@ critique and review; standard models (Sonnet, GPT-6.1-Sol) implement and verify;
 GPT-6-Luna) research. Parley tells agents to keep implementation on the standard tier and to name
 the reason when a strong model writes code; a project's `PARLEY.md` can change the split.
 
-**Global agent rules.** Put personal rules in `~/.parley/PARLEY.md`, or in `PARLEY.md` in the
-home selected by `PARLEY_HOME`. Parley reads the file on every launch and resume, including
-assistant turns and background jobs. Project agents get global rules followed by the project's
-`PARLEY.md`. Each file has a 32 KiB limit. Custom runner templates deliver these rules through
-`{systemPrompt}` or `{developerInstructions}`, depending on the provider.
+**Global agent rules.** On startup, Parley creates `~/.parley/PARLEY.md` with a template if the
+file is missing. `PARLEY_HOME` selects a different home folder. Add your personal rules to the
+file. Parley reads them on every agent launch and resume, including assistant turns and background
+jobs. Project agents get global rules followed by the project's `PARLEY.md`. Each file has a 32 KiB
+limit. Custom runner templates deliver these rules through `{systemPrompt}` or
+`{developerInstructions}`, depending on the provider.
 
 ## Install and use
 
