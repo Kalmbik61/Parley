@@ -7,6 +7,8 @@ import { ensureStateDir } from './state-dir.js';
 export type LayerWarningCode =
   | 'parley-md-unreadable'
   | 'parley-md-truncated'
+  | 'global-parley-md-unreadable'
+  | 'global-parley-md-truncated'
   | 'provider-override-gap'
   | 'role-truncated'
   | 'recipe-playbook-truncated';
@@ -162,6 +164,22 @@ export async function readParleyMd(projectPath: string): Promise<ParleyMdResult>
   } catch {
     return unreadable();
   }
+}
+
+export async function readGlobalParleyMd(home: string): Promise<ParleyMdResult> {
+  const { text, warnings } = await readParleyMd(home);
+  return {
+    text: text === '' ? '' : `Global user rules (PARLEY.md):\n${text}`,
+    warnings: warnings.map(({ code }) => code === 'parley-md-truncated'
+      ? {
+          code: 'global-parley-md-truncated',
+          message: 'Parley cut the global PARLEY.md at 32 KB. Shorten the global rules to include the remainder.',
+        }
+      : {
+          code: 'global-parley-md-unreadable',
+          message: 'Parley could not read the global PARLEY.md in its home folder.',
+        }),
+  };
 }
 
 function unreadable(): ParleyMdResult {

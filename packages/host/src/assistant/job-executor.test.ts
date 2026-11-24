@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -221,6 +221,28 @@ describe('job executor', () => {
     const args = specs[0]!.args;
     expect(args.some((arg) => arg.includes('PARLEY_ASSISTANT_TOKEN="job_'))).toBe(true);
     expect(args.some((arg) => arg.startsWith('model_instructions_file='))).toBe(true);
+  });
+
+  it('includes global Parley rules in the Codex job instructions file', async () => {
+    await writeFile(path.join(cwd, 'PARLEY.md'), 'Apply the global job rule.');
+    vi.stubEnv('PARLEY_HOME', cwd);
+    try {
+      let instructions = '';
+      const { execute } = setup({ ok: true }, {
+        provider: codexEntry,
+        run: (spec, onEvent) => {
+          const prefix = 'model_instructions_file=';
+          const arg = spec.args.find((value) => value.startsWith(prefix))!;
+          instructions = readFileSync(JSON.parse(arg.slice(prefix.length)), 'utf8');
+          onEvent({ type: 'text', delta: 'Done.' });
+          return { cancel: vi.fn(), done: Promise.resolve({ ok: true }) };
+        },
+      });
+      await expect(execute({ ...job, provider: 'codex' }).done).resolves.toMatchObject({ ok: true });
+      expect(instructions).toContain('Global user rules (PARLEY.md):\nApply the global job rule.');
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it('JOB_PROMPT: 1–3 предложения, имена вместо id, «не знаю», link_request первым шагом, запись только карточкой', () => {

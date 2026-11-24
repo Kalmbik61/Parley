@@ -47,7 +47,7 @@ import { CHANNEL_VALUE, NO_CHANNEL_WARNING } from './channel.js';
 import { loadBrief, writeBrief } from './brief.js';
 import { BROWSER_PRIORITY_RULE, CODEX_APPROVAL_GUIDANCE, CODEX_TOOL_EXAMPLES, linkedSettingsRule, systemGuidance } from './guidance.js';
 import { assignmentsBlock } from './plan-tasks.js';
-import { readParleyMd } from './parley-md.js';
+import { readGlobalParleyMd, readParleyMd } from './parley-md.js';
 import { readProjectMemory } from './project-memory.js';
 import type { MemoryItem } from './project-memory.js';
 import { leadRecipeBlock } from './recipe-lead.js';
@@ -59,7 +59,7 @@ import { finishSession, linkProviderSession, type MetricsRoots } from './metrics
 import { writeWorkSettings } from './settings-file.js';
 import { CLAUDE_SKILL_BUDGET_ENV, CODEX_SKILL_CATALOG_OVERRIDE, claudeSkillReduction, codexSkillRoute } from './skill-reduction.js';
 import { isPointerText } from './delivery.js';
-import { createWork, deleteSessionFiles, readMap, SharedStateError, updateMap, workPaths } from './store.js';
+import { createWork, deleteSessionFiles, parleyHome, readMap, SharedStateError, updateMap, workPaths } from './store.js';
 import type { LaunchedBy, WorkMap, WorkSession } from './types.js';
 
 /** Чего хочет запуск сверх самой сессии. */
@@ -523,8 +523,11 @@ async function plan(
   if (hasSystemLayer || hasDeveloperLayer) {
     const map = await readMap(projectPath, workId);
     const brief = quiet ? await writtenBrief(projectPath, workId, session.id) : null;
-    const parley = await readParleyMd(projectPath);
-    diagnostics.push(...parley.warnings);
+    const [globalParley, parley] = await Promise.all([
+      readGlobalParleyMd(parleyHome()),
+      readParleyMd(projectPath),
+    ]);
+    diagnostics.push(...globalParley.warnings, ...parley.warnings);
     let memoryItems: MemoryItem[] = [];
     try { memoryItems = (await readProjectMemory(projectPath)).items; }
     catch (error) {
@@ -570,6 +573,7 @@ async function plan(
       // Правило — только там, где у агента есть `browser_open`: канал выдан и сервер MCP доходит шаблоном с `{mcpConfig}`.
       ...(options.agent !== undefined && mcpRoute ? { browser: BROWSER_PRIORITY_RULE } : {}),
       ...(brief === null ? {} : { brief }),
+      globalParleyMd: globalParley.text,
       parleyMd: parley.text,
       memoryItems,
     });

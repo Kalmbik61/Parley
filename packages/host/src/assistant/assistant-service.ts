@@ -27,6 +27,7 @@ import {
   participantLabel,
   pendingCards,
   planRefOf,
+  readGlobalParleyMd,
   readLetters,
   sessionMention,
   WorkNotFoundError,
@@ -539,13 +540,13 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     return conversation;
   }
 
-  async function files(current: Conversation, url: string, gender: AssistantGender): Promise<{ mcpFile: string; promptFile: string }> {
+  async function files(current: Conversation, url: string, systemPrompt: string): Promise<{ mcpFile: string; promptFile: string }> {
     await mkdir(dir, { recursive: true, mode: 0o700 });
     const mcpFile = path.join(dir, 'mcp.json');
     const promptFile = path.join(dir, `prompt-${current.language}.md`);
     await writeFile(mcpFile, assistantMcpJson({ url, token: current.token }), { mode: 0o600 });
     await chmod(mcpFile, 0o600);
-    await writeFile(promptFile, assistantPrompt(current.language, gender), { mode: 0o600 });
+    await writeFile(promptFile, systemPrompt, { mode: 0o600 });
     return { mcpFile, promptFile };
   }
 
@@ -575,7 +576,10 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
     }
     const url = `${base}${ASSISTANT_PATH}`;
     const gender = voiceGender();
-    const { mcpFile, promptFile } = await files(current, url, gender);
+    const globalRules = await readGlobalParleyMd(deps.home);
+    for (const warning of globalRules.warnings) deps.log(warning.message);
+    const systemPrompt = [assistantPrompt(language, gender), globalRules.text].filter(Boolean).join('\n\n');
+    const { mcpFile, promptFile } = await files(current, url, systemPrompt);
     const codex = entry.runner.mcpConfig === 'codex-override';
     // Сессия CLI живёт дольше хода, а род в зеркале сменился: новый род — со следующего ответа, разговор тот же (Р3).
     const voiceNote = current.sessionId !== null && current.gender !== gender ? `[system: voice changed — speak as ${gender}]` : null;
@@ -590,7 +594,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
       {
         prompt,
         mcpConfig: codex ? assistantCodexMcp({ url, token: current.token }) : mcpFile,
-        systemPrompt: assistantPrompt(language, gender),
+        systemPrompt,
         developerInstructions: codexInstructionsFile(promptFile),
         ...(model === null ? {} : { model }),
         ...(current.sessionId === null ? {} : { providerSessionId: current.sessionId }),

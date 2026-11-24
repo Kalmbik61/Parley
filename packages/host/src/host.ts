@@ -863,6 +863,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       launchEnv: assistantLaunchEnv,
       binary: (command) => findRunnerBinary(command, process.env),
       cwd: assistantCwd(parleyHome()),
+      log: (line) => log.warn(line),
       tokens: assistantJobTokens,
       promptOf: (job) => jobPrompt?.(job) ?? job.requestText,
       endpointUrl: () => {

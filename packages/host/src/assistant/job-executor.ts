@@ -15,8 +15,10 @@ import {
   assistantMcpJson,
   classifyAssistantError,
   codexInstructionsFile,
+  parleyHome,
   parseClaudeLine,
   parseCodexLine,
+  readGlobalParleyMd,
   type ProviderEntry,
 } from '@parley/core';
 import { normalizeHumanText } from '@parley/core/assistant';
@@ -68,6 +70,7 @@ export interface JobExecutorDeps {
   /** База маршрута помощника (`<origin>/assistant`); `null` — сервер хуков ещё не поднят. */
   endpointUrl(): string | null;
   run?(spec: TurnSpec, onEvent: Parameters<typeof runTurn>[1]): TurnHandle;
+  log?(line: string): void;
   timeoutMs?: number;
   now?(): number;
 }
@@ -95,14 +98,17 @@ export function createJobExecutor(deps: JobExecutorDeps): (job: Job) => JobRun {
         dir = await mkdtemp(path.join(deps.cwd, 'job-'));
         const mcpFile = path.join(dir, 'mcp.json');
         const promptFile = path.join(dir, 'prompt.md');
+        const globalRules = await readGlobalParleyMd(parleyHome());
+        for (const warning of globalRules.warnings) deps.log?.(warning.message);
+        const systemPrompt = [JOB_PROMPT, globalRules.text].filter(Boolean).join('\n\n');
         await writeFile(mcpFile, assistantMcpJson({ url, token }), { mode: 0o600 });
-        await writeFile(promptFile, JOB_PROMPT, { mode: 0o600 });
+        await writeFile(promptFile, systemPrompt, { mode: 0o600 });
         const command = assistantCommand(
           entry,
           {
             prompt: deps.promptOf?.(job) ?? job.requestText,
             mcpConfig: codex ? assistantCodexMcp({ url, token }) : mcpFile,
-            systemPrompt: JOB_PROMPT,
+            systemPrompt,
             developerInstructions: codexInstructionsFile(promptFile),
           },
           false,

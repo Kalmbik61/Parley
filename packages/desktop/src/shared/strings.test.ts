@@ -34,6 +34,8 @@ const NOTICE_KINDS: NoticeKind[] = [
   'parley-md-created',
   'parley-md-unreadable',
   'parley-md-truncated',
+  'global-parley-md-unreadable',
+  'global-parley-md-truncated',
   'provider-override-gap',
   'memory-truncated',
   'memory-unreadable',
