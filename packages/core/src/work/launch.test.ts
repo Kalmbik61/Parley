@@ -1669,12 +1669,18 @@ describe('common session layer delivery', () => {
   it('Codex carries project rules in launch/new/resume and keeps the resume pointer last', async () => {
     const { workId, sessionId } = await pending('codex');
     await writeFile(path.join(project, 'PARLEY.md'), '# Team\n<!-- template -->\nUse fixtures.');
+    const globalFile = path.join(home, 'PARLEY.md');
+    await writeFile(globalFile, '<!-- hidden global comment -->\nOriginal global rule.');
     const session = await sessionOf(workId, sessionId);
-    for (const plan of [await planLaunch(project, workId, session), await planNew(project, workId, session),
-      await planResume(project, workId, { ...session, providerSessionId: 'codex-thread' }, { prompt: 'INBOX POINTER' })]) {
+    const plans = [await planLaunch(project, workId, session), await planNew(project, workId, session)];
+    await writeFile(globalFile, 'Updated global rule.');
+    plans.push(await planResume(project, workId, { ...session, providerSessionId: 'codex-thread' }, { prompt: 'INBOX POINTER' }));
+    for (const plan of plans) {
       const layer = codexLayer(plan.args);
+      const globalRule = plan.args[0] === 'resume' ? 'Updated global rule.' : 'Original global rule.';
       expect(layer).toContain(`your session is ${sessionId}`);
-      expect(layer).toContain('Team rules of this project (PARLEY.md):\n# Team\n\nUse fixtures.');
+      expect(layer).toContain(`Global user rules (PARLEY.md):\n${globalRule}\n\nTeam rules of this project (PARLEY.md):\n# Team\n\nUse fixtures.`);
+      expect(layer).not.toContain('hidden global comment');
       expect(layer).not.toContain('template');
       expect(layer).not.toContain('прогнать e2e');
       expect(plan.args).toContain('project_doc_fallback_filenames=["CLAUDE.md"]');
@@ -1682,6 +1688,62 @@ describe('common session layer delivery', () => {
       expect(layer).toContain('verify its effects before retrying');
       if (plan.args[0] === 'resume') expect(plan.args.at(-1)).toBe('INBOX POINTER');
     }
+  });
+
+  it.each(['claude', 'glm', 'qwen'])('%s gets global rules in a project without PARLEY.md', async (provider) => {
+    const { workId, sessionId } = await pending(provider);
+    const session = await sessionOf(workId, sessionId);
+    await writeFile(path.join(home, 'PARLEY.md'), 'Use global fixtures.');
+    const plan = await planLaunch(project, workId, session);
+    const layer = plan.args[plan.args.indexOf('--append-system-prompt') + 1];
+    expect(layer).toContain('Global user rules (PARLEY.md):\nUse global fixtures.');
+    expect(layer).not.toContain('Team rules of this project');
+  });
+
+  it('writes the OpenCode session instructions with global Parley rules', async () => {
+    const { workId, sessionId } = await pending('opencode');
+    const session = await sessionOf(workId, sessionId);
+    await writeFile(path.join(home, 'PARLEY.md'), 'Use global fixtures.');
+    const plan = await planLaunch(project, workId, session);
+    const config = JSON.parse(plan.opencodeServer!.env['OPENCODE_CONFIG_CONTENT']!) as { instructions: string[] };
+    expect(await readFile(config.instructions[0]!, 'utf8')).toContain('Global user rules (PARLEY.md):\nUse global fixtures.');
+  });
+
+  it('loads both rule files for Kimi and refreshes them on resume', async () => {
+    const { workId, sessionId } = await pending('kimi');
+    const session = await sessionOf(workId, sessionId);
+    const file = path.join(home, 'PARLEY.md');
+    await writeFile(file, 'Original global rule.');
+    await writeFile(path.join(project, 'PARLEY.md'), 'Project rule.');
+    const fresh = await planNew(project, workId, session);
+    expect(fresh.kimiAcp).toMatchObject({
+      instructions: 'Global user rules (PARLEY.md):\nOriginal global rule.\n\nTeam rules of this project (PARLEY.md):\nProject rule.',
+    });
+    expect(fresh.kimiAcp?.prompt).toBeUndefined();
+    await writeFile(file, 'Updated global rule.');
+    const resumed = await planResume(project, workId, { ...session, providerSessionId: 'kimi-session' });
+    expect(resumed.kimiAcp).toMatchObject({ sessionId: 'kimi-session', instructions: expect.stringContaining('Updated global rule.') });
+  });
+
+  it('reports global rule read failures without dropping project rules', async () => {
+    const { workId, sessionId } = await pending('codex');
+    const session = await sessionOf(workId, sessionId);
+    await mkdir(path.join(home, 'PARLEY.md'));
+    await writeFile(path.join(project, 'PARLEY.md'), 'PROJECT RULES');
+    const plan = await planLaunch(project, workId, session);
+    expect(plan.diagnostics?.map((warning) => warning.code)).toContain('global-parley-md-unreadable');
+    expect(codexLayer(plan.args)).toContain('PROJECT RULES');
+  });
+
+  it('reports truncation of global rules independently of project rules', async () => {
+    const { workId, sessionId } = await pending('codex');
+    const session = await sessionOf(workId, sessionId);
+    await writeFile(path.join(home, 'PARLEY.md'), 'FIRST GLOBAL RULE\n' + 'x'.repeat(40000));
+    await writeFile(path.join(project, 'PARLEY.md'), 'PROJECT RULES');
+    const plan = await planLaunch(project, workId, session);
+    expect(plan.diagnostics?.map((warning) => warning.code)).toContain('global-parley-md-truncated');
+    expect(codexLayer(plan.args)).toContain('FIRST GLOBAL RULE\n[PARLEY.md is cut at 32 KB by Parley]');
+    expect(codexLayer(plan.args)).toContain('PROJECT RULES');
   });
 
   it('quiet Codex gets the existing brief as context, never as a first prompt', async () => {

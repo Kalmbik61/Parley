@@ -30,6 +30,7 @@ interface KimiAcpOptions {
   env: NodeJS.ProcessEnv;
   mcpServers: KimiMcpServer[];
   sessionId?: string;
+  instructions?: string;
   clientVersion?: string;
   elicitationForm?: boolean;
   canShowElicitation?: (request: Extract<KimiRequest, { kind: 'elicitation' }>) => boolean;
@@ -115,6 +116,8 @@ export function createKimiAcp(options: KimiAcpOptions) {
   let changingConfig = false;
   let nextId = 0;
   let sessionId = options.sessionId;
+  let instructions = options.instructions;
+  let embeddedContext = false;
   let connected = false;
   let exitInfo: ExitInfo | undefined;
   let dead: KimiAcpError | undefined;
@@ -397,6 +400,7 @@ export function createKimiAcp(options: KimiAcpOptions) {
   async function connect(): Promise<string> {
     const result = await initialize();
     const capabilities = record(result['agentCapabilities']);
+    embeddedContext = record(capabilities['promptCapabilities'])['embeddedContext'] === true;
     const params = { cwd: options.cwd, mcpServers: options.mcpServers };
     let opened: JsonObject;
     if (sessionId === undefined) {
@@ -435,8 +439,15 @@ export function createKimiAcp(options: KimiAcpOptions) {
     let reason = 'error';
     let failure: KimiAcpError | undefined;
     try {
-      const result = await request('session/prompt', { sessionId, prompt: [{ type: 'text', text }] }, null);
+      const prompt: JsonObject[] = [{ type: 'text', text }];
+      if (instructions !== undefined) {
+        prompt.push(embeddedContext
+          ? { type: 'resource', resource: { uri: 'parley://session-rules', mimeType: 'text/markdown', text: instructions } }
+          : { type: 'text', text: instructions });
+      }
+      const result = await request('session/prompt', { sessionId, prompt }, null);
       reason = typeof result['stopReason'] === 'string' ? result['stopReason'] : 'end_turn';
+      if (reason !== 'cancelled') instructions = undefined;
       return reason;
     } catch (error) {
       failure = error as KimiAcpError;

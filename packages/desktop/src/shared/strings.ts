@@ -3557,6 +3557,8 @@ const NOTICE_DETAIL: Record<NoticeKind, string> = {
   'parley-md-created': 'Parley added PARLEY.md — team rules for your agents',
   'parley-md-unreadable': "PARLEY.md couldn't be read — this session starts without its project rules",
   'parley-md-truncated': 'PARLEY.md was cut at 32 KB — shorten the project rules to include the remainder',
+  'global-parley-md-unreadable': 'could not read the global PARLEY.md in the Parley home folder',
+  'global-parley-md-truncated': 'global PARLEY.md was cut at 32 KB — shorten the global rules to include the remainder',
   'provider-override-gap': "custom Codex runner is missing Parley's instructions setting — restore the default runner to include session rules",
   'role-missing': 'saved role is unavailable — this session starts without role defaults',
   'memory-truncated': 'project memory was cut at 12 KiB — clean up memory.md to include the remaining facts',

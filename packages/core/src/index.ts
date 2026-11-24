@@ -777,7 +777,7 @@ export type {
   ArtifactsWorkspace,
 } from './work/types.js';
 
-export { createParleyMd, ensureParleyMd } from './work/parley-md.js';
+export { createParleyMd, ensureParleyMd, readGlobalParleyMd } from './work/parley-md.js';
 
 export { BUILTIN_ROLES, modelForTier } from './roles/builtin.js';
 export { buildRoleCatalog, listRoleCatalog, resolveRoleChoice, RoleChoiceError } from './roles/catalog.js';

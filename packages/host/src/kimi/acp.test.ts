@@ -8,11 +8,11 @@ const fixture = fileURLToPath(new URL('./fixtures/acp.cjs', import.meta.url));
 const mcpServers = [{ type: 'stdio' as const, name: 'parley', command, args: [], env: [{ name: 'PARLEY_SESSION_ID', value: 's-01' }] }];
 let sessions: ReturnType<typeof createKimiAcp>[] = [];
 
-function start(sessionId?: string, env = {}, binary = command, loadHistory = false) {
+function start(sessionId?: string, env = {}, binary = command, loadHistory = false, instructions?: string) {
   const text: string[] = [];
   const acp = createKimiAcp({
     command: binary, args: [fixture], cwd, env: { ...env, KIMI_FIXTURE_EXPECT_FORMS: '1' }, mcpServers, sessionId,
-    loadHistory, elicitationForm: true,
+    loadHistory, elicitationForm: true, instructions,
     onText: (chunk) => text.push(chunk),
   });
   sessions.push(acp);
@@ -32,6 +32,17 @@ describe('Kimi Code ACP subprocess', () => {
     expect(text.join('')).toBe('Hello Parley');
     expect(await acp.setConfig('mode', 'plan')).toMatchObject([{ id: 'mode', currentValue: 'plan' }]);
     expect(acp.state().config).toMatchObject([{ id: 'mode', currentValue: 'plan' }]);
+  });
+
+  it('attaches launch rules to the first ACP prompt as embedded context', async () => {
+    const { acp, text } = start(undefined, {}, command, false, 'Use global fixtures.');
+    await acp.connect();
+    await acp.prompt('inspect context');
+    expect(JSON.parse(text.shift()!)).toEqual([
+      { type: 'resource', resource: { uri: 'parley://session-rules', mimeType: 'text/markdown', text: 'Use global fixtures.' } },
+    ]);
+    await acp.prompt('inspect context');
+    expect(JSON.parse(text.shift()!)).toEqual([]);
   });
 
   it('shows a bounded CLI validation reason and keeps the confirmed configuration on refusal', async () => {

@@ -8,6 +8,7 @@ All notable changes to Parley are documented in this file.
 
 ### Added
 
+- Agents load your global `PARLEY.md` rules on launch and resume. For project agents, project rules follow the global rules.
 - Kimi Code: install the official standalone CLI from Settings → Providers. Parley also detects the standalone installation when the desktop's PATH does not include it.
 - Kimi Code: **Sign in** opens an interactive login terminal in provider settings and refreshes the sign-in status when it closes.
 - Kimi Code: choose an available model and supported effort when creating a session. Parley applies both choices before the first prompt.

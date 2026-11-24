@@ -266,6 +266,14 @@ const SHUTDOWN_HOOK_MS = 5_000;
 const SHUTDOWN_TOTAL_MS = 15_000;
 /** Сколько `server.close` ждёт, пока клиенты закроются сами, прежде чем их сокеты уничтожаются. */
 const CLIENT_CLOSE_GRACE_MS = 1_000;
+const GLOBAL_PARLEY_MD_TEMPLATE = `# PARLEY.md
+
+<!--
+Add your personal rules below this comment. Parley loads them for agents across
+all your projects. For example, you can set a preferred response language or
+say which checks to run before reporting a change.
+-->
+`;
 
 export async function startHost(options: HostOptions = {}): Promise<RunningHost> {
   const resolvedHome = options.home ?? parleyHome();
@@ -307,6 +315,13 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     throw new HostAlreadyRunning();
   }
   await Promise.all([paths.socket, paths.token].map((file) => rm(file, { force: true })));
+
+  try {
+    await writeFile(path.join(resolvedHome, 'PARLEY.md'), GLOBAL_PARLEY_MD_TEMPLATE, { flag: 'wx', mode: 0o600 });
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== 'EEXIST') log.warn('Could not create the global PARLEY.md', { code });
+  }
 
   // 4. Токен рукопожатия — новый на каждый запуск, права 0600 гарантируются chmod,
   //    а не только `mode` у writeFile (тот режется umask).
@@ -1090,6 +1105,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       launchEnv: assistantLaunchEnv,
       binary: (command) => findRunnerBinary(command, process.env),
       cwd: assistantCwd(parleyHome()),
+      log: (line) => log.warn(line),
       tokens: assistantJobTokens,
       // Флаг автономии — для записи допуска прогона job; читается при выпуске его токена (A2).
       autonomy: async () => (await loadConfig()).config.assistantAutonomy,
