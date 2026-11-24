@@ -664,3 +664,27 @@ describe('deleteCustom и живые сессии (спека подписок 1
     expect(await exists(dir)).toBe(true);
   });
 });
+
+
+it('native Kimi sign-in is wired through auth methods, events and provider-list state', async () => {
+  const previousKimi = process.env.PARLEY_KIMI_BIN;
+  // An executable fixture path, never the installed user CLI.
+  process.env.PARLEY_KIMI_BIN = process.execPath;
+  try {
+    const { spawn, processes } = stubSpawn();
+    const client = await boot({ auth: { spawn, refreshKimi: async () => false } });
+    expect((await rpc(client, 'providers.signIn', { provider: 'kimi' })).at(-1)?.result).toEqual({ ok: true });
+    expect(processes[0]?.launch.args).toEqual(['login']);
+    expect(await item(client, 'kimi')).toMatchObject({ kimiAuth: { signingIn: true } });
+    expect((await rpc(client, 'providers.signInInput', { provider: 'kimi', data: 'device\r' })).at(-1)?.result).toEqual({ ok: true });
+    expect(processes[0]?.written).toEqual(['device\r']);
+    expect((await rpc(client, 'providers.cancelSignIn', { provider: 'kimi' })).at(-1)?.result).toEqual({ ok: true });
+    expect(await eventNamed(client, 'providers.signInExit')).toMatchObject({ provider: 'kimi', signedIn: false });
+    expect(await item(client, 'kimi')).toMatchObject({ kimiAuth: { signingIn: false } });
+    expect((await rpc(client, 'providers.authStatus', { provider: 'kimi' })).at(-1)?.result).toEqual({ signedIn: false, detail: null });
+    expect((await rpc(client, 'providers.signOut', { provider: 'kimi' })).at(-1)?.error).toMatchObject({ code: 'bad_request' });
+  } finally {
+    if (previousKimi === undefined) delete process.env.PARLEY_KIMI_BIN;
+    else process.env.PARLEY_KIMI_BIN = previousKimi;
+  }
+});

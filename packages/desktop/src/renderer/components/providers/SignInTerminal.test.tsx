@@ -6,7 +6,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render } from '@testing-library/react';
 import { createFakeBridge, type FakeBridge } from '../../test-utils/fake-bridge.js';
-import { xtermMock } from '../../test-utils/xterm-mock.js';
+import { xtermMock, lineFromText } from '../../test-utils/xterm-mock.js';
 import { useProvidersStore } from '../../store/providers.js';
 import { SignInTerminal } from './SignInTerminal.js';
 
@@ -133,4 +133,20 @@ describe('SignInTerminal', () => {
     });
     expect(xtermMock.terminals[0]!.disposed).toBe(false);
   });
+});
+
+
+it('opens Kimi device links through the safe external URL handler', async () => {
+  const open = vi.spyOn(bridge.app, 'openExternal').mockResolvedValue(undefined);
+  render(<SignInTerminal provider="kimi" running />);
+  const term = xtermMock.terminals[0]!;
+  const handler = term.initialOptions.linkHandler as { activate(event: MouseEvent, text: string): void };
+  handler.activate(new MouseEvent('click'), 'javascript:alert(1)');
+  expect(open).not.toHaveBeenCalled();
+  handler.activate(new MouseEvent('click'), 'https://example.test/device');
+  expect(open).toHaveBeenCalledWith('https://example.test/device');
+  term.setLines([lineFromText('https://example.test/device')]);
+  const links = await new Promise<import('@xterm/xterm').ILink[] | undefined>((resolve) => term.linkProviders[0]!.provideLinks(1, resolve));
+  links![0]!.activate(new MouseEvent('click'), links![0]!.text);
+  expect(open).toHaveBeenCalledTimes(2);
 });

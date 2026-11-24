@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 const readline = process.getBuiltinModule('node:readline');
-const { existsSync, readFileSync, realpathSync, writeFileSync } = process.getBuiltinModule('node:fs');
+const { appendFileSync, existsSync, readFileSync, realpathSync, writeFileSync } = process.getBuiltinModule('node:fs');
 const { spawn } = process.getBuiltinModule('node:child_process');
 
 async function parleyMap(server) {
@@ -38,11 +38,17 @@ const booleanConfig = process.env.KIMI_FIXTURE_BOOLEAN_CONFIG === '1';
 const modelFile = process.env.KIMI_FIXTURE_MODEL_FILE;
 let model = modelFile && existsSync(modelFile) ? readFileSync(modelFile, 'utf8') : 'alpha';
 let thinking = false;
+let effort = 'low';
+const creationConfig = process.env.KIMI_FIXTURE_CREATION_CONFIG === '1';
+const trace = (event) => { if (process.env.KIMI_FIXTURE_TRACE) appendFileSync(process.env.KIMI_FIXTURE_TRACE, JSON.stringify(event) + '\n'); };
 const config = (currentValue = 'default') => [{
   id: 'mode', name: 'Mode', category: 'mode', type: 'select', currentValue,
   options: [{ value: 'default', name: 'Default' }, { value: 'plan', name: 'Plan' }],
 }, ...(booleanConfig ? [{ id: 'thinking', name: 'Thinking', type: 'boolean', currentValue: thinking }] : []),
-...(modelFile ? [{
+...(creationConfig && !booleanConfig ? [{
+  id: 'thinking', name: 'Thinking', category: 'thought_level', type: 'select', currentValue: effort,
+  options: (model === 'beta' ? ['low', 'high', 'max'] : ['low', 'high']).map((value) => ({ value, name: value })),
+}] : []), ...(modelFile || creationConfig ? [{
   id: 'model', name: 'Model', category: 'model', type: 'select', currentValue: model,
   options: [{ value: 'alpha', name: 'Alpha' }, { value: 'beta', name: 'Beta' }],
 }] : [])];
@@ -73,7 +79,12 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
       forms = params.clientCapabilities.elicitation?.form !== undefined;
       if (params.protocolVersion !== 1 || (process.env.KIMI_FIXTURE_EXPECT_FORMS && params.clientCapabilities.elicitation?.form === undefined)) process.exit(3);
       if (booleanConfig && params.clientCapabilities.session?.configOptions?.boolean === undefined) process.exit(3);
-      return reply(id, { protocolVersion: 1, agentInfo: { name: 'Kimi Code CLI' }, agentCapabilities: { loadSession: true, sessionCapabilities: { resume: {}, list: {} } } });
+      return reply(id, { protocolVersion: 1, ...(process.env.KIMI_FIXTURE_ADVERTISE_LOGIN ? { authMethods: [{ id: 'login', name: 'Login' }] } : {}), agentInfo: { name: 'Kimi Code CLI' }, agentCapabilities: { loadSession: true, sessionCapabilities: { resume: {}, list: {} } } });
+    case 'authenticate':
+      if (params.methodId !== 'login') process.exit(6);
+      return process.env.KIMI_FIXTURE_AUTH_REQUIRED
+        ? write({ id, error: { code: -32000, message: 'Authentication required' } })
+        : reply(id, {});
     case 'session/list':
       return process.env.KIMI_FIXTURE_LOGGED_OUT
         ? write({ id, error: { code: -32000, message: 'Authentication required' } })
@@ -96,15 +107,20 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
       if (process.env.KIMI_FIXTURE_REJECT_CONFIG) {
         return write({ id, error: { code: -32602, message: '\x1b[31mPlan mode is unavailable for this session.\x1b[0m\nInternal detail' } });
       }
+      trace({ configId: params.configId, value: params.value });
+      if (process.env.KIMI_FIXTURE_IGNORE_CONFIG) return reply(id, { configOptions: config(mode) });
       if (params.configId === 'mode') mode = params.value;
       else if (booleanConfig && params.configId === 'thinking' && params.type === 'boolean') thinking = params.value;
-      else if (modelFile && params.configId === 'model' && ['alpha', 'beta'].includes(params.value)) {
+      else if ((modelFile || creationConfig) && params.configId === 'model' && ['alpha', 'beta'].includes(params.value)) {
         model = params.value;
-        writeFileSync(modelFile, model);
-      } else process.exit(5);
+        if (modelFile) writeFileSync(modelFile, model);
+        effort = 'low';
+      } else if (creationConfig && !booleanConfig && params.configId === 'thinking') effort = params.value;
+      else process.exit(5);
       update(params.sessionId, { sessionUpdate: 'config_option_update', configOptions: config(mode) });
       return reply(id, { configOptions: config(mode) });
     case 'session/prompt':
+      trace({ prompt: params.prompt[0].text, model, effort });
       if (params.sessionId !== 'acp-session') process.exit(6);
       prompt = id;
       if (params.prompt[0].text === 'disconnect') process.exit(7);

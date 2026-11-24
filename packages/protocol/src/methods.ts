@@ -535,6 +535,8 @@ export interface Results extends KimiMethodResults, AssistantMethodResults, Voic
        * nothing else; never stored, never a verdict. `null` — not known yet or the probe failed. A host before this field omits it.
        */
       opencodeAuth?: { connected: number } | null;
+      /** Native Kimi supports the embedded provider login terminal. */
+      kimiAuth?: { signingIn: boolean };
     }>;
   };
   'providers.setKey': { keyHint: string };

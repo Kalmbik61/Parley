@@ -12,6 +12,8 @@ import { createFakeBridge } from '../../test-utils/fake-bridge.js';
 import { ProviderCard } from './ProviderCard.js';
 import { ProviderInstall } from './ProviderInstall.js';
 
+vi.mock('./SignInTerminal.js', () => ({ SignInTerminal: () => <div data-sign-in-terminal="" /> }));
+
 type Provider = Result<'providers.list'>['providers'][number];
 const glm = (patch: Partial<Provider> = {}): Provider => ({
   id: 'glm',
@@ -917,4 +919,19 @@ describe('ProviderCard: OpenCode (spec 2026-11-12, 4.9, 4.12)', () => {
     show(glm());
     expect(document.querySelector('[data-opencode-auth]')).toBeNull();
   });
+});
+
+
+it('offers native Kimi sign-in only for an installed CLI on a host advertising the terminal', async () => {
+  const provider: Provider = { id: 'kimi', label: 'Kimi Code', available: false, needs: 'sign-in', version: '2.7.3' };
+  useProvidersStore.setState({ providers: [], signInOutput: {}, signInResult: {} });
+  bridge.setHandler('providers.signIn', () => ({ ok: true }));
+  const { rerender } = render(<ProviderCard provider={provider} onReload={async () => {}} onRestartHost={() => {}} />);
+  expect(screen.queryByText(S.accounts.signIn)).toBeNull();
+  rerender(<ProviderCard provider={{ ...provider, kimiAuth: { signingIn: false } }} onReload={async () => {}} onRestartHost={() => {}} />);
+  expect(screen.queryByText(S.providerCard.kimi.signIn)).toBeNull();
+  fireEvent.click(screen.getByText(S.accounts.signIn));
+  await waitFor(() => expect(bridge.calls.some(call => call.method === 'providers.signIn' && call.params.provider === 'kimi')).toBe(true));
+  rerender(<ProviderCard provider={{ ...provider, needs: 'cli', kimiAuth: { signingIn: false } }} onReload={async () => {}} onRestartHost={() => {}} />);
+  expect(screen.queryByText(S.accounts.signIn)).toBeNull();
 });

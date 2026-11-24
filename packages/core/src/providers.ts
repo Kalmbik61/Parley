@@ -809,8 +809,8 @@ export function assistantCommand(
  */
 export const supportsModel = (entry: ProviderEntry): boolean =>
   // OpenCode's TUI has no model flag: the model goes into the server config document (`opencode-config.ts`, spec 2026-11-12, 4.3),
-  // so the route, not a template item, says the entry takes a model.
-  entry.runner.mcpConfig === 'opencode-server' || (entry.runner.args ?? []).some((item) => item === '{model}');
+  // Kimi also applies choices through ACP config rather than CLI flags. These routes accept a model.
+  entry.runner.mcpConfig === 'kimi-acp' || entry.runner.mcpConfig === 'opencode-server' || (entry.runner.args ?? []).some((item) => item === '{model}');
 
 /**
  * Принимает ли провайдер усилие при запуске — по тому же правилу, что и модель, но `{effort}`
@@ -818,6 +818,7 @@ export const supportsModel = (entry: ProviderEntry): boolean =>
  * любой элемент с ним.
  */
 export const supportsEffort = (entry: ProviderEntry): boolean =>
+  (entry.runner.mcpConfig === 'kimi-acp' && (entry.models ?? []).some((model) => (model.efforts?.length ?? 0) > 0)) ||
   (entry.runner.args ?? []).some((item) => item.includes('{effort}'));
 
 /**
@@ -829,7 +830,7 @@ export const supportsEffort = (entry: ProviderEntry): boolean =>
  */
 export function selectableModels(entry: ProviderEntry): ModelOption[] | null {
   const list = entry.models;
-  if (!supportsModel(entry) || list === undefined || list === null || list.length === 0) {
+  if (!supportsModel(entry) || list === undefined || list === null || (list.length === 0 && entry.runner.mcpConfig !== 'kimi-acp')) {
     return null;
   }
   return list.map((model) =>
@@ -1037,6 +1038,11 @@ export function opencodeModelsFile(): string {
   return path.join(parleyHome(), 'opencode-models.json');
 }
 
+/** Sanitized Kimi CLI model metadata, shared by host, renderer and agent processes. */
+export function kimiModelsFile(): string {
+  return path.join(parleyHome(), 'kimi-models.json');
+}
+
 /**
  * Пределы подписи модели и описания уровня из каталога CLI: длиннее обрезают и разбор `codex debug models` в хосте,
  * и чтение `codexModelsFile` — внешний ввод не растягивает ни окно, ни ответ `get_map`.
@@ -1176,7 +1182,7 @@ export function resolveModelEffort(
   if (!EFFORT_TOKEN.test(effort)) {
     return { error: `effort ${JSON.stringify(effort)} is not a level name${allowed}` };
   }
-  if (!supportsEffort(entry)) return { choice: resolved };
+  if (!supportsEffort(entry) && entry.runner.mcpConfig !== 'kimi-acp') return { choice: resolved };
   const subject = kept ?? 'the default model';
   if (levels === null) return { error: `${subject} has no effort levels; omit effort` };
   if (!levels.some((level) => level.id === effort)) {
@@ -1219,7 +1225,7 @@ const isEffortOption = (value: unknown): value is EffortOption =>
  * запасной список. В запись ложатся только известные поля; подпись модели и описание уровня — не длиннее
  * `MODEL_LABEL_MAX` и `EFFORT_DESCRIPTION_MAX`, подпись уровня — `effortLabel(id)`, а не из файла.
  */
-async function readCodexModels(file: string): Promise<ModelOption[] | null> {
+async function readCodexModels(file: string, allowEmpty = false): Promise<ModelOption[] | null> {
   let data: unknown;
   try {
     data = JSON.parse(await readFile(file, 'utf8'));
@@ -1227,7 +1233,7 @@ async function readCodexModels(file: string): Promise<ModelOption[] | null> {
     return null;
   }
   const models = isRecord(data) ? data['models'] : undefined;
-  if (!isModelList(models) || models.length === 0) return null;
+  if (!isModelList(models) || (!allowEmpty && models.length === 0)) return null;
   const levelsValid = models.every(
     (model) =>
       model.efforts === undefined ||
@@ -1370,8 +1376,9 @@ export async function loadProviders(
   customFile = customProvidersFile(),
   qwenFile = qwenModelsFile(),
   opencodeFile = opencodeModelsFile(),
+  kimiFile = kimiModelsFile(),
 ): Promise<Record<WorkProvider, ProviderEntry>> {
-  const registry = await loadBaseProviders(file, codexFile, qwenFile, opencodeFile);
+  const registry = await loadBaseProviders(file, codexFile, qwenFile, opencodeFile, kimiFile);
   // Свои провайдеры (спека 5.3) и аккаунты подписок (спека подписок 5.2) — после providers.json; занятый id
   // (встроенный или из файла) не перекрывают. Аккаунту нужна запись `claude` уже со всеми переопределениями.
   for (const record of await readCustomProviders(customFile)) {
@@ -1388,6 +1395,7 @@ async function loadBaseProviders(
   codexFile: string,
   qwenFile: string,
   opencodeFile: string,
+  kimiFile: string,
 ): Promise<Record<WorkProvider, ProviderEntry>> {
   const registry: Record<WorkProvider, ProviderEntry> = Object.fromEntries(
     Object.values(PROVIDERS).map((entry) => [
@@ -1414,6 +1422,10 @@ async function loadBaseProviders(
   const opencode = registry['opencode'];
   const opencodeLive = await readCodexModels(opencodeFile);
   if (opencode !== undefined && opencodeLive !== null) registry['opencode'] = { ...opencode, models: opencodeLive };
+
+  const kimi = registry['kimi'];
+  const kimiLive = await readCodexModels(kimiFile, true);
+  if (kimi !== undefined && kimiLive !== null) registry['kimi'] = { ...kimi, models: kimiLive };
 
   let raw: string;
   try {

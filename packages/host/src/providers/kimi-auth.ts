@@ -1,5 +1,6 @@
 import { homedir } from 'node:os';
 import { findRunnerBinary } from '@parley/core';
+import { kimiLoginEnv } from './kimi-env.js';
 import { createKimiAcp } from '../kimi/acp.js';
 
 const REFRESH_MS = 30_000;
@@ -28,7 +29,7 @@ export function createKimiAuth(onChange: () => void) {
       if (stopped || checkedGeneration !== generation) return;
       probe = createKimiAcp({
         command: binary, args: ['acp'], cwd: homedir(),
-        env: { ...process.env, KIMI_CODE_NO_AUTO_UPDATE: '1' }, mcpServers: [],
+        env: kimiLoginEnv(process.env), mcpServers: [],
       });
       const next = await probe.checkAuth();
       if (checkedGeneration === generation) observe(next);
@@ -43,6 +44,14 @@ export function createKimiAuth(onChange: () => void) {
 
   return {
     current: () => status,
+    async refreshNow(command: string): Promise<boolean> {
+      await checking;
+      if (stopped) return false;
+      observe(null);
+      checking = refresh(command, generation);
+      await checking;
+      return status === true;
+    },
     observe,
     refreshIfStale(command: string): void {
       if (stopped || checking !== undefined || Date.now() - lastCheck < REFRESH_MS) return;

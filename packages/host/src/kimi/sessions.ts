@@ -47,7 +47,7 @@ export function createKimiSessions(host: HostContext, hooks: KimiSessionHooks) {
 
   function requireSession(ref: SessionRef): Live {
     const session = live.get(refKey(ref));
-    if (!session?.ready) throw new HostError('not_found', 'Kimi Code session is not running');
+    if (!session?.ready || !session.acp.connected()) throw new HostError('not_found', 'Kimi Code session is not running');
     return session;
   }
 
@@ -143,8 +143,17 @@ export function createKimiSessions(host: HostContext, hooks: KimiSessionHooks) {
 
     try {
       const sessionId = await acp.connect();
+      // 2.7.3 exposes model aliases and thinking levels as select config options.
+      // Read options again after switching model: the supported levels may change.
+      for (const [configId, value] of [['model', launch.model], ['thinking', launch.effort]] as const) {
+        if (value === undefined) continue;
+        await acp.setConfig(configId, value);
+        if (acp.state().config.find((option) => option.id === configId)?.currentValue !== value) {
+          throw new KimiAcpError(`Kimi Code did not apply the selected ${configId}`, 'invalid');
+        }
+      }
       const pid = acp.pid;
-      if (pid === undefined || live.get(key) !== session) throw new KimiAcpError('Kimi Code ACP disconnected', 'disconnected');
+      if (pid === undefined || live.get(key) !== session || !acp.connected()) throw new KimiAcpError('Kimi Code ACP disconnected', 'disconnected');
       hooks.authChanged?.(true);
       flushReplayPrompt();
       if (replayed) output({ kind: 'end', reason: 'end_turn' });
@@ -155,6 +164,10 @@ export function createKimiSessions(host: HostContext, hooks: KimiSessionHooks) {
           write(data) {
             if (!session.ready) return;
             if (data === '\x1b' || data === '\x03') {
+              if (data === '\x03') {
+                session.draft = [];
+                session.draftBytes = 0;
+              }
               acp.cancel();
               return;
             }
@@ -187,7 +200,7 @@ export function createKimiSessions(host: HostContext, hooks: KimiSessionHooks) {
           },
         },
         activate() {
-          if (live.get(key) !== session) return;
+          if (live.get(key) !== session || !acp.connected()) throw new HostError('not_found', 'Kimi Code session is not running');
           session.ready = true;
           for (const event of initialOutput) hooks.output(ref, event);
           initialOutput.length = 0;
@@ -214,7 +227,7 @@ export function createKimiSessions(host: HostContext, hooks: KimiSessionHooks) {
       const clean = sanitizeForSend(text);
       if (session.acp.busy()) return { inserted: false, submitted: false, reason: session.acp.state().requests.length === 0 ? 'busy' : 'blocked' };
       if (!sendNow) return { inserted: false, submitted: false, reason: 'blocked' };
-      if (session.draft.length > 0) return { inserted: false, submitted: false, reason: 'draft' };
+      // ACP sends a separate prompt; it neither submits nor replaces the terminal draft.
       submit(ref, session, clean);
       return { inserted: true, submitted: true, reason: null };
     },

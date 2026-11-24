@@ -146,6 +146,7 @@ export interface MethodDeps {
   cliInstaller?: CliInstaller;
   /** Каталог моделей Codex из пробы CLI: `providers.list` просит его обновиться, когда он устарел; без него — не просит. */
   codexCatalog?: CodexCatalog;
+  kimiCatalog?: import('../providers/kimi-catalog.js').KimiCatalog;
   /** Каталог моделей Qwen Code: `providers.list` просит его обновиться в фоне, когда он устарел; без него — не просит. */
   qwenCatalog?: QwenCatalog;
   opencodeCatalog?: OpencodeCatalog;
@@ -315,7 +316,7 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     'works.rename': worksRename as AnyHandler,
     'works.setStatus': worksSetStatus as AnyHandler,
     'works.setCloseFinished': worksSetCloseFinished as AnyHandler,
-    'providers.list': createProvidersList(deps.providerVersions, deps.limits, deps.glmCheck, deps.codexCatalog, deps.customCheck, deps.auth, deps.cliUpdates, deps.qwenCatalog, deps.opencodeCatalog, deps.opencodeAuth, deps.kimiAuth) as AnyHandler,
+    'providers.list': createProvidersList(deps.providerVersions, deps.limits, deps.glmCheck, deps.codexCatalog, deps.customCheck, deps.auth, deps.cliUpdates, deps.qwenCatalog, deps.opencodeCatalog, deps.opencodeAuth, deps.kimiAuth, deps.kimiCatalog) as AnyHandler,
     'providers.setKey': createProvidersSetKey(deps.limits, deps.glmCheck, deps.customCheck) as AnyHandler,
     'providers.clearKey': createProvidersClearKey(deps.limits, deps.glmCheck, deps.customCheck) as AnyHandler,
     // Метод есть всегда (hello перечисляет все METHODS); без службы проверки пропускать нечего.

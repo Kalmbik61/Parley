@@ -2574,19 +2574,46 @@ describe('OpenCode in the dialog (spec 2026-11-12, 4.8)', () => {
 });
 
 describe('Kimi Code in the dialog', () => {
-  it('launches native Kimi and directs model selection to the active chat', async () => {
-    bridge.setHandler('providers.list', async () => ({ providers: [...PROVIDERS, {
-      id: 'kimi', label: 'Kimi Code', available: true, version: '2.1.1',
-      models: [{ id: 'static-model', label: 'Static model' }],
-    }] }));
+  const nativeKimi = {
+    id: 'kimi', label: 'Kimi Code', available: true, version: '2.7.3', effort: true,
+    models: [
+      { id: 'alpha', label: 'Alpha', efforts: null },
+      { id: 'beta', label: 'Beta', efforts: [{ id: 'low', label: 'Low' }, { id: 'high', label: 'High' }, { id: 'max', label: 'Max' }] },
+    ],
+  };
+
+  beforeEach(() => {
+    bridge.setHandler('providers.list', async () => ({ providers: [...PROVIDERS, nativeKimi] }));
+  });
+
+  it('submits catalog model and effort choices to ordinary session creation', async () => {
     await renderDialog();
     fireEvent.click(providerRadio(0, 'Kimi Code'));
-    expect(screen.getByText(S.providerCard.kimi.chooseInChat)).toBeTruthy();
-    expect(within(rows()[0]!).queryByLabelText('Model')).toBeNull();
+    await chooseOption(modelSelect(0), 'Beta');
+    await chooseOption(effortSelect(0), 'Max');
     fireEvent.click(button('Start session'));
     await waitFor(() => expect(callsOf('sessions.create')).toHaveLength(1));
-    expect(callsOf('sessions.create')[0]).toMatchObject({ provider: 'kimi' });
+    expect(callsOf('sessions.create')[0]).toMatchObject({ provider: 'kimi', model: 'beta', effort: 'max' });
+  });
+
+  it('omits untouched model and effort choices', async () => {
+    await renderDialog();
+    fireEvent.click(providerRadio(0, 'Kimi Code'));
+    fireEvent.click(button('Start session'));
+    await waitFor(() => expect(callsOf('sessions.create')).toHaveLength(1));
     expect(callsOf('sessions.create')[0]).not.toHaveProperty('model');
+    expect(callsOf('sessions.create')[0]).not.toHaveProperty('effort');
+  });
+
+  it('preserves explicit Default and hides effort for a model without levels', async () => {
+    await renderDialog();
+    fireEvent.click(providerRadio(0, 'Kimi Code'));
+    await chooseOption(modelSelect(0), 'Alpha');
+    expect(within(rows()[0]!).queryByLabelText('Effort')).toBeNull();
+    await chooseOption(modelSelect(0), 'Default');
+    fireEvent.click(button('Start session'));
+    await waitFor(() => expect(callsOf('sessions.create')).toHaveLength(1));
+    expect(callsOf('sessions.create')[0]).toMatchObject({ provider: 'kimi', model: null });
     expect(callsOf('sessions.create')[0]).not.toHaveProperty('effort');
   });
 });

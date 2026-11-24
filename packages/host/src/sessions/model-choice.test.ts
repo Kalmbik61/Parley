@@ -33,13 +33,21 @@ function builtInList(entry: typeof PROVIDERS.claude): Array<{ id: string; label:
 }
 
 describe('resolveModelChoice: модель из диалога запуска против списка провайдера', () => {
-  it('оставляет модель и effort Kimi Code настройкам живой ACP-сессии', async () => {
+  it('проверяет Kimi по тому же каталогу, что и окно', async () => {
+    await writeProviders({ kimi: { models: [
+      { id: 'beta', label: 'Beta', efforts: ['max'] },
+      { id: 'alpha', label: 'Alpha', efforts: null },
+    ] } });
     await expect(resolveModelChoice('kimi', '')).resolves.toEqual({});
-    for (const [model, effort] of [['kimi-a', undefined], [undefined, 'high']] as const) {
-      await expect(resolveModelChoice('kimi', model, effort)).rejects.toMatchObject({
-        code: 'bad_request',
-        data: { reason: 'kimi-config-in-chat' },
-      });
+    await expect(resolveModelChoice('kimi', 'beta', 'max')).resolves.toEqual({ model: 'beta', effort: 'max' });
+    await expect(resolveModelChoice('kimi', 'stale')).rejects.toMatchObject({ code: 'bad_request' });
+    await expect(resolveModelChoice('kimi', 'alpha', 'max')).rejects.toMatchObject({ code: 'bad_request' });
+  });
+
+  it('не теряет явный effort Kimi, если в каталоге нет моделей с уровнями', async () => {
+    for (const models of [[], [{ id: 'alpha', label: 'Alpha', efforts: null }]]) {
+      await writeProviders({ kimi: { models } });
+      await expect(resolveModelChoice('kimi', undefined, 'high')).rejects.toMatchObject({ code: 'bad_request' });
     }
   });
 

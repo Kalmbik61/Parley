@@ -180,6 +180,8 @@ export interface LaunchPlan {
   /** Kimi Code owns the session id and receives the Parley MCP server over ACP. */
   kimiAcp?: {
     sessionId?: string;
+    model?: string;
+    effort?: string;
     mcpServers: Array<{ type: 'stdio'; name: string; command: string; args: string[]; env: Array<{ name: string; value: string }> }>;
     prompt?: string;
   };
@@ -732,6 +734,9 @@ async function plan(
 
   const kimiAcp: LaunchPlan['kimiAcp'] = kimi ? {
     ...(resuming && subs.providerSessionId !== undefined ? { sessionId: subs.providerSessionId } : {}),
+    // ACP restores chat choices on resume; creation defaults must not overwrite them.
+    ...(!resuming && subs.model !== undefined ? { model: subs.model } : {}),
+    ...(!resuming && subs.effort !== undefined ? { effort: subs.effort } : {}),
     mcpServers: Object.entries(mcpConfig(params).mcpServers).map(([name, server]) => ({
       ...server, name, env: Object.entries(server.env).map(([name, value]) => ({ name, value })),
     })),

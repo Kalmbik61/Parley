@@ -108,6 +108,31 @@ it('uses ordinary session and Chat RPC, calls the real Parley MCP, then cancels 
   });
 }, 15_000);
 
+it('applies catalog choices before its first prompt and restores subsequent chat changes on resume', async () => {
+  vi.stubEnv('KIMI_FIXTURE_CREATION_CONFIG', '1');
+  const projectPath = await setup();
+  const traceFile = path.join(home!, 'startup-trace');
+  vi.stubEnv('KIMI_FIXTURE_TRACE', traceFile);
+  await writeFile(path.join(home!, 'providers.json'), JSON.stringify({ kimi: { models: [
+    { id: 'alpha', label: 'Alpha', efforts: ['low', 'high'] },
+    { id: 'beta', label: 'Beta', efforts: ['low', 'high', 'max'] },
+  ] } }));
+  const { ref } = await call('sessions.create', { ...input(projectPath), task: 'hello', model: 'beta', effort: 'max' });
+  await expect.poll(() => readFile(traceFile, 'utf8')).toContain('"prompt"');
+  const trace = (await readFile(traceFile, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
+  expect(trace.slice(0, 2)).toEqual([{ configId: 'model', value: 'beta' }, { configId: 'thinking', value: 'max' }]);
+  expect(trace[2]).toMatchObject({ prompt: expect.stringContaining('hello'), model: 'beta', effort: 'max' });
+  expect(await session(ref)).toMatchObject({ model: 'beta', effort: 'max' });
+  await expectReply(ref, 'Hello Parley');
+  expect(await call('kimi.setConfig', { ref, configId: 'model', value: 'alpha' })).toMatchObject({
+    config: expect.arrayContaining([expect.objectContaining({ id: 'model', currentValue: 'alpha' })]),
+  });
+  await call('pty.send', { ref, text: 'disconnect', submit: true });
+  await expect.poll(() => session(ref)).toMatchObject({ lifecycle: 'sleeping' });
+  await call('sessions.resume', { ref });
+  expect((await call('kimi.getState', { ref })).config).toContainEqual(expect.objectContaining({ id: 'model', currentValue: 'alpha' }));
+}, 15_000);
+
 it('distinguishes sign-in required and a missing CLI on ordinary create', async () => {
   const projectPath = await setup(true, true);
   expect((await request('sessions.create', input(projectPath))).error).toMatchObject({ data: { reason: 'kimi-sign-in' } });
@@ -215,4 +240,40 @@ it('answers the correct request when two live cards use the same form key', asyn
   expect((await questions()).map((item) => item.id)).toEqual([first!.id]);
   expect(await decide(first!.id, 'First answer')).toEqual({ applied: true, state: 'answered' });
   await expectReply(ref, 'First answer / Second answer');
+}, 15_000);
+
+
+it('recovers from idle child exit before the first send without replaying the unsent message', async () => {
+  const projectPath = await setup();
+  const { ref } = await call('sessions.create', input(projectPath));
+  const created = await session(ref);
+  expect(created?.pid).toBeTypeOf('number');
+  process.kill(created!.pid!, 'SIGKILL');
+  await expect.poll(() => session(ref)).toMatchObject({ lifecycle: 'sleeping' });
+  expect((await request('pty.send', { ref, text: 'проверка', submit: true })).error).toMatchObject({ code: 'not_found' });
+  expect((await call('feed.snapshot', { ref })).items).not.toContainEqual(expect.objectContaining({ kind: 'prompt', text: 'проверка' }));
+  await call('sessions.resume', { ref });
+  expect((await call('feed.snapshot', { ref })).items).not.toContainEqual(expect.objectContaining({ kind: 'prompt', text: 'проверка' }));
+  expect(await call('pty.send', { ref, text: 'проверка', submit: true })).toMatchObject({ submitted: true });
+  await expectReply(ref, 'Hello Parley');
+}, 15_000);
+
+
+it('delivers a Cyrillic Chat prompt once while preserving the raw terminal draft', async () => {
+  const projectPath = await setup();
+  const traceFile = path.join(home!, 'draft-trace');
+  vi.stubEnv('KIMI_FIXTURE_TRACE', traceFile);
+  const { ref } = await call('sessions.create', input(projectPath));
+  client!.send({ method: 'pty.input', params: { ref, data: 'unfinished terminal draft' } });
+  expect(await call('pty.send', { ref, text: 'привет! тест', submit: true })).toEqual({
+    inserted: true, submitted: true, reason: null,
+  });
+  await expectReply(ref, 'Hello Parley');
+  const trace = async () => (await readFile(traceFile, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
+  expect(await trace()).toEqual([{ prompt: 'привет! тест', model: 'alpha', effort: 'low' }]);
+  client!.send({ method: 'pty.input', params: { ref, data: '\r' } });
+  await expect.poll(trace).toEqual([
+    { prompt: 'привет! тест', model: 'alpha', effort: 'low' },
+    { prompt: 'unfinished terminal draft', model: 'alpha', effort: 'low' },
+  ]);
 }, 15_000);

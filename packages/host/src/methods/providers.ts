@@ -109,11 +109,13 @@ export function createProvidersList(
   opencodeCatalog?: Pick<OpencodeCatalog, 'refreshIfStale'>,
   opencodeAuth?: Pick<OpencodeAuthHint, 'current' | 'refreshIfStale'>,
   kimiAuth?: Pick<KimiAuth, 'current' | 'refreshIfStale'>,
+  kimiCatalog?: Pick<import('../providers/kimi-catalog.js').KimiCatalog, 'refreshIfStale'>,
 ): Handler<'providers.list'> {
   return async () => {
     catalog?.refreshIfStale();
     qwenCatalog?.refreshIfStale();
     opencodeCatalog?.refreshIfStale();
+    kimiCatalog?.refreshIfStale();
     const registry = await loadProviders();
     await versions?.ready;
     const probes = new Map<string, Promise<string | null>>();
@@ -167,6 +169,7 @@ export function createProvidersList(
           argsOverridden: entry.argsOverridden === true,
           ...(check === undefined ? {} : { check }),
           ...(custom === undefined ? {} : { custom }),
+          ...(entry.id === 'kimi' ? { kimiAuth: { signingIn: auth?.signingIn(entry.id) ?? false } } : {}),
           // Hints only, from `qwenAuthHints`: presence and two non-secret strings (spec 2026-11-11, 3.6).
           ...(entry.family === 'qwen' && entry.custom === undefined ? { qwenAuth: await qwenAuthHints() } : {}),
           // A count from `opencode auth list` (spec 2026-11-12, 4.12), asked for an installed 2.x only; the answer never waits for the probe.

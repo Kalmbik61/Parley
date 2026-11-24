@@ -13,6 +13,7 @@ import { Input } from '../../ui/input.js';
 import { AgentIcon } from '../AgentIcon.js';
 import { CheckLine, knownReason, maskedHint, newerCheck } from './check-line.js';
 import { accountOf } from './custom-provider-draft.js';
+import { NativeKimiSignIn } from './NativeKimiSignIn.js';
 import { ProviderInstall } from './ProviderInstall.js';
 import { GLM_KEY_URL, installableId, PROVIDER_INSTALL } from './provider-install.js';
 
@@ -401,10 +402,13 @@ export function ProviderCard({
               </Button>
             </>
           ) : null}
-          {provider.needs === 'sign-in' ? (
+          {provider.needs === 'sign-in' && provider.kimiAuth === undefined ? (
             <p className="text-xs text-muted-foreground">{S.providerCard.kimi.signIn}</p>
           ) : null}
         </div>
+      ) : null}
+      {provider.id === 'kimi' && provider.kimiAuth !== undefined && provider.needs !== 'cli' && (!provider.available || provider.kimiAuth.signingIn) ? (
+        <NativeKimiSignIn running={provider.kimiAuth.signingIn} onReload={onReload} />
       ) : null}
       {provider.id === 'opencode' && provider.available ? (
         // OpenCode signs in inside its own TUI: the card shows how many integrations `opencode auth list` reports, never a verdict.

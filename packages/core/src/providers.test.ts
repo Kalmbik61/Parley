@@ -1959,6 +1959,20 @@ describe('resolveModelEffort: пара модели и effort для окна и
     });
   });
 
+  it('Kimi не теряет явный effort, когда каталог не содержит уровней', () => {
+    for (const models of [[], [{ id: 'plain', label: 'Plain', efforts: null }]]) {
+      const kimi: ProviderEntry = { ...PROVIDERS.kimi, models };
+      expect(resolveModelEffort(kimi, { effort: 'high' })).toEqual({
+        error: 'the default model has no effort levels; omit effort',
+      });
+      expect(resolveModelEffort(kimi, {})).toEqual({ choice: {} });
+    }
+    const kimi: ProviderEntry = { ...PROVIDERS.kimi, models: [{ id: 'plain', label: 'Plain', efforts: null }] };
+    expect(resolveModelEffort(kimi, { model: 'plain', effort: 'high' })).toEqual({
+      error: 'plain has no effort levels; omit effort',
+    });
+  });
+
   it('уровень не из списка модели — ошибка с её уровнями; у «Default» — с общими', () => {
     expect(resolveModelEffort(PROVIDERS.codex, { model: 'gpt-6-luna', effort: 'ultra' })).toEqual({
       error: 'ultra is not a level of gpt-6-luna; allowed: low, medium, high, xhigh, max',
