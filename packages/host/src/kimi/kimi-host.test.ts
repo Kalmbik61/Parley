@@ -29,13 +29,19 @@ async function call<M extends MethodName>(method: M, params: Params<M>): Promise
   return response.result as Result<M>;
 }
 
-async function setup(loggedOut = false): Promise<string> {
+async function setup(loggedOut = false, standalone = false): Promise<string> {
   home = await tempHome();
-  const binary = path.join(home, 'kimi');
+  const binary = path.join(home, standalone ? '.kimi-code/bin/kimi' : 'kimi');
+  if (standalone) await mkdir(path.dirname(binary), { recursive: true });
   const project = path.join(home, 'project');
   await mkdir(project);
   await writeFile(binary, await readFile(new URL('./fixtures/acp.cjs', import.meta.url)), { mode: 0o755 });
-  vi.stubEnv('PARLEY_KIMI_BIN', binary);
+  vi.stubEnv('PARLEY_KIMI_BIN', standalone ? undefined : binary);
+  if (standalone) {
+    vi.stubEnv('HARNAS_KIMI_BIN', undefined);
+    vi.stubEnv('HOME', home);
+    vi.stubEnv('PATH', path.dirname(process.execPath));
+  }
   vi.stubEnv('KIMI_FIXTURE_MODEL_FILE', path.join(home, 'fixture-model'));
   if (loggedOut) vi.stubEnv('KIMI_FIXTURE_LOGGED_OUT', '1');
   running = await startHost({ home });
@@ -103,11 +109,12 @@ it('uses ordinary session and Chat RPC, calls the real Parley MCP, then cancels 
 }, 15_000);
 
 it('distinguishes sign-in required and a missing CLI on ordinary create', async () => {
-  const projectPath = await setup(true);
+  const projectPath = await setup(true, true);
   expect((await request('sessions.create', input(projectPath))).error).toMatchObject({ data: { reason: 'kimi-sign-in' } });
   expect((await call('providers.list', {})).providers.find(({ id }) => id === 'kimi')).toMatchObject({ available: false, needs: 'sign-in' });
   vi.stubEnv('PARLEY_KIMI_BIN', '/no/such/kimi');
   expect((await request('sessions.create', input(projectPath))).error).toMatchObject({ data: { reason: 'kimi-missing-cli' } });
+  expect((await call('providers.list', {})).providers.find(({ id }) => id === 'kimi')).toMatchObject({ available: false, needs: 'cli' });
 }, 15_000);
 
 async function pendingCard(ref: SessionRef, kind: 'permission' | 'question') {

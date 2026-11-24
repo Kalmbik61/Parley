@@ -1,6 +1,6 @@
 /**
  * Установка CLI провайдера из Parley (спека 2026-11-11, §4.2). Хост скачивает установщик вендора по константному
- * HTTPS-адресу из таблицы `CLI_TOOLS` (редирект — только на HTTPS-хост из списка этого CLI, тело до 1 МБ, 15 с), кладёт
+ * HTTPS-адресу из таблицы `CLI_INSTALL_TOOLS` (редирект — только на HTTPS-хост из списка этого CLI, тело до 1 МБ, 15 с), кладёт
  * его в свежую папку `0700` и запускает константным argv без shell: `[интерпретатор…, файл, …константные аргументы]`.
  * Ничего из запроса и настроек в argv не попадает. Окружение — `installerEnv`, процесс — общий раннер с флагом
  * занятости на CLI (его делит обновление), 10 мин, группа убивается по таймауту и при остановке хоста. После выхода
@@ -14,7 +14,7 @@ import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import https from 'node:https';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { BinaryNotFoundError, CLI_TOOLS, resolveRunnerBinary, type CliInstallPlan, type CliTool } from '@parley/core';
+import { BinaryNotFoundError, CLI_INSTALL_TOOLS, resolveRunnerBinary, type CliInstallPlan, type CliInstallTool } from '@parley/core';
 import type { Log } from '../log.js';
 import { cliEnv, createCliRun, installerEnv, type CliRun } from './cli-run.js';
 import type { CliUpdates } from './updates.js';
@@ -29,11 +29,12 @@ export const INSTALLER_MAX_BYTES = 1024 * 1024;
 const MAX_REDIRECTS = 5;
 
 /** Команды для ручной установки на Windows: Install из Parley там только показывает команду. */
-const WINDOWS_COMMANDS: Readonly<Record<CliTool, string>> = {
+const WINDOWS_COMMANDS: Readonly<Record<CliInstallTool, string>> = {
   claude: 'irm https://claude.ai/install.ps1 | iex',
   codex: 'npm install -g @openai/codex',
   qwen: 'npm install -g @qwen-code/qwen-code@latest',
   opencode: 'npm install -g @opencode/cli@latest',
+  kimi: 'irm https://code.kimi.com/kimi-code/install.ps1 | iex',
 };
 
 export interface CliInstallOutcome {
@@ -55,7 +56,7 @@ export interface CliInstallOutcome {
 export type CliInstallResult = { state: 'busy' } | CliInstallOutcome;
 
 export interface CliInstaller {
-  install(command: CliTool, who: string): Promise<CliInstallResult>;
+  install(command: CliInstallTool, who: string): Promise<CliInstallResult>;
 }
 
 export interface CliInstallerOptions {
@@ -151,8 +152,8 @@ export function createCliInstaller(options: CliInstallerOptions): CliInstaller {
   const smokeTimeoutMs = options.smokeTimeoutMs ?? CLI_INSTALL_SMOKE_TIMEOUT_MS;
   const source = (): NodeJS.ProcessEnv => options.env ?? process.env;
 
-  const install = async (command: CliTool, who: string): Promise<CliInstallOutcome> => {
-    const descriptor = CLI_TOOLS[command];
+  const install = async (command: CliInstallTool, who: string): Promise<CliInstallOutcome> => {
+    const descriptor = CLI_INSTALL_TOOLS[command];
     const plan = descriptor.install;
     const manualCommand = manualInstallCommand(plan);
     const fail = (error: string, output = '', extra: Partial<CliInstallOutcome> = {}): CliInstallOutcome => {
@@ -203,7 +204,7 @@ export function createCliInstaller(options: CliInstallerOptions): CliInstaller {
     const check = await cli.exec(found.path, descriptor.smokeArgs, cliEnv(source()), smokeTimeoutMs);
     const smoke = { ok: check.code === 0 && !check.timedOut, output: check.output };
     // Способ установки (`method`) пишет эта перепроверка: ждём её до рассылки `providers.changed`, но недолго.
-    if (options.updates !== undefined) {
+    if (options.updates !== undefined && command !== 'kimi') {
       const recheck = options.updates.checkOne(command, { force: true }).catch((error: unknown) => {
         options.log.warn('CLI latest re-check after install failed', { command, error: String(error) });
       });
@@ -223,7 +224,7 @@ export function createCliInstaller(options: CliInstallerOptions): CliInstaller {
 
   return {
     install(command, who) {
-      if (!Object.hasOwn(CLI_TOOLS, command)) return Promise.reject(new Error(`unsupported command: ${command}`));
+      if (!Object.hasOwn(CLI_INSTALL_TOOLS, command)) return Promise.reject(new Error(`unsupported command: ${command}`));
       if (platform === 'win32') {
         options.log.info('provider CLI install', { who, command, ok: false, error: 'windows' });
         return Promise.resolve({

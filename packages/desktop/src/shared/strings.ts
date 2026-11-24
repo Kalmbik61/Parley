@@ -832,10 +832,9 @@ export const S = {
   providerCard: {
     /** Qwen Code card (spec 2026-11-11, 3.6): sign-in hints, never a verdict. */
     kimi: {
-      missingCli: 'Install the Node-based Kimi Code CLI and make sure kimi is on the host’s PATH.',
-      signIn: 'Run kimi login in a terminal on the host, then refresh the provider.',
+      missingCli: 'Install the official Kimi Code CLI on the host, then check again.',
+      signIn: 'Run kimi login in a terminal on the host, then check again.',
       chooseInChat: 'Choose the model, thinking level, and mode in the active Kimi Code chat.',
-      refresh: 'Refresh connection',
     },
     qwen: {
       hint: {
