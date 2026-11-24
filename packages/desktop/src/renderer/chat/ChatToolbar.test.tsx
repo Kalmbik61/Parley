@@ -8,6 +8,7 @@ import { EMPTY_HISTORY } from '../layout/history.js';
 import { useLayoutStore } from '../layout/store.js';
 import { emptyLayout, openTab } from '../layout/tree.js';
 import { useWorksStore } from '../store/works.js';
+import { BRANCH_COLOR_CLASS, branchColors } from '../lib/branch-colors.js';
 import { makeSession, makeSwarm, makeSwarmMember, makeWork } from '../test-utils/work-fixtures.js';
 import { ChatToolbar } from './ChatToolbar.js';
 
@@ -102,6 +103,78 @@ describe('ChatToolbar — где человек: тег и ярлык сесси
     const title = screen.getByTestId('chat-toolbar-title');
     expect(title.textContent).toBe('');
     expect(title.hasAttribute('title')).toBe(false);
+  });
+});
+
+describe('ChatToolbar — ветка сессии в шапке', () => {
+  const KEY = '/tmp/proj w-01';
+  const PROJECT = '/tmp/proj';
+  const wt = (id: string, base = 'main') => ({ path: `/tmp/${id}`, branch: `parley/w-01/${id}`, base, createdAt: null });
+
+  function setUp(sessions: ReturnType<typeof makeSession>[], branches: Record<string, string | null> = {}): void {
+    useWorksStore.setState({ entries: [makeWork('w-01', { projectPath: PROJECT, sessions })], branches, loading: false, error: null });
+    const layout = openTab(emptyLayout(), { kind: 'terminal', id: 'terminal:s-01', sessionId: 's-01' }, 'active');
+    useLayoutStore.setState({ activeWorkKey: KEY, layouts: { [KEY]: layout }, hydrated: { [KEY]: true }, pending: {}, history: EMPTY_HISTORY, mru: {}, navigating: false });
+  }
+  const show = (view: 'chat' | 'terminal' = 'chat') => render(<ChatToolbar workKey={KEY} tabId="terminal:s-01" view={view} available provider="claude" />);
+
+  it('сессия в папке проекта: живая ветка проекта, тултип «Project folder · …», в обоих видах', () => {
+    setUp([makeSession('s-01', 'lead')], { [PROJECT]: 'feat/x' });
+    const { rerender } = show();
+    const chip = screen.getByTestId('chat-branch');
+    expect(chip.textContent).toBe('feat/x');
+    expect(chip.title).toBe('Project folder · feat/x');
+    expect(chip.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true');
+    expect(chip.querySelector('.font-mono')?.className).toContain('truncate');
+    expect(chip.className).toContain('max-w-[30%]');
+    expect(chip.className).toContain('shrink');
+    rerender(<ChatToolbar workKey={KEY} tabId="terminal:s-01" view="terminal" available provider="claude" />);
+    expect(screen.getByTestId('chat-branch').textContent).toBe('feat/x');
+  });
+
+  it('чип стоит перед плашкой с подписью', () => {
+    setUp([makeSession('s-01', 'lead')], { [PROJECT]: 'feat/x' });
+    show();
+    const position = screen.getByTestId('chat-branch').compareDocumentPosition(screen.getByTestId('chat-toolbar-plate'));
+    expect(position & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('worktree-сессия: её ветка и тултип с базой', () => {
+    setUp([makeSession('s-01', 'lead', { worktree: wt('s-01') })], { [PROJECT]: 'feat/x' });
+    show();
+    const chip = screen.getByTestId('chat-branch');
+    expect(chip.textContent).toBe('parley/w-01/s-01');
+    expect(chip.title).toBe('Own worktree · parley/w-01/s-01 ← main');
+    expect(screen.getByTestId('chat-branch-icon').getAttribute('class')).not.toContain('text-branch-');
+  });
+
+  it('нет worktree и ветка проекта неизвестна — чипа нет', () => {
+    setUp([makeSession('s-01', 'lead')], { [PROJECT]: null });
+    show();
+    expect(screen.queryByTestId('chat-branch')).toBeNull();
+  });
+
+  it('клон: ветка клона и тултип «Own clone · …»', () => {
+    setUp([makeSession('s-01', 'lead', { workspace: { kind: 'clone', path: '/tmp/clone', branch: 'clone/b', sha: 'abc' } })], { [PROJECT]: 'feat/x' });
+    show();
+    const chip = screen.getByTestId('chat-branch');
+    expect(chip.textContent).toBe('clone/b');
+    expect(chip.title).toBe('Own clone · clone/b');
+  });
+
+  it('папка артефактов — чипа нет', () => {
+    setUp([makeSession('s-01', 'lead', { workspace: { kind: 'artifacts', path: '/tmp/art' } })], { [PROJECT]: 'feat/x' });
+    show();
+    expect(screen.queryByTestId('chat-branch')).toBeNull();
+  });
+
+  it('две открытые worktree-сессии с общей базой: значок чипа красится слотом из branchColors', () => {
+    const sessions = [makeSession('s-01', 'a', { worktree: wt('s-01') }), makeSession('s-02', 'b', { worktree: wt('s-02') })];
+    setUp(sessions);
+    show();
+    const slot = branchColors(sessions).get('main');
+    expect(slot).toBe(2);
+    expect(screen.getByTestId('chat-branch-icon').getAttribute('class')).toContain(BRANCH_COLOR_CLASS[slot ?? 0]);
   });
 });
 

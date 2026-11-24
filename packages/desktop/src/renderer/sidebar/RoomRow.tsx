@@ -12,7 +12,9 @@
  * решение → `needs you` → `@you` → значок. Шеврон в кнопке 16px (`Show agents` / `Hide agents`), время последнего
  * события. Название жирное, когда комната выбрана, ждёт человека или в ней назвали человека. Свёрнутая —
  * значки провайдеров участников (отступ 37, зазор 14): значок 14 и в правом нижнем углу кружок-счётчик, обведённый
- * цветом фона карточки; число — ВСЕ агенты провайдера в комнате, не только запущенные (решение 7), тултип
+ * цветом фона карточки; число — агенты провайдера, которых развёрнутая комната показывает строками (`members`): не только запущенные
+ * (решение 7), закрытых среди них нет (они в блоке «Closed sessions»), так свёрнутая и развёрнутая
+ * комнаты не расходятся; тултип
  * `2 Claude Code agents`. «В комнате» — те, кого сайдбар в неё поставил (`CardRoomRow.sessions`): сессия старой карты,
  * числящаяся в нескольких комнатах, считается только в самой ранней (решение 4). Развёрнутая — строки участников
  * (`SessionRow` с `inRoom`), `★` у ведущего.
@@ -58,6 +60,7 @@ import { roomAwaitsDecision, sessionNeed } from '../attention/derive.js';
 import { AgentIcon } from '../components/AgentIcon.js';
 import { AgentStateDot } from '../components/AgentStateDot.js';
 import { useLayoutStore } from '../layout/store.js';
+import { sessionBranchColor } from '../lib/branch-colors.js';
 import { cn } from '../lib/cn.js';
 import { liveContext } from '../lib/context-format.js';
 import { sessionRowLabel, sessionTag } from '../lib/participant.js';
@@ -100,6 +103,8 @@ export interface RoomRowProps {
   onOpen(): void;
   /** Колбэк строки участника — один на сессию на всё время жизни карточки (`SessionRow` — `memo`). */
   openerFor(sessionId: string): () => void;
+  /** Цвета значков веток работы (`lib/branch-colors.ts`); нет — значки участников вторичного цвета. */
+  branchColors?: ReadonlyMap<string, number>;
 }
 
 interface ProviderBadge {
@@ -140,6 +145,7 @@ export function RoomRow({
   selectedSessionId,
   onOpen,
   openerFor,
+  branchColors,
 }: RoomRowProps): JSX.Element {
   const { room } = row;
   const stateKey = roomKey(workKey, room.id);
@@ -186,7 +192,7 @@ export function RoomRow({
     row.lead === null ? null : sessionTag(row.lead),
     row.sessions.map((session) => sessionTag(session.id)),
   );
-  const badges = providerBadges(row.sessions, providers);
+  const badges = providerBadges(row.members, providers);
   // Обводка счётчика — цвет фона карточки, чтобы кружок читался поверх значка (активная карточка — `neutral-100`).
   const ring = active ? 'shadow-[0_0_0_1.5px_var(--color-neutral-100)]' : 'shadow-[0_0_0_1.5px_var(--color-surface)]';
 
@@ -332,6 +338,7 @@ export function RoomRow({
               // `roomId` нужен только для «Make lead»; в архивную комнату хост ведущего не пускает (`requireOpenRoom`).
               {...(row.archived ? {} : { roomId: room.id })}
               lead={session.id === row.lead}
+              {...(branchColors === undefined ? {} : { branchColor: sessionBranchColor(branchColors, session) })}
             />
           ))}
         </div>

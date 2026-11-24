@@ -22,7 +22,7 @@ import { accountOf } from '../providers/custom-provider-draft.js';
 import { ProviderCard } from '../providers/ProviderCard.js';
 import { ProviderUpdateRow } from '../providers/ProviderUpdateRow.js';
 
-const CORE_IDS = ['claude', 'codex', 'glm'] as const;
+const CORE_IDS = ['claude', 'codex', 'glm', 'qwen', 'opencode'] as const;
 
 export function ProvidersSettings(): JSX.Element {
   const providers = useProvidersStore((state) => state.providers);
@@ -36,9 +36,11 @@ export function ProvidersSettings(): JSX.Element {
   }, [requested]);
 
   const customs = providers.filter((provider) => provider.custom != null);
+  const kimi = providers.find((provider) => provider.id === 'kimi');
   const pills = [
     ...CORE_IDS.map((id) => providers.find((provider) => provider.id === id) ??
       { id, label: providerName(id, id), available: false, version: null, limits: null }),
+    ...(kimi === undefined ? [] : [kimi]),
     ...customs,
   ];
   const current = selected === 'new' ? undefined : pills.find((provider) => provider.id === selected);
@@ -81,8 +83,8 @@ export function ProvidersSettings(): JSX.Element {
           <span>{S.statusBar.addProvider}</span>
         </button>
       </div>
-      {/* GLM и свои провайдеры делят CLI `claude`: строка обновления только у самих Claude Code и Codex. */}
-      {current !== undefined && current.custom == null && (current.id === 'claude' || current.id === 'codex') ?
+      {/* GLM и свои провайдеры делят CLI `claude`: строка обновления только у самих Claude Code, Codex, Qwen Code и OpenCode. */}
+      {current !== undefined && current.custom == null && (current.id === 'claude' || current.id === 'codex' || current.id === 'qwen' || current.id === 'opencode') ?
         <ProviderUpdateRow key={current.id} provider={current} onReload={reload} /> : null}
       {current !== undefined && current.custom == null ?
         <ProviderCard provider={current} onReload={reload} onRestartHost={() => useUiStore.getState().confirmRestartHost()} /> :

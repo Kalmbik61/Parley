@@ -8,8 +8,11 @@
  * Опроса нет: пересчёт идёт по событиям наблюдателей (журнал хуков, лог
  * провайдера, список работ), по одному таймеру на сессию — на момент, когда
  * истечёт порог тишины, если сессия сейчас `working`, — и по дочитыванию
- * журналов после новых наблюдателей (`watch-settle`). Планового `setInterval`
- * в файле нет и не должно быть (приёмка куска 1.5).
+ * журналов после новых наблюдателей (`watch-settle`). Проход списка работ
+ * пересчитывает только сессии с изменившимся входом (`changedSessions`), а не
+ * все сессии всех работ. Единственный периодический таймер — страховка
+ * `SAFETY_RESCAN_MS`: она перечитывает журналы активных сессий, если
+ * наблюдатель потерял запись без уведомления.
  */
 
 import { latestAgentPlan } from '@parley/core/agent-plan';
@@ -18,10 +21,12 @@ import { appendFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
   DEFAULT_BACKGROUND_HOLD_MS,
+  DEFAULT_QUIET_TURN_HOLD_MS,
   PARLEY_STARTUP_NOTIFICATION,
   PERMISSION_ANSWERED_EVENT,
   TERMINAL_WORKING_EVENT,
   activityOf,
+  presentedActivity,
   claudeProjectRoots,
   applyAutoTitle,
   autoTitleOf,
@@ -52,6 +57,8 @@ import {
   type Activity,
   type ContextFill,
   type ActivityLog,
+  byFamily,
+  providerFamily,
   type EventRecord,
   type EventsLog,
   type EventsWatcher,
@@ -65,6 +72,7 @@ import {
   type UsageResolver,
   type UsageSummary,
   type WorkEntry,
+  type WorkMap,
   type WorkSession,
 } from '@parley/core';
 import {
@@ -81,6 +89,7 @@ import type { HostContext } from '../context.js';
 import type { WindowCounters } from '../health/window-counters.js';
 import type { LimitsService } from '../limits/limits-service.js';
 import type { CodexSignal } from '../pty/codex-terminal.js';
+import type { QwenStatus } from '../pty/qwen-terminal.js';
 import { mailSessions } from '../mail-sessions.js';
 import { createSettler } from '../watch-settle.js';
 import type { MailNotice, WorksService, WorksView } from '../works/works-service.js';
@@ -107,6 +116,8 @@ export interface ActivityServiceOptions extends MetricsRoots {
   silenceThresholdMs?: number;
   /** Предел удержания фоновыми субагентами и ожиданием `wait_for` (`activityOf`); по умолчанию — час. */
   backgroundHoldMs?: number;
+  /** Предел показа тишины открытого хода как `working` (`activityOf`); по умолчанию 15 минут. */
+  quietTurnHoldMs?: number;
   /**
    * Чтение `meta.json` субагента — сверх интерфейса плана: тест подставляет читателя-счётчика и видит, что и
    * когда спросили. По умолчанию — `readSubagentMeta`.
@@ -167,7 +178,27 @@ export interface ActivityService {
    * и «новые» строки журнала (спека «Застрявшие сессии», 3.2). У возобновлённой сессии журнал прошлого запуска не пуст, и
    * экран старта ловится по тому, что с запуска нынешнего процесса ничего не прибавилось.
    */
-  processStarted(ref: SessionRef): void;
+  processStarted(ref: SessionRef, spawnedAt?: number): void;
+  /** Lifecycle and turn boundaries delivered by the current Kimi ACP process. */
+  kimiActivity(ref: SessionRef, state: 'ready' | 'working' | 'blocked' | 'ended', detail?: string): void;
+  /** Qwen Code program status (OSC 7501) of the session's current process (spec 2026-11-11, 3.4 amendment). */
+  qwenStatus(ref: SessionRef, status: QwenStatus): void;
+  /**
+   * The process generation of the session (`processStarted` counts them); `null` — no process started under this host.
+   * The tools endpoint takes it when a `tools/list` request arrives and hands it back to `mcpListed`.
+   */
+  processGeneration(ref: SessionRef): number | null;
+  /**
+   * The session's Parley MCP server got its tool list answered: the agent's MCP client is connected. Counts only for the
+   * generation that sent the request and only while it is still the current one: a list of a replaced process does not
+   * certify its successor (spec 2026-11-11, 3.4 amendment).
+   */
+  mcpListed(ref: SessionRef, generation: number | null): void;
+  /**
+   * The session's current Qwen process last reported OSC 7501 `state=blocked` (sign-in, a permission or a question in
+   * its terminal): nothing may be typed or submitted. Other providers and sessions without a report — `false`.
+   */
+  qwenBlocked(ref: SessionRef): boolean;
   /**
    * План 2026-10-01, кусок 4a, решение О: окно держит вопрос агента (хук `PreToolUse`) — сессия
    * 'blocked', пока хук не отпущен: журнал событий удержанного вопроса не видит и по тишине считал бы её
@@ -196,13 +227,49 @@ export interface ActivityService {
    * Журнал какой-то сессии изменился (индекс логов; живая лента по нему ловит прерывание Esc —
    * запись «[Request interrupted by user…]», план 2026-10-01, решение 5). Возвращает отписку.
    */
-  onLogChange(listener: () => void): () => void;
+  onLogChange(listener: (change?: LogChange) => void): () => void;
   /** Источник цифр итога комнаты (спека расхода токенов, 5.2): итог сессии целиком, границы её лога и срез по окнам. */
   usageResolver(): UsageResolver;
   stop(): Promise<void>;
 }
 
 const workKeyOf = (projectPath: string, workId: string): string => `${projectPath}\u0000${workId}`;
+
+/**
+ * Страховка от потерянных записей: журналы активных сессий перечитываются раз в этот срок, даже если наблюдатель
+ * ничего не принёс (`createSettler` даёт только разовую серию пауз после нового наблюдателя).
+ */
+export const SAFETY_RESCAN_MS = 30_000;
+
+const isLive = (session: WorkSession): boolean => session.lifecycle === 'active';
+
+/**
+ * Общий вход пересчёта всех сессий работы: что читают правила непрочитанного (`isUnreadFor`, `recipientsOf`,
+ * `cancelledPlanLetter`, `currentPlanEffect`, `actionable`, `liveLead`, `isRoomClosed`) и автозаголовок. Состав сессий
+ * идёт целиком (id и признак закрытой): удаление сессии помечает её письма удалёнными, а список писем адресатов
+ * (`pendingLetters`) читается заново.
+ */
+const sharedPrint = (map: WorkMap): string =>
+  JSON.stringify([
+    map.work.title,
+    map.work.status,
+    map.rooms,
+    map.plans ?? null,
+    map.planEffects ?? null,
+    map.sessions.map((session) => [session.id, session.lifecycle === 'closed']),
+  ]);
+
+/** Тот же журнал: чтение без новых строк отдаёт те же записи (`openEvents` копирует массив, но не записи). */
+const sameJournal = (a: readonly EventRecord[] | null, b: readonly EventRecord[] | null): boolean =>
+  a === b || (a !== null && b !== null && a.length === b.length && a.at(-1) === b.at(-1));
+
+/** Что проход работ видел у работы в прошлый раз: версия строки и отпечатки входов. */
+interface SeenWork {
+  version: number | undefined;
+  incarnation: number | undefined;
+  shared: string;
+  sessions: Map<string, string>;
+}
 
 /**
  * Неудачное чтение `meta.json` субагента повторяется не чаще: Claude пишет файл рядом со стартом, а пересчётов
@@ -397,6 +464,36 @@ interface Launch {
  * время одно — mtime файла. Её время — запуск процесса: новее всего прошлого, в том числе записи об ошибке API в логе, с
  * которой запасной путь лимита сверяет начало работы.
  */
+/** Need detail of a Qwen session past the startup grace without readiness (spec 2026-11-11, 3.4). */
+export const QWEN_STARTUP_ATTENTION = 'Qwen needs attention at startup (sign-in or a dialog): see the terminal';
+/** The same when the process never reported its program status (OSC 7501), as another qwen version might not. */
+export const QWEN_STARTUP_NO_STATUS = 'Qwen needs attention at startup: see the terminal';
+
+/** Readiness facts of one Qwen process (spec 2026-11-11, 3.4 amendment). */
+interface QwenProcess {
+  /** The process generation (`processStarted`): facts of another generation are not this process's. */
+  generation: number;
+  /** Spawn time of the process, taken before the spawn: journal lines written earlier belong to a past process. */
+  spawnedAt: number;
+  /** Any OSC 7501 report arrived. */
+  statusSeen: boolean;
+  /** `state=idle` arrived: the prompt accepts input. */
+  idleSeen: boolean;
+  /** Since when it reports `blocked:kind=auth` (the sign-in picker); `null` — not now. */
+  authAt: number | null;
+  /** The session's Parley MCP server listed its tools through the host. */
+  mcpListed: boolean;
+  /** A live native prompt also drives the in-chat terminal panel for unrecognised layouts. */
+  promptNeed?: SessionNeed;
+  /** The last report was `state=blocked`. */
+  blocked: boolean;
+}
+
+/** A journal line that proves the Qwen process accepts input (spec 2026-11-11, 3.4). */
+export const isQwenReadiness = (event: EventRecord): boolean =>
+  (event.name === 'Notification' && (event.notificationType === 'auth_success' || event.notificationType === 'idle_prompt')) ||
+  (event.name === 'UserPromptSubmit' && event.promptEmpty !== true);
+
 function withLaunchBoundary(
   journal: readonly EventRecord[] | null,
   launch: Launch | null,
@@ -445,7 +542,8 @@ export function wholeSessionUsage(selected: UsageSummary, hasLog: boolean, provi
     input: 0,
     output: 0,
     cacheRead: 0,
-    cacheWrite: provider === 'codex' ? null : 0,
+    // Cache writes are not observed for Codex or Qwen Code: unknown, not zero.
+    cacheWrite: byFamily(provider, { claude: 0, codex: null, qwen: null, opencode: 0, neutral: 0 }),
     totalInput: 0,
     source: 'native-index',
     observedAt: null,
@@ -467,6 +565,7 @@ export function createActivityService(
   const nowFn = options.now ?? Date.now;
   let silenceThresholdMs = options.silenceThresholdMs ?? 30_000;
   const backgroundHoldMs = options.backgroundHoldMs ?? DEFAULT_BACKGROUND_HOLD_MS;
+  const quietTurnHoldMs = options.quietTurnHoldMs ?? DEFAULT_QUIET_TURN_HOLD_MS;
   const trustWaitMs = options.trustWaitMs ?? DEFAULT_TRUST_WAIT_MS;
   const startupWaitMs = options.startupWaitMs ?? DEFAULT_STARTUP_WAIT_MS;
   const codexCallGraceMs = options.codexCallGraceMs ?? CODEX_CALL_GRACE_MS;
@@ -484,6 +583,7 @@ export function createActivityService(
    */
   const turnBoundaries = new Map<string, string>();
   const journals = new Map<string, readonly EventRecord[] | null>();
+  const kimiEvents = new Map<string, EventRecord[]>();
   const seenAt = new Map<string, string>();
   const silenceTimers = new Map<string, NodeJS.Timeout>();
   const autoTitled = new Set<string>();
@@ -506,6 +606,10 @@ export function createActivityService(
   const trustWaitNotified = new Set<string>();
   /** Срок экрана старта у Claude и GLM (`startupEventOf`): по таймеру на сессию, чтобы пересчитать её на сроке. */
   const startupTimers = new Map<string, NodeJS.Timeout>();
+  /** What the current Qwen process has shown since its start: OSC 7501 reports and the Parley MCP tool list. */
+  const qwenProcesses = new Map<string, QwenProcess>();
+  /** Process generations by session key (`processStarted`); they only grow, so a stale one never matches again. */
+  const generations = new Map<string, number>();
   /** Запуски процессов, которые видел хост (`processStarted`), по ключу сессии: отсчёт срока и «новых» строк журнала. */
   const launches = new Map<string, Launch>();
   /**
@@ -522,6 +626,13 @@ export function createActivityService(
   const linkInFlight = new Set<string>();
   const terminals = new Map<string, TerminalState>();
   const workWatches = new Map<string, WorkWatch>();
+  /** Что проход работ видел у каждой работы (`changedSessions`), по ключу работы. */
+  const seenWorks = new Map<string, SeenWork>();
+  /**
+   * Сессии с `need` лимита, у которых время сброса ещё не защёлкнуто (`publishedNeed`): окно провайдера может прийти
+   * позже удара и службы лимитов никто не слушает, поэтому такая сессия пересчитывается на каждом проходе работ.
+   */
+  const limitPending = new Set<string>();
   const listeners = new Set<(ref: SessionRef, value: SessionLive) => void>();
   /**
    * `meta.json` субагентов, у которых снимок хуков не назвал описания: прочитанное и неудачи по ключу
@@ -544,14 +655,15 @@ export function createActivityService(
   const mailDirty = new Map<string, { ref: SessionRef; journal: EventsLog }>();
   let mailFlushQueued = false;
   let unsubscribeLog: (() => void) | undefined;
+  let safetyTimer: NodeJS.Timeout | undefined;
   /**
    * На macOS fs.watch каталогов живёт в одном на процесс потоке FSEvents, и libuv пересоздаёт его на каждом
    * новом наблюдателе: запись, сделанная в этот миг, не доходит ни до одного наблюдателя процесса (опыт
    * 2026-10-06: 3 записи из 150, если в миг записи заводится наблюдатель другого каталога). Поэтому после
-   * новых наблюдателей — своих журналов и индекса логов — перечитываются журналы всех работ, а не только той,
-   * чей наблюдатель заведён.
+   * новых наблюдателей — своих журналов и индекса логов — перечитываются журналы активных сессий всех работ, а не
+   * только той, чей наблюдатель заведён (`rescanLive`).
    */
-  const catchUp = createSettler(() => settleAllJournals());
+  const catchUp = createSettler(() => rescanLive());
 
   function clearSilenceTimer(key: string): void {
     const timer = silenceTimers.get(key);
@@ -590,6 +702,38 @@ export function createActivityService(
   }
 
   /**
+   * Sessions whose state comes from the hook journal: the Claude Code family, Qwen Code (its per-session system
+   * settings file journals the same way) and OpenCode (the host's event bridge writes the journal, `opencode/events.ts`;
+   * its first line of a process is the readiness `SessionStart`). Codex and a null or unknown family do not.
+   */
+  function hooksExpected(session: WorkSession): boolean {
+    return byFamily(session.provider, { claude: true, codex: false, qwen: true, opencode: true, neutral: false });
+  }
+
+  const isQwen = (session: WorkSession): boolean =>
+    byFamily(session.provider, { claude: false, codex: false, qwen: true, opencode: false, neutral: false });
+
+  /**
+   * Qwen readiness (spec 2026-11-11, 3.4 and its amendment): `SessionStart` is not ready, because Qwen fires it under its
+   * sign-in picker. The current process is ready once its terminal reported OSC 7501 `state=idle` and its Parley MCP
+   * client listed the tools, or once its journal shows input: `auth_success`, `idle_prompt` or a real prompt
+   * (`UserPromptSubmit` that is not Qwen's empty follow-up). A journal line counts only by its own payload time at or
+   * after the spawn of the current process: its position past the cached journal length proves nothing, because the
+   * journal is read asynchronously and a read finishing after a fast resume brings old lines past that length.
+   */
+  function qwenReady(key: string): boolean {
+    const current = qwenProcesses.get(key);
+    // The terminal says the prompt is idle and the agent's Parley MCP client has its tools: the first turn can use them.
+    if (current?.idleSeen === true && current.mcpListed) return true;
+    // The journal shows the process took input (a real prompt, idle after a turn, a finished sign-in).
+    const journal = journals.get(key) ?? [];
+    if (current === undefined) return journal.slice(launches.get(key)?.journalLength ?? 0).some(isQwenReadiness);
+    return journal.some(
+      (event) => isQwenReadiness(event) && event.atFromPayload === true && Date.parse(event.at) >= current.spawnedAt,
+    );
+  }
+
+  /**
    * События сессии для свёртки. У Claude Code — журнал хуков. У codex хуков нет: журнал `events/` пишет
    * только скрипт `notify` (конец хода), поэтому его отсутствие не поломка хуков, а к журналу добавляется
    * последнее известное состояние терминала — по времени, как если бы это был хук. Сессия codex — и та,
@@ -598,9 +742,16 @@ export function createActivityService(
    * нового процесса (`withLaunchBoundary`).
    */
   function eventsFor(session: WorkSession, key: string): readonly EventRecord[] | null {
+    if (session.provider === 'kimi') return kimiEvents.get(key) ?? null;
     const journal = journals.get(key) ?? null;
     const terminal = terminals.get(key);
-    if (terminal === undefined && session.provider !== 'codex') {
+    // Qwen states `starting` and `started` (spec 3.4): until the current process shows readiness, its lines stay out of
+    // the fold. Its `SessionStart` alone must not make the session look ready (`hookedSince`), so nothing is typed
+    // into the pty before `ready`; past the grace `startupEventOf` adds the startup attention.
+    if (terminal === undefined && journal !== null && isQwen(session) && hostProcessLive(session, key) && !qwenReady(key)) {
+      return journal.slice(0, launches.get(key)?.journalLength ?? 0);
+    }
+    if (terminal === undefined && hooksExpected(session)) {
       return withLaunchBoundary(journal, launchBoundaryOf(session, key));
     }
     // Строки до запуска процесса Codex — прошлых процессов (прежний агент до замены, прошлый запуск): за ними граница
@@ -658,7 +809,7 @@ export function createActivityService(
     return (
       session.launchedBy === 'host' &&
       session.lifecycle === 'active' &&
-      session.provider !== 'codex' &&
+      hooksExpected(session) &&
       !terminals.has(key)
     );
   }
@@ -679,10 +830,10 @@ export function createActivityService(
    * процесса не прибавилось. Без записи о запуске (`processStarted`) отсчёт идёт от пустого журнала.
    */
   function waitsForStartup(session: WorkSession, key: string): boolean {
-    return (
-      hostProcessLive(session, key) &&
-      (journals.get(key)?.length ?? 0) === (launches.get(key)?.journalLength ?? 0)
-    );
+    if (!hostProcessLive(session, key)) return false;
+    // Qwen waits until readiness, not until its first line (`SessionStart` fires under the sign-in picker).
+    if (isQwen(session)) return !qwenReady(key);
+    return (journals.get(key)?.length ?? 0) === (launches.get(key)?.journalLength ?? 0);
   }
 
   /**
@@ -701,12 +852,17 @@ export function createActivityService(
     log: ActivityLog | null,
   ): EventRecord | null {
     if (!waitsForStartup(session, key)) return null;
-    const due = startupDue(session, key);
+    const qwen = isQwen(session) ? qwenProcesses.get(key) : undefined;
+    // Qwen under its sign-in picker says so itself: attention at once, not after the grace.
+    const due = qwen?.authAt ?? startupDue(session, key);
     if (!(due <= now)) return null;
     if (Date.parse(log?.lastRecordAt ?? '') > launchedAtOf(session, key)) return null;
     return {
       ...bareEvent(new Date(due).toISOString(), 'Notification'),
       notificationType: PARLEY_STARTUP_NOTIFICATION,
+      // It does not assert that sign-in failed: Qwen may stand at any startup dialog. No OSC 7501 at all (another qwen
+      // version): the shorter text, and nothing is ever typed (`hookedSince` stays false).
+      ...(isQwen(session) ? { message: qwen?.statusSeen === true ? QWEN_STARTUP_ATTENTION : QWEN_STARTUP_NO_STATUS } : {}),
     };
   }
 
@@ -748,7 +904,8 @@ export function createActivityService(
     now: number,
   ): void {
     clearSilenceTimer(key);
-    if (activity.activity !== 'working') return;
+    // Тишина открытого хода (`quietTurn`) тоже ждёт своего предела `quietTurnHoldMs`, иначе он не сработал бы.
+    if (activity.activity !== 'working' && activity.quietTurn !== true) return;
 
     const eventAt = activity.lastEventAt === null ? Number.NaN : Date.parse(activity.lastEventAt);
     const recordAt = log?.lastRecordAt == null ? Number.NaN : Date.parse(log.lastRecordAt);
@@ -758,7 +915,8 @@ export function createActivityService(
     );
     if (!Number.isFinite(quietAt)) return;
     const silenceAt = quietAt + silenceThresholdMs;
-    const holdAt = quietAt + backgroundHoldMs;
+    // Тишина открытого хода снимается раньше предела фоновых задач.
+    const holdAt = quietAt + (activity.quietTurn === true ? quietTurnHoldMs : backgroundHoldMs);
     const deadline = silenceAt >= now ? silenceAt : holdAt >= now ? holdAt : null;
     if (deadline === null) return;
 
@@ -930,10 +1088,11 @@ export function createActivityService(
         const usage = await currentSegmentUsage(session, resolver);
         const cost = (await resolver.cost?.(session, { from: lastEnd, to: null })) ?? null;
         const changed = JSON.stringify([usage, cost]) !== JSON.stringify([entry.usage, entry.cost]);
-        currentSegments.set(key, { lastEnd, usage, cost, at: nowFn(), running: false });
+        // Запись сессии, ушедшей из карты за время чтения, чистка уже убрала: заново она не заводится.
+        if (currentSegments.get(key) === entry) currentSegments.set(key, { lastEnd, usage, cost, at: nowFn(), running: false });
         if (changed && !stopped) recompute(ref);
       } catch (error) {
-        currentSegments.set(key, { lastEnd, usage: entry.usage, cost: entry.cost, at: nowFn(), running: false });
+        if (currentSegments.get(key) === entry) currentSegments.set(key, { lastEnd, usage: entry.usage, cost: entry.cost, at: nowFn(), running: false });
         host.log.warn('расход текущего отрезка не посчитался', { sessionId: session.id, error: String(error) });
       }
     })();
@@ -1071,13 +1230,16 @@ export function createActivityService(
   ): void {
     if (session.launchedBy !== 'host' || session.lifecycle !== 'active') return;
     // Хуков Codex харнесс не включает: их отсутствие у него — норма, состояние ведёт терминал.
-    if (terminals.has(key) || session.provider === 'codex') return;
+    if (terminals.has(key) || !hooksExpected(session)) return;
+    // OpenCode has no hooks either: this notice never applies to it. Its journal comes from the host's event bridge, whose
+    // first write (the readiness `SessionStart`) also creates `events/`, so a missing journal says nothing about hooks.
+    if (byFamily(session.provider, { claude: false, codex: false, qwen: false, opencode: true, neutral: false })) return;
     if (events !== null || hooksMissingNotified.has(key)) return;
     hooksMissingNotified.add(key);
     host.broadcast('host.notice', {
       kind: 'hooks-missing',
       ref,
-      text: `Claude Code hooks did not arrive for session ${ref.sessionId} — status comes from the log`,
+      text: `${isQwen(session) ? 'Qwen Code' : 'Claude Code'} hooks did not arrive for session ${ref.sessionId} — status comes from the log`,
       at: new Date().toISOString(),
     });
   }
@@ -1093,8 +1255,9 @@ export function createActivityService(
       clearTrustWaitTimer(key);
       return;
     }
-    // Экраны старта Codex ловит свой срок (`terminalStarted`): хуков у него не будет ни в одной папке.
-    if (terminals.has(key) || session.provider === 'codex') {
+    // Экраны старта Codex ловит свой срок (`terminalStarted`): хуков у него не будет ни в одной папке. Qwen has folder
+    // trust off by default; its startup screens are the readiness state's startup attention.
+    if (terminals.has(key) || !hooksExpected(session) || isQwen(session)) {
       clearTrustWaitTimer(key);
       return;
     }
@@ -1192,6 +1355,7 @@ export function createActivityService(
       now,
       silenceThresholdMs: threshold,
       backgroundHoldMs,
+      quietTurnHoldMs,
     });
     const seen = isSeen(seenAt.get(key), draft.turnEndedAt);
     const folded = activityOf({
@@ -1201,6 +1365,7 @@ export function createActivityService(
       now,
       silenceThresholdMs: threshold,
       backgroundHoldMs,
+      quietTurnHoldMs,
     });
     // Пока от нынешнего процесса не пришло ни одной строки, свёртка видит прошлое (журнал прошлого запуска) и то, что
     // дописал хост: границу процесса (`withLaunchBoundary`) и экран старта (`startupEventOf`). Хука нового процесса в них
@@ -1288,7 +1453,7 @@ export function createActivityService(
     // событий самого CLI (лимит, вход: ход ими оборван, а не стоит) главнее — они остаются, сторож к ним ничего не
     // добавляет: `blocked` с таким `need` несогласован (`reportedNeed`).
     const held = questionHeldKeys.get(key);
-    const waiting: SessionActivity =
+    let waiting: SessionActivity =
       activity.activity === 'blocked'
         ? activity
         : held !== undefined
@@ -1307,6 +1472,10 @@ export function createActivityService(
                 },
               }
             : activity;
+    const nativeNeed = isQwen(session) ? qwenProcesses.get(key)?.promptNeed : undefined;
+    if (nativeNeed) {
+      waiting = { ...waiting, activity: 'blocked', need: nativeNeed };
+    }
     const need = publishedNeed(key, session, waiting.need, now);
     const published: SessionActivity = need === waiting.need ? waiting : { ...waiting, need };
     const value: SessionLive = { activity: published, metrics };
@@ -1317,7 +1486,12 @@ export function createActivityService(
     const previous = live.get(key);
     live.set(key, value);
     if (previous === undefined || !sameLive(previous, value)) {
-      host.broadcast('activity.changed', { ref, activity: published, metrics });
+      // Клиентам уходит показанное значение: тишина открытого хода выглядит как `working`. Рассылка — только когда
+      // изменилось оно; слушатели хоста (письма, сон, сжатие) читают сырое.
+      const shown = presentedActivity(published);
+      if (previous === undefined || !sameLive({ ...previous, activity: presentedActivity(previous.activity) }, { ...value, activity: shown })) {
+        host.broadcast('activity.changed', { ref, activity: shown, metrics });
+      }
       for (const listener of listeners) listener(ref, value);
     }
 
@@ -1347,10 +1521,12 @@ export function createActivityService(
   ): SessionNeed | null {
     if (need === null || session.lifecycle !== 'active') {
       limitResets.delete(key);
+      limitPending.delete(key);
       return null;
     }
     if (need.kind !== 'limit') {
       limitResets.delete(key);
+      limitPending.delete(key);
       return need;
     }
     let reset = limitResets.get(key);
@@ -1359,6 +1535,9 @@ export function createActivityService(
       reset = { resetsAt: picked.resetsAt, window: picked.window };
       if (reset.resetsAt !== null) limitResets.set(key, reset);
     }
+    // Времени сброса нет: окно лимита доедет позже без событий сессии, и её досчитает проход работ.
+    if (reset.resetsAt === null) limitPending.add(key);
+    else limitPending.delete(key);
     return { ...need, ...reset };
   }
 
@@ -1421,10 +1600,28 @@ export function createActivityService(
     const eventsDir = workPaths(entry.projectPath, entry.map.work.id).events;
     let watch = workWatches.get(wk);
     if (watch === undefined) {
-      watch = { journal: openEvents(eventsDir), watcher: null };
+      // One reader for the whole work; each session's journal is parsed with its own provider family.
+      const projectPath = entry.projectPath;
+      const workId = entry.map.work.id;
+      watch = {
+        journal: openEvents(eventsDir, (sessionId) => {
+          const provider = works.entry(projectPath, workId)?.map.sessions.find((session) => session.id === sessionId)?.provider;
+          return provider === undefined ? null : providerFamily(provider);
+        }),
+        watcher: null,
+      };
       workWatches.set(wk, watch);
     }
-    if (watch.watcher !== null || !existsSync(eventsDir)) return { watch, renewed: false };
+    // Наблюдатель нужен работе не в архиве с активной сессией: хуки пишет только живой процесс. Он заводится лениво и при
+    // засыпании сессий остаётся — каждый новый наблюдатель пересоздаёт поток FSEvents процесса и теряет записи
+    // (комментарий у `catchUp`). Читатель журналов остаётся и у архивной работы.
+    if (entry.map.work.status === 'archived') {
+      watch.watcher?.close();
+      watch.watcher = null;
+      return { watch, renewed: false };
+    }
+    if (watch.watcher !== null) return { watch, renewed: false };
+    if (!entry.map.sessions.some(isLive) || !existsSync(eventsDir)) return { watch, renewed: false };
 
     const current = watch;
     let failed = false;
@@ -1458,12 +1655,29 @@ export function createActivityService(
     return { watch, renewed: true };
   }
 
-  /** Дочитывание журналов работы после включения наблюдателя: чтение без новых байт состояния не меняет. */
-  function settleJournals(projectPath: string, workId: string): void {
-    const current = works.entry(projectPath, workId);
-    const watch = workWatches.get(workKeyOf(projectPath, workId));
-    if (stopped || current === undefined || watch === undefined) return;
-    for (const session of current.map.sessions) void readJournal(projectPath, workId, watch.journal, session.id);
+  /**
+   * Дочитывание журналов активных сессий всех работ: после новых наблюдателей (`catchUp`) и по страховочному таймеру
+   * (`SAFETY_RESCAN_MS`). Чтение без новых байт состояния не меняет. Спящие и закрытые сессии хуков не пишут.
+   * Заодно индексу логов отдаются логи этих сессий, кроме Codex (его дочитывает `codex-log-poll.ts`): потерянное
+   * событие наблюдателя логов иначе дождалось бы следующей записи в файл. Без изменений это один `stat` на файл.
+   */
+  function rescanLive(): void {
+    if (stopped) return;
+    const logs: string[] = [];
+    for (const entry of works.snapshot().entries) {
+      const watch = workWatches.get(workKeyOf(entry.projectPath, entry.map.work.id));
+      for (const session of entry.map.sessions) {
+        if (!isLive(session)) continue;
+        if (watch !== undefined) void readJournal(entry.projectPath, entry.map.work.id, watch.journal, session.id);
+        // The log index serves the Claude family and Qwen; Codex has `codex-log-poll.ts`.
+        // A Qwen session not yet indexed (created after the watcher attached, event missed) is probed through its binding.
+        const file = byFamily(session.provider, { claude: true, codex: false, qwen: true, opencode: false, neutral: false })
+          ? (logIndex.index(session)?.file ?? session.qwenTranscript?.path)
+          : undefined;
+        if (file !== undefined) logs.push(file);
+      }
+    }
+    if (logs.length > 0) logIndex.rescan(logs);
   }
 
   async function readJournal(
@@ -1476,17 +1690,12 @@ export function createActivityService(
     const events = await journal.read(sessionId).catch(() => null);
     if (stopped) return;
     const ref: SessionRef = { projectPath, workId, sessionId };
-    journals.set(refKey(ref), events);
-    recompute(ref);
-  }
-
-  /**
-   * Дочитывание всех журналов после новых наблюдателей (`catchUp`): иначе потерянная строка ждала бы
-   * следующей записи того же журнала — у свежей сессии это первый хук, без которого хост не пускает
-   * отправку из окна (`hookedSince`).
-   */
-  function settleAllJournals(): void {
-    for (const entry of works.snapshot().entries) settleJournals(entry.projectPath, entry.map.work.id);
+    const key = refKey(ref);
+    const known = journals.has(key);
+    const previous = journals.get(key) ?? null;
+    journals.set(key, events);
+    // Журнал без новых строк состояния не меняет: пересчёт только у нового журнала или изменившегося.
+    if (!known || !sameJournal(previous, events)) recompute(ref);
   }
 
   /** Работы и сессии, которых в свежем снимке больше нет: состояние не копится вечно. */
@@ -1507,6 +1716,9 @@ export function createActivityService(
       watch.watcher?.close();
       workWatches.delete(wk);
     }
+    for (const wk of Array.from(seenWorks.keys())) if (!validWorks.has(wk)) seenWorks.delete(wk);
+    for (const key of Array.from(limitPending)) if (!validSessions.has(key)) limitPending.delete(key);
+    for (const key of Array.from(currentSegments.keys())) if (!validSessions.has(key)) currentSegments.delete(key);
 
     for (const [key] of Array.from(journals)) if (!validSessions.has(key)) journals.delete(key);
     for (const [key] of Array.from(live)) if (!validSessions.has(key)) live.delete(key);
@@ -1557,25 +1769,67 @@ export function createActivityService(
     for (const [key] of Array.from(startupTimers)) if (!validSessions.has(key)) clearStartupTimer(key);
   }
 
+  /**
+   * Сессии работы, чей вход пересчёта изменился с прошлого прохода. Входы `recompute`, и кто видит их изменение:
+   * - своя запись карты (`JSON.stringify(session)`: жизненный цикл, метки, снимок метрик, переводы, план, привязки);
+   * - общее по работе (`sharedPrint`: название, статус, комнаты с порогами входа, планы и их эффекты, состав сессий) —
+   *   изменилось, пересчитываются все сессии работы;
+   * - письма и отметки прочтения в базе — уведомление `onMail` (`handleMail`); отметка, записанная другим процессом, —
+   *   исключение: сессия обновится на своём следующем событии (журнал лога → `LogChange.affects`);
+   * - журнал хуков, индекс логов, терминал, запуск процесса, просмотр, контекст, сжатие, вопрос, причина ожидания,
+   *   расход отрезка, `meta.json` субагентов, таймеры тишины, старта и сторожа — каждый зовёт `recompute` сам;
+   * - служба лимитов не уведомляет: сессию с `need` лимита без времени сброса досчитывает `limitPending`.
+   * Та же определённая версия и та же `incarnation`, что в прошлый раз, — карта та же, и ничего не сериализуется; без
+   * точной версии решают отпечатки.
+   */
+  function changedSessions(entry: WorkEntry): ReadonlySet<string> {
+    const wk = workKeyOf(entry.projectPath, entry.map.work.id);
+    const seen = seenWorks.get(wk);
+    if (
+      seen !== undefined &&
+      entry.version !== undefined &&
+      seen.version === entry.version &&
+      seen.incarnation === entry.incarnation
+    ) {
+      return new Set();
+    }
+    const shared = sharedPrint(entry.map);
+    const sessions = new Map<string, string>();
+    const changed = new Set<string>();
+    for (const session of entry.map.sessions) {
+      const print = JSON.stringify(session);
+      sessions.set(session.id, print);
+      if (seen === undefined || seen.shared !== shared || seen.sessions.get(session.id) !== print) changed.add(session.id);
+    }
+    seenWorks.set(wk, { version: entry.version, incarnation: entry.incarnation, shared, sessions });
+    return changed;
+  }
+
   function handleWorksChange(snapshot: WorksView): void {
     if (stopped) return;
-    // Комнаты и участники карты решают, чьё письмо непрочитано (`isUnreadFor`): список писем читается заново.
-    pendingLetters.clear();
     for (const entry of snapshot.entries) {
       const { watch, renewed } = ensureWorkWatch(entry);
+      const changed = changedSessions(entry);
       for (const session of entry.map.sessions) {
         const ref: SessionRef = {
           projectPath: entry.projectPath,
           workId: entry.map.work.id,
           sessionId: session.id,
         };
-        if (journals.has(refKey(ref)) && !renewed) recompute(ref);
-        // Журнал читается и у уже известной сессии: событие, дописанное в окно между созданием fs-наблюдателя
-        // и его реальным включением, наблюдатель теряет, и до следующей записи хука его не увидел бы никто.
-        // Чтение инкрементальное — без новых байт это один stat. Первое чтение журнала новой сессии —
-        // читатель мог появиться раньше её (работа известна, сессия только что добавлена); после нового
-        // наблюдателя — всё, что хуки дописали без него.
-        void readJournal(entry.projectPath, entry.map.work.id, watch.journal, session.id);
+        const key = refKey(ref);
+        const known = journals.has(key);
+        if (changed.has(session.id)) {
+          // Комнаты и участники карты решают, чьё письмо непрочитано (`isUnreadFor`): список писем читается заново.
+          pendingLetters.delete(key);
+          if (known) recompute(ref);
+        } else if (limitPending.has(key)) {
+          recompute(ref);
+        }
+        // Журнал читается у сессии без прочитанного журнала (читатель мог появиться раньше её), у изменившейся и после
+        // нового наблюдателя: всё, что хуки дописали без него, и событие, дописанное в окно между созданием
+        // fs-наблюдателя и его реальным включением, никто не увидел бы до следующей записи хука. Чтение
+        // инкрементальное — без новых байт это один stat, а пересчёт идёт только при изменившемся журнале.
+        if (!known || renewed || changed.has(session.id)) void readJournal(entry.projectPath, entry.map.work.id, watch.journal, session.id);
       }
     }
     pruneRemoved(snapshot);
@@ -1583,7 +1837,7 @@ export function createActivityService(
 
   /**
    * Запись писем без записи карты (спека rooms.mail 6.7): `unread` в метриках меняется только у адресатов новых писем и
-   * читателей, и `onChange` её уже не приносит. Как `handleWorksChange` для всех сессий, здесь для названных: журнал
+   * читателей, и `onChange` её уже не приносит. Как `handleWorksChange` для изменившихся сессий, здесь для названных: журнал
    * перечитывается (чтение инкрементальное, без новых байт — один stat), и наблюдатель за каталогом журналов, появившимся
    * после старта, заводится. Без этого указатель будильника ждал бы потерянного хука адресата до дочитывания по таймеру
    * (`catchUp`), а хуки его ответа остались бы без наблюдателя до следующей записи карты.
@@ -1647,12 +1901,18 @@ export function createActivityService(
       // (`~/.claude/projects`), а старт хоста ждать это не должен — до готовности
       // индекса activity просто не видит страховки по логу и живёт одними хуками.
       // Готовый индекс заводит свои наблюдатели, и журналы перечитываются ещё раз.
-      void logIndex.start().then(() => catchUp.schedule(), (error: unknown) => {
+      void logIndex.start().then((stats) => {
+        if (stats !== null) host.log.info('индекс логов провайдера построен', stats);
+        catchUp.schedule();
+      }, (error: unknown) => {
         host.log.error('индекс логов провайдера не построился', { error: String(error) });
       });
       unsubscribeWorks = works.onChange((snapshot) => handleWorksChange(snapshot));
       unsubscribeMail = works.onMail(handleMail);
       handleWorksChange(works.snapshot());
+      // Страховка: наблюдатель бывает слеп без уведомления (поток FSEvents пересоздан в миг записи).
+      safetyTimer = setInterval(rescanLive, SAFETY_RESCAN_MS);
+      safetyTimer.unref();
     },
     get: (ref) => live.get(refKey(ref)),
     mailWaiting(ref, reason) {
@@ -1746,9 +2006,70 @@ export function createActivityService(
       terminals.set(key, state);
       recomputeOnStart(ref);
     },
-    processStarted(ref) {
+    kimiActivity(ref, state, detail) {
       if (stopped) return;
       const key = refKey(ref);
+      const at = new Date(nowFn()).toISOString();
+      const events = kimiEvents.get(key) ?? [];
+      const event = state === 'ready' ? bareEvent(at, 'SessionStart')
+        : state === 'ended' ? bareEvent(at, 'Stop')
+        : state === 'blocked' ? { ...bareEvent(at, 'Notification'), notificationType: 'permission_prompt', message: detail ?? null }
+        : bareEvent(at, events.at(-1)?.name === 'Notification' ? PERMISSION_ANSWERED_EVENT : 'UserPromptSubmit');
+      kimiEvents.set(key, [...events.slice(-15), event]);
+      recompute(ref);
+    },
+    qwenStatus(ref, status) {
+      if (stopped) return;
+      const key = refKey(ref);
+      const current = qwenProcesses.get(key);
+      // Reports before `processStarted` of this generation have no process to belong to.
+      if (current === undefined) return;
+      current.statusSeen = true;
+      if (status.state === 'idle') current.idleSeen = true;
+      current.blocked = status.state === 'blocked';
+      if (current.blocked && (status.kind === 'question' || status.kind === 'permission')) {
+        const kind = status.kind === 'permission' ? 'approval' : 'question';
+        current.promptNeed = {
+          kind, since: current.promptNeed?.kind === kind ? current.promptNeed.since : new Date(nowFn()).toISOString(),
+          detail: clampDetail(status.msg), resetsAt: null, window: null, account: null,
+        };
+      } else {
+        delete current.promptNeed;
+      }
+      const auth = status.state === 'blocked' && status.kind === 'auth';
+      // The picker is left once Qwen reports any other state.
+      current.authAt = auth ? (current.authAt ?? nowFn()) : null;
+      recompute(ref);
+    },
+    qwenBlocked(ref) {
+      return qwenProcesses.get(refKey(ref))?.blocked === true;
+    },
+    processGeneration(ref) {
+      return generations.get(refKey(ref)) ?? null;
+    },
+    mcpListed(ref, generation) {
+      if (stopped) return;
+      const current = qwenProcesses.get(refKey(ref));
+      // The list was asked by another (replaced) process, or before any process of this host: not this process's tools.
+      if (current === undefined || generation === null || current.generation !== generation || current.mcpListed) return;
+      current.mcpListed = true;
+      recompute(ref);
+    },
+    processStarted(ref, spawnedAt) {
+      if (stopped) return;
+      const key = refKey(ref);
+      const generation = (generations.get(key) ?? 0) + 1;
+      generations.set(key, generation);
+      // A new process generation: nothing it has not shown yet counts (stale OSC or MCP of the previous process).
+      qwenProcesses.set(key, {
+        generation,
+        spawnedAt: spawnedAt ?? nowFn(),
+        statusSeen: false,
+        idleSeen: false,
+        authAt: null,
+        mcpListed: false,
+        blocked: false,
+      });
       launches.set(key, { at: nowFn(), journalLength: journals.get(key)?.length ?? 0 });
       // Срок и счёт новых строк начинаются заново: таймер прежнего запуска (Resume) к этому процессу не относится.
       clearStartupTimer(key);
@@ -1789,6 +2110,7 @@ export function createActivityService(
       const key = refKey(ref);
       // Запись о запуске относится к процессу: у Claude и GLM состояния терминала нет, и выход иначе её не снимал бы.
       launches.delete(key);
+      if (kimiEvents.delete(key)) recompute(ref);
       if (!terminals.has(key)) return;
       clearTerminal(key);
       clearCodexCallTimer(key);
@@ -1814,7 +2136,7 @@ export function createActivityService(
             sessionId: session.id,
           };
           const value = live.get(refKey(ref));
-          if (value !== undefined) result.push({ ref, activity: value.activity, metrics: value.metrics });
+          if (value !== undefined) result.push({ ref, activity: presentedActivity(value.activity), metrics: value.metrics });
         }
       }
       return result;
@@ -1827,6 +2149,8 @@ export function createActivityService(
       unsubscribeMail?.();
       unsubscribeLog?.();
       catchUp.cancel();
+      if (safetyTimer !== undefined) clearInterval(safetyTimer);
+      safetyTimer = undefined;
       for (const timer of silenceTimers.values()) clearTimeout(timer);
       silenceTimers.clear();
       for (const timer of trustWaitTimers.values()) clearTimeout(timer);

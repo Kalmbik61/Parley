@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BrowserWindow, IpcMain, Session, WebContents } from 'electron';
 import type { WorksSnapshot } from '@parley/protocol';
 import type { FeedCard, FeedItem } from '@parley/core';
+import type { AboutInfo, UpdateCheckResult } from '../shared/bridge.js';
 import { decodeIpcError, type IpcErrorInfo } from '../shared/ipc-error.js';
 import type { DevtoolsSnapshot, ResponseBody, ViewportSpec } from '../shared/browser-devtools.js';
 import { ISLAND_EVENTS } from '../shared/island.js';
@@ -21,6 +22,22 @@ import type { NotesFile } from '../shared/notes-types.js';
 import { bindWorksSyncWindow, forwardHostToPages, forwardHostToWindow, isFocusTarget, parseAgentRegistration, registerIpc, withIpcError, type RegisterIpcOptions } from './ipc.js';
 import { createRootsRegistry, FilesDeniedError, type RootsRegistry } from './roots.js';
 import type { TtsState } from './assistant/tts.js';
+
+const ABOUT_INFO: AboutInfo = {
+  version: '0.37.0',
+  commit: '2b52d262',
+  commitDate: '2026-11-17',
+  dirty: false,
+  arch: 'arm64',
+  electron: '44.0.0',
+  chrome: '140.0.0.0',
+  node: '24.0.0',
+  os: 'macOS 15.0',
+  appPath: '/Applications/Parley.app',
+  dataDir: '~/.parley',
+  updateChecks: true,
+  lastCheck: null,
+};
 
 /** Подставной `ipcMain`: сохраняет обработчики и умеет их дёргать, как настоящий `invoke`. */
 class FakeIpcMain {
@@ -88,6 +105,8 @@ const emulation = {
   })),
 };
 /** Ответы окна на просьбы агента (этап B2): main/browser/agent-ops.ts подменён — мост проверяет только форму. */
+/** Модуль клиентского сертификата: мост проверяет только форму ответа окна и передаёт `sender`. */
+const clientCert = { answer: vi.fn(), clear: vi.fn(async () => undefined) };
 const agentOps = { openTabResult: vi.fn(), registerTab: vi.fn(), captureReady: vi.fn(), stop: vi.fn(), focusReady: vi.fn() };
 
 /** Подставной webContents для моста `browser:*`: EventEmitter плюс то, что трогает мост. */
@@ -133,6 +152,8 @@ function setup(
     webContents?: Map<number, unknown>;
     onUiSaved?: () => void;
     appVersion?: string | null;
+    aboutInfo?: AboutInfo;
+    checkForUpdates?: () => Promise<UpdateCheckResult>;
     isIslandSender?: (sender: unknown) => boolean;
     islandActive?: () => boolean;
     reportSessionVisibility?: (event: { sender?: unknown; senderFrame?: unknown }, value: unknown) => void;
@@ -152,7 +173,11 @@ function setup(
   showItemInFolder: ReturnType<typeof vi.fn>;
   showNotification: ReturnType<typeof vi.fn>;
   takeFocusTarget: ReturnType<typeof vi.fn>;
-  getUpdate: ReturnType<typeof vi.fn>;
+  getUpdateState: ReturnType<typeof vi.fn>;
+  downloadUpdate: ReturnType<typeof vi.fn>;
+  cancelUpdateDownload: ReturnType<typeof vi.fn>;
+  installUpdate: ReturnType<typeof vi.fn>;
+  takeUpdateResult: ReturnType<typeof vi.fn>;
   openPath: ReturnType<typeof vi.fn>;
   saveDropImage: ReturnType<typeof vi.fn>;
   saveDiagnostics: ReturnType<typeof vi.fn>;
@@ -197,7 +222,11 @@ function setup(
   const showItemInFolder = vi.fn();
   const showNotification = vi.fn();
   const takeFocusTarget = vi.fn().mockReturnValue(null);
-  const getUpdate = vi.fn().mockResolvedValue(null);
+  const getUpdateState = vi.fn().mockReturnValue({ phase: 'idle' });
+  const downloadUpdate = vi.fn().mockResolvedValue(undefined);
+  const cancelUpdateDownload = vi.fn().mockResolvedValue(undefined);
+  const installUpdate = vi.fn().mockResolvedValue(undefined);
+  const takeUpdateResult = vi.fn().mockReturnValue(null);
   // Настоящие shell.openPath/showItemInFolder тесты не зовут никогда: открыли бы приложения
   // и Finder на экране человека (решение контролёра 5.2).
   const openPath = vi.fn().mockResolvedValue('');
@@ -239,8 +268,14 @@ function setup(
     chooseFiles,
     showNotification,
     takeFocusTarget,
-    getUpdate,
+    getUpdateState,
+    downloadUpdate,
+    cancelUpdateDownload,
+    installUpdate,
+    takeUpdateResult,
     appVersion: overrides.appVersion === undefined ? '0.2.0-test' : overrides.appVersion,
+    aboutInfo: () => overrides.aboutInfo ?? ABOUT_INFO,
+    checkForUpdates: overrides.checkForUpdates ?? (async () => ({ kind: 'unavailable' as const })),
     ...(overrides.onUiSaved === undefined ? {} : { onUiSaved: overrides.onUiSaved }),
     ...(overrides.isIslandSender === undefined ? {} : { isIslandSender: overrides.isIslandSender }),
     ...(overrides.islandActive === undefined ? {} : { islandActive: overrides.islandActive }),
@@ -266,6 +301,7 @@ function setup(
       inspector,
       emulation,
       agent: agentOps,
+      clientCert,
     },
   });
 
@@ -282,7 +318,11 @@ function setup(
     showItemInFolder,
     showNotification,
     takeFocusTarget,
-    getUpdate,
+    getUpdateState,
+    downloadUpdate,
+    cancelUpdateDownload,
+    installUpdate,
+    takeUpdateResult,
     openPath,
     saveDropImage,
     saveDiagnostics,
@@ -301,13 +341,15 @@ describe('registerIpc', () => {
     ipcMain.invoke('app:island-shortcut-suspend', true);
     expect(suspend).toHaveBeenCalledWith(true);
   });
-  it('terminal session target is additive, while cardId+terminal and other view values are rejected', () => {
+  it('terminal and chat session targets are additive, while cardId+view and other view values are rejected', () => {
     const session = { kind: 'session', ref: { projectPath: '/p', workId: 'w-1', sessionId: 's-01' } };
     expect(isFocusTarget(session)).toBe(true);
     expect(isFocusTarget({ ...session, cardId: 'c-1' })).toBe(true);
     expect(isFocusTarget({ ...session, view: 'terminal' })).toBe(true);
-    for (const view of ['chat', null, false, 1]) expect(isFocusTarget({ ...session, view })).toBe(false);
+    expect(isFocusTarget({ ...session, view: 'chat' })).toBe(true);
+    for (const view of ['other', null, false, 1]) expect(isFocusTarget({ ...session, view })).toBe(false);
     expect(isFocusTarget({ ...session, view: 'terminal', cardId: 'c-1' })).toBe(false);
+    expect(isFocusTarget({ ...session, view: 'chat', cardId: 'c-1' })).toBe(false);
   });
   it('session-visibility preserves sender and main-frame identity for the guarded relay', () => {
     const reportSessionVisibility = vi.fn();
@@ -1189,23 +1231,69 @@ describe('registerIpc — app:version (хост другой сборки, 0.2.0
   });
 });
 
-describe('registerIpc — app:get-update (V6 плана релиза 0.1.0)', () => {
-  const update = { version: '0.2.0', url: 'https://github.com/Kalmbik61/Parley/releases/tag/v0.2.0' };
+describe('registerIpc — app:about-info', () => {
+  it('отдаёт то, что вернула опция', async () => {
+    const info: AboutInfo = { ...ABOUT_INFO, version: null, commit: null, dirty: true };
+    const { ipcMain } = setup({ aboutInfo: info });
+    await expect(ipcMain.invoke('app:about-info')).resolves.toEqual(info);
+  });
+});
 
-  it('отдаёт то, что нашла проверка main; ничего не нашла или выключена — null', async () => {
-    const { ipcMain, getUpdate } = setup();
-    getUpdate.mockResolvedValueOnce(update).mockResolvedValueOnce(null);
+describe('registerIpc — app:check-for-updates', () => {
+  it('отдаёт итог опции', async () => {
+    const result: UpdateCheckResult = { kind: 'available', latest: '0.38.0', checkedAt: 5 };
+    const { ipcMain } = setup({ checkForUpdates: async () => result });
+    await expect(ipcMain.invoke('app:check-for-updates')).resolves.toEqual(result);
+  });
+});
 
-    await expect(ipcMain.invoke('app:get-update')).resolves.toEqual(update);
-    await expect(ipcMain.invoke('app:get-update')).resolves.toBeNull();
-    expect(getUpdate).toHaveBeenCalledTimes(2);
+describe('registerIpc — самообновление (спека self-update §5.1)', () => {
+  const available = {
+    phase: 'available',
+    version: '0.2.0',
+    url: 'https://github.com/Kalmbik61/Parley/releases/tag/v0.2.0',
+    canInstall: true,
+  };
+
+  it('app:get-update-state отдаёт текущее состояние установщика', async () => {
+    const { ipcMain, getUpdateState } = setup();
+    getUpdateState.mockReturnValueOnce(available).mockReturnValueOnce({ phase: 'idle' });
+
+    await expect(ipcMain.invoke('app:get-update-state')).resolves.toEqual(available);
+    await expect(ipcMain.invoke('app:get-update-state')).resolves.toEqual({ phase: 'idle' });
+    expect(getUpdateState).toHaveBeenCalledTimes(2);
   });
 
-  it('отказ проверки — код failed, как у прочих каналов', async () => {
-    const { ipcMain, getUpdate } = setup();
-    getUpdate.mockRejectedValueOnce(new Error('boom'));
+  it('SU-08: download, cancel и install зовут установщик без параметров, что бы ни прислало окно', async () => {
+    const { ipcMain, downloadUpdate, cancelUpdateDownload, installUpdate } = setup();
 
-    expect(await codeOf(ipcMain.invoke('app:get-update'))).toBe('failed');
+    await ipcMain.invoke('app:download-update', '9.9.9', '/etc/passwd');
+    await ipcMain.invoke('app:cancel-update-download', { version: '9.9.9' });
+    await ipcMain.invoke('app:install-update', 'https://evil.example/a.zip');
+
+    expect(downloadUpdate).toHaveBeenCalledTimes(1);
+    expect(downloadUpdate).toHaveBeenCalledWith();
+    expect(cancelUpdateDownload).toHaveBeenCalledTimes(1);
+    expect(cancelUpdateDownload).toHaveBeenCalledWith();
+    expect(installUpdate).toHaveBeenCalledTimes(1);
+    expect(installUpdate).toHaveBeenCalledWith();
+  });
+
+  it('app:take-update-result отдаёт итог из main без параметров; пусто — null', async () => {
+    const { ipcMain, takeUpdateResult } = setup();
+    takeUpdateResult.mockReturnValueOnce({ kind: 'updated', version: '0.2.0' }).mockReturnValueOnce(null);
+
+    await expect(ipcMain.invoke('app:take-update-result', 'x')).resolves.toEqual({ kind: 'updated', version: '0.2.0' });
+    await expect(ipcMain.invoke('app:take-update-result')).resolves.toBeNull();
+    expect(takeUpdateResult).toHaveBeenNthCalledWith(1);
+    expect(takeUpdateResult).toHaveBeenNthCalledWith(2);
+  });
+
+  it('отказ установщика — код failed, как у прочих каналов', async () => {
+    const { ipcMain, downloadUpdate } = setup();
+    downloadUpdate.mockRejectedValueOnce(new Error('boom'));
+
+    expect(await codeOf(ipcMain.invoke('app:download-update'))).toBe('failed');
   });
 
   it('app:save-ui после записи зовёт onUiSaved (включённая проверка версии идёт сразу); без записи — не зовёт', async () => {
@@ -1585,13 +1673,50 @@ describe('мост browser:* (тест 8 куска 9.1)', () => {
     expect(guest.setZoomLevel).toHaveBeenCalledTimes(3);
   });
 
-  it('clear-data — clearStorageData() и clearCache() раздела', async () => {
+  it('cert-response: requestId, отпечаток и remember проверяются; верный вызов передаёт sender события в clientCert.answer', async () => {
+    clientCert.answer.mockClear();
+    const { ipcMain } = browserSetup();
+    const sender = { id: 1 };
+    const send = (...args: unknown[]) => ipcMain.invokeWithEvent('browser:cert-response', { sender }, ...args);
+    for (const id of [42, '', 'x'.repeat(65), null, undefined]) {
+      expect(await codeOf(send(id, 'sha256/a', false)), String(id)).toBe('bad_request');
+    }
+    for (const fingerprint of [42, undefined, {}, 'f'.repeat(257)]) {
+      expect(await codeOf(send('r1', fingerprint, false)), String(fingerprint)).toBe('bad_request');
+    }
+    for (const remember of ['yes', 1, null, undefined]) {
+      expect(await codeOf(send('r1', 'sha256/a', remember)), String(remember)).toBe('bad_request');
+    }
+    expect(clientCert.answer).not.toHaveBeenCalled();
+
+    await send('r1', 'sha256/a', true);
+    expect(clientCert.answer).toHaveBeenLastCalledWith('r1', 'sha256/a', true, sender);
+    await send('r2', 'sha256/b', false);
+    expect(clientCert.answer).toHaveBeenLastCalledWith('r2', 'sha256/b', false, sender);
+    await send('x'.repeat(64), 'f'.repeat(256), false);
+    expect(clientCert.answer).toHaveBeenCalledTimes(3);
+  });
+
+  it('cert-response: null — «не сейчас», answer(requestId, null, false, sender) даже при remember = true', async () => {
+    clientCert.answer.mockClear();
+    const { ipcMain } = browserSetup();
+    const sender = { id: 1 };
+    await ipcMain.invokeWithEvent('browser:cert-response', { sender }, 'r3', null, true);
+    expect(clientCert.answer).toHaveBeenCalledTimes(1);
+    expect(clientCert.answer).toHaveBeenCalledWith('r3', null, false, sender);
+  });
+
+  it('clear-data — clearStorageData() и clearCache() раздела, затем clientCert.clear()', async () => {
     browserSession.clearStorageData.mockClear();
     browserSession.clearCache.mockClear();
+    clientCert.clear.mockClear();
     const { ipcMain } = browserSetup();
     await ipcMain.invoke('browser:clear-data');
     expect(browserSession.clearStorageData).toHaveBeenCalledTimes(1);
     expect(browserSession.clearCache).toHaveBeenCalledTimes(1);
+    expect(clientCert.clear).toHaveBeenCalledTimes(1);
+    const order = [browserSession.clearStorageData, browserSession.clearCache, clientCert.clear].map((fn) => fn.mock.invocationCallOrder[0] ?? 0);
+    expect(order).toEqual([...order].sort((a, b) => a - b));
     expect(otherSession.clearStorageData).not.toHaveBeenCalled();
   });
 

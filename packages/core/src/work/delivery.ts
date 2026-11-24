@@ -8,7 +8,9 @@
 
 import { HUMAN, type Message, type Room, type WorkSession } from './types.js';
 import type { SessionActivity } from './activity.js';
+import { cleanInline } from '../text-clean.js';
 import { sessionMention } from './thread.js';
+import { isReportUpdateLetter } from './task-giver.js';
 
 /**
  * Окно тишины (план «меньше ходов», C1.2): заметка всем без упоминания не будит простаивающего агента сразу —
@@ -77,6 +79,9 @@ export type DeliveryAction =
     }
   | { kind: 'resume'; text: string; letterIds: string[] };
 
+/** Название комнаты в указателе: строка набирается в чужой терминал и должна оставаться короткой. */
+const POINTER_TITLE_MAX = 80;
+
 /**
  * Текст указателя (план, кусок 3.5): сколько писем и откуда — прямые, одна
  * комната с названием, несколько комнат списком, комнаты вместе с прямыми.
@@ -88,7 +93,7 @@ export function pointerText(letters: readonly Message[], rooms: readonly Room[])
   const tail = 'Call check_inbox.';
   const head = `New messages (${letters.length})`;
   const roomIds = [
-    ...new Set(letters.flatMap((message) => (message.roomId === null ? [] : [message.roomId]))),
+    ...new Set(letters.flatMap((message) => (message.roomId === null ? [] : [cleanInline(message.roomId)]))),
   ].sort((a, b) => a.localeCompare(b, 'en', { numeric: true }));
   const direct = letters.some((message) => message.roomId === null);
   const task = letters.some((message) => message.from === HUMAN && message.roomId !== null && message.to.length === 0)
@@ -102,7 +107,7 @@ export function pointerText(letters: readonly Message[], rooms: readonly Room[])
   const id = roomIds[0] as string;
   const room = rooms.find((candidate) => candidate.id === id);
   // Комнаты в карте нет (письмо пережило её) — хватит и id.
-  return room === undefined ? `${head} in ${id}${task}. ${tail}` : `${head} in ${id} "${room.title}"${task}. ${tail}`;
+  return room === undefined ? `${head} in ${id}${task}. ${tail}` : `${head} in ${id} "${cleanInline(room.title, POINTER_TITLE_MAX)}"${task}. ${tail}`;
 }
 
 /** Указатель целиком (`pointerText`): голова со счётом, необязательное «in r-…», хвост `Call check_inbox.`. */
@@ -161,12 +166,14 @@ function mentionPattern(recipientId: string): RegExp {
 
 /**
  * Срочность письма для одного получателя: от человека, адресное (`to` не пусто), не заметка (`question`, `decision`)
- * или с упоминанием получателя `@sNN` (или `@s-NN`, `mentionPattern`). Выражение упоминания строится один раз —
+ * или с упоминанием получателя `@sNN` (или `@s-NN`, `mentionPattern`). Письмо-обновление итога (`isReportUpdateLetter`)
+ * не срочное, как бы ни было адресовано: оно ждёт окна тишины. Выражение упоминания строится один раз —
  * предикат годится на любое число писем.
  */
 function urgencyOf(recipientId: string): (message: Message) => boolean {
   const mention = mentionPattern(recipientId);
-  return (message) => message.from === HUMAN || message.to.length > 0 || message.kind !== 'note' || mention.test(message.text);
+  return (message) => !isReportUpdateLetter(message) &&
+    (message.from === HUMAN || message.to.length > 0 || message.kind !== 'note' || mention.test(message.text));
 }
 
 /** Письмо будит получателя сразу, без окна тишины (`urgencyOf`). */
@@ -289,4 +296,24 @@ export function deliveryAction(input: DeliveryInput): DeliveryAction {
     letterIds: letters.map((message) => message.id),
     ...(queue ? { queue: true as const } : {}),
   };
+}
+
+/**
+ * Предупреждение `send_message` об адресате, которого письмо не поднимет: поле `wakeBlocked`; сессия спит и поднимать
+ * нечем (нет id провайдера и прежних агентов, как в `resumeSession` будильника); спит и час подъёмов исчерпан
+ * (лимит `reserveAttempt` считает и подъём после сна по решению хоста). `null` — письмо дойдёт обычным путём.
+ */
+export function heldWarning(session: WorkSession, resumesInHour: number, resumeRate: number): string | null {
+  const mention = sessionMention(session.id);
+  if (session.wakeBlocked != null) {
+    return `${mention} cannot be woken (${session.wakeBlocked.reason}): it reads this when the human resumes it`;
+  }
+  if (session.lifecycle !== 'sleeping') return null;
+  if (session.providerSessionId === null && (session.previousAgents?.length ?? 0) === 0) {
+    return `${mention} is asleep with no conversation to resume: it reads this when the human starts it`;
+  }
+  if (resumesInHour >= resumeRate) {
+    return `${mention} reached its hourly resume limit: it reads this when the limit frees or the human resumes it`;
+  }
+  return null;
 }

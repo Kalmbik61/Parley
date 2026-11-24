@@ -55,9 +55,9 @@ export interface WindowWorkEntry {
  * который кто-то правит «на месте», в проде тихо портил бы карту всем читателям сразу, а здесь это `TypeError`
  * в месте правки. В проде заморозки нет — обход объекта на каждую сборку лишний.
  */
-const freezeMaps = process.env['VITEST'] !== undefined || process.env['PARLEY_FREEZE_MAPS'] === '1';
+export const freezeMaps = process.env['VITEST'] !== undefined || process.env['PARLEY_FREEZE_MAPS'] === '1';
 
-function deepFreeze<T>(value: T): T {
+export function deepFreeze<T>(value: T): T {
   if (typeof value === 'object' && value !== null && !Object.isFrozen(value)) {
     Object.freeze(value);
     for (const child of Object.values(value)) deepFreeze(child);

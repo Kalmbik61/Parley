@@ -153,10 +153,12 @@ describe('mergeLimits: свод лимитов нескольких сессий
     at: string,
     fiveHour: [number, string] | null,
     week: [number, string] | null,
+    changedAt?: string,
   ): ProviderLimits => ({
     fiveHour: fiveHour === null ? null : { usedPercent: fiveHour[0], resetsAt: fiveHour[1] },
     week: week === null ? null : { usedPercent: week[0], resetsAt: week[1] },
     at,
+    ...(changedAt === undefined ? {} : { changedAt }),
   });
 
   it('пусто — null; одна запись — она же', () => {
@@ -165,11 +167,12 @@ describe('mergeLimits: свод лимитов нескольких сессий
     expect(mergeLimits([only])).toEqual(only);
   });
 
-  it('равный resetsAt — большее usedPercent, а не запись с более поздним at', () => {
-    // Простаивающая сессия: Claude Code зовёт скрипт по другим поводам (смена режима, /compact)
-    // с прежними числами, и её `at` свежее, а числа — устаревшие.
-    const idleButFresh = limits('2026-09-29T11:59:00.000Z', [58, R5], [41, RW]);
-    const worked = limits('2026-09-29T11:00:00.000Z', [61, R5], [43, RW]);
+  it('простаивающая сессия со свежим at и старым changedAt не перебивает ту, что работала', () => {
+    // Claude Code зовёт скрипт по другим поводам (смена режима, /compact) с прежними числами:
+    // `at` свежее, `changedAt` — когда числа менялись на самом деле. (Заменяет прежний тест
+    // «равный resetsAt — большее usedPercent»: расход там вырос, и работавшая сессия по-прежнему побеждает.)
+    const idleButFresh = limits('2026-09-29T11:59:00.000Z', [58, R5], [41, RW], '2026-09-29T09:00:00.000Z');
+    const worked = limits('2026-09-29T11:00:00.000Z', [61, R5], [43, RW], '2026-09-29T11:00:00.000Z');
 
     for (const list of [
       [idleButFresh, worked],
@@ -178,7 +181,68 @@ describe('mergeLimits: свод лимитов нескольких сессий
       const merged = mergeLimits(list);
       expect(merged?.fiveHour?.usedPercent).toBe(61);
       expect(merged?.week?.usedPercent).toBe(43);
+      expect(merged?.at).toBe('2026-09-29T11:59:00.000Z');
+      expect(merged?.changedAt).toBe('2026-09-29T11:00:00.000Z');
     }
+  });
+
+  it('равный resetsAt и равное время изменения — большее usedPercent', () => {
+    const a = limits('2026-09-29T11:00:00.000Z', [58, R5], [41, RW], '2026-09-29T10:00:00.000Z');
+    const b = limits('2026-09-29T11:30:00.000Z', [61, R5], [43, RW], '2026-09-29T10:00:00.000Z');
+    for (const list of [[a, b], [b, a]]) {
+      expect(mergeLimits(list)?.week?.usedPercent).toBe(43);
+    }
+  });
+
+  describe('сброс лимита вендором посреди окна (реальные формы 2026-11-12)', () => {
+    const RESET = '2026-11-16T16:00:00.000Z'; // resets_at 1794844800
+    const staleHigh = limits('2026-11-12T08:51:00.000Z', [30, '2026-11-12T13:00:00.000Z'], [96, RESET]);
+    const freshLow = limits('2026-11-12T17:22:00.000Z', null, [10, RESET]);
+
+    it('старое 96 % без changedAt и свежее 10 % с равным resetsAt → 10', () => {
+      for (const list of [[staleHigh, freshLow], [freshLow, staleHigh]]) {
+        expect(mergeLimits(list)?.week).toEqual({ usedPercent: 10, resetsAt: RESET });
+      }
+    });
+
+    it('смешанный порядок at: много старых файлов и несколько свежих', () => {
+      const olds = [92, 94, 96, 95].map((p, i) => limits(`2026-11-12T0${i + 1}:00:00.000Z`, null, [p, RESET]));
+      const news = [2, 5, 10].map((p, i) => limits(`2026-11-12T1${i + 5}:00:00.000Z`, null, [p, RESET]));
+      for (const list of [[...olds, ...news], [...news, ...olds], [news[1]!, olds[2]!, news[2]!, olds[0]!, news[0]!]]) {
+        expect(mergeLimits(list)?.week?.usedPercent).toBe(10);
+      }
+    });
+
+    it('простаивающая сессия, повторяющая старые 96 % со свежим at, не перебивает работавшую после сброса', () => {
+      const idle = limits('2026-11-12T18:00:00.000Z', null, [96, RESET], '2026-11-12T08:51:00.000Z');
+      for (const list of [[idle, freshLow], [freshLow, idle]]) {
+        expect(mergeLimits(list)?.week).toEqual({ usedPercent: 10, resetsAt: RESET });
+      }
+    });
+
+    it('работает и для пятичасового окна', () => {
+      const R = '2026-11-12T19:00:00.000Z';
+      const old = limits('2026-11-12T16:00:00.000Z', [88, R], null);
+      const fresh = limits('2026-11-12T17:00:00.000Z', [4, R], null, '2026-11-12T17:00:00.000Z');
+      expect(mergeLimits([old, fresh])?.fiveHour?.usedPercent).toBe(4);
+      expect(mergeLimits([fresh, old])?.fiveHour?.usedPercent).toBe(4);
+    });
+
+    it('окно сводится по своей записи, а не по общему changedAt свода', () => {
+      // B менялась позже всех, но недельного окна у неё нет: недельное решают A и C.
+      const a = limits('2026-11-12T10:00:00.000Z', null, [40, RESET], '2026-11-12T10:00:00.000Z');
+      const b = limits('2026-11-12T12:00:00.000Z', [5, '2026-11-12T19:00:00.000Z'], null, '2026-11-12T12:00:00.000Z');
+      const c = limits('2026-11-12T11:00:00.000Z', null, [50, RESET], '2026-11-12T11:00:00.000Z');
+      expect(mergeLimits([a, b, c])?.week?.usedPercent).toBe(50);
+      expect(mergeLimits([c, b, a])?.week?.usedPercent).toBe(50);
+    });
+
+    it('неизвестный resetsAt — по-прежнему последнее наблюдение по at', () => {
+      const x: ProviderLimits = { fiveHour: null, week: { usedPercent: 70, resetsAt: null }, at: '2026-11-12T10:00:00.000Z', changedAt: '2026-11-12T12:00:00.000Z' };
+      const y: ProviderLimits = { fiveHour: null, week: { usedPercent: 20, resetsAt: null }, at: '2026-11-12T11:00:00.000Z' };
+      expect(mergeLimits([x, y])?.week?.usedPercent).toBe(20);
+      expect(mergeLimits([y, x])?.week?.usedPercent).toBe(20);
+    });
   });
 
   it('разный resetsAt — окно с более поздним сбросом, даже если оно меньше и старше по at', () => {
@@ -197,8 +261,9 @@ describe('mergeLimits: свод лимитов нескольких сессий
 
   it('каждое окно сводится отдельно: пятичасовое от одной сессии, недельное — от другой', () => {
     // Пятичасовое окно началось заново (сессия A), недельное у той же недели, но у B расход больше.
-    const a = limits('2026-09-29T12:00:00.000Z', [3, R5_NEXT], [40, RW]);
-    const b = limits('2026-09-29T11:00:00.000Z', [70, R5], [45, RW]);
+    // Недельное окно: у B числа менялись позже (changedAt), хотя `at` у A свежее.
+    const a = limits('2026-09-29T12:00:00.000Z', [3, R5_NEXT], [40, RW], '2026-09-29T10:00:00.000Z');
+    const b = limits('2026-09-29T11:00:00.000Z', [70, R5], [45, RW], '2026-09-29T11:00:00.000Z');
 
     const merged = mergeLimits([a, b]);
     expect(merged?.fiveHour).toEqual({ usedPercent: 3, resetsAt: R5_NEXT });
@@ -215,10 +280,18 @@ describe('mergeLimits: свод лимитов нескольких сессий
     expect(mergeLimits([onlyFive, onlyFive])?.week).toBeNull();
   });
 
+  it('parseLimitsFile читает changedAt; битый — отсутствует', () => {
+    const body = (changedAt: unknown) =>
+      JSON.stringify({ at: AT, changedAt, rateLimits: { seven_day: { used_percentage: 10, resets_at: NOW_SEC + 86_400 } } });
+    expect(parseLimitsFile(body('2026-09-29T11:00:00Z'))?.changedAt).toBe('2026-09-29T11:00:00.000Z');
+    expect(parseLimitsFile(body('nope'))).not.toHaveProperty('changedAt');
+    expect(parseLimitsFile(body(5))).not.toHaveProperty('changedAt');
+  });
+
   it('at сводного значения — самое позднее из всех, в каком бы порядке ни пришли записи', () => {
-    const early = limits('2026-09-29T10:00:00.000Z', [61, R5], [43, RW]);
-    const late = limits('2026-09-29T12:00:00.000Z', [58, R5], [41, RW]);
-    const middle = limits('2026-09-29T11:00:00.000Z', [50, R5], [40, RW]);
+    const early = limits('2026-09-29T10:00:00.000Z', [61, R5], [43, RW], '2026-09-29T10:00:00.000Z');
+    const late = limits('2026-09-29T12:00:00.000Z', [58, R5], [41, RW], '2026-09-29T09:00:00.000Z');
+    const middle = limits('2026-09-29T11:00:00.000Z', [50, R5], [40, RW], '2026-09-29T08:00:00.000Z');
 
     for (const list of [
       [early, late, middle],
@@ -229,6 +302,7 @@ describe('mergeLimits: свод лимитов нескольких сессий
         fiveHour: { usedPercent: 61, resetsAt: R5 },
         week: { usedPercent: 43, resetsAt: RW },
         at: '2026-09-29T12:00:00.000Z',
+        changedAt: '2026-09-29T10:00:00.000Z',
       });
     }
   });

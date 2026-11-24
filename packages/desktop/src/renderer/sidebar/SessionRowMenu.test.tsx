@@ -330,6 +330,22 @@ describe('SessionRowMenu — Make lead (участник развёрнутой 
 });
 
 describe('SessionRowMenu — Resume', () => {
+  it('отказ роли после замены агента — тост с текстом хоста (спека 2026-11-12, 2.6)', async () => {
+    const message = 'Architect is a read-only role and does not run on Qwen Code. Continue @s02 on Codex again to keep the role; from there you can continue it on Qwen Code without the role.';
+    bridge.setHandler('sessions.resume', () => {
+      throw encodeIpcError({ code: 'conflict', message, data: { reason: 'role-change' } });
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    renderMenu(makeSession('s-02', 'Bruno', { lifecycle: 'sleeping' }));
+    fireEvent.click(screen.getByText('Resume'));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(toast).toHaveBeenCalledWith(message);
+    warn.mockRestore();
+  });
+
   it('отказ бюджета — тост с причиной и настройкой, не «conflicting state»', async () => {
     bridge.setHandler('sessions.resume', () => {
       throw encodeIpcError({

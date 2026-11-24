@@ -1,10 +1,14 @@
 import { homedir } from 'node:os';
 import { envValue } from '@parley/core';
 import { startupWaitFromEnv } from './activity/activity-service.js';
+import { installCrashGuards } from './crash-guards.js';
 import { HostAlreadyRunning, SocketPathTooLong, startHost } from './host.js';
 import { glmCheckOptionsFromEnv } from './limits/glm-check.js';
 import { limitsOptionsFromEnv } from './limits/limits-service.js';
 import { probeCodexCatalog } from './providers/codex-catalog.js';
+import { probeOpencodeAuthCount } from './providers/opencode-auth-hint.js';
+import { probeOpencodeModels } from './providers/opencode-catalog.js';
+import { probeQwenModels } from './providers/qwen-catalog.js';
 import { probeCliVersion } from './providers/versions.js';
 
 /** Коды выхода: 0 — обычная остановка, 3 — хост уже запущен, 4 — путь сокета слишком длинный. */
@@ -25,7 +29,7 @@ async function main(): Promise<number> {
   const codexHookGraceMs = Number.isInteger(hookGraceRaw) && hookGraceRaw >= 100 && hookGraceRaw <= 600_000 ? hookGraceRaw : undefined;
   const options = {
     ...(envIdleMs ? { idleMs: Number(envIdleMs) } : {}),
-    ...(probeVersions ? { probeVersion: probeCliVersion, probeCodexCatalog, cliUpdates: { fetchImpl: fetch, userHome: homedir() } } : {}),
+    ...(probeVersions ? { probeVersion: probeCliVersion, probeCodexCatalog, probeQwenCatalog: probeQwenModels, probeOpencodeCatalog: probeOpencodeModels, probeOpencodeAuth: probeOpencodeAuthCount, cliUpdates: { fetchImpl: fetch, userHome: homedir() } } : {}),
     ...(limits === undefined ? {} : { limits }),
     ...(glmCheck === undefined ? {} : { glmCheck }),
     ...(startupWaitMs === undefined ? {} : { startupWaitMs }),
@@ -33,7 +37,12 @@ async function main(): Promise<number> {
   };
   try {
     const running = await startHost(options);
+    const removeCrashGuards = installCrashGuards({
+      log: running.context.log,
+      shutdown: (reason) => running.context.shutdown(reason),
+    });
     await running.closed;
+    removeCrashGuards();
     return 0;
   } catch (error) {
     if (error instanceof HostAlreadyRunning) return 3;
@@ -45,6 +54,8 @@ async function main(): Promise<number> {
 main()
   .then((code) => {
     process.exitCode = code;
+    // Зависший хук остановки мог оставить живые дескрипторы: процесс всё равно уходит.
+    setTimeout(() => process.exit(code), 3000).unref();
   })
   .catch((error: unknown) => {
     console.error(error);

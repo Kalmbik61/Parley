@@ -6,7 +6,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { addRoom, addSession, archiveRoom, createWork, mapLetterTx, cancelRoomPlan, ENGINE, HUMAN, parseMap, readStoredMap, replaceStoredMap, summarizePlanEffects, proposeCompletion, resolveProposal, halt, reserve, resume, setProposal, startAttempt, type AttemptChannelRequest, type CheckResult, type RoomPlan, type SessionNeed, type WindowWorkMap, type WorkMap } from '@parley/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createAutonomousEngine, resolveAutonomousProposal, type EngineIO } from './autonomous-engine.js';
+import { createAutonomousEngine, ENGINE_SAFETY_TICK_MS, resolveAutonomousProposal, type EngineIO } from './autonomous-engine.js';
 import { attemptsEngineGitPath, type AttemptsProposal } from '../agent/attempts-endpoint.js';
 import { resolveRoomProposal, resumeAutonomousPlan } from './rooms-service.js';
 import type { RequestInfo } from '../context.js';
@@ -1604,5 +1604,144 @@ describe('human return of autonomous completion', () => {
     expect(f.map().rooms[0]!.proposal).toBeNull();
     await f.engine.flush(f.projectPath, 'w-01');
     expect(f.attempt(1)).toMatchObject({ item: 1, n: 2, status: 'running' });
+  });
+});
+
+describe('autonomous engine: gate by version and safety tick', () => {
+  afterEach(() => vi.useRealTimers());
+  // Остановленный план даёт тихий цикл: `cycle` читает карту, `drainSessions` и сам цикл грузят план — три чтения
+  // (`read`, `load`, `load`), записей нет. Файловая система без `.git` движка делает восстановление чисто памятным.
+  async function quiet(withVersion = true) {
+    const f = await fixture();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    f.map().plans![0] = halt(f.read(), { actor: ENGINE, rev: 1, now: now.toISOString(), reason: 'human', detail: 'Pause' });
+    let version = 1;
+    let listener: (() => void) | undefined;
+    const readMap = vi.fn(f.io.readMap);
+    const versionCalls = vi.fn(() => version);
+    const absent = async () => { throw Object.assign(new Error('absent'), { code: 'ENOENT' }); };
+    const io: EngineIO = {
+      ...f.io,
+      readMap,
+      ...(withVersion ? { version: versionCalls } : {}),
+      fs: { ...fs, stat: absent as typeof fs.stat },
+      // Запись движка растит версию и будит onChange, как настоящая работа.
+      updateMap: async (...args: Parameters<EngineIO['updateMap']>) => { const result = await f.io.updateMap(...args); version += 1; listener?.(); return result; },
+    };
+    const works = {
+      snapshot: () => ({ entries: [{ projectPath: f.projectPath, map: f.map(), version }] }) as unknown as WorksView,
+      onChange: (fn: (...args: never[]) => void) => { listener = fn as () => void; return () => {}; },
+    };
+    const engine = createAutonomousEngine(io, { provider: 'codex', verifier: { provider: 'claude', model: 'sonnet' }, works });
+    engines.push(engine);
+    engine.start();
+    await vi.advanceTimersByTimeAsync(0);
+    return { readMap, versionCalls, change: () => listener!(), foreignWrite: () => { version += 1; listener!(); }, tick: async (ms: number) => { await vi.advanceTimersByTimeAsync(ms); await vi.advanceTimersByTimeAsync(0); } };
+  }
+
+  it('onChange с той же версией не запускает цикл', async () => {
+    const q = await quiet();
+    const before = q.versionCalls.mock.calls.length;
+    q.change(); q.change(); q.change();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(q.versionCalls.mock.calls.length).toBe(before);
+  });
+
+  it('тик 30 с при той же версии не копирует карту', async () => {
+    const q = await quiet();
+    const reads = q.readMap.mock.calls.length, before = q.versionCalls.mock.calls.length;
+    await q.tick(ENGINE_SAFETY_TICK_MS - 1);
+    expect(q.versionCalls.mock.calls.length).toBe(before);
+    await q.tick(1);
+    expect(q.versionCalls.mock.calls.length).toBe(before + 3);
+    expect(q.readMap.mock.calls.length).toBe(reads);
+  });
+
+  it('смена версии — один цикл и одно чтение', async () => {
+    const q = await quiet();
+    const reads = q.readMap.mock.calls.length, before = q.versionCalls.mock.calls.length;
+    q.foreignWrite();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(q.readMap.mock.calls.length).toBe(reads + 1);
+    expect(q.versionCalls.mock.calls.length).toBe(before + 3);
+    q.change();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(q.versionCalls.mock.calls.length).toBe(before + 3);
+  });
+
+  it('без io.version каждое чтение идёт в readMap', async () => {
+    const q = await quiet(false);
+    const reads = q.readMap.mock.calls.length;
+    await q.tick(ENGINE_SAFETY_TICK_MS);
+    expect(q.readMap.mock.calls.length).toBe(reads + 3);
+  });
+});
+
+describe('прерывание проверок плана', () => {
+  type Fixture = Awaited<ReturnType<typeof fixture>>;
+  const cancelledResult = (ctx: Parameters<EngineIO['runner']>[0], spec: Parameters<EngineIO['runner']>[1], sha: string, attemptId: string): CheckResult =>
+    ({ id: ctx.resultId, specId: spec.id, attemptId, sha, argvHash: digest(spec.argv), envHash: digest(spec.env), inputsOk: true, verdict: 'error', by: ENGINE, exitCode: null, summary: 'cancelled', outputTail: null, at: now.toISOString(), durationMs: 1 });
+  /** Поддельный runner стоит, пока не придёт abort (как настоящий: после abort возвращает итог `cancelled`). */
+  function hangingRunner(f: Fixture) {
+    const seen: AbortSignal[] = [];
+    let started!: () => void;
+    const running = new Promise<void>(resolve => { started = resolve; });
+    f.io.runner = vi.fn(async (ctx, spec, sha, attemptId) => {
+      seen.push(ctx.signal!); started();
+      await new Promise<void>(resolve => ctx.signal!.addEventListener('abort', () => resolve(), { once: true }));
+      return cancelledResult(ctx, spec, sha, attemptId);
+    });
+    return { seen, running };
+  }
+  const checkOps = (f: Fixture) => f.read().autonomous!.ops.filter(op => op.kind === 'check');
+
+  it('cancel aborts the running check and resolves', async () => {
+    const f = await fixture(); await f.engine.flush(f.projectPath, 'w-01');
+    const hang = hangingRunner(f);
+    const pending = f.submit();
+    await hang.running;
+    await f.engine.cancel({ projectPath: f.projectPath, workId: 'w-01', planId: 'pl-01', rev: 1 });
+    expect(hang.seen[0]!.aborted).toBe(true);
+    expect(f.read().status).toBe('cancelled');
+    // Прерванная проверка в карту итог не пишет: намерение закрыл сам cancel как failed.
+    expect(checkOps(f).map(op => op.state)).toEqual(['failed']);
+    expect(await pending).toMatchObject({ ok: false, error: { code: 'check-cancelled' } });
+  });
+
+  it('stop resolves while a check runs', async () => {
+    const f = await fixture(); await f.engine.flush(f.projectPath, 'w-01');
+    const hang = hangingRunner(f);
+    const pending = f.submit();
+    await hang.running;
+    await f.engine.stop();
+    expect(hang.seen[0]!.aborted).toBe(true);
+    // После остановки намерение разбирает сверка при старте: оно осталось intended, результата нет.
+    expect(checkOps(f).map(op => op.state)).toEqual(['intended']);
+    expect(await pending).toMatchObject({ ok: false, error: { code: 'check-cancelled' } });
+  });
+
+  it('a queued check of a cancelled work never starts', async () => {
+    const first = await fixture(); await first.engine.flush(first.projectPath, 'w-01');
+    const second = await fixture(); await second.engine.flush(second.projectPath, 'w-01');
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let firstStarted!: () => void;
+    const firstRunning = new Promise<void>(resolve => { firstStarted = resolve; });
+    const passing = first.io.runner;
+    first.io.runner = vi.fn(async (ctx, spec, sha, attemptId) => { firstStarted(); await gate; return passing(ctx, spec, sha, attemptId); });
+    const pendingFirst = first.submit();
+    await firstRunning;
+    // Проверка второй работы встаёт в общую очередь за первой.
+    const pendingSecond = second.submit();
+    await vi.waitFor(() => expect(second.attempt().receipt).toBeTruthy());
+    await new Promise(resolve => setTimeout(resolve, 100));
+    await second.engine.cancel({ projectPath: second.projectPath, workId: 'w-01', planId: 'pl-01', rev: 1 });
+    expect(second.read().status).toBe('cancelled');
+    expect(await pendingSecond).toMatchObject({ ok: false, error: { code: 'check-cancelled' } });
+    release();
+    expect(await pendingFirst).toMatchObject({ ok: true });
+    await new Promise(resolve => setTimeout(resolve, 100));
+    expect(second.io.runner).not.toHaveBeenCalled();
+    expect(checkOps(second)).toEqual([]);
   });
 });

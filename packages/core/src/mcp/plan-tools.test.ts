@@ -874,7 +874,7 @@ it("set_room_mode reports its own system line by id, even when the write put ano
   expect(notices[0]!.text).not.toContain("Plan pl-01 completed");
 });
 
-it("a still-live verifier cannot complete an unsatisfied item whose owner closed before the host reconcile event", async () => {
+it("a still-live verifier can complete a submitted item whose owner closed before the host reconcile event", async () => {
   await accepted();
   const identity = { planId: "pl-01", rev: 0, item: 1 };
   expect(
@@ -888,17 +888,16 @@ it("a still-live verifier cannot complete an unsatisfied item whose owner closed
   await updateMap(project, context.workId, (map) =>
     transitionSession(map, "s-02", "closed"),
   );
-  const before = JSON.stringify(await readMap(project, context.workId));
   expect(
     (
       await call("s-03", "plan_verify", {
         ...identity,
         verdict: "verified",
-        note: "Too late",
+        note: "Still checked",
       })
     ).failed,
-  ).toBe(true);
-  expect(JSON.stringify(await readMap(project, context.workId))).toBe(before);
+  ).toBe(false);
+  expect(readStoredMap(project, context.workId).plans![0]!.items[0]!.status).toBe("verified");
 });
 
 it("legacy Free decision preserves character limits for 6000 and 10000 Cyrillic characters and its exact reply shape", async () => {

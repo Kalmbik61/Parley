@@ -10,9 +10,9 @@
  */
 
 import { constants, type Dirent } from 'node:fs';
-import { lstat, open, readdir, realpath } from 'node:fs/promises';
+import { open, readdir, realpath } from 'node:fs/promises';
 import path from 'node:path';
-import { claudeProjectRoots } from '../discover.js';
+import { claudeProjectRoots, findClaudeSessionFile } from '../discover.js';
 import { discoverClaudeSkills } from './claude.js';
 import type { SkillCatalog } from './catalog.js';
 import { readMarkdownFrontmatter } from './frontmatter.js';
@@ -29,23 +29,6 @@ export type ListedNames =
   | { status: 'ok'; names: string[] }
   | { status: 'no-transcript' }
   | { status: 'no-listing' };
-
-/** Файл `<uuid>.jsonl` в каталоге проекта одного из корней истории; симлинки и не-файлы пропускаются. */
-async function transcriptFile(uuid: string, roots: readonly string[]): Promise<string | null> {
-  for (const root of roots) {
-    let projects: Dirent[];
-    try { projects = await readdir(root, { withFileTypes: true }); } catch { continue; }
-    for (const project of projects) {
-      if (!project.isDirectory()) continue;
-      const file = path.join(root, project.name, `${uuid}.jsonl`);
-      try {
-        const info = await lstat(file);
-        if (info.isFile()) return file;
-      } catch { /* В этом каталоге проекта такого транскрипта нет. */ }
-    }
-  }
-  return null;
-}
 
 /** Целые строки из окон файла: у края окна строка может быть оборвана, её отбрасываем. */
 async function windowLines(file: string, windowBytes: number): Promise<string[] | null> {
@@ -85,7 +68,7 @@ export async function readClaudeListedNames(
   options: { roots?: readonly string[]; windowBytes?: number } = {},
 ): Promise<ListedNames> {
   if (!SESSION_UUID.test(uuid)) return { status: 'no-transcript' };
-  const file = await transcriptFile(uuid, options.roots ?? claudeProjectRoots());
+  const file = await findClaudeSessionFile(uuid, options.roots ?? claudeProjectRoots());
   if (file === null) return { status: 'no-transcript' };
   const lines = await windowLines(file, options.windowBytes ?? LISTING_WINDOW_BYTES);
   if (lines === null) return { status: 'no-transcript' };

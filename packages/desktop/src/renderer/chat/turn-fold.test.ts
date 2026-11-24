@@ -157,3 +157,25 @@ describe('строка статуса', () => {
     expect(formatTurnDuration(3_600_000)).toBe('1h');
   });
 });
+
+const mail = (): FeedItem => ({ ...base(), kind: 'mail', via: 'pointer', toolUseId: null, letters: [{ id: 'm-1', from: 'human', fromLabel: null, kind: 'note', room: null, at: '2026-10-30T00:00:00Z', text: 'hi' }] });
+
+describe('foldFeed: mail (spec 2026-11-12)', () => {
+  it('is visible in both modes and never joins a group', () => {
+    for (const mode of ['replies', 'final'] as const) {
+      expect(shape(foldFeed([prompt(), tool('Bash'), mail(), text(), turn()], mode, none))).toContain('mail');
+      expect(shape(foldFeed([prompt(), tool('Bash'), mail(), tool('Read'), turn()], mode, none)).filter((row) => row === 'mail')).toHaveLength(1);
+    }
+  });
+
+  it('a turn of pointer prompt, mail and text has no "Retried requests" group', () => {
+    const rows = shape(foldFeed([prompt('New messages (1). Call check_inbox.'), mail(), text(), turn()], 'replies', none));
+    expect(rows.filter((row) => row.startsWith('group:'))).toEqual([]);
+    expect(rows).toEqual(['prompt', 'control:completed', 'mail', 'text']);
+  });
+
+  it('a turn of check_inbox tool, mail and text keeps the tool in its group and the mail visible', () => {
+    const rows = shape(foldFeed([prompt(), tool('mcp__parley__check_inbox'), mail(), text(), turn()], 'replies', none));
+    expect(rows).toEqual(['prompt', 'control:completed', `group:${groupTitle([tool('mcp__parley__check_inbox')]).title}`, 'mail', 'text']);
+  });
+});

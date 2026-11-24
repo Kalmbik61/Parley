@@ -28,6 +28,7 @@ import {
   FeedDraft,
   finishAgent,
   finishTool,
+  putMail,
   limitText,
   newText,
   newTool,
@@ -165,7 +166,7 @@ function onTurnContext(draft: FeedDraft, record: RolloutRecord): void {
   draft.put(item);
 }
 
-function onItem(draft: FeedDraft, record: RolloutRecord, cursor: CodexCursor, agentId: string | null): void {
+function onItem(draft: FeedDraft, record: RolloutRecord, cursor: CodexCursor, agentId: string | null, mail: boolean): void {
   const item = record.payload['item'];
   if (!isRecord(item)) return;
   const type = str(item, 'type');
@@ -232,7 +233,9 @@ function onItem(draft: FeedDraft, record: RolloutRecord, cursor: CodexCursor, ag
       const args = isRecord(item['arguments']) ? item['arguments'] : {};
       const result = isRecord(item['result']) ? mcpResult(item['result']) : undefined;
       const error = isRecord(item['error']) ? str(item['error'], 'message') : str(item, 'error');
-      putTool(draft, agentId, finishTool(newTool(id, `mcp__${server}__${name}`, args, startAt, agentId), statusOf(item), result ?? error ?? undefined, endAt));
+      const finished = finishTool(newTool(id, `mcp__${server}__${name}`, args, startAt, agentId), statusOf(item), result ?? error ?? undefined, endAt);
+      putTool(draft, agentId, finished);
+      if (mail && agentId === null) putMail(draft, finished);
       return;
     }
     case 'Extension': {
@@ -331,7 +334,7 @@ function onAsyncQuestion(draft: FeedDraft, record: RolloutRecord): void {
   draft.put(newText(`text:codex-question:${callId}`, record.at, null, text, false));
 }
 
-function applyRecord(draft: FeedDraft, record: RolloutRecord, cursor: CodexCursor, agentId: string | null): void {
+function applyRecord(draft: FeedDraft, record: RolloutRecord, cursor: CodexCursor, agentId: string | null, mail: boolean): void {
   if (record.type === 'turn_context') {
     if (agentId === null) onTurnContext(draft, record);
     return;
@@ -344,7 +347,7 @@ function applyRecord(draft: FeedDraft, record: RolloutRecord, cursor: CodexCurso
   const kind = str(record.payload, 'type');
   if (kind === 'item_completed') {
     cursor.modern = true;
-    onItem(draft, record, cursor, agentId);
+    onItem(draft, record, cursor, agentId, mail);
     return;
   }
   if (agentId !== null) return;
@@ -361,6 +364,7 @@ export function applyCodexRecords(
   records: readonly RolloutRecord[],
   cursor: CodexCursor,
   agentId: string | null = null,
+  mail = true,
 ): { update: FeedUpdate; cursor: CodexCursor } {
   const draft = new FeedDraft(state);
   const next: CodexCursor = { ...cursor };
@@ -369,17 +373,17 @@ export function applyCodexRecords(
       if (record.ordinal <= next.lastOrdinal) continue;
       next.lastOrdinal = record.ordinal;
     }
-    applyRecord(draft, record, next, agentId);
+    applyRecord(draft, record, next, agentId, mail);
   }
   return { update: draft.done(), cursor: next };
 }
 
 export function feedFromCodexRollout(
   records: readonly RolloutRecord[],
-  options: { limit?: number; historyStart?: number } = {},
+  options: { limit?: number; historyStart?: number; context?: 'root' | 'child' } = {},
 ): { state: FeedState; cursor: CodexCursor } {
   const start: CodexCursor = { ...emptyCodexCursor(), lastOrdinal: (options.historyStart ?? 0) - 1 };
-  const { update, cursor } = applyCodexRecords(emptyFeedState(), records, start);
+  const { update, cursor } = applyCodexRecords(emptyFeedState(), records, start, null, options.context !== 'child');
   let { state } = update;
   const conversational = records.some((record) => record.type === 'response_item' || (record.type === 'event_msg' && str(record.payload, 'type') !== 'token_count'));
   if (!cursor.modern && conversational) {

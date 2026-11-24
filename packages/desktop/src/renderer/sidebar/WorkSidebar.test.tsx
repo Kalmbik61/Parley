@@ -512,9 +512,9 @@ describe('WorkSidebar — клавиатура (спека 6.5, кусок 3.4)'
     expect(screen.getByText('Pin')).toBeTruthy();
   });
 
-  it('→ и ← на карточке раскрывают и сворачивают ещё и архивные комнаты (архив комнат, 5.1)', () => {
+  it('→ и ← на карточке раскрывают и сворачивают оба блока разом: «Closed sessions» и «Archived rooms» (архив комнат, 5.1)', () => {
     const entry = makeWork('w-ka', {
-      sessions: [makeSession('s-01', 'open'), makeSession('s-02', 'asleep', { lifecycle: 'sleeping' })],
+      sessions: [makeSession('s-01', 'open'), makeSession('s-02', 'asleep', { lifecycle: 'sleeping' }), makeSession('s-03', 'gone', { lifecycle: 'closed' })],
       rooms: [{ ...makeRoom('r-01', 'Old room'), members: ['s-02'], lead: 's-02', archivedAt: '2026-10-08T12:00:00.000Z' }],
     });
     setWorks([entry]);
@@ -522,13 +522,23 @@ describe('WorkSidebar — клавиатура (спека 6.5, кусок 3.4)'
     render(<Harness />);
     const card = document.querySelector<HTMLElement>(`[data-work-key="${keyOf(entry)}"]`) as HTMLElement;
     act(() => card.focus());
-    expect(card.querySelector('[data-archived-rooms]')?.textContent).toBe('1 archived room');
+    const closed = (): HTMLElement | null => card.querySelector<HTMLElement>('[data-closed-sessions]');
+    const archived = (): HTMLElement | null => card.querySelector<HTMLElement>('[data-archived-rooms]');
+    expect(closed()?.textContent).toBe('Closed sessions1');
+    expect(archived()?.textContent).toBe('Archived rooms1');
     expect(card.querySelector('[data-room-row]')).toBeNull();
+    expect(card.querySelector('[data-session-id="s-03"]')).toBeNull();
 
     fireEvent.keyDown(card, { key: 'ArrowRight' });
     expect(card.querySelector('[data-room-row="r-01"]')).not.toBeNull();
+    expect(card.querySelector('[data-closed-sessions-list] [data-session-id="s-03"]')).not.toBeNull();
+    expect(closed()?.getAttribute('aria-expanded')).toBe('true');
+    expect(archived()?.getAttribute('aria-expanded')).toBe('true');
     fireEvent.keyDown(card, { key: 'ArrowLeft' });
     expect(card.querySelector('[data-room-row]')).toBeNull();
+    expect(card.querySelector('[data-session-id="s-03"]')).toBeNull();
+    expect(closed()?.getAttribute('aria-expanded')).toBe('false');
+    expect(archived()?.getAttribute('aria-expanded')).toBe('false');
   });
 });
 

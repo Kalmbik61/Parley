@@ -56,7 +56,7 @@ Parley adds the swarm rules to the queen's brief, so write only the question. A 
 4. The output: the answer per sub-question, with sources, hypotheses, "not found" with the scope read, and gaps.
 5. Hints for slicing, if you know the seams.
 
-A swarm started by the live lead of a room belongs to the room; one started by any other session belongs to that session. The result comes back to the owner as a letter from Parley: \`Swarm sw-NN [Tag] done, N/M handed in, time\`, the queen's summary and a pointer to her full report. Do not poll the swarm: wait for that letter on your inbox. Only the human can cancel a swarm, from the window.
+A swarm started by the live lead of a room belongs to the room; one started by any other session belongs to that session. The result comes back to the owner as a letter from Parley: \`Swarm sw-NN [Tag] done, N/M handed in (K declared partial), time\`, the queen's summary and a pointer to her full report. \`(K declared partial)\` is there only when K is above zero: it counts the members who handed in with partial coverage, even if the queen left it out. Do not poll the swarm: wait for that letter on your inbox. Only the human can cancel a swarm, from the window.
 
 Limits (the human changes them in Settings → Limits): 16 sessions per swarm with the queen, 8 of them running at once, 6 swarms and 64 swarm sessions per workspace per day (the last 24 hours), 90 minutes of lifetime. Swarm sessions do not use the agent new-session limits, but they count toward the workspace limits on concurrent sessions and launches per hour. A refusal names its limit; only the human can raise it.
 
@@ -74,7 +74,7 @@ Size: four to eight slices is a good first wave. More slices mean more hand-ins 
 
 ## Drone task
 
-\`swarm_add\` with \`role: "drone"\` takes \`task\`, \`provider\`, optional \`label\`, \`model\`, \`effort\` and \`agentRole\` (default builtin:researcher, read-only). The task must be self-contained: the drone sees only it and the swarm rules Parley appends. Write it from this template:
+\`swarm_add\` with \`role: "drone"\` takes \`task\`, \`provider\`, optional \`label\`, \`slice\`, \`model\`, \`effort\` and \`agentRole\` (default builtin:researcher, read-only). \`slice\` is a short name of the slice, up to 60 characters: Parley shows it to the human and in the wave letter. The task must be self-contained: the drone sees only it and the swarm rules Parley appends. Write it from this template:
 
 \`\`\`
 Slice: <folder, module, documents or sources>, at <commit SHA or version>.
@@ -82,8 +82,8 @@ Question: <the sub-questions this slice answers>.
 Seams: <named links to other slices>; beyond the slice read at most <N> files or pages, and only along these seams.
 Out of scope: everything else. Do not draw conclusions about the whole subject.
 Depth: a search hit is a lead, not a finding. Open every file you cite and read it whole, not only the matched line. Read at least <N> files of the slice and list them all under COVERAGE.
-Hand in with report done, in this format:
-COVERAGE: covered | partial | failed — what you read (files, sections, URLs)
+Hand in with report: status done and coverage ("covered" if you read the whole slice and answered its questions, otherwise "partial"). The summary has this format:
+COVERAGE: what you read (files, sections, URLs)
 FACTS: one claim per line, each with its source (path:line at the SHA, document and section, or URL)
 HYPOTHESES: claims you could not tie to a source
 NOT FOUND: what you looked for and where
@@ -95,6 +95,7 @@ Models: cheap models (\`haiku\`, \`sonnet\` on low effort, a small Codex model o
 ## Collecting hand-ins
 
 - Wait with \`wait_for\` on a member id, or on "inbox" for Parley's letters. A member that handed in is closed by Parley; you do not close anyone.
+- When every member of a wave has handed in or dropped out, Parley writes you "Wave finished in swarm sw-NN": the count of covered, partial, coverage-not-stated, failed and not-handed-in members, the list of those not closed with their slice names, how many members from earlier waves are still not closed (the earlier incomplete self-estimates: Parley does not know which of those gaps a successor already closed, your register does), and what is left of the swarm's sessions and time. Coverage in it is the member's own estimate, so check the hand-ins against the objective.
 - Read a hand-in with \`get_map\` and \`session\` plus \`field: "summary"\`. Read the hand-in, not the transcript.
 - Check each hand-in: is coverage stated, do facts carry sources at the right SHA or version, are hypotheses kept apart. A fact without a source goes to the register as a hypothesis.
 - Partial or failed coverage is a named gap. Close it with a new drone for the gap, or read it yourself and say so in the summary. Do not wait forever: a member that is stuck or silent becomes a gap.
@@ -116,7 +117,7 @@ Every claim that goes into the summary is "not verified" until a verifier who is
 
 ## Summary
 
-Parley writes you "All members of swarm sw-NN have handed in. Write the summary: call report with the combined result."
+Parley writes you "Wave finished in swarm sw-NN" (see Collecting hand-ins). Write the summary after that letter, not before it.
 
 Before you write it, look at the clock. If lifetime is left and your register has gaps, spend it on them: add drones for the uncovered parts and verifiers for the claims still not verified. In pilot 2 the queen handed in at minute 12 of 90 with a long "not covered" list. Hand in early only when the register has no gaps worth the time.
 
@@ -133,7 +134,7 @@ Hand it in with \`report\`, status done. Parley passes up to 4096 characters of 
 
 ## Closing
 
-- \`report done\` from the queen closes the swarm. Members still working are closed with it, so do not hand in before the "all members have handed in" letter unless you mean to stop the swarm.
+- \`report done\` from the queen closes the swarm. Members still working are closed with it, so do not hand in before the "Wave finished" letter unless you mean to stop the swarm.
 - \`report failed\` closes it as failed. Say what went wrong and what was covered.
 - When the lifetime runs out, Parley closes all members and writes you "The time limit of swarm sw-NN has run out". Hand in what you have at once, with what is not covered.
 - Only the human cancels a swarm. A member cannot cancel it.

@@ -1,0 +1,561 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Room board — mockup</title>
+<style>
+/* Mockup of a board inside a Parley room. Tokens are copied from the window's Organic palette
+   (packages/desktop/src/renderer/styles/tokens.css on master). Nothing here is product code. */
+@font-face { font-family: 'Figtree'; src: url('assets/fonts/Figtree-Variable.ttf') format('truetype'); font-weight: 400 700; font-display: swap; }
+@font-face { font-family: 'Caprasimo'; src: url('assets/fonts/Caprasimo.ttf') format('truetype'); font-weight: 400; font-display: swap; }
+
+:root {
+  --bg: #f5ead8; --surface: #ebddc5; --text: #201e1d; --accent: #c67139; --accent2: #7a8a5e;
+  --n100: #f9f4ed; --n200: #eee7db; --n300: #dcd3c4; --n400: #c0b6a5; --n500: #a19786; --n600: #82796a; --n700: #645c50; --n800: #474238;
+  --a100: #fff2eb; --a200: #ffe1d0; --a600: #b2622d; --a700: #8c491a; --a800: #643312;
+  --s100: #f0fae1; --s200: #e1eecc; --s600: #728157; --s700: #56633f; --s800: #3d472b;
+  --divider: color-mix(in srgb, #201e1d 16%, transparent);
+  --sheet: #f9f4ed; --card: #f9f4ed; --muted: var(--n700);
+  --primary: var(--a700); --primary-fg: var(--bg);
+  --well: color-mix(in srgb, var(--text) 6%, transparent);
+  --hover: color-mix(in srgb, var(--text) 7%, transparent);
+  --shadow-sm: 0 1px 2px color-mix(in srgb, #2e2b25 14%, transparent);
+  --shadow-md: 0 3px 10px color-mix(in srgb, #2e2b25 16%, transparent);
+  --shadow-lg: 0 12px 32px color-mix(in srgb, #2e2b25 22%, transparent);
+  --scrim: color-mix(in srgb, #2e2b25 50%, transparent);
+  --font: 'Figtree', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --heading: 'Caprasimo', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+.dark {
+  --bg: #0e0d0c; --surface: #161513; --text: #ece6dc; --accent: #d67f48; --accent2: #8fa073;
+  --n100: #23211e; --n200: #2c2926; --n300: #3b3732; --n400: #524d46; --n500: #6e675e; --n600: #8b8479; --n700: #a8a095; --n800: #cbc4b9;
+  --a100: #2a1a10; --a200: #3a2314; --a600: #dc8753; --a700: #eea373; --a800: #f8c39f;
+  --s100: #1b2014; --s200: #242b1a; --s600: #9aad7b; --s700: #b5c697; --s800: #d0ddb7;
+  --divider: color-mix(in srgb, #ece6dc 14%, transparent);
+  --sheet: #0b0a09; --card: var(--n100); --primary: var(--accent);
+  --shadow-sm: 0 0 0 1px color-mix(in srgb, #ece6dc 9%, transparent), 0 1px 2px rgb(0 0 0 / .5);
+  --shadow-md: 0 0 0 1px color-mix(in srgb, #ece6dc 9%, transparent), 0 4px 12px rgb(0 0 0 / .5);
+  --shadow-lg: 0 0 0 1px color-mix(in srgb, #ece6dc 10%, transparent), 0 12px 32px rgb(0 0 0 / .6);
+  --scrim: rgb(0 0 0 / .6);
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin: 0; font-family: var(--font); font-size: 13px; line-height: 1.4; -webkit-font-smoothing: antialiased; background: var(--surface); color: var(--text); }
+button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; text-align: left; }
+:focus-visible { outline: 2px solid var(--a600); outline-offset: 2px; }
+h1, h2, h3, p { margin: 0; }
+.muted { color: var(--muted); }
+
+/* The agent's own colour: one hue per session, the same everywhere. */
+.ag { --ink: var(--agent, var(--n400)); }
+.dark .ag { --ink: color-mix(in srgb, var(--agent, var(--n400)) 68%, #fff); }
+.av { position: relative; display: inline-flex; flex: none; width: var(--sz, 22px); height: var(--sz, 22px); padding: 3px; border-radius: 50%; background: var(--card); box-shadow: 0 0 0 2px var(--ink); }
+.av img { width: 100%; height: 100%; display: block; }
+.av.sm { --sz: 18px; padding: 2px; }
+.av.lg { --sz: 28px; padding: 4px; }
+.av .v { position: absolute; right: -5px; bottom: -5px; width: 12px; height: 12px; border-radius: 50%; font-size: 8px; line-height: 12px; text-align: center; font-style: normal; font-weight: 700; box-shadow: 0 0 0 1.5px var(--card); }
+.v.ok { background: var(--s600); color: var(--sheet); }
+.v.ok::after { content: '✓'; }
+.v.no { background: var(--a600); color: var(--sheet); }
+.v.no::after { content: '✕'; }
+.v.wait { background: var(--n300); color: var(--n700); }
+.v.wait::after { content: '…'; }
+
+.app { display: grid; grid-template-columns: 236px minmax(0, 1fr); height: 100vh; }
+.side { display: flex; flex-direction: column; gap: 14px; padding: 16px 12px; min-height: 0; overflow-y: auto; }
+.side h2 { font-family: var(--heading); font-size: 17px; font-weight: 400; padding: 0 6px; }
+.side .cap { font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); padding: 0 6px; }
+.side-list { display: flex; flex-direction: column; gap: 2px; }
+.side-row { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px; border-radius: 10px; font-size: 12.5px; }
+.side-row:hover { background: var(--hover); }
+.side-row.on { background: color-mix(in srgb, var(--text) 9%, transparent); }
+.side-row .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.side-row small { color: var(--muted); font-size: 11px; }
+
+.sheet { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; margin: 10px 10px 10px 0; background: var(--sheet); border-radius: 28px; overflow: hidden; box-shadow: var(--shadow-sm); }
+.tabs { display: flex; align-items: center; gap: 6px; padding: 10px 16px 0; }
+.tab { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 999px; font-size: 12.5px; color: var(--muted); }
+.tab:hover { background: var(--hover); color: var(--text); }
+.tab.on { background: var(--n200); color: var(--text); }
+.spacer { flex: 1; }
+.mock { display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px; border-radius: 999px; border: 1px dashed var(--n500); font-size: 12px; color: var(--muted); }
+.mock:hover { background: var(--hover); color: var(--text); }
+.mock.go { border-style: solid; border-color: transparent; background: var(--primary); color: var(--primary-fg); font-family: var(--heading); }
+
+.room-head { display: flex; flex-direction: column; gap: 12px; padding: 18px 36px 14px; border-bottom: 1px solid color-mix(in srgb, currentColor 12%, transparent); }
+.room-title { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.room-title h1 { font-family: var(--heading); font-weight: 400; font-size: 25px; line-height: 1.12; letter-spacing: -.015em; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chips { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+.badge { display: inline-flex; align-items: center; gap: 5px; border-radius: 999px; padding: 3px 10px; font-size: 11px; letter-spacing: .02em; background: var(--n200); color: var(--n800); white-space: nowrap; }
+.badge.sage { background: var(--s200); color: var(--s800); }
+.badge.terra { background: var(--a200); color: var(--a800); }
+.seg { display: inline-flex; padding: 3px; border-radius: 999px; background: var(--n200); }
+.seg button { padding: 4px 12px; border-radius: 999px; font-size: 12px; color: var(--muted); }
+.seg button.on { background: var(--card); color: var(--text); box-shadow: var(--shadow-sm); }
+
+.strip { display: flex; gap: 8px; overflow-x: auto; padding: 2px 2px 4px; scrollbar-width: thin; }
+.agent { flex: 1 0 128px; max-width: 200px; min-width: 0; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 3px 9px; align-items: center; padding: 8px 10px; border-radius: 14px; background: var(--well); border: 1.5px solid transparent; }
+.agent:hover { background: var(--hover); }
+.agent.on { border-color: var(--ink); background: color-mix(in srgb, var(--ink) 10%, transparent); }
+.agent b { display: block; font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent small { display: block; font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.now { grid-column: 1 / -1; display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted); min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--n500); }
+.now.working .dot { background: var(--ink); animation: pulse 1.4s ease-in-out infinite; }
+.now.reviewing .dot { background: transparent; box-shadow: inset 0 0 0 2px var(--ink); }
+.now.question { color: var(--a700); font-weight: 600; }
+.now.question .dot { background: var(--a600); }
+@keyframes pulse { 50% { opacity: .35; transform: scale(.8); } }
+
+.bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 12px 36px 8px; }
+.bar label { font-size: 12px; color: var(--muted); }
+.board { display: flex; gap: 12px; flex: 1; min-height: 0; overflow: auto; padding: 4px 36px 14px; align-items: flex-start; }
+.col { flex: 0 0 264px; display: flex; flex-direction: column; gap: 8px; padding: 9px; border-radius: 16px; background: var(--well); }
+.col h3 { display: flex; align-items: baseline; gap: 6px; padding: 1px 4px 0; font-size: 13px; font-weight: 600; }
+.col h3 small { font-weight: 400; font-size: 12px; color: var(--muted); }
+.col .rule { padding: 0 4px; font-size: 11px; color: var(--muted); }
+.cards { display: flex; flex-direction: column; gap: 8px; min-height: 36px; }
+.empty { padding: 8px 4px; font-size: 12px; color: var(--muted); }
+
+.card { display: flex; flex-direction: column; gap: 7px; width: 100%; padding: 10px 10px 10px 12px; border-radius: 14px; background: var(--card); box-shadow: var(--shadow-sm); border-left: 3px solid var(--ink); transition: opacity .2s; }
+.card:hover { box-shadow: var(--shadow-md); }
+.card.dim { opacity: .32; }
+.card.flash { animation: flash 1.4s ease-out; }
+@keyframes flash { 0% { box-shadow: 0 0 0 3px var(--ink), var(--shadow-md); } 100% { box-shadow: 0 0 0 0 transparent, var(--shadow-sm); } }
+.card-top { display: flex; gap: 6px; align-items: baseline; }
+.num { flex: none; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.title { font-weight: 600; font-size: 13px; overflow-wrap: anywhere; }
+.who { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12px; }
+.who .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.who .st { margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--muted); }
+.who .st.working .dot { background: var(--ink); animation: pulse 1.4s ease-in-out infinite; }
+.step { font-size: 12px; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.meta { display: flex; flex-wrap: wrap; align-items: center; gap: 3px 10px; font-size: 11px; color: var(--muted); }
+.meta .badge { padding: 2px 8px; }
+.gate { display: flex; align-items: center; gap: 9px; padding-top: 2px; font-size: 11.5px; }
+.gate .avs { display: inline-flex; gap: 9px; padding-right: 4px; }
+.checks { display: flex; flex-wrap: wrap; gap: 5px; }
+.check { display: inline-flex; gap: 4px; align-items: center; padding: 1px 7px; border-radius: 999px; font-size: 11px; background: var(--n200); color: var(--n800); }
+.check.pass { background: var(--s200); color: var(--s800); }
+.check.fail { background: var(--a200); color: var(--a800); }
+.need { padding: 6px 8px; border-radius: 9px; font-size: 11.5px; background: var(--a100); color: var(--a800); border: 1px solid color-mix(in srgb, var(--a600) 30%, transparent); }
+.waits { font-size: 11.5px; color: var(--muted); }
+
+.ticker { display: flex; flex-direction: column; gap: 2px; padding: 8px 36px 10px; border-top: 1px solid color-mix(in srgb, currentColor 12%, transparent); font-size: 12px; color: var(--muted); min-height: 62px; }
+.ticker div { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ticker div:first-child { color: var(--text); }
+.ticker time { font-variant-numeric: tabular-nums; margin-right: 8px; }
+.placeholder { padding: 28px 36px; color: var(--muted); max-width: 560px; }
+
+.pboard { display: flex; flex-direction: column; gap: 12px; flex: 1; min-height: 0; padding: 16px 20px; }
+.pboard h1 { font-family: var(--heading); font-weight: 400; font-size: 18px; }
+.btn { display: inline-flex; align-items: center; justify-content: center; height: 30px; padding: 0 13px; border-radius: 999px; font-family: var(--heading); font-size: 12px; border: 1px solid var(--divider); }
+.btn:hover { background: var(--hover); }
+.btn.primary { background: var(--primary); color: var(--primary-fg); border-color: transparent; }
+.progress { display: flex; gap: 2px; height: 6px; border-radius: 999px; overflow: hidden; background: var(--n200); }
+.progress i { display: block; height: 100%; }
+.progress .p-ver { background: var(--s600); }
+.progress .p-rev { background: var(--s200); }
+.progress .p-pro { background: var(--n500); }
+.progress .p-need { background: var(--a600); }
+.stack { display: inline-flex; gap: 7px; align-items: center; padding-left: 2px; }
+.link { text-decoration: underline; text-underline-offset: 2px; font-size: 12px; color: var(--muted); }
+.link:hover { color: var(--text); }
+
+.scrim { position: absolute; inset: 0; background: var(--scrim); }
+.drawer { position: absolute; top: 0; right: 0; bottom: 0; width: min(420px, 94%); display: flex; flex-direction: column; gap: 14px; padding: 20px 22px; overflow-y: auto; background: var(--card); box-shadow: var(--shadow-lg); border-radius: 28px 0 0 28px; }
+.drawer h2 { font-family: var(--heading); font-weight: 400; font-size: 20px; line-height: 1.15; }
+.drawer h4 { margin: 0 0 6px; font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.drawer ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.drawer li { display: flex; gap: 8px; align-items: flex-start; font-size: 12.5px; }
+.tick { flex: none; width: 15px; height: 15px; margin-top: 1px; border-radius: 4px; border: 1.5px solid var(--n500); font-size: 10px; line-height: 12px; text-align: center; }
+.tick.done { background: var(--s600); border-color: var(--s600); color: var(--sheet); }
+.x { margin-left: auto; width: 28px; height: 28px; border-radius: 50%; text-align: center; font-size: 16px; color: var(--muted); }
+.x:hover { background: var(--hover); }
+.row { display: flex; align-items: center; gap: 10px; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 4px; }
+
+.notes { position: absolute; top: 46px; right: 16px; z-index: 5; width: min(430px, calc(100% - 32px)); padding: 16px 18px; border-radius: 18px; background: var(--card); box-shadow: var(--shadow-lg); font-size: 12.5px; }
+.notes h3 { font-family: var(--heading); font-weight: 400; font-size: 15px; margin-bottom: 8px; }
+.notes ol { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 7px; }
+.toast { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%); padding: 8px 14px; border-radius: 999px; background: var(--text); color: var(--sheet); font-size: 12px; box-shadow: var(--shadow-md); z-index: 6; }
+
+@media (max-width: 940px) {
+  .app { grid-template-columns: minmax(0, 1fr); }
+  .side { display: none; }
+  .sheet { margin: 8px; }
+  .room-head, .bar, .board, .ticker { padding-left: 18px; padding-right: 18px; }
+}
+@media (prefers-reduced-motion: reduce) { .now .dot, .who .dot, .card.flash { animation: none !important; } }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+const AGENTS = {
+  's-510': { label: 'Lead',      role: 'Planner',   provider: 'claude',   model: 'Opus',        color: '#5566c9' },
+  's-511': { label: 'Architect', role: 'Architect', provider: 'codex',    model: 'gpt-6-astra', color: '#a2559b' },
+  's-512': { label: 'Builder A', role: 'Executor',  provider: 'codex',    model: 'gpt-6.1-sol', color: '#1f8f86' },
+  's-513': { label: 'Builder B', role: 'Executor',  provider: 'claude',   model: 'Sonnet',      color: '#2f86c7' },
+  's-514': { label: 'Reviewer',  role: 'Reviewer',  provider: 'codex',    model: 'gpt-6-astra', color: '#c9506e' },
+  's-515': { label: 'Verifier',  role: 'Verifier',  provider: 'claude',   model: 'Sonnet',      color: '#a8861a' },
+  's-516': { label: 'Security',  role: 'Reviewer',  provider: 'qwen',     model: 'qwen4-max',   color: '#7a52c7' },
+  's-517': { label: 'UX',        role: 'Reviewer',  provider: 'opencode', model: 'big-pickle',  color: '#5f6b7a' },
+};
+const REVIEWERS = ['s-514', 's-515', 's-516', 's-517'];
+const gate = (a, b, c, d) => ({ 's-514': a, 's-515': b, 's-516': c, 's-517': d });
+
+const STAGES = [
+  { id: 'analysis',    title: 'Analysis',    rule: 'Planner' },
+  { id: 'design',      title: 'Design',      rule: 'Architect' },
+  { id: 'plan-review', title: 'Plan review', rule: 'Gate · 4 of 4 must approve' },
+  { id: 'build',       title: 'Build',       rule: 'Executor × 2' },
+  { id: 'code-review', title: 'Code review', rule: 'Gate · checks, then 4 of 4' },
+  { id: 'done',        title: 'Done',        rule: 'Verified' },
+];
+const STATES = [
+  { id: 'waiting',  title: 'Waiting',     has: ['waiting'] },
+  { id: 'progress', title: 'In progress', has: ['progress', 'blocked'] },
+  { id: 'review',   title: 'In review',   has: ['review'] },
+  { id: 'verified', title: 'Verified',    has: ['verified'] },
+];
+const STAGE_TITLE = Object.fromEntries(STAGES.map(s => [s.id, s.title]));
+const STATE_WORD = { waiting: 'Waiting', progress: 'In progress', blocked: 'Blocked', review: 'In review', verified: 'Verified' };
+
+const INITIAL = {
+  clock: 12 * 60 + 41,
+  log: [
+    { t: '12:41', text: 'Builder A submitted #1 → Code review' },
+    { t: '12:38', text: 'Check unit failed on #2 → returned to Builder A · attempt 2 of 3' },
+    { t: '12:33', text: 'Architect asked you a question on #7' },
+  ],
+  cards: [
+    { id: 1, title: 'Payment link schema and migration', stage: 'code-review', state: 'review', owner: 's-512', attempt: [1, 3], min: 38, tok: 184,
+      checks: [['migrate', 'pass'], ['unit', 'pass']], votes: gate('ok', 'ok', 'ok', 'wait'),
+      criteria: [['Table payment_link with a unique token', true], ['Migration runs forward and back', true], ['No change to existing invoices', true]] },
+    { id: 2, title: 'Payment form', stage: 'build', state: 'progress', owner: 's-512', attempt: [2, 3], min: 14, tok: 212, returned: 'unit check failed',
+      step: 'Writing tests for the amount field', checks: [['lint', 'pass'], ['unit', 'fail']],
+      criteria: [['Form opens by a valid link', true], ['Amount and currency are read-only', true], ['Errors of the provider are shown to the payer', false]] },
+    { id: 3, title: 'Webhook from the payment provider', stage: 'build', state: 'progress', owner: 's-513', attempt: [1, 3], min: 21, tok: 143,
+      step: 'Handling duplicate deliveries', checks: [['lint', 'run'], ['unit', 'run']],
+      criteria: [['Signature is verified', true], ['A repeated delivery changes nothing', false], ['Invoice becomes paid', false]] },
+    { id: 4, title: 'Receipt email', stage: 'build', state: 'waiting', owner: null, after: [2],
+      criteria: [['Email is sent once per payment', false], ['Receipt has the amount and the invoice number', false]] },
+    { id: 5, title: 'Link expiry and revoke', stage: 'plan-review', state: 'review', owner: 's-511', min: 9, tok: 58,
+      votes: gate('ok', 'wait', 'wait', 'ok'),
+      criteria: [['A link expires after 7 days by default', true], ['The owner can revoke a link', true]] },
+    { id: 6, title: 'API contract for /pay/:token', stage: 'done', state: 'verified', owner: 's-511', attempt: [1, 3], min: 17, tok: 77,
+      checks: [['openapi', 'pass']], votes: gate('ok', 'ok', 'ok', 'ok'),
+      criteria: [['Contract is in the OpenAPI file', true], ['Errors have stable codes', true]] },
+    { id: 7, title: 'Rate limit on the public link', stage: 'design', state: 'blocked', owner: 's-511', min: 5, tok: 31,
+      need: 'Limit per link or per IP? Waiting for your answer.',
+      criteria: [['The limit is stated in the design', false]] },
+    { id: 8, title: 'Refund by link', stage: 'analysis', state: 'progress', owner: 's-510', min: 6, tok: 41,
+      step: 'Collecting acceptance criteria',
+      criteria: [['Criteria are written and agreed', false]] },
+  ],
+};
+
+let S = structuredClone(INITIAL);
+const ui = { tab: 'room', view: 'board', cols: 'state', focus: null, open: null, notes: false, step: 0, playing: false, toast: null, flash: new Set() };
+let timer = null, toastTimer = null;
+
+const card = id => S.cards.find(c => c.id === id);
+const esc = s => String(s).replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
+const dark = () => document.documentElement.classList.contains('dark');
+const icon = p => 'assets/providers/' + (p === 'codex' && dark() ? 'codex-light' : p) + '.svg';
+const okCount = c => Object.values(c.votes || {}).filter(v => v === 'ok').length;
+
+function log(text) {
+  S.clock += 1 + (S.log.length % 3);
+  const t = String(Math.floor(S.clock / 60)).padStart(2, '0') + ':' + String(S.clock % 60).padStart(2, '0');
+  S.log.unshift({ t, text });
+}
+
+/* The scripted run: each step is one event the plan would report. */
+const STEPS = [
+  () => { const c = card(1); c.votes['s-517'] = 'ok'; c.state = 'verified'; c.stage = 'done'; log('UX approved #1 · 4 of 4 → Verified'); return [1]; },
+  () => { const c = card(2); Object.assign(c, { state: 'review', stage: 'code-review', step: null, returned: null, checks: [['lint', 'pass'], ['unit', 'run']], votes: gate('wait', 'wait', 'wait', 'wait') }); log('Builder A submitted #2 → Code review, checks are running'); return [2]; },
+  () => { const c = card(2); Object.assign(c, { state: 'progress', stage: 'build', attempt: [3, 3], returned: 'unit check failed', step: 'Fixing rounding in the amount field', checks: [['lint', 'pass'], ['unit', 'fail']], votes: null }); log('Check unit failed on #2 → returned to Builder A · attempt 3 of 3'); return [2]; },
+  () => { const c = card(7); Object.assign(c, { state: 'progress', need: null, step: 'Writing the limit per link into the design' }); log('You answered #7 → Architect continues'); return [7]; },
+  () => { const c = card(7); Object.assign(c, { state: 'review', stage: 'plan-review', step: null, votes: gate('wait', 'wait', 'wait', 'wait') }); log('Architect submitted #7 → Plan review'); return [7]; },
+  () => { const c = card(5); c.votes['s-516'] = 'no'; Object.assign(c, { state: 'progress', stage: 'design', returned: 'Security: a revoked link must stop working at once', step: 'Reworking the revoke rule' }); log('Security asked for changes on #5 → back to Design'); return [5]; },
+  () => { const c = card(3); Object.assign(c, { state: 'review', stage: 'code-review', step: null, checks: [['lint', 'pass'], ['unit', 'pass']], votes: gate('wait', 'wait', 'wait', 'wait') }); log('Builder B submitted #3 → Code review, checks passed'); return [3]; },
+  () => { const c = card(2); Object.assign(c, { state: 'review', stage: 'code-review', step: null, returned: null, checks: [['lint', 'pass'], ['unit', 'pass']], votes: gate('ok', 'ok', 'wait', 'wait') }); log('Builder A submitted #2 again → checks passed, 2 of 4 approved'); return [2]; },
+  () => { const c = card(2); c.votes = gate('ok', 'ok', 'ok', 'ok'); c.state = 'verified'; c.stage = 'done';
+          Object.assign(card(4), { state: 'progress', owner: 's-512', attempt: [1, 3], min: 1, tok: 6, after: null, step: 'Starting: the receipt template' });
+          log('#2 verified · #4 is no longer waiting → Builder A started it'); return [2, 4]; },
+  () => { const c = card(3); c.votes = gate('ok', 'ok', 'wait', 'ok'); log('#3: 3 of 4 approved, Security is still reading'); return [3]; },
+];
+
+function agentNow(id) {
+  const own = S.cards.filter(c => c.owner === id);
+  const asked = own.find(c => c.state === 'blocked');
+  if (asked) return { cls: 'question', text: 'Needs you · #' + asked.id };
+  const doing = own.find(c => c.state === 'progress');
+  if (doing) return { cls: 'working', text: 'Working on #' + doing.id };
+  const reading = S.cards.filter(c => c.state === 'review' && c.votes && c.votes[id] === 'wait');
+  if (reading.length) return { cls: 'reviewing', text: 'Reviewing ' + reading.map(c => '#' + c.id).join(', ') };
+  return { cls: 'idle', text: 'Idle' };
+}
+const involves = (c, id) => c.owner === id || (c.state === 'review' && c.votes && id in c.votes);
+
+function av(id, size = '', verdict = null) {
+  const a = AGENTS[id];
+  const mark = verdict ? `<i class="v ${verdict}"></i>` : '';
+  const word = verdict ? ' · ' + ({ ok: 'approved', no: 'asked for changes', wait: 'not answered yet' }[verdict]) : '';
+  return `<span class="av ag ${size}" style="--agent:${a.color}" title="${esc(a.label + ' · ' + id + word)}"><img src="${icon(a.provider)}" alt="">${mark}</span>`;
+}
+
+function cardHTML(c) {
+  const a = c.owner ? AGENTS[c.owner] : null;
+  const dim = ui.focus && !involves(c, ui.focus) ? ' dim' : '';
+  const flash = ui.flash.has(c.id) ? ' flash' : '';
+  const second = ui.cols === 'state' ? STAGE_TITLE[c.stage] : STATE_WORD[c.state];
+  const parts = [];
+  parts.push(`<div class="card-top"><span class="num">#${c.id}</span><span class="title">${esc(c.title)}</span></div>`);
+  if (a) {
+    const st = c.state === 'progress' ? '<span class="st working"><i class="dot"></i>working</span>'
+      : c.state === 'review' ? '<span class="st">submitted</span>'
+      : c.state === 'blocked' ? '<span class="st">asked you</span>' : '';
+    parts.push(`<div class="who">${av(c.owner)}<span class="name">${esc(a.label)} <span class="muted">· ${c.owner}</span></span>${st}</div>`);
+  }
+  if (c.step) parts.push(`<div class="step">${esc(c.step)}</div>`);
+  if (c.need) parts.push(`<div class="need">${esc(c.need)}</div>`);
+  if (c.after && c.after.length) parts.push(`<div class="waits">Waits for ${c.after.map(n => '#' + n).join(', ')}</div>`);
+  if (c.returned) parts.push(`<div class="waits">Returned: ${esc(c.returned)}</div>`);
+  if (c.checks && c.state !== 'verified') parts.push(`<div class="checks">${c.checks.map(([n, r]) => `<span class="check ${r}">${esc(n)} ${r === 'pass' ? '✓' : r === 'fail' ? '✕' : '…'}</span>`).join('')}</div>`);
+  if (c.votes && c.state === 'review') parts.push(`<div class="gate"><span class="avs">${REVIEWERS.map(r => av(r, 'sm', c.votes[r])).join('')}</span><span>${okCount(c)} of 4 approved</span></div>`);
+  const meta = [`<span class="badge ${c.state === 'verified' ? 'sage' : c.state === 'blocked' ? 'terra' : ''}">${esc(second)}</span>`];
+  if (c.attempt && c.state !== 'verified') meta.push(`<span>attempt ${c.attempt[0]} of ${c.attempt[1]}</span>`);
+  if (c.min) meta.push(`<span>${c.min} min</span>`);
+  if (c.tok) meta.push(`<span>${c.tok}k tokens</span>`);
+  parts.push(`<div class="meta">${meta.join('')}</div>`);
+  return `<button class="card ag${dim}${flash}" style="--agent:${a ? a.color : 'var(--n400)'}" data-card="${c.id}" data-act="card" data-id="${c.id}">${parts.join('')}</button>`;
+}
+
+function boardHTML() {
+  const cols = ui.cols === 'state'
+    ? STATES.map(s => ({ title: s.title, rule: null, cards: S.cards.filter(c => s.has.includes(c.state)) }))
+    : STAGES.map(s => ({ title: s.title, rule: s.rule, cards: S.cards.filter(c => c.stage === s.id) }));
+  return cols.map(col => `<section class="col" aria-label="${esc(col.title)}">
+      <h3>${esc(col.title)} <small>${col.cards.length}</small></h3>
+      ${col.rule ? `<div class="rule">${esc(col.rule)}</div>` : ''}
+      <div class="cards">${col.cards.map(cardHTML).join('') || '<div class="empty">Nothing here</div>'}</div>
+    </section>`).join('');
+}
+
+function stripHTML() {
+  return Object.entries(AGENTS).map(([id, a]) => {
+    const now = agentNow(id);
+    return `<button class="agent ag${ui.focus === id ? ' on' : ''}" style="--agent:${a.color}" data-act="agent" data-id="${id}" aria-pressed="${ui.focus === id}" title="Show only the cards of ${esc(a.label)}">
+      ${av(id, 'lg')}<span><b>${esc(a.label)}</b><small>${esc(a.role)} · ${esc(a.model)}</small></span>
+      <span class="now ${now.cls}"><i class="dot"></i>${esc(now.text)}</span></button>`;
+  }).join('');
+}
+
+function counts() {
+  const n = { verified: 0, review: 0, progress: 0, blocked: 0, waiting: 0 };
+  S.cards.forEach(c => { n[c.state]++; });
+  return n;
+}
+
+function roomHTML() {
+  const n = counts();
+  const done = ui.step >= STEPS.length;
+  const play = ui.playing ? 'Pause' : done ? 'Replay' : ui.step ? 'Continue' : 'Play the run';
+  const body = ui.view === 'board' ? `
+      <div class="bar">
+        <label id="cols-label">Columns</label>
+        <div class="seg" role="group" aria-labelledby="cols-label">
+          <button class="${ui.cols === 'state' ? 'on' : ''}" data-act="cols" data-v="state" aria-pressed="${ui.cols === 'state'}">By state</button>
+          <button class="${ui.cols === 'stage' ? 'on' : ''}" data-act="cols" data-v="stage" aria-pressed="${ui.cols === 'stage'}">By stage</button>
+        </div>
+        ${ui.focus ? `<button class="badge" data-act="agent" data-id="${ui.focus}">Only ${esc(AGENTS[ui.focus].label)} ✕</button>` : ''}
+        <span class="spacer"></span>
+        <button class="mock go" data-act="play" title="Mockup control: replays a scripted run">${ui.playing ? '❚❚' : '▶'} ${play}</button>
+        <button class="mock" data-act="reset" title="Mockup control">↺ Reset</button>
+      </div>
+      <div class="board" id="board">${boardHTML()}</div>
+      <div class="ticker" aria-live="polite">${S.log.slice(0, 3).map(e => `<div><time>${e.t}</time>${esc(e.text)}</div>`).join('')}</div>`
+    : `<div class="placeholder">${ui.view === 'feed' ? 'The room feed stays as it is today: letters, decisions and the composer.' : 'The plan list stays as it is today: items, owners, verifiers and checkpoints. The board shows the same items as cards.'}</div>`;
+  return `
+    <div class="room-head">
+      <div>
+        <div class="room-title"><h1>Pay by link</h1><span class="spacer"></span>
+          <div class="seg" role="group" aria-label="Room view">
+            ${['feed', 'board', 'plan'].map(v => `<button class="${ui.view === v ? 'on' : ''}" data-act="view" data-v="${v}" aria-pressed="${ui.view === v}">${v[0].toUpperCase() + v.slice(1)}</button>`).join('')}
+          </div>
+        </div>
+        <span class="muted">Created by you · 8 agents · lead Lead · Shop</span>
+      </div>
+      <div class="chips">
+        <span class="badge">Autonomous</span>
+        <span class="badge sage">${n.verified} of ${S.cards.length} verified</span>
+        ${n.blocked ? `<span class="badge terra">${n.blocked} needs you</span>` : ''}
+        <span class="muted">52 min · 746k tokens</span>
+      </div>
+      <div class="strip" id="strip">${stripHTML()}</div>
+    </div>${body}`;
+}
+
+function projectHTML() {
+  const n = counts(), total = S.cards.length;
+  const w = k => `style="width:${(n[k] / total) * 100}%"`;
+  const busy = Object.keys(AGENTS).filter(id => ['working', 'reviewing', 'question'].includes(agentNow(id).cls));
+  const plain = (title, extra = '') => `<div class="card ag" style="cursor:default"><div class="title">${title}</div><div class="meta"><span class="badge">Shop</span></div>${extra}</div>`;
+  return `<div class="pboard">
+    <div class="row"><h1>Board</h1><span class="muted">Project board: where tasks come in</span></div>
+    <div class="board" style="padding:0">
+      <section class="col"><h3>Backlog <small>2</small></h3><div class="cards">
+        ${plain('Export invoices to CSV', '<div><button class="btn" data-act="todo">Send to…</button></div>')}
+        ${plain('Dark theme for the checkout page', '<div><button class="btn" data-act="todo">Send to…</button></div>')}
+      </div></section>
+      <section class="col"><h3>In progress <small>2</small></h3><div class="cards">
+        <div class="card ag" style="cursor:default">
+          <div class="title">Pay by link</div>
+          <div class="meta"><span class="badge">Shop</span><span>Room · Autonomous</span></div>
+          <div class="progress" role="img" aria-label="${n.verified} verified, ${n.review} in review, ${n.progress} in progress, ${n.blocked} need you, ${n.waiting} waiting">
+            <i class="p-ver" ${w('verified')}></i><i class="p-rev" ${w('review')}></i><i class="p-pro" ${w('progress')}></i><i class="p-need" ${w('blocked')}></i>
+          </div>
+          <div class="meta"><span>${n.verified} of ${total} verified</span>${n.blocked ? `<span style="color:var(--a700);font-weight:600">${n.blocked} needs you</span>` : ''}</div>
+          <div class="stack" title="Agents working now">${busy.map(id => av(id, 'sm')).join('')}</div>
+          <div><button class="link" data-act="tab" data-v="room">Open room board</button></div>
+        </div>
+        <div class="card ag" style="--agent:#c9506e;cursor:default"><div class="title">Fix the flaky cart test</div>
+          <div class="who"><span class="av ag" style="--agent:#c9506e"><img src="${icon('claude')}" alt=""></span><span class="name">Debugger <span class="muted">· s-498</span></span><span class="st working"><i class="dot"></i>working</span></div>
+          <div class="meta"><span class="badge">Shop</span></div></div>
+      </div></section>
+      <section class="col"><h3>Review <small>1</small></h3><div class="cards">
+        ${plain('Currency rounding in totals', '<div class="row"><button class="btn primary" data-act="todo">Accept</button><button class="btn" data-act="todo">Return…</button></div><div class="waits">Reported done 12 min ago</div>')}
+      </div></section>
+      <section class="col"><h3>Done <small>1</small></h3><div class="cards">${plain('Upgrade the payment SDK', '<div class="waits">Done on 2026-11-16</div>')}</div></section>
+    </div></div>`;
+}
+
+function drawerHTML() {
+  const c = card(ui.open);
+  if (!c) return '';
+  const a = c.owner ? AGENTS[c.owner] : null;
+  const word = { ok: 'Approved', no: 'Asked for changes', wait: 'Not answered yet' };
+  return `<div class="scrim" data-act="close"></div>
+  <aside class="drawer" role="dialog" aria-label="Item ${c.id}">
+    <div class="row"><span class="badge">${esc(STAGE_TITLE[c.stage])}</span><span class="badge ${c.state === 'verified' ? 'sage' : c.state === 'blocked' ? 'terra' : ''}">${esc(STATE_WORD[c.state])}</span><button class="x" data-act="close" aria-label="Close">×</button></div>
+    <h2>#${c.id} ${esc(c.title)}</h2>
+    ${a ? `<div class="row">${av(c.owner, 'lg')}<div><b>${esc(a.label)}</b> <span class="muted">· ${c.owner}</span><div class="muted">${esc(a.role)} · ${esc(a.model)}${c.attempt ? ` · attempt ${c.attempt[0]} of ${c.attempt[1]}` : ''}</div></div></div>` : '<div class="muted">No owner yet. The engine starts it when the items it waits for are verified.</div>'}
+    ${c.step ? `<div><h4>Now</h4><div>${esc(c.step)}</div></div>` : ''}
+    ${c.need ? `<div class="need">${esc(c.need)}</div>` : ''}
+    ${c.returned ? `<div><h4>Returned</h4><div>${esc(c.returned)}</div></div>` : ''}
+    <div><h4>Criteria</h4><ul>${c.criteria.map(([t, d]) => `<li><span class="tick ${d ? 'done' : ''}">${d ? '✓' : ''}</span><span>${esc(t)}</span></li>`).join('')}</ul></div>
+    ${c.checks ? `<div><h4>Checks</h4><div class="checks">${c.checks.map(([n, r]) => `<span class="check ${r}">${esc(n)} ${r === 'pass' ? '✓ passed' : r === 'fail' ? '✕ failed' : '… running'}</span>`).join('')}</div></div>` : ''}
+    ${c.votes ? `<div><h4>Review gate · ${okCount(c)} of 4 approved</h4><ul>${REVIEWERS.map(r => `<li>${av(r, 'sm', c.votes[r])}<span><b>${esc(AGENTS[r].label)}</b> <span class="muted">· ${word[c.votes[r]]}</span></span></li>`).join('')}</ul></div>` : ''}
+    <div class="muted">${c.min ? c.min + ' min' : 'Not started'}${c.tok ? ' · ' + c.tok + 'k tokens' : ''}</div>
+    <div class="actions">
+      ${a ? '<button class="btn" data-act="todo">Open session</button><button class="btn" data-act="todo">Open changes</button>' : ''}
+      ${c.state === 'blocked' ? '<button class="btn primary" data-act="todo">Answer…</button>' : ''}
+    </div>
+  </aside>`;
+}
+
+const NOTES = [
+  'Карточка — это пункт плана комнаты. Состояние, исполнитель, проверяющий, отметка «что сейчас» и попытки уже есть в плане; новое здесь только представление.',
+  'Цвет агента — новая вещь: кольцо вокруг значка провайдера и полоса слева на карточке. Один цвет на сессию во всех местах окна. Нажмите на агента в ленте сверху — останутся его карточки.',
+  '«By state» можно собрать на данных, которые есть сегодня. «By stage» показывает конвейер по этапам и требует правил колонок.',
+  'Ворота ревью («3 of 4 approved») — новая сущность: сейчас у пункта один проверяющий.',
+  'Кнопки с пунктирной рамкой — управление макетом. «Play the run» проигрывает сценарий из десяти событий; в продукте карточки двигает обновление плана.',
+  'Вкладка «Board» слева вверху показывает, как эта комната видна на доске проекта: ход, «needs you» и работающие агенты.',
+  'Вопросы к спеке: вкладка рядом с лентой или отдельная панель; что показывать в комнате без плана; расход токенов на карточке сейчас не считается (только по сессии и комнате).',
+];
+
+function appHTML() {
+  return `<div class="app">
+    <nav class="side" aria-label="Workspace">
+      <h2>Shop</h2>
+      <div class="side-list">
+        <div class="cap">Rooms</div>
+        <button class="side-row ${ui.tab === 'room' ? 'on' : ''}" data-act="tab" data-v="room"><span class="grow">Pay by link</span><small>${counts().verified}/${S.cards.length}</small></button>
+        <button class="side-row ${ui.tab === 'project' ? 'on' : ''}" data-act="tab" data-v="project"><span class="grow">Board</span></button>
+      </div>
+      <div class="side-list">
+        <div class="cap">Agents in the room</div>
+        ${Object.entries(AGENTS).map(([id, a]) => `<button class="side-row ag ${ui.focus === id ? 'on' : ''}" style="--agent:${a.color}" data-act="agent" data-id="${id}">${av(id, 'sm')}<span class="grow">${esc(a.label)}</span><small>${id}</small></button>`).join('')}
+      </div>
+    </nav>
+    <main class="sheet">
+      <div class="tabs">
+        <button class="tab ${ui.tab === 'project' ? 'on' : ''}" data-act="tab" data-v="project">Board</button>
+        <button class="tab ${ui.tab === 'room' ? 'on' : ''}" data-act="tab" data-v="room">Pay by link</button>
+        <span class="spacer"></span>
+        <button class="mock" data-act="notes" aria-expanded="${ui.notes}" title="Mockup control">Пояснения</button>
+        <button class="mock" data-act="theme" title="Mockup control">${dark() ? 'Light' : 'Dark'}</button>
+      </div>
+      ${ui.tab === 'room' ? roomHTML() : projectHTML()}
+      ${ui.notes ? `<div class="notes" role="dialog" aria-label="Пояснения"><div class="row"><h3>Что показывает макет</h3><button class="x" data-act="notes" aria-label="Закрыть">×</button></div><ol>${NOTES.map(n => `<li>${n}</li>`).join('')}</ol></div>` : ''}
+      ${ui.open ? drawerHTML() : ''}
+      ${ui.toast ? `<div class="toast" role="status">${esc(ui.toast)}</div>` : ''}
+    </main></div>`;
+}
+
+function render(flip = false) {
+  const root = document.getElementById('root');
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const before = new Map();
+  if (flip && !reduce) root.querySelectorAll('[data-card]').forEach(el => before.set(el.dataset.card, el.getBoundingClientRect()));
+  const keep = ['board', 'strip'].map(id => { const el = document.getElementById(id); return el ? [id, el.scrollLeft, el.scrollTop] : null; }).filter(Boolean);
+  root.innerHTML = appHTML();
+  keep.forEach(([id, x, y]) => { const el = document.getElementById(id); if (el) { el.scrollLeft = x; el.scrollTop = y; } });
+  before.forEach((was, id) => {
+    const el = root.querySelector(`[data-card="${id}"]`);
+    if (!el) return;
+    const now = el.getBoundingClientRect();
+    const dx = was.left - now.left, dy = was.top - now.top;
+    if (dx || dy) el.animate([{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'none' }], { duration: 460, easing: 'cubic-bezier(.2,.8,.2,1)' });
+  });
+  ui.flash.clear();
+}
+
+function advance() {
+  if (ui.step >= STEPS.length) { stop(); render(); return; }
+  STEPS[ui.step++]().forEach(id => ui.flash.add(id));
+  if (ui.step >= STEPS.length) stop();
+  render(true);
+}
+function stop() { ui.playing = false; clearInterval(timer); timer = null; }
+function reset() { stop(); S = structuredClone(INITIAL); ui.step = 0; ui.open = null; }
+function toast(text) { ui.toast = text; clearTimeout(toastTimer); toastTimer = setTimeout(() => { ui.toast = null; render(); }, 1800); }
+
+document.addEventListener('click', event => {
+  const el = event.target.closest('[data-act]');
+  if (!el) return;
+  const { act, v, id } = el.dataset;
+  let flip = false;
+  if (act === 'tab') { ui.tab = v; ui.open = null; }
+  else if (act === 'view') ui.view = v;
+  else if (act === 'cols') { ui.cols = v; flip = true; }
+  else if (act === 'agent') ui.focus = ui.focus === id ? null : id;
+  else if (act === 'card') ui.open = Number(id);
+  else if (act === 'close') ui.open = null;
+  else if (act === 'notes') ui.notes = !ui.notes;
+  else if (act === 'theme') document.documentElement.classList.toggle('dark');
+  else if (act === 'reset') reset();
+  else if (act === 'todo') toast('Mockup: this button is not wired');
+  else if (act === 'play') {
+    if (ui.playing) stop();
+    else { if (ui.step >= STEPS.length) reset(); ui.playing = true; ui.tab = 'room'; ui.view = 'board'; advance(); if (ui.playing) timer = setInterval(advance, 1900); return; }
+  }
+  render(flip);
+});
+document.addEventListener('keydown', event => {
+  if (event.key !== 'Escape') return;
+  if (ui.open) ui.open = null; else if (ui.notes) ui.notes = false; else return;
+  render();
+});
+
+if (matchMedia('(prefers-color-scheme: dark)').matches) document.documentElement.classList.add('dark');
+render();
+</script>
+</body>
+</html>

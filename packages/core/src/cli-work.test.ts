@@ -1,8 +1,9 @@
 import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { closeWorkDb } from './work/db.js';
@@ -13,6 +14,8 @@ const run = promisify(execFile);
 const here = path.dirname(fileURLToPath(import.meta.url));
 const CLI = path.join(here, 'cli.ts');
 const REPO = path.join(here, '..', '..', '..');
+/** Загрузчик tsx для `node --import`: тот же приём, что в `work/store.test.ts`. */
+const tsxLoader = pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href;
 
 let home = '';
 let project = '';
@@ -26,7 +29,8 @@ interface Result {
 }
 
 /**
- * Тот же способ, что у остальных тестов CLI: исходник через tsx. Домашняя папка
+ * Тот же способ, что у остальных тестов CLI: исходник через tsx, напрямую через
+ * node, без `pnpm exec` (почему — см. `cli.test.ts`). Домашняя папка
  * харнесса и проект — временные, настоящий `claude` не запускается никогда:
  * доступность провайдеров подсунута оверрайдами на shell-заглушку.
  */
@@ -45,7 +49,7 @@ async function cliEnv(extra: NodeJS.ProcessEnv, ...args: string[]): Promise<Resu
     ...extra,
   };
   try {
-    const { stdout, stderr } = await run('pnpm', ['exec', 'tsx', CLI, ...args], { cwd: REPO, env });
+    const { stdout, stderr } = await run(process.execPath, ['--import', tsxLoader, CLI, ...args], { cwd: REPO, env });
     return { stdout, stderr, code: 0 };
   } catch (error) {
     const failure = error as { stdout?: string; stderr?: string; code?: number };

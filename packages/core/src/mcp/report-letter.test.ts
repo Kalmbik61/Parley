@@ -44,12 +44,37 @@ afterEach(async () => {
 
 describe('report letters', () => {
   it('finishes the report even when its notification cannot be stored', async () => {
-    vi.spyOn(letterStore, 'writeLetters').mockImplementationOnce(() => { throw new Error('letter store unavailable'); });
+    vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    vi.spyOn(letterStore, 'writeLetters')
+      .mockImplementationOnce(() => { throw new Error('letter store unavailable'); })
+      .mockImplementationOnce(() => { throw new Error('letter store unavailable'); });
     const answer = await report();
     expect(answer.isError).not.toBe(true);
     expect(body(answer)).toMatchObject({ status: 'done', summary: 'Finished\nDetails' });
     expect(readStoredMap(project, workId).sessions[1]?.result).toBe('done');
     expect(inbox()).toHaveLength(0);
+  });
+
+  it('при двух сбоях записи итог сохранён, агент получает команду написать сам, строка идёт в stderr', async () => {
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    vi.spyOn(letterStore, 'writeLetters')
+      .mockImplementationOnce(() => { throw new Error('letter store unavailable'); })
+      .mockImplementationOnce(() => { throw new Error('letter store unavailable'); });
+    const answer = body(await report());
+    expect(readStoredMap(project, workId).sessions[1]?.result).toBe('done');
+    expect(answer['notified']).toEqual([]);
+    expect(answer['warning']).toEqual(expect.stringMatching(/^The result is saved, but the notice letter was not written\./));
+    expect(answer['warning']).toContain('send_message {to: "s-01", text: "<result>"}');
+    expect(stderr).toHaveBeenCalledWith(expect.stringContaining('parley-mcp: report letter of s-02 not written: letter store unavailable'));
+    expect(inbox()).toHaveLength(0);
+  });
+
+  it('один сбой записи не заметен: вторая попытка пишет письмо, поля warning нет', async () => {
+    vi.spyOn(letterStore, 'writeLetters').mockImplementationOnce(() => { throw new Error('letter store unavailable'); });
+    const answer = body(await report());
+    expect(answer).not.toHaveProperty('warning');
+    expect(answer['notified']).toEqual(['s-01']);
+    expect(inbox()).toHaveLength(1);
   });
 
   it('returns the wait result even when consuming its notification fails', async () => {
@@ -79,12 +104,67 @@ describe('report letters', () => {
     expect(inbox()).toEqual([expect.objectContaining({ text: expect.stringContaining('Second result') })]);
   });
 
-  it('uses the newest task sender', async () => {
+  it('mails the creator and the newest task sender in one letter', async () => {
     letter('s-01');
     letter('s-03');
-    await report();
-    expect(inbox()).toHaveLength(0);
+    const answer = body(await report());
+    expect(inbox()).toHaveLength(1);
     expect(inbox('s-03')).toHaveLength(1);
+    expect(inbox('s-03')[0]?.to).toEqual(['s-01', 's-03']);
+    expect(answer['notified']).toEqual(['s-01', 's-03']);
+    expect(answer['next']).toBe('Notified s-01 (task giver), s-03 (task giver).');
+  });
+
+  it('a room member reports to the room lead: one letter naming the room', async () => {
+    await updateMap(project, workId, (map) => {
+      addRoom(map, { title: 'Room', creator: 's-01', ownerId: 's-01', members: ['s-01', 's-02'], lead: 's-01' });
+    });
+    const answer = body(await report());
+    expect(inbox().map((message) => message.text)).toEqual([
+      's-02 reported done in r-01: Finished. Full summary: get_map {session: "s-02", field: "summary"}',
+    ]);
+    expect(answer['notified']).toEqual(['s-01']);
+    expect(answer['next']).toEqual(expect.stringMatching(/^Notified s-01 \(lead of r-01\)\./));
+  });
+
+  it('a room lead reports to the room owner and to its creator in one letter', async () => {
+    await updateMap(project, workId, (map) => {
+      addRoom(map, { title: 'Room', creator: 's-03', ownerId: 's-03', members: ['s-02'], lead: 's-02' });
+    });
+    const answer = body(await report());
+    expect(inbox('s-03')).toHaveLength(1);
+    expect(inbox('s-01')).toHaveLength(1);
+    expect(inbox('s-03')[0]?.to).toEqual(['s-03', 's-01']);
+    expect(inbox('s-03')[0]?.id).toBe(inbox('s-01')[0]?.id);
+    expect(answer['next']).toEqual(expect.stringMatching(/^Notified s-03 \(owner of r-01\), s-01 \(task giver\)\./));
+  });
+
+  it('the same result again within a minute writes nothing, a different one writes an update', async () => {
+    await report('First');
+    const again = body(await report('First'));
+    expect(again['notified']).toEqual(['s-01']);
+    expect(again['next']).toBe('Already notified s-01 (task giver) with this result; no new letter.');
+    expect(inbox()).toHaveLength(1);
+    await report('Second');
+    expect(inbox()).toHaveLength(1);
+    expect(inbox()[0]?.text).toContain('(update)');
+    expect(inbox()[0]?.text).toContain('Second');
+  });
+
+  it('the same result after the window writes an ordinary letter', async () => {
+    const twoMinutesAgo = new Date(Date.now() - 120_000).toISOString();
+    await updateMap(project, workId, (map) => {
+      map.sessions[1]!.result = 'done';
+      map.sessions[1]!.summary = 'Finished\nDetails';
+    });
+    writeLetters(project, workId, (letters) => {
+      letters.add({ roomId: null, from: 'system', to: ['s-01'], kind: 'note', at: twoMinutesAgo,
+        text: 's-02 reported done: Finished. Full summary: get_map {session: "s-02", field: "summary"}' });
+    });
+    await report();
+    expect(inbox()).toHaveLength(1);
+    expect(inbox()[0]?.text).not.toContain('(update)');
+    expect(inbox()[0]?.at).not.toBe(twoMinutesAgo);
   });
 
   it('skips questions, system letters, outgoing letters and child reports across pages', async () => {
@@ -98,7 +178,7 @@ describe('report letters', () => {
     letter('s-03', 'question');
     writeLetters(project, workId, (letters) => { letters.add({ roomId: null, from: 's-02', to: ['s-03'], kind: 'note', text: 'outgoing' }); });
     await report();
-    expect(inbox()).toHaveLength(0);
+    expect(inbox()).toHaveLength(1); // The creator is always told.
     expect(inbox('s-03')).toHaveLength(2); // Its outgoing task and the worker's report.
     expect(inbox('s-03').filter((message) => message.from === 'system')).toHaveLength(1);
   });
@@ -111,11 +191,18 @@ describe('report letters', () => {
     expect(inbox('s-03')).toHaveLength(0);
   });
 
-  it.each(['direct', 'creator'])('does not notify for a human %s task', async (mode) => {
-    if (mode === 'direct') letter('human');
-    else await updateMap(project, workId, (map) => { map.sessions[1]!.createdBy = 'human'; });
+  it('a human direct task does not hide the letter from the creator', async () => {
+    letter('human');
     await report();
+    expect(inbox()).toHaveLength(1);
+  });
+
+  it('does not notify for a human creator', async () => {
+    await updateMap(project, workId, (map) => { map.sessions[1]!.createdBy = 'human'; });
+    const answer = body(await report());
     expect(inbox()).toHaveLength(0);
+    expect(answer['notified']).toEqual([]);
+    expect(answer['next']).toBe('Nobody was notified: the human sees the result in the window.');
   });
 
   it('progress sends nothing and failed reports its status', async () => {
@@ -144,16 +231,16 @@ describe('report letters', () => {
     expect(inbox()).toHaveLength(0);
   });
 
-  it.each(['room', 'closed', 'missing', 'self'])('does not notify with %s exclusion', async (reason) => {
+  it.each(['closed', 'missing', 'self'])('does not notify with %s exclusion', async (reason) => {
     await updateMap(project, workId, (map) => {
-      if (reason === 'room') addRoom(map, { title: 'Room', creator: 's-01', members: ['s-01', 's-02'] });
       if (reason === 'closed') map.sessions[0]!.lifecycle = 'closed';
       if (reason === 'missing') map.sessions[1]!.createdBy = 's-99';
       if (reason === 'self') map.sessions[1]!.createdBy = 's-02';
     });
-    await report();
+    const answer = body(await report());
     expect(inbox()).toHaveLength(0);
     expect(inbox('s-02')).toHaveLength(0);
+    expect(answer['next']).toEqual(expect.stringMatching(/^Nobody was notified: no live task giver/));
   });
 
   it('notifies a sleeping giver and permits reports from an archived room', async () => {

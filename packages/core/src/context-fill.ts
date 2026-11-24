@@ -71,6 +71,21 @@ export function codexContextFill(info: unknown, at: string): ContextFill | null 
   return { usedPercent: 100 - remaining, windowTokens, usedTokens, at };
 }
 
+/**
+ * Qwen Code reports the context fill on `Stop` (spec 2026-11-11, 3.4): `context_usage` is a fraction of the window and
+ * `context_limit` the window in tokens. `null` — the event carries no usage.
+ */
+export function qwenContextFill(usage: number | undefined, limit: number | undefined, at: string): ContextFill | null {
+  if (usage === undefined || !Number.isFinite(usage) || usage < 0) return null;
+  const windowTokens = limit !== undefined && Number.isFinite(limit) && limit > 0 ? limit : null;
+  return {
+    usedPercent: Math.round(clampPercent(usage * 100)),
+    windowTokens,
+    usedTokens: windowTokens === null ? null : Math.round(Math.min(1, usage) * windowTokens),
+    at,
+  };
+}
+
 /** Текст файла `context/<сессия>.json` → наблюдение; битый JSON или не та форма — `null`. */
 export function parseContextFill(raw: string): ContextFill | null {
   let data: unknown;

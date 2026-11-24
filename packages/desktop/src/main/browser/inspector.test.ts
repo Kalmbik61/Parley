@@ -750,6 +750,7 @@ describe('команды CDP (спека 3.3)', () => {
         'DOM.describeNode',
         'DOM.disable',
         'DOM.enable',
+        'DOM.getFrameOwner',
         'DOM.getNodeForLocation',
         'DOM.resolveNode',
         'Emulation.clearDeviceMetricsOverride',
@@ -762,8 +763,10 @@ describe('команды CDP (спека 3.3)', () => {
         'Network.enable',
         'Network.getResponseBody',
         'Page.captureScreenshot',
+        'Page.createIsolatedWorld',
         'Page.disable',
         'Page.enable',
+        'Page.getFrameTree',
         'Page.getLayoutMetrics',
         'Runtime.callFunctionOn',
         'Runtime.disable',
@@ -885,6 +888,8 @@ describe('закрытый список CDP — этап B (спека брау�
     expect(cdpCallAllowed('Runtime.callFunctionOn')).toBe(false);
     expect(cdpCallAllowed('Runtime.evaluate', { expression: '1' })).toBe(false);
     expect(cdpCallAllowed('DOM.describeNode', { backendNodeId: 1 })).toBe(true);
+    expect(cdpCallAllowed('Page.createIsolatedWorld', { frameId: 'f', worldName: 'parley-agent' })).toBe(true);
+    expect(cdpCallAllowed('Page.getFrameTree')).toBe(true);
   });
 
   it('Фокус ревью 4: send с чужой функцией отклонён до debugger.sendCommand; с REACT_INFO_FN — уходит', async () => {
@@ -909,7 +914,7 @@ describe('закрытый список CDP — этап B (спека брау�
       for (const match of text.matchAll(/'Runtime\.callFunctionOn'/g)) {
         calls += 1;
         const at = match.index ?? 0;
-        expect(text.slice(at, at + 200), file).toMatch(/functionDeclaration: (REACT_INFO_FN|SELECT_OPTION_FN)/);
+        expect(text.slice(at, at + 200), file).toMatch(/functionDeclaration: (REACT_INFO_FN|SELECT_OPTION_FN|HIT_TEST_FN|PROBE_FN)/);
       }
     }
     expect(calls).toBeGreaterThan(0);

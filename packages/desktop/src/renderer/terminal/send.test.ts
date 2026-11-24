@@ -299,6 +299,24 @@ describe('отказ возобновления по бюджету называ
     expect(vi.mocked(toast.error).mock.calls[0]?.[0]).toMatch(/^Couldn't resume session: 6 of 6 sessions/);
   });
 
+  it('отказ роли после замены агента (спека 2026-11-12, 2.6): тост — текст хоста; без метки — общий текст', async () => {
+    const message = 'Architect is a read-only role and does not run on Qwen Code. Continue @s02 on Codex again to keep the role; from there you can continue it on Qwen Code without the role.';
+    const bridge = createFakeBridge();
+    bridge.setHandler('sessions.resume', () => {
+      throw encodeIpcError({ code: 'conflict', message, data: { reason: 'role-change' } });
+    });
+    resumeSession(bridge, ref, 'S02 Bruno');
+    await vi.waitFor(() => expect(toast.error).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(toast.error).mock.calls[0]?.[0]).toBe(message);
+
+    bridge.setHandler('sessions.resume', () => {
+      throw encodeIpcError({ code: 'conflict', message });
+    });
+    resumeSession(bridge, ref, 'S02 Bruno');
+    await vi.waitFor(() => expect(toast.error).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(toast.error).mock.calls[1]?.[0]).toBe("Couldn't resume S02 Bruno: conflicting state.");
+  });
+
   it('кнопка Resume в тосте отправки: отказ уходит тостом, а не только в консоль', async () => {
     const bridge = createFakeBridge();
     const session = makeSession('s-02', 'Bruno', { lifecycle: 'sleeping' });

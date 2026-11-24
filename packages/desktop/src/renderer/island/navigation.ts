@@ -35,7 +35,7 @@ export function pendingNavigation(
     ...consents.map(({ id }) => ({ key: consentNavigationKey(id), kind: 'consent' as const })),
     ...feed.map((item) => ({
       key: feedNavigationKey(item.key), kind: 'feed' as const,
-      target: item.card === null ? { kind: 'session' as const, ref: item.ref, view: 'terminal' as const }
+      target: item.card === null ? { kind: 'session' as const, ref: item.ref, view: item.inWindow ? 'chat' as const : 'terminal' as const }
         : { kind: 'session' as const, ref: item.ref, cardId: item.card.cardId },
     })),
     ...rooms,

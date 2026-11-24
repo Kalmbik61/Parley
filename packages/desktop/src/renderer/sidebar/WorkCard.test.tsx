@@ -93,6 +93,9 @@ const card = (): HTMLElement => {
   return element;
 };
 
+/** Заголовок-переключатель блока «Closed sessions»; `null` — блока нет. */
+const closedToggle = (): HTMLElement | null => document.querySelector<HTMLElement>('[data-closed-sessions]');
+
 afterEach(() => {
   cleanup();
   disposeHost();
@@ -109,6 +112,26 @@ describe('WorkCard (тест 3)', () => {
     expect(card().querySelectorAll('[data-room-row="r-owned"]')).toHaveLength(1);
     expect(card().querySelectorAll('[data-session-id="s-owner"]')).toHaveLength(1);
     expect(card().querySelector('[data-room-row="r-owned"] [data-tree-guide="elbow"]')).not.toBeNull();
+  });
+
+  it('значки веток: две открытые worktree-сессии с общей базой — один цвет, сессия с другой базой — без цвета', () => {
+    const wt = (id: string, base: string) => ({ path: `/tmp/${id}`, branch: `parley/w-01/${id}`, base, createdAt: null });
+    renderCard(
+      makeWork('w-01', {
+        sessions: [
+          makeSession('s-01', 'a', { worktree: wt('s-01', 'main') }),
+          makeSession('s-02', 'b', { worktree: wt('s-02', 'main') }),
+          makeSession('s-03', 'c', { worktree: wt('s-03', 'develop') }),
+        ],
+      }),
+    );
+    const colorOf = (id: string): string | null =>
+      card().querySelector(`[data-session-id="${id}"] [data-worktree]`)?.getAttribute('data-branch-color') ?? null;
+    // `main` → FNV-1a % 5 = 2, значит слот 3 в атрибуте.
+    expect(colorOf('s-01')).toBe('3');
+    expect(colorOf('s-02')).toBe('3');
+    expect(colorOf('s-03')).toBeNull();
+    expect(card().querySelector('[data-session-id="s-03"] [data-worktree]')).not.toBeNull();
   });
 
   it('на корне data-work-key', () => {
@@ -293,17 +316,17 @@ describe('WorkCard (тест 3)', () => {
 
   // Правки ревью куска 2: в done-карточке основной цвет сайдбара — вторичный (dimmed.css), а на hover
   // кнопки заливка text 4 % карточки + text 6 % кнопки — вторичный на ней ниже 4.5:1: цвет на hover — явно основной.
-  it('«N more closed» на hover — основной текст (--color-text), а не --work-sidebar-foreground: тот в done-карточке вторичный', () => {
+  it('заголовок «Closed sessions» на hover — основной текст (--color-text), а не --work-sidebar-foreground: тот в done-карточке вторичный', () => {
     const mixed = makeWork('w-closed', {
       sessions: [makeSession('s-01', 'a'), makeSession('s-02', 'b', { lifecycle: 'closed' })],
     });
     renderCard(mixed);
-    const more = screen.getByText('1 more closed');
+    const more = closedToggle() as HTMLElement;
     expect(more.className).toContain('hover:text-(--color-text)');
     expect(more.className).not.toContain('hover:text-work-sidebar-foreground');
   });
 
-  it('закрытые спрятаны за «2 more closed», клик раскрывает их, «Hide closed» прячет снова (и не активирует карточку)', () => {
+  it('свёрнуто: заголовок «Closed sessions» с числом строк блока, строк блока в DOM нет; клик раскрывает блок, повторный сворачивает (и не активирует карточку)', () => {
     const onActivate = vi.fn();
     const mixed = makeWork('w-closed', {
       sessions: [
@@ -315,20 +338,51 @@ describe('WorkCard (тест 3)', () => {
     renderCard(mixed, { onActivate });
     expect(card().querySelectorAll('[data-session-id]')).toHaveLength(1);
     expect(card().querySelector('[data-work-meta]')?.textContent).toContain('1 session');
-    const more = screen.getByText('2 more closed');
-    expect(more.className).toContain('h-6');
-    expect(more.className).toContain('pl-7');
-    expect(more.className).toContain('text-[11px]');
-    expect(more.className).toContain('rounded-full');
-    fireEvent.click(more);
+    const head = closedToggle() as HTMLElement;
+    expect(head.textContent).toBe('Closed sessions2');
+    expect(head.getAttribute('aria-expanded')).toBe('false');
+    expect(head.className).toContain('h-6');
+    expect(head.className).toContain('pl-7');
+    expect(head.className).toContain('text-[11px]');
+    expect(head.className).toContain('rounded-full');
+    fireEvent.click(head);
     expect(card().querySelectorAll('[data-session-id]')).toHaveLength(3);
-    expect(screen.queryByText('2 more closed')).toBeNull();
+    expect(closedToggle()?.getAttribute('aria-expanded')).toBe('true');
+    expect(closedToggle()?.textContent).toBe('Closed sessions2');
+    // Строки блока — под заголовком.
+    const first = card().querySelector('[data-closed-sessions-list] [data-session-id]') as HTMLElement;
+    expect((closedToggle() as HTMLElement).compareDocumentPosition(first) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
     expect(onActivate).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByText('Hide closed'));
+    fireEvent.click(closedToggle() as HTMLElement);
     expect(card().querySelectorAll('[data-session-id]')).toHaveLength(1);
-    expect(screen.getByText('2 more closed')).toBeTruthy();
-    expect(screen.queryByText('Hide closed')).toBeNull();
+    expect(closedToggle()?.getAttribute('aria-expanded')).toBe('false');
     expect(onActivate).not.toHaveBeenCalled();
+  });
+
+  it('закрытых сессий нет — заголовка «Closed sessions» нет', () => {
+    renderCard(makeWork('w-closed', { sessions: [makeSession('s-01', 'a')] }));
+    expect(closedToggle()).toBeNull();
+  });
+
+  it('10 строк в блоке — второй кнопки «Hide closed» нет, 11 — есть и она сворачивает блок', () => {
+    const many = (n: number) =>
+      makeWork('w-closed', { sessions: [makeSession('s-00', 'open'), ...Array.from({ length: n }, (_, i) => makeSession(`s-${String(i + 1).padStart(2, '0')}`, 'x', { lifecycle: 'closed' }))] });
+    renderCard(many(10));
+    fireEvent.click(closedToggle() as HTMLElement);
+    expect(card().querySelectorAll('[data-closed-sessions-list] [data-session-id]')).toHaveLength(10);
+    expect(card().querySelector('[data-closed-sessions-hide]')).toBeNull();
+    cleanup();
+    // Раскрытие живёт в памяти окна по ключу работы: блок из 11 строк остаётся раскрытым.
+    renderCard(many(11));
+    expect(card().querySelectorAll('[data-closed-sessions-list] [data-session-id]')).toHaveLength(11);
+    const hide = card().querySelector('[data-closed-sessions-hide]') as HTMLElement;
+    expect(hide.textContent).toBe('Hide closed');
+    expect(hide.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true');
+    expect((card().querySelector('[data-closed-sessions-list]') as HTMLElement).compareDocumentPosition(hide) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+    fireEvent.click(hide);
+    expect(card().querySelector('[data-closed-sessions-list]')).toBeNull();
+    expect(card().querySelector('[data-closed-sessions-hide]')).toBeNull();
+    expect(closedToggle()?.getAttribute('aria-expanded')).toBe('false');
   });
 
   it('блок строк: отступ сверху 6, зазор 1', () => {
@@ -365,18 +419,20 @@ describe('WorkCard (тест 3)', () => {
     expect(guidesOf('s-02')).toEqual([]);
   });
 
-  it('линий дерева нет, если строки родителя не видно: родитель закрыт и спрятан под «N more closed», ребёнок остаётся с отступом', () => {
+  it('линий дерева нет, если строки родителя не видно: родитель закрыт и стоит в блоке «Closed sessions», ребёнок остаётся с отступом; раскрытие блока основное дерево не меняет', () => {
     const tree = makeWork('w-01', {
       sessions: [makeSession('s-01', 'root', { lifecycle: 'closed' }), makeSession('s-02', 'child', { parent: 's-01' })],
     });
     renderCard(tree);
     expect(card().querySelectorAll('[data-tree-guide]')).toHaveLength(0);
     expect((document.querySelector('[data-session-id="s-02"]') as HTMLElement).style.marginLeft).toBe('20px');
-    fireEvent.click(screen.getByText('1 more closed'));
-    expect(card().querySelectorAll('[data-session-id="s-01"] [data-tree-guide="start"]')).toHaveLength(1);
-    expect(card().querySelectorAll('[data-session-id="s-02"] [data-tree-guide="elbow"]')).toHaveLength(1);
+    fireEvent.click(closedToggle() as HTMLElement);
+    expect(card().querySelectorAll('[data-tree-guide]')).toHaveLength(0);
+    expect((document.querySelector('[data-session-id="s-02"]') as HTMLElement).style.marginLeft).toBe('20px');
+    expect(card().querySelectorAll('[data-closed-sessions-list] [data-session-id="s-01"]')).toHaveLength(1);
+    expect((card().querySelector('[data-closed-sessions-list] [data-session-id="s-01"]') as HTMLElement).style.marginLeft).toBe('0px');
     // Раскрытие живёт в памяти окна по ключу работы — убираем за собой, как соседний тест.
-    fireEvent.click(screen.getByText('Hide closed'));
+    fireEvent.click(closedToggle() as HTMLElement);
   });
 
   it('клик по карточке — onActivate; у активной работы строки тащатся, выбранная помечена', () => {
@@ -431,10 +487,11 @@ describe('WorkCard — done и длинное название (тест 7)', ()
 });
 
 describe('WorkCard — строки S (английский интерфейс)', () => {
-  it('sessionCount и moreClosed', () => {
+  it('sessionCount и заголовки блоков', () => {
     expect(S.sidebar.sessionCount(1)).toBe('1 session');
     expect(S.sidebar.sessionCount(3)).toBe('3 sessions');
-    expect(S.sidebar.moreClosed(2)).toBe('2 more closed');
+    expect(S.sidebar.closedSessions).toBe('Closed sessions');
+    expect(S.sidebar.archivedRooms).toBe('Archived rooms');
   });
 
   // Метка безымянной работы `UNTITLED_WORK` core стоит в карте, пока не придёт автозаголовок Claude Code.
@@ -584,7 +641,7 @@ describe('WorkCard — комнаты на месте участников (1.2)
     expect(card().querySelector('[data-work-meta]')?.textContent).toContain('4 sessions');
   });
 
-  it('комната без живых участников — в конце карточки; закрытые участники — «N more closed» считает их, строками они видны только внутри развёрнутой комнаты', () => {
+  it('комната без живых участников — в конце карточки; закрытый участник стоит в блоке «Closed sessions», а не в строках комнаты, раскрыт блок или нет', () => {
     const entry = makeWork('w-01', {
       sessions: [makeSession('s-01', 'a'), makeSession('s-02', 'b', { lifecycle: 'closed' })],
       rooms: [room('r-01', ['s-02'])],
@@ -592,11 +649,13 @@ describe('WorkCard — комнаты на месте участников (1.2)
     renderCard(entry);
     expect(rowsOfCard()).toEqual(['s-01', 'r-01']);
     expect(card().querySelector('[data-work-meta]')?.textContent).toContain('1 session');
-    // «1 more closed»: клик показывает закрытые — участник появляется в развёрнутой комнате, а не отдельной строкой.
+    // Клик по заголовку блока: закрытый участник появляется в блоке, а не в развёрнутой комнате и не в основном дереве.
     useUiStore.getState().setRoomExpanded(roomKey(workKey('/tmp/proj', 'w-01'), 'r-01'), true);
-    fireEvent.click(screen.getByText('1 more closed'));
+    expect(closedToggle()?.textContent).toBe('Closed sessions1');
+    fireEvent.click(closedToggle() as HTMLElement);
     expect(rowsOfCard()).toEqual(['s-01', 'r-01', 's-02']);
-    expect(card().querySelector('[data-room-row] [data-session-id="s-02"]')).not.toBeNull();
+    expect(card().querySelector('[data-room-row] [data-session-id="s-02"]')).toBeNull();
+    expect(card().querySelector('[data-closed-sessions-list] [data-session-id="s-02"]')).not.toBeNull();
   });
 
   it('старая карта: сессия в нескольких комнатах стоит в самой ранней по createdAt, в другой её строки нет (решение 4)', () => {
@@ -685,10 +744,10 @@ describe('WorkCard — строка «New session or room» (1.2, «Под ст�
     expect(newRow()).toBeNull();
   });
 
-  it('стоит под строками и под «N more closed»', () => {
+  it('стоит под строками и под блоком «Closed sessions»', () => {
     const withClosed = makeWork('w-01', { sessions: [makeSession('s-01', 'a'), makeSession('s-02', 'b', { lifecycle: 'closed' })] });
     renderCard(withClosed, { active: true });
-    const more = screen.getByText('1 more closed');
+    const more = closedToggle() as HTMLElement;
     const button = newRow() as HTMLElement;
     expect(more.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
     expect(card().querySelector('[data-session-id="s-01"]')?.compareDocumentPosition(more)).toBeTruthy();
@@ -879,7 +938,7 @@ it('passes the awaiting-verification count through the real room row without rai
 });
 
 // Архив комнат (спека 2026-10-08, 5.1): архивные комнаты уходят из основных строк под ссылку внизу карточки.
-describe('WorkCard — архивные комнаты под ссылкой (5.1)', () => {
+describe('WorkCard — архивные комнаты под заголовком (5.1)', () => {
   const KEY = workKey('/tmp/proj', 'w-01');
   const ARCHIVED_AT = '2026-10-08T12:00:00.000Z';
   const room = (id: string, members: string[], patch: Partial<Room> = {}): Room => ({ ...makeRoom(id, `Room ${id}`), members, lead: members[0] ?? null, ...patch });
@@ -888,6 +947,7 @@ describe('WorkCard — архивные комнаты под ссылкой (5.
   const rowsOfCard = (): string[] =>
     [...card().querySelectorAll<HTMLElement>('[data-session-id], [data-room-row]')].map((element) => element.getAttribute('data-room-row') ?? (element.getAttribute('data-session-id') as string));
   const link = (): HTMLElement | null => card().querySelector<HTMLElement>('[data-archived-rooms]');
+  const expand = (): void => void fireEvent.click(link() as HTMLElement);
 
   beforeEach(() => {
     useUiStore.setState({ roomExpanded: {}, dialogs: { ...useUiStore.getState().dialogs, newSession: { open: false, work: null, room: false } } });
@@ -895,35 +955,37 @@ describe('WorkCard — архивные комнаты под ссылкой (5.
     showArchivedRooms(KEY, false);
   });
 
-  it('архивной комнаты в основных строках нет, под ссылкой «1 archived room» её строка не выводится, пока ссылку не раскрыли', () => {
+  it('архивной комнаты в основных строках нет, под заголовком «Archived rooms» (число 1) её строка не выводится, пока блок не раскрыли', () => {
     renderCard(makeWork('w-01', { sessions: sessions(), rooms: [archivedRoom('r-01', ['s-02'])] }));
     expect(rowsOfCard()).toEqual(['s-01', 's-03']);
-    expect(link()?.textContent).toBe('1 archived room');
+    expect(link()?.textContent).toBe('Archived rooms1');
+    expect(link()?.getAttribute('aria-expanded')).toBe('false');
     expect(card().querySelector('[data-room-row]')).toBeNull();
   });
 
-  it('число во множественном: «2 archived rooms»; нет архивных — ссылки нет', () => {
+  it('число — число архивных комнат: 2; нет архивных — заголовка нет', () => {
     renderCard(makeWork('w-01', { sessions: sessions(), rooms: [archivedRoom('r-01', ['s-02']), archivedRoom('r-02', [])] }));
-    expect(link()?.textContent).toBe('2 archived rooms');
+    expect(link()?.textContent).toBe('Archived rooms2');
     cleanup();
     renderCard(makeWork('w-01', { sessions: sessions(), rooms: [room('r-01', ['s-02'])] }));
     expect(link()).toBeNull();
   });
 
-  it('клик раскрывает приглушённые строки (data-dimmed) и меняет подпись на «Hide archived rooms»; повторный — сворачивает; карточку не переключает', () => {
+  it('клик по заголовку раскрывает приглушённые строки (data-dimmed), aria-expanded меняется, подпись та же; повторный — сворачивает; карточку не переключает', () => {
     const onActivate = vi.fn();
     renderCard(makeWork('w-01', { sessions: sessions(), rooms: [archivedRoom('r-01', ['s-02'])] }), { onActivate });
     fireEvent.click(link() as HTMLElement);
     const row = card().querySelector('[data-room-row="r-01"]') as HTMLElement;
     expect(row).not.toBeNull();
     expect(row.hasAttribute('data-dimmed')).toBe(true);
-    expect(link()?.textContent).toBe('Hide archived rooms');
-    // Строка стоит под ссылкой.
+    expect(link()?.textContent).toBe('Archived rooms1');
+    expect(link()?.getAttribute('aria-expanded')).toBe('true');
+    // Строка стоит под заголовком.
     expect((link() as HTMLElement).compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
 
     fireEvent.click(link() as HTMLElement);
     expect(card().querySelector('[data-room-row]')).toBeNull();
-    expect(link()?.textContent).toBe('1 archived room');
+    expect(link()?.getAttribute('aria-expanded')).toBe('false');
     expect(onActivate).not.toHaveBeenCalled();
   });
 
@@ -947,28 +1009,48 @@ describe('WorkCard — архивные комнаты под ссылкой (5.
     expect(card().querySelector('[data-room-row="r-01"] [data-session-id="s-02"]')).toBeNull();
   });
 
-  it('стоит после «N more closed» и перед «New session or room»', () => {
+  it('стоит после блока «Closed sessions» (оба раскрыты — строки закрытых выше заголовка архивных) и перед «New session or room»', () => {
     const list = [makeSession('s-01', 'a'), makeSession('s-02', 'b', { lifecycle: 'closed' })];
     renderCard(makeWork('w-01', { sessions: list, rooms: [archivedRoom('r-01', ['s-02'])] }), { active: true });
-    const more = screen.getByText('1 more closed');
+    const more = closedToggle() as HTMLElement;
     const add = screen.getByText(S.sidebar.newSessionOrRoom);
-    expect(more.compareDocumentPosition(link() as HTMLElement) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+    fireEvent.click(more);
+    const closedRow = card().querySelector('[data-closed-sessions-list] [data-session-id]') as HTMLElement;
+    expect(more.compareDocumentPosition(closedRow) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+    expect(closedRow.compareDocumentPosition(link() as HTMLElement) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
     expect((link() as HTMLElement).compareDocumentPosition(add) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
   });
 
-  it('вид ссылки как у «N more closed»: 24px, 11px, отступ 28, вторичный цвет, основной на hover', () => {
+  it('вид заголовка как у «Closed sessions»: 24px, 11px, отступ 28, вторичный цвет, основной на hover', () => {
     renderCard(makeWork('w-01', { sessions: sessions(), rooms: [archivedRoom('r-01', ['s-02'])] }));
     for (const cls of ['h-6', 'pl-7', 'text-[11px]', 'rounded-full', 'text-work-sidebar-muted-foreground', 'hover:bg-foreground/6', 'hover:text-(--color-text)']) {
       expect(link()?.className, cls).toContain(cls);
     }
   });
 
-  it('showArchivedRooms (→ и ← клавиатуры) раскрывает и сворачивает; вместе с «N more closed» дополнений не требует', () => {
+  it('showArchivedRooms (→ и ← клавиатуры) раскрывает и сворачивает; вместе с блоком закрытых дополнений не требует', () => {
     renderCard(makeWork('w-01', { sessions: sessions(), rooms: [archivedRoom('r-01', ['s-02'])] }));
     act(() => showArchivedRooms(KEY, true));
     expect(card().querySelector('[data-room-row="r-01"]')).not.toBeNull();
     act(() => showArchivedRooms(KEY, false));
     expect(card().querySelector('[data-room-row]')).toBeNull();
+  });
+
+  it('10 архивных комнат — второй кнопки нет, 11 — есть «Hide archived rooms», она сворачивает блок', () => {
+    const rooms = (n: number): Room[] => Array.from({ length: n }, (_, i) => archivedRoom(`r-${String(i + 1).padStart(2, '0')}`, []));
+    renderCard(makeWork('w-01', { sessions: sessions(), rooms: rooms(10) }));
+    expand();
+    expect(card().querySelectorAll('[data-archived-rooms-list] [data-room-row]')).toHaveLength(10);
+    expect(card().querySelector('[data-archived-rooms-hide]')).toBeNull();
+    cleanup();
+    renderCard(makeWork('w-01', { sessions: sessions(), rooms: rooms(11) }));
+    expect(card().querySelectorAll('[data-archived-rooms-list] [data-room-row]')).toHaveLength(11);
+    const hide = card().querySelector('[data-archived-rooms-hide]') as HTMLElement;
+    expect(hide.textContent).toBe('Hide archived rooms');
+    fireEvent.click(hide);
+    expect(card().querySelector('[data-archived-rooms-list]')).toBeNull();
+    expect(card().querySelector('[data-archived-rooms-hide]')).toBeNull();
+    expect(link()?.getAttribute('aria-expanded')).toBe('false');
   });
 
   it('все комнаты в архиве — кнопки «#» нет (меню комнат пустое); есть открытая — кнопка на месте', () => {

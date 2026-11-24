@@ -13,7 +13,8 @@ import { Input } from '../../ui/input.js';
 import { AgentIcon } from '../AgentIcon.js';
 import { CheckLine, knownReason, maskedHint, newerCheck } from './check-line.js';
 import { accountOf } from './custom-provider-draft.js';
-import { GLM_KEY_URL, PROVIDER_INSTALL } from './provider-install.js';
+import { ProviderInstall } from './ProviderInstall.js';
+import { GLM_KEY_URL, installableId, PROVIDER_INSTALL } from './provider-install.js';
 
 export interface ProviderCardProps {
   /** Структурный тип позволяет передать снимок стора или список этого открытия диалога. */
@@ -64,6 +65,18 @@ export function ProviderCard({
   const showInstall =
     install !== null &&
     (isGlm ? provider.needs === 'cli' || provider.version == null : !provider.available);
+  // Установка из окна (спека 2026-11-11): у GLM своей установки нет — он делит CLI Claude; нужен хост с `providers.install`.
+  const installId = isGlm ? null : installableId(provider.id);
+  const canInstall = installId !== null && methods.has('providers.install');
+  // Qwen Code has no copy-paste command block here: its install is the host's `Install…` (spec 2026-11-11, §4.2).
+  const qwenMissing = provider.id === 'qwen' && !provider.available;
+  // OpenCode: not installed (no version), or a 1.x found (a version, but readiness refuses it): both offer the host's `Install…`.
+  const opencodeMissing = provider.id === 'opencode' && !provider.available && provider.version == null;
+  const opencodeLegacy = provider.id === 'opencode' && !provider.available && provider.version != null;
+  const missingCli = (showInstall && !isGlm) || qwenMissing || opencodeMissing || opencodeLegacy;
+  const qwenAuth = provider.id === 'qwen' ? (provider.qwenAuth ?? null) : null;
+  const opencodeConnected = provider.id === 'opencode' ? (provider.opencodeAuth?.connected ?? null) : null;
+  const latest = provider.cli?.latest ?? null;
 
   useEffect(() => {
     ++generation.current;
@@ -304,8 +317,33 @@ export function ProviderCard({
           ) : null}
         </>
       ) : null}
+      {qwenMissing ? (
+        <p data-not-installed className="text-xs text-muted-foreground">
+          {S.providerCard.notInstalled}
+          {latest === null ? '' : ` · ${S.providerCard.latestVersion(latest)}`}
+        </p>
+      ) : null}
+      {opencodeMissing ? (
+        <p data-not-installed className="text-xs text-muted-foreground">
+          {S.providerCard.notInstalled}
+          {latest === null ? '' : ` · ${S.providerCard.latestVersion(latest)}`}
+        </p>
+      ) : null}
+      {opencodeLegacy ? (
+        <p data-opencode-legacy="" className="text-xs text-muted-foreground">{S.providerCard.opencode.legacy(provider.version ?? '')}</p>
+      ) : null}
+      {canInstall && installId !== null ? (
+        // Вне блока с командой: ход и итог остаются на месте, когда CLI найден и блок исчезает.
+        <ProviderInstall id={installId} name={name} missing={missingCli} disabled={busy} onReload={onReload} />
+      ) : null}
       {showInstall && install !== null ? (
         <div className="space-y-2">
+          {canInstall ? (
+            <p data-not-installed className="text-xs text-muted-foreground">
+              {S.providerCard.notInstalled}
+              {latest === null ? '' : ` · ${S.providerCard.latestVersion(latest)}`}
+            </p>
+          ) : null}
           <code className="block break-all rounded-lg bg-muted p-2 text-xs">{install.command}</code>
           <div className="flex flex-wrap gap-2">
             <Button
@@ -321,7 +359,7 @@ export function ProviderCard({
                 });
               }}
             >
-              {copied ? S.providerCard.copied : S.providerCard.copy}
+              {copied ? S.providerCard.copied : canInstall ? S.providerCard.copyCommand : S.providerCard.copy}
             </Button>
             <Button
               type="button"
@@ -334,6 +372,50 @@ export function ProviderCard({
             </Button>
           </div>
           <p className="text-xs text-muted-foreground">{S.providerCard.path}</p>
+        </div>
+      ) : null}
+      {provider.id === 'qwen' && provider.available ? (
+        // Qwen Code signs in inside its terminal (`/auth`): the card shows hints from local files, never a verdict.
+        <div data-qwen-auth={qwenAuth?.hint ?? 'unknown'} className="space-y-1">
+          <p className="text-xs text-muted-foreground">
+            {qwenAuth === null
+              ? S.providerCard.qwen.hint['not-detected']
+              : qwenAuth.hint === 'configured'
+                ? S.providerCard.qwen.hint.configured(qwenAuth.selectedType ?? '')
+                : S.providerCard.qwen.hint[qwenAuth.hint]}
+          </p>
+          <p className="text-xs text-muted-foreground">{S.providerCard.qwen.hintNote}</p>
+          <p data-qwen-model="" className="text-xs text-muted-foreground">{S.providerCard.qwen.model(qwenAuth?.model ?? null)}</p>
+          <p className="text-xs text-muted-foreground">{S.providerCard.qwen.modelHelp}</p>
+        </div>
+      ) : null}
+      {provider.id === 'kimi' && !provider.available ? (
+        <div className="space-y-1" data-kimi-connection={provider.needs ?? 'unknown'}>
+          {provider.needs === 'cli' ? (
+            <>
+              <p className="text-xs text-muted-foreground">{S.providerCard.kimi.missingCli}</p>
+              <Button type="button" size="xs" variant="link"
+                onClick={() => openGuide('https://www.kimi.com/code/docs/en/kimi-code-cli/guides/getting-started#installation')}>
+                {S.providerCard.installationGuide}
+              </Button>
+            </>
+          ) : null}
+          {provider.needs === 'sign-in' ? (
+            <p className="text-xs text-muted-foreground">{S.providerCard.kimi.signIn}</p>
+          ) : null}
+          <Button type="button" size="xs" variant="outline" disabled={busy}
+            onClick={() => void run(S.errors.actions.loadProviders, onReload)}>
+            {S.providerCard.kimi.refresh}
+          </Button>
+        </div>
+      ) : null}
+      {provider.id === 'opencode' && provider.available ? (
+        // OpenCode signs in inside its own TUI: the card shows how many integrations `opencode auth list` reports, never a verdict.
+        <div data-opencode-auth={opencodeConnected === null ? 'unknown' : opencodeConnected > 0 ? 'signed-in' : 'signed-out'} className="space-y-1">
+          <p className="text-xs text-muted-foreground">
+            {opencodeConnected !== null && opencodeConnected > 0 ? S.providerCard.opencode.hint.connected(opencodeConnected) : S.providerCard.opencode.hint.none}
+          </p>
+          <p className="text-xs text-muted-foreground">{S.providerCard.opencode.hintNote}</p>
         </div>
       ) : null}
       {!isGlm && install !== null ? (

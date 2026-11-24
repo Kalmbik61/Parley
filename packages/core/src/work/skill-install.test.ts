@@ -20,7 +20,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { installAgentSkill } from './skill-install.js';
+import { gitLocationSpawnCount, installAgentSkill, resetGitLocationCache } from './skill-install.js';
 import { SKILL_MD } from './skill.js';
 import { MINIMAL_DEVELOPMENT_SKILL_MD, MINIMAL_DEVELOPMENT_LICENSE } from './minimal-development.js';
 import { PARLEY_BROWSER_SKILL_MD } from './parley-browser-skill.js';
@@ -40,6 +40,7 @@ beforeEach(async () => {
   project = path.join(root, 'project');
   await mkdir(project);
   savedHome = process.env['HOME'];
+  resetGitLocationCache();
 });
 
 afterEach(async () => {
@@ -1295,4 +1296,41 @@ it('rejects an owned license FIFO without hanging the launch or touching unrelat
   const result = await run(process.execPath, ['--import', createRequire(import.meta.url).resolve('tsx'), '--input-type=module', '-e', script], { timeout: 2500 });
   expect(JSON.parse(result.stdout)).toEqual({ edited: true, written: 0 });
   expect((await lstat(license)).isFIFO()).toBe(true);
+});
+
+describe('кэш расположения git', () => {
+  const exclude = (dir: string): Promise<string> =>
+    readFile(path.join(dir, '.git', 'info', 'exclude'), 'utf8');
+  it('десять проходов установки одного проекта запускают git один раз; строки exclude дописаны с первого', async () => {
+    await initRepo(project);
+    resetGitLocationCache();
+    const before = gitLocationSpawnCount();
+    await installAgentSkill({ projectPath: project });
+    const text = await exclude(project);
+    for (const line of PATTERNS) expect(count(text, line), line).toBe(1);
+    for (let pass = 0; pass < 9; pass++) await installAgentSkill({ projectPath: project });
+    expect(gitLocationSpawnCount() - before).toBe(1);
+    expect(await exclude(project)).toBe(text);
+  });
+
+  it('сбой git не кэшируется: не репозиторий спрашивается снова, а после git init строки ложатся', async () => {
+    const before = gitLocationSpawnCount();
+    await installAgentSkill({ projectPath: project });
+    await installAgentSkill({ projectPath: project });
+    expect(gitLocationSpawnCount() - before).toBe(2);
+    await run('git', ['init', '-b', 'main', project]);
+    await installAgentSkill({ projectPath: project });
+    expect(gitLocationSpawnCount() - before).toBe(3);
+    for (const line of PATTERNS) expect(count(await exclude(project), line), line).toBe(1);
+  });
+
+  it('репозиторий исчез после кэша: git спрашивается заново, мёртвый .git не воскресает', async () => {
+    await initRepo(project);
+    await installAgentSkill({ projectPath: project });
+    const before = gitLocationSpawnCount();
+    await rm(path.join(project, '.git'), { recursive: true, force: true });
+    await installAgentSkill({ projectPath: project });
+    expect(gitLocationSpawnCount() - before).toBe(1);
+    expect(await exists(path.join(project, '.git'))).toBe(false);
+  });
 });

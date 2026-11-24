@@ -465,6 +465,31 @@ describe('signIn — свой маленький PTY (К14, К17)', () => {
     expect(events.map((item) => item.event)).toEqual(['providers.changed', 'providers.signInExit', 'providers.changed']);
   });
 
+  it('onSignInExit: зовётся после providers.signInExit с аккаунтом и итогом; падение обработчика вход не ломает', async () => {
+    const { spawn, processes } = fakeSpawn();
+    const { exec } = fakeExec({ stdout: SIGNED_OUT }, { stdout: SIGNED_IN });
+    const seen: Array<[string, boolean]> = [];
+    const { auth, events, warnings } = boot({
+      spawn,
+      exec,
+      now: () => 5_000,
+      onSignInExit: (provider: string, signedIn: boolean) => {
+        seen.push([provider, signedIn]);
+        throw new Error('handler boom');
+      },
+    });
+    await auth.refresh(ID);
+    await auth.signIn(ID);
+    events.length = 0;
+
+    processes[0]!.exit({ exitCode: 0 });
+    await exited(events);
+
+    expect(seen).toEqual([[ID, true]]);
+    expect(eventsOf(events, 'providers.signInExit')).toHaveLength(1);
+    expect(warnings.length).toBeGreaterThan(0);
+  });
+
   it('вход прерван без входа: signedIn false, код — 128 + номер сигнала', async () => {
     const { spawn, processes } = fakeSpawn();
     const { auth, events } = boot({ spawn, exec: fakeExec({ stdout: SIGNED_OUT }).exec });

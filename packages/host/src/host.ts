@@ -7,6 +7,7 @@ import { hostToolContext, mapChangeSignal, turnBoundarySource } from './agent/to
 import { createToolsEndpoint } from './agent/tools-endpoint.js';
 import { randomBytes } from 'node:crypto';
 import { mkdir, chmod, link, rename, rm, writeFile } from 'node:fs/promises';
+import type { Socket } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -33,6 +34,7 @@ import {
   PARLEY,
   providerLabel,
   updateMap,
+  defaultQwenRoot,
   userClaudeConfigDir,
   migrateMapsToDb,
   migrateProjects,
@@ -46,13 +48,16 @@ import {
   readSecret,
   rewriteArtifactRefs,
   roleSummaries,
+  rotateWorkJournals,
   socketIsAlive,
   versionAtLeast,
   workPaths,
   writeSecret,
+  type McpContext,
   type ProjectMigration,
   type ProviderEntry,
   type Room,
+  type ToolLaunch,
   type WorkMap,
 } from '@parley/core';
 import { createTelegramService } from './telegram/service.js';
@@ -95,14 +100,23 @@ import type { CustomCheckOptions } from './providers/custom-check.js';
 import { createLimitsService } from './limits/limits-service.js';
 import type { LimitsServiceOptions } from './limits/limits-service.js';
 import { startCodexCatalog } from './providers/codex-catalog.js';
+import { startOpencodeAuthHint, type OpencodeAuthProbe } from './providers/opencode-auth-hint.js';
+import { startOpencodeCatalog, type OpencodeModelsProbe } from './providers/opencode-catalog.js';
+import { startQwenCatalog, type QwenModelsProbe } from './providers/qwen-catalog.js';
 import type { CatalogProbe } from './providers/codex-catalog.js';
 import { startProviderVersions } from './providers/versions.js';
 import { createCliUpdates, type CliUpdatesOptions } from './providers/updates.js';
 import { createCliUpdateRunner } from './providers/update-run.js';
+import { createCliInstaller } from './providers/install-run.js';
+import { createCliRun } from './providers/cli-run.js';
 import type { VersionProbe } from './providers/versions.js';
 import { createPtyManager } from './pty/pty-manager.js';
+import { createKimiSessions } from './kimi/sessions.js';
+import { createKimiAuth } from './providers/kimi-auth.js';
+import { createProcessMonitor } from './pty/process-monitor.js';
 import { createSender } from './pty/send.js';
 import { createFeedService } from './feed/feed-service.js';
+import { canShowKimiElicitation } from './feed/kimi-interactions.js';
 import { ensureCodexHookLauncher } from './feed/codex-hook-launcher.js';
 import { createBacklogService } from './backlog/backlog-service.js';
 import { createPlanEffectsService } from './rooms/plan-effects.js';
@@ -122,20 +136,30 @@ import { createRequests } from './assistant/requests.js';
 import { createRequestLinker, type RequestLinker } from './assistant/request-link.js';
 import { createRequestStatus, type RequestStatusReader } from './assistant/request-status.js';
 import { createJobPrompt } from './assistant/job-context.js';
+import { createServiceMessages, startServiceQueue, type ServiceMessages } from './assistant/service-messages.js';
 import { createJobExecutor } from './assistant/job-executor.js';
 import { createLiveClient } from './voice/live-client.js';
 import { createVoiceSessionService } from './voice/voice-session-service.js';
 import { createVoiceTelemetry, LIVE_USD_PER_MINUTE } from './voice/telemetry.js';
 import { dailyBudget } from './voice/budget.js';
 import { AGENT_BROWSER_PATH, createBrowserEndpoint } from './agent/browser-endpoint.js';
-import { createHookServer } from './hooks/hook-server.js';
+import { createHookServer, type HookRequest } from './hooks/hook-server.js';
+import { createPacketEndpoint, PACKET_PATH, packetContext } from './hooks/packet-endpoint.js';
+import { ensurePacketHookLauncher } from './hooks/packet-hook-launcher.js';
+import { createInlineMail, hookWithInlineMail } from './hooks/inline-mail.js';
+import { appendMailJournal } from './feed/mail-journal.js';
+import { createSilentEndings } from './endings/silent-endings.js';
 import { createSessionsService } from './sessions/sessions-service.js';
+import { createOpencodeSupervisor } from './opencode/server.js';
+import { createOpencodeBridge } from './opencode/events.js';
 import { providerLaunchEnv } from './sessions/provider-env.js';
 import { createReadyJournal } from './sessions/ready-journal.js';
+import { createQwenBinding } from './activity/qwen-binding.js';
 import { createAutoSleepService } from './sleep/auto-sleep-service.js';
 import { limitAlternatives } from './stuck/limit-alternatives.js';
 import { createStuckService, stuckReportFromEnv } from './stuck/stuck-service.js';
 import { limitReturnFromEnv } from './wake/limit-return.js';
+import { withDeadline } from './deadline.js';
 import { createWakeService } from './wake/wake-service.js';
 import { createWorktreeHolds } from './worktrees/holds.js';
 import { createWorktreesService } from './worktrees/worktrees-service.js';
@@ -149,6 +173,10 @@ export interface HostOptions {
   home?: string;
   idleMs?: number;
   helloTimeoutMs?: number;
+  /** Срок одного хука остановки, мс (по умолчанию 5 с); тесты ставят короче. */
+  shutdownHookMs?: number;
+  /** Срок всей остановки, мс (по умолчанию 15 с). */
+  shutdownTotalMs?: number;
   version?: string;
   /**
    * Проба версии CLI провайдеров на старте (`<команда> --version`, одна на команду). Без неё
@@ -163,6 +191,21 @@ export interface HostOptions {
    * зовут `startHost` без пробы или с подменой.
    */
   probeCodexCatalog?: CatalogProbe;
+  /**
+   * Проба каталога моделей Qwen Code на старте (`qwen --acp`, спека 2026-11-12, 8.4). Без неё каталога нет и `models` у
+   * `qwen` остаётся как есть: подключает её только `main.ts`, тесты настоящий qwen не запускают.
+   */
+  probeQwenCatalog?: QwenModelsProbe;
+  /**
+   * Probe of the OpenCode model catalog at start (`opencode models --standalone`, spec 2026-11-12, 4.7). Without it there is no
+   * catalog and `models` of `opencode` stays as it is: only `main.ts` connects it, tests never run the real opencode.
+   */
+  probeOpencodeCatalog?: OpencodeModelsProbe;
+  /**
+   * Probe of the OpenCode sign-in count (`opencode auth list --format json --standalone`, spec 2026-11-12, 4.12) for the provider
+   * card. Without it the card shows no count: only `main.ts` connects it, tests never run the real opencode.
+   */
+  probeOpencodeAuth?: OpencodeAuthProbe;
   /**
    * Проверка новых версий CLI раз в сутки (`codex`, `claude`; спека 2026-11-02). Без неё ничего не спрашивается и в
    * `providers.list` нет поля `update`: сетевой `fetch` подключает только `main.ts`, тесты передают подмену.
@@ -217,6 +260,10 @@ export class SocketPathTooLong extends Error {
 
 const DEFAULT_IDLE_MS = 300_000;
 const DEFAULT_HELLO_TIMEOUT_MS = 5_000;
+const SHUTDOWN_HOOK_MS = 5_000;
+const SHUTDOWN_TOTAL_MS = 15_000;
+/** Сколько `server.close` ждёт, пока клиенты закроются сами, прежде чем их сокеты уничтожаются. */
+const CLIENT_CLOSE_GRACE_MS = 1_000;
 const GLOBAL_PARLEY_MD_TEMPLATE = `# PARLEY.md
 
 <!--
@@ -308,6 +355,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   const hostVersion = options.version ?? readHostVersion();
   const idleMs = options.idleMs ?? DEFAULT_IDLE_MS;
   const helloTimeoutMs = options.helloTimeoutMs ?? DEFAULT_HELLO_TIMEOUT_MS;
+  const shutdownHookMs = options.shutdownHookMs ?? SHUTDOWN_HOOK_MS;
+  const shutdownTotalMs = options.shutdownTotalMs ?? SHUTDOWN_TOTAL_MS;
 
   let resolveClosed!: (reason: string) => void;
   const closed = new Promise<string>((resolve) => {
@@ -340,6 +389,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     sync: { enabled: true },
     // `ptyManager` создаётся ниже, поэтому набор берётся лениво, на каждую сверку живости.
     ownedPids: () => new Set(ptyManager.list().map((h) => h.pid)),
+    // Служба активности создаётся позже: лог сессии берётся из её индекса лениво, на каждую сверку живости.
+    logFileOf: (ref) => activityService.logFile(ref),
   });
   // Сервис зовёт onFailure по разу на каждый код сбоя (конфликт снимка, журнал решения), а у человека одна карточка
   // с одним текстом: повтор для той же работы только вытеснял бы из строки статуса прежние уведомления.
@@ -387,7 +438,12 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   // 30 секунд; окну — в `providers.list` и событием `providers.limitsChanged`. Запускается в конце
   // старта, когда снимок работ уже прочитан. Создаётся до активности: время сброса лимита сессии она берёт
   // у этой службы (спека «Застрявшие сессии», 3.4).
-  const limitsService = createLimitsService(handle.context, worksService, options.limits);
+  // Живые rollout-файлы Codex берутся лениво, после старта: `ptyManager` и активность создаются ниже.
+  const limitsService = createLimitsService(handle.context, worksService, {
+    liveCodexLogs: () =>
+      ptyManager.list().filter((h) => h.provider === 'codex').flatMap((h) => activityService.codexLogFiles(h.ref)),
+    ...options.limits,
+  });
   handle.context.onShutdown(async () => limitsService.stop());
 
   // Активность живёт поверх работ: точка статуса и строка метрик окна (1.5).
@@ -401,7 +457,28 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
 
   // Вход в аккаунты подписки (спека подписок 5.5): состояние по команде самого CLI, вход в своём маленьком PTY. Создаётся
   // до сессий и службы «застрял»: обе берут у неё `status`. Проверка на старте (К5) идёт в фоне, старт хоста её не ждёт.
-  const authService = createAuthService(handle.context, options.auth);
+  // Каталог моделей Qwen Code (спека 2026-11-12, 8.4): проба на старте и раз в 6 часов в фоне, после входа в Qwen — заново.
+  // Новый список хост пишет в `qwen-models.json` (его читает `loadProviders`) и сообщает окну `providers.changed`. Заводится до
+  // службы входа: конец входа в Qwen просит у каталога свежую пробу.
+  const qwenCatalog = startQwenCatalog(options.probeQwenCatalog, log, () => {
+    handle.context.broadcast('providers.changed', { provider: 'qwen' });
+  });
+  // OpenCode model catalog (spec 2026-11-12, 4.7): a probe at start and every 6 hours in the background; a new list goes to
+  // `opencode-models.json` (read by `loadProviders`) and the window gets `providers.changed`.
+  const opencodeCatalog = startOpencodeCatalog(options.probeOpencodeCatalog, log, () => {
+    handle.context.broadcast('providers.changed', { provider: 'opencode' });
+  });
+  // The sign-in count of OpenCode for its card: asked when the card is listed, not at start; the window reloads when it changes.
+  const opencodeAuth = startOpencodeAuthHint(options.probeOpencodeAuth, () => {
+    handle.context.broadcast('providers.changed', { provider: 'opencode' });
+  });
+  const authService = createAuthService(handle.context, {
+    ...options.auth,
+    onSignInExit: (provider, signedIn) => {
+      options.auth?.onSignInExit?.(provider, signedIn);
+      if (provider === 'qwen') void qwenCatalog.refresh();
+    },
+  });
   handle.context.onShutdown(async () => authService.stop());
   // Вошёл ли аккаунт для запуска сессии и помощника: кэш службы входа, а пока он пуст (старт хоста, первая проверка ещё
   // идёт) — исход самой проверки, общей с фоновой. Иначе вошедший аккаунт отказывал бы первые секунды после старта (спека
@@ -422,6 +499,13 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   // Живые PTY сессий (1.6). На остановке хоста добиваются вместе с ним —
   // иначе процесс агента остаётся сиротой без хоста, который бы его закрыл.
   const ptyManager = createPtyManager(handle.context, windowCounters);
+  // Сторож тихих концовок (работы, активность и PTY уже есть). Его `stop` — раньше `sessionsService.stopAll` (хуки идут по
+  // порядку регистрации): выключение хоста гасит процессы, и ни одно письмо о «тихом конце» не должно за ним последовать.
+  const silentEndings = createSilentEndings(handle.context, { works: worksService, activity: activityService, pty: ptyManager });
+  handle.context.onShutdown(async () => silentEndings.stop());
+  // Процессы PTY для тулбара: один `ps` на тик, опрос только пока есть подписчики.
+  const processMonitor = createProcessMonitor({ log: handle.context.log, livePtys: () => ptyManager.list() });
+  handle.context.onShutdown(async () => processMonitor.stop());
 
   // Состояние сессий codex — по потоку их терминала, а не по хукам (спека комнат Organic, 3.6): менеджер PTY
   // разбирает заголовок окна и уведомления, сервис активности выводит из них состояние.
@@ -436,7 +520,14 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     works: worksService,
     activity: activityService,
     pty: ptyManager,
-  }, options.codexHookGraceMs === undefined ? {} : { codexHookGraceMs: options.codexHookGraceMs });
+    // Отказ с текстом по вопросу терминала Codex уходит тем же отправителем, что `pty.send` (он создаётся ниже и зовётся позже).
+    send: (params) => send(params, handle.context.log),
+  }, {
+    ...(options.codexHookGraceMs === undefined ? {} : { codexHookGraceMs: options.codexHookGraceMs }),
+    // OpenCode Chat reads the messages of the session's own server (the supervisor is created further down; it is only called later).
+    opencodeServer: (ref) => opencodeSupervisor.get(ref),
+    kimiRespond: (ref, requestId, response) => kimi.respond(ref, requestId, response),
+  });
   // Канал агента к браузеру окна (спека браузера 2026-10-07, 3.7): путь `/agent/browser` на сервере хуков и свой
   // реестр токенов — у всех провайдеров. Операцию исполняет окно с возможностью `browser-agent`.
   const browserEndpoint = createBrowserEndpoint({
@@ -463,6 +554,9 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   let assistantLinker: RequestLinker | undefined;
   // eslint-disable-next-line prefer-const -- поздняя привязка: Request создаются после сервиса помощника
   let assistantStatus: RequestStatusReader | undefined;
+  // Служебные сообщения в разговор острова (спека автономии §6.3): строятся после jobs и Request, сервис зовёт их позже.
+  // eslint-disable-next-line prefer-const -- поздняя привязка: Request создаются после сервиса помощника
+  let serviceMessages: ServiceMessages | undefined;
   // Токены job помощника (план голоса, T1): у каждого job свой токен MCP, токен разговора ему не отдаётся.
   const assistantJobTokens = createJobTokens();
   const assistantEndpoint = createAssistantEndpoint({
@@ -485,8 +579,10 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       const entry = (await loadProviders())[provider];
       return entry === undefined ? null : providerLabel(entry);
     },
-    request: (input) => {
-      consentsService.requestSwitch(input);
+    // Смена роли на цели — на карточке (спека 2026-11-12, 2.4): человек видит её до Allow.
+    request: async (input) => {
+      const roleChange = await sessionsService.roleChangeFor(input.ref, input.provider);
+      consentsService.requestSwitch(roleChange === null ? input : { ...input, roleChange });
     },
   });
   const swarmEndpoint = createSwarmEndpoint({
@@ -522,43 +618,80 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   // Строки провайдеров для `get_map {field: "providers"}` — те же, что у `/agent/providers`: ходить к себе по HTTP
   // незачем; `wait_for` будит изменение работ службы, а не `fs.watch`; `list_roles` берёт общий кэш каталога. Токен
   // тот же, что у остальных маршрутов агента.
+  const toolContextFor = (ref: SessionRef, launch: ToolLaunch): Promise<McpContext> =>
+    hostToolContext(ref, launch, {
+      // Канал агента — по регистрации хоста: от него зависят имена инструментов канала, которые пакет комнаты называет сессии.
+      agentChannel: (agentRef) => browserEndpoint.isRegistered(agentRef),
+      providerRows: listProviderRows,
+      onWorksChange: mapChangeSignal(worksService),
+      roleCatalog: (cwd) => roleCatalog(cwd, { codex: true }),
+      attempts: (ref, request) => attemptsEndpoint.perform(ref, request, () => browserEndpoint.isRegistered(ref)),
+      turnBoundary: turnBoundarySource(worksService, activityService),
+      // Лента ёмкости заведена ниже по файлу; вызов поздний, как у `sessionsService`. Сбой снимка не должен ронять
+      // инструмент: `null` — в ответе `machine: null`.
+      capacity: async (ref) => {
+        try {
+          const live = activityService.get(ref)?.activity;
+          return {
+            machine: (await capacityFeed.snapshot()).machine,
+            activity: live === undefined ? null : { subagents: live.subagents, background: live.runningBackground },
+          };
+        } catch (error) {
+          log.warn('ёмкость: числа для get_capacity не собрались', { error: String(error) });
+          return null;
+        }
+      },
+    });
   const toolsEndpoint = createToolsEndpoint({
     authenticate: (req) => browserEndpoint.authenticate(req),
-    contextFor: (ref, launch) =>
-      hostToolContext(ref, launch, {
-        providerRows: listProviderRows,
-        onWorksChange: mapChangeSignal(worksService),
-        roleCatalog: (cwd) => roleCatalog(cwd, { codex: true }),
-        attempts: (ref, request) => attemptsEndpoint.perform(ref, request, () => browserEndpoint.isRegistered(ref)),
-        turnBoundary: turnBoundarySource(worksService, activityService),
-        // Лента ёмкости заведена ниже по файлу; вызов поздний, как у `sessionsService`. Сбой снимка не должен ронять
-        // инструмент: `null` — в ответе `machine: null`.
-        capacity: async (ref) => {
-          try {
-            const live = activityService.get(ref)?.activity;
-            return {
-              machine: (await capacityFeed.snapshot()).machine,
-              activity: live === undefined ? null : { subagents: live.subagents, background: live.runningBackground },
-            };
-          } catch (error) {
-            log.warn('ёмкость: числа для get_capacity не собрались', { error: String(error) });
-            return null;
-          }
-        },
-      }),
+    contextFor: toolContextFor,
     log,
+    // Qwen readiness needs the agent's Parley MCP client connected (spec 2026-11-11, 3.4 amendment).
+    generationOf: (ref) => activityService.processGeneration(ref),
+    onList: (ref, generation) => activityService.mcpListed(ref, generation),
   });
-  const hookServer = createHookServer({
+  const inlineMail = createInlineMail({
     log,
-    onHook: (request) => {
+    provider: (ref) => worksService.entry(ref.projectPath, ref.workId)?.map.sessions.find((session) => session.id === ref.sessionId)?.provider,
+    context: toolContextFor,
+    mailJournal: appendMailJournal,
+    delivered: (ref, text, at) => feedService.delivered(ref, text, at),
+  });
+  const qwenBinding = createQwenBinding({
+    log,
+    qwenRoot: defaultQwenRoot(),
+    session: (ref) => worksService.entry(ref.projectPath, ref.workId)?.map.sessions.find((session) => session.id === ref.sessionId),
+    store: async (ref, binding) => {
+      await updateMap(ref.projectPath, ref.workId, (map) => {
+        const target = map.sessions.find((session) => session.id === ref.sessionId);
+        if (target !== undefined) target.qwenTranscript = binding;
+      }, { touch: false });
+    },
+  });
+  // One hook handler chain: the HTTP hook receiver and the OpenCode event bridge (spec 2026-11-12, 4.4) both feed it.
+  const dispatchHook = (request: HookRequest): void => {
+      void qwenBinding.onHook(request);
       readyJournal.onHook(request.ref);
       try {
         compactionService?.onHook(request.ref, request.body);
       } catch (error) {
         log.warn(`compaction hook failed: ${error instanceof Error ? error.message : String(error)}`);
       }
-      feedService.onHook(request);
-    },
+      // Указатель на письма с хуком `UserPromptSubmit`: хост отвечает сам (письма в `additionalContext`), а лента получает
+      // событие с глухим `respond`: её `{}` второй ответ не перебьёт.
+      hookWithInlineMail(inlineMail, (hook) => feedService.onHook(hook))(request);
+  };
+  // Путь пакета состояния комнаты (спека 2026-11-16, 3.5): доступ проверяет приёмник общей с `/hooks` точкой, сессия — из регистрации.
+  // Возможности запуска (навигатор, профиль, канал агента) — из состояния хоста: снимок запуска, который процесс MCP этой сессии
+  // прислал по своему токену (`launchOf`), и регистрация хуков; запрос моста их не называет. Снимка нет — пакета нет.
+  const packetEndpoint = createPacketEndpoint({
+    log,
+    context: packetContext(toolsEndpoint, toolContextFor),
+  });
+  const hookServer = createHookServer({
+    log,
+    onHook: dispatchHook,
+    guarded: { [PACKET_PATH]: (request) => packetEndpoint.handle(request) },
     routes: { [AGENT_ATTEMPTS_PATH]: (req, res) => attemptsEndpoint.handle(req, res), [AGENT_SESSIONS_PATH]: (req, res) => sessionEndpoint.handle(req, res), [AGENT_SWITCH_PATH]: (req, res) => switchEndpoint.handle(req, res), [AGENT_SWARMS_PATH]: (req, res) => swarmEndpoint.handle(req, res), [AGENT_PROVIDERS_PATH]: (req, res) => providersEndpoint.handle(req, res), [AGENT_TOOLS_PATH]: (req, res) => toolsEndpoint.handle(req, res), [AGENT_BROWSER_PATH]: (req, res) => browserEndpoint.handle(req, res), ...assistantEndpoint.routes() },
   });
 
@@ -590,6 +723,25 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       return undefined;
     });
     return codexHookCommand;
+  };
+  // Мост пакета комнаты: запускатель заводится при первой надобности, когда настройка `roomPacket` включена на запуске
+  // `claude`. Не записался — запуск идёт без моста, следующий пробует снова.
+  let packetLauncher: Promise<string | undefined> | undefined;
+  const packetHookOnce = async (): Promise<{ launcher: string; url: string } | undefined> => {
+    if (!(await loadConfig()).config.roomPacket) return undefined;
+    const origin = hookServer.origin();
+    if (origin === null) return undefined;
+    packetLauncher ??= ensurePacketHookLauncher(
+      parleyHome(),
+      process.execPath,
+      fileURLToPath(new URL('./hooks/packet-hook-bin.js', import.meta.url)),
+    ).catch((error: unknown) => {
+      log.warn('пакет комнаты: запускатель не записан, запуск без моста', { error: String(error) });
+      packetLauncher = undefined;
+      return undefined;
+    });
+    const launcher = await packetLauncher;
+    return launcher === undefined ? undefined : { launcher, url: `${origin}${PACKET_PATH}` };
   };
   // Согласия человека на папку (спека 2026-10-21, 4.2 и 4.4): запуск Codex без согласия на проект ждёт здесь. Служба
   // заводится до сессий и будильника, а продолжает запуски через них — привязка поздняя, замыкания читают их позже.
@@ -666,19 +818,50 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     config: async () => (await loadConfig()).config,
   });
   handle.context.onShutdown(async () => capacityFeed.stop());
+  // OpenCode servers (spec 2026-11-12, 4.2): one per live OpenCode session, run file in the Parley home.
+  const opencodeSupervisor = createOpencodeSupervisor({
+    home: resolvedHome,
+    log,
+    // The last message poll before a planned stop keeps the Chat of a closed session (spec 2026-11-12, 4.11).
+    beforeStop: (ref, server) => feedService.opencodeLastPoll(ref, server),
+  });
+  // OpenCode events (spec 2026-11-12, 4.4): the session's SSE stream into the journal and the hook chain.
+  const opencodeEvents = createOpencodeBridge({
+    log,
+    hook: dispatchHook,
+    // An event of the session makes the Chat feed poll its server now (spec 4.11).
+    onSessionEvent: (ref) => void feedService.opencodePoll(ref).catch(() => {}),
+  });
+  handle.context.onShutdown(async () => opencodeEvents.stopAll());
+  const kimiAuth = createKimiAuth(() => handle.context.broadcast('providers.changed', { provider: 'kimi' }));
+  const kimi = createKimiSessions(handle.context, {
+    output: feedService.kimiOutput,
+    requestsChanged: feedService.kimiRequests,
+    canShowElicitation: canShowKimiElicitation,
+    hasHistory: feedService.kimiHasHistory,
+    activity: activityService.kimiActivity,
+    authChanged: kimiAuth.observe,
+  });
   sessionsService = createSessionsService(
     handle.context,
     worksService,
     ptyManager,
     activityService,
     {
+      endings: silentEndings,
       capacity: capacityService,
       consents: consentsService,
       projectMcp,
       hooks: hookServer,
+      opencode: opencodeSupervisor,
+      opencodeEvents,
+      kimi,
+      // Qwen's brief is typed by the wake service once the process is ready (spec 2026-11-11, 3.4 amendment).
+      deferFirst: (ref, pid, text) => wakeService.deferFirst(ref, pid, text),
       providerVersions,
       signedIn: accountSignedIn,
       codexHookCommand: codexHookCommandOnce,
+      packetHook: packetHookOnce,
       agent: {
         url: () => {
           const origin = hookServer.origin();
@@ -701,7 +884,18 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       },
     },
   );
+  // Будильник и сон — до остановки сессий: письмо, пришедшее посреди `stopAll`, не должно поднять сессию снова.
+  // Сервисы создаются ниже, замыкания читают их позже; у обоих `stop()` идемпотентен.
+  handle.context.onShutdown(async () => wakeService.stop());
+  handle.context.onShutdown(async () => autoSleepService.stop());
   handle.context.onShutdown(() => sessionsService.stopAll());
+  handle.context.onShutdown(async () => {
+    await kimi.stopAll();
+    await kimiAuth.stop();
+  });
+  // Sessions stop their servers on exit; this catches any left (a TUI that did not exit in time). The lifelines also
+  // kill their groups when the host's pipes close.
+  handle.context.onShutdown(() => opencodeSupervisor.stopAll());
   // Жизненный цикл роёв (спека роя v1, 3): сверка на каждом снимке работ и раз в 30 с; стартует после чтения работ.
   // Королеву завершённого роя усыпляет сервис сна: он создаётся ниже, замыкание читает его позже.
   const swarmsService = createSwarmsService(handle.context, worksService, sessionsService, {}, {
@@ -733,9 +927,10 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       // Возврат после сброса лимита (спека застрявших 6.3): окно провайдера из службы лимитов, сроки — рычаги E2E.
       limits: limitsService,
       limitReturn: limitReturnFromEnv(process.env),
+      // OpenCode: the brief, the pointer and the limit-return text go through the session server's API (O7).
+      opencodeServer: (ref) => opencodeSupervisor.get(ref),
     },
   );
-  handle.context.onShutdown(async () => wakeService.stop());
 
   // Сон агентов (спека 2026-10-30, 4.1): усыпляет простаивающих агентов Claude Code, а письмо поднимает их будильником.
   // Сжатие создаётся ниже: замыкание читает его позже, как у будильника.
@@ -746,11 +941,11 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     sessions: sessionsService,
     wake: wakeService,
     compacting: (ref) => compactionService?.holds(ref) === true,
+    silentTurns: silentEndings,
     config: async () => (await loadConfig()).config,
     // Сон по давлению памяти и ради слота очереди (спека, 4.2) читает тот же датчик, что и сервис ёмкости.
     pressure: pressureSensor,
   });
-  handle.context.onShutdown(async () => autoSleepService.stop());
 
   compactionService = createCompactionService({
     host: handle.context,
@@ -763,12 +958,20 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   handle.context.onShutdown(async () => compactionService?.stop());
 
   // Один отправитель на хост: окно (`pty.send`) и помощник делят «свой Enter в полёте» по сессии.
-  const send = createSender({
+  const sendPty = createSender({
     pty: ptyManager,
     activity: activityService,
     wake: wakeService,
     switching: (ref: SessionRef) => sessionsService.exclusive.held(ref),
   });
+  const send: typeof sendPty = async (params, log) => {
+    const { ref, text, submit } = params;
+    if (ptyManager.get(ref)?.provider !== 'kimi') return sendPty(params, log);
+    if (sessionsService.exclusive.held(ref) || wakeService.inFlight(ref)) {
+      return { inserted: false, submitted: false, reason: 'busy' };
+    }
+    return kimi.send(ref, text, submit);
+  };
   const secretOf = (entry: ProviderEntry): Promise<string | null> =>
     entry.runner.secret === undefined ? Promise.resolve(null) : readSecret(entry.runner.secret);
   // Готовность провайдера к запуску агента: ключ, версия CLI для окна, вход аккаунта подписки. Версия для помощника — в `ready`.
@@ -816,7 +1019,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     sendLetter: (input) => sendHumanLetter(input, { via: 'assistant' }),
     createRoom: (input) => createHumanRoom(input),
     resolveRoomProposal: (input) => resolveRoomProposal(input),
-    endpoint: { origin: () => hookServer.origin(), setToken: (token) => assistantEndpoint.setToken(token) },
+    endpoint: { origin: () => hookServer.origin(), setToken: (run) => assistantEndpoint.setToken(run) },
     // Шаги плана карточки `actions` (спека 2026-10-28, 6.1): те же функции хоста, что зовёт окно.
     createWork: async (input) => (await createWork(input.projectPath, { title: input.title, goal: input.goal })).work.id,
     // `exactOptionalPropertyTypes`: zod даёт `role?: … | undefined`, а `CreateSessionInput` явного `undefined` ключом не принимает —
@@ -835,11 +1038,20 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     },
     resume: (ref, prompt) => sessionsService.launch(ref, 'resume', { by: 'human', ...(prompt === null ? {} : { prompt }) }),
     interrupt: (ref) => feedService.interrupt(ref),
-    stopSession: (ref) => sessionsService.stop(ref),
-    closeSession: (ref) => sessionsService.close(ref),
+    stopSession: (ref) => sessionsService.stop(ref, 'human'),
+    closeSession: (ref) => sessionsService.close(ref, 'human'),
     addRoomMember: (input) => addRoomMember(input),
     roles: async (projectPath) => roleSummaries(await roleCatalog(projectPath, { codex: true })).roles,
     leanAgents: async () => (await loadConfig()).config.leanAgents,
+    // Флаг автономии — для записи допуска попытки хода; читается без кэша, при выпуске её токена (A2).
+    autonomy: async () => (await loadConfig()).config.assistantAutonomy,
+    startedAt: (ref) => ptyManager.get(ref)?.startedAt,
+    // Итог автономного действия без получателя и событие слежения — служебным Request (спека автономии §5.3, §6.3).
+    deliverOutcome: (card, outcome) => void serviceMessages?.outcome(card, outcome),
+    onWatchEvent: (event) => void serviceMessages?.watchEvent(event),
+    onAutonomyOff: () => void serviceMessages?.autonomyOff(),
+    // Прогон job действителен для автономного действия (спека автономии §5.2, правило 3): токен этого прогона жив и job `running`.
+    jobLive: (admission) => assistantJobTokens.current(admission.jobId)?.runId === admission.runId && assistantJobs.getJob(admission.jobId)?.state === 'running',
     providerReady: sessionReady,
     // `telegram` создаётся ниже, но зовётся уже после запуска, как `onReminderWhileOff`.
     actionsShown: () =>
@@ -865,6 +1077,11 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     onReminderWhileOff: (reminder) => telegram.reminderWhileOff(reminder),
   });
   const reminderTarget = assistantService;
+  // Окно узнаёт о режиме при старте; смену флага подхватывает обёртка `settings.set`.
+  // Слежение за ответом сессий, которым помощник дал работу без подтверждения (спека автономии §6.2).
+  const watchingAssistant = assistantService;
+  activityService.onChange((ref) => watchingAssistant.watchActivity(ref));
+  worksService.onChange(() => watchingAssistant.watchWorks());
 
   // Вход job голосового Request (текст, контекст, открытые Request): Request создаётся после jobs, поэтому поздняя привязка.
   // eslint-disable-next-line prefer-const -- поздняя привязка: замыкание executor читает её раньше присваивания
@@ -880,6 +1097,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       cwd: assistantCwd(parleyHome()),
       log: (line) => log.warn(line),
       tokens: assistantJobTokens,
+      // Флаг автономии — для записи допуска прогона job; читается при выпуске его токена (A2).
+      autonomy: async () => (await loadConfig()).config.assistantAutonomy,
       promptOf: (job) => jobPrompt?.(job) ?? job.requestText,
       endpointUrl: () => {
         const origin = hookServer.origin();
@@ -887,11 +1106,33 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       },
     }),
     defaultProvider: () => assistantService?.settings()?.provider ?? ASSISTANT_PROVIDER_ORDER[0] ?? 'claude',
+    // Job, что шёл при остановке: исходы его автономных карточек — в его резюме (спека автономии §5.3).
+    restartNote: (job, room) => assistantService.claimRestartOutcome(job.jobId, room),
+    // Событие слежения, вернувшееся после лимита, прошло политику очереди: Request снятых неактуальны (спека автономии §6.3).
+    onServiceDrop: (drops) => serviceMessages?.dropped(drops),
     log: (line) => log.info(line),
   });
   // Request голосовых поручений: durable в той же базе, связан с job по ключу; закрытие голоса job не отменяет.
   const assistantRequests = createRequests({ db: sideDb, jobs: assistantJobs });
-  jobPrompt = createJobPrompt({ requests: assistantRequests, jobs: assistantJobs });
+  jobPrompt = createJobPrompt({
+    requests: assistantRequests,
+    jobs: assistantJobs,
+    // Название работы — из снимка работ по ref: в записи слежения его нет (W5).
+    recentSessions: () =>
+      assistantService.recentSessions().map((item) => ({
+        name: item.name,
+        work: worksService.snapshot().entries.find((entry) => entry.projectPath === item.ref.projectPath && entry.map.work.id === item.ref.workId)?.map.work.title ?? item.ref.workId,
+      })),
+    language: () => assistantService.settings()?.language ?? null,
+  });
+  serviceMessages = createServiceMessages({
+    requests: assistantRequests,
+    jobs: assistantJobs,
+    takeResult: (proposalId) => assistantCards.takeResult(proposalId, 'sent_as_message'),
+    // Флаг из состояния сервиса — синхронно, в одном участке с созданием Request; его ведёт `refreshAutonomy`.
+    autonomous: () => assistantService.state().autonomous === true,
+    note: (text) => assistantService.noteWatch(text),
+  });
   assistantStatus = createRequestStatus({ requests: assistantRequests });
   assistantLinker = createRequestLinker({
     db: sideDb,
@@ -902,6 +1143,10 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     safeTools: JOB_CANCEL_SAFE_TOOLS,
   });
   assistantJobs.onJobChanged((job) => handle.context.broadcast('assistant.job.changed', { jobId: job.jobId, state: job.state, revision: job.revision }));
+  // Прогон job кончился: итоги его автономных действий, что он не забрал, уходят дальше (спека автономии §5.3).
+  assistantJobs.onJobChanged((job) => {
+    if (job.state !== 'queued' && job.state !== 'running') assistantService.jobEnded(job.jobId);
+  });
   assistantService.onCardChanged((change) => handle.context.broadcast('assistant.card.changed', change));
   // Телефону — проекция job без логов и argv (план голоса, B3); граница `remote` пропускает событие по REMOTE_EVENTS.
   assistantJobs.onJobChanged((job) => {
@@ -930,7 +1175,10 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   });
   assistantJobs.onJobChanged((job) => notificationIngest.onJob(job));
   assistantService.onCardChanged((change) => notificationIngest.onCard(change));
-  void assistantJobs.recover().catch((error: unknown) => log.info(`assistant jobs: recover failed: ${(error as Error).message}`));
+  // После сверки job: исходы автономных карточек, что не забрал ни один job, уходят в доставку (спека автономии §5.3).
+  // Начальный флаг режима (и снятие ждущих событий слежения при выключенном) — до сверки и разбора очереди job (спека
+  // автономии §6.2); затем исходы автономных карточек, что не забрал ни один job, уходят в доставку (§5.3).
+  void startServiceQueue({ assistant: assistantService, messages: serviceMessages, jobs: assistantJobs, log: (line) => log.info(line) });
   handle.context.onShutdown(async () => assistantJobs.stop());
 
   // Канал Telegram (план B): опрос бота, карточки и письма; остановка раньше помощника, чтобы мост отписался первым.
@@ -945,7 +1193,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     // `by: 'telegram'` называет канал решения в trust.json: кто выдал доверие папке.
     consents: {
       list: () => consentsService.list(),
-      decide: (id, decision) => consentsService.decide(id, decision, 'telegram'),
+      decide: (id, decision, roleChange) => consentsService.decide(id, decision, 'telegram', undefined, undefined, roleChange),
       onChange: (listener) => consentsService.onChange(listener),
     },
     sendLetter: (input) => sendHumanLetter(input, { via: 'telegram' }),
@@ -1020,12 +1268,15 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
           onChange: (command) => handle.context.broadcast('providers.changed', { provider: command }),
         });
   cliUpdates?.start();
+  // Один раннер процессов CLI на хост: флаг занятости на CLI общий у обновления и установки (спека Qwen, §4.2 п. 5).
+  const cliRun = createCliRun();
   // Обновление CLI по просьбе человека (`providers.update`): сессии считаются, но не трогаются.
   const cliUpdateRunner =
     cliUpdates === undefined
       ? undefined
       : createCliUpdateRunner({
           log,
+          cli: cliRun,
           versions: providerVersions,
           updates: cliUpdates,
           ...(options.cliUpdates?.env === undefined ? {} : { env: options.cliUpdates.env }),
@@ -1034,7 +1285,19 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
             return ptyManager.list().filter((pty) => pty.provider !== null && registry[pty.provider]?.runner.command === command).length;
           },
         });
-  handle.context.onShutdown(async () => cliUpdateRunner?.stop());
+  // Установка CLI по просьбе человека (`providers.install`): тот же раннер, затем перепроверка последней версии.
+  const cliInstaller =
+    cliUpdates === undefined
+      ? undefined
+      : createCliInstaller({
+          log,
+          cli: cliRun,
+          versions: providerVersions,
+          updates: cliUpdates,
+          ...(options.cliUpdates?.env === undefined ? {} : { env: options.cliUpdates.env }),
+        });
+  // Остановка хоста убивает идущие установщики и обновления целыми группами.
+  handle.context.onShutdown(async () => cliRun.stop());
   handle.context.onShutdown(async () => cliUpdates?.stop());
 
   const glmCheck = createGlmCheckService(handle.context, options.glmCheck);
@@ -1087,7 +1350,11 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     providerVersions,
     ...(cliUpdates === undefined ? {} : { cliUpdates }),
     ...(cliUpdateRunner === undefined ? {} : { cliUpdateRunner }),
+    ...(cliInstaller === undefined ? {} : { cliInstaller }),
     codexCatalog,
+    qwenCatalog,
+    opencodeCatalog,
+    opencodeAuth,
     limits: limitsService,
     glmCheck,
     customCheck,
@@ -1096,6 +1363,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     activity: activityService,
     pty: ptyManager,
     sessions: sessionsService,
+    kimi,
+    kimiAuth,
     swarms: swarmsService,
     wake: wakeService,
     consents: consentsService,
@@ -1105,6 +1374,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     holds: worktreeHolds,
     sweeper: worktreeSweeper,
     feed: feedService,
+    processMonitor,
     browserAgent: browserEndpoint,
     send,
     assistant: assistantService,
@@ -1143,6 +1413,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
         for (const client of handle.context.clients()) if (client.role === 'remote') client.close();
       }
       voiceDailyMinutes = result.config.voiceDailyMinutes;
+      // Флаг автономии меняется без перезапуска: сервис применяет новое значение сразу и переиздаёт состояние.
+      void assistantService.refreshAutonomy(result.config.assistantAutonomy);
       return result;
     };
   }
@@ -1247,6 +1519,13 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     },
   });
 
+  // Все соединения, в том числе не прошедшие `hello`: на остановке не закрывшиеся сами уничтожаются.
+  const sockets = new Set<Socket>();
+  server.on('connection', (socket: Socket) => {
+    sockets.add(socket);
+    socket.once('close', () => sockets.delete(socket));
+  });
+
   // 5. `listen`, затем сокет переводится на 0600 (изначально его создаёт `listen`).
   try {
     await new Promise<void>((resolve, reject) => {
@@ -1274,6 +1553,12 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   // 7. Таймер простоя: ни клиентов, ни занятых ключей — отсчёт стартует сразу.
   idleWatcher.notify(true);
 
+  // OpenCode backstop (spec 2026-11-12, 4.2 "Host dies first"): before any session can be resumed, the groups of
+  // lifelines a previous host left alive are killed. Only pids with the recorded start time; no environment is read.
+  await opencodeSupervisor.sweep().catch((error: unknown) => {
+    log.error('opencode run file was not swept', { error: String(error) });
+  });
+
   const startFailure = await worksService.start().then(
     () => null,
     (error: unknown) => (error instanceof Error ? error.message : String(error)),
@@ -1282,6 +1567,11 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   // пустая таблица иначе сошла бы за «работ нет» и окно не показало бы причину (`works-unreadable`).
   const worksFailure = migration.unreadable ?? startFailure;
   if (worksFailure === null) {
+    // Журналы хуков спящих и закрытых сессий сжимаются здесь: сверка живости прошла, а читателей журнала (список
+    // прерванных ниже, служба активности и будильник позже) ещё нет — позиции их массивов события не сдвинутся. Срок
+    // ограничен `JOURNAL_ROTATE_BUDGET_MS`, остаток доберётся следующий старт.
+    const trimmed = await rotateWorkJournals(worksService.snapshot().entries).catch(() => ({ rotated: 0, freedBytes: 0 }));
+    if (trimmed.rotated > 0) log.info('журналы хуков сжаты', trimmed);
     // Сверка живости уже прошла на первом чтении работ: те, чей журнал оборван
     // посреди хода, прерваны падением прошлого хоста (спека 10).
     await sessionsService.collectInterrupted().catch((error: unknown) => {
@@ -1316,6 +1606,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   // До активности: сверка эпизодов с картой идёт по первому изменению каждой сессии (спека застрявших 4.4), а оно
   // приходит из самого `activityService.start()`.
   stuckService.start();
+  silentEndings.start();
   // Состояние входа аккаунтов (К5): в фоне, `providers.changed` придёт, когда ответы CLI будут разобраны.
   void authService.refreshAll();
   await activityService.start();
@@ -1350,24 +1641,55 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     process.off('SIGTERM', onSignal);
     process.off('SIGINT', onSignal);
 
-    for (const hook of shutdownHooks) {
-      // Хуки останавливают сессии по очереди, не параллельно — await в цикле намеренный.
-      await hook().catch((error: unknown) => {
-        log.error('хук остановки упал', { error: String(error) });
-      });
-    }
-    // База работ — после всех хуков, службу работ (опрос базы) в их числе: журнал WAL сводится в файл базы здесь, а не
-    // восстанавливается следующим стартом (спека хранилища 6.1).
-    try {
-      closeWorkDb();
-    } catch (error) {
-      log.error('база работ не закрылась', { error: String(error) });
-    }
+    let dbClosed = false;
+    const closeDb = (): void => {
+      if (dbClosed) return;
+      dbClosed = true;
+      try {
+        closeWorkDb();
+      } catch (error) {
+        log.error('база работ не закрылась', { error: String(error) });
+      }
+    };
+    // После общего срока шаги в фоне новых хуков не начинают.
+    let abandoned = false;
+    const steps = async (): Promise<void> => {
+      for (const [index, hook] of shutdownHooks.entries()) {
+        if (abandoned) return;
+        // Хуки останавливают сессии по очереди, не параллельно — await в цикле намеренный.
+        try {
+          const outcome = await withDeadline(
+            (async () => hook())(),
+            shutdownHookMs,
+          );
+          if (outcome === 'timeout') log.warn('shutdown hook timed out', { hook: index, ms: shutdownHookMs });
+        } catch (error) {
+          log.error('хук остановки упал', { error: String(error) });
+        }
+      }
+      if (abandoned) return;
+      // База работ — после всех хуков, службу работ (опрос базы) в их числе: журнал WAL сводится в файл базы здесь, а не
+      // восстанавливается следующим стартом (спека хранилища 6.1).
+      closeDb();
 
-    // `server.close()` дожидается закрытия всех соединений — без явного
-    // разрыва клиенты, которые сами не отключились, повесили бы остановку.
-    for (const client of handle.context.clients()) client.close();
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+      // `server.close()` дожидается закрытия всех соединений — без явного
+      // разрыва клиенты, которые сами не отключились, повесили бы остановку.
+      for (const client of handle.context.clients()) client.close();
+      await withDeadline(new Promise<void>((resolve) => server.close(() => resolve())), CLIENT_CLOSE_GRACE_MS);
+      for (const socket of sockets) socket.destroy();
+    };
+    const outcome = await withDeadline(steps(), shutdownTotalMs).catch((error: unknown) => {
+      log.error('остановка хоста упала', { error: String(error) });
+      return 'done' as const;
+    });
+    if (outcome === 'timeout') {
+      abandoned = true;
+      log.error('shutdown deadline exceeded', { ms: shutdownTotalMs });
+      for (const socket of sockets) socket.destroy();
+      // steps() брошен вместе с server.close(): без этого сервер слушает уже снятый сокет.
+      server.close();
+      closeDb();
+    }
     // Замок — последним: пока он держится, новый хост не стартует и не застанет сокет и токен
     // уходящего (lane-r4).
     await Promise.all([paths.socket, paths.token].map((file) => rm(file, { force: true })));

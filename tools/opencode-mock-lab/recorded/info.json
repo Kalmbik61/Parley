@@ -1,0 +1,1 @@
+{"version":"2.2.7","pid":1234,"hostname":"lab-host","urls":["http://127.0.0.1:4096"],"paths":{"tmp":"/tmp/opencode"},"capabilities":{"persistentPty":true}}

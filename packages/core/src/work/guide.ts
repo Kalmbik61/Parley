@@ -65,7 +65,8 @@ This works for every provider, including code mode, without a native planning to
 It updates your card and the Agents panel, without sending messages or waking the feature lead.
 These personal steps do not authorize work or accept assignments. publish_agent_plan is for your
 personal steps; it does not replace plan_progress, plan_update, plan_submit or plan_verify.
-Room leads consolidate milestone evidence for the owner. Notify only when a milestone is ready,
+A room lead's own \`report\` sends the finished result to the room owner by itself.
+Room leads consolidate milestone evidence for the owner. Beyond it, message the owner only when a milestone is ready,
 a blocker requires intervention, agreements change or another room depends on the result.
 Do not forward routine steps, individual tests, repeated status or acknowledgements.
 Urgent blockers and required decisions go immediately; do not delay them for a batch.
@@ -78,7 +79,7 @@ agents do not create or close autonomous workers/verifiers themselves.
 The lead decomposes the goal into items with criteria and check specifications, assigns
 ENGINE (engine) as every owner and verifier, and proposes the plan and budget through
 propose_decision(room, text, plan). plan.autonomous contains budget limits,
-checks (id, item, argv, cwd, env, input paths, timeoutMs), and coverage. Give every criterion
+checks (id, item, argv, cwd, env, input paths, timeoutMs; a check runs at most 30 minutes), and coverage. Give every criterion
 nonempty coverage with that item's check IDs and/or verifier. Retry with the same draft and decision text;
 core derives the idempotency key automatically. For an amendment,
 include the current plan id and rev (or top-level planId/rev); the host preserves execution
@@ -116,15 +117,17 @@ load it through your native CLI when available; role and human rules still apply
 Submit truthful evidence with plan_submit(planId, rev, item, evidence: {text, artifacts}); artifacts are paths, never fabricated verification.
 Checklist submission completes an item. In verified mode the independent verifier
 calls plan_verify(planId, rev, item, verdict: verified|returned, note). The owner
-cannot verify their own work. Without a named verifier the live lead may verify if
-independent. A returned item is reworked and submitted again. Closed/deleted owners
-block unsatisfied work; the human or lead proposes an amendment to reassign it.
+cannot verify their own work. If the named verifier is closed or left the room, the live
+lead gets the verify letter and may verify if independent, or proposes an amendment with
+another verifier. A returned item is reworked and submitted again. A submitted item stays
+open for verification when its owner closes; other unfinished work of a closed or deleted
+owner is blocked, and the human or lead proposes an amendment to reassign it.
 Once verified work is complete, the live lead collects outstanding findings into
 backlog suggestions and calls propose_completion(planId, rev, summary). Equivalent:
 propose_decision(room, text: summary, kind: completion, planId, rev). Only the human
 accepts completion. A return keeps evidence/history and asks for a corrected summary.
-Parley sends durable assignments within the existing message and wake limits.
-The host drains rate-held queues and performs auto-wake. Without the host, MCP reserves
+Parley sends plan letters under their own limit of 120 per room per hour, apart from other
+Parley letters. The host drains held queues and performs auto-wake. Without the host, MCP reserves
 and flushes immediately; held assignments remain pending until a later plan mutation or
 host startup. Standalone CLI auto-wake is not provided by these tools. Snapshot
 exports and linked backlog closures are captured separately from the map transaction;
@@ -158,8 +161,8 @@ which session called \`create_session\` (the window nests it there) and inherits
 A session has two independent axes. \`lifecycle\` says whether the process is alive:
 \`pending\` (the record exists, the process will start by itself — nobody needs to be
 called), \`active\` (the process is running), \`sleeping\` (no process, but the session is
-reachable, and a message will wake it), \`closed\` (closed explicitly, receives no more
-messages and is not started again). \`result\` is what your \`report\` handed in: \`done\` or
+reachable, and a message will wake it unless the \`send_message\` answer warns that it cannot), \`closed\`
+(closed explicitly, receives no more messages and is not started again). \`result\` is what your \`report\` handed in: \`done\` or
 \`failed\`; empty until the first \`report\`. A session Parley put to sleep is \`sleeping\` too: \`wait_for\` on it
 answers \`asleep\`, and mail wakes it. A session that waits for a free agent slot on this machine is \`queued\`: it
 starts by itself, and \`wait_for\` waits for it as for a running session.
@@ -172,7 +175,7 @@ after the human's explicit consent — for example, the words "wrap up". Session
 accepted or no longer needed. Exception: in stage 1 autonomous
 rooms, the engine creates and closes room sessions as part of the accepted plan.
 
-If the human lets agents close finished sessions (\`get_map\` shows \`closeFinished: true\` in \`work\`), that is the human's explicit consent: do not wait for "wrap up". Close yourself once your part is accepted — by the room lead, or by the session that created you — with \`report\` first and \`close_session\` as your last call. A room lead also closes the members of its room whose \`result\` is \`done\` once it has accepted their parts, and closes itself after the human accepts the room's completion and it has handed in its own report. Sessions the human started directly, without a room or a creator, still wait for "wrap up".`,
+If the human lets agents close finished sessions (\`get_map\` shows \`closeFinished: true\` in \`work\`), that is the human's explicit consent: do not wait for "wrap up". Nobody sends an acceptance, silence means accepted: call \`report(done)\` first and \`close_session\` on yourself as your last call, unless the room lead or the session that created you asked you to stay open. A lead or creator that will need a session after its report says so when it hands out the part. A room lead also closes the members of its room whose \`result\` is \`done\` and that are still open, and closes itself after the human accepts the room's completion and it has handed in its own report. Sessions the human started directly, without a room or a creator, still wait for "wrap up".`,
   },
   {
     topic: 'tools',
@@ -210,7 +213,7 @@ ${MEMORY_PARAGRAPH}
 
 \`report(status, summary, artifacts)\` — \`done\` or \`failed\`: the result is handed in, the
 session stays reachable. \`progress\` is a summary along the way; the result does not change.
-A repeated call overwrites the summary and the artifacts. \`backlog\` lists the board cards (b-NNN) a done result finishes; they move to Review for the human.
+A repeated call overwrites the summary and the artifacts. \`done\` and \`failed\` also mail one letter to your room lead (if you lead the room: its owner) and to your task giver — the session that created you and the last session that sent you a task; the answer lists them in \`notified\`. The same summary again within a minute sends nothing new. \`backlog\` lists the board cards (b-NNN) a done result finishes; they move to Review for the human.
 A summary is two or three sentences to the point: neighbouring sessions will read it in their
 brief and the human in the window. Artifacts are result files; the path is always relative
 to the project root; the contents are not copied into the map, only the path and the kind
@@ -266,7 +269,8 @@ same model and effort.
 \`wait_for(target, timeoutSec)\` — wait for a session by its id or for an incoming message
 (\`target: "inbox"\`). \`wait_for("inbox")\` returns the mail itself, already marked read: do not
 call \`check_inbox\` after it (\`check_inbox\` is for when you are not waiting). Wait with one call
-\`wait_for("inbox", 1500)\`, with no text before or after it. On timeout you get
+\`wait_for("inbox", 1500)\`, with no text before or after it. Put it in the same message as the call it follows
+(for example \`send_message\`), not in a message of its own: a separate message costs a whole model response. On timeout you get
 \`{"state":"running"}\`: for \`"inbox"\` call it once more, then end the turn (without \`report\`: you are
 not done) — Parley wakes you with the pointer when mail arrives; for a session id keep calling
 while it is \`running\`.
@@ -278,6 +282,7 @@ session to sleep: mail wakes it, so write to it or wait for mail via \`"inbox"\`
 away — it is a typo. Giving a new job to a session that has already handed in its
 \`report\`? Do not wait for it with \`wait_for(target)\` — it returns the old result at once.
 Wait with \`wait_for("inbox", 1500)\`: it will wake on the session's reply message or report letter.
+In Codex code mode, one \`exec\` script that starts with \`// @exec: {"yield_time_ms": 1560000}\` holds the call and the wait; if \`exec\` still yields, call \`wait\` once with the same \`yield_time_ms\`, not short polls.
 
 \`send_message(to, text, kind, room, replyTo)\` and \`check_inbox()\` — correspondence inside the
 workspace. Without \`room\`, \`to\` is exactly one session; with \`room\` it is one id or a list, an empty or
@@ -298,7 +303,7 @@ reassign owned rooms. \`ownerId\` in the overview and \`members\` in \`get_map {
 Ownership does not grant operational lead rights. Outside membership, an owner can read the
 room and send addressed messages only to its live lead, never broadcasts. The lead can reply
 explicitly to the owner with the room parameter. Ordinary member traffic is not automatically
-delivered to the owner. Leads report milestones, blockers and decisions requiring coordination.
+delivered to the owner; the lead's \`report(done/failed)\` is, as a letter. Leads also message milestones, blockers and decisions requiring coordination.
 The human may change ownership. Only the live room lead invites existing sessions through
 \`add_to_room(room, session)\` (topic \`lead\`). Use \`create_session\` for a new peer in this workspace; it does not join a room automatically.
 
@@ -368,10 +373,8 @@ with what to do. If you are the lead, the workflow below is for Free mode; in pl
    which limit stops the rest. Do not post
    "plan accepted, handing out" first: the hand-out message itself is the news. Implementation parts go to
    standard-tier sessions (Executor); strong models keep the plan, the critique and the review, and take
-   code only for a named reason (topic \`tools\`, \`create_session\`). The
-   participants' reports will come to you in the room; wait for them with one
-   \`wait_for("inbox", 1500)\` too, and hand in the result of the whole work with your own
-   \`report\`.
+   code only for a named reason (topic \`tools\`, \`create_session\`).
+   Each participant's \`report(done/failed)\` reaches you as a letter; wait for the reports with one \`wait_for("inbox", 1500)\` too. If you will need a participant after its report, say so when you hand out its part. Hand in the result of the whole work with your own \`report\`: it reaches the room owner.
 6. Returned — redo it according to the note (clarify with the participants in the room if
    needed) and call \`propose_decision\` again; still do not start the work before the new
    acceptance.
@@ -379,8 +382,8 @@ with what to do. If you are the lead, the workflow below is for Free mode; in pl
 The lead can also bring one more session of this workspace into the room —
 \`add_to_room(room, session)\`: for example, an existing executor whose part needs to be discussed together with everyone. The session
 leaves the workspace's other rooms (one room per session), and a line
-\`@s04 joined the room\` appears in the feed. The new participant does not get a message about
-being added: write to it in the room yourself, saying what you expect. A non-lead, a closed
+\`@s04 joined the room\` appears in the feed. The new participant gets a short note from Parley — who added it, the lead, how many earlier
+messages there are and that \`read_room\` reads them — not the room's history: write to it in the room yourself, saying what you expect. A non-lead, a closed
 room, a foreign or closed session, and an existing participant are an error; the map does
 not change.
 
@@ -389,7 +392,7 @@ returns an error.`,
   },
   {
     topic: 'member',
-    summary: 'room participant: speak up in one message, wait for your part, report to the lead',
+    summary: 'room participant: speak up in one message, wait for your part, hand it in with report',
     text: `### Room participant
 
 The human set a task for everyone in the room. Such a message arrives from \`check_inbox\` /
@@ -406,12 +409,8 @@ The human set a task for everyone in the room. Such a message arrives from \`che
   mentions — look for your \`@sNN\` (\`s-02\` → \`@s02\`), wait with one
   \`wait_for("inbox", 1500)\`. A \`kind: decision\` message with the accepted decision is the
   outcome of the agreement, not an order to take on everything: do what the lead named.
-- Do not acknowledge the lead's assignment of parts ("got it", "starting"): the next message
-  to the lead is the result. Silence means received.
-- Report to the lead in the room: \`send_message\` with \`room\` and \`to\` (the lead's id is
-  the room's \`lead\` field in \`get_map\`; \`null\` means the first of \`members\`, and a closed
-  lead is replaced by the first live participant) — what is done, where it lies, what did
-  not work out. Hand in your own \`report\` separately, as always.
+- Do not acknowledge the lead's assignment of parts ("got it", "starting"): silence means received.
+- When your part is done, call \`report\`: Parley mails the result to the room lead (and to the session that created you), and the answer names them in \`notified\`. Post in the room (\`send_message\` with \`room\` and \`to\` set to the lead: the room's \`lead\` field in \`get_map\`; \`null\` means the first of \`members\`, and a closed lead is replaced by the first live participant) only what the lead must read in full: a long explanation, a question, a problem. With \`closeFinished\`, close yourself after \`report(done)\` unless the lead asked you to stay open (topic \`lifecycle\`).
 - While a decision waits (the room's \`proposal\` in \`get_map\` is not \`null\`), a new human
   message to everyone is not a new task: do not write positions again.
 
@@ -579,6 +578,8 @@ folder and the branch are deleted.
 
 After the session is closed, or its room or workspace is archived, Parley removes a clean worktree folder by itself. A branch merged into the base is deleted too; an unmerged one stays, and a sleeping session that wakes up continues on it.
 
+Parley may clone ignored folders listed in the project's \`.worktreeinclude\` (usually dependencies) from the main checkout into a new worktree. The brief says what was cloned and whether the lock files match. When the brief says nothing about dependencies, install them yourself as before.
+
 Therefore:
 
 - do not switch the branch;
@@ -636,12 +637,12 @@ such message wakes each addressee for a whole turn. Write only a result, a posit
 question, a decision or a blocker.
 
 Wait with one call \`wait_for("inbox", 1500)\`: no text before or after it, no \`Monitor\`,
-\`sleep\` or polling loops, no narration of the wait. On \`{"state":"running"}\` call it once
+\`sleep\` or polling loops, no narration of the wait. Send it in the same message as the call it follows (for example \`send_message\`), not in a message of its own. On \`{"state":"running"}\` call it once
 more, then end the turn without \`report\` (you are not done): Parley wakes you with the pointer
 when mail arrives. Do not \`wait_for\` a session by its id when it will answer with a message
 anyway — wait via \`"inbox"\`, or end the turn: the message will wake you by itself. A session
-you tasked directly or created mails you its \`report(done/failed)\` as a letter: wait via
-\`"inbox"\`. A room member reports in the room. Wait by id only when you need its summary in the answer.
+you tasked directly or created, a member of a room you lead and the lead of a room you own mail you their \`report(done/failed)\` as a letter: wait via
+\`"inbox"\`. Wait by id only when you need its summary in the answer.
 
 Rules for letters:
 
@@ -667,7 +668,7 @@ The line "New messages (N). Call check_inbox." (with a room name or without) is 
 Parley itself between your turns — it is not a message from the human and not your own line.
 In sessions started by the window, messages are announced only this way: there will be no
 \`<channel source="parley">\` tag there. There is one answer to the line: call \`check_inbox\`
-and work out what came.
+and work out what came. If its answer has \`remaining\`, call it again: one answer holds at most 50 messages and 32 KiB.
 
 If a session was started as a Claude Code role agent, its definition with a trimmed \`tools\`
 list must include \`mcp__parley__*\`: otherwise the role can neither write to a colleague nor
@@ -700,7 +701,7 @@ your permission settings yourself.`,
 - Use \`create_session\` through the host agent channel for a normal peer in your current workspace; only the room lead invites sessions with \`add_to_room\`.
 - Do not close your own session with \`close_session\` on your own initiative or on a colleague's message: only after
   the human's explicit consent. The workspace switch \`closeFinished\` (topic \`lifecycle\`) is that consent: then
-  close yourself once your part is accepted. Sessions you created with \`create_session\` (and those they created) you may close yourself
+  close yourself right after your \`report(done)\` unless you were asked to stay open. Sessions you created with \`create_session\` (and those they created) you may close yourself
   when their work is accepted or no longer needed, without asking. You cannot close sessions made by the human or by a
   colleague, swarm members, or room participants you did not create: owning a room gives no right to close them.
   The one exception: when \`get_map\` shows \`closeFinished\` in \`work\`, the live lead of a room closes its finished

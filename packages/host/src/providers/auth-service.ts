@@ -40,6 +40,8 @@ export interface AuthServiceOptions {
   minGapMs?: number;
   /** Сколько ждать выхода после SIGHUP, мс, прежде чем добить процесс входа SIGKILL. По умолчанию 3 секунды, как у сессий. */
   killGraceMs?: number;
+  /** Вход закончился (после `providers.signInExit`): нужно, например, каталогу моделей Qwen, который после входа спрашивают заново. */
+  onSignInExit?: (provider: string, signedIn: boolean) => void;
 }
 
 export interface AuthService {
@@ -262,6 +264,11 @@ export function createAuthService(host: HostContext, options: AuthServiceOptions
     if (stopped) return;
     const signedIn = await check(finished.id, true);
     host.broadcast('providers.signInExit', { provider: finished.id, exitCode: exitCodeOf(exit), signedIn });
+    try {
+      options.onSignInExit?.(finished.id, signedIn);
+    } catch (error) {
+      host.log.warn('вход аккаунта: обработчик конца входа упал', { id: finished.id, error: String(error) });
+    }
     // `signingIn` стал false, даже если состояние входа не изменилось (отмена): окно перечитывает строку провайдера.
     host.broadcast('providers.changed', { provider: finished.id });
   }

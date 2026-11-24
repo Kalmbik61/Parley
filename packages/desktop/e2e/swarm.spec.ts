@@ -50,12 +50,15 @@ const readLines = async <T>(file: string): Promise<T[]> =>
     .filter((line) => line !== '')
     .map((line) => JSON.parse(line) as T);
 
+/** Адрес окна острова: после `island.html` может идти запрос (`?worksSync=1`). */
+const isIslandUrl = (url: string): boolean => /\/island\.html(\?|$)/.test(url);
+
 function islandPage(app: ElectronApplication): Page | undefined {
-  return app.windows().find((page) => page.url().endsWith('/island.html'));
+  return app.windows().find((page) => isIslandUrl(page.url()));
 }
 
 async function mainWindowOf(app: ElectronApplication): Promise<Page> {
-  const found = (): Page | undefined => app.windows().find((page) => page.url() !== '' && page.url() !== 'about:blank' && !page.url().endsWith('/island.html'));
+  const found = (): Page | undefined => app.windows().find((page) => page.url() !== '' && page.url() !== 'about:blank' && !isIslandUrl(page.url()));
   await expect.poll(() => found() !== undefined, { message: 'главное окно загрузилось', timeout: 30_000 }).toBe(true);
   return found()!;
 }
@@ -101,7 +104,7 @@ test.describe('рой работы (спека роя v1, раздел 9)', () =
     electronApp.on('window', (page) => page.on('dialog', (dialog) => void dialog.dismiss().catch(() => {})));
     const window = await mainWindowOf(electronApp);
     await electronApp.evaluate(({ BrowserWindow }) =>
-      BrowserWindow.getAllWindows().find((candidate) => !candidate.webContents.getURL().endsWith('/island.html'))?.setBounds({ x: 0, y: 0, width: 1400, height: 900 }),
+      BrowserWindow.getAllWindows().find((candidate) => !/\/island\.html(\?|$)/.test(candidate.webContents.getURL()))?.setBounds({ x: 0, y: 0, width: 1400, height: 900 }),
     );
     // Дом с работой открывается сразу в оболочке, пустой — на заставке.
     await expect(window.getByTestId(existingHome ? 'app-shell' : 'landing')).toBeVisible();
@@ -289,6 +292,90 @@ test.describe('рой работы (спека роя v1, раздел 9)', () =
     await shot(window, '1-group-collapsed');
   });
 
+  test('1b) частичная сдача: слово partial, точка и маркер отличны от сдавшей и от идущей; срез в имени участника', async () => {
+    const opened = await openApp();
+    const { window, workId, workKey, electronApp } = opened;
+    const creator = await sessionCreate(opened, 'creator');
+    const queen = await sessionCreate(opened, 'queen');
+    const [covered, partial, failed, working] = [
+      await sessionCreate(opened, 'drone-covered'),
+      await sessionCreate(opened, 'drone-partial'),
+      await sessionCreate(opened, 'drone-failed'),
+      await sessionCreate(opened, 'drone-working'),
+    ];
+    const at = '2026-11-16T12:01:00.000Z';
+    const member = (sessionId: string, role: 'queen' | 'drone', n: number, patch: Record<string, unknown> = {}) => ({
+      sessionId, role, n, addedAt: '2026-11-16T12:00:00.000Z', handedAt: null, slice: null, coverage: null, ...patch,
+    });
+    const swarm: WorkSwarm = {
+      id: 'sw-01', tag: 'Audit', creator: { kind: 'session', sessionId: creator }, objective: 'Study', queen, status: 'running',
+      createdAt: new Date(Date.now() - 4 * 60_000).toISOString(), endedAt: null, result: null, failure: null, seenAt: null, expiredAt: null,
+      members: [
+        member(queen, 'queen', 1),
+        member(covered, 'drone', 1, { handedAt: at, slice: 'core', coverage: 'covered' }),
+        member(partial, 'drone', 2, { handedAt: at, slice: 'host/sessions', coverage: 'partial' }),
+        member(failed, 'drone', 3, { slice: 'packages/desktop/src/renderer/sidebar and everything below' }),
+        member(working, 'drone', 4),
+      ],
+    };
+    const current = mapOf(opened);
+    replaceStoredMapE2E(home, project, workId, {
+      ...withoutLettersE2E(current),
+      swarms: [swarm],
+      swarmSeq: 1,
+      // Работающий — открытая сессия; сорвавшийся — результат failed, как у `report failed`.
+      sessions: current.sessions.map((session) =>
+        session.id === working || session.id === queen ? { ...session, lifecycle: 'active' as const }
+          : session.id === failed ? { ...session, lifecycle: 'closed' as const, result: 'failed' as const }
+          : session),
+    });
+
+    const row = swarmRow(opened, 'sw-01');
+    await expect(row).toBeVisible({ timeout: 20_000 });
+    await expect(row.locator('[data-swarm-counter]')).toHaveText('2/4');
+    // Точки: сдавшая, частичная, сорвавшаяся, идущая; частичная не похожа ни на сдавшую, ни на идущую.
+    const dots = row.locator('[data-swarm-dots] [data-dot]');
+    await expect(dots).toHaveCount(4);
+    expect(await dots.evaluateAll((nodes) => nodes.map((node) => node.getAttribute('data-dot')))).toEqual(['handed', 'partial', 'failed', 'open']);
+    const paint = (index: number) => dots.nth(index).evaluate((node) => {
+      const style = getComputedStyle(node);
+      return `${style.backgroundImage}|${style.backgroundColor}|${style.borderTopColor}`;
+    });
+    const [handedPaint, partialPaint, openPaint] = [await paint(0), await paint(1), await paint(3)];
+    expect(partialPaint).not.toBe(handedPaint);
+    expect(partialPaint).not.toBe(openPaint);
+    expect(partialPaint).toContain('gradient');
+
+    await row.click();
+    const line = (id: string) => row.locator(`[data-swarm-member="${id}"]`);
+    await expect(line(partial)).toHaveAttribute('aria-label', 'Drone 2, host/sessions: partial');
+    await expect(line(partial).locator('[data-swarm-name]')).toHaveText('Drone 2 · host/sessions');
+    await expect(line(partial)).toContainText('partial');
+    await expect(line(covered)).toHaveAttribute('aria-label', 'Drone 1, core: handed in ✓');
+    await expect(line(failed)).toHaveAttribute('data-member-state', 'failed');
+    await expect(line(working)).toHaveAttribute('aria-label', 'Drone 4: reading…');
+    expect(await row.locator('[data-swarm-member] [data-marker]').evaluateAll((nodes) => nodes.map((node) => node.getAttribute('data-marker')))).toEqual(['handed', 'partial', 'failed', 'working']);
+    // Длинный срез обрезается, полное имя — в title.
+    await expect(line(failed).locator('[data-swarm-name]')).toHaveAttribute('title', 'Drone 3 · packages/desktop/src/renderer/sidebar and everything below');
+    expect(await line(failed).locator('[data-swarm-slice]').evaluate((node) => node.scrollWidth > node.clientWidth)).toBe(true);
+
+    // Снимки: свёрнутая и раскрытая строка в светлой и тёмной теме (`SWARM_SHOTS`).
+    const card = window.locator(`[data-work-key="${workKey}"]`);
+    for (const theme of ['light', 'dark'] as const) {
+      await electronApp.evaluate(({ nativeTheme }, source) => { nativeTheme.themeSource = source; }, theme);
+      await expect.poll(() => window.evaluate(() => document.documentElement.classList.contains('dark')), { timeout: 10_000 }).toBe(theme === 'dark');
+      if (shotsDir !== undefined) {
+        // Клик по тегу в шапке строки: центр раскрытой строки — это строка участника, она открывает сессию.
+        await row.locator('[data-swarm-tag]').click();
+        await expect(row).toHaveAttribute('aria-expanded', 'false');
+        await card.screenshot({ path: path.join(shotsDir, `collapsed-${theme}.png`) });
+        await row.locator('[data-swarm-tag]').click();
+        await expect(row).toHaveAttribute('aria-expanded', 'true');
+        await card.screenshot({ path: path.join(shotsDir, `expanded-${theme}.png`) });
+      }
+    }
+  });
+
   test('2) живой рой: create_swarm, swarm_add, сдача, collecting, итог создателю, Mark as seen', async () => {
     const opened = await openApp();
     const { window, workKey } = opened;
@@ -467,8 +554,9 @@ test.describe('рой работы (спека роя v1, раздел 9)', () =
     for (const id of drones) await expect.poll(() => mapOf(opened).sessions.find((session) => session.id === id)?.lifecycle, { timeout: 20_000 }).toBe('closed');
     // Королева остаётся обычной сессией: с ней можно продолжить разговор.
     expect(mapOf(opened).sessions.find((session) => session.id === queen)?.lifecycle).not.toBe('closed');
-    // Отменённый рой с карточки уходит (виден только при «N more closed»), значка нет.
+    // Отменённый рой с основных строк уходит в свёрнутый блок «Closed sessions», значка нет.
     await expect(row).toHaveCount(0, { timeout: 20_000 });
+    await expect(window.locator(`[data-work-key="${workKey}"] [data-closed-sessions]`)).toHaveAttribute('aria-expanded', 'false');
     await expect(window.locator(`[data-work-key="${workKey}"] [data-swarm-badge]`)).toHaveCount(0);
     await shot(window, '4-cancelled');
   });

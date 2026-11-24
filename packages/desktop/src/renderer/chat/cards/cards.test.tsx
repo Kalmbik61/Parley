@@ -127,6 +127,25 @@ afterEach(() => {
 });
 
 describe('PermissionCard', () => {
+  it('shows the requested action and sends the specific ACP option', async () => {
+    render(<Card item={permission({
+      permissionOptions: [
+        { optionId: 'session-only', name: 'Approve for this session', kind: 'allow_always' },
+        { optionId: 'revision', name: 'Revise', kind: 'reject_once' },
+      ],
+      permissionPreview: [
+        { type: 'text', text: 'Write the release notes to notes.md' },
+        { type: 'diff', path: 'notes.md', oldText: 'before', newText: 'after' },
+      ],
+    })} />);
+    expect(screen.getByText('Write the release notes to notes.md')).toBeTruthy();
+    expect(screen.getByTestId('card-after').textContent).toBe('after');
+    expect(screen.queryByTestId('card-deny-message')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Approve for this session' }));
+    await waitFor(() => expect(decideCalls()).toHaveLength(1));
+    expect(lastDecision()).toEqual({ kind: 'permission', behavior: 'allow', optionId: 'session-only' });
+  });
+
   it('ждёт — команда, описание и три действия; нажатие «Allow» шлёт allow', async () => {
     render(<Card item={permission()} />);
     const card = screen.getByTestId('chat-card');
@@ -286,6 +305,28 @@ describe('PermissionCard', () => {
 });
 
 describe('QuestionCard', () => {
+  it('sends structured selections and text keyed by field ID', async () => {
+    render(<Card item={question({ questions: [
+      {
+        question: 'Channels?', header: null, multiSelect: true,
+        options: [{ label: 'Stable, stable', value: 'stable', description: null }, { label: 'Beta', value: 'beta', description: null }],
+        field: { id: 'channels', type: 'choice', required: true },
+      },
+      {
+        question: 'Note?', header: null, options: [], multiSelect: false,
+        field: { id: 'note', type: 'text', required: true },
+      },
+    ] })} />);
+    expect(screen.queryByTestId('card-other')).toBeNull();
+    fireEvent.click(option('Stable, stable'));
+    fireEvent.click(option('Beta'));
+    fireEvent.click(screen.getByTestId('card-next'));
+    fireEvent.change(screen.getByTestId('card-other-text'), { target: { value: 'Free text' } });
+    fireEvent.click(screen.getByTestId('card-submit'));
+    await waitFor(() => expect(decideCalls()).toHaveLength(1));
+    expect(lastDecision()).toEqual({ kind: 'question', answers: {}, values: { channels: ['stable', 'beta'], note: 'Free text' } });
+  });
+
   it('uses the shared answer serializer for chat/island parity', () => {
     expect(chatAnswerOf).toBe(sharedAnswerOf);
   });
@@ -315,6 +356,17 @@ describe('QuestionCard', () => {
     fireEvent.click(screen.getByTestId('card-submit'));
     await waitFor(() => expect(decideCalls()).toHaveLength(1));
     expect(lastDecision()).toEqual({ kind: 'question', answers: { 'Which fruit?': 'Mango' } });
+  });
+
+  it('sends native Qwen multi-select choices and custom text without splitting commas', async () => {
+    render(<Card item={question({ id: 'qwen-dialog:test', via: 'terminal', questions: [question().questions[1]!] })} />);
+    fireEvent.click(option('Nuts'));
+    fireEvent.click(screen.getByTestId('card-other'));
+    fireEvent.change(screen.getByTestId('card-other-text'), { target: { value: 'Red, white' } });
+    fireEvent.click(screen.getByTestId('card-submit'));
+    await waitFor(() => expect(decideCalls()).toHaveLength(1));
+    expect(lastDecision()).toEqual({ kind: 'question', answers: { 'Which toppings?': 'Nuts, Red, white' },
+      values: { choices: ['Nuts'], other: 'Red, white' } });
   });
 
   it('multiSelect — «Other» добавляется к выбранным подписям', async () => {

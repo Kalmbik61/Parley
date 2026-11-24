@@ -58,7 +58,7 @@ export type HostStatus =
  * Явный view:'terminal' меняет и сохранённый вид сессии; с cardId он несовместим.
  */
 export type FocusTarget =
-  | ({ kind: 'session'; ref: SessionRef } & ({ cardId?: string; view?: never } | { view: 'terminal'; cardId?: never }))
+  | ({ kind: 'session'; ref: SessionRef } & ({ cardId?: string; view?: never } | { view: 'terminal' | 'chat'; cardId?: never }))
   | { kind: 'mail'; projectPath: string; workId: string }
   | { kind: 'room'; projectPath: string; workId: string; roomId: string };
 
@@ -79,6 +79,74 @@ export interface UpdateInfo {
   version: string;
   url: string;
 }
+
+/** Почему проверка новой версии не ответила. */
+export type UpdateCheckFailure =
+  | 'network' // нет ответа, обрыв, таймаут, 5xx и прочие не-2xx, кроме ниже
+  | 'rate_limited' // 403 или 429: лимит GitHub для запросов без токена
+  | 'bad_response'; // ответ пришёл, но не годится: 404, больше предела, не JSON, не стабильный релиз
+
+/** Итог проверки — по кнопке «Check now» или по расписанию. */
+export type UpdateCheckResult =
+  | { kind: 'current'; latest: string; checkedAt: number } // последний релиз не новее запущенной версии
+  | { kind: 'available'; latest: string; checkedAt: number } // есть новее
+  | { kind: 'failed'; reason: UpdateCheckFailure; checkedAt: number }
+  | { kind: 'unavailable' }; // окно не собрано или PARLEY_UPDATE_CHECK=off
+
+/** Сведения для раздела Settings → About (`app:about-info`). */
+export interface AboutInfo {
+  /** `app.getVersion()` собранного окна; `null` — разработка (как `appVersion` в `ipc.ts`). */
+  version: string | null;
+  /** Сборка: короткий SHA (8 знаков), дата коммита `YYYY-MM-DD`, правки отслеживаемых файлов. Нет git — `null`. */
+  commit: string | null;
+  commitDate: string | null;
+  dirty: boolean;
+  arch: string; // process.arch
+  electron: string; // process.versions.electron
+  chrome: string; // process.versions.chrome
+  node: string; // process.versions.node
+  os: string; // `macOS ${process.getSystemVersion()}`
+  /** Путь `.app`; не из `.app` и не собранное окно — `null`. Домашний каталог заменён на `~`. */
+  appPath: string | null;
+  /** `parleyHome()`; домашний каталог заменён на `~`. */
+  dataDir: string;
+  /** Проверка возможна вообще: `updateCheckAllowed(env, app.isPackaged)`. */
+  updateChecks: boolean;
+  /** Последняя завершённая проверка, ручная или по расписанию; `null` — ещё не было. */
+  lastCheck: UpdateCheckResult | null;
+}
+
+/** Почему попытка самообновления отказала (спека self-update §5.1). */
+export type UpdateFailure =
+  | 'network' // нет ответа, не 2xx, обрыв, вышло время ожидания
+  | 'too_large' // файл больше предела
+  | 'checksum' // архива нет в SHA256SUMS.txt или хэш не совпал
+  | 'bad_archive' // не распаковался, нет Parley.app, чужая версия или идентификатор, не снялся карантин
+  | 'disk' // ошибка записи: каталог загрузки, каталог рядом с приложением, файл сценария
+  | 'cannot_replace'; // к моменту установки заменить себя уже нельзя
+
+/** Состояние самообновления; живёт в main, окно получает его событием (спека self-update §5.1). */
+export type UpdateState =
+  | { phase: 'idle' }
+  | { phase: 'available'; version: string; url: string; canInstall: boolean }
+  | { phase: 'downloading'; version: string; url: string; received: number; total: number | null }
+  | { phase: 'verifying'; version: string; url: string }
+  | { phase: 'ready'; version: string; url: string }
+  | { phase: 'failed'; version: string; url: string; reason: UpdateFailure };
+
+/** Код отказа в файле итога замены: пять от сценария и `helper` от main (спека self-update §5.5). */
+export type UpdateResultFailure =
+  | 'still_running'
+  | 'no_app'
+  | 'swap_failed'
+  | 'restore_failed'
+  | 'launch_failed'
+  | 'helper';
+
+/** Итог замены, прочитанный новым окном при старте. */
+export type UpdateResult =
+  | { kind: 'updated'; version: string }
+  | { kind: 'failed'; version: string; reason: UpdateResultFailure };
 
 /**
  * Ответ окна на `app:confirm-close` (кусок 7.3a): `close` — «Don't save» или «Save all», у
@@ -129,6 +197,10 @@ export interface ParleyBridge {
      * перезапускают. `null` — окно не собрано (`pnpm dev`, E2E), и сверять нечего.
      */
     version(): Promise<string | null>;
+    /** Сведения о сборке и окружении для Settings → About (`app:about-info`). */
+    aboutInfo(): Promise<AboutInfo>;
+    /** «Check now»: проверка новой версии с итогом; ответ всегда приходит, исключений нет. */
+    checkForUpdates(): Promise<UpdateCheckResult>;
     restartHost(): Promise<void>;
     /** «Retry» экрана «No connection to host»: подключение заново, с короткой паузой (fix-final-b). */
     reconnect(): Promise<void>;
@@ -245,12 +317,21 @@ export interface ParleyBridge {
     /** Ответ на `app:confirm-close` (`app:close-answer`). */
     answerClose(answer: CloseAnswer): void;
     /**
-     * Новая версия на GitHub (V6 плана релиза 0.1.0). При подписке отдаёт слушателю уже найденное (`app:get-update`:
-     * main мог найти релиз, пока окно грузилось или показывало «Connecting…»), дальше — каждое событие
-     * `app:update-available` от проверки main; одна и та же версия может прийти не раз (проверка — раз в сутки).
-     * Проверка выключена переключателем или `PARLEY_UPDATE_CHECK=off` — не приходит ничего.
+     * Самообновление (спека self-update §5.1). Состояние живёт в main (`app:get-update-state`): окно получает его
+     * событием `app:update-state` и по запросу. Подписчик получает текущее состояние сразу, как прежде получал
+     * найденное, дальше — каждое изменение (`idle`, если проверка выключена или ничего не найдено). Ни один вызов
+     * ниже не принимает версию, адрес или путь: выбранный релиз держит main.
      */
-    onUpdateAvailable(listener: (info: UpdateInfo) => void): () => void;
+    getUpdateState(): Promise<UpdateState>;
+    onUpdateState(listener: (state: UpdateState) => void): () => void;
+    /** `available` (с `canInstall`) или `failed` → `downloading`; из прочих состояний — ничего. */
+    downloadUpdate(): Promise<void>;
+    /** `downloading` и `verifying` → `available` с последней найденной версией. */
+    cancelUpdateDownload(): Promise<void>;
+    /** `ready` → намерение замены и обычный выход («Restart now»); из прочих состояний — ничего. */
+    installUpdate(): Promise<void>;
+    /** Итог прошлой замены, прочитанный при старте: отдаётся один раз, дальше `null`. */
+    takeUpdateResult(): Promise<UpdateResult | null>;
   };
   /**
    * Settings → Remote access (mobile spec 12): the local control socket of the bridge, through main. The window

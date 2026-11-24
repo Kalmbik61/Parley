@@ -167,7 +167,7 @@ test.describe('вид Chat у Codex на журнале (план 2026-10-07, Ta
     await resize(app, width, height);
     await expect(window.getByTestId('landing')).toBeVisible();
     const errors: string[] = [];
-    window.on('pageerror', (error) => errors.push(`pageerror: ${error.message}`));
+    window.on('pageerror', (error) => errors.push(`pageerror: ${error.stack ?? error.message}`));
     const work = await call<{ workId: string }>(window, 'works.create', {
       projectPath: project,
       title: 'e2e-codex-chat',
@@ -280,13 +280,14 @@ test.describe('вид Chat у Codex на журнале (план 2026-10-07, Ta
     expect(errors).toEqual([]);
   });
 
-  test('запрос подтверждения в терминале Codex — баннер ожидания в ленте, переход в терминал показывает вопрос', async () => {
+  test('запрос подтверждения в терминале Codex — панель вопроса терминала в ленте, переход в терминал показывает вопрос', async () => {
     const { window, ref, errors } = await open(1400, 900);
     const chat = await toChat(window);
     await stub(window, ref, 'STUB_APPROVAL');
-    const banner = chat.getByTestId('chat-waiting-banner');
-    await expect(banner).toBeVisible({ timeout: 20_000 });
-    await chat.getByTestId('chat-waiting-open').click();
+    // Хост знает `pty.screenText`: вместо строки «ждёт в терминале» — панель с экраном терминала.
+    await expect(chat.getByTestId('chat-terminal-prompt')).toBeVisible({ timeout: 20_000 });
+    await expect(chat.getByTestId('chat-waiting-banner')).toHaveCount(0);
+    await chat.getByTestId('chat-terminal-prompt-open').click();
     await expect(window.getByTestId('chat-view')).toHaveCount(0);
     await expect.poll(() => screenText(window)).toContain('enter: STUB_APPROVAL');
     expect(errors).toEqual([]);
@@ -419,7 +420,107 @@ test.describe('вид Chat у Codex на журнале (план 2026-10-07, Ta
     expect(errors).toEqual([]);
   });
 
-  test('настройка включена, хуки не одобрены: подсказка про доверие, Open terminal, STUB_APPROVAL — баннер ожидания без карточки', async () => {
+  test('одобрение команды на экране терминала Codex без хуков: карточка с кнопками, Allow нажимает 1; экран сменился до клика — «Answered in the terminal», клавиша не ушла', async () => {
+    const { window, ref, errors } = await open(1400, 900);
+    const chat = await toChat(window);
+    const card = (state: 'pending' | 'allowed' | 'elsewhere'): Locator =>
+      chat.locator(`[data-testid="chat-card"][data-card-kind="permission"][data-card-state="${state}"]`);
+
+    // Заглушка рисует экран одобрения и ставит заголовок Action Required: хост узнаёт форму и заводит карточку.
+    await stub(window, ref, 'STUB_APPROVAL_SCREEN touch created.txt');
+    await expect(card('pending')).toHaveCount(1, { timeout: 20_000 });
+    await expect(card('pending')).toContainText('touch created.txt');
+    await expect(card('pending').getByTestId('card-allow')).toBeVisible();
+    await expect(card('pending').getByTestId('card-deny')).toBeVisible();
+    // Есть карточка — панели вопроса терминала нет.
+    await expect(chat.getByTestId('chat-terminal-prompt')).toHaveCount(0);
+
+    // Allow доходит до терминала цифрой 1.
+    await card('pending').getByTestId('card-allow').click();
+    await expect(card('allowed')).toHaveCount(1, { timeout: 20_000 });
+    await window.getByRole('radio', { name: 'Terminal' }).click();
+    await expect.poll(() => screenText(window)).toContain('approved: touch created.txt');
+    await window.getByRole('radio', { name: 'Chat' }).click();
+
+    // Второе одобрение; через 4 с, до клика, заглушка рисует поверх другое: карточка по прежнему экрану уже не наша.
+    await stub(window, ref, 'STUB_APPROVAL_SCREEN rm -rf build => rm -rf dist');
+    await expect(card('pending')).toContainText('rm -rf build', { timeout: 20_000 });
+    await expect(card('elsewhere')).toHaveCount(1, { timeout: 20_000 });
+    await expect(card('elsewhere')).toContainText('Answered in the terminal');
+    // Кнопок у отвеченной карточки нет, а заглушка ничего не получила: ни одобрения, ни отказа второй команды.
+    await expect(card('elsewhere').getByTestId('card-allow')).toHaveCount(0);
+    await window.getByRole('radio', { name: 'Terminal' }).click();
+    await expect.poll(() => screenText(window)).toContain('rm -rf dist');
+    const screen = await screenText(window);
+    for (const answered of ['approved: rm', 'approved-always: rm', 'denied: rm']) expect(screen).not.toContain(answered);
+    expect(errors).toEqual([]);
+  });
+
+  test('вопрос Codex с вариантами: выбранный ответ из карточки Chat доходит до терминала', async () => {
+    const { window, ref, errors } = await open(1400, 900, '0.166.0');
+    const chat = await toChat(window);
+    const card = chat.locator('[data-testid="chat-card"][data-card-kind="question"]');
+
+    await stub(window, ref, 'STUB_QUESTION_SCREEN');
+    await expect(card).toHaveAttribute('data-card-state', 'pending', { timeout: 20_000 });
+    await expect(card).toContainText('Which color do you prefer?');
+    await expect(chat.getByTestId('chat-terminal-prompt')).toHaveCount(0);
+    await card.getByRole('radio', { name: /^Blue/ }).check();
+    await card.getByTestId('card-submit').click();
+    await expect(card).toHaveAttribute('data-card-state', 'answered', { timeout: 20_000 });
+    await expect(card.getByTestId('card-answers')).toContainText('Blue');
+
+    await window.getByRole('radio', { name: 'Terminal' }).click();
+    await expect.poll(() => screenText(window)).toContain('answer: Blue');
+    expect(errors).toEqual([]);
+  });
+
+  test('вопрос на экране терминала: панель в Chat показывает его, Enter с кнопки и текст из поля доходят до агента', async () => {
+    const { window, ref, errors } = await open(1400, 900);
+    const chat = await toChat(window);
+    const panel = chat.getByTestId('chat-terminal-prompt');
+
+    // Возврат в Chat сразу после монтажа xterm оставляет отложенный вызов viewport.
+    await window.getByRole('radio', { name: 'Terminal' }).evaluate((terminal) => new Promise<void>((resolve) => {
+      const observer = new MutationObserver(() => {
+        if (document.querySelector('.xterm') === null) return;
+        observer.disconnect();
+        const radio = [...document.querySelectorAll<HTMLButtonElement>('button[role="radio"]')]
+          .find((button) => button.textContent?.trim() === 'Chat');
+        radio?.click();
+        resolve();
+      });
+      observer.observe(document.body, { childList: true, subtree: true });
+      (terminal as HTMLButtonElement).click();
+    }));
+    await expect(chat).toBeVisible();
+
+    // Вопрос с тремя вариантами: его текст виден в панели.
+    await stub(window, ref, 'STUB_QUESTION');
+    await expect(panel).toBeVisible({ timeout: 20_000 });
+    await expect(chat.getByTestId('chat-terminal-prompt-screen')).toContainText('Which color do you prefer?', { timeout: 20_000 });
+    await expect(chat.getByTestId('chat-terminal-prompt-screen')).toContainText('3. Blue');
+
+    // Клик по Enter доходит до заглушки: она отвечает `picked: default`, вопрос закрыт — панель уходит.
+    await chat.getByTestId('chat-terminal-prompt-enter').click();
+    await expect(panel).toHaveCount(0, { timeout: 20_000 });
+    await window.getByRole('radio', { name: 'Terminal' }).click();
+    await expect.poll(() => screenText(window)).toContain('picked: default');
+    await window.getByRole('radio', { name: 'Chat' }).click();
+    await expect(chat).toBeVisible();
+
+    // Второй вопрос: текст из поля доходит до заглушки целиком, затем Enter отдельным нажатием.
+    await stub(window, ref, 'STUB_QUESTION');
+    await expect(panel).toBeVisible({ timeout: 20_000 });
+    await chat.getByTestId('chat-terminal-prompt-input').fill('yes please');
+    await chat.getByTestId('chat-terminal-prompt-send').click();
+    await expect(panel).toHaveCount(0, { timeout: 20_000 });
+    await window.getByRole('radio', { name: 'Terminal' }).click();
+    await expect.poll(() => screenText(window)).toContain('enter: yes please');
+    expect(errors).toEqual([]);
+  });
+
+  test('настройка включена, хуки не одобрены: подсказка про доверие, Open terminal, STUB_APPROVAL — панель вопроса терминала без карточки', async () => {
     const { window, ref, errors } = await open(1400, 900, '0.160.0', 'untrusted');
     const chat = await toChat(window);
     const hint = chat.getByTestId('codex-hooks-hint');
@@ -428,7 +529,7 @@ test.describe('вид Chat у Codex на журнале (план 2026-10-07, Ta
     await shot(window, 'hooks-hint-1400x900');
 
     await stub(window, ref, 'STUB_APPROVAL');
-    await expect(chat.getByTestId('chat-waiting-banner')).toBeVisible({ timeout: 20_000 });
+    await expect(chat.getByTestId('chat-terminal-prompt')).toBeVisible({ timeout: 20_000 });
     await expect(chat.locator('[data-testid="chat-card"][data-card-kind="permission"]')).toHaveCount(0);
 
     await hint.getByRole('button', { name: 'Open terminal' }).click();

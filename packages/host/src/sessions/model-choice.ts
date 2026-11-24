@@ -28,6 +28,11 @@ export async function resolveModelChoice(
     ...(effort === undefined || effort === '' ? {} : { effort }),
   };
   if (choice.model === undefined && choice.effort === undefined) return choice;
+  if (provider === 'kimi') {
+    throw new HostError('bad_request', 'Choose the model and thinking level in the active Kimi Code chat.', {
+      reason: 'kimi-config-in-chat',
+    });
+  }
 
   const entry = (await loadProviders())[provider];
   if (entry === undefined) return choice;

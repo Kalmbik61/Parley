@@ -95,6 +95,12 @@ describe('cardDetail', () => {
     expect(detail).toBe('abcd…');
   });
 
+  it('правка Codex из терминала (apply_patch) — путь файла', () => {
+    expect(cardDetail(permission('apply_patch', { path: '/p/src/a.ts' }))).toBe('/p/src/a.ts');
+    // Другой инструмент с одним путём подробностей по-прежнему не имеет.
+    expect(cardDetail(permission('Read', { path: '/p/src/a.ts' }))).toBeNull();
+  });
+
   it('нечего показать — null', () => {
     expect(cardDetail(permission('Read', { file_path: '/p/a.ts' }))).toBeNull();
   });

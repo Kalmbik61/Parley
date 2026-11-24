@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { openMemoryDb } from '@parley/core';
 import type { AssistantCardChanged } from '@parley/protocol';
 import type { Job, JobState } from '../assistant/jobs.js';
@@ -65,6 +65,15 @@ describe('notification ingest', () => {
     ingest.onCard(card('decided', { decidedVia: 'mobile', revision: 2 }));
     ingest.onCard(card('decided', { decidedVia: 'island', revision: 2 }));
     expect(store.get('needs_confirmation:p1')).toMatchObject({ state: 'acked', ackedVia: 'mobile' });
+  });
+
+  it('автономная карточка (decidedVia auto) не даёт строки и не трогает чужую', () => {
+    const { ingest, store, count } = setup();
+    ingest.onCard(card('decided', { cardId: 'p2', decidedVia: 'auto', outcome: 'done', revision: 2 }));
+    expect(count()).toBe(0);
+    ingest.onCard(card('needs_confirmation'));
+    ingest.onCard(card('decided', { decidedVia: 'auto', outcome: 'done', revision: 2 }));
+    expect(store.get('needs_confirmation:p1')).toMatchObject({ state: 'new' });
   });
 
   it('expired: строка терминальна, ожидающая доставка снята; позднее решение её не воскрешает', () => {
@@ -144,5 +153,20 @@ describe('notification ingest: dispatch и onInlineDelivered', () => {
       expect(rows.some((r) => r.channel === 'app')).toBe(false);
       expect(rows.length).toBe(allowed ? 2 : 0);
     }
+  });
+});
+
+describe('notification ingest: служебные job (автономия, W2)', () => {
+  it('RW-12: финал служебного job не даёт строки и доставки ни в один канал, в том числе в Telegram', () => {
+    const db = openMemoryDb();
+    const store = createNotificationStore(db);
+    const dispatch = vi.fn();
+    const ingest = createIngest({ store, hostId: 'host-1', now: () => 100, dispatch });
+    const service = (state: JobState): Job => ({ ...job(state, 4), origin: 'system' }) as Job;
+    for (const state of ['completed', 'failed', 'cancelled'] as const) ingest.onJob(service(state));
+    expect((db.prepare('SELECT COUNT(*) AS n FROM notifications').get() as { n: number }).n).toBe(0);
+    expect(dispatch).not.toHaveBeenCalled();
+    ingest.onJob(job('completed', 5));
+    expect(dispatch).toHaveBeenCalledTimes(1);
   });
 });

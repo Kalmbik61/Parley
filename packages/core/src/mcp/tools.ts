@@ -50,9 +50,9 @@ import {
   TOPOLOGY_FIELDS,
   type TopologyField,
 } from '../work/context-pages.js';
-import { settleDelayMs } from '../work/delivery.js';
+import { heldWarning, settleDelayMs } from '../work/delivery.js';
 import { guide, GUIDE_TOPICS, guideTopic } from '../work/guide.js';
-import { storeLetterReader, unreadLetters, writeLetters, type LetterReads } from '../work/letter-store.js';
+import { mapLetterTx, storeLetterReader, storeLetterReads, unreadLetters, writeLetters, type LetterReads } from '../work/letter-store.js';
 import { recipientsOf } from '../work/letters.js';
 import { isCodexThreadBinding, transitionSession } from '../work/map.js';
 import { boardTake, markBoardReview, planBacklogIds, readBoardItems, type BoardSkipReason } from '../work/board.js';
@@ -64,7 +64,7 @@ import { readProjectMemory } from '../work/project-memory.js';
 import type { MemoryKind } from '../work/project-memory.js';
 import { readProjectPreferences } from '../work/project-preferences.js';
 import { finishSession } from '../work/metrics.js';
-import { isReportLetterAbout, lastTaskGiver, reportLetterText } from '../work/task-giver.js';
+import { REPORT_UPDATE_WINDOW_MS, isReportLetterAbout, reportLetterText, reportRecipients, type ReportRecipient } from '../work/task-giver.js';
 import { SHORT_PROFILE_HIDDEN_TOOLS } from '../work/mcp-config.js';
 import { PROPOSAL_TEXT_MAX } from '../work/proposals.js';
 import {
@@ -74,6 +74,7 @@ import {
   limitsFromConfig,
   RESOURCE_WINDOW_MS,
   ResourceDeniedError,
+  resumesInWindow,
   type ResourceLimits,
 } from '../work/resource-policy.js';
 import { capacityReport, type CapacityReport } from '../work/capacity-report.js';
@@ -84,9 +85,11 @@ import { PLAN_TASKS_TOOL, planTasks } from './plan-tasks.js';
 import { AGENT_SWITCH_UNAVAILABLE, CREATE_SESSION_TOOL, REQUEST_AGENT_SWITCH_TOOL, SESSION_CREATION_UNAVAILABLE, createSession, requestAgentSwitch } from './session-tools.js';
 import { CREATE_SWARM_TOOL, SWARM_ADD_TOOL, SWARM_UNAVAILABLE, createSwarm, swarmAdd } from './swarm-tools.js';
 import { fetchProviderRows } from './provider-rows.js';
+import { buildRoomPacket, type PacketTarget, type RoomPacketResult } from '../work/room-packet.js';
 import { addMemberByLead, addRoom, canReadRoom, isCreatedDescendant, isMember, isRoomArchived, joinNotice, leaveOtherRooms, liveLead, requireOpenRoom } from '../work/rooms.js';
 import { agentStatus, asleepHint } from '../work/session-state.js';
-import { swarmOfSession } from '../work/swarms.js';
+import { SWARM_COVERAGES, swarmOfSession } from '../work/swarms.js';
+import type { SwarmCoverage } from '../work/swarms.js';
 import { stuckHint, stuckWarning } from '../work/stuck.js';
 import { SharedStateError, inspectSharedIgnore, readMap, readWorksIndex, sharedProjectPaths, updateMap, viewMap, workVersionKey } from '../work/store.js';
 import { participantLabel, sessionMention, agentLetterAudience, agentLetterVisible } from '../work/thread.js';
@@ -97,11 +100,13 @@ import {
   type Artifact,
   type Message,
   type Room,
+  type SessionResult,
   type WorkMap,
   type WorkSession,
 } from '../work/types.js';
-import { BROWSER_UNAVAILABLE, createBrowserTools } from './browser-tools.js';
+import { BROWSER_TOOLS, BROWSER_UNAVAILABLE, createBrowserTools } from './browser-tools.js';
 import type { McpContext } from './context.js';
+import { inboxPage, type InboxCharLimit, type InboxExtras } from './inbox-page.js';
 import { watchInbox, type Ring } from './inbox-watch.js';
 import { waitForMap } from './watch-map.js';
 
@@ -463,7 +468,7 @@ export const TOOLS: Tool[] = [
         room: { type: 'string' },
         field: {
           type: 'string',
-          enum: ['goal', 'title', 'task', 'summary', 'history', 'artifacts', 'contextFrom', 'messages', 'message', 'summaries', 'archive', 'providers', ...TOPOLOGY_FIELDS, 'plan'],
+          enum: ['goal', 'title', 'task', 'summary', 'history', 'artifacts', 'contextFrom', 'messages', 'message', 'summaries', 'archive', 'providers', ...TOPOLOGY_FIELDS, 'plan', 'packet'],
           description: 'task…contextFrom: with session; messages: room pages (no room: direct); message: by id; archive: other workspaces.',
         },
         id: { type: 'string' },
@@ -486,7 +491,7 @@ export const TOOLS: Tool[] = [
     name: 'report',
     annotations: WRITES,
     description:
-      'Report your result (done/failed; stays reachable, not closed) or progress. Replaces summary and artifacts. Done/failed also mails the session that last tasked you directly or via create_session.',
+      'Report your result (done/failed; stays reachable, not closed) or progress. Replaces summary and artifacts. Done/failed mails your room lead, room owner or task giver; the answer names them.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -503,6 +508,8 @@ export const TOOLS: Tool[] = [
         },
         backlog: { type: 'array', maxItems: 30, uniqueItems: true, items: { type: 'string', pattern: '^b-\\d{3,}$' },
           description: 'Board cards this done result finishes; they move to Review.' },
+        coverage: { type: 'string', enum: ['covered', 'partial'],
+          description: 'Swarm members only: covered if the whole slice is read and its questions answered, else partial.' },
       },
       required: ['status', 'summary'],
     },
@@ -514,7 +521,7 @@ export const TOOLS: Tool[] = [
     name: 'wait_for',
     annotations: WRITES,
     description:
-      'Wait for a session (target = its id) or mail (target = "inbox"); mail is marked read; no check_inbox needed. Timeout returns {"state":"running"}. {"state":"stuck"}: waiting for the human or a usage limit — do not wait for it again, Parley writes when back. A session that already handed in its report returns the old result at once by id: wait for its answer to a new job via "inbox": its next report arrives there as a letter.',
+      'Wait for a session (target = its id) or mail (target = "inbox"); mail is marked read. Timeout returns {"state":"running"}. {"state":"stuck"}: waiting for the human or a usage limit — do not wait for it again, Parley writes when back. A session that already handed in its report returns the old result at once by id: wait for its answer to a new job via "inbox": its next report arrives there as a letter.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -561,7 +568,7 @@ export const TOOLS: Tool[] = [
     name: 'check_inbox',
     annotations: WRITES,
     description:
-      "Return this session's unread messages (direct and from its rooms) and mark them read.",
+      "Return a page of this session's unread messages (direct and from its rooms) and mark it read.",
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
   {
@@ -590,7 +597,7 @@ export const TOOLS: Tool[] = [
     name: 'add_to_room',
     annotations: WRITES,
     description:
-      "Bring another session of this workspace into the room. Lead only. One room per session: it leaves its other rooms and the feed shows \"@s04 joined the room\". The new participant gets no message: tell it in the room what you expect.",
+      "Bring another session of this workspace into the room. Lead only. One room per session: it leaves its other rooms and the feed shows \"@s04 joined the room\". The new participant gets a note, not the history: tell it in the room what you expect.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -642,7 +649,7 @@ export const TOOLS: Tool[] = [
     name: 'close_session',
     annotations: CLOSES,
     description:
-      "Close yourself after the human's explicit consent or, if work.closeFinished, once accepted; ones you created: when accepted.",
+      "Close yourself after the human's explicit consent or, if work.closeFinished, after report(done); ones you created: when accepted.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -747,6 +754,43 @@ const optionalString = (args: Record<string, unknown>, name: string): string | u
   return value;
 };
 
+/**
+ * Чей пакет собирать для `get_map {field: "packet"}`. Участнику комната не нужна: она одна. Владелец вне состава обязан
+ * назвать её. Несуществующая и чужая комната отвечают одинаково: по ответу не узнать, есть ли она.
+ */
+function packetTarget(map: WorkMap, sessionId: string, roomId: string | undefined): PacketTarget {
+  const unavailable = (id: string): PageError => new PageError('unknown-target', `room ${id} is not available to this session`);
+  if (roomId !== undefined) {
+    const room = map.rooms.find((candidate) => candidate.id === roomId);
+    if (room === undefined) throw unavailable(roomId);
+    if (room.members.includes(sessionId)) return { roomId, viewer: { kind: 'member', sessionId } };
+    if (room.ownerId === sessionId) return { roomId, viewer: { kind: 'owner', sessionId } };
+    throw unavailable(roomId);
+  }
+  const mine = map.rooms.filter((candidate) => candidate.members.includes(sessionId));
+  if (mine.length === 1) return { roomId: mine[0]!.id, viewer: { kind: 'member', sessionId } };
+  if (mine.length > 1) throw new PageError('unknown-target', `You are in several rooms (${mine.map((room) => room.id).join(', ')}); name one with room.`);
+  const owned = map.rooms.filter((candidate) => candidate.ownerId === sessionId);
+  if (owned.length > 0) throw new PageError('unknown-target', `You are not a member of any room; name the room you own with room (${owned.map((room) => room.id).join(', ')}).`);
+  throw new PageError('unknown-target', 'This session is in no room: there is no room state packet.');
+}
+
+/**
+ * Инструменты, которые сервер добавляет к каталогу `ToolRunner.list` при канале агента: браузер окна и создание сессий.
+ * Один источник для `ListTools` и для имён в пакете состояния, чтобы пакет не разошёлся со списком сервера.
+ */
+function agentChannelTools(browser: readonly Tool[], sessionAgent: boolean): Tool[] {
+  return [...browser, ...(sessionAgent ? [CREATE_SESSION_TOOL, REQUEST_AGENT_SWITCH_TOOL, CREATE_SWARM_TOOL, SWARM_ADD_TOOL] : [])];
+}
+
+/** Имена инструментов, которые сервер объявляет этой сессии: каталог, профиль, навигатор навыков и канал агента — как у `ListTools`. */
+function declaredToolNames(context: McpContext): string[] {
+  const names = TOOLS.filter((tool) => toolDeclaredInProfile(context, tool)).map((tool) => tool.name);
+  if (context.skillNavigator === true) names.push(FIND_SKILL.name);
+  const channel = context.agent === undefined && context.hasAgentChannel !== true ? [] : agentChannelTools(BROWSER_TOOLS, context.sessionId !== null);
+  return [...names, ...channel.map((tool) => tool.name)];
+}
+
 /** Ограниченные страницы `get_map`: поле, список или письма — по параметрам; без параметров карту отдаёт `getMap`. */
 async function mapPage(context: McpContext, map: WorkMap, args: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
   const maxBytes = clampPageBytes(numberArg(args, 'maxBytes'));
@@ -760,6 +804,16 @@ async function mapPage(context: McpContext, map: WorkMap, args: Record<string, u
       if (sessionId !== undefined || roomId !== undefined || args['kind'] !== undefined || args['id'] !== undefined || args['rev'] !== undefined)
         throw new PageError('invalid-cursor', 'Collection pages accept only field, cursor and maxBytes; use session or room for detail.');
       return topologyListPage(map, context.sessionId, letters, { field: field as TopologyField, ...(cursorRaw === undefined ? {} : { cursor: cursorRaw }), maxBytes });
+    }
+    if (field === 'packet') {
+      if (sessionId !== undefined || args['kind'] !== undefined || args['id'] !== undefined || args['rev'] !== undefined || cursorRaw !== undefined)
+        throw new PageError('invalid-cursor', 'Field packet accepts only room and maxBytes.');
+      if (context.sessionId === null) throw new Error(NO_SESSION);
+      const built = buildRoomPacket(map, packetTarget(map, context.sessionId, roomId), storeLetterReads(context.projectPath, context.workId), declaredToolNames(context), new Date().toISOString());
+      if (!built.ok) throw new PageError('unknown-target', built.message);
+      // Пакет не режется: если запрошенного предела не хватает, отказ называет нужный размер.
+      if (built.bytes > maxBytes) throw new Error(`The room state packet is ${built.bytes} bytes, more than maxBytes ${maxBytes}; it is never cut. Call again with maxBytes of at least ${built.bytes}.`);
+      return built.text;
     }
     if (field === 'plan') {
       const id = stringArg(args, 'id');
@@ -875,9 +929,11 @@ async function report(
   const summary = stringArg(args, 'summary');
   const artifacts = artifactsArg(args);
   const backlogIds = backlogIdsArg(args);
+  const coverage = coverageArg(args);
 
   // Резюме пишем до смены статуса: ждущий `wait_for` просыпается на статусе и
   // должен увидеть уже готовое резюме, а не пустое поле.
+  const previous: { result?: SessionResult | null; summary?: string | null } = {};
   let map = await updateMap(context.projectPath, context.workId, (current) => {
     const session = requireSession(current, sessionId);
     // Закрытая сессия ничего больше не сдаёт (спецификация 7.1) — проверяем
@@ -885,27 +941,38 @@ async function report(
     if (session.lifecycle === 'closed') {
       throw new Error(`session ${sessionId} is closed: report not accepted`);
     }
+    previous.result = session.result;
+    previous.summary = session.summary;
     session.summary = summary;
     session.summarySource = 'agent';
     session.artifacts = artifacts;
+    // Покрытие (спека «видимые дыры», 3.4) пишется в этой же записи, раньше смены `result` (`finishSession` ниже): хост,
+    // увидев `done`, уже видит покрытие. Записывает только сдающий трутень или проверяющий; поле без значения прежнее не стирает.
+    if (coverage !== null && status === 'done') {
+      const member = swarmOfSession(current, sessionId)?.member;
+      if (member !== undefined && member.role !== 'queen') member.coverage = coverage;
+    }
   });
+  let notice: string | null = null;
+  let notified: string[] | undefined;
+  let warning: string | undefined;
   if (status !== 'progress') {
     // Письмо уже лежит, когда смена результата разбудит ожидающего по id.
-    try {
-      writeLetters(context.projectPath, context.workId, (letters, current) => {
-        const giver = lastTaskGiver(current, letters, sessionId);
-        if (giver === null) return;
-        const older = letters.unreadFor(giver).filter((message) => isReportLetterAbout(message, sessionId));
-        letters.markRead(giver, older.map((message) => message.id), new Date().toISOString());
-        letters.add({ from: SYSTEM, roomId: null, to: [giver], kind: 'note', text: reportLetterText(sessionId, status, summary) });
-      });
-    } catch { /* Уведомление не должно мешать сессии сдать результат. */ }
+    const sent = writeReportLetter(context, sessionId, status, summary, previous);
+    if (sent !== null) {
+      notified = sent.recipients.map((recipient) => recipient.id);
+      notice = reportNotice(map, sessionId, sent);
+    } else {
+      notified = [];
+      warning = reportLetterWarning(map, sessionId);
+    }
     // Итоговые метрики в карту фиксирует общий код жизненного цикла.
     map = await finishSession(context.projectPath, context.workId, sessionId, status);
   }
 
   const session = requireSession(map, sessionId);
-  const next = status === 'done' ? closeFinishedHint(map, sessionId) : null;
+  const hint = status === 'done' ? closeFinishedHint(map, sessionId) : null;
+  const next = [notice, hint].filter((part): part is string => part !== null).join(' ');
   // Карточки доски: только при done; при progress и failed номера молча не учитываются.
   let board: { review: string[]; skipped: { id: string; reason: BoardSkipReason }[] } | undefined;
   let backlogHint: string | undefined;
@@ -924,10 +991,89 @@ async function report(
     status: session.result ?? agentStatus(session),
     summary: session.summary,
     artifacts: session.artifacts,
-    ...(next !== null ? { next } : {}),
+    ...(notified !== undefined ? { notified } : {}),
+    ...(warning !== undefined ? { warning } : {}),
+    ...(next !== '' ? { next } : {}),
     ...(board !== undefined ? { backlog: board } : {}),
     ...(backlogHint !== undefined ? { backlogHint } : {}),
   };
+}
+
+/**
+ * Письмо о сдаче всем адресатам `reportRecipients` одной записью. Повтор того же итога в пределах окна письма не пишет;
+ * другой итог в окне — письмо с пометкой `(update)`. Две попытки; обе упали — `null` (итог сохранён, письма нет).
+ */
+function writeReportLetter(
+  context: McpContext,
+  sessionId: string,
+  status: SessionResult,
+  summary: string,
+  previous: { result?: SessionResult | null; summary?: string | null },
+): { recipients: ReportRecipient[]; repeat: boolean } | null {
+  let failure: unknown;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return writeLetters(context.projectPath, context.workId, (letters, current) => {
+        const recipients = reportRecipients(current, letters, sessionId);
+        if (recipients.length === 0) return { recipients, repeat: false };
+        const sinceAt = new Date(Date.now() - REPORT_UPDATE_WINDOW_MS).toISOString();
+        const recent = letters.query({ from: SYSTEM, roomId: null, sinceAt, newestFirst: true, limit: 50 })
+          .some((message) => isReportLetterAbout(message, sessionId));
+        if (recent && previous.result === status && previous.summary === summary) return { recipients, repeat: true };
+        const ids = recipients.map((recipient) => recipient.id);
+        const at = new Date().toISOString();
+        for (const id of ids) {
+          const older = letters.unreadFor(id).filter((message) => isReportLetterAbout(message, sessionId));
+          letters.markRead(id, older.map((message) => message.id), at);
+        }
+        const rooms = [...new Set(recipients.flatMap((recipient) => recipient.roomId === undefined ? [] : [recipient.roomId]))];
+        letters.add({ from: SYSTEM, roomId: null, to: ids, kind: 'note',
+          text: reportLetterText(sessionId, status, summary, { rooms, update: recent }) });
+        return { recipients, repeat: false };
+      });
+    } catch (error) {
+      failure = error;
+    }
+  }
+  process.stderr.write(`parley-mcp: report letter of ${sessionId} not written: ${(failure as Error).message}\n`);
+  return null;
+}
+
+/** Фраза в `next` о том, кого уведомил `report` (или почему никого). */
+function reportNotice(map: WorkMap, sessionId: string, sent: { recipients: ReportRecipient[]; repeat: boolean }): string {
+  if (sent.recipients.length > 0) {
+    const list = sent.recipients.map((recipient) => {
+      const role = recipient.as === 'giver' ? 'task giver' : `${recipient.as === 'lead' ? 'lead' : 'owner'} of ${recipient.roomId}`;
+      return `${recipient.id} (${role})`;
+    }).join(', ');
+    return sent.repeat ? `Already notified ${list} with this result; no new letter.` : `Notified ${list}.`;
+  }
+  const member = swarmOfSession(map, sessionId);
+  if (member !== null) {
+    return `Handed in to swarm ${member.swarm.id}: Parley passes swarm results on by itself; do not message anyone about it.`;
+  }
+  const createdBy = map.sessions.find((row) => row.id === sessionId)?.createdBy;
+  const humanOnly = (createdBy == null || createdBy === '' || createdBy === HUMAN) &&
+    map.rooms.every((room) => isRoomArchived(room) || !isMember(room, sessionId) || room.ownerId == null);
+  return humanOnly
+    ? 'Nobody was notified: the human sees the result in the window.'
+    : 'Nobody was notified: no live task giver, room lead or room owner. If a session waits for this result, write to it: send_message {to: "<id>", text: "<result>"}.';
+}
+
+/** Ответ, когда письмо о сдаче не записано дважды: итог сохранён, агент пишет адресатам сам. */
+function reportLetterWarning(map: WorkMap, sessionId: string): string {
+  const candidates = reportRecipients(map, mapLetterTx({ ...map, messages: [] }).letters, sessionId);
+  const base = 'The result is saved, but the notice letter was not written.';
+  if (candidates.length === 0) return base;
+  const calls = candidates.map((recipient) => recipient.roomId === undefined
+    ? `send_message {to: "${recipient.id}", text: "<result>"}`
+    : `send_message {room: "${recipient.roomId}", to: ["${recipient.id}"], text: "<result>"}`);
+  return `${base} Tell them yourself: ${calls.join('; ')}.`;
+}
+
+/** `coverage` отчёта: необязательное, одно из двух слов; другое значение — ошибка аргумента до любой записи. */
+function coverageArg(args: Record<string, unknown>): SwarmCoverage | null {
+  return args['coverage'] === undefined ? null : enumArg(args, 'coverage', SWARM_COVERAGES);
 }
 
 function backlogIdsArg(args: Record<string, unknown>): string[] {
@@ -975,12 +1121,12 @@ function closeFinishedHint(map: WorkMap, sessionId: string): string | null {
         led.some((room) => room.members.includes(row.id)))
       .map((row) => row.id);
     return finished.length > 0
-      ? `The human lets agents close finished sessions in this workspace (work.closeFinished): that is the human's explicit consent. Once you have accepted their parts, call close_session with target set to each of: ${finished.join(', ')}; the tool allows it.`
+      ? `The human lets agents close finished sessions in this workspace (work.closeFinished): that is the human's explicit consent. These members of your room have finished and are still open: call close_session with target set to each of: ${finished.join(', ')}, unless you still need one of them; the tool allows it.`
       : null;
   }
   const createdBy = map.sessions.find((row) => row.id === sessionId)?.createdBy;
   if (rooms.length > 0 || (typeof createdBy === 'string' && createdBy !== '')) {
-    return `The human lets agents close finished sessions in this workspace (work.closeFinished): that is the human's explicit consent. Once your part is accepted, call close_session with target "${sessionId}" as your last call.`;
+    return `The human lets agents close finished sessions in this workspace (work.closeFinished): that is the human's explicit consent. Nobody sends an acceptance, silence means accepted: unless the lead or the session that created you asked you to stay open, call close_session with target "${sessionId}" as your last call.`;
   }
   return null;
 }
@@ -1194,8 +1340,8 @@ async function waitFor(
     if (context.turnBoundarySince?.(startedAt) === true) return { state: 'running' };
     // Хост поставил отметку, пока шло ожидание: письмо остаётся непрочитанным. `takeInbox` проверяет это ещё раз в своей записи.
     if (fenced()) return { state: 'running' };
-    const { messages, notice } = takeInbox(context, sessionId);
-    if (messages.length > 0) return { state: 'message', messages, ...notice };
+    const { messages, extras } = takeInbox(context, sessionId);
+    if (messages.length > 0) return { state: 'message', messages, ...extras };
     // Письма успел забрать параллельный `check_inbox`: пустой `message` не отдаём, ждём остаток таймаута. Пауза перед
     // новым ожиданием — на случай, если проба и `takeInbox` разойдутся: без неё цикл крутился бы в микрозадачах до таймаута.
     const remaining = endsAt - Date.now();
@@ -1241,6 +1387,7 @@ async function sendMessage(
   const limits = await limitsOf(context);
   let created = '';
   let stuckNotes: string[] = [];
+  const resumeRate = context.resumeRate ?? DEFAULT_CONFIG.resumeRate;
   writeLetters(context.projectPath, context.workId, (letters, current) => {
     // Отправителя проверяем наравне с получателем: сервер удалённой сессии ещё
     // жив, и без проверки в карту легло бы письмо от несуществующего адресата,
@@ -1309,8 +1456,11 @@ async function sendMessage(
     // Адресат (явный или по рассылке комнаты) застрял: письмо уже записано, но прочтёт он его по возвращении (5.3).
     const now = new Date();
     stuckNotes = recipientsOf(sent, current).flatMap((id) => {
-      const need = current.sessions.find((candidate) => candidate.id === id)?.stuck;
-      return need == null ? [] : [stuckWarning(id, need, now)];
+      const recipient = current.sessions.find((candidate) => candidate.id === id);
+      if (recipient?.stuck != null) return [stuckWarning(id, recipient.stuck, now)];
+      // Застрявшему — только предупреждение о застрявшем. Остальные: письмо записано, но поднять адресата нечем или нельзя.
+      const held = recipient === undefined ? null : heldWarning(recipient, resumesInWindow(current, id, now.getTime()), resumeRate);
+      return held === null ? [] : [held];
     });
   });
   const warnings = [
@@ -1329,7 +1479,9 @@ async function sendMessage(
 function takeInbox(
   context: McpContext,
   sessionId: string,
-): { messages: ReturnType<typeof inboxView>[]; notice: ReturnType<typeof openAssignmentsNotice> } {
+  limit?: InboxCharLimit,
+  lockTimeoutMs?: number,
+): { messages: ReturnType<typeof inboxView>[]; extras: InboxExtras } {
   const at = new Date().toISOString();
   return writeLetters(context.projectPath, context.workId, (letters, current) => {
     requireSession(current, sessionId);
@@ -1339,22 +1491,79 @@ function takeInbox(
     if (revision !== null && revision !== context.agentRevision) throw new Error(STALE_AGENT);
     // Сессию усыпляет хост или уже усыпил (`inboxFenced`): письма не выдаются и не помечаются, но и ошибки нет — они поднимут её
     // после сна. Тоже в этой записи: отметка, поставленная после проверки в `waitFor`, письма не заберёт.
-    if (inboxFenced(requireSession(current, sessionId))) return { messages: [], notice: {} };
-    const inbox = letters.unreadFor(sessionId);
-    const views = inbox.map((message) => inboxView(message, current, sessionId, (id) => letters.byId(id)));
-    letters.markRead(sessionId, inbox.map((message) => message.id), at);
-    return { messages: views, notice: openAssignmentsNotice(current, sessionId) };
-  });
+    if (inboxFenced(requireSession(current, sessionId))) return { messages: [], extras: {} };
+    // Одна страница (`inboxPage`): прочитанными помечается только отданное, остальное ждёт следующего вызова.
+    const page = inboxPage(
+      letters.unreadFor(sessionId),
+      (message) => inboxView(message, current, sessionId, (id) => letters.byId(id)),
+      openAssignmentsNotice(current, sessionId),
+      limit,
+    );
+    letters.markRead(sessionId, page.ids, at);
+    return { messages: page.messages, extras: page.extras };
+  }, lockTimeoutMs === undefined ? undefined : { lockTimeoutMs });
+}
+
+/** Первая строка текста, которым хост доставляет письма вместе с указателем (`takeInlineMail`). */
+export const INLINE_MAIL_LINE = 'Parley delivered the messages announced above; they are marked read. Do not call check_inbox for them.';
+/** Предел всего текста доставки: строка и страница в компактном JSON. */
+export const INLINE_MAIL_MAX_CHARS = 9000;
+
+/**
+ * Письма сессии для хука `UserPromptSubmit` (хост отвечает им на указатель): та же страница и та же пометка прочитанными, что у
+ * `check_inbox` (`takeInbox`), но в пределе `INLINE_MAIL_MAX_CHARS` символов. Письма, не влезшие в предел, остаются непрочитанными и
+ * считаются в `remaining`. `null` — выдавать нечего (пусто, ограда сна); устаревший агент и сбой записи — исключение, ничего не помечено.
+ */
+export function takeInlineMail(
+  context: McpContext,
+  sessionId: string,
+  lockTimeoutMs?: number,
+): { text: string; letters: number } | null {
+  const { messages, extras } = takeInbox(context, sessionId, { chars: INLINE_MAIL_MAX_CHARS - INLINE_MAIL_LINE.length - 1 }, lockTimeoutMs);
+  if (messages.length === 0) return null;
+  return { text: `${INLINE_MAIL_LINE}\n${JSON.stringify({ messages, ...extras })}`, letters: messages.length };
+}
+
+/**
+ * Пакет состояния комнаты для сессии контекста (мост после сжатия, спека 2026-11-16, 3.5): та же сборка, что у
+ * `get_map {field: "packet"}` без параметра `room`. `null` — пакета нет: сессия без комнаты или в нескольких комнатах
+ * (мосту некого выбирать), комната закрыта, сбой сборки. Ничего не пишет.
+ */
+export async function sessionRoomPacket(context: McpContext, at: string = new Date().toISOString()): Promise<RoomPacketResult | null> {
+  if (context.sessionId === null) return null;
+  const map = await readMap(context.projectPath, context.workId);
+  let target: PacketTarget;
+  try {
+    target = packetTarget(map, context.sessionId, undefined);
+  } catch {
+    return null;
+  }
+  return buildRoomPacket(map, target, storeLetterReads(context.projectPath, context.workId), declaredToolNames(context), at);
 }
 
 async function checkInbox(context: McpContext, sessionId: string): Promise<unknown> {
-  const { messages, notice } = takeInbox(context, sessionId);
-  return { messages, ...notice };
+  const { messages, extras } = takeInbox(context, sessionId);
+  return { messages, ...extras };
 }
 
 /** Сессия роя в комнату не входит (спека роя v1, 4): проверка по карте, `code: message` как у остальных отказов роя. */
 function assertNotSwarmMember(map: WorkMap, sessionId: string): void {
   if (swarmOfSession(map, sessionId) !== null) throw new Error(`swarm-member: ${sessionId} is a member of a swarm and cannot join a room.`);
+}
+
+/** Сколько комнат одна сессия может завести за скользящий час (`RESOURCE_WINDOW_MS`). */
+const ROOMS_PER_HOUR = 5;
+
+/**
+ * Сессию из открытой комнаты, которую завёл человек, уводит только человек или живой ведущий этой комнаты.
+ * `exceptRoomId` — комната, куда сессию зовут: её саму отказом не считаем.
+ */
+function assertNotInHumanRoom(map: WorkMap, caller: string, memberId: string, exceptRoomId: string | null): void {
+  const room = map.rooms.find((row) => row.creator === HUMAN && !isRoomArchived(row) && isMember(row, memberId)
+    && row.id !== exceptRoomId && liveLead(map, row) !== caller);
+  if (room !== undefined) {
+    throw new Error(`session ${memberId} works in room ${room.id}, which the human set up: only the human or that room's lead can move it`);
+  }
 }
 
 async function createRoom(
@@ -1371,6 +1580,11 @@ async function createRoom(
   let roomId = '';
   await updateMap(context.projectPath, context.workId, (current, letters) => {
     requireSession(current, sessionId);
+    const since = Date.now() - RESOURCE_WINDOW_MS;
+    const recent = current.rooms.filter((row) => row.creator === sessionId && Date.parse(row.createdAt) > since).length;
+    if (recent >= ROOMS_PER_HOUR) {
+      throw new Error(`too many rooms: ${recent} created by this session in the last hour (limit ${ROOMS_PER_HOUR}); reuse a room with add_to_room or ask the human`);
+    }
     const members = [...new Set(membersInput)];
     const invited = members.filter((id) => id !== sessionId);
     for (const memberId of members) {
@@ -1379,6 +1593,7 @@ async function createRoom(
         throw new Error(`session ${memberId} is closed: it cannot be added to the room`);
       }
       assertNotSwarmMember(current, memberId);
+      assertNotInHumanRoom(current, sessionId, memberId, null);
     }
     // Приглашение — письмо от создателя каждому участнику: оно расходует тот же бюджет писем, что и `send_message`,
     // иначе исчерпанный лимит обходился бы созданием комнаты.
@@ -1417,10 +1632,12 @@ async function addToRoom(
     // Правила — ведущий, живая комната, закрытая или чужая сессия, уже участник, одна комната на сессию —
     // держит `addMemberByLead`. Его `RoomRuleError` уходит агенту текстом ошибки, как у `propose_decision`,
     // а исключение из мутатора не даёт `updateMap` записать карту: после отказа она не меняется.
-    // Допуска бюджета здесь нет намеренно (P37): `addMemberByLead` пишет только системную строку «joined the room»
-    // (`from: system`, адресат — человек), она никого не будит, не рассылается и в бюджет писем не входит. Письма
-    // приглашённому здесь нет, в отличие от `create_room`; разговорная квота управление комнатой не блокирует.
+    // Допуска бюджета здесь нет намеренно (P37): `addMemberByLead` пишет системную строку «joined the room»
+    // (`from: system`, адресат — человек) и одно прямое письмо новичку от `system` (кто ввёл, ведущий, число прежних
+    // писем): они не рассылаются и в бюджет писем `parley` не входят; письмо будит новичка сразу. Разговорная квота
+    // управление комнатой не блокирует.
     assertNotSwarmMember(current, target);
+    assertNotInHumanRoom(current, sessionId, target, roomId);
     messageId = addMemberByLead(current, letters, roomId, sessionId, target).id;
   });
   return { messageId };
@@ -1714,7 +1931,7 @@ async function dispatch(
  * при подключении, поэтому он короткий и весь про поведение: этикет тут —
  * половина защиты от переписки двух вежливых агентов до конца лимита (4.7).
  */
-export const CHANNEL_INSTRUCTIONS = `Colleagues' messages in this workspace are announced with the tag <channel source="parley">: in it from is the sender session's id, from_label is its role, kind is the kind of message. The tag has no message text: if you see the tag, call check_inbox, it returns all unread messages at once.
+export const CHANNEL_INSTRUCTIONS = `Colleagues' messages in this workspace are announced with the tag <channel source="parley">: in it from is the sender session's id, from_label is its role, kind is the kind of message. The tag has no message text: if you see the tag, call check_inbox; it returns the oldest unread messages, and while its answer has remaining, call it again.
 Answer with send_message(to=<from>) only to a \`question\`; a note and a decision need no answer, do not write "thanks" or "agreed". Record an agreement with one message with kind: decision to the one you agreed with.
 Each message is announced once; check_inbox and wait_for("inbox") are a safety net in case the channel is silent.`;
 
@@ -2015,10 +2232,13 @@ export async function staleAgent(context: McpContext): Promise<boolean> {
   return current !== null && current !== context.agentRevision;
 }
 
+const toolDeclaredInProfile = (context: McpContext, tool: Tool): boolean =>
+  context.toolProfile !== 'short' || !(SHORT_PROFILE_HIDDEN_TOOLS as readonly string[]).includes(tool.name);
+
 export function createToolRunner(context: McpContext): ToolRunner {
   const navigator = context.skillNavigator === true ? skillNavigator(context) : null;
   // Профиль `short` (Codex): три инструмента памяти не объявляются; вызов такого имени уходит в обычный разбор, как и любое неизвестное.
-  const declaredInProfile = (tool: Tool): boolean => context.toolProfile !== 'short' || !(SHORT_PROFILE_HIDDEN_TOOLS as readonly string[]).includes(tool.name);
+  const declaredInProfile = (tool: Tool): boolean => toolDeclaredInProfile(context, tool);
   // Тред Codex привязывается один раз за жизнь исполнителя — с первого вызова, где `_meta.threadId` есть.
   const revision = context.nativeContextRevision;
   const launchRevision = typeof revision === 'string' && THREAD_ID.test(revision) && revision === revision.toLowerCase() ? revision : null;
@@ -2091,7 +2311,7 @@ export function createParleyServer(context: McpContext, runner?: ToolRunner): Se
   const browser = context.agent === undefined ? null : createBrowserTools(context.agent, { clientName: () => server.getClientVersion()?.name });
   const sessionAgent = sessionId === null ? undefined : context.agent;
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: [...await tools.list(), ...(browser?.tools ?? []), ...(sessionAgent ? [CREATE_SESSION_TOOL, REQUEST_AGENT_SWITCH_TOOL, CREATE_SWARM_TOOL, SWARM_ADD_TOOL] : [])],
+    tools: [...await tools.list(), ...agentChannelTools(browser?.tools ?? [], sessionAgent !== undefined)],
   }));
   server.setRequestHandler(
     CallToolRequestSchema,

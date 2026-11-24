@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import type {
-  CheckResult,
   PlanCheckpoint,
   PlanItem,
   RoomMode,
@@ -22,12 +21,13 @@ import { isRoomArchived } from "../../lib/room-archive.js";
 import { RoleChip } from "../../lib/role-summary.js";
 import { sessionRowLabel } from "../../lib/participant.js";
 import { relativeTime } from "../../lib/relative-time.js";
-import { roomLiveLead } from "../../lib/room-lead.js";
+import { roomLiveLead, roomVerifierUnavailable } from "../../lib/room-lead.js";
 import { useNow } from "../../lib/use-now.js";
 import { useHostStore } from "../../store/host.js";
 import { badgeVariants } from "../../ui/badge.js";
 import { Button } from "../../ui/button.js";
 import { Textarea } from "../../ui/textarea.js";
+import { checkLine, lastAttempt, latestAttemptCheck } from "./latest-attempt-check.js";
 import { PlanHaltBadge } from "./PlanChip.js";
 
 const P = S.plans;
@@ -419,6 +419,187 @@ function CheckpointView({
   );
 }
 /**
+ * Тело строки пункта плана: заголовок, попытка, основание, обязанности, отметки хода и блок подробностей. Список
+ * плана кладёт его в `<li>`, панель пункта на доске комнаты — в свой контейнер, с раскрытыми подробностями.
+ */
+export function PlanItemBody({
+  plan,
+  item,
+  entry,
+  bridge,
+  expanded,
+  renderActions,
+}: {
+  plan: RoomPlan;
+  item: PlanItem;
+  entry?: WindowWorkEntry;
+  bridge?: ParleyBridge;
+  /** Блок подробностей раскрыт сразу (панель пункта). */
+  expanded?: boolean;
+  renderActions?: (item: PlanItem) => JSX.Element | null;
+}): JSX.Element {
+  const now = useNow(60_000);
+  const room = entry?.map.rooms.find((candidate) => candidate.id === plan.roomId);
+  const liveLeadId = entry && room ? roomLiveLead(entry.map, room) : null;
+  // Обязанности и позиции — только у checklist и verified: пункты автономного плана ведёт движок (попытки, attempt_*).
+  const checkpoints = plan.mode !== "autonomous";
+  const working =
+    checkpoints && (plan.status === "active" || plan.status === "completing");
+  const session = entry?.map.sessions.find(
+    (session) => session.id === item.owner,
+  );
+  const attempt = lastAttempt(plan, item.id);
+  const check = attempt ? latestAttemptCheck(plan, attempt) : undefined;
+  const verdict = checkLine(check);
+  const satisfied = planItemSatisfied(plan, item);
+  const duties = working ? planItemDuties(plan, item, liveLeadId, entry && room ? roomVerifierUnavailable(entry.map, room, item.verifier) : false) : [];
+  const submission = planSubmission(item);
+  return (
+    <>
+      <div className="flex flex-wrap items-center gap-2">
+        <strong
+          data-plan-item-title=""
+          className="min-w-0 break-words [overflow-wrap:anywhere]"
+        >
+          {item.id}. {item.title}
+        </strong>
+        <span>{P.itemStatus[item.status]}</span>
+        <span>
+          {P.owner}: {ownerLabel(entry, item.owner)}
+        </span>
+        {session && entry ? (
+          <RoleChip
+            role={session.role}
+            {...(bridge ? { bridge } : {})}
+            sessionRef={{
+              projectPath: entry.projectPath,
+              workId: entry.map.work.id,
+              sessionId: session.id,
+            }}
+            cwd={session.worktree?.path ?? entry.projectPath}
+          />
+        ) : null}
+      </div>
+      {attempt ? <p data-plan-attempt="" className="truncate" title={verdict}>{P.attempt(attempt.n, P.attemptStatus[attempt.status], verdict)}</p> : null}
+      {item.acceptedChecklistRevision === undefined ? null : (
+        <p>{P.basis(item.acceptedChecklistRevision)}</p>
+      )}
+      {duties.length > 0 ? (
+        <ul data-plan-duties="" className="space-y-0.5">
+          {duties.map((duty) => (
+            <li
+              key={duty.role}
+              data-plan-duty={duty.role}
+              data-plan-duty-action={duty.action}
+              className="min-w-0"
+            >
+              {dutyText(duty, entry)}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {checkpoints && !satisfied && item.progress?.owner ? (
+        <CheckpointView
+          role="owner"
+          checkpoint={item.progress.owner}
+          stale={false}
+          entry={entry}
+          now={now}
+        />
+      ) : null}
+      {checkpoints && !satisfied && item.progress?.verifier ? (
+        <CheckpointView
+          role="verifier"
+          checkpoint={item.progress.verifier}
+          stale={item.progress.verifier.submission !== submission}
+          entry={entry}
+          now={now}
+        />
+      ) : null}
+      <details {...(expanded ? { open: true } : {})}>
+        <summary>
+          {P.scope}, {P.criteria}, {P.evidence}, {P.note}
+        </summary>
+        <p className="whitespace-pre-wrap">
+          {P.scope}: {item.scope}
+        </p>
+        {item.after.length ? (
+          <p>
+            {P.dependencies}: {item.after.join(", ")}
+          </p>
+        ) : null}
+        {item.criteria.length ? (
+          <div>
+            {P.criteria}
+            <ul>
+              {item.criteria.map((text, index) => (
+                <li key={index} className="whitespace-pre-wrap">
+                  {text}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+        {item.verifier ? (
+          <p>
+            {P.verifier}: {ownerLabel(entry, item.verifier)}
+          </p>
+        ) : null}
+        {item.evidence ? (
+          <div>
+            <p className="whitespace-pre-wrap">{item.evidence.text}</p>
+            <ul>
+              {item.evidence.artifacts.map((text, index) => (
+                <li key={index} className="whitespace-pre-wrap">
+                  {text}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+        {(plan.mode === "checklist" || plan.mode === "verified") &&
+        item.submissions && item.submissions.length > 1 ? (
+          <div data-plan-submissions="">
+            {P.submissions}
+            <ul>
+              {[...item.submissions].reverse().map((row, index) => (
+                <li key={row.n} data-plan-submission={row.n} className="break-words">
+                  <p className="whitespace-pre-wrap">
+                    {P.submission(row.n, ownerLabel(entry, row.by), relativeTime(row.at, new Date()))}
+                    {row.verdict && row.verdictBy
+                      ? " · " + (row.verdict === "verified" ? P.submissionVerified : P.submissionReturned)(ownerLabel(entry, row.verdictBy))
+                      : ""}
+                    {row.returnedBy ? " · " + P.returnedByYou : ""}
+                  </p>
+                  {row.note ? <p className="whitespace-pre-wrap break-words">{row.note}</p> : null}
+                  {row.returnNote ? <p className="whitespace-pre-wrap break-words">{row.returnNote}</p> : null}
+                  {index > 0 ? (
+                    <details>
+                      <summary>{P.evidence}</summary>
+                      <p className="whitespace-pre-wrap break-words">{row.evidence.text}</p>
+                      <ul>
+                        {row.evidence.artifacts.map((text, at) => (
+                          <li key={at} className="whitespace-pre-wrap break-words">
+                            {text}
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+        {item.note ? (
+          <p className="whitespace-pre-wrap">{item.note}</p>
+        ) : null}
+      </details>
+      {renderActions?.(item)}
+    </>
+  );
+}
+/**
  * Read-only content shared by accepted plans, proposed revisions and completion cards. Who must act on each item and the
  * saved owner/verifier positions come from the pure `@parley/core/plan-state` (one table, shared with `plan_tasks`); the
  * live lead is the one the window already shows (`roomLiveLead`). Only an active or completing plan has duties.
@@ -434,14 +615,7 @@ export function PlanSummary({
   bridge?: ParleyBridge;
   renderActions?: (item: PlanItem) => JSX.Element | null;
 }): JSX.Element {
-  const now = useNow(60_000);
   const awaiting = planAwaitingCount(plan);
-  const room = entry?.map.rooms.find((candidate) => candidate.id === plan.roomId);
-  const liveLeadId = entry && room ? roomLiveLead(entry.map, room) : null;
-  // Обязанности и позиции — только у checklist и verified: пункты автономного плана ведёт движок (попытки, attempt_*).
-  const checkpoints = plan.mode !== "autonomous";
-  const working =
-    checkpoints && (plan.status === "active" || plan.status === "completing");
   return (
     <div
       data-plan-summary=""
@@ -460,173 +634,21 @@ export function PlanSummary({
         ) : null}
       </div>
       <ol className="space-y-2">
-        {plan.items.map((item) => {
-          const session = entry?.map.sessions.find(
-            (session) => session.id === item.owner,
-          );
-          const attempt = plan.mode === "autonomous"
-            ? plan.autonomous?.attempts.filter((row) => row.item === item.id).sort((a, b) => b.n - a.n)[0]
-            : undefined;
-          const check = attempt ? plan.autonomous?.ops
-            .filter((op) => op.kind === "check" && op.state === "done")
-            .map((op) => op.result?.checkResult as CheckResult | undefined)
-            .filter((row): row is CheckResult => !!row && row.attemptId === attempt.id && attempt.checks.includes(row.id))
-            .sort((a, b) => a.at.localeCompare(b.at)).at(-1) : undefined;
-          const summary = check?.summary.replace(/\s+/g, " ") ?? "";
-          const verdict = check ? `${check.specId} → ${check.verdict} · ${summary.slice(0, 160)}${summary.length > 160 ? "…" : ""}` : "";
-          const satisfied = planItemSatisfied(plan, item);
-          const duties = working ? planItemDuties(plan, item, liveLeadId) : [];
-          const submission = planSubmission(item);
-          return (
-            <li
-              key={item.id}
-              data-plan-item={item.id}
-              className="min-w-0 rounded border p-2"
-            >
-              <div className="flex flex-wrap items-center gap-2">
-                <strong
-                  data-plan-item-title=""
-                  className="min-w-0 break-words [overflow-wrap:anywhere]"
-                >
-                  {item.id}. {item.title}
-                </strong>
-                <span>{P.itemStatus[item.status]}</span>
-                <span>
-                  {P.owner}: {ownerLabel(entry, item.owner)}
-                </span>
-                {session && entry ? (
-                  <RoleChip
-                    role={session.role}
-                    {...(bridge ? { bridge } : {})}
-                    sessionRef={{
-                      projectPath: entry.projectPath,
-                      workId: entry.map.work.id,
-                      sessionId: session.id,
-                    }}
-                    cwd={session.worktree?.path ?? entry.projectPath}
-                    revision={`${session.pid}:${session.startedAtProcess}:${session.lifecycle}:${session.worktree?.path}`}
-                  />
-                ) : null}
-              </div>
-              {attempt ? <p data-plan-attempt="" className="truncate" title={verdict}>{P.attempt(attempt.n, P.attemptStatus[attempt.status], verdict)}</p> : null}
-              {item.acceptedChecklistRevision === undefined ? null : (
-                <p>{P.basis(item.acceptedChecklistRevision)}</p>
-              )}
-              {duties.length > 0 ? (
-                <ul data-plan-duties="" className="space-y-0.5">
-                  {duties.map((duty) => (
-                    <li
-                      key={duty.role}
-                      data-plan-duty={duty.role}
-                      data-plan-duty-action={duty.action}
-                      className="min-w-0"
-                    >
-                      {dutyText(duty, entry)}
-                    </li>
-                  ))}
-                </ul>
-              ) : null}
-              {checkpoints && !satisfied && item.progress?.owner ? (
-                <CheckpointView
-                  role="owner"
-                  checkpoint={item.progress.owner}
-                  stale={false}
-                  entry={entry}
-                  now={now}
-                />
-              ) : null}
-              {checkpoints && !satisfied && item.progress?.verifier ? (
-                <CheckpointView
-                  role="verifier"
-                  checkpoint={item.progress.verifier}
-                  stale={item.progress.verifier.submission !== submission}
-                  entry={entry}
-                  now={now}
-                />
-              ) : null}
-              <details>
-                <summary>
-                  {P.scope}, {P.criteria}, {P.evidence}, {P.note}
-                </summary>
-                <p className="whitespace-pre-wrap">
-                  {P.scope}: {item.scope}
-                </p>
-                {item.after.length ? (
-                  <p>
-                    {P.dependencies}: {item.after.join(", ")}
-                  </p>
-                ) : null}
-                {item.criteria.length ? (
-                  <div>
-                    {P.criteria}
-                    <ul>
-                      {item.criteria.map((text, index) => (
-                        <li key={index} className="whitespace-pre-wrap">
-                          {text}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                ) : null}
-                {item.verifier ? (
-                  <p>
-                    {P.verifier}: {ownerLabel(entry, item.verifier)}
-                  </p>
-                ) : null}
-                {item.evidence ? (
-                  <div>
-                    <p className="whitespace-pre-wrap">{item.evidence.text}</p>
-                    <ul>
-                      {item.evidence.artifacts.map((text, index) => (
-                        <li key={index} className="whitespace-pre-wrap">
-                          {text}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                ) : null}
-                {(plan.mode === "checklist" || plan.mode === "verified") &&
-                item.submissions && item.submissions.length > 1 ? (
-                  <div data-plan-submissions="">
-                    {P.submissions}
-                    <ul>
-                      {[...item.submissions].reverse().map((row, index) => (
-                        <li key={row.n} data-plan-submission={row.n} className="break-words">
-                          <p className="whitespace-pre-wrap">
-                            {P.submission(row.n, ownerLabel(entry, row.by), relativeTime(row.at, new Date()))}
-                            {row.verdict && row.verdictBy
-                              ? " · " + (row.verdict === "verified" ? P.submissionVerified : P.submissionReturned)(ownerLabel(entry, row.verdictBy))
-                              : ""}
-                            {row.returnedBy ? " · " + P.returnedByYou : ""}
-                          </p>
-                          {row.note ? <p className="whitespace-pre-wrap break-words">{row.note}</p> : null}
-                          {row.returnNote ? <p className="whitespace-pre-wrap break-words">{row.returnNote}</p> : null}
-                          {index > 0 ? (
-                            <details>
-                              <summary>{P.evidence}</summary>
-                              <p className="whitespace-pre-wrap break-words">{row.evidence.text}</p>
-                              <ul>
-                                {row.evidence.artifacts.map((text, at) => (
-                                  <li key={at} className="whitespace-pre-wrap break-words">
-                                    {text}
-                                  </li>
-                                ))}
-                              </ul>
-                            </details>
-                          ) : null}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                ) : null}
-                {item.note ? (
-                  <p className="whitespace-pre-wrap">{item.note}</p>
-                ) : null}
-              </details>
-              {renderActions?.(item)}
-            </li>
-          );
-        })}
+        {plan.items.map((item) => (
+          <li
+            key={item.id}
+            data-plan-item={item.id}
+            className="min-w-0 rounded border p-2"
+          >
+            <PlanItemBody
+              plan={plan}
+              item={item}
+              {...(entry ? { entry } : {})}
+              {...(bridge ? { bridge } : {})}
+              {...(renderActions ? { renderActions } : {})}
+            />
+          </li>
+        ))}
       </ol>
     </div>
   );

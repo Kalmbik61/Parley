@@ -87,6 +87,11 @@ describe('стор помощника', () => {
     await store.getState().decide('send');
     expect(deps.call).toHaveBeenCalledWith('assistant.decide', { proposalId: 'p7', decision: 'send', action: 'actions' });
   });
+  it('stopPlan зовёт assistant.stopPlan с id плана', async () => {
+    const { store, deps } = setup();
+    await store.getState().stopPlan('p7');
+    expect(deps.call).toHaveBeenCalledWith('assistant.stopPlan', { proposalId: 'p7' });
+  });
   it('решение по письму — без поля action', async () => {
     const { store, deps } = setup();
     store.getState().applyHost({ ...HOST_IDLE, phase: 'awaiting-confirm', proposal: { id: 'p1', target: 'Auth', where: 'w', kind: 'note', text: 't', wake: false }, turn: 1 });
@@ -912,3 +917,36 @@ describe('стор помощника: Live-голос и пошаговый г�
   });
 });
 
+
+describe('deliverService: второй путь служебного итога', () => {
+  it('открывает остров и озвучивает текст обычной озвучкой один раз; клавиатуру не берёт', () => {
+    const t = speechSetup();
+    t.store.getState().close();
+    t.deps.keyboard.mockClear?.();
+    t.store.getState().deliverService('Design review answered. It needs your check.');
+    expect(t.store.getState()).toMatchObject({ open: true, collapsed: false });
+    expect(t.texts()).toEqual(['Design review answered.', 'It needs your check.']);
+    expect(t.deps.keyboard).not.toHaveBeenCalledWith(true);
+  });
+
+  it('«Speak answers» выключено — остров открывается, озвучки нет', () => {
+    const t = speechSetup({ speech: { enabled: false } });
+    t.store.getState().close();
+    t.store.getState().deliverService('Design review answered.');
+    expect(t.store.getState().open).toBe(true);
+    expect(t.texts()).toEqual([]);
+  });
+
+  it('Live активен — озвучка молчит; идущая речь ответа не обрывается', () => {
+    const t = speechSetup();
+    t.store.getState().setLiveActive(true);
+    t.store.getState().deliverService('Design review answered.');
+    expect(t.texts()).toEqual([]);
+    t.store.getState().setLiveActive(false);
+    spokenTurn(t);
+    const before = t.texts().length;
+    t.store.getState().deliverService('Another thing.');
+    expect(t.texts()).toHaveLength(before);
+    expect(t.speaker.stop).not.toHaveBeenCalled();
+  });
+});

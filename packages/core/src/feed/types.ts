@@ -18,6 +18,9 @@ export const FEED_PATCH_LINES = 2_000;
 /** Предел задания и итога субагента (`FeedAgent.prompt`, `result`); дальше — `truncated`. */
 export const FEED_AGENT_TEXT_LIMIT = 16 * 1024;
 
+/** Предел текста одного письма в `FeedMailLetter.text`; дальше — `cut`. */
+export const FEED_MAIL_TEXT_LIMIT = 16 * 1024;
+
 /** Предел текста ответа модели (`FeedText.text`); дальше — `truncated`. */
 export const FEED_TEXT_LIMIT = 256 * 1024;
 
@@ -163,6 +166,8 @@ interface FeedCardBase extends FeedItemBase {
   agentId?: string;
   /** Когда карточка перестала ждать. */
   settledAt?: string;
+  /** Карточка заведена по экрану терминала (вопрос Codex), а не по хуку: решение хост вводит клавишей. У карточек хука поля нет. */
+  via?: 'terminal';
 }
 
 /** Запрос разрешения (`PermissionRequest`). */
@@ -175,11 +180,38 @@ export interface FeedPermissionCard extends FeedCardBase {
   message?: string;
   /** Пришёл `Notification` `permission_prompt`: CLI сам напомнил человеку про диалог. */
   notified: boolean;
+  /** Explicit choices offered by a provider, with the original response IDs. */
+  permissionOptions?: FeedPermissionOption[];
+  permissionPreview?: FeedPermissionPreview[];
 }
+
+export interface FeedPermissionOption {
+  optionId: string;
+  name: string;
+  kind: 'allow_once' | 'allow_always' | 'reject_once' | 'reject_always';
+}
+
+export type FeedPermissionPreview =
+  | { type: 'text'; text: string }
+  | { type: 'diff'; path: string; oldText: string | null; newText: string };
 
 export interface FeedQuestionOption {
   label: string;
   description: string | null;
+  /** For a structured question, the displayed label can differ from its answer. */
+  value?: string;
+}
+
+export type FeedQuestionValue = string | number | boolean | string[];
+
+export interface FeedQuestionField {
+  id: string;
+  type: 'choice' | 'text' | 'number' | 'integer' | 'boolean';
+  required: boolean;
+  description?: string;
+  /** Bounds on cardinality, text length or numeric value, depending on type. */
+  min?: number;
+  max?: number;
 }
 
 export interface FeedQuestion {
@@ -187,12 +219,14 @@ export interface FeedQuestion {
   header: string | null;
   options: FeedQuestionOption[];
   multiSelect: boolean;
+  field?: FeedQuestionField;
 }
 
 /** Вопрос агента (`AskUserQuestion`). */
 export interface FeedQuestionCard extends FeedCardBase {
   kind: 'question';
   questions: FeedQuestion[];
+  formPrompt?: string;
   /** Ответ — из окна или из `PostToolUse`, если ответили в терминале. */
   answers?: Record<string, string>;
 }
@@ -278,7 +312,39 @@ export interface FeedTurn extends FeedItemBase {
   interrupted?: true;
 }
 
+/** Одно доставленное письмо (поля, которые читает человек; `replyTo`, `via`, `roomTask` и `assignment` отброшены). */
+export interface FeedMailLetter {
+  /** `m-…` */
+  id: string;
+  /** Id сессии, `human`, `system` или `parley`. */
+  from: string;
+  /** Подпись отправителя на момент доставки, как её увидел агент. */
+  fromLabel: string | null;
+  kind: 'note' | 'question' | 'decision';
+  room: { id: string; title: string } | null;
+  /** Когда письмо отправлено. */
+  at: string;
+  /** До `FEED_MAIL_TEXT_LIMIT` символов. */
+  text: string;
+  /** Урезано доставкой (подсказка страницы) или пределом ленты. */
+  cut?: true;
+}
+
+/** Одна доставка: страница писем, выданная сессии за один раз (`takeInbox`). */
+export interface FeedMail extends FeedItemBase {
+  /** `mail:<id первого письма>` */
+  kind: 'mail';
+  via: 'pointer' | 'check_inbox' | 'wait_for';
+  /** Вызов, из которого письма пришли; `null` у `pointer`. */
+  toolUseId: string | null;
+  /** 1..50 писем. */
+  letters: FeedMailLetter[];
+  /** Сколько непрочитанных осталось после этой страницы. */
+  remaining?: number;
+}
+
 export type FeedItem =
+  | FeedMail
   | FeedPrompt
   | FeedText
   | FeedTool
@@ -292,8 +358,8 @@ export type FeedItem =
 
 /** Решение человека из окна (`feed.decide`). */
 export type FeedDecision =
-  | { kind: 'permission'; behavior: 'allow' | 'deny'; always?: true; message?: string }
-  | { kind: 'question'; answers: Record<string, string> }
+  | { kind: 'permission'; behavior: 'allow' | 'deny'; always?: true; message?: string; optionId?: string }
+  | { kind: 'question'; answers: Record<string, string>; values?: Record<string, FeedQuestionValue> }
   | { kind: 'plan'; choice: 'auto-accept' | 'manual' };
 
 /**

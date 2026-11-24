@@ -100,6 +100,15 @@ describe('ContextChip (спека 3.2, 3.4)', () => {
     await waitFor(() => expect(compactCalls().at(-1)?.params).toEqual({ ref, instructions: null }));
   });
 
+  it('Qwen Code: the focus field is disabled with an explanation and null is submitted', async () => {
+    render(<ContextChip {...props({ provider: 'qwen' })} />);
+    fireEvent.click(screen.getByTestId('ctx'));
+    expect((screen.getByTestId('compact-instructions') as HTMLTextAreaElement).disabled).toBe(true);
+    expect(screen.getByText(S.context.qwenNoFocus)).toBeTruthy();
+    fireEvent.click(screen.getByTestId('compact-submit'));
+    await waitFor(() => expect(compactCalls().at(-1)?.params).toEqual({ ref, instructions: null }));
+  });
+
   it('ждёт — Cancel зовёт cancelCompact; идёт — кнопка неактивна', async () => {
     const { unmount } = render(<ContextChip {...props({ compaction: 'pending' })} />);
     fireEvent.click(screen.getByTestId('ctx'));

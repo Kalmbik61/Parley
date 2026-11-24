@@ -24,12 +24,43 @@ export const CLAUDE_SKILL_BUDGET_ENV = { SLASH_COMMAND_TOOL_CHAR_BUDGET: '1' } a
  */
 export const claudeSkillRoute = { catalogReady: true };
 
+/** Сколько успешно прочитанный каталог Codex переживает: новый, удалённый или изменённый навык виден самое позднее через это время. */
+export const CODEX_SKILL_CATALOG_TTL_MS = 30_000;
+
+/** Чтение в полёте или готовое; `at` — момент начала чтения, поэтому TTL считается от самых старых данных. */
+const codexCatalogCache = new Map<string, { at: number; value: Promise<SkillCatalog | null> }>();
+
+/** Только для тестов: сбросить кэш каталога. */
+export function resetCodexSkillCatalogCache(): void { codexCatalogCache.clear(); }
+
+/**
+ * Ключ чтения: всё, от чего зависит ответ `skills/list`: бинарь и его аргументы настройки, домашние каталоги
+ * (`HOME`, `CODEX_HOME`) и `cwd` (навыки бывают проектными). Файлы навыков в ключ не входят: их смену ограничивает TTL.
+ */
+const catalogKey = (options: SkillContextOptions): string =>
+  JSON.stringify([options.command ?? null, options.configArgs ?? null, options.env?.CODEX_HOME ?? null, options.env?.HOME ?? null, options.profile ?? null, options.cwd]);
+
+/** Чтение с общим промисом в полёте; `null` (не прочитан или ошибка) в кэше не остаётся, следующий запуск читает заново. */
+function readCatalogCached(options: SkillContextOptions): Promise<SkillCatalog | null> {
+  const now = Date.now();
+  for (const [key, entry] of codexCatalogCache) if (now - entry.at >= CODEX_SKILL_CATALOG_TTL_MS) codexCatalogCache.delete(key);
+  const key = catalogKey(options);
+  const found = codexCatalogCache.get(key);
+  if (found !== undefined) return found.value;
+  const value = readCodexSkillCatalog(options).catch(() => null);
+  const entry = { at: now, value };
+  codexCatalogCache.set(key, entry);
+  void value.then(catalog => { if (catalog === null && codexCatalogCache.get(key) === entry) codexCatalogCache.delete(key); });
+  return value;
+}
+
 /**
  * Чтение каталога Codex запуска из `skills/list` самого Codex. Швом служит объект, как `claudeSkillRoute`: тесты
- * подменяют чтение, настоящий запуск спрашивает `codex app-server`. Не прочитан (или ошибка) — `null`, список остаётся.
+ * подменяют чтение, настоящий запуск спрашивает `codex app-server` (один на одинаковые запросы в пределах TTL).
+ * Не прочитан (или ошибка) — `null`, список остаётся.
  */
 export const codexSkillRoute: { catalog: (options: SkillContextOptions) => Promise<SkillCatalog | null> } = {
-  catalog: (options) => readCodexSkillCatalog(options).catch(() => null),
+  catalog: readCatalogCached,
 };
 
 /** Значение подстановки `{skillCatalog}`: целое присваивание TOML для `-c` Codex. */

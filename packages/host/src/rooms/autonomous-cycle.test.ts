@@ -390,7 +390,7 @@ describe('autonomous room cycle with stub agents and real Git', () => {
     await f.mirror();
   });
 
-  it.each(['attemptsPerItem', 'no_progress'] as const)('halts on %s without another worker, and keeps limits across restart', async reason => {
+  it.each(['attemptsPerItem', 'no_progress'] as const)('halts on %s without another worker, and keeps limits across restart; Resume after no_progress retries the blocked item', async reason => {
     const f = await fixture({ count: 1, attempts: reason === 'attemptsPerItem' ? 1 : 5 }); await f.go();
     await f.submit();
     if (reason === 'no_progress') { await f.flush(); await f.submit(1); }
@@ -400,10 +400,22 @@ describe('autonomous room cycle with stub agents and real Git', () => {
     if (reason === 'no_progress') expect(a.attempts[0]!.failureSignature).toBe(a.attempts[1]!.failureSignature);
     const count = a.attempts.length;
     await f.flush(); await expectReadOnlyRecovery(f); await f.resume(); await f.flush();
-    expect((await f.state()).budget.limits).toEqual(limit); expect((await f.state()).budget.spent).toEqual(spent);
-    expect((await f.state()).attempts).toHaveLength(count);
-    expect((await f.read()).sessions.filter(row => row.id !== 's-01').every(row => row.lifecycle === 'closed')).toBe(true);
-    expect((await f.state()).integration.verifiedHead).toBe(f.baseSha);
+    const after = await f.state();
+    expect(after.budget.limits).toEqual(limit);
+    if (reason === 'attemptsPerItem') {
+      expect(after.budget.spent).toEqual(spent);
+      expect(after.attempts).toHaveLength(count);
+      expect((await f.read()).sessions.filter(row => row.id !== 's-01').every(row => row.lifecycle === 'closed')).toBe(true);
+    } else {
+      // Resume после no_progress возвращает заблокированный пункт в работу и повторяет его: начинается ещё одна попытка.
+      expect(after.halted).toBeNull();
+      expect(after.attempts).toHaveLength(count + 1);
+      expect(after.attempts.at(-1)!.status).toBe('running');
+      expect(after.budget.spent).toEqual({ ...spent, attempts: spent.attempts + 1, repairWaves: spent.repairWaves + 1, sessions: spent.sessions + 1, launches: spent.launches + 1 });
+      const worker = after.attempts.at(-1)!.worker!;
+      expect((await f.read()).sessions.filter(row => row.id !== 's-01').every(row => row.id === worker ? row.lifecycle === 'active' : row.lifecycle === 'closed')).toBe(true);
+    }
+    expect(after.integration.verifiedHead).toBe(f.baseSha);
     expect(await f.bare('rev-parse', `refs/heads/${a.integration.branch}`)).toBe(f.baseSha);
   });
 

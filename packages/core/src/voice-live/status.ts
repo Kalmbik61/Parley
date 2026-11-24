@@ -28,6 +28,8 @@ export interface StatusInput {
   createdAt: number;
   /** Делегация этой Live-сессии; `null` — восстановление. */
   delegationId: string | null;
+  /** Служебный Request (спека автономии §6.3) в статусы Live не попадает; нет поля — `island`. */
+  origin?: 'island' | 'system';
 }
 
 export interface StatusNotifierDeps {
@@ -91,7 +93,7 @@ export function createStatusNotifier(deps: StatusNotifierDeps): StatusNotifier {
   return {
     observe(inputs) {
       for (const input of inputs) {
-        if (input.stale || !isOpen(input.state)) {
+        if (input.origin === 'system' || input.stale || !isOpen(input.state)) {
           pending.delete(input.requestId);
           continue;
         }

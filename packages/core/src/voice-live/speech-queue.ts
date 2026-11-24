@@ -31,7 +31,9 @@ export const INTERRUPT_WINDOW_MS = 1000;
 /** Предел непрерывного звука при отправленном итоге: дольше этого `played` не ждём, итог остаётся карточкой (`unknown`). */
 export const MAX_AUDIO_MS = 60_000;
 
-export type SpeechState = 'queued' | 'submitted' | 'played' | 'unknown' | 'dropped';
+/** `shown` — только у служебных итогов: Live острова не был активен, итог показан карточкой и ушёл в обычную озвучку. */
+export type SpeechState = 'queued' | 'submitted' | 'played' | 'unknown' | 'dropped' | 'shown';
+export type ResultOrigin = 'island' | 'system';
 export type CardState = 'hidden' | 'shown';
 export type ResultJobState = 'queued' | 'running' | 'needs_confirmation' | 'completed' | 'failed' | 'cancelled';
 
@@ -51,6 +53,8 @@ export interface ResultInput {
   delegationId: string | null;
   /** Итог этой ревизии уже передан в Live (отметка хоста). */
   deliveredLive: boolean;
+  /** Происхождение Request; нет поля (старый хост) — `island`. */
+  origin?: ResultOrigin;
 }
 
 export interface QueueItem {
@@ -58,6 +62,7 @@ export interface QueueItem {
   jobId: string;
   revision: number;
   delegationId: string | null;
+  origin: ResultOrigin;
   speech: SpeechState;
   card: CardState;
   /** Полный итог для карточки. */
@@ -82,6 +87,8 @@ export interface SpeechEffects {
   /** Итог передан в Live: хост отмечает доставку (`requests.ack(requestId, 'live', revision)`). */
   ack(requestId: string, revision: number): void;
   cardShown(item: Readonly<QueueItem>): void;
+  /** Служебный итог доставлен вторым путём (Live не активен): остров открывается и озвучивает текст обычной озвучкой. */
+  shown?(item: Readonly<QueueItem>): void;
   changed?(): void;
 }
 
@@ -91,6 +98,8 @@ export interface SpeechQueueDeps {
   phrases: SpeechPhrases;
   /** Правило подтверждений (`AckTracker.canAppend`). */
   canAppend(delegationId: string | null, purpose: AppendPurpose): boolean;
+  /** Live острова активен; без зависимости — всегда активен (служебный итог второго пути не наступает). */
+  liveActive?(): boolean;
 }
 
 export interface SpeechQueue {
@@ -180,6 +189,8 @@ export function createSpeechQueue(deps: SpeechQueueDeps): SpeechQueue {
   const toUnknown = (entry: Entry): void => {
     entry.speech = 'unknown';
     showCard(entry);
+    // Служебный итог: отметка доставки ставится только из played или shown; перебитый итог остаётся карточкой, это его доставка.
+    if (entry.origin === 'system') deps.effects.ack(entry.requestId, entry.revision);
     notify();
   };
 
@@ -198,6 +209,7 @@ export function createSpeechQueue(deps: SpeechQueueDeps): SpeechQueue {
             jobId: input.jobId,
             revision: input.revision,
             delegationId: input.delegationId,
+            origin: input.origin ?? 'island',
             speech: input.stale ? 'dropped' : 'queued',
             card: 'hidden',
             text,
@@ -284,6 +296,19 @@ export function createSpeechQueue(deps: SpeechQueueDeps): SpeechQueue {
       const at = deps.now();
       const ordered = [...entries.values()];
 
+      // Второй путь служебного итога: Live острова не активен — карточка сразу, обычная озвучка, отметка доставки.
+      // Проверка и перевод состояния — один синхронный участок.
+      if (!(deps.liveActive?.() ?? true)) {
+        for (const entry of ordered) {
+          if (entry.origin !== 'system' || entry.speech !== 'queued' || entry.gate !== 'open') continue;
+          entry.speech = 'shown';
+          showCard(entry);
+          deps.effects.shown?.(entry);
+          deps.effects.ack(entry.requestId, entry.revision);
+          notify();
+        }
+      }
+
       // Показ карточкой по мягкой политике: только когда ворота открыты и итог актуален.
       for (const entry of ordered) {
         if (entry.speech === 'queued' && entry.card === 'hidden' && entry.gate === 'open' && at - entry.queuedAt >= CARD_AFTER_MS) showCard(entry);
@@ -295,6 +320,7 @@ export function createSpeechQueue(deps: SpeechQueueDeps): SpeechQueue {
         const heard = normalizeHumanText(entry.heard, {});
         if (entry.audioSeen && entry.audioEndedAt !== null && at - entry.audioEndedAt >= INTERRUPT_WINDOW_MS && heard !== '' && overlaps(entry.spoken, heard)) {
           entry.speech = 'played';
+          if (entry.origin === 'system') deps.effects.ack(entry.requestId, entry.revision);
           notify();
         } else if (!entry.audioSeen && at - entry.submittedAt >= PLAY_START_TIMEOUT_MS && !modelPlaying) {
           toUnknown(entry);
@@ -332,7 +358,7 @@ export function createSpeechQueue(deps: SpeechQueueDeps): SpeechQueue {
         lastSendAt = at;
         // Сокращённый итог отсылает к экрану: карточка должна быть видна, когда голос это говорит.
         if (entry.truncated) showCard(entry);
-        deps.effects.ack(entry.requestId, entry.revision);
+        if (entry.origin !== 'system') deps.effects.ack(entry.requestId, entry.revision);
         notify();
         break;
       }
@@ -344,6 +370,7 @@ export function createSpeechQueue(deps: SpeechQueueDeps): SpeechQueue {
         jobId: entry.jobId,
         revision: entry.revision,
         delegationId: entry.delegationId,
+        origin: entry.origin,
         speech: entry.speech,
         card: entry.card,
         text: entry.text,
@@ -359,7 +386,17 @@ export function createSpeechQueue(deps: SpeechQueueDeps): SpeechQueue {
       humanSpeaking = false;
       modelPlaying = false;
       for (const entry of entries.values()) {
-        if (entry.speech === 'submitted') toUnknown(entry);
+        // Служебный итог, не дошедший до played, возвращается в queued и идёт вторым путём.
+        if (entry.speech === 'submitted' && entry.origin === 'system') {
+          entry.speech = 'queued';
+          entry.submittedAt = null;
+          entry.spoken = '';
+          entry.heard = '';
+          entry.audioSeen = false;
+          entry.audioEndedAt = null;
+          entry.audioStartedAt = null;
+          entry.delegationId = null;
+        } else if (entry.speech === 'submitted') toUnknown(entry);
         else if (entry.speech === 'queued') entry.delegationId = null;
       }
       notify();

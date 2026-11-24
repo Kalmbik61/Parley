@@ -13,6 +13,8 @@ export default defineConfig({
     // Дом тестового процесса — временный каталог, как у core и host: main пишет в `~/.parley/desktop`, и тест без
     // песочницы писал бы в данные человека (а `parleyHome()` под vitest настоящий дом отвергает).
     setupFiles: ['../core/test/sandbox-home.ts'],
+    // Корень домов на прогон: создаёт и убирает главный процесс (см. `sandbox-home-root.ts`).
+    globalSetup: ['../core/test/sandbox-home-root.ts'],
     // `dist/**` — вывод `electron-builder` (кусок 1.13): внутри упакованного
     // `.app` лежит `pnpm deploy` хоста целиком, вместе с его `*.test.ts` —
     // без исключения vitest пытается прогнать их тут, под чужим tsconfig.

@@ -36,10 +36,12 @@ import type { AgentScripts } from './agent-evaluate.js';
 import type { AgentStorage } from './agent-storage.js';
 import type { AgentWindow } from './agent-window.js';
 import { BASIC_AUTH_HINT, type BasicAuth } from './basic-auth.js';
+import { CLIENT_CERT_HINT, humanWait, type ClientCert } from './client-cert.js';
 import type { TypingClock } from './human-typing.js';
 import { createAgentCapture } from './agent-capture.js';
 import { createAgentActions, settleLoad, sleep, withNavigation } from './agent-actions.js';
 import { createAgentDom } from './agent-dom.js';
+import { createAgentSettle } from './agent-settle.js';
 import type { AgentCaptureDeps } from './agent-capture.js';
 import { createPageRegistry, listTabs } from './agent-pages.js';
 import type { PageRecord, PageRegistry } from './agent-pages.js';
@@ -61,6 +63,8 @@ export interface AgentOpsDeps {
    * а вкладка, ждущая логин человека, отвечает агенту подсказкой, а не ожиданием загрузки. Нет — как раньше, без учётных данных.
    */
   basicAuth?: Pick<BasicAuth, 'remember' | 'holdForPage' | 'dropPage' | 'isPending' | 'onPending'>;
+  /** Клиентский сертификат (`main/browser/client-cert.ts`): вкладка, ждущая выбора человека, отвечает агенту подсказкой, а не ожиданием загрузки. */
+  clientCert?: Pick<ClientCert, 'isPending' | 'onPending'>;
   /** «Let agents use the browser» (`UiFile.browser.agentsAllowed`): читается на каждую операцию. */
   agentsAllowed(): Promise<boolean>;
   /** Просит окно открыть вкладку (`browser:agent-open-tab`); `false` — окно не готово слушать. */
@@ -252,6 +256,7 @@ export function createPageRunner(deps: {
       let lent = null as { unlend(): void; release(): void } | null;
       const guard: InputGuard = {
         signal,
+        deadline,
         check() {
           if (!allowed) throw new AgentOpError('access_denied', AGENTS_OFF);
           if (registry.isPaused(record.workKey, record.owner)) throw new AgentOpError('access_denied', PAUSED);
@@ -651,6 +656,7 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
   });
   const reads = createAgentReads({ inspector: deps.inspector });
   const dom = createAgentDom({ inspector: deps.inspector });
+  const settle = createAgentSettle({ inspector: deps.inspector });
   const capture = createAgentCapture({ inspector: deps.inspector, emulation: deps.emulation, registry, dom, saveImage: deps.saveImage, image: deps.image, activity: deps.activity, inGuest: deps.inGuest, ...(deps.captureReadyMs === undefined ? {} : { captureReadyMs: deps.captureReadyMs }), ...(deps.guestCallMs === undefined ? {} : { guestCallMs: deps.guestCallMs }), ...(deps.windowHeight === undefined ? {} : { windowHeight: deps.windowHeight }), ...(deps.screenDpr === undefined ? {} : { screenDpr: deps.screenDpr }) });
 
   function askWindow(event: AgentOpenTab): Promise<AgentOpenTabResult | 'no_window' | 'timeout'> {
@@ -708,9 +714,13 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
     }
     return runner.run(request, agentId, async (contents, record, guard) => {
       if (target.credentials !== null && answer.reused) deps.basicAuth?.remember(contents.id, origin, target.credentials);
-      const loaded = await settleLoad(contents, AGENT_LIMITS.loadMs, guard.signal, deps.basicAuth);
+      const loaded = await settleLoad(contents, AGENT_LIMITS.loadMs, guard.signal, humanWait(deps.basicAuth, deps.clientCert));
       const notes = deps.agentWindow.take(`${record.workKey}\n${record.pageId}`);
-      return { ...base, loaded, title: titleForAgent(contents.getTitle()), notes: deps.basicAuth?.isPending(contents.id) === true ? [BASIC_AUTH_HINT, ...notes] : notes };
+      const hints = [
+        ...(deps.basicAuth?.isPending(contents.id) === true ? [BASIC_AUTH_HINT] : []),
+        ...(deps.clientCert?.isPending(contents.id) === true ? [CLIENT_CERT_HINT] : []),
+      ];
+      return { ...base, loaded, title: titleForAgent(contents.getTitle()), notes: [...hints, ...notes] };
     }, { window: true });
   }
 
@@ -772,8 +782,9 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
         contents.reload();
       }
     };
-    const outcome = await withNavigation(contents, act, guard.signal, deps.basicAuth);
+    const outcome = await withNavigation(contents, act, guard.signal, humanWait(deps.basicAuth, deps.clientCert));
     if (deps.basicAuth?.isPending(contents.id) === true) notes.push(BASIC_AUTH_HINT);
+    if (deps.clientCert?.isPending(contents.id) === true) notes.push(CLIENT_CERT_HINT);
     if (failure.text !== null) notes.push(`The page failed to load: ${titleForAgent(failure.text)}`);
     return {
       tab: args.tab,
@@ -855,7 +866,9 @@ export function createAgentOps(deps: AgentOpsDeps): AgentOps {
               emulation: deps.emulation,
               window: deps.agentWindow,
               activity: deps.activity,
+              settle,
               ...(deps.basicAuth === undefined ? {} : { basicAuth: deps.basicAuth }),
+              ...(deps.clientCert === undefined ? {} : { clientCert: deps.clientCert }),
               ...(deps.uploadHome === undefined ? {} : { home: deps.uploadHome }),
             });
             return ok(await runner.run(request, args.tab, (contents, record, guard) => actions.actionOf(contents, record, request, args, guard), { changes: true, window: true, seen: true }));

@@ -3,37 +3,24 @@
  * Сеть берётся как параметр `fetchImpl`, чтобы тесты обходились без неё. Любая ошибка — `null`, без исключений
  * и без логов с телом ответа.
  */
-export type CliUpdateProvider = 'codex' | 'claude';
-export type InstallMethod = 'standalone' | 'npm' | 'brew' | 'native' | 'unknown';
+import { CLI_TOOLS, LATEST_SOURCE_URLS, type CliInstallMethod, type CliLatestSource, type CliTool } from './cli-tools.js';
 
-/** Откуда спрашивать последнюю версию. */
-export type LatestVersionSource =
-  | { kind: 'codex-github' }
-  | { kind: 'codex-brew' }
-  /** `channel` — ключ в `dist-tags` (`latest` по умолчанию). */
-  | { kind: 'claude-npm'; channel?: string };
+export type CliUpdateProvider = CliTool;
+export type InstallMethod = CliInstallMethod;
 
-const SOURCE_URLS = {
-  'codex-github': 'https://api.github.com/repos/openai/codex/releases/latest',
-  'codex-brew': 'https://formulae.brew.sh/api/cask/codex.json',
-  'claude-npm': 'https://registry.npmjs.org/-/package/@anthropic-ai/claude-code/dist-tags',
-} as const;
+/** Откуда спрашивать последнюю версию (таблица `cli-tools.ts`). */
+export type LatestVersionSource = CliLatestSource;
 
 const SEMVER = /^(\d+)\.(\d+)\.(\d+)$/;
 
-/** Способ установки по настоящему пути исполняемого файла (после раскрытия ссылок). */
-export function installMethod(provider: CliUpdateProvider, realBinary: string, home: string): InstallMethod {
-  const path = realBinary.replaceAll('\\', '/');
-  const root = home.replaceAll('\\', '/').replace(/\/+$/, '');
-  if (provider === 'codex') {
-    if (path.includes('/node_modules/@openai/codex/')) return 'npm';
-    if (path.startsWith(`${root}/.codex/packages/standalone/`)) return 'standalone';
-    if (path.includes('/Caskroom/') || path.startsWith('/opt/homebrew/')) return 'brew';
-    return 'unknown';
-  }
-  if (path.includes('/node_modules/@anthropic-ai/claude-code/')) return 'npm';
-  if (path.startsWith(`${root}/.local/share/claude/versions/`)) return 'native';
-  return 'unknown';
+/** Способ установки по настоящему пути исполняемого файла (после раскрытия ссылок); правила — в таблице. */
+export function installMethod(
+  provider: CliUpdateProvider,
+  realBinary: string,
+  home: string,
+  exists: (path: string) => boolean = () => false,
+): InstallMethod {
+  return CLI_TOOLS[provider].installMethod(realBinary, home, exists);
 }
 
 /** Чистая версия `x.y.z` или `null` для пре-релизов и чужой формы. */
@@ -54,7 +41,7 @@ export async function fetchLatestVersion(
   timeoutMs = 5000,
 ): Promise<string | null> {
   try {
-    const response = await fetchImpl(SOURCE_URLS[source.kind], {
+    const response = await fetchImpl(LATEST_SOURCE_URLS[source.kind], {
       headers: { accept: 'application/json' },
       signal: AbortSignal.timeout(timeoutMs),
     });

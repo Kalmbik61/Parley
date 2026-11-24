@@ -22,10 +22,12 @@ import deepseekUrl from '../assets/providers/deepseek.svg';
 import kimiLightUrl from '../assets/providers/kimi-light.svg';
 import kimiUrl from '../assets/providers/kimi.svg';
 import minimaxUrl from '../assets/providers/minimax.svg';
+import opencodeUrl from '../assets/providers/opencode.svg';
 import openrouterLightUrl from '../assets/providers/openrouter-light.svg';
 import openrouterUrl from '../assets/providers/openrouter.svg';
 import parleyUrl from '../assets/providers/parley.svg';
 import qwenUrl from '../assets/providers/qwen.svg';
+import { agentColourIndex, agentColourVar } from '../lib/agent-colour.js';
 import { useProvidersStore, type ProviderInfo } from '../store/providers.js';
 import { useUiStore } from '../store/ui.js';
 import { kindOf } from './providers/custom-provider-draft.js';
@@ -60,11 +62,11 @@ const isVendor = (value: unknown): value is Vendor => typeof value === 'string' 
  * Семейство CLI аккаунта подписки (спека подписок 5.9): значок аккаунта — значок его CLI, а не Parley. Берётся из строки
  * `providers.list` (`family` отдаёт хост); у записи с адресом, хоть она и запускается через `claude`, значка CLI нет.
  * Вендор узнаётся по пресету endpoint-записи, а не по пользовательскому имени или id.
- * Протокол пока знает только `family: 'claude'`; Codex — по виду аккаунта до этапа 3.
+ * Семейство, которого окно не знает (qwen до A10 или новое), даёт нейтральный значок.
  */
 function providerBrand(row: ProviderInfo | undefined): 'claude' | 'codex' | Vendor | null {
   const kind = kindOf(row?.custom);
-  if (kind === 'claude-account') return row?.family ?? 'claude';
+  if (kind === 'claude-account') return row?.family === 'codex' ? 'codex' : row?.family === 'claude' || row?.family == null ? 'claude' : null;
   if (kind === 'codex-account') return 'codex';
   if (kind === 'endpoint' && row?.custom && 'preset' in row.custom && isVendor(row.custom.preset)) return row.custom.preset;
   return null;
@@ -85,6 +87,8 @@ function brandIcon(provider: string, dark: boolean, brand: 'claude' | 'codex' | 
       return claudeUrl;
     case 'codex':
       return dark ? codexLightUrl : codexUrl;
+    case 'opencode':
+      return opencodeUrl;
     default:
       // Плитки пресетов в диалоге своего провайдера передают id пресета.
       return isVendor(id) ? VENDOR_ICONS[id][dark ? 1 : 0] : null;
@@ -96,9 +100,39 @@ export interface AgentIconProps {
   size?: number;
   /** Подпись значка для скринридера — только когда рядом нет названия провайдера. */
   label?: string;
+  /** Сессия агента: у `s-<N>` значок получает кольцо цвета агента (спека доски комнаты 5.1). */
+  sessionId?: string | null;
 }
 
-export function AgentIcon({ provider, size = 12, label }: AgentIconProps): JSX.Element {
+export function AgentIcon({ provider, size = 12, label, sessionId }: AgentIconProps): JSX.Element {
+  const colourIndex = agentColourIndex(sessionId);
+  const colour = agentColourVar(sessionId);
+  const icon = <AgentIconBody provider={provider} size={size} {...(label === undefined ? {} : { label })} ring={colour !== null} />;
+  if (colour === null) return icon;
+  // Кольцо — контур обёртки: размер элемента не меняется, раскладка строк тоже. `data-agent-icon` переезжает на
+  // обёртку, чтобы `dimmed.css` приглушил кольцо и значок один раз.
+  return (
+    <span
+      data-agent-icon=""
+      data-agent-colour={colourIndex}
+      className="inline-flex shrink-0 rounded-full"
+      style={{ width: size, height: size, outline: `1.5px solid ${colour}`, outlineOffset: 2 }}
+    >
+      {icon}
+    </span>
+  );
+}
+
+interface AgentIconBodyProps {
+  provider: string;
+  size: number;
+  label?: string;
+  /** Значок внутри кольца: атрибут приглушения стоит на обёртке. */
+  ring: boolean;
+}
+
+function AgentIconBody({ provider, size, label, ring }: AgentIconBodyProps): JSX.Element {
+  const marker = ring ? {} : { 'data-agent-icon': '' };
   const dark = useUiStore((state) => state.dark);
   // Селектор отдаёт строку или `null`: значок перерисовывается только при смене бренда.
   const brand = useProvidersStore((state) => providerBrand(state.providers.find((row) => row.id === provider)));
@@ -111,7 +145,7 @@ export function AgentIcon({ provider, size = 12, label }: AgentIconProps): JSX.E
         width={size}
         height={size}
         draggable={false}
-        data-agent-icon=""
+        {...marker}
         className="block shrink-0"
         style={{ width: size, height: size }}
       />
@@ -119,7 +153,7 @@ export function AgentIcon({ provider, size = 12, label }: AgentIconProps): JSX.E
   }
   return (
     <span
-      data-agent-icon=""
+      {...marker}
       className="inline-flex shrink-0 items-center justify-center rounded-[4px] bg-muted font-medium leading-none text-muted-foreground"
       style={{ width: size, height: size, fontSize: Math.round(size * 0.6) }}
     >

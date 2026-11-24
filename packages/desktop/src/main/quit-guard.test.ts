@@ -1,4 +1,7 @@
 import { EventEmitter } from 'node:events';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import { guardAppQuit, quitQuestion } from './quit-guard.js';
 import type { QuitGuardDeps } from './quit-guard.js';
@@ -25,6 +28,12 @@ class FakeApp extends EventEmitter {
         prevented = true;
       },
     });
+    return prevented;
+  }
+  /** Как Electron: `will-quit`, и только если выход не отменён, — `quit`. Возвращает, отменён ли выход. */
+  exit(): boolean {
+    const prevented = this.willQuit();
+    if (!prevented) this.emit('quit');
     return prevented;
   }
 }
@@ -106,6 +115,36 @@ describe('guardAppQuit', () => {
     expect(deps.ask).not.toHaveBeenCalled();
   });
 
+  it('retryQuit: повтор выхода идёт через него и после остановки хоста; сам quit() зовёт только он', async () => {
+    const retried: string[] = [];
+    const retryQuit = vi.fn((quit: () => void) => {
+      retried.push('retry');
+      quit();
+    });
+    const { app, steps } = setup({ retryQuit });
+    expect(app.willQuit()).toBe(true);
+    await vi.waitFor(() => expect(steps).toEqual(['stop-host', 'quit']));
+    expect(retryQuit).toHaveBeenCalledTimes(1);
+    expect(retried).toEqual(['retry']);
+    expect(app.willQuit()).toBe(false);
+  });
+
+  it('retryQuit, не вызвавший quit, выход не повторяет: прямого quit() в обход него нет', async () => {
+    const retryQuit = vi.fn();
+    const { app, steps } = setup({ retryQuit });
+    expect(app.willQuit()).toBe(true);
+    await vi.waitFor(() => expect(retryQuit).toHaveBeenCalledTimes(1));
+    expect(steps).toEqual(['stop-host']);
+  });
+
+  it('retryQuit не вызывается при отмене вопроса', async () => {
+    const retryQuit = vi.fn();
+    const { app, steps } = setup({ ask: vi.fn(async () => 'cancel' as const), retryQuit });
+    expect(app.willQuit()).toBe(true);
+    await vi.waitFor(() => expect(steps).toEqual(['cancel']));
+    expect(retryQuit).not.toHaveBeenCalled();
+  });
+
   it('повторный will-quit, пока вопрос открыт, — тоже отменён, второго вопроса нет', async () => {
     let answer!: (value: 'stop' | 'cancel') => void;
     const ask = vi.fn(
@@ -139,6 +178,180 @@ describe('guardAppQuit', () => {
     const { app, guard } = setup();
     guard.dispose();
     expect(app.willQuit()).toBe(false);
+  });
+});
+
+/**
+ * Отмена вопроса о выходе (⌘Q → Cancel) оставляет приложение и хост работать, поэтому всё, что рвёт связь окна с хостом,
+ * не может случиться, пока вопрос открыт: разбор идёт на `quit`, который Electron шлёт, только если ни один слушатель
+ * `will-quit` не отменил выход. Раньше разбор висел на `will-quit` — после «Cancel» окно оказывалось на закрытом
+ * соединении, а `liveSessions()` в самом вопросе получал null вместо числа сессий.
+ */
+describe('разбор соединения при выходе', () => {
+  function wire(over: Partial<QuitGuardDeps> = {}) {
+    const steps: string[] = [];
+    const app = new FakeApp(steps);
+    let closed = false;
+    // Как HostConnection: после close() сокета нет, и число сессий неизвестно.
+    const connection = {
+      close: vi.fn(() => {
+        closed = true;
+      }),
+    };
+    const worksBinding = { dispose: vi.fn() };
+    const liveSessions = vi.fn(async () => (closed ? null : 3));
+    const ask = vi.fn(async (): Promise<'stop' | 'cancel'> => 'stop');
+    const onCancel = vi.fn(() => {
+      steps.push('cancel');
+    });
+    guardAppQuit(app, {
+      liveSessions,
+      ask,
+      stopHost: async () => {
+        steps.push('stop-host');
+      },
+      onCancel,
+      keepHost: false,
+      log: vi.fn(),
+      ...over,
+    });
+    // Как в main/index.ts.
+    app.on('quit', () => {
+      worksBinding.dispose();
+      connection.close();
+    });
+    return { app, steps, connection, worksBinding, liveSessions, ask, onCancel };
+  }
+
+  it('«cancel» — связь с хостом и привязка works целы, вопрос получил число сессий', async () => {
+    const ask = vi.fn(async (): Promise<'stop' | 'cancel'> => 'cancel');
+    const { app, steps, connection, worksBinding, onCancel } = wire({ ask });
+    expect(app.exit()).toBe(true);
+    await vi.waitFor(() => expect(steps).toEqual(['cancel']));
+    expect(ask).toHaveBeenCalledWith(3);
+    expect(onCancel).toHaveBeenCalledTimes(1);
+    expect(connection.close).not.toHaveBeenCalled();
+    expect(worksBinding.dispose).not.toHaveBeenCalled();
+  });
+
+  it('«stop» — хост гасится, выход проходит, и только тогда разбираются привязка и соединение', async () => {
+    const { app, steps, connection, worksBinding, liveSessions, ask } = wire();
+    expect(app.exit()).toBe(true);
+    await vi.waitFor(() => expect(steps).toEqual(['stop-host', 'quit']));
+    // Вопрос задан по живому соединению, а выход ещё не состоялся.
+    expect(await liveSessions.mock.results[0]?.value).toBe(3);
+    expect(ask).toHaveBeenCalledWith(3);
+    expect(connection.close).not.toHaveBeenCalled();
+    expect(worksBinding.dispose).not.toHaveBeenCalled();
+
+    expect(app.exit()).toBe(false);
+    expect(worksBinding.dispose).toHaveBeenCalledTimes(1);
+    expect(connection.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('отмена, потом ещё выход: второй вопрос тоже получает число сессий', async () => {
+    const ask = vi.fn(async (): Promise<'stop' | 'cancel'> => 'cancel');
+    const { app, steps, connection, worksBinding } = wire({ ask });
+    expect(app.exit()).toBe(true);
+    await vi.waitFor(() => expect(steps).toEqual(['cancel']));
+
+    ask.mockResolvedValueOnce('stop');
+    expect(app.exit()).toBe(true);
+    await vi.waitFor(() => expect(steps).toEqual(['cancel', 'stop-host', 'quit']));
+    expect(ask.mock.calls).toEqual([[3], [3]]);
+    expect(connection.close).not.toHaveBeenCalled();
+    expect(worksBinding.dispose).not.toHaveBeenCalled();
+  });
+
+  it('тестовый режим (keepHost): вопроса нет, выход проходит и разбирает привязку и соединение', () => {
+    const { app, connection, worksBinding } = wire({ keepHost: true });
+    expect(app.exit()).toBe(false);
+    expect(worksBinding.dispose).toHaveBeenCalledTimes(1);
+    expect(connection.close).toHaveBeenCalledTimes(1);
+  });
+});
+
+/** Проводка в `main/index.ts`: сторож — единственный, кто держит выход; остальное гасится на `quit`. */
+describe('main/index.ts: что делается до ответа на вопрос о выходе', () => {
+  const index = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'index.ts'), 'utf8');
+
+  it('на will-quit и before-quit ничего не вешается: выход может быть отменён, вопрос ещё открыт', () => {
+    // Единственное исключение — сброс намерения «Restart now» (`quit-intent.ts`): он ничего не отменяет и не гасит.
+    const intentListener = "app.on('before-quit', () => quitIntent.onBeforeQuit());";
+    expect(index).toContain(intentListener);
+    expect(index.replace(intentListener, '')).not.toMatch(/app\.on\('(will-quit|before-quit)'/);
+  });
+
+  it('привязка works и соединение с хостом разбираются на quit', () => {
+    expect(index).toMatch(/app\.on\('quit', \(\) => \{[^}]*worksBinding\?\.dispose\(\)[^}]*connection\.close\(\)/);
+  });
+
+  /** Текст вызова от `start` до закрывающей строки `});` с тем же отступом, что у строки начала. */
+  function callBlock(start: number): string {
+    const lineStart = index.lastIndexOf('\n', start) + 1;
+    const indent = /^ */.exec(index.slice(lineStart))![0];
+    const end = index.indexOf(`\n${indent}});`, start);
+    expect(end).toBeGreaterThan(start);
+    return index.slice(start, end);
+  }
+
+  const RETRY = 'retryQuit: (quit) => quitIntent.ownQuit(quit),';
+
+  it("powerMonitor 'shutdown': намерение «Restart now» сбрасывается раньше app.quit()", () => {
+    const start = index.indexOf("powerMonitor.on('shutdown'");
+    expect(start).toBeGreaterThan(-1);
+    const handler = callBlock(start);
+    const clear = handler.indexOf('quitIntent.clear();');
+    const quit = handler.indexOf('app.quit();');
+    expect(clear).toBeGreaterThan(-1);
+    expect(quit).toBeGreaterThan(-1);
+    expect(clear).toBeLessThan(quit);
+  });
+
+  it('повторы выхода сторожами идут через quitIntent.ownQuit: guardAppQuit и каждый guardWindowClose', () => {
+    const appStart = index.indexOf('guardAppQuit(app, {');
+    expect(appStart).toBeGreaterThan(-1);
+    expect(callBlock(appStart)).toContain(RETRY);
+
+    const calls = [...index.matchAll(/guardWindowClose\(/g)];
+    expect(calls.length).toBeGreaterThan(0);
+    for (const call of calls) expect(callBlock(call.index!)).toContain(RETRY);
+  });
+
+  it('шаг stopHost сторожа сперва ждёт updateInstaller.stopForQuit(), потом гасит хост', () => {
+    const start = index.indexOf('guardAppQuit(app, {');
+    expect(start).toBeGreaterThan(-1);
+    const block = callBlock(start);
+    const step = block.indexOf('stopHost: async () => {');
+    expect(step).toBeGreaterThan(-1);
+    const body = block.slice(step);
+    const stopForQuit = body.indexOf('await updateInstaller.stopForQuit();');
+    const stopHost = body.indexOf('await connection.stopHost();');
+    expect(stopForQuit).toBeGreaterThan(-1);
+    expect(stopHost).toBeGreaterThan(-1);
+    expect(stopForQuit).toBeLessThan(stopHost);
+  });
+
+  it('переключатель «Check for updates» доходит до установщика: при старте до проверки и при каждом сохранении настроек', () => {
+    const start = index.indexOf('updates.start();');
+    expect(start).toBeGreaterThan(-1);
+    const initial = index.indexOf('if (ui.checkForUpdates) updateInstaller.checksEnabled();');
+    expect(initial).toBeGreaterThan(-1);
+    expect(initial).toBeLessThan(start);
+    expect(index).toContain('if (current.checkForUpdates) updateInstaller.checksEnabled();');
+    expect(index).toContain('else void updateInstaller.checksDisabled();');
+  });
+
+  it("app.once('quit') зовёт updateInstaller.onQuit()", () => {
+    expect(index).toContain("app.once('quit', () => updateInstaller.onQuit());");
+  });
+
+  it('runUpdateStartup зовётся раньше, чем создано первое окно', () => {
+    const startup = index.indexOf('runUpdateStartup({');
+    const firstWindow = index.indexOf('mainWindow = openWindow();');
+    expect(startup).toBeGreaterThan(-1);
+    expect(firstWindow).toBeGreaterThan(-1);
+    expect(startup).toBeLessThan(firstWindow);
   });
 });
 

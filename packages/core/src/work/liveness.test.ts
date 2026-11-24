@@ -32,14 +32,18 @@ vi.mock('./store.js', async (importOriginal) => {
  * берёт `promisify(execFile)`, а ответ `{ stdout, stderr }` у настоящего `execFile` лежит под `promisify.custom` —
  * обёртка зовёт настоящий и только считает.
  */
-const psCalls = vi.hoisted(() => ({ count: 0 }));
+const psCalls = vi.hoisted(() => ({ count: 0, hang: false }));
 
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>();
   const { promisify } = await import('node:util');
   const execFile = Object.assign(actual.execFile.bind(actual), {
     [promisify.custom]: (file: string, ...rest: unknown[]) => {
-      if (file === 'ps') psCalls.count += 1;
+      if (file === 'ps') {
+        psCalls.count += 1;
+        // Зависший `ps`, убитый по таймауту: `execFile` отклоняет промис.
+        if (psCalls.hang) return Promise.reject(Object.assign(new Error('ps timed out'), { killed: true }));
+      }
       return (promisify(actual.execFile) as (...args: unknown[]) => Promise<unknown>)(file, ...rest);
     },
   });
@@ -60,6 +64,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  psCalls.hang = false;
   for (const child of children.splice(0)) await stop(child);
   delete process.env.PARLEY_HOME;
   await Promise.all([home, project].map((dir) => rm(dir, { recursive: true, force: true })));
@@ -181,6 +186,22 @@ describe('checkSession (чек-лист 15)', () => {
 
     await stop(child);
     expect(await checkSession(session, { owned: true })).toEqual({ alive: false });
+  });
+
+  // `ps` зовётся только на macOS: на Linux время старта берётся из /proc.
+  it.skipIf(process.platform !== 'darwin')('ps завис и убит по таймауту: время старта неизвестно, сессия считается живой', async () => {
+    const child = start();
+    const session = sessionOf({ pid: child.pid ?? 0, startedAtProcess: new Date(0).toISOString() });
+    psCalls.hang = true;
+    expect(await processStartedAt(child.pid ?? 0)).toBeNull();
+    expect(await checkSession(session)).toEqual({ alive: true });
+  });
+
+  it.skipIf(process.platform !== 'darwin')('ps вернул мусор: время старта неизвестно', async () => {
+    const child = start();
+    const readPs = vi.fn(async () => null);
+    expect(await processStartedAt(child.pid ?? 0, readPs)).toBeNull();
+    expect(readPs).toHaveBeenCalledTimes(1);
   });
 
   it('pid: null — живость по тишине лога', async () => {

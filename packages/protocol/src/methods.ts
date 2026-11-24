@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { SessionProcessesSnapshot } from './processes.js';
 import { browserAgentResultParams } from './browser-agent.js';
 import { capabilitySkillMethodSchemas } from './capability-skill-actions.js';
 import type { CapabilitySkillMethodResults } from './capability-skill-actions.js';
@@ -28,13 +29,15 @@ import { voiceMethodSchemas } from './remote/voice.js';
 import type { VoiceMethodResults } from './remote/voice.js';
 import { customProviderMethodSchemas } from './custom-providers.js';
 import type { CustomProviderInfo, CustomProviderMethodResults } from './custom-providers.js';
+import type { QwenAuthHints } from './qwen-auth.js';
+import { kimiConfigValue, type KimiMethodResults } from './kimi.js';
 import type { AssistantMethodResults } from './assistant.js';
 import { telegramMethodSchemas } from './telegram.js';
 import { voiceProviderMethodSchemas } from './voice-provider.js';
 import type { VoiceProviderMethodResults } from './voice-provider.js';
 import type { TelegramMethodResults } from './telegram.js';
-import { consentMethodSchemas } from './consents.js';
-import type { ConsentMethodResults } from './consents.js';
+import { consentMethodSchemas, roleChangeAck } from './consents.js';
+import type { ConsentMethodResults, RoleChange } from './consents.js';
 import { journalMethodSchemas } from './journal.js';
 import type { JournalMethodResults } from './journal.js';
 import { memoryMethodSchemas } from './memory.js';
@@ -52,7 +55,7 @@ import type { WorksMailStateResult } from './works-mail-state.js';
 import { feedDecision } from './feed.js';
 import type { FeedDecisions } from './feed.js';
 import type { ProgressResult } from './feed-progress.js';
-import type { Capabilities, CapacitySnapshot, CliUpdate, CompactResult, HostDiagnostics, ModelOption, ProfileStatus, ProviderCheck, ProviderLimits, SendResult, SessionRef, WorksSnapshot } from './types.js';
+import type { Capabilities, CapacitySnapshot, CliStatus, CliUpdate, CompactResult, HostDiagnostics, ModelOption, ProfileStatus, ProviderCheck, ProviderLimits, SendResult, SessionRef, WorksSnapshot } from './types.js';
 
 /** Снимок рецепта комнаты: границы те же, что у карты (`parseMap`). */
 const recipeSnapshot = z
@@ -132,6 +135,10 @@ export const METHODS = {
   'providers.skipUpdate': z.object({ provider: z.string() }),
   // Обновить CLI провайдера его собственной командой `update` (спека 2026-11-02, раздел 4); сессии не трогаются.
   'providers.update': z.object({ provider: z.string() }),
+  // Проверить версии сейчас (спека Qwen, §4.4): свежая проба CLI и свежий запрос последней версии; не чаще раза в 10 с на CLI.
+  'providers.checkUpdates': z.object({ provider: z.string() }),
+  // Установить CLI провайдера установщиком вендора (спека Qwen, §4.2): argv константный, из запроса — только провайдер.
+  'providers.install': z.object({ provider: z.string() }),
   'providers.check': z.object({ provider: z.string() }),
   // Key normalization belongs to core: trim edges before checking the length or whitespace.
   'providers.setKey': z.object({ provider: z.string(), key: z.string() }),
@@ -209,6 +216,8 @@ export const METHODS = {
   'sessions.rename': z.object({ ref: sessionRef, label: renameTitle }),
   'sessions.interrupted': z.object({}),
   // Режим разрешений (план 2026-10-01, решение 4): хост жмёт Shift+Tab и сверяет подвал терминала.
+  'kimi.getState': z.object({ ref: sessionRef }),
+  'kimi.setConfig': z.object({ ref: sessionRef, configId: z.string().min(1).max(1024), value: kimiConfigValue }),
   'sessions.setMode': z.object({ ref: sessionRef, mode: permissionModeChoice }),
   // «Keep awake» из меню строки сессии (спека сна агентов, 4.1): человек запрещает хосту усыплять сессию, флаг лежит в
   // карте. Закрытая сессия — `conflict`, нет сессии или работы — `not_found`. Агент флаг не ставит. Старый хост метода не
@@ -232,6 +241,8 @@ export const METHODS = {
     effort: z.string().regex(EFFORT_TOKEN_RE).nullable().optional(),
     carry: z.enum(['handover', 'transcript']).default('handover'),
     force: z.boolean().optional(),
+    /** The role change the human saw (spec 2026-11-12, 2.3); required by the host only when read-only is lost. */
+    roleChange: roleChangeAck.optional(),
   }),
   // Подсказки поля ввода вида «Chat» (живая проверка 2026-10-02): команды, скиллы и субагенты CLI
   // провайдера у человека и в проекте — хост только читает их папки.
@@ -244,6 +255,9 @@ export const METHODS = {
   'sessions.resumeInterrupted': z.object({ refs: z.array(sessionRef) }),
   'pty.attach': z.object({ ref: sessionRef }),
   'pty.detach': z.object({ ref: sessionRef }),
+  // Процессы PTY сессии для тулбара: подписка отдаёт начальный снимок, дальше — `processes.changed`.
+  'processes.subscribe': z.object({ ref: sessionRef }),
+  'processes.unsubscribe': z.object({ ref: sessionRef }),
   'wake.pause': z.object({}),
   'wake.resume': z.object({}),
   'wake.state': z.object({}),
@@ -339,6 +353,8 @@ export const METHODS = {
   'worktrees.available': z.object({ projectPath: z.string() }),
   // `patch` только добавлен: старый хост его отбросит, старое окно не шлёт. false — `patch: ''`.
   'worktrees.diff': z.object({ ref: sessionRef, patch: z.boolean().optional() }),
+  // Версия набора изменений — дёшево, без патча: окно перечитывает дифф, только если она сменилась. Методы необязательные: старый хост их не знает.
+  'worktrees.version': z.object({ ref: sessionRef }),
   'worktrees.commit': z.object({ ref: sessionRef, message: z.string().min(1) }),
   'worktrees.merge': z.object({ ref: sessionRef }),
   'worktrees.discard': z.object({ ref: sessionRef, force: z.boolean() }),
@@ -349,6 +365,7 @@ export const METHODS = {
   'worktrees.leftovers': z.object({}),
   'worktrees.removeCopy': z.object({ ref: sessionRef }),
   'changes.project': z.object({ ref: sessionRef, patch: z.boolean().optional() }),
+  'changes.version': z.object({ ref: sessionRef }),
   'changes.commitProject': z.object({ ref: sessionRef, message: z.string().min(1).max(10000) }),
   // Пачка окна — до 500 id (500 мс тишины); пустую слать незачем.
   'mail.markRead': z.object({
@@ -360,6 +377,8 @@ export const METHODS = {
   // байтов не видит, поэтому здесь только «не пусто».
   // `requestedAt` — как у `rooms.send`: метка нажатия Send для `queueMs` в журнале хоста.
   'pty.send': z.object({ ref: sessionRef, text: z.string().min(1), submit: z.boolean(), requestedAt: z.number().optional() }),
+  // Видимый экран терминала сессии (панель вопроса в Chat): без `rows` — весь экран, с `rows` — нижние строки; сессии нет — пустой список.
+  'pty.screenText': z.strictObject({ ref: sessionRef, rows: z.number().int().min(1).max(200).optional() }),
   // Отдельная ограниченная проекция острова: никаких renderer path/agentId/limit.
   'feed.progress': z.strictObject({ ref: sessionRef }),
   // Лента вида «Chat» (план 2026-10-01, Task 2, решение 14). `agentId` — лента субагента из его
@@ -395,7 +414,7 @@ export const NOTIFICATIONS = {
   'activity.seen': z.object({ ref: sessionRef }),
 } as const;
 
-export interface Results extends AssistantMethodResults, VoiceMethodResults, CardsMethodResults, TelegramMethodResults, VoiceProviderMethodResults, ConsentMethodResults, CustomProviderMethodResults, CapabilitySkillMethodResults, BacklogMethodResults, CapabilityPluginMethodResults, PlanMethodResults, JournalMethodResults, MemoryMethodResults, HistoryMethodResults, ContextPageMethodResults {
+export interface Results extends KimiMethodResults, AssistantMethodResults, VoiceMethodResults, CardsMethodResults, TelegramMethodResults, VoiceProviderMethodResults, ConsentMethodResults, CustomProviderMethodResults, CapabilitySkillMethodResults, BacklogMethodResults, CapabilityPluginMethodResults, PlanMethodResults, JournalMethodResults, MemoryMethodResults, HistoryMethodResults, ContextPageMethodResults {
   /** `methods` — все методы и уведомления хоста; нет поля — хост до этапа 3 (спека 3.2). */
   /** `features` — что хост умеет сверх протокола 1 (например, компактные снимки): нет поля — хост до P35. */
   hello: { hostVersion: string; protocol: number; pid: number; methods?: string[]; features?: string[] };
@@ -408,11 +427,30 @@ export interface Results extends AssistantMethodResults, VoiceMethodResults, Car
   'providers.refreshLimits': { ok: true };
   /** Версия `update.latest` провайдера помечена пропущенной; пропускать нечего — `bad_request`. */
   'providers.skipUpdate': { ok: true };
+  /** Состояние CLI провайдера после проверки; в пределах 10 с от прошлой проверки — текущее состояние без новой. */
+  'providers.checkUpdates': { cli: CliStatus };
   /**
    * `busy` — обновление этого CLI уже идёт. `done`: `ok` — выход 0 и версия выросла (или равна найденной);
    * `output` — последние 4 КБ stdout и stderr; `manualCommand` — при `ok: false`; `smoke` — пробный запуск Codex с
    * флагами Parley; `runningSessions` — активные сессии этого CLI, они остаются на старой версии до перезапуска.
    */
+  /**
+   * `busy` — установка или обновление этого CLI уже идёт. `done`: `ok` — выход 0, без таймаута, версия у найденного
+   * бинаря и успешная проба; `version` — версия найденного бинаря; `output` — последние 4 КБ вывода установщика;
+   * `error` и `manualCommand` — при `ok: false`; `pathNote` — бинарь найден только по точному ожидаемому пути.
+   */
+  'providers.install':
+    | { state: 'busy' }
+    | {
+        state: 'done';
+        ok: boolean;
+        version: string | null;
+        output: string;
+        error?: string;
+        manualCommand?: string;
+        pathNote?: string;
+        smoke?: { ok: boolean; output: string };
+      };
   'providers.update':
     | { state: 'busy' }
     | {
@@ -441,11 +479,10 @@ export interface Results extends AssistantMethodResults, VoiceMethodResults, Car
       /** Only a masked hint is returned for providers that use a saved key. */
       keyHint?: string | null;
       /**
-       * Trusted built-in CLI family; older hosts omit this field. Temporarily `'claude' | null` only: the window's feed
-       * availability checks type `family` that narrowly, so `'codex'` (Codex accounts, subscriptions spec 5.2, stage 3)
-       * is added in the task that updates those consumers.
+       * Trusted built-in CLI family; older hosts omit this field, and an entry without a family (providers.json) is
+       * `null`. A reader that meets a value it does not know treats it as neutral.
        */
-      family?: 'claude' | null;
+      family?: 'claude' | 'codex' | 'qwen' | 'opencode' | null;
       // Три поля ниже необязательны, как `hello.methods`: хост переживает окно, а `PROTOCOL_VERSION`
       // остаётся 1, поэтому новое окно с хостом, оставшимся с живыми сессиями, получит элементы без
       // них. Нынешний хост отдаёт их всегда; нет поля — окно читает «контрола нет» и «версии нет».
@@ -485,6 +522,19 @@ export interface Results extends AssistantMethodResults, VoiceMethodResults, Car
       custom?: CustomProviderInfo | null;
       /** Новая версия CLI провайдера; `null` — версия не новее, её пропустили или проверки не было. Хост до T2 поля не знает. */
       update?: CliUpdate | null;
+      /** Состояние CLI (claude, codex, qwen; GLM и свои провайдеры делят строку `claude`); хост до этой версии поля не знает. */
+      cli?: CliStatus;
+      /**
+       * Qwen Code only: sign-in hints (spec 2026-11-11, 3.6). Presence and two non-secret strings, never a verdict and never
+       * a secret: `selectedType` and `model` come from `security.auth.selectedType` and `model.name` of the Qwen home's
+       * settings file; the credential file and the env key are reported as presence only. A host before this field omits it.
+       */
+      qwenAuth?: QwenAuthHints | null;
+      /**
+       * OpenCode only (spec 2026-11-12, 4.12): how many integrations `opencode auth list` reports as connected. A count and
+       * nothing else; never stored, never a verdict. `null` — not known yet or the probe failed. A host before this field omits it.
+       */
+      opencodeAuth?: { connected: number } | null;
     }>;
   };
   'providers.setKey': { keyHint: string };
@@ -539,6 +589,8 @@ export interface Results extends AssistantMethodResults, VoiceMethodResults, Car
       needs: string | null;
       limits: ProviderLimits | null;
       transcript: boolean;
+      /** The role change when the session continues on this target; `null` — none. Older hosts omit it. */
+      roleChange?: RoleChange | null;
     }>;
     suggested: string | null;
     keeps: { rooms: number; leads: string[]; owns: string[]; children: number; unread: number; worktree: string | null };
@@ -548,7 +600,12 @@ export interface Results extends AssistantMethodResults, VoiceMethodResults, Car
    * `held` — запуск ждёт согласия (папка Codex); `queued` — запуск ждёт свободного слота машины (очередь, спека ёмкости
    * 4.2); `carried` — как передан контекст.
    */
-  'sessions.switchAgent': { outcome: 'started' | 'held' | 'queued'; carried: 'handover' | 'transcript' };
+  'sessions.switchAgent': {
+    outcome: 'started' | 'held' | 'queued';
+    carried: 'handover' | 'transcript';
+    /** Роль сменилась (id ролей): прежняя не запускается у цели, `to: null` — без роли. Старый хост поля не шлёт. */
+    role?: { from: string; to: string | null };
+  };
   /** Списки отсортированы по имени; у провайдера без поддержки (Codex) — пустые. */
   'capabilities.list': Capabilities;
   'capabilities.get': CapabilitySnapshot;
@@ -559,6 +616,8 @@ export interface Results extends AssistantMethodResults, VoiceMethodResults, Car
   'sessions.resumeInterrupted': { ok: true };
   'pty.attach': { snapshot: string; cols: number; rows: number };
   'pty.detach': { ok: true };
+  'processes.subscribe': SessionProcessesSnapshot;
+  'processes.unsubscribe': { ok: true };
   'wake.pause': { paused: boolean };
   'wake.resume': { paused: boolean };
   'wake.state': { paused: boolean };
@@ -583,6 +642,7 @@ export interface Results extends AssistantMethodResults, VoiceMethodResults, Car
   'rooms.send': { messageId: string };
   'worktrees.available': { available: boolean; gitRoot?: boolean };
   'worktrees.diff': WorktreeDiff;
+  'worktrees.version': { version: string };
   'worktrees.commit': { commit: string };
   'worktrees.merge': MergeResult;
   'worktrees.discard': { ok: true };
@@ -591,9 +651,11 @@ export interface Results extends AssistantMethodResults, VoiceMethodResults, Car
   'worktrees.leftovers': { items: WorktreeLeftover[] };
   'worktrees.removeCopy': RemoveCopyResult;
   'changes.project': ProjectChanges;
+  'changes.version': { version: string };
   'changes.commitProject': { commit: string };
   'mail.markRead': { marked: number };
   'pty.send': SendResult;
+  'pty.screenText': { lines: string[] };
   'feed.progress': ProgressResult;
   /**
    * `schemaVersion` — `FEED_SCHEMA_VERSION` хоста; дальше дельты `feed.changed` по `revision`.

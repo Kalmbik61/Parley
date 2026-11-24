@@ -330,6 +330,20 @@ const STATE_ICON_BACKGROUNDS: Record<string, (theme: Theme) => Rgb> = {
   'выбранная строка активной карточки (--card + --accent)': (theme) => on(theme, '--accent', solid(theme, '--card')),
 };
 
+/** Фоны, на которых стоит кольцо цвета агента (спека доски комнаты 5.1): к фонам значков состояний добавляются лист, меню и карточки участников. */
+const AGENT_RING_BACKGROUNDS: Record<string, (theme: Theme) => Rgb> = {
+  ...STATE_ICON_BACKGROUNDS,
+  'лист (--sheet)': (theme) => solid(theme, '--sheet'),
+  'меню упоминаний (--popover)': (theme) => solid(theme, '--popover'),
+  'карточка участника (currentColor 6 % на листе)': (theme) =>
+    compositeOver(solid(theme, '--foreground'), 0.06, solid(theme, '--sheet')),
+  'карточка участника, blocked (accent-200)': (theme) => solid(theme, '--color-accent-200'),
+  'карточка участника, unseen (accent-2-200)': (theme) => solid(theme, '--color-accent-2-200'),
+  'выбранная строка меню (--accent на --popover)': (theme) => on(theme, '--accent', solid(theme, '--popover')),
+  'выбранная строка меню (--color-text 9 % на --popover)': (theme) =>
+    compositeOver(solid(theme, '--color-text'), 0.09, solid(theme, '--popover')),
+};
+
 describe('значки состояний — не ниже 3:1 к фонам сайдбара в обеих темах, включая hover', () => {
   const ICONS: Array<{ name: string; token: string; skip?: readonly string[] }> = [
     { name: 'idle, pending, спит, закрыта (--state-inactive)', token: '--state-inactive' },
@@ -347,6 +361,14 @@ describe('значки состояний — не ниже 3:1 к фонам с
         if (skip?.includes(background) === true) continue;
         it(`${theme}: ${name} на «${background}»`, () => {
           expect(contrastRatio(solid(theme, token), backdrop(theme))).toBeGreaterThanOrEqual(NON_TEXT);
+        });
+      }
+    }
+
+    for (const [background, backdrop] of Object.entries(AGENT_RING_BACKGROUNDS)) {
+      for (let index = 0; index < 8; index += 1) {
+        it(`${theme}: кольцо цвета агента --agent-colour-${index} на «${background}»`, () => {
+          expect(contrastRatio(solid(theme, `--agent-colour-${index}`), backdrop(theme))).toBeGreaterThanOrEqual(NON_TEXT);
         });
       }
     }
@@ -730,6 +752,14 @@ describe('целостность токенов', () => {
       '--status-success-text',
       '--agent-question',
       '--agent-question-text',
+      '--agent-colour-0',
+      '--agent-colour-1',
+      '--agent-colour-2',
+      '--agent-colour-3',
+      '--agent-colour-4',
+      '--agent-colour-5',
+      '--agent-colour-6',
+      '--agent-colour-7',
       '--work-sidebar',
       '--work-sidebar-foreground',
       '--work-sidebar-accent',

@@ -4,8 +4,9 @@ import { createIngest } from '../notifications/ingest.js';
 import { createNotificationStore } from '../notifications/store.js';
 import { createRequestHandlers } from '../methods/requests.js';
 import { createJobs, type Job, type JobEnd, type JobResult, type JobRun } from './jobs.js';
-import { createRequests, originKeyOf, REQUEST_CONTEXT_LIMIT, type SubmitRequestInput } from './requests.js';
+import { createRequests, LIVE_CONSUMER, originKeyOf, REQUEST_CONTEXT_LIMIT, type SubmitRequestInput } from './requests.js';
 import type { RequestInfo } from '../context.js';
+import { assistantMethodSchemas } from '@parley/protocol';
 
 interface Fake {
   job: Job;
@@ -292,5 +293,141 @@ describe('методы requests.* (локальный остров)', () => {
     expect(listed.requests).toHaveLength(1);
     const revision = listed.requests[0].job.revision;
     expect(await call(handlers, 'requests.ack', { requestId: submitted.request.requestId, consumer: 'island-voice', revision })).toEqual({ ok: true, reason: 'acked' });
+  });
+});
+
+describe('служебный Request (автономия, W2)', () => {
+  const tag = (group: string | null = 'g1') => ({ kind: 'watch' as const, group, fallback: 'S03 replied; the summary is not ready.' });
+  const service = (key: string, over: Partial<SubmitRequestInput> = {}): SubmitRequestInput & { origin: 'system'; service: ReturnType<typeof tag> } => ({
+    conversationId: 'conv-1',
+    voiceSessionId: 'host',
+    delegationId: key,
+    text: `Reply from S03 (${key})`,
+    context: { service: 'watch', key },
+    origin: 'system',
+    service: tag(),
+    ...over,
+  });
+
+  it('RW-04: повтор события — тот же Request; другое событие и та же сессия другой работы — новые', () => {
+    const { requests, db } = setup();
+    const first = requests.submit(service('watch:/p:w-1:s-01:turn:100'));
+    const again = requests.submit(service('watch:/p:w-1:s-01:turn:100'));
+    expect(again).toMatchObject({ created: false, request: { requestId: first.request.requestId, jobId: first.request.jobId } });
+    expect(first.request.originKey).toBe(originKeyOf('host', 'watch:/p:w-1:s-01:turn:100'));
+    const next = requests.submit(service('watch:/p:w-1:s-01:need:permission:2026-11-15T10:00:00.000Z', { service: tag('other') }));
+    const otherWork = requests.submit(service('watch:/p:w-2:s-01:turn:100', { service: tag('w-2') }));
+    expect(next.created).toBe(true);
+    expect(otherWork.created).toBe(true);
+    expect(new Set([first.request.requestId, next.request.requestId, otherWork.request.requestId]).size).toBe(3);
+    expect(count(db, 'assistant_jobs')).toBe(3);
+  });
+
+  it('служебный Request: job system со своим видом, сразу связан как независимый, origin в виде; поручение острова — island', () => {
+    const { requests, jobs } = setup();
+    const own = requests.submit(service('watch:/p:w-1:s-01:turn:100')).request;
+    expect(own).toMatchObject({ origin: 'system', link: { kind: 'independent', supersedes: [] }, gate: 'open', stale: false, context: { service: 'watch' } });
+    expect(jobs.getJob(own.jobId)).toMatchObject({ origin: 'system', service: tag(), correlation: { voiceSessionId: 'host', delegationId: 'watch:/p:w-1:s-01:turn:100' } });
+    expect(requests.submit(input('d1')).request.origin).toBe('island');
+  });
+
+  it('RW-10: служебный Request не держит ворота более старого итога', async () => {
+    const { requests, runs } = setup();
+    const older = requests.submit(input('d1')).request;
+    runs[0]!.end({ ok: true, summary: 'answer', result: done('answer'), outcome: 'completed' });
+    await settled();
+    requests.submit(service('watch:/p:w-1:s-01:turn:100'));
+    expect(requests.get(older.requestId)).toMatchObject({ gate: 'open', heldBy: null });
+  });
+
+  it('RW-10: девять невытесненных служебных не вытесняют более старое человеческое поручение из openBefore (отсечка до LIMIT)', () => {
+    const { requests } = setup();
+    const human = requests.submit(input('d1')).request;
+    // Итоги действий не заменяются и не снимаются переполнением: все девять остаются открытыми и новее человеческого.
+    for (let index = 0; index < 9; index += 1) requests.submit(service(`outcome:p${index}`, { service: { kind: 'outcome', group: null, fallback: 'x' } }));
+    const newer = requests.submit(input('d2')).request;
+    const open = requests.list('conv-1', LIVE_CONSUMER).filter((request) => request.origin === 'system' && !request.stale && request.seq > human.seq && request.seq < newer.seq);
+    expect(open).toHaveLength(9);
+    expect(requests.openBefore('conv-1', newer.seq, 8).map((request) => request.requestId)).toEqual([human.requestId]);
+  });
+
+  it('RPC requests.submit не принимает origin; ключ host зарезервирован за хостом', async () => {
+    expect(assistantMethodSchemas['requests.submit'].safeParse({ ...input('d1'), origin: 'system' }).success).toBe(false);
+    expect(assistantMethodSchemas['requests.submit'].safeParse(input('d1')).success).toBe(true);
+    const { requests, db } = setup();
+    expect(() => requests.submit(input('watch:/p:w-1:s-01:turn:100', { voiceSessionId: 'host' }))).toThrow(/reserved/);
+    expect(count(db, 'assistant_jobs')).toBe(0);
+  });
+
+  it('замена по сессии: прежний Request неактуален, его job отменён; новый снимок знает, сколько ответов было', () => {
+    const { requests, jobs } = setup();
+    // Занят единственный служебный слот: события ждут в очереди.
+    requests.submit(service('outcome:p1', { service: { kind: 'outcome', group: null, fallback: 'x' } }));
+    const first = requests.submit(service('watch:/p:w-1:s-01:turn:1')).request;
+    const second = requests.submit(service('watch:/p:w-1:s-01:turn:2')).request;
+    const third = requests.submitService(service('watch:/p:w-1:s-01:turn:3'));
+    expect(requests.get(first.requestId)).toMatchObject({ stale: true, supersededBy: second.requestId, version: 2 });
+    expect(jobs.getJob(first.jobId)?.state).toBe('cancelled');
+    expect(second.context).toMatchObject({ earlierReplies: 1 });
+    expect(third?.request.context).toMatchObject({ earlierReplies: 2 });
+    expect(third?.overflow).toEqual([]);
+  });
+
+  it('переполнение: старейшее ждущее событие снято, Request неактуален и возвращён для заметки', () => {
+    const { requests, jobs } = setup();
+    requests.submit(service('outcome:p1', { service: { kind: 'outcome', group: null, fallback: 'x' } }));
+    const waiting = Array.from({ length: 5 }, (_, index) => requests.submit(service(`watch:/p:w-1:s-0${index}:turn:1`, { service: tag(`g${index}`) })).request);
+    const sixth = requests.submitService(service('watch:/p:w-1:s-09:turn:1', { service: tag('g9') }));
+    expect(sixth?.overflow.map((request) => request.requestId)).toEqual([waiting[0]!.requestId]);
+    expect(sixth?.overflow[0]).toMatchObject({ stale: true, context: { key: 'watch:/p:w-1:s-00:turn:1' } });
+    expect(jobs.getJob(waiting[0]!.jobId)?.state).toBe('cancelled');
+    expect(waiting.slice(1).map((request) => jobs.getJob(request.jobId)?.state)).toEqual(['queued', 'queued', 'queued', 'queued']);
+  });
+
+  it('ключ служебного Request занят чужим job (телефон прислал тот же idempotencyKey) — отказ, guard откатан', () => {
+    const { requests, jobs, db } = setup();
+    db.exec('CREATE TABLE marks (id TEXT)');
+    jobs.submitJob({ origin: 'mobile', text: 'x', idempotencyKey: `request:${originKeyOf('host', 'outcome:p1')}`, correlation: { mode: 'text' } });
+    const guard = () => {
+      db.prepare('INSERT INTO marks (id) VALUES (?)').run('m');
+      return true;
+    };
+    expect(() => requests.submitService(service('outcome:p1'), guard)).toThrow(/taken/);
+    expect(count(db, 'marks')).toBe(0);
+    expect(count(db, 'assistant_requests')).toBe(0);
+  });
+
+  it('dropService (возврат после limit): снятые неактуальны, их считает более новое событие той же сессии; снятые переполнением — для заметки', () => {
+    const { requests, jobs } = setup();
+    const old = requests.submit(service('watch:/p:w-1:s-01:turn:1')).request;
+    const newer = requests.submit(service('watch:/p:w-1:s-01:turn:2')).request;
+    const other = requests.submit(service('watch:/p:w-1:s-02:turn:1', { service: tag('g2') })).request;
+    expect(jobs.getJob(old.jobId)?.state).toBe('running');
+    const overflow = requests.dropService([
+      { jobId: old.jobId, reason: 'replaced', by: newer.jobId },
+      { jobId: other.jobId, reason: 'overflow', by: newer.jobId },
+    ]);
+    expect(requests.get(old.requestId)).toMatchObject({ stale: true, supersededBy: newer.requestId });
+    expect(requests.get(newer.requestId)?.context).toMatchObject({ earlierReplies: 1 });
+    expect(overflow.map((request) => request.requestId)).toEqual([other.requestId]);
+    expect(requests.dropService([{ jobId: other.jobId, reason: 'overflow', by: newer.jobId }])).toEqual([]);
+  });
+
+  it('submitService: guard в той же транзакции; false — ничего не создано; сбой вставки откатывает и guard', () => {
+    const { requests, db } = setup();
+    db.exec('CREATE TABLE marks (id TEXT)');
+    const mark = () => {
+      db.prepare('INSERT INTO marks (id) VALUES (?)').run('m');
+      return true;
+    };
+    expect(requests.submitService(service('outcome:p1'), () => false)).toBeNull();
+    expect(count(db, 'assistant_jobs')).toBe(0);
+    db.exec(`CREATE TRIGGER fail_requests BEFORE INSERT ON assistant_requests BEGIN SELECT RAISE(ABORT, 'disk full'); END`);
+    expect(() => requests.submitService(service('outcome:p1'), mark)).toThrow(/disk full/);
+    expect(count(db, 'marks')).toBe(0);
+    expect(count(db, 'assistant_jobs')).toBe(0);
+    db.exec('DROP TRIGGER fail_requests');
+    expect(requests.submitService(service('outcome:p1'), mark)?.created).toBe(true);
+    expect(count(db, 'marks')).toBe(1);
   });
 });

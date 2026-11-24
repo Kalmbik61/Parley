@@ -47,14 +47,13 @@ const message = (id: string, at: string, patch: Partial<Message> = {}): Message 
  * Строка комнаты из настоящих `cardRows` и `archivedRows`: тесты берут ту же форму данных, что даёт карточка. Без
  * `roomId` — первая из основных строк (архивные идут после них).
  */
-function roomRowOf(entry: WindowWorkEntry, showClosed = false, roomId?: string): CardRoomRow {
-  const found = [...cardRows(entry.map, showClosed), ...archivedRows(entry.map, showClosed)].find((row): row is CardRoomRow => row.kind === 'room' && (roomId === undefined || row.room.id === roomId));
+function roomRowOf(entry: WindowWorkEntry, roomId?: string): CardRoomRow {
+  const found = [...cardRows(entry.map), ...archivedRows(entry.map)].find((row): row is CardRoomRow => row.kind === 'room' && (roomId === undefined || row.room.id === roomId));
   if (found === undefined) throw new Error('строки комнаты нет');
   return found;
 }
 
 interface Options extends Partial<Omit<RoomRowProps, 'row'>> {
-  showClosed?: boolean;
   /** Какая из комнат карты — строка (по умолчанию первая). */
   roomId?: string;
   /** Обработчик клика предка — карточки: строка комнаты не должна отдавать ему клики шеврона и участников. */
@@ -62,7 +61,7 @@ interface Options extends Partial<Omit<RoomRowProps, 'row'>> {
 }
 
 function renderRow(entry: WindowWorkEntry, options: Options = {}) {
-  const { showClosed, roomId, onParentClick, ...props } = options;
+  const { roomId, onParentClick, ...props } = options;
   return render(
     <div onClick={onParentClick}>
       <RoomRow
@@ -70,7 +69,7 @@ function renderRow(entry: WindowWorkEntry, options: Options = {}) {
         projectPath={PROJECT}
         workId={WORK}
         bridge={BRIDGE}
-        row={roomRowOf(entry, showClosed, roomId)}
+        row={roomRowOf(entry, roomId)}
         mentioned={false}
         activity={{}}
         now={NOW}
@@ -214,7 +213,7 @@ describe('RoomRow — свёрнутая (1.2)', () => {
     }
   });
 
-  it('счётчик — число ВСЕХ агентов провайдера в комнате, не только запущенных (решение 7); тултип — «N Claude Code agents»', () => {
+  it('счётчик — агенты провайдера, что стоят строками развёрнутой комнаты: не только запущенные (решение 7), закрытых среди них нет (они в блоке «Closed sessions»); тултип — «N Claude Code agents»', () => {
     const mixed = fourAgents(
       { members: ['s-01', 's-02', 's-03', 's-04'] },
       {
@@ -226,14 +225,20 @@ describe('RoomRow — свёрнутая (1.2)', () => {
         ],
       },
     );
+    const counts = (): number => badges().reduce((sum, badge) => sum + Number(badge.querySelector('[data-provider-count]')?.textContent), 0);
     renderRow(mixed);
     const [claude, codex] = badges();
     expect(claude?.getAttribute('data-provider-badge')).toBe('claude');
-    expect(claude?.querySelector('[data-provider-count]')?.textContent).toBe('3');
-    expect(claude?.getAttribute('title')).toBe('3 Claude Code agents');
+    expect(claude?.querySelector('[data-provider-count]')?.textContent).toBe('2');
+    expect(claude?.getAttribute('title')).toBe('2 Claude Code agents');
     expect(codex?.getAttribute('data-provider-badge')).toBe('codex');
     expect(codex?.querySelector('[data-provider-count]')?.textContent).toBe('1');
     expect(codex?.getAttribute('title')).toBe('1 Codex agent');
+    const collapsedTotal = counts();
+    cleanup();
+    useUiStore.getState().setRoomExpanded(roomKey(KEY, 'r-01'), true);
+    renderRow(mixed);
+    expect(memberRows()).toHaveLength(collapsedTotal);
   });
 
   it('значок провайдера без слова рядом называет себя для скринридера (alt = тултип); провайдеры — по алфавиту, порядок записи не важен', () => {
@@ -315,6 +320,30 @@ describe('RoomRow — свёрнутая (1.2)', () => {
 describe('RoomRow — развёрнутая (1.2)', () => {
   const expand = (): void => useUiStore.getState().setRoomExpanded(roomKey(KEY, 'r-01'), true);
 
+  it('участник получает цвет значка ветки из branchColors, без карты значок вторичный', () => {
+    expand();
+    const wt = (id: string) => ({ path: `/tmp/${id}`, branch: `parley/w/${id}`, base: 'main', createdAt: null });
+    const entry = fourAgents(
+      {},
+      {
+        sessions: [
+          makeSession('s-01', 'a', { worktree: wt('s-01') }),
+          makeSession('s-02', 'b', { worktree: wt('s-02') }),
+          makeSession('s-03', 'c'),
+          makeSession('s-04', 'd'),
+        ],
+      },
+    );
+    const badgeOf = (id: string): Element | null => memberRows().find((row) => row.getAttribute('data-session-id') === id)?.querySelector('[data-worktree]') ?? null;
+    renderRow(entry, { branchColors: new Map([['main', 4]]) });
+    expect(badgeOf('s-01')?.getAttribute('data-branch-color')).toBe('5');
+    expect(badgeOf('s-02')?.getAttribute('data-branch-color')).toBe('5');
+    expect(badgeOf('s-03')).toBeNull();
+    cleanup();
+    renderRow(entry);
+    expect(badgeOf('s-01')?.hasAttribute('data-branch-color')).toBe(false);
+  });
+
   it('строки участников 26px, как строки сессий, но с отступом слева 18 и без правого поля; значков-счётчиков нет', () => {
     expand();
     renderRow(fourAgents());
@@ -348,7 +377,7 @@ describe('RoomRow — развёрнутая (1.2)', () => {
   it('ведущий — roomLiveLead: закрытого назначенного подменяет первый живой; у старой карты без lead — первый из members', () => {
     expand();
     const closedLead = fourAgents({ lead: 's-01' }, { sessions: [makeSession('s-01', 'a', { lifecycle: 'closed' }), ...sessions('s-02', 's-03', 's-04')] });
-    renderRow(closedLead, { showClosed: true });
+    renderRow(closedLead);
     expect(rowEl().querySelector('[data-lead]')?.closest('[data-session-id]')?.getAttribute('data-session-id')).toBe('s-02');
     cleanup();
     renderRow(fourAgents({ lead: null, members: ['s-03', 's-02'] }));
@@ -372,15 +401,11 @@ describe('RoomRow — развёрнутая (1.2)', () => {
     expect(useUiStore.getState().roomExpanded[roomKey(KEY, 'r-01')]).toBe(true);
   });
 
-  it('закрытые участники — строками только при показанных закрытых (showClosed)', () => {
+  it('закрытые участники строками комнаты не выводятся — они в блоке «Closed sessions»', () => {
     expand();
     const entry = fourAgents({}, { sessions: [...sessions('s-01', 's-02', 's-03'), makeSession('s-04', 'd', { lifecycle: 'closed' })] });
     renderRow(entry);
     expect(memberRows().map((row) => row.getAttribute('data-session-id'))).toEqual(['s-01', 's-02', 's-03']);
-    cleanup();
-    renderRow(entry, { showClosed: true });
-    expect(memberRows().map((row) => row.getAttribute('data-session-id'))).toEqual(['s-01', 's-02', 's-03', 's-04']);
-    expect(memberRows()[3]?.getAttribute('data-dimmed')).toBe('row');
   });
 
   it('участники тащатся только в активной работе, выбранный помечен', () => {

@@ -24,6 +24,7 @@ import type {
   PlanWaitingFor,
 } from './plan-state.js';
 import { isMember, isRoomArchived, isRoomClosed, liveLead } from './rooms.js';
+import { planVerifierUnavailable } from './plans.js';
 import type {
   PlanCheckpoint,
   PlanEvidence,
@@ -248,7 +249,12 @@ function collect(
           finished.push({ plan, item, role: 'verifier' });
         continue;
       }
-      for (const duty of planItemDuties(plan, item, lead))
+      for (const duty of planItemDuties(
+        plan,
+        item,
+        lead,
+        planVerifierUnavailable(map, room, item),
+      ))
         if (duty.sessionId === sessionId)
           tasks.push(task(plan, room, item, duty));
     }

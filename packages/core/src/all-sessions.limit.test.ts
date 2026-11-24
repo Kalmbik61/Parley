@@ -2,6 +2,8 @@ import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { IndexReuse } from './index-reuse.js';
+import type { SessionIndex } from './session-index.js';
 
 /**
  * Подставной читатель со счётчиком (раунд lane-r3, п. 1): все файлы индекса читает
@@ -40,6 +42,7 @@ vi.mock('node:fs', async (importOriginal) => {
 });
 
 const { buildAllSessions } = await import('./all-sessions.js');
+const { appendFile } = await import('node:fs/promises');
 
 let claudeRoot: string;
 let codexRoot: string;
@@ -121,5 +124,75 @@ describe('buildAllSessions — остановка (2026-10-06)', () => {
       name: 'AbortError',
     });
     expect(reads.total).toBe(0);
+  });
+});
+
+/** Кэш в памяти: `old` — что видел прошлый запуск, `fresh` — что кладёт текущая сборка. */
+function memoryReuse(old: Map<string, { key: string; index: SessionIndex }>) {
+  const fresh = new Map<string, { key: string; index: SessionIndex }>();
+  const reuse: IndexReuse = {
+    get: (file, key) => (old.get(file)?.key === key ? old.get(file)?.index : undefined),
+    put: (file, key, index) => void fresh.set(file, { key, index }),
+  };
+  return { reuse, fresh };
+}
+
+describe('buildAllSessions — reuse (кэш между запусками)', () => {
+  it('reuse: файл с совпавшим ключом не открывается', async () => {
+    await writeHistory(6);
+    const first = memoryReuse(new Map());
+    const built = await buildAllSessions({ claudeRoot, codexRoot, reuse: first.reuse });
+    expect(reads.total).toBe(12);
+    const before = reads.total;
+
+    const second = memoryReuse(first.fresh);
+    const again = await buildAllSessions({ claudeRoot, codexRoot, reuse: second.reuse });
+
+    expect(reads.total - before).toBe(0);
+    expect(again).toEqual(built);
+    expect(second.fresh.size).toBe(12);
+  });
+
+  it('reuse: дописанный файл и новый подагент читаются заново, остальные — нет', async () => {
+    await writeHistory(4);
+    const first = memoryReuse(new Map());
+    await buildAllSessions({ claudeRoot, codexRoot, reuse: first.reuse });
+    const before = reads.total;
+
+    await appendFile(path.join(claudeRoot, '-proj', 'c01.jsonl'), line({ type: 'user', sessionId: 'c01', timestamp: '2026-03-10T11:00:00.000Z', message: { role: 'user' } }));
+    // Подагент у сессии, чей главный файл не менялся: ключ включает подагентов.
+    await mkdir(path.join(claudeRoot, '-proj', 'c02', 'subagents'), { recursive: true });
+    await writeFile(
+      path.join(claudeRoot, '-proj', 'c02', 'subagents', 'agent-a1.jsonl'),
+      line({ type: 'user', sessionId: 'c02', timestamp: '2026-03-10T11:00:00.000Z', message: { role: 'user' } }),
+    );
+    const second = memoryReuse(first.fresh);
+    const again = await buildAllSessions({ claudeRoot, codexRoot, reuse: second.reuse });
+
+    // c01: один файл; c02: главный файл и подагент.
+    expect(reads.total - before).toBe(3);
+    expect(again.find((session) => session.id === 'c01')?.records).toBe(2);
+  });
+
+  it('reuse: файл, дописанный во время чтения, при следующей сборке читается снова', async () => {
+    // Одна сессия Claude: её чтение первое в сборке (Claude строится до Codex).
+    await writeHistory(1);
+    const target = path.join(claudeRoot, '-proj', 'c00.jsonl');
+    const first = memoryReuse(new Map());
+    let appending: Promise<void> | undefined;
+    reads.onOpen = () => {
+      // Ключ снимается до открытия потока: дозапись после него обязана сделать ключ устаревшим.
+      appending ??= appendFile(target, line({ type: 'user', sessionId: 'c00', timestamp: '2026-03-10T12:00:00.000Z', message: { role: 'user' } }));
+    };
+    await buildAllSessions({ claudeRoot, codexRoot, reuse: first.reuse });
+    reads.onOpen = undefined;
+    await appending;
+    const before = reads.total;
+
+    const second = memoryReuse(first.fresh);
+    await buildAllSessions({ claudeRoot, codexRoot, reuse: second.reuse });
+
+    // Перечитан ровно дописанный файл; rollout Codex взят из кэша.
+    expect(reads.total - before).toBe(1);
   });
 });

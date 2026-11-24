@@ -1,8 +1,10 @@
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
-import { defaultCodexRoot, discoverCodexSessions } from '../codex/discover.js';
+import { codexLogId, defaultCodexRoot, discoverCodexSessions } from '../codex/discover.js';
 import { indexCodexSession } from '../codex/index-session.js';
-import { claudeRootFor, discoverSession, discoverSessions } from '../discover.js';
+import { defaultQwenRoot, discoverQwenSessions, qwenLogId } from '../qwen/discover.js';
+import { indexQwenSession } from '../qwen/index-session.js';
+import { claudeRootFor, discoverSession, discoverSessions, findClaudeSessionFile } from '../discover.js';
 import { isClaudeCode, type ProviderEntry } from '../providers.js';
 import { indexSessionFile, type SessionIndex } from '../session-index.js';
 import { setResult, transitionSession } from './map.js';
@@ -15,6 +17,7 @@ import type { SessionMetrics, SessionResult, WorkMap, WorkProvider, WorkSession 
 export interface MetricsRoots {
   claudeRoot?: string;
   codexRoot?: string;
+  qwenRoot?: string;
 }
 
 /** Метрики живой сессии: в карту не пишутся, пересчитываются при чтении (спецификация, раздел 6). */
@@ -51,6 +54,12 @@ function adapterFor(provider: WorkProvider, roots: MetricsRoots) {
     return {
       list: async (): Promise<ProviderLog[]> =>
         (await discoverSessions(root)).map((session) => ({ id: session.id, file: session.file })),
+      // Известный путь берётся, если имя файла — id сессии; иначе одиночный поиск `<проект>/<id>.jsonl`
+      // (readdir корня и lstat по проектам), без обхода подагентов каждого файла истории.
+      find: async (id: string, known?: string | null): Promise<string | null> => {
+        if (known != null && path.basename(known) === `${id}.jsonl` && (await isFile(known))) return known;
+        return findClaudeSessionFile(id, [root]);
+      },
       // Для Claude id сессии в карте — uuid jsonl-файла (спецификация, раздел 3). Подагентов читаем, только
       // когда нужны их токены: привязке по времени они ни к чему.
       index: async (file: string, withDescendants = false): Promise<SessionIndex> =>
@@ -69,11 +78,37 @@ function adapterFor(provider: WorkProvider, roots: MetricsRoots) {
           id: session.id,
           file: session.file,
         })),
+      // Известный путь — по имени rollout-файла; иначе прежний обход каталогов дней (только readdir).
+      find: async (id: string, known?: string | null): Promise<string | null> => {
+        if (known != null && codexLogId(path.basename(known)) === id && (await isFile(known))) return known;
+        return (await discoverCodexSessions(root)).find((candidate) => candidate.id === id)?.file ?? null;
+      },
       // Потомков Codex (порождённые треды) по родителю в одиночном разборе не найти: их складывает хост.
       index: (file: string): Promise<SessionIndex> => indexCodexSession(file),
     };
   }
+  if (provider === 'qwen') {
+    const root = roots.qwenRoot ?? defaultQwenRoot();
+    return {
+      list: async (): Promise<ProviderLog[]> =>
+        (await discoverQwenSessions(root)).map((session) => ({ id: session.id, file: session.file })),
+      // A known path is taken by its name; otherwise a walk of `<root>/<project>/chats` (readdir only).
+      find: async (id: string, known?: string | null): Promise<string | null> => {
+        if (known != null && qwenLogId(path.basename(known)) === id.toLowerCase() && (await isFile(known))) return known;
+        return (await discoverQwenSessions(root)).find((candidate) => candidate.id === id.toLowerCase())?.file ?? null;
+      },
+      index: (file: string): Promise<SessionIndex> => indexQwenSession(file),
+    };
+  }
   return null;
+}
+
+async function isFile(file: string): Promise<boolean> {
+  try {
+    return (await stat(file)).isFile();
+  } catch {
+    return false;
+  }
 }
 
 /** Индекс сессии в метрики карты: длительность, четыре счётчика, вызовы по именам. */
@@ -94,14 +129,15 @@ export async function readSessionMetrics(
   provider: WorkProvider,
   providerSessionId: string,
   roots: MetricsRoots = {},
+  knownFile: string | null = null,
 ): Promise<LiveSessionMetrics | null> {
   const adapter = adapterFor(provider, roots);
   if (adapter === null) return null;
 
-  const log = (await adapter.list()).find((candidate) => candidate.id === providerSessionId);
-  if (log === undefined) return null;
+  const file = await adapter.find(providerSessionId, knownFile);
+  if (file === null) return null;
 
-  const index = await adapter.index(log.file, true);
+  const index = await adapter.index(file, true);
   return {
     metrics: metricsOf(index),
     lastRecordAt: index.endedAt,
@@ -192,6 +228,8 @@ export function silenceMs(lastRecordAt: string | null, now: number = Date.now())
 export type FinalStatus = SessionResult | 'sleeping';
 
 export interface FinishOptions extends MetricsRoots, TransitionOptions {
+  /** Лог сессии, который хост уже знает по индексу логов: итоговые метрики читаются без поиска по истории. */
+  logFileOf?: (session: WorkSession) => string | null;
   /** Сколько ждать занятую базу (`busy_timeout`) при записи перехода (кусок 1.4 хоста: сверка живости работ). */
   lockTimeoutMs?: number;
 }
@@ -220,6 +258,10 @@ export async function finishSession(
     projectPath,
     workId,
     (map) => {
+      // Выход процесса и сверка живости могут усыпить одну сессию внахлёст: вторая запись пустая, не ошибка.
+      if (to === 'sleeping' && map.sessions.find((candidate) => candidate.id === sessionId)?.lifecycle === 'sleeping') {
+        return;
+      }
       const target =
         to === 'sleeping'
           ? transitionSession(map, sessionId, to, options)
@@ -269,10 +311,10 @@ export async function sleepSessions(
 }
 
 /** Итоговые метрики сессии из лога провайдера; `null` — сессия не привязана к логу или лога нет. */
-async function measureFinal(session: WorkSession, roots: MetricsRoots): Promise<LiveSessionMetrics | null> {
+async function measureFinal(session: WorkSession, options: FinishOptions): Promise<LiveSessionMetrics | null> {
   return session.providerSessionId === null
     ? null
-    : readSessionMetrics(session.provider, session.providerSessionId, roots);
+    : readSessionMetrics(session.provider, session.providerSessionId, options, options.logFileOf?.(session) ?? null);
 }
 
 /** Пишет итоговые метрики в запись сессии; `seen` — сессия, какой она была при чтении лога. */

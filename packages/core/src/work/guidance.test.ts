@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { TOOLS as PARLEY_TOOLS } from '../mcp/tools.js';
 import { MCP_SERVER_NAME } from '../names.js';
+import { BUILTIN_ROLES } from '../roles/builtin.js';
 import { LEAD_ROLE, memberRole } from './brief.js';
 import { GUIDE, guideTopic } from './guide.js';
 import { SKILL_MD } from './skill.js';
@@ -118,6 +119,8 @@ describe('системная вставка', () => {
     expect(line).toContain('wait_for("inbox", 1500)');
     expect(line).not.toContain('1800');
     expect(line).toContain('no text before or after');
+    // Ожидание — в том же сообщении, что и вызов перед ним: отдельное сообщение ради wait_for — лишний ответ модели.
+    expect(line).toContain('wait_for("inbox", 1500) in one message with the call it follows; no text before or after');
     expect(line).toMatch(/no Monitor, sleep or loops/);
     // Буквальное {"state":"running"}: Codex иначе путает его со своим «Script running with cell ID».
     expect(line).toContain('on {"state":"running"} repeat once, then end the turn without report (not done)');
@@ -157,7 +160,7 @@ describe('системная вставка', () => {
     const line = stableGuidance().split('\n').find((candidate) => candidate.startsWith('close_session'));
 
     expect(line).toBe(
-      'close_session — yours: after the human\'s "wrap up" or, if work.closeFinished, once accepted; sessions you created: once accepted; autonomous stage 1: the engine creates and closes sessions.',
+      'close_session — yours: after the human\'s "wrap up" or, if work.closeFinished, after report(done); sessions you created: once accepted; autonomous stage 1: the engine creates and closes sessions.',
     );
     expect(systemGuidance(mapOf('Authorization', 'login by e-mail'), 's-03').split('\n').length).toBeLessThanOrEqual(14);
   });
@@ -217,7 +220,7 @@ describe('системная вставка', () => {
     const text = systemGuidance(mapOf('Authorization', 'login by e-mail'), 's-03');
 
     expect(text).toMatch(
-      /a participant speaks up in one message, waits for their part and reports to the lead in the room/,
+      /a participant speaks up in one message, waits for their part and hands it in with report/,
     );
   });
 
@@ -367,14 +370,16 @@ describe('подробный гид', () => {
     expect(tools).not.toMatch(/it does not change a sleeping session that a message woke up/);
   });
 
-  it('комнаты: add_to_room — только ведущий, одна комната на сессию, строка «joined the room», письма новому нет', () => {
+  it('комнаты: add_to_room — только ведущий, одна комната на сессию, строка «joined the room», новичку — записка, а не история', () => {
     const lead = sectionOf('### The lead and the decision', '### Room participant');
 
     expect(lead).toContain('`add_to_room(room, session)`');
     expect(lead).toContain('an existing executor');
     expect(lead).toMatch(/one room per\s+session/);
     expect(lead).toContain('`@s04 joined the room`');
-    expect(lead).toMatch(/The new participant does not get a message about\s+being added/);
+    expect(lead).toContain(
+      'The new participant gets a short note from Parley — who added it, the lead, how many earlier messages there are and that `read_room` reads them — not the room\'s history',
+    );
     expect(lead).toMatch(
       /A non-lead, a closed\s+room, a foreign or closed session, and an existing participant are an error/,
     );
@@ -436,7 +441,7 @@ describe('подробный гид', () => {
     expect(GUIDE).toContain('### Room participant');
     expect(GUIDE).toMatch(/Speak up in one message/);
     expect(GUIDE).toMatch(/Wait for your part: do not start the work/);
-    expect(GUIDE).toMatch(/Report to the lead in the room/);
+    expect(GUIDE).toMatch(/When your part is done, call `report`/);
   });
 
   it('комнаты, ведущему: пока решение ждёт, новое сообщение человека всем цикл не перезапускает', () => {
@@ -917,8 +922,8 @@ it('uses personal plans for quiet progress and reserves owner pings for material
   const text = stableGuidance();
   expect(text).toContain('Before multi-step work, publish_agent_plan');
   expect(text).toContain('Personal plans do not message anyone');
-  expect(text).toContain('blockers needing intervention');
-  expect(text).toContain('skip routine steps, test counts and acknowledgements');
+  expect(text).toContain("A lead's report reaches the room owner");
+  expect(text).toContain('only about blockers, changed agreements or cross-room dependencies, not routine steps');
 });
 
 describe('профиль short, примеры для Codex и правило остановки', () => {
@@ -938,7 +943,7 @@ describe('профиль short, примеры для Codex и правило о
 
   it('CODEX_TOOL_EXAMPLES names real tools and real argument keys', () => {
     const calls = [...CODEX_TOOL_EXAMPLES.matchAll(/tools\.mcp__parley__(\w+)\((\{[^)]*\})?/g)];
-    expect(calls.map((m) => m[1])).toEqual(['get_map', 'send_message', 'check_inbox', 'wait_for', 'report']);
+    expect(calls.map((m) => m[1])).toEqual(['get_map', 'send_message', 'check_inbox', 'wait_for', 'wait_for', 'report']);
     for (const [, name, args] of calls) {
       const tool = PARLEY_TOOLS.find((t) => t.name === name)!;
       expect(tool, name).toBeDefined();
@@ -946,6 +951,11 @@ describe('профиль short, примеры для Codex и правило о
     }
     // Пример ожидания — одно длинное и помечающее прочитанным (как вставка): 1500 с, не 600 и не 1800.
     expect(CODEX_TOOL_EXAMPLES).toContain('wait_for({ target: "inbox", timeoutSec: 1500 }); // returns and marks messages read; on running repeat once');
+    // Скрипт, который ждёт, начинается с прагмы `@exec` и держит вызов перед ожиданием вместе с ним; при повторном yield — один `wait` с тем же сроком.
+    expect(CODEX_TOOL_EXAMPLES).toContain('A waiting exec script starts with `// @exec: {"yield_time_ms": 1560000}` and holds the call it follows and the wait: send_message, then text(await tools.mcp__parley__wait_for({ target: "inbox", timeoutSec: 1500 })).');
+    expect(CODEX_TOOL_EXAMPLES).toContain('If exec still yields, call wait once with that yield_time_ms.');
+    // 1560000 мс = 1500 с ожидания и минута запаса.
+    expect(1560000).toBe((1500 + 60) * 1000);
     expect(CODEX_TOOL_EXAMPLES.split('\n').length).toBeLessThanOrEqual(8);
     expect(Buffer.byteLength(CODEX_TOOL_EXAMPLES)).toBeLessThanOrEqual(1024);
     expect(CODEX_TOOL_EXAMPLES).not.toMatch(/[А-Яа-яЁё]/);
@@ -954,5 +964,33 @@ describe('профиль short, примеры для Codex и правило о
   it('stable guidance ends the report line with the stop rule', () => {
     expect(stableGuidance()).toMatch(/Call report before finishing, then end the turn; without it the result goes nowhere\.$/m);
     expect(stableGuidance({ toolProfile: 'short' })).toMatch(/Call report before finishing, then end the turn; without it the result goes nowhere\.$/m);
+  });
+
+  it('ни один текст агенту не держит прежнее правило сдачи', () => {
+    const texts = [
+      GUIDE,
+      stableGuidance(),
+      CODEX_TOOL_EXAMPLES,
+      LEAD_ROLE,
+      memberRole('@s03'),
+      SKILL_MD,
+      ...BUILTIN_ROLES.map((role) => role.prompt),
+      ...PARLEY_TOOLS.map((tool) => tool.description ?? ''),
+    ];
+    const old = [
+      'report to the lead in the room',
+      'once your part is accepted',
+      'A room member reports in the room',
+      'exactly once at the end',
+      'batch evidence',
+      'also mails the session that last tasked you',
+    ];
+    for (const text of texts) {
+      for (const phrase of old) expect(text.toLowerCase(), phrase).not.toContain(phrase.toLowerCase());
+    }
+    // Новое правило: кого будит report.
+    for (const text of [stableGuidance(), CODEX_TOOL_EXAMPLES, SKILL_MD]) {
+      expect(text).toContain('notifies your room lead, room owner or task giver');
+    }
   });
 });

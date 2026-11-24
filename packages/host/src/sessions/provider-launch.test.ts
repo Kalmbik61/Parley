@@ -49,7 +49,7 @@ function service(
       return { ref, pid: process.pid };
     },
   } as unknown as PtyManager;
-  return createSessionsService(host, { onChange: () => () => {} } as unknown as WorksService, pty, { markSeen() {}, watchClaudeRoot } as unknown as ActivityService, {
+  return createSessionsService(host, { onChange: () => () => {} } as unknown as WorksService, pty, { markSeen() {}, logFile: () => null, watchClaudeRoot } as unknown as ActivityService, {
     providerVersions: { ready: Promise.resolve(), get: () => version, fresh: probe },
     hooks: { url: hookUrl, register, unregister() {} },
     ...(signedIn === undefined ? {} : { signedIn }),

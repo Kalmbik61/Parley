@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { UpdateState } from '../../shared/bridge.js';
 import { createFakeBridge } from './fake-bridge.js';
 
 describe('fake-bridge: files и openPath (кусок 5.2)', () => {
@@ -124,39 +125,52 @@ describe('fake-bridge: git, поиск и слежение (кусок 7.1b)', (
   });
 });
 
-describe('fake-bridge: onUpdateAvailable (V6 плана релиза 0.1.0)', () => {
-  const info = { version: '0.2.0', url: 'https://github.com/Kalmbik61/Parley/releases/tag/v0.2.0' };
+describe('fake-bridge: состояние самообновления (спека self-update §5.1)', () => {
+  const available: UpdateState = {
+    phase: 'available',
+    version: '0.2.0',
+    url: 'https://github.com/Kalmbik61/Parley/releases/tag/v0.2.0',
+    canInstall: true,
+  };
 
-  it('emitUpdate доходит до подписчиков; после отписки — нет', () => {
+  it('onUpdateState: подписчик сразу получает текущее состояние; emitUpdateState доходит до подписчиков, после отписки — нет', () => {
     const bridge = createFakeBridge();
     const got: unknown[] = [];
-    const off = bridge.app.onUpdateAvailable((update) => got.push(update));
+    const off = bridge.app.onUpdateState((state) => got.push(state));
+    expect(got).toEqual([{ phase: 'idle' }]);
 
-    bridge.emitUpdate(info);
+    bridge.emitUpdateState(available);
     off();
-    bridge.emitUpdate({ ...info, version: '0.3.0' });
+    bridge.emitUpdateState({ phase: 'idle' });
 
-    expect(got).toEqual([info]);
+    expect(got).toEqual([{ phase: 'idle' }, available]);
   });
 
-  it('setPendingUpdate: каждый новый подписчик получает найденное сразу, как через app:get-update; null — ничего', () => {
+  it('setUpdateState: новый подписчик и getUpdateState видят его без события', async () => {
     const bridge = createFakeBridge();
     const first: unknown[] = [];
-    bridge.app.onUpdateAvailable((update) => first.push(update));
-    expect(first).toEqual([]);
+    bridge.app.onUpdateState((state) => first.push(state));
 
-    bridge.setPendingUpdate(info);
+    bridge.setUpdateState(available);
     const second: unknown[] = [];
-    const third: unknown[] = [];
-    bridge.app.onUpdateAvailable((update) => second.push(update));
-    bridge.app.onUpdateAvailable((update) => third.push(update));
-    expect(second).toEqual([info]);
-    expect(third).toEqual([info]);
+    bridge.app.onUpdateState((state) => second.push(state));
 
-    bridge.setPendingUpdate(null);
-    const fourth: unknown[] = [];
-    bridge.app.onUpdateAvailable((update) => fourth.push(update));
-    expect(fourth).toEqual([]);
+    expect(first).toEqual([{ phase: 'idle' }]);
+    expect(second).toEqual([available]);
+    await expect(bridge.app.getUpdateState()).resolves.toEqual(available);
+  });
+
+  it('вызовы моста пишутся в updateCalls по порядку; takeUpdateResult отдаёт итог один раз', async () => {
+    const bridge = createFakeBridge();
+    bridge.setUpdateResult({ kind: 'updated', version: '0.2.0' });
+
+    await bridge.app.downloadUpdate();
+    await bridge.app.cancelUpdateDownload();
+    await bridge.app.installUpdate();
+    await expect(bridge.app.takeUpdateResult()).resolves.toEqual({ kind: 'updated', version: '0.2.0' });
+    await expect(bridge.app.takeUpdateResult()).resolves.toBeNull();
+
+    expect(bridge.updateCalls).toEqual(['download', 'cancel', 'install', 'takeResult', 'takeResult']);
   });
 });
 

@@ -40,6 +40,35 @@ describe('createContextService (спека 4.3)', () => {
     expect(setContext).toHaveBeenCalledWith(claude, FILL);
   });
 
+  it('qwen: the fill of its latest Stop with context_usage; none yet — nothing set; the status line file is not read', async () => {
+    const qwen = { ...claude, sessionId: 's-05' };
+    await writeFile(contextFile(workPaths(project, 'w-01').dir, 's-05'), JSON.stringify(FILL));
+    const events = workPaths(project, 'w-01').events;
+    await mkdir(events, { recursive: true });
+    const journal = path.join(events, 's-05.jsonl');
+    const line = (body: Record<string, unknown>): string => `${JSON.stringify(body)}\n`;
+    await writeFile(journal, line({ hook_event_name: 'SessionStart' }));
+    const setContext = vi.fn();
+    const service = createContextService({ pty: { list: () => [{ ref: qwen, provider: 'qwen' }] as unknown as PtyHandle[] }, activity: { setContext, logFile: () => null } });
+    await service.tick();
+    expect(setContext).not.toHaveBeenCalled();
+    await writeFile(journal, line({ hook_event_name: 'SessionStart' }) + line({ hook_event_name: 'Stop', context_usage: 0.1, context_limit: 1000 })
+      + line({ hook_event_name: 'Stop', context_usage: 0.42, context_limit: 200000 }) + line({ hook_event_name: 'Notification', notification_type: 'idle_prompt' }));
+    await service.tick();
+    expect(setContext).toHaveBeenCalledTimes(1);
+    expect(setContext).toHaveBeenCalledWith(qwen, expect.objectContaining({ usedPercent: 42, windowTokens: 200000, usedTokens: 84000 }));
+  });
+
+  it('a null or unknown family is neither read as Claude nor as Codex', async () => {
+    await writeFile(contextFile(workPaths(project, 'w-01').dir, 's-03'), JSON.stringify(FILL));
+    const setContext = vi.fn();
+    const neutral = [
+      { ref: { ...claude, sessionId: 's-04' }, provider: 'mystery' },
+    ] as unknown as PtyHandle[];
+    await createContextService({ pty: { list: () => neutral }, activity: { setContext, logFile: () => null } }).tick();
+    expect(setContext).not.toHaveBeenCalled();
+  });
+
   it('файла нет — setContext(ref, null)', async () => {
     const setContext = vi.fn();
     await createContextService({ pty: { list: handles }, activity: { setContext, logFile: () => null } }).tick();

@@ -23,11 +23,12 @@
  */
 
 import { createHash } from 'node:crypto';
+import { stat } from 'node:fs/promises';
 import {
   dropExpiredWindows,
   envValue,
   mergeLimits,
-  readCodexLimits,
+  createCodexLimitsReader,
   readSecret,
   readWorkLimits,
   workPaths,
@@ -46,6 +47,8 @@ export interface LimitsServiceOptions {
   intervalMs?: number;
   /** Корень логов Codex; по умолчанию `defaultCodexRoot()` — `~/.codex/sessions`. */
   codexRoot?: string;
+  /** Rollout-файлы идущих сессий Codex: читаются и из старого каталога дня; по умолчанию нет. */
+  liveCodexLogs?: () => readonly string[];
   /** Часы: по ним отбрасываются окна с прошедшим сбросом; тесты подставляют свои и не спят. */
   now?: () => number;
   /** Таймер опроса — возвращает отмену; тесты подставляют свой, без настоящего ожидания. */
@@ -113,6 +116,9 @@ export function createLimitsService(
   const now = options.now ?? Date.now;
   const schedule = options.schedule ?? defaultSchedule;
   const intervalMs = options.intervalMs ?? LIMITS_POLL_MS;
+  const codexReader = createCodexLimitsReader(options.codexRoot);
+  /** Файлы лимитов по каталогу работы; перечитываются, только когда сменился mtime `limits/`. */
+  let workFiles = new Map<string, { mtimeMs: number; files: Map<string, ProviderLimits> }>();
 
   /** Лимиты по провайдерам на момент последнего чтения, без окон с прошедшим сбросом. */
   let state = new Map<string, ProviderLimits>();
@@ -189,17 +195,31 @@ export function createLimitsService(
       else list.push(limits);
     };
 
+    const nextWorkFiles = new Map<string, { mtimeMs: number; files: Map<string, ProviderLimits> }>();
     for (const entry of works.snapshot().entries) {
       const providers = new Map(
         entry.map.sessions.map((session) => [session.id, session.provider]),
       );
-      const files = await readWorkLimits(workPaths(entry.projectPath, entry.map.work.id).dir);
+      const paths = workPaths(entry.projectPath, entry.map.work.id);
+      // Скрипт строки статуса кладёт файл через `rename`: это меняет mtime каталога. Каталога нет — пусто.
+      const mtimeMs = await stat(paths.limits).then(
+        (info) => info.mtimeMs,
+        () => null,
+      );
+      if (mtimeMs === null) continue;
+      const before = workFiles.get(paths.dir);
+      const cached = before !== undefined && before.mtimeMs === mtimeMs ? before : undefined;
+      const files = cached?.files ?? (await readWorkLimits(paths.dir));
+      nextWorkFiles.set(paths.dir, cached ?? { mtimeMs, files });
       for (const [sessionId, limits] of files) {
         const provider = providers.get(sessionId);
         if (provider !== undefined && provider !== 'glm') consider(provider, limits);
       }
     }
-    const codex = await readCodexLimits(options.codexRoot).catch(() => null);
+    workFiles = nextWorkFiles;
+    const codex = await Promise.resolve()
+      .then(() => codexReader.read(options.liveCodexLogs?.()))
+      .catch(() => null);
     if (codex !== null) consider('codex', codex);
 
     const merged = new Map<string, ProviderLimits>();

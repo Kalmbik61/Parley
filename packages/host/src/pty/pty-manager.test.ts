@@ -518,3 +518,112 @@ describe('PtyManager: сигналы терминала codex (спека ком
     await manager.stop(sessionRef, { graceMs: 200 });
   });
 });
+
+describe('PtyManager: изоляция слушателей', () => {
+  function spyHost(): { host: HostContext; errors: string[] } {
+    const errors: string[] = [];
+    const base = fakeHost();
+    const host: HostContext = {
+      ...base,
+      log: { info: () => {}, warn: () => {}, error: (message: string) => void errors.push(message) },
+    };
+    return { host, errors };
+  }
+
+  it('бросивший слушатель выхода не мешает остальным и не вешает stop()', async () => {
+    const { host, errors } = spyHost();
+    const manager = createPtyManager(host);
+    const sessionRef = ref();
+    let second = 0;
+    manager.on('exit', () => {
+      throw new Error('boom');
+    });
+    manager.on('exit', () => {
+      second += 1;
+    });
+    manager.start(sessionRef, launch());
+    await waitFor(() => manager.snapshot(sessionRef).snapshot.includes('STUB READY'));
+
+    await manager.stop(sessionRef, { graceMs: 200 });
+    expect(second).toBe(1);
+    expect(errors).toHaveLength(1);
+  });
+
+  it('бросивший слушатель старта не отменяет запуск', async () => {
+    const { host, errors } = spyHost();
+    const manager = createPtyManager(host);
+    const sessionRef = ref();
+    let second = 0;
+    manager.on('start', () => {
+      throw new Error('boom');
+    });
+    manager.on('start', () => {
+      second += 1;
+    });
+    const handle = manager.start(sessionRef, launch());
+
+    expect(handle).toBeDefined();
+    expect(manager.get(sessionRef)).toBeDefined();
+    expect(second).toBe(1);
+    expect(errors).toHaveLength(1);
+    await manager.stop(sessionRef, { graceMs: 200 });
+  });
+
+  it('сбой рассылки pty.exit всё равно разрешает stop()', async () => {
+    const base = fakeHost();
+    const host: HostContext = {
+      ...base,
+      broadcast: (event, data) => {
+        if (event === 'pty.exit') throw new Error('broadcast failed');
+        base.broadcast(event, data);
+      },
+    };
+    const manager = createPtyManager(host);
+    const sessionRef = ref();
+    manager.start(sessionRef, launch());
+    await waitFor(() => manager.snapshot(sessionRef).snapshot.includes('STUB READY'));
+
+    await expect(manager.stop(sessionRef, { graceMs: 200 })).resolves.toBeDefined();
+  });
+});
+
+describe('PtyManager: Qwen Code program status (OSC 7501)', () => {
+  /** A process that prints the given OSC 7501 reports, split at the ST terminator, then waits. */
+  const qwenLaunch = (states: string[], provider = 'qwen'): PtyLaunch => ({
+    command: process.execPath,
+    args: ['-e', `const parts = ${JSON.stringify(states)}.map((s) => '\\x1b]7501;' + s + '\\x1b\\\\');
+      let i = 0; const t = setInterval(() => { if (i >= parts.length) { clearInterval(t); return; }
+      const p = parts[i++]; process.stdout.write(p.slice(0, -1)); setTimeout(() => process.stdout.write(p.slice(-1)), 5); }, 30);
+      setTimeout(() => {}, 60000);`],
+    cwd: process.cwd(),
+    env: { ...process.env },
+    provider,
+  });
+
+  it('reports the qwen session status in stream order, across chunk boundaries', async () => {
+    const manager = createPtyManager(fakeHost());
+    const sessionRef = ref();
+    const seen: Array<{ state: string; kind: string | null }> = [];
+    manager.on('program-status', (from, status) => {
+      if (from.sessionId === sessionRef.sessionId) seen.push({ state: status.state, kind: status.kind });
+    });
+    manager.start(sessionRef, qwenLaunch(['state=blocked:kind=auth:app=qwen-code', 'state=idle:app=qwen-code']));
+    await waitFor(() => seen.length === 2);
+    expect(seen).toEqual([{ state: 'blocked', kind: 'auth' }, { state: 'idle', kind: null }]);
+    await manager.stop(sessionRef, { graceMs: 200 });
+  });
+
+  it('other providers report nothing', async () => {
+    const manager = createPtyManager(fakeHost());
+    const sessionRef = ref();
+    const seen: unknown[] = [];
+    let output = '';
+    manager.on('program-status', (_from, status) => seen.push(status));
+    manager.on('output', (_from, data) => { output += data; });
+    manager.start(sessionRef, qwenLaunch(['state=idle:app=qwen-code'], 'claude'));
+    await waitFor(() => output.includes('7501'));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(seen).toEqual([]);
+    await manager.stop(sessionRef, { graceMs: 200 });
+  });
+});

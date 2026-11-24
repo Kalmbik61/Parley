@@ -313,23 +313,22 @@ describe('SettingsDialog — тест 3: ошибка хоста при сохр
   });
 });
 
-// V6 плана релиза 0.1.0: переключатель проверки новой версии. Своей секции «General» в окне нет — он стоит в
-// «Notifications», под подсказкой про системные настройки.
+// V6 плана релиза 0.1.0: переключатель проверки новой версии; с 0.38 — в разделе About.
 describe('SettingsDialog — переключатель «Check for updates» (V6 плана релиза 0.1.0)', () => {
-  it('в секции Notifications, включён по умолчанию, с пояснением о GitHub; на других секциях его нет', async () => {
+  it('в секции About, включён по умолчанию, с пояснением о GitHub; на других секциях его нет', async () => {
     const bridge = createFakeBridge();
     openSettings(bridge);
 
-    switchTo('Notifications');
-    const toggle = await screen.findByRole('switch', { name: 'Check for updates' });
+    switchTo('About');
+    const toggle = await screen.findByRole('switch', { name: 'Check for updates automatically' });
     expect(toggle.getAttribute('aria-checked')).toBe('true');
     expect(screen.getByText(/Looks for a newer Parley release on GitHub/)).toBeTruthy();
 
     switchTo('Appearance');
-    expect(screen.queryByRole('switch', { name: 'Check for updates' })).toBeNull();
+    expect(screen.queryByRole('switch', { name: 'Check for updates automatically' })).toBeNull();
     switchTo('Agents');
     await screen.findByText('Worktree root');
-    expect(screen.queryByRole('switch', { name: 'Check for updates' })).toBeNull();
+    expect(screen.queryByRole('switch', { name: 'Check for updates automatically' })).toBeNull();
   });
 
   it('клик выключает: app.saveUi({ checkForUpdates: false }) и зеркало ui; повторный — включает', async () => {
@@ -337,11 +336,11 @@ describe('SettingsDialog — переключатель «Check for updates» (V
     const saveUiSpy = vi.spyOn(bridge.app, 'saveUi');
     openSettings(bridge);
 
-    switchTo('Notifications');
-    fireEvent.click(await screen.findByRole('switch', { name: 'Check for updates' }));
+    switchTo('About');
+    fireEvent.click(await screen.findByRole('switch', { name: 'Check for updates automatically' }));
 
     await waitFor(() => expect(saveUiSpy).toHaveBeenCalledWith({ checkForUpdates: false }));
-    const toggle = screen.getByRole('switch', { name: 'Check for updates' });
+    const toggle = screen.getByRole('switch', { name: 'Check for updates automatically' });
     await waitFor(() => expect(toggle.getAttribute('aria-checked')).toBe('false'));
     expect(useUiStore.getState().ui.checkForUpdates).toBe(false);
 
@@ -355,8 +354,8 @@ describe('SettingsDialog — переключатель «Check for updates» (V
     await bridge.app.saveUi({ checkForUpdates: false });
     openSettings(bridge);
 
-    switchTo('Notifications');
-    const toggle = await screen.findByRole('switch', { name: 'Check for updates' });
+    switchTo('About');
+    const toggle = await screen.findByRole('switch', { name: 'Check for updates automatically' });
 
     expect(toggle.getAttribute('aria-checked')).toBe('false');
   });
@@ -366,8 +365,8 @@ describe('SettingsDialog — переключатель «Check for updates» (V
     await bridge.app.saveUi({ dismissedUpdate: '0.2.0', notifications: { ...DEFAULT_UI.notifications, sound: false } });
     openSettings(bridge);
 
-    switchTo('Notifications');
-    fireEvent.click(await screen.findByRole('switch', { name: 'Check for updates' }));
+    switchTo('About');
+    fireEvent.click(await screen.findByRole('switch', { name: 'Check for updates automatically' }));
 
     await waitFor(() => expect(useUiStore.getState().ui.checkForUpdates).toBe(false));
     expect(useUiStore.getState().ui.dismissedUpdate).toBe('0.2.0');
@@ -383,10 +382,10 @@ describe('SettingsDialog — переключатель «Check for updates» (V
     useUiStore.getState().init(bridge);
     render(<SettingsDialog open bridge={bridge} onOpenChange={() => {}} />);
 
-    switchTo('Notifications');
-    await screen.findByText('Not getting notifications? System Settings → Notifications → Parley');
+    switchTo('About');
+    await screen.findByRole('button', { name: 'Check now' });
 
-    expect(screen.queryByRole('switch', { name: 'Check for updates' })).toBeNull();
+    expect(screen.queryByRole('switch', { name: 'Check for updates automatically' })).toBeNull();
   });
 });
 
@@ -1163,11 +1162,52 @@ describe('SettingsDialog — навигация слева (живая пров�
       'Voice',
       'Assistant',
       'Remote access',
+      'About',
     ]);
 
     const pane = screen.getByTestId('settings-pane');
     // Не «Assistant»: та секция зовёт getHostClient(), которого в этом окружении нет.
     switchTo('Browser');
     expect(await within(pane).findByRole('button', { name: S.settings.clearBrowserData })).toBeTruthy();
+  });
+});
+
+// Самообновление (спека self-update §4.2): строка состояния под переключателем.
+describe('SettingsDialog — строка самообновления', () => {
+  it('в About: видна и при выключенной автопроверке', async () => {
+    const bridge = createFakeBridge();
+    bridge.setUpdateState({ phase: 'ready', version: '0.2.0', url: 'https://github.com/Kalmbik61/Parley/releases/tag/v0.2.0' });
+    openSettings(bridge);
+
+    switchTo('About');
+    expect(await screen.findByText('0.2.0 is ready to install')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Restart to update' })).toBeTruthy();
+
+    // Выключили автопроверку: найденное ручной проверкой остаётся видно.
+    fireEvent.click(screen.getByRole('switch', { name: 'Check for updates automatically' }));
+    await waitFor(() => expect(useUiStore.getState().ui.checkForUpdates).toBe(false));
+    expect(screen.getByText('0.2.0 is ready to install')).toBeTruthy();
+  });
+
+  it('в Notifications переключателя и строки обновления нет', async () => {
+    const bridge = createFakeBridge();
+    bridge.setUpdateState({ phase: 'ready', version: '0.2.0', url: 'https://github.com/Kalmbik61/Parley/releases/tag/v0.2.0' });
+    openSettings(bridge);
+
+    switchTo('Notifications');
+    await screen.findByText('Not getting notifications? System Settings → Notifications → Parley');
+    expect(screen.queryByRole('switch', { name: 'Check for updates automatically' })).toBeNull();
+    expect(screen.queryByText(/Looks for a newer Parley release/)).toBeNull();
+    expect(screen.queryByText('0.2.0 is ready to install')).toBeNull();
+  });
+
+  it('SU-01: нет новой версии — строки нет', async () => {
+    const bridge = createFakeBridge();
+    openSettings(bridge);
+
+    switchTo('About');
+    await screen.findByRole('switch', { name: 'Check for updates automatically' });
+    expect(screen.queryByRole('button', { name: 'Restart to update' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Update' })).toBeNull();
   });
 });

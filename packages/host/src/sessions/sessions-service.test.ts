@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   addSession,
   addRoom,
+  applyAgentSwitch,
   buildRoleCatalog,
   codexModelsFile,
   createPendingSession,
@@ -18,8 +19,10 @@ import {
   grantTrust,
   defaultSessionName,
   NEW_LABEL,
+  parleyHome,
   plannedWorktree,
   readMap,
+  readTrialLedger,
   readStoredMap,
   saveConfig,
   setWorkStatus,
@@ -28,6 +31,7 @@ import {
   ENGINE,
   startAttempt,
   transitionSession,
+  unresolvedIntents,
   updateMap,
   workPaths,
 } from '@parley/core';
@@ -45,6 +49,7 @@ import { createWorktreesService } from '../worktrees/worktrees-service.js';
 import type { SessionsFeedOptions, SessionsService } from './sessions-service.js';
 
 const STUB = fileURLToPath(new URL('../../test/stub-agent.mjs', import.meta.url));
+const QWEN_STUB = fileURLToPath(new URL('../../test/stub-qwen-agent.mjs', import.meta.url));
 const runGit = promisify(execFile);
 
 /** Репозиторий с одним коммитом на ветке `main` — общая точка отсчёта тестов worktree. */
@@ -126,6 +131,7 @@ function fakeActivity(): ActivityService {
     start: async () => {},
     get: () => undefined,
     markSeen: () => {},
+    logFile: () => null,
     onChange: () => () => {},
     stop: async () => {},
   };
@@ -865,6 +871,53 @@ describe('launch(): лента вида «Chat» — адрес приёмник
     await launched.stop();
   });
 
+  it('qwen 0.27.2: hook token in the env, HTTP hooks to the receiver in its system settings file, token revoked on stop', async () => {
+    const qwenArgs = await tempArgsFile();
+    setEnv('PARLEY_QWEN_BIN', QWEN_STUB);
+    setEnv('STUB_QWEN_ARGS_FILE', qwenArgs);
+    setEnv('QWEN_CODE_SYSTEM_SETTINGS_PATH', path.join(project, 'no-admin-settings.json'));
+    const { hooks, registered, unregistered } = fakeHooks();
+    const work = await createWork(project, { title: 'Work', goal: '' });
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity(), {
+      hooks, providerVersions: fakeVersions({ qwen: '0.27.2' }),
+    });
+    const ref = await service.create({ projectPath: project, workId: work.work.id, provider: 'qwen', label: 'qwen', task: '', parent: null });
+    await vi.waitFor(async () => expect((await readFile(qwenArgs, 'utf8')).length).toBeGreaterThan(0));
+    const started = JSON.parse(await readFile(qwenArgs, 'utf8')) as { argv: string[]; env: Record<string, string> };
+    expect(registered).toHaveLength(1);
+    expect(registered[0]?.ref).toEqual(ref);
+    expect(started.env.PARLEY_HOOK_TOKEN).toBe(registered[0]?.token);
+    expect(started.env.PARLEY_HOOK_URL).toBeUndefined();
+    expect(started.argv).not.toContain('--yolo');
+    const settings = JSON.parse(await readFile(started.env.QWEN_CODE_SYSTEM_SETTINGS_PATH as string, 'utf8')) as Launched['settings'];
+    expect(new Set(httpHookUrls(settings))).toEqual(new Set([HOOK_URL]));
+    await service.stop(ref);
+    await vi.waitFor(() => expect(unregistered).toContainEqual(ref));
+  });
+
+  it('qwen: the brief is not an argument; it goes to deferFirst with the pid of the started process', async () => {
+    const qwenArgs = await tempArgsFile();
+    setEnv('PARLEY_QWEN_BIN', QWEN_STUB);
+    setEnv('STUB_QWEN_ARGS_FILE', qwenArgs);
+    setEnv('QWEN_CODE_SYSTEM_SETTINGS_PATH', path.join(project, 'no-admin-settings.json'));
+    const deferred: Array<{ ref: SessionRef; pid: number; text: string }> = [];
+    const work = await createWork(project, { title: 'Work', goal: '' });
+    const pty = createPtyManager(fakeHost());
+    const service = createSessionsService(fakeHost(), fakeWorks(), pty, fakeActivity(), {
+      providerVersions: fakeVersions({ qwen: '0.27.2' }),
+      deferFirst: (ref, pid, text) => deferred.push({ ref, pid, text }),
+    });
+    const ref = await service.create({ projectPath: project, workId: work.work.id, provider: 'qwen', label: 'qwen', task: 'run the e2e suite', parent: null });
+    await vi.waitFor(async () => expect((await readFile(qwenArgs, 'utf8')).length).toBeGreaterThan(0));
+    const started = JSON.parse(await readFile(qwenArgs, 'utf8')) as { argv: string[] };
+    expect(started.argv).not.toContain('-i');
+    expect(started.argv.join('\n')).not.toContain('run the e2e suite');
+    expect(deferred).toHaveLength(1);
+    expect(deferred[0]).toMatchObject({ ref, pid: pty.get(ref)?.pid });
+    expect(deferred[0]?.text).toContain('run the e2e suite');
+    await service.stop(ref);
+  });
+
   it('claude 2.1.280 (ниже порога): ни токена, ни HTTP-хуков, прежние хуки на месте', async () => {
     const { hooks, registered } = fakeHooks();
     const launched = await launchWith('claude', { hooks, providerVersions: fakeVersions({ claude: '2.1.280' }) });
@@ -886,6 +939,31 @@ describe('launch(): лента вида «Chat» — адрес приёмник
     expect(httpHookUrls(launched.settings)).toEqual([]);
 
     await launched.stop();
+  });
+
+  it('мост пакета комнаты: только claude с регистрацией хуков и когда packetHook вернул адрес; иначе в файле моста нет', async () => {
+    const packetHook = async () => ({ launcher: '/home/me/.parley/bin/parley-packet-hook', url: `${HOOK_URL}/packet` });
+    const commandsOf = (settings: Launched['settings']): string[] =>
+      (settings as unknown as { hooks: Record<string, { hooks: { type: string; command?: string; timeout?: number }[] }[]> } | null)
+        ?.hooks['SessionStart']?.[0]?.hooks.filter((hook) => hook.type === 'command').map((hook) => `${hook.command}|${hook.timeout ?? ''}`) ?? [];
+
+    const { hooks } = fakeHooks();
+    const on = await launchWith('claude', { hooks, providerVersions: fakeVersions({ claude: '2.1.286' }), packetHook });
+    expect(commandsOf(on.settings)).toHaveLength(2);
+    expect(commandsOf(on.settings)[1]).toBe(`"/home/me/.parley/bin/parley-packet-hook" "${HOOK_URL}/packet" PARLEY_HOOK_TOKEN|2`);
+    await on.stop();
+
+    // Настройка выключена (packetHook ничего не вернул) — файл прежний.
+    const off = await launchWith('claude', { hooks: fakeHooks().hooks, providerVersions: fakeVersions({ claude: '2.1.286' }), packetHook: async () => undefined });
+    expect(commandsOf(off.settings)).toHaveLength(1);
+    await off.stop();
+
+    // Без регистрации хуков (версия не опознана) packetHook не зовётся и моста нет.
+    let asked = 0;
+    const noFeed = await launchWith('claude', { hooks: fakeHooks().hooks, providerVersions: fakeVersions({ claude: null }), packetHook: async () => { asked += 1; return packetHook(); } });
+    expect(asked).toBe(0);
+    expect(noFeed.settings === null || commandsOf(noFeed.settings).length <= 1).toBe(true);
+    await noFeed.stop();
   });
 
   it('codex — вне режима parley и при «подходящей» версии — без токена', async () => {
@@ -1156,6 +1234,83 @@ describe('выход процесса', () => {
     expect(exitEvent).toBeDefined();
     expect((exitEvent?.data as { ref: SessionRef }).ref).toEqual(ref);
   });
+
+  /** Сторож тихих концовок — шпионы на трёх методах; сессии создаются заглушкой, которая живёт, пока её не остановят. */
+  function endingsSpy() {
+    return {
+      exited: vi.fn<(ref: SessionRef, exit: { exitCode: number; signal?: number }, launch: { by: string; runMs: number } | null) => Promise<void>>().mockResolvedValue(undefined),
+      stoppedByHuman: vi.fn<(ref: SessionRef) => Promise<void>>().mockResolvedValue(undefined),
+      closedByHuman: vi.fn<(ref: SessionRef) => Promise<void>>().mockResolvedValue(undefined),
+    };
+  }
+  const createLive = (sessions: SessionsService, workId: string, label: string): Promise<SessionRef> =>
+    sessions.create({ projectPath: project, workId, provider: 'claude', label, task: 'т', parent: null });
+
+  it('сам вышел (код 3): сторожу уходит exited с кодом, без причины запуска «wake»; Stop и Close молчат', async () => {
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    setEnv('STUB_EXIT_AFTER_MS', '100');
+    const endings = endingsSpy();
+    const sessions = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity(), { endings });
+    const ref = await createLive(sessions, work.work.id, 'бэкенд');
+    await waitFor(() => endings.exited.mock.calls.length > 0, REAL_PROCESS_WAIT_MS);
+    expect(endings.exited).toHaveBeenCalledTimes(1);
+    expect(endings.exited).toHaveBeenCalledWith(ref, expect.objectContaining({ exitCode: 3 }), { by: 'human', runMs: expect.any(Number) });
+    expect(endings.stoppedByHuman).not.toHaveBeenCalled();
+    expect(endings.closedByHuman).not.toHaveBeenCalled();
+  }, REAL_PROCESS_WAIT_MS);
+
+  it("stop(ref, 'human') — stoppedByHuman и ни одного exited; stop(ref) без причины — ничего", async () => {
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    const endings = endingsSpy();
+    const sessions = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity(), { endings });
+    const quiet = await createLive(sessions, work.work.id, 'a');
+    await sessions.stop(quiet);
+    expect(sessions.live(quiet)).toBe(false);
+    expect(endings.exited).not.toHaveBeenCalled();
+    expect(endings.stoppedByHuman).not.toHaveBeenCalled();
+
+    const human = await createLive(sessions, work.work.id, 'b');
+    await sessions.stop(human, 'human');
+    expect(endings.stoppedByHuman).toHaveBeenCalledTimes(1);
+    expect(endings.stoppedByHuman).toHaveBeenCalledWith(human);
+    expect(endings.exited).not.toHaveBeenCalled();
+  }, REAL_PROCESS_WAIT_MS);
+
+  it("close(ref, 'human') — closedByHuman после записи closed, без exited и stoppedByHuman; close(ref) — ничего", async () => {
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    const lifecycles: Array<string | undefined> = [];
+    const endings = endingsSpy();
+    endings.closedByHuman.mockImplementation(async (ref) => {
+      lifecycles.push((await readMap(project, work.work.id)).sessions.find((s) => s.id === ref.sessionId)?.lifecycle);
+    });
+    const sessions = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity(), { endings });
+    const quiet = await createLive(sessions, work.work.id, 'a');
+    await sessions.close(quiet);
+    expect(endings.closedByHuman).not.toHaveBeenCalled();
+
+    const human = await createLive(sessions, work.work.id, 'b');
+    await sessions.close(human, 'human');
+    expect(endings.closedByHuman).toHaveBeenCalledTimes(1);
+    expect(endings.closedByHuman).toHaveBeenCalledWith(human);
+    expect(lifecycles).toEqual(['closed']);
+    expect(endings.exited).not.toHaveBeenCalled();
+    expect(endings.stoppedByHuman).not.toHaveBeenCalled();
+  }, REAL_PROCESS_WAIT_MS);
+
+  it('stopAll (выключение хоста): сторожу не сообщается ничего', async () => {
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    const endings = endingsSpy();
+    const pty = createPtyManager(fakeHost());
+    const sessions = createSessionsService(fakeHost(), fakeWorks(), pty, fakeActivity(), { endings });
+    const first = await createLive(sessions, work.work.id, 'a');
+    const second = await createLive(sessions, work.work.id, 'b');
+    await sessions.stopAll();
+    expect(sessions.live(first)).toBe(false);
+    expect(sessions.live(second)).toBe(false);
+    expect(endings.exited).not.toHaveBeenCalled();
+    expect(endings.stoppedByHuman).not.toHaveBeenCalled();
+    expect(endings.closedByHuman).not.toHaveBeenCalled();
+  }, REAL_PROCESS_WAIT_MS);
 });
 
 function service(options: Parameters<typeof createWorksService>[1] = {}): WorksService {
@@ -1448,6 +1603,90 @@ describe('worktree (план, кусок 4.2)', () => {
     await service.stop(ref);
   });
 
+  it('после создания копии зовётся клон, итог в карте', async () => {
+    await initGitProject(project);
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    setEnv('STUB_ARGS_FILE', await tempArgsFile());
+    setEnv('PARLEY_WORKTREE_ROOT', await tempWorktreeRoot());
+    const record = { at: '2026-11-11T10:00:00.000Z', cloned: 1, first: 'node_modules' };
+    const seen: { copyExisted: boolean; path: string }[] = [];
+    const depsSeeder = {
+      run: vi.fn(async (_ref: SessionRef, info: WorktreeInfo) => {
+        seen.push({ copyExisted: existsSync(info.path), path: info.path });
+        return record;
+      }),
+    };
+
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity(), { depsSeeder });
+    const ref = await service.create({
+      projectPath: project,
+      workId: work.work.id,
+      provider: 'claude',
+      label: 'бэкенд',
+      task: 'сделай штуку',
+      parent: null,
+      worktree: true,
+    });
+
+    expect(depsSeeder.run).toHaveBeenCalledTimes(1);
+    // Клон зовётся после создания копии: каталог к этому моменту уже есть.
+    expect(seen[0]?.copyExisted).toBe(true);
+    const stored = (await readMap(project, work.work.id)).sessions.find((candidate) => candidate.id === ref.sessionId);
+    expect(stored?.worktree?.seed).toEqual(record);
+    expect(stored?.worktree?.path).toBe(seen[0]?.path);
+    await service.stop(ref);
+  });
+
+  it('клон вернул null — ключа seed в карте нет', async () => {
+    await initGitProject(project);
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    setEnv('STUB_ARGS_FILE', await tempArgsFile());
+    setEnv('PARLEY_WORKTREE_ROOT', await tempWorktreeRoot());
+    const depsSeeder = { run: vi.fn(async () => null) };
+
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity(), { depsSeeder });
+    const ref = await service.create({
+      projectPath: project,
+      workId: work.work.id,
+      provider: 'claude',
+      label: 'бэкенд',
+      task: 'сделай штуку',
+      parent: null,
+      worktree: true,
+    });
+
+    expect(depsSeeder.run).toHaveBeenCalledTimes(1);
+    const stored = (await readMap(project, work.work.id)).sessions.find((candidate) => candidate.id === ref.sessionId);
+    expect(stored?.worktree).not.toBeNull();
+    expect(stored?.worktree !== null && stored?.worktree !== undefined && 'seed' in stored.worktree).toBe(false);
+    await service.stop(ref);
+  });
+
+  it('первое создание — заметки нет', async () => {
+    await initGitProject(project);
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    setEnv('STUB_ARGS_FILE', await tempArgsFile());
+    setEnv('PARLEY_WORKTREE_ROOT', await tempWorktreeRoot());
+    const depsSeeder = {
+      run: vi.fn(async () => ({ at: '2026-11-11T10:00:00.000Z', cloned: 1, first: 'node_modules' })),
+    };
+
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity(), { depsSeeder });
+    const ref = await service.create({
+      projectPath: project,
+      workId: work.work.id,
+      provider: 'claude',
+      label: 'бэкенд',
+      task: 'сделай штуку',
+      parent: null,
+      worktree: true,
+    });
+
+    const map = readStoredMap(project, work.work.id);
+    expect(map.messages.filter((m) => m.from === SYSTEM && m.to.includes(ref.sessionId) && m.text.startsWith('Your worktree folder'))).toEqual([]);
+    await service.stop(ref);
+  });
+
   it('1б: sessions.create({ worktree: true }) — бриф на диске называет ветку и базу worktree (fix-guide, п. 3)', async () => {
     // Бриф пишется при создании записи, а план worktree — следом: без
     // перезаписи агент получил бы бриф без строки о своей ветке.
@@ -1704,6 +1943,30 @@ describe('убранная копия', () => {
     expect(head.stdout.trim()).toBe(info.branch);
     const stored = (await readMap(ref.projectPath, ref.workId)).sessions.find((s) => s.id === ref.sessionId);
     expect(stored?.worktree?.removedAt).toBeUndefined();
+    await service.stop(ref);
+  });
+
+  it('подъём из ветки — заметка сессии', async () => {
+    const { ref, info } = await sessionWithCopy();
+    setEnv('STUB_ARGS_FILE', await tempArgsFile());
+    await runGit('git', ['-C', project, 'worktree', 'remove', '--force', info.path]);
+    await updateMap(ref.projectPath, ref.workId, (map) => {
+      const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
+      if (session?.worktree) session.worktree.removedAt = new Date().toISOString();
+    });
+    const depsSeeder = {
+      run: vi.fn(async () => ({ at: '2026-11-11T10:00:00.000Z', cloned: 1, first: 'node_modules' })),
+    };
+
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity(), { depsSeeder });
+    await service.launch(ref, 'launch');
+
+    const map = readStoredMap(ref.projectPath, ref.workId);
+    const notes = map.messages.filter((m) => m.from === SYSTEM && m.to.includes(ref.sessionId) && m.kind === 'note');
+    expect(notes).toHaveLength(1);
+    expect(notes[0]?.text).toBe(
+      `Your worktree folder was removed while this session was not running and is restored from branch \`${info.branch}\`. Its commits are intact. Dependencies: \`node_modules\` was cloned from the main checkout; lock files match, no install is needed.`,
+    );
     await service.stop(ref);
   });
 
@@ -2123,6 +2386,24 @@ describe('session layer warnings and final spawn budget', () => {
     expect(unregister).toHaveBeenCalledWith(ref);
     expect(JSON.stringify(broadcasts)).not.toContain('private-hook-token');
     expect(JSON.stringify(broadcasts)).not.toContain('private-environment-value');
+    await service.stopAll();
+  });
+
+  it('the hook token is registered with the session agent revision from the launch environment', async () => {
+    setEnv('PARLEY_HOME', path.join(project, 'home'));
+    const host = fakeHost();
+    const pty = createPtyManager(host);
+    const registered = vi.fn(() => 'token');
+    const service = createSessionsService(host, fakeWorks(), pty, fakeActivity(), {
+      hooks: { url: () => 'http://127.0.0.1:4321/hooks', register: registered, unregister: vi.fn() },
+      providerVersions: { ready: Promise.resolve(), get: () => '999.0.0' },
+      spawnLimits: async () => ({ argMax: 50000, pointerSize: 8 }),
+    });
+    const ref = await makeRef();
+    await updateMap(project, ref.workId, map => { map.sessions.find(item => item.id === ref.sessionId)!.agentRevision = 'rev-test'; });
+    await service.launch(ref, 'launch').catch(() => {});
+    expect(registered).toHaveBeenCalledTimes(1);
+    expect((registered.mock.calls[0] as unknown[])[3]).toBe('rev-test');
     await service.stopAll();
   });
 
@@ -2995,5 +3276,333 @@ describe('лимиты созданий агентами — за сутки, а
       expect(refusal).toMatchObject({ code: 'new-sessions', scope: 'room', used: 2, limit: 2 });
       expect(refusal?.message).toContain('sessions in this room in the last 24 hours');
     } finally { await service.stopAll(); }
+  });
+});
+
+describe('опыт с пакетом состояния: розыгрыш и хранение плеча, установка моста (Э-1)', () => {
+  const HOOK_URL = 'http://127.0.0.1:4321/hooks';
+  const PACKET_BRIDGE = { launcher: '/home/me/.parley/bin/parley-packet-hook', url: `${HOOK_URL}/packet` };
+  const hookEnv = ['PARLEY_HOOK_TOKEN', 'PARLEY_HOOK_URL', 'PARLEY_HOOK_CAPABILITY'];
+  let inheritedHooks: Array<string | undefined>;
+  beforeEach(async () => {
+    inheritedHooks = hookEnv.map((name) => process.env[name]);
+    for (const name of hookEnv) delete process.env[name];
+    // Дом общий для тестов файла: список назначений прежних тестов не должен попасть в счёт этих.
+    await rm(path.join(parleyHome(), 'trials'), { recursive: true, force: true });
+  });
+  afterEach(() => {
+    hookEnv.forEach((name, index) => {
+      if (inheritedHooks[index] === undefined) delete process.env[name];
+      else process.env[name] = inheritedHooks[index];
+    });
+  });
+
+  const hooks: NonNullable<SessionsFeedOptions['hooks']> = { url: () => HOOK_URL, register: () => 'token', unregister: () => {} };
+  const versions = { ready: Promise.resolve(), get: () => '2.1.286', fresh: async () => '2.1.286' } as ProviderVersions;
+  const trialOf = async (ref: SessionRef) =>
+    (await readMap(ref.projectPath, ref.workId)).sessions.find((candidate) => candidate.id === ref.sessionId)?.trial;
+  const sessionOf = async (ref: SessionRef) =>
+    (await readMap(ref.projectPath, ref.workId)).sessions.find((candidate) => candidate.id === ref.sessionId)!;
+  const enable = (trial: string, roomPacket = true) => saveConfig({ roomPacket, roomPacketTrial: trial });
+
+  /** Источник случайности по списку: вызовы идут по порядку, каждый записан. */
+  const draws = (...values: number[]) => {
+    const asked: number[] = [];
+    const random = (max: number): number => { asked.push(max); return values[asked.length - 1] ?? 0; };
+    return { random, asked };
+  };
+
+  async function setup(feed: SessionsFeedOptions = {}) {
+    const work = await createWork(project, { title: 'Работа', goal: '' });
+    setEnv('STUB_ARGS_FILE', await tempArgsFile());
+    const service = createSessionsService(fakeHost(), fakeWorks(), createPtyManager(fakeHost()), fakeActivity(), feed);
+    return { workId: work.work.id, service };
+  }
+
+  it('опыт включён: пути окна (три вида создания) получают плечо и имя по подставленному источнику случайности', async () => {
+    await enable('exp-a');
+    const { random, asked } = draws(0, 1, 0, 1, 1, 0);
+    const { workId, service } = await setup({ random });
+    const base = { projectPath: project, provider: 'claude', label: '', parent: null };
+    const refs = [
+      await service.create({ ...base, workId: null, task: '' }),
+      await service.create({ ...base, workId, task: '' }),
+      await service.create({ ...base, workId, task: 'сделай штуку' }),
+      await service.create({ ...base, workId: null, task: '' }),
+      await service.create({ ...base, workId, task: '' }),
+      await service.create({ ...base, workId, task: 'сделай штуку' }),
+    ];
+    try {
+      const arms = [];
+      for (const ref of refs) {
+        const trial = await trialOf(ref);
+        expect(trial, ref.sessionId).toMatchObject({ name: 'exp-a' });
+        expect(Number.isFinite(Date.parse(trial!.at))).toBe(true);
+        arms.push(trial!.arm);
+        // В историю сессии назначение не пишется.
+        expect(JSON.stringify((await sessionOf(ref)).history)).not.toContain('exp-a');
+      }
+      expect(arms).toEqual(['packet', 'control', 'packet', 'control', 'control', 'packet']);
+      expect(asked).toEqual([2, 2, 2, 2, 2, 2]);
+    } finally { await service.stopAll(); }
+  });
+
+  it('путь агента (create_session) и путь роя получают плечо; один розыгрыш на сессию', async () => {
+    await enable('exp-a');
+    const { random, asked } = draws(1, 0);
+    const { workId, service } = await setup({ random });
+    const caller = await createPendingSession(project, workId, { provider: 'claude', label: 'Caller', task: 'Coordinate', parent: null, contextFrom: [] });
+    const agent = await service.create({ projectPath: project, workId, provider: 'claude', label: 'Peer', task: 'Implement', parent: null, requestedBy: caller });
+    const swarm = await service.create({
+      projectPath: project, workId, provider: 'claude', label: '', task: 'Check everything', parent: null,
+      swarm: { kind: 'create', tag: 'Audit', objective: 'Check everything' },
+    });
+    try {
+      expect(await trialOf(agent)).toMatchObject({ name: 'exp-a', arm: 'control' });
+      expect(await trialOf(swarm)).toMatchObject({ name: 'exp-a', arm: 'packet' });
+      // Создающая сессия без розыгрыша и без плеча: она заведена до включения плеча.
+      expect((await sessionOf({ projectPath: project, workId, sessionId: caller })).trial).toBeUndefined();
+      expect(asked).toEqual([2, 2]);
+    } finally { await service.stopAll(); }
+  });
+
+  it('плеча нет: другой провайдер, опыт не идёт, roomPacket выключен, сессия создана до включения; розыгрыш не вызывается', async () => {
+    const { random, asked } = draws(0, 0, 0, 0, 0);
+    setEnv('PARLEY_CODEX_BIN', STUB);
+    const { workId, service } = await setup({ random });
+    const base = { projectPath: project, workId, label: '', task: '', parent: null };
+    const refs: SessionRef[] = [];
+    // До включения опыта.
+    await saveConfig({ roomPacket: true, roomPacketTrial: '' });
+    refs.push(await service.create({ ...base, provider: 'claude' }));
+    // roomPacket выключен, имя задано.
+    await enable('exp-a', false);
+    refs.push(await service.create({ ...base, provider: 'claude' }));
+    // Опыт идёт, но провайдер не claude.
+    await enable('exp-a');
+    refs.push(await service.create({ ...base, provider: 'codex' }));
+    try {
+      for (const ref of refs) expect(await sessionOf(ref), ref.sessionId).not.toHaveProperty('trial');
+      expect(asked).toEqual([]);
+      // Сессия, созданная до включения, плеча не получила и позже: имя опыта в записи появляется только при создании.
+      await enable('exp-b');
+      expect(await sessionOf(refs[0]!)).not.toHaveProperty('trial');
+    } finally { await service.stopAll(); }
+  });
+
+  it('смена имени опыта: новые сессии получают новое имя, у прежних остаётся прежнее, время назначения не меняется', async () => {
+    await enable('exp-a');
+    const { random } = draws(0, 1, 0);
+    const { workId, service } = await setup({ random });
+    const base = { projectPath: project, workId, provider: 'claude', label: '', task: '', parent: null };
+    const first = await service.create(base);
+    const second = await service.create(base);
+    const firstTrial = await trialOf(first);
+    await enable('exp-b');
+    const third = await service.create(base);
+    // Заморозка набора: имя очищено — новые сессии плеча не получают, прежние сохраняют своё.
+    await enable('');
+    const fourth = await service.create(base);
+    try {
+      expect(await trialOf(first)).toEqual(firstTrial);
+      expect((await trialOf(second))?.name).toBe('exp-a');
+      expect(await trialOf(third)).toMatchObject({ name: 'exp-b', arm: 'packet' });
+      expect(await sessionOf(fourth)).not.toHaveProperty('trial');
+    } finally { await service.stopAll(); }
+  });
+
+  it('плечо сохраняется после возобновления, повторного чтения карты и смены провайдера туда и обратно; недопустимое значение при чтении отвергается', async () => {
+    await enable('exp-a');
+    const { random } = draws(1);
+    const { workId, service } = await setup({ random });
+    const ref = await service.create({ projectPath: project, workId, provider: 'claude', label: '', task: '', parent: null });
+    const assigned = await trialOf(ref);
+    expect(assigned).toMatchObject({ name: 'exp-a', arm: 'control' });
+    try {
+      // Возобновление: процесс остановлен и поднят снова.
+      await service.stop(ref);
+      await service.launch(ref, 'resume');
+      expect(await trialOf(ref)).toEqual(assigned);
+      // Повторное чтение карты.
+      expect(await trialOf(ref)).toEqual(assigned);
+      // Смена провайдера туда и обратно — настоящим `applyAgentSwitch`, как у оркестратора замены (`current.sessions = …`).
+      const binding = (provider: string, endedAt: string) => ({
+        provider, model: null, effort: null, providerSessionId: null, startedAt: null, endedAt,
+        reason: 'manual' as const, requestedBy: 'human', carried: 'handover' as const,
+      });
+      await updateMap(project, workId, (map) => {
+        map.sessions = applyAgentSwitch(map, ref.sessionId, { provider: 'codex' }, binding('claude', '2026-11-17T11:00:00.000Z'), 'rev-1').sessions;
+      });
+      const onCodex = await sessionOf(ref);
+      expect(onCodex.provider).toBe('codex');
+      expect(onCodex.previousAgents).toHaveLength(1);
+      expect(onCodex.trial).toEqual(assigned);
+      await updateMap(project, workId, (map) => {
+        map.sessions = applyAgentSwitch(map, ref.sessionId, { provider: 'claude' }, binding('codex', '2026-11-17T12:00:00.000Z'), 'rev-2').sessions;
+      });
+      const back = await sessionOf(ref);
+      expect(back.provider).toBe('claude');
+      expect(back.previousAgents).toHaveLength(2);
+      expect(back.trial).toEqual(assigned);
+      // Запись с недопустимым значением не стирается при чтении: поле становится состоянием «назначение повреждено».
+      await updateMap(project, workId, (map) => {
+        Object.assign(map.sessions.find((candidate) => candidate.id === ref.sessionId)!, { trial: { ...assigned, arm: 'both' } });
+      });
+      expect(await trialOf(ref)).toEqual({ damaged: true });
+    } finally { await service.stopAll(); }
+  });
+
+  it('список назначений: на всех путях создания (окно, агент, рой) — намерение до карты, подтверждение после; метка из карты, путь проекта, работа, номер создания и сессия', async () => {
+    await enable('exp-a');
+    const { random } = draws(0, 1, 0, 1, 0);
+    const { workId, service } = await setup({ random });
+    const base = { projectPath: project, provider: 'claude', label: '', parent: null };
+    const caller = await createPendingSession(project, workId, { provider: 'claude', label: 'Caller', task: 'Coordinate', parent: null, contextFrom: [] });
+    const refs = [
+      await service.create({ ...base, workId: null, task: '' }),
+      await service.create({ ...base, workId, task: '' }),
+      await service.create({ ...base, workId, task: 'сделай штуку' }),
+      await service.create({ ...base, workId, task: 'Implement', requestedBy: caller }),
+      await service.create({ ...base, workId, task: 'Check everything', swarm: { kind: 'create', tag: 'Audit', objective: 'Check everything' } }),
+    ];
+    try {
+      const ledger = readTrialLedger('exp-a')!;
+      expect(ledger.unreadable).toEqual([]);
+      expect(ledger.lines).toHaveLength(refs.length * 2);
+      for (const ref of refs) {
+        const tag = (await trialOf(ref))!.tag;
+        const mine = ledger.lines.filter((line) => line.tag === tag);
+        // Намерение стоит раньше подтверждения, отмены нет, подтверждение называет ту же сессию, что и карта.
+        expect(mine.map((line) => line.kind), ref.sessionId).toEqual(['intent', 'confirm']);
+        expect(mine[1]).toMatchObject({ projectPath: ref.projectPath, workId: ref.workId, sessionId: ref.sessionId });
+        expect(mine[0]).toMatchObject({ name: 'exp-a', arm: (await trialOf(ref))!.arm });
+      }
+      expect(unresolvedIntents(ledger.lines)).toHaveLength(refs.length);
+    } finally { await service.stopAll(); }
+  });
+
+  it('сбой записи намерения: сессия создаётся без плеча на всех путях, список не появляется, остальной запуск идёт', async () => {
+    await enable('exp-a');
+    const { random } = draws(0, 0, 0);
+    const { workId, service } = await setup({ random });
+    // Вместо каталога `trials` — файл: дозапись невозможна.
+    await writeFile(path.join(parleyHome(), 'trials'), 'not a directory');
+    const base = { projectPath: project, provider: 'claude', label: '', parent: null };
+    const caller = await createPendingSession(project, workId, { provider: 'claude', label: 'Caller', task: 'Coordinate', parent: null, contextFrom: [] });
+    const refs = [
+      await service.create({ ...base, workId, task: '' }),
+      await service.create({ ...base, workId, task: 'сделай штуку' }),
+      await service.create({ ...base, workId, task: 'Implement', requestedBy: caller }),
+    ];
+    try {
+      for (const ref of refs) expect(await sessionOf(ref), ref.sessionId).not.toHaveProperty('trial');
+    } finally { await service.stopAll(); }
+  });
+
+  it('опыт не идёт: каталога trials нет, карта без следа', async () => {
+    await saveConfig({ roomPacket: true, roomPacketTrial: '' });
+    const { workId, service } = await setup();
+    const ref = await service.create({ projectPath: project, workId, provider: 'claude', label: '', task: '', parent: null });
+    try {
+      expect(existsSync(path.join(parleyHome(), 'trials'))).toBe(false);
+      expect((await readMap(project, workId)).work).not.toHaveProperty('trialTrace');
+      expect(await sessionOf(ref)).not.toHaveProperty('trial');
+    } finally { await service.stopAll(); }
+  });
+
+  const SETTINGS_PATH = (argv: string[]): string => argv[argv.indexOf('--settings') + 1]!;
+
+  it('сбой шага после создания записи оставляет в карте сессию с плечом на трёх путях; повторное чтение карты его возвращает', async () => {
+    await enable('exp-a');
+    const { random } = draws(1, 0, 1);
+    // Бинаря нет: запись создана, запуск падает после неё.
+    setEnv('PARLEY_CLAUDE_BIN', '/несуществующий/путь/до/claude');
+    const { workId, service } = await setup({ random });
+    const base = { projectPath: project, provider: 'claude', label: '', parent: null };
+    for (const input of [{ workId: null, task: '' }, { workId, task: '' }, { workId, task: 'сделай штуку' }]) {
+      await expect(service.create({ ...base, ...input })).rejects.toThrow();
+    }
+    const maps = await Promise.all((await readdir(path.join(workPaths(project, workId).dir, '..'))).filter((name) => /^w-/.test(name))
+      .map((name) => readMap(project, name)));
+    const arms = maps.flatMap((map) => map.sessions.map((session) => session.trial?.arm)).sort();
+    expect(arms).toEqual(['control', 'control', 'packet']);
+    for (const map of maps) for (const session of map.sessions) expect(session.trial).toMatchObject({ name: 'exp-a' });
+  });
+
+  it('повреждённое назначение: контрольная сессия с испорченным временем, опыт заморожен, roomPacket включён — моста при запуске нет, и после цикла запись-чтение карты тоже', async () => {
+    await saveConfig({ roomPacket: true, roomPacketTrial: '' });
+    const { workId, service } = await setup({ hooks, providerVersions: versions, packetHook: async () => PACKET_BRIDGE });
+    const id = await createPendingSession(project, workId, {
+      provider: 'claude', label: 'Опыт', task: 'сделай штуку', parent: null, contextFrom: [],
+      trial: { name: 'exp-a', arm: 'control', at: 'not-a-time', tag: '0123456789abcdef0123456789abcdef' },
+    });
+    const ref = { projectPath: project, workId, sessionId: id };
+    // Любая запись карты стирать состояние не должна.
+    await updateMap(project, workId, (map) => { map.work.goal = 'touched'; });
+    expect((await sessionOf(ref)).trial).toEqual({ damaged: true });
+    await service.launch(ref, 'new');
+    const args = await readArgs(process.env['STUB_ARGS_FILE']!);
+    const settings = JSON.parse(await readFile(SETTINGS_PATH(args.argv), 'utf8')) as { hooks: Record<string, { hooks: { type: string; command?: string }[] }[]> };
+    expect(settings.hooks['SessionStart']?.[0]?.hooks.filter((hook) => hook.type === 'command')).toHaveLength(1);
+    expect((await sessionOf(ref)).trial).toEqual({ damaged: true });
+    await service.stopAll();
+  });
+
+
+  /** Файл настроек запуска `claude` со сценарием: плечо, `roomPacket`, имя опыта. Возвращает число команд в `SessionStart` и сам файл. */
+  async function launchedSettings(arm: 'none' | 'packet' | 'control', roomPacket: boolean, trialName: string, packetHook: SessionsFeedOptions['packetHook']) {
+    await saveConfig({ roomPacket, roomPacketTrial: trialName });
+    const { workId, service } = await setup({ hooks, providerVersions: versions, ...(packetHook === undefined ? {} : { packetHook }) });
+    const id = await createPendingSession(project, workId, {
+      provider: 'claude', label: 'Опыт', task: 'сделай штуку', parent: null, contextFrom: [],
+      ...(arm === 'none' ? {} : { trial: { name: 'exp-a', arm, at: '2026-11-17T10:00:00.000Z', tag: '0123456789abcdef0123456789abcdef' } }),
+    });
+    const ref = { projectPath: project, workId, sessionId: id };
+    await service.launch(ref, 'new');
+    const file = process.env['STUB_ARGS_FILE']!;
+    const args = await readArgs(file);
+    const text = await readFile(SETTINGS_PATH(args.argv), 'utf8');
+    const settings = JSON.parse(text) as { hooks: Record<string, { hooks: { type: string; command?: string }[] }[]> };
+    const commands = settings.hooks['SessionStart']?.[0]?.hooks.filter((hook) => hook.type === 'command').map((hook) => hook.command) ?? [];
+    await service.stopAll();
+    return { text, commands };
+  }
+
+  // Мост: сессия с плечом «контроль» — никогда; «пакет» — при включённом roomPacket; без плеча — при включённом roomPacket
+  // и пустом имени опыта. Все двенадцать сочетаний.
+  const ARMS = ['none', 'packet', 'control'] as const;
+  const combos = ARMS.flatMap((arm) => [true, false].flatMap((roomPacket) => [true, false].map((running) => ({ arm, roomPacket, running }))));
+  const bridgeExpected = ({ arm, roomPacket, running }: { arm: (typeof ARMS)[number]; roomPacket: boolean; running: boolean }): boolean =>
+    roomPacket && arm !== 'control' && (arm === 'packet' || !running);
+
+  it.each(combos)('мост в файле настроек: плечо $arm, roomPacket $roomPacket, опыт идёт $running', async (combo) => {
+    // Как `packetHook` хоста: при выключенном roomPacket он ничего не возвращает.
+    const packetHook = async () => (combo.roomPacket ? PACKET_BRIDGE : undefined);
+    const { commands } = await launchedSettings(combo.arm, combo.roomPacket, combo.running ? 'exp-a' : '', packetHook);
+    expect(commands.length).toBe(bridgeExpected(combo) ? 2 : 1);
+    if (bridgeExpected(combo)) expect(commands[1]).toContain('parley-packet-hook');
+  });
+
+  it('опыт выключен и плеч нет: файл настроек не зависит от того, есть ли у сервиса мост, пока roomPacket выключен; при включённом — мост ровно один', async () => {
+    const off = await launchedSettings('none', false, '', async () => undefined);
+    const offWithoutHook = await launchedSettings('none', false, '', undefined);
+    expect(off.text).toBe(offWithoutHook.text);
+    expect(off.commands).toHaveLength(1);
+    const on = await launchedSettings('none', true, '', async () => PACKET_BRIDGE);
+    expect(on.commands).toHaveLength(2);
+    // Единственное отличие включённого моста — вторая команда в `SessionStart`.
+    const withoutBridge = JSON.parse(on.text) as { hooks: { SessionStart: { hooks: { command?: string }[] }[] } };
+    withoutBridge.hooks.SessionStart[0]!.hooks = withoutBridge.hooks.SessionStart[0]!.hooks.filter((hook) => !hook.command?.includes('parley-packet-hook'));
+    expect(withoutBridge).toEqual(JSON.parse(off.text));
+  });
+
+  it('пакетHook не зовётся, когда правило отказывает: контроль и сессия без плеча при идущем опыте', async () => {
+    let asked = 0;
+    const hook = async () => { asked += 1; return PACKET_BRIDGE; };
+    await launchedSettings('control', true, 'exp-a', hook);
+    await launchedSettings('none', true, 'exp-a', hook);
+    expect(asked).toBe(0);
+    await launchedSettings('packet', true, 'exp-a', hook);
+    expect(asked).toBe(1);
   });
 });

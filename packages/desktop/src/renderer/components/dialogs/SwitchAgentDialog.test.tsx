@@ -91,6 +91,30 @@ describe('SwitchAgentDialog', () => {
     expect(calls()[0]).not.toHaveProperty('effort');
   });
 
+  it('role change: text of the selected target above the button, ack sent with the switch; no text when none', async () => {
+    const roleChange = { from: 'builtin:architect', to: null, readOnlyLost: true, text: 'Architect is a read-only role and does not run on Codex. The session will continue without a role, and can edit files and run commands.' };
+    bridge.setHandler('sessions.switchAgent', () => ({ outcome: 'started' as const, carried: 'handover' as const }));
+    const base = options();
+    await open(options({ targets: [base.targets[0]!, { ...base.targets[1]!, roleChange }] }));
+    expect(document.querySelector('[data-switch-role-change]')).toBeNull();
+    fireEvent.click(screen.getByRole('radio', { name: /Codex/ }));
+    const line = document.querySelector('[data-switch-role-change]');
+    expect(line?.textContent).toBe(roleChange.text);
+    expect(line?.hasAttribute('data-read-only-lost')).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    await waitFor(() => expect(calls()).toHaveLength(1));
+    expect(calls()[0]).toMatchObject({ provider: 'codex', roleChange: { from: 'builtin:architect', to: null } });
+    expect(calls()[0]!['roleChange']).not.toHaveProperty('text');
+  });
+
+  it('without a role change the switch sends no roleChange', async () => {
+    bridge.setHandler('sessions.switchAgent', () => ({ outcome: 'started' as const, carried: 'handover' as const }));
+    await open();
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    await waitFor(() => expect(calls()).toHaveLength(1));
+    expect(calls()[0]).not.toHaveProperty('roleChange');
+  });
+
   it('blockers — список, кнопка недоступна, вызова нет', async () => {
     await open(options({ blockers: ['The session is closed'] }));
     expect(screen.getByText('The session is closed')).toBeTruthy();

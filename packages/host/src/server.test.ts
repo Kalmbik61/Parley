@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { addRoom, addSession, createWork, listTrust, parleyHome, readMap, trustKey, updateMap, workDb, workPaths } from '@parley/core';
+import { RoleChoiceError, addRoom, addSession, createWork, listTrust, parleyHome, readMap, trustKey, updateMap, workDb, workPaths } from '@parley/core';
 import {
   ASSISTANT_ACTIONS_FEATURE,
   BROWSER_AGENT_FEATURE,
@@ -75,6 +75,16 @@ describe('рукопожатие', () => {
     client.close();
   });
 
+  it('hello.features contains feed-opencode (the OpenCode Chat gate)', async () => {
+    const { home, token } = await boot();
+    const client = connectRaw(hostPaths(home).socket);
+    await waitConnected(client.socket);
+
+    const response = await hello(client, token);
+    expect((response.result as { features: string[] }).features).toContain('feed-opencode');
+    client.close();
+  });
+
   it('hello.features содержит rooms-mail', async () => {
     const { home, token } = await boot();
     const client = connectRaw(hostPaths(home).socket);
@@ -114,6 +124,73 @@ describe('рукопожатие', () => {
     await waitConnected(client.socket);
 
     await waitClosed(client.socket, 1000);
+  });
+
+  async function badFrameLogLines(home: string): Promise<string[]> {
+    const text = await readFile(hostPaths(home).log, 'utf8');
+    return text.split('\n').filter((line) => line.includes('bad frame from client'));
+  }
+
+  it('битая строка закрывает только это соединение, хост отвечает другим', async () => {
+    const { home, token } = await boot();
+    const broken = connectRaw(hostPaths(home).socket);
+    const healthy = connectRaw(hostPaths(home).socket);
+    await waitConnected(broken.socket);
+    await waitConnected(healthy.socket);
+    await hello(broken, token);
+    await hello(healthy, token);
+
+    broken.socket.write('garbage\n');
+    await waitClosed(broken.socket);
+
+    healthy.send({ id: 400, method: 'host.info', params: {} });
+    expect((await healthy.next()).id).toBe(400);
+    const lines = await badFrameLogLines(home);
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0] as string)).toMatchObject({ level: 'warn', client: 'test', kind: 'bad-json' });
+    expect(await readFile(hostPaths(home).log, 'utf8')).not.toContain('garbage');
+    healthy.close();
+  });
+
+  it('битая строка до hello тоже закрывает соединение', async () => {
+    const { home, token } = await boot();
+    const broken = connectRaw(hostPaths(home).socket);
+    await waitConnected(broken.socket);
+
+    broken.socket.write('garbage\n');
+    await waitClosed(broken.socket);
+
+    const healthy = connectRaw(hostPaths(home).socket);
+    await waitConnected(healthy.socket);
+    await hello(healthy, token);
+    healthy.send({ id: 401, method: 'host.info', params: {} });
+    expect((await healthy.next()).id).toBe(401);
+    const lines = await badFrameLogLines(home);
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0] as string)).toMatchObject({ client: 'before-hello', kind: 'bad-json' });
+    healthy.close();
+  });
+
+  it('валидный кадр и битая строка одним write: кадр не исполняется, соединение закрыто, хост жив', async () => {
+    const { home, token } = await boot();
+    const broken = connectRaw(hostPaths(home).socket);
+    const healthy = connectRaw(hostPaths(home).socket);
+    await waitConnected(broken.socket);
+    await waitConnected(healthy.socket);
+    await hello(broken, token);
+    await hello(healthy, token);
+
+    let received = 0;
+    broken.socket.on('data', () => {
+      received += 1;
+    });
+    broken.socket.write(`${JSON.stringify({ id: 402, method: 'host.info', params: {} })}\ngarbage\n`);
+    await waitClosed(broken.socket);
+    expect(received).toBe(0);
+
+    healthy.send({ id: 403, method: 'host.info', params: {} });
+    expect((await healthy.next()).id).toBe(403);
+    healthy.close();
   });
 });
 
@@ -541,6 +618,18 @@ describe('роль remote: белый список этапа A (спека мо
     const listed = (await collectUntil(client, 11)).at(-1);
     expect(listed?.error).toBeUndefined();
     expect(listed?.result).toBeDefined();
+    client.close();
+  });
+
+  it('assistant.stopPlan, assistant.journal и settings.set от remote — unknown_method', async () => {
+    const { home, token } = await boot();
+    const { client } = await connectAs(home, token, 'remote');
+    let id = 3000;
+    for (const [method, params] of [['assistant.stopPlan', { proposalId: 'p1' }], ['assistant.journal', {}], ['settings.set', { key: 'assistantAutonomy', value: 'true' }]] as const) {
+      id += 1;
+      client.send({ id, method, params });
+      expect((await collectUntil(client, id)).at(-1)?.error, method).toMatchObject({ code: 'unknown_method' });
+    }
     client.close();
   });
 
@@ -1453,6 +1542,25 @@ describe('роль remote: запуск с телефона (A2b, спека м�
       s.close();
     });
 
+    it('pty.send с телефона: строка оболочки (`!…`) — bad_request до обработчика; `/compact` и обычный текст проходят; окно не ограничено', async () => {
+      const s = await a28Server({ enabled: true });
+      const remote = await s.connect('remote');
+      let id = 640;
+      for (const text of ['!echo test', '  !echo', 'привет\n!echo', '\x1b[31m!echo']) {
+        const reply = await answer(remote.client, ++id, 'pty.send', { ...message, text });
+        expect(reply.error, JSON.stringify(text)).toMatchObject({ code: 'bad_request', message: 'Shell commands cannot be sent from the phone' });
+      }
+      expect(s.spies['pty.send']).not.toHaveBeenCalled();
+      for (const text of ['/compact', 'hello!', 'привет']) {
+        expect((await answer(remote.client, ++id, 'pty.send', { ...message, text })).error, text).toBeUndefined();
+      }
+      expect(s.spies['pty.send']).toHaveBeenCalledTimes(3);
+      const desktop = await s.connect('desktop');
+      expect((await answer(desktop.client, ++id, 'pty.send', { ...message, text: '!echo test' })).error).toBeUndefined();
+      expect(s.spies['pty.send']).toHaveBeenCalledTimes(4);
+      s.close();
+    });
+
     it('sessions.create с workId: null — новая работа только в известном проекте', async () => {
       const s = await a28Server({ enabled: true });
       const remote = await s.connect('remote');
@@ -1503,6 +1611,15 @@ describe('роль remote: запуск с телефона (A2b, спека м�
       expect((await answer(remote.client, 670, 'sessions.create', { ...session, trustFolder: true })).error)
         .toMatchObject({ code: 'internal', message: 'trust.json is not writable' });
       expect(s.spies['sessions.create']).not.toHaveBeenCalled();
+      s.close();
+    });
+
+    it('отказ роли отвечает bad_request с понятным сообщением, а не internal', async () => {
+      const s = await a28Server({ enabled: true });
+      s.spies['sessions.create']!.mockRejectedValueOnce(new RoleChoiceError('role-permissions-unavailable'));
+      const desktop = await s.connect('desktop');
+      expect((await answer(desktop.client, 661, 'sessions.create', session)).error)
+        .toMatchObject({ code: 'bad_request', data: { reason: 'role-permissions-unavailable' }, message: expect.stringContaining('read-only') });
       s.close();
     });
 

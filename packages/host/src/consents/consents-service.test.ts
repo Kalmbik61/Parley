@@ -323,6 +323,70 @@ describe('ConsentsService: карточка agent-switch', () => {
     await vi.waitFor(() => expect(second.switchAgent).toHaveBeenCalledTimes(1));
     expect(second.continueLaunch).not.toHaveBeenCalled();
   });
+
+  describe('смена роли на карточке (спека 2026-11-12, 2.4)', () => {
+    const lost = {
+      from: 'builtin:architect',
+      to: null,
+      readOnlyLost: true,
+      text: 'Architect is a read-only role and does not run on Qwen Code. The session will continue without a role, and can edit files and run commands.',
+    };
+    const roleAsk = { ...ask, provider: 'qwen', providerLabel: 'Qwen Code', model: null, roleChange: lost };
+
+    it('карточка несёт смену роли и переживает перезапуск хоста', () => {
+      const first = build();
+      const card = first.service.requestSwitch(roleAsk);
+      expect(card).toMatchObject({ kind: 'agent-switch', roleChange: lost });
+      first.service.stop();
+      expect(build().service.list()).toEqual([expect.objectContaining({ id: card.id, roleChange: lost })]);
+    });
+
+    it('allow без подтверждения или с чужим — bad_request, карточка ждёт, замены нет', async () => {
+      const { service, switchAgent } = build();
+      const card = service.requestSwitch(roleAsk);
+      const refusal = { code: 'bad_request', message: `${lost.text} Allow it in an updated Parley window.` };
+      await expect(service.decide(card.id, 'allow')).rejects.toMatchObject(refusal);
+      await expect(service.decide(card.id, 'allow', 'window', undefined, undefined, { from: 'builtin:architect', to: 'builtin:executor' })).rejects.toMatchObject(refusal);
+      expect(service.list()).toEqual([expect.objectContaining({ id: card.id, state: 'pending' })]);
+      expect(switchAgent).not.toHaveBeenCalled();
+    });
+
+    it('allow с подтверждением — switchAgent получает смену роли', async () => {
+      const { service, switchAgent } = build();
+      const card = service.requestSwitch(roleAsk);
+      expect(await service.decide(card.id, 'allow', 'window', undefined, undefined, { from: 'builtin:architect', to: null })).toEqual({ applied: true, state: 'allowed' });
+      await vi.waitFor(() => expect(switchAgent).toHaveBeenCalledTimes(1));
+      expect(switchAgent).toHaveBeenCalledWith(ref('s-03'), {
+        requestId: card.id, provider: 'qwen', force: true, by: 's-01', roleChange: { from: 'builtin:architect', to: null },
+      });
+    });
+
+    it('deny без подтверждения — как всегда', async () => {
+      const { service, switchAgent, tellRequester } = build();
+      const card = service.requestSwitch(roleAsk);
+      expect(await service.decide(card.id, 'deny')).toEqual({ applied: true, state: 'denied' });
+      await vi.waitFor(() => expect(tellRequester).toHaveBeenCalledTimes(1));
+      expect(switchAgent).not.toHaveBeenCalled();
+    });
+
+    it('смена без потери read-only: allow без подтверждения проходит, смена уходит в switchAgent', async () => {
+      const { service, switchAgent } = build();
+      const plain = { from: 'claude:reviewer', to: 'codex:reviewer', readOnlyLost: false, text: 'Role reviewer does not run on Codex. The session will continue as reviewer (codex).' };
+      const card = service.requestSwitch({ ...ask, roleChange: plain });
+      await service.decide(card.id, 'allow');
+      await vi.waitFor(() => expect(switchAgent).toHaveBeenCalledTimes(1));
+      expect(switchAgent.mock.calls[0]![1]).toMatchObject({ roleChange: { from: 'claude:reviewer', to: 'codex:reviewer' } });
+    });
+
+    it('карточка без смены роли — switchAgent без roleChange', async () => {
+      const { service, switchAgent } = build();
+      const card = service.requestSwitch(ask);
+      expect(card).not.toHaveProperty('roleChange');
+      await service.decide(card.id, 'allow');
+      await vi.waitFor(() => expect(switchAgent).toHaveBeenCalledTimes(1));
+      expect(switchAgent.mock.calls[0]![1]).not.toHaveProperty('roleChange');
+    });
+  });
 });
 
 describe('ConsentsService: серверы MCP проекта (спека 2026-11-02, 7)', () => {

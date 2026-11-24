@@ -1,0 +1,3 @@
+parent 17122 alive after kill -9: no
+serve 17124 alive: yes
+{"version":"2.2.7","pid":1234,"hostname":"lab-host","urls":["http://127.0.0.1:4096"],"paths":{"tmp":"/private

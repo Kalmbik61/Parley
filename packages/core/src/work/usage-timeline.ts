@@ -63,10 +63,13 @@ function emptyTimeline(file: string, family: 'claude' | 'codex'): UsageTimeline 
 }
 
 /**
- * Дочитывает лог с `previous.offset` и возвращает НОВУЮ шкалу (прежняя не меняется). Усечение
- * (`size < offset`) или подмена файла (другой `ino`) — чтение с нуля. Оборванная последняя строка ждёт
- * следующего вызова; целая (JSON-объект) без `\n` принимается сразу, как у readline. Само чтение —
- * `readJsonlTail`. `adapter` разбирает записи Claude так же, как в полном чтении индексатора.
+ * Дочитывает лог с `previous.offset` и возвращает шкалу с новым курсором. Усечение (`size < offset`) или
+ * подмена файла (другой `ino`) — чтение с нуля, шкала целиком новая. Иначе новые наблюдения, точки стоимости и
+ * `sidechain` копятся в буфере и ПОСЛЕ удачного чтения дописываются в массивы прежней шкалы на месте (без копии
+ * на каждое дописывание); чтение, упавшее посреди хвоста, шкалу не меняет. Прежний объект шкалы после вызова
+ * обновляется на месте и возвращается же: держать его для сравнения нельзя. Оборванная последняя строка ждёт следующего
+ * вызова; целая (JSON-объект) без `\n` принимается сразу, как у readline. Само чтение — `readJsonlTail`.
+ * `adapter` разбирает записи Claude так же, как в полном чтении индексатора.
  */
 export async function extendUsageTimeline(
   previous: UsageTimeline | null,
@@ -76,29 +79,21 @@ export async function extendUsageTimeline(
   adapter: SchemaAdapter = adapterV1,
 ): Promise<UsageTimeline> {
   const prior = previous !== null && previous.family === family ? previous : null;
-  // Черновик заводится только когда есть что менять; прежняя шкала не мутируется никогда.
-  type Draft = {
+  type Buffer_ = {
     observations: UsageObservation[];
     sidechain: ClaudeSidechain | undefined;
     costs: CostPoint[];
     lastStamp: string | null;
   };
-  let draft: Draft | null = null;
-  const fresh = (): Draft => ({
+  const fresh = (lastStamp: string | null): Buffer_ => ({
     observations: [],
     sidechain: family === 'claude' ? { agents: new Set<string | null>(), unidentified: false } : undefined,
     costs: [],
-    lastStamp: null,
+    lastStamp,
   });
-  const copyOfPrior = (): Draft => ({
-    observations: [...(prior?.observations ?? [])],
-    sidechain:
-      family === 'claude'
-        ? { agents: new Set(prior?.sidechain?.agents), unidentified: prior?.sidechain?.unidentified ?? false }
-        : undefined,
-    costs: [...(prior?.costs ?? [])],
-    lastStamp: prior?.lastStamp ?? null,
-  });
+  // Буфер новых записей; `restarted` — чтение началось с нуля, прежняя шкала не продолжается.
+  let buffer = fresh(prior?.lastStamp ?? null);
+  let restarted = false;
 
   const cursor: TailCursor | null =
     prior === null
@@ -114,41 +109,59 @@ export async function extendUsageTimeline(
 
   const result = await readJsonlTail(cursor, file, reader, {
     reset: () => {
-      draft = fresh();
+      buffer = fresh(null);
+      restarted = true;
     },
     record: (raw, lineNo) => {
-      draft ??= copyOfPrior();
       if (family === 'claude') {
         const stamp = typeof raw['timestamp'] === 'string' ? raw['timestamp'] : null;
         if (raw['type'] === 'cost-state') {
           const total = raw['totalCostUSD'];
-          if (draft.lastStamp !== null && typeof total === 'number' && Number.isFinite(total)) {
-            draft.costs.push({ at: draft.lastStamp, total, unknown: raw['hasUnknownModelCost'] === true });
+          if (buffer.lastStamp !== null && typeof total === 'number' && Number.isFinite(total)) {
+            buffer.costs.push({ at: buffer.lastStamp, total, unknown: raw['hasUnknownModelCost'] === true });
           }
           return;
         }
-        if (stamp !== null) draft.lastStamp = stamp;
+        if (stamp !== null) buffer.lastStamp = stamp;
         const record = adapter.toSessionRecord(raw);
         const observation = claudeUsageObservation(record, file, lineNo);
         if (observation !== null) {
-          draft.observations.push(observation);
-          if (draft.sidechain !== undefined) noteClaudeSidechain(draft.sidechain, record);
+          buffer.observations.push(observation);
+          if (buffer.sidechain !== undefined) noteClaudeSidechain(buffer.sidechain, record);
         }
         return;
       }
       const observation = codexUsageObservation(raw);
-      if (observation !== null) draft.observations.push(observation);
+      if (observation !== null) buffer.observations.push(observation);
     },
   });
   if (result.missing) return emptyTimeline(file, family);
 
-  const kept = draft as Draft | null;
-  const observations = kept?.observations ?? prior?.observations ?? [];
-  const sidechain = kept === null ? prior?.sidechain : kept.sidechain;
-  const costs = kept === null ? prior?.costs : kept.costs;
-  const lastStamp = kept === null ? prior?.lastStamp : kept.lastStamp;
+  let observations: UsageObservation[];
+  let sidechain: ClaudeSidechain | undefined;
+  let costs: CostPoint[] | undefined;
+  let lastStamp: string | null | undefined;
+  if (prior === null || restarted) {
+    ({ observations, sidechain, costs, lastStamp } = buffer);
+  } else {
+    // Чтение удалось: буфер дописывается в массивы прежней шкалы на месте.
+    observations = prior.observations as UsageObservation[];
+    for (const item of buffer.observations) observations.push(item);
+    sidechain = prior.sidechain;
+    if (buffer.sidechain !== undefined) {
+      sidechain ??= { agents: new Set<string | null>(), unidentified: false };
+      for (const agent of buffer.sidechain.agents) sidechain.agents.add(agent);
+      if (buffer.sidechain.unidentified) sidechain.unidentified = true;
+    }
+    costs = prior.costs as CostPoint[] | undefined;
+    if (buffer.costs.length > 0) {
+      costs ??= [];
+      for (const point of buffer.costs) costs.push(point);
+    }
+    lastStamp = buffer.lastStamp ?? prior.lastStamp;
+  }
   const { cursor: next } = result;
-  return {
+  const updated: UsageTimeline = {
     file,
     family,
     offset: next.offset,
@@ -161,6 +174,11 @@ export async function extendUsageTimeline(
     ...(family === 'claude' && lastStamp !== undefined ? { lastStamp } : {}),
     ...(next.unterminated ? { unterminated: true } : {}),
   };
+  if (prior === null || restarted) return updated;
+  // Массивы прежней шкалы уже выросли на месте: курсор обновляется в том же объекте, чтобы смещение и массивы
+  // не расходились, если вызывающий не успеет принять результат (упало чтение соседнего подагента).
+  if (updated.unterminated === undefined) delete prior.unterminated;
+  return Object.assign(prior, updated);
 }
 
 /** Срез расхода Claude по окнам: тот же итог, что у индексатора с `usageWindows`, без чтения файлов. */

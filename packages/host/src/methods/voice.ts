@@ -29,7 +29,8 @@ export function createVoiceHandlers(jobs: Jobs | undefined, voice: VoiceDeps | u
         ...(params.context === undefined ? {} : { context: params.context }),
       });
     const get: Handler<'jobs.get'> = async (params) => ({ job: projectPhoneJob(jobs.getJob(params.jobId)) });
-    const cancel: Handler<'jobs.cancel'> = async (params) => ({ job: projectPhoneJob(jobs.cancelJob(params.jobId)) });
+    // Служебный job (спека автономии §6.3) телефону не принадлежит: отказ до любой записи, ответ как у неизвестного job.
+    const cancel: Handler<'jobs.cancel'> = async (params) => (jobs.getJob(params.jobId)?.origin === 'system' ? { job: null } : { job: projectPhoneJob(jobs.cancelJob(params.jobId)) });
     handlers['jobs.submit'] = submit as AnyHandler;
     handlers['jobs.get'] = get as AnyHandler;
     handlers['jobs.cancel'] = cancel as AnyHandler;

@@ -143,8 +143,8 @@ export function makeMailEvent(patch: Partial<RoomsMailEvent> & Pick<RoomsMailEve
 }
 
 /** Участник роя: `role` и номер, `handed` — сдал (иначе работает). */
-export function makeSwarmMember(sessionId: string, role: WorkSwarmMember['role'], n = 1, handed = false): WorkSwarmMember {
-  return { sessionId, role, n, addedAt: '2026-09-27T08:01:00.000Z', handedAt: handed ? '2026-09-27T08:05:00.000Z' : null };
+export function makeSwarmMember(sessionId: string, role: WorkSwarmMember['role'], n = 1, handed = false, patch: Partial<WorkSwarmMember> = {}): WorkSwarmMember {
+  return { sessionId, role, n, addedAt: '2026-09-27T08:01:00.000Z', handedAt: handed ? '2026-09-27T08:05:00.000Z' : null, ...patch };
 }
 
 /** Рой: по умолчанию `running`, создатель — человек, королева — первый участник. */

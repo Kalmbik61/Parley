@@ -1,9 +1,12 @@
 import { createServer as createNetServer } from 'node:net';
 import { performance } from 'node:perf_hooks';
 import type { Server, Socket } from 'node:net';
+import { RoleChoiceError, startsShellLine } from '@parley/core';
 import {
   COMPACT_WORKS_FEATURE,
   FEED_CODEX_FEATURE,
+  FEED_OPENCODE_FEATURE,
+  FEED_QWEN_FEATURE,
   LineDecoder,
   LineTooLongError,
   PROTOCOL_VERSION,
@@ -23,6 +26,13 @@ import type { Client } from './client.js';
 import type { AnyHandler, AnyNotificationHandler, HostContext, RequestInfo } from './context.js';
 import { HostError } from './errors.js';
 import { resolvePreparedWorksSyncReply } from './works/works-sync.js';
+
+const ROLE_CHOICE_MESSAGES: Record<RoleChoiceError['code'], string> = {
+  'role-missing': 'The selected role was not found',
+  'role-provider-mismatch': 'The selected role is not available for this provider',
+  'role-permissions-unavailable': 'This role needs permissions (such as read-only) that this provider cannot enforce yet',
+  'role-context-unverified': 'The selected role context could not be verified',
+};
 
 export interface ServerOptions {
   context: HostContext;
@@ -111,7 +121,7 @@ interface HelloParams {
  * Что хост умеет сверх протокола 1: окно по этому списку знает, что снимок работ компактный, что лента Chat есть у Codex и
  * что письма приходят событием `rooms.mail`, а не вместе со снимком.
  */
-const HOST_FEATURES = [COMPACT_WORKS_FEATURE, FEED_CODEX_FEATURE, ROOMS_MAIL_FEATURE, REMOTE_POLICY_FEATURE];
+const HOST_FEATURES = [COMPACT_WORKS_FEATURE, FEED_CODEX_FEATURE, FEED_QWEN_FEATURE, FEED_OPENCODE_FEATURE, ROOMS_MAIL_FEATURE, REMOTE_POLICY_FEATURE];
 
 const REMOTE_METHOD_SET: ReadonlySet<string> = new Set(REMOTE_METHODS);
 const REMOTE_NOTIFICATION_SET: ReadonlySet<string> = new Set(REMOTE_NOTIFICATIONS);
@@ -262,11 +272,13 @@ function handleConnection(socket: Socket, options: ServerOptions): void {
     try {
       messages = decoder.push(chunk);
     } catch (error) {
-      if (error instanceof LineTooLongError) {
-        socket.destroy();
-        return;
-      }
-      throw error;
+      // Битая строка закрывает только это соединение: тела кадра в логе нет.
+      options.context.log.warn('bad frame from client', {
+        client: client?.role ?? client?.name ?? 'before-hello',
+        kind: error instanceof LineTooLongError ? 'line-too-long' : 'bad-json',
+      });
+      socket.destroy();
+      return;
     }
     for (const raw of messages) {
       if (rejected) return;
@@ -335,9 +347,12 @@ function handleHello(
 
   // Роль — только здесь и один раз: повторный `hello` уходит в handleMessage и получает `unknown_method`.
   const remote = hello.client === 'remote';
+  const onOverflow = (queuedBytes: number): void => {
+    options.context.log.warn('клиент отключён: буфер записи выше потолка', { op: 'client.overflow', client: hello.client, queuedBytes });
+  };
   const registered = remote
-    ? createClient(socket, hello.client, (hello.features ?? []).filter((name) => REMOTE_CLIENT_FEATURES.has(name)), 'remote')
-    : createClient(socket, hello.client, hello.features);
+    ? createClient(socket, hello.client, (hello.features ?? []).filter((name) => REMOTE_CLIENT_FEATURES.has(name)), 'remote', onOverflow)
+    : createClient(socket, hello.client, hello.features, undefined, onOverflow);
   const methods = supportedMethods(options);
   writeRaw(socket, {
     id,
@@ -495,6 +510,11 @@ function handleMessage(raw: unknown, client: Client, options: ServerOptions): vo
     client.send({ id, error: { code: 'bad_request', message: 'the phone cannot write into an autonomous room' } });
     return;
   }
+  // Строка оболочки (`!…`) с телефона исполнилась бы в терминале сессии; `checkRemoteParams` уже проверил, что `text` — строка.
+  if (client.role === 'remote' && method === 'pty.send' && startsShellLine((parsed.message.params as { text: string }).text)) {
+    client.send({ id, error: { code: 'bad_request', message: 'Shell commands cannot be sent from the phone' } });
+    return;
+  }
   const handler = options.methodHandlers[method];
   if (!handler) {
     // Схема метода известна протоколу (иначе parseIncoming вернул бы invalid),
@@ -583,6 +603,12 @@ function handleMessage(raw: unknown, client: Client, options: ServerOptions): vo
           : { code: error.code, message: error.message, data: error.data };
         client.send({ id, error: errorField });
         logIfSlow({ ok: false, code: error.code });
+        return;
+      }
+      // Отказ роли — ошибка запроса, а не сбой хоста: понятное сообщение вместо `internal`.
+      if (error instanceof RoleChoiceError) {
+        client.send({ id, error: { code: 'bad_request', message: ROLE_CHOICE_MESSAGES[error.code], data: { reason: error.code } } });
+        logIfSlow({ ok: false, code: 'bad_request' });
         return;
       }
       const message = error instanceof Error ? error.message : String(error);

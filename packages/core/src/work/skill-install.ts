@@ -439,20 +439,45 @@ async function retireLegacy(pass: Pass, root: string): Promise<void> {
   }
 }
 
+type GitLocation = { commonDir: string; prefix: string };
+/** Положительные ответы git на жизнь процесса: общий каталог и префикс корня не меняются, пока корень тот же репозиторий. */
+const locations = new Map<string, GitLocation>();
+let locationSpawns = 0;
+/** Только для тестов. */
+export function resetGitLocationCache(): void { locations.clear(); }
+/** Только для тестов: сколько раз запущен `git rev-parse`. */
+export function gitLocationSpawnCount(): number { return locationSpawns; }
+
 /**
  * Где лежит общий каталог репозитория и как называется корень относительно вершины рабочей копии.
  * `null` — не репозиторий или git не отвечает: скрывать нечего. Пробы зовут git с `core.fsmonitor=false`
  * (как остальные вызовы git в core): программа из конфигурации репозитория здесь не нужна.
+ *
+ * Кэшируется только положительный ответ, по корню. Перед выдачей одна проверка `stat`: у настоящего общего каталога
+ * есть `HEAD`. Если корень перестал быть репозиторием или репозиторий унесли, записи нет — спрашиваем git заново, и
+ * `info/exclude` не дописывается в каталог, которого уже нет (иначе `mkdir -p` воскресил бы его пустым).
+ * Остаточное окно: корень стал вложенным репозиторием, а старый общий каталог цел — строки лягут в старый файл;
+ * скилл тогда виден git до перезапуска хоста, ничего чужого не пишется.
  */
-async function gitLocation(root: string): Promise<{ commonDir: string; prefix: string } | null> {
+async function gitLocation(root: string): Promise<GitLocation | null> {
+  const key = path.resolve(root);
+  const known = locations.get(key);
+  if (known !== undefined) {
+    if ((await stat(path.join(known.commonDir, 'HEAD')).catch(() => null))?.isFile() === true) return known;
+    locations.delete(key);
+  }
   try {
+    locationSpawns += 1;
     const { stdout } = await run(
       'git',
       ['-c', 'core.fsmonitor=false', '-C', root, 'rev-parse', '--git-common-dir', '--show-prefix'],
       { timeout: 5000 },
     );
     const [common = '', prefix = ''] = stdout.split('\n');
-    return common === '' ? null : { commonDir: path.resolve(root, common), prefix };
+    if (common === '') return null;
+    const location = { commonDir: path.resolve(root, common), prefix };
+    locations.set(key, location);
+    return location;
   } catch {
     return null;
   }

@@ -13,6 +13,16 @@
 //     STUB_WORK       — ход: заголовок со спиннером, пока не придёт STUB_READY или STUB_NOTE
 //     STUB_READY      — конец хода: `Ready`
 //     STUB_APPROVAL   — вопрос человеку: OSC 9 `Approval requested: …` и заголовок Action Required
+//     STUB_QUESTION   — неузнанная форма вопроса для сырой панели: цифра 1–3 (`picked: <цифра>`), Enter без текста
+//                       (`picked: default`) или текст с Enter (`enter: <текст>`), затем заголовок `Ready`
+//     STUB_QUESTION_SCREEN — экран `request_user_input` Codex 0.166 по замеру; цифра отправляет вариант, стрелка вниз
+//                       и Tab на последнем варианте открывают заметки, Enter отправляет введённый текст
+//     STUB_APPROVAL_SCREEN [команда] — экран одобрения команды Codex 0.166 (форма с образца спайка: заголовок, `$ команда`,
+//                       три пронумерованных варианта, строка-подсказка), OSC 9 `Approval requested` и заголовок Action Required;
+//                       ждёт цифру 1–3 одним нажатием (`approved: <команда>`, `approved-always: <команда>`, `denied: <команда>`),
+//                       затем заголовок `Ready`. `STUB_APPROVAL_SCREEN <команда> => <другая>` через 4 с печатает поверх прежнего экран
+//                       с другой командой (экран сменился, пока человек ещё не ответил): `pty.send` в ожидающую сессию хост
+//                       не пускает, поэтому смену экрана делает сама заглушка
 //     STUB_LIMIT [текст] — лимит подписки (спека застрявших, 3.3 и 9): ход кончается ошибкой — в журнале треда
 //                       `task_complete` с `error: { message, codex_error_info: 'usage_limit_exceeded' }` (нужен
 //                       STUB_CODEX_SESSIONS), заголовок `Ready`, как у Codex; без текста — сообщение без времени сброса
@@ -100,6 +110,7 @@ function callHook(event, extra) {
 
 const PASTE_START = '\x1b[200~';
 const PASTE_END = '\x1b[201~';
+const ARROW_DOWN = '\x1b[B';
 const THREAD = process.env.STUB_CODEX_THREAD ?? '019ce3d5-584a-7be2-922e-b8185a8d7c19';
 const FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
@@ -108,6 +119,89 @@ const title = (text) => out(`\x1b]0;${text}\x07`);
 const line = (text) => out(`${text.replace(/\r?\n/g, '\r\n')}\r\n`);
 
 let spinner = null;
+const questionOptions = ['Red (Recommended)', 'Green', 'Blue', 'None of the above'];
+const questionDescriptions = [
+  'Select red as your preferred color.',
+  'Select green as your preferred color.',
+  'Select blue as your preferred color.',
+  'Optionally, add details in notes (tab)',
+];
+/** Открыт вопрос: упрощённая форма для сырой панели или узнанная форма для карточки. */
+let questionOpen = null;
+let questionSelected = 0;
+let questionNotes = '';
+let questionRows = 0;
+
+function clearQuestionScreen() {
+  if (questionRows === 0) return;
+  out(`\x1b[${questionRows}A\r\x1b[J`);
+  questionRows = 0;
+}
+
+/** Перерисовка вопроса и поля заметок по замерам question-options и question-notes-open. */
+function drawQuestionScreen() {
+  clearQuestionScreen();
+  const rows = ['  Question 1/1 (1 unanswered)', '  Which color do you prefer?', ''];
+  for (const [index, option] of questionOptions.entries()) {
+    const cursor = index === questionSelected ? '› ' : '  ';
+    rows.push(`  ${cursor}${index + 1}. ${option.padEnd(22)}${questionDescriptions[index]}`);
+  }
+  rows.push('');
+  if (questionOpen === 'notes') {
+    rows.push(`  › ${questionNotes || 'Add notes'}`, '', '  tab or esc to clear notes | enter to submit answer');
+  } else {
+    rows.push('  tab to add notes | enter to submit answer | esc to interrupt');
+  }
+  const columns = process.stdout.columns ?? 80;
+  questionRows = rows.reduce((count, row) => count + Math.max(1, Math.ceil(row.length / columns)), 0);
+  line(rows.join('\n'));
+}
+
+function printQuestionScreen() {
+  questionOpen = 'options';
+  questionSelected = 0;
+  questionNotes = '';
+  drawQuestionScreen();
+  title(`[ ! ] Action Required | ${THREAD}`);
+}
+
+function closeQuestion(answer) {
+  clearQuestionScreen();
+  questionOpen = null;
+  if (answer !== null) line(answer);
+  title(`Ready | ${THREAD}`);
+}
+
+/** Открыто одобрение `STUB_APPROVAL_SCREEN`: команда на экране; следующая цифра 1–3 отвечает на него. */
+let approvalCommand = null;
+
+function printApproval(command) {
+  approvalCommand = command;
+  line('');
+  line('  Would you like to run the following command?');
+  line('');
+  line('  Environment: local');
+  line('');
+  line(`  Reason: Allow \`${command}\` to write in the read-only workspace?`);
+  line('');
+  line(`  $ ${command}`);
+  line('');
+  line('› 1. Yes, proceed (y)');
+  line(`  2. Yes, and don't ask again for commands that start with \`${command}\` (p)`);
+  line('  3. No, and tell Codex what to do differently (esc)');
+  line('');
+  line('  Press enter to confirm or esc to cancel');
+  stopSpinner();
+  out(`\x1b]9;Approval requested: ${command}\x07`);
+  title(`[ ! ] Action Required | ${THREAD}`);
+}
+
+function answerApproval(digit) {
+  const command = approvalCommand;
+  approvalCommand = null;
+  line(digit === '1' ? `approved: ${command}` : digit === '2' ? `approved-always: ${command}` : `denied: ${command}`);
+  title(`Ready | ${THREAD}`);
+}
 
 // Журнал Codex: rollout-файл треда в корне STUB_CODEX_SESSIONS. Без переменной все функции ниже ничего не делают.
 // Хост запускает бинарь и без терминала (клиент ролей `app-server` по stdio): журнал пишет только процесс под PTY.
@@ -321,6 +415,8 @@ function submit(text, key) {
     return undefined;
   }
   line(`enter: ${text}`);
+  // Ответ текстом на открытый вопрос (кроме самой команды STUB_QUESTION): вопрос закрыт.
+  if (questionOpen === 'raw' && text !== '') closeQuestion(null);
   if (journalCommand(text)) return undefined;
   if (text === 'STUB_WORK') {
     // Ход в ленте начинается сообщением пользователя: без него `turnActive` хода не видит (кнопки Stop не будет).
@@ -333,6 +429,21 @@ function submit(text, key) {
   else if (text === 'STUB_READY') {
     stopSpinner();
     title(`Ready | ${THREAD}`);
+  } else if (text === 'STUB_APPROVAL_SCREEN' || text.startsWith('STUB_APPROVAL_SCREEN ')) {
+    const [first, replacement] = text.slice('STUB_APPROVAL_SCREEN'.length).split('=>').map((part) => part.trim());
+    printApproval(first || 'touch created.txt');
+    if (replacement) setTimeout(() => printApproval(replacement), 4_000);
+  } else if (text === 'STUB_QUESTION_SCREEN') {
+    stopSpinner();
+    printQuestionScreen();
+  } else if (text === 'STUB_QUESTION') {
+    stopSpinner();
+    questionOpen = 'raw';
+    line('Which color do you prefer?');
+    line('1. Red');
+    line('2. Green');
+    line('3. Blue');
+    title(`[ ! ] Action Required | ${THREAD}`);
   } else if (text === 'STUB_APPROVAL') {
     // Пока Codex ждёт человека, спиннер не крутится: заголовок держит Action Required.
     stopSpinner();
@@ -418,8 +529,40 @@ function interrupt() {
 
 /** Нажатия вне вставки: Enter отправляет, Tab — в очередь, остальное — набор. */
 function typed(text) {
+  const [first, ...rest] = text.split(ARROW_DOWN);
+  typeCharacters(first);
+  for (const chunk of rest) {
+    if (questionOpen === 'options') {
+      questionSelected = Math.min(questionSelected + 1, questionOptions.length - 1);
+      drawQuestionScreen();
+    } else typeCharacters(ARROW_DOWN);
+    typeCharacters(chunk);
+  }
+}
+
+function typeCharacters(text) {
+  let notesChanged = false;
   for (const char of text) {
-    if (char === '\r' || char === '\n') {
+    // Одобрение открыто, поле пусто: цифра отвечает на него одним нажатием, как у Codex.
+    if (approvalCommand !== null && composer === '' && char >= '1' && char <= '3') {
+      answerApproval(char);
+    } else if (questionOpen === 'notes') {
+      if (char === '\r' || char === '\n') closeQuestion(`answer: ${questionNotes}`);
+      else {
+        questionNotes += char;
+        notesChanged = true;
+      }
+    } else if (questionOpen === 'options' && composer === '' && /^[1-4]$/.test(char)) {
+      closeQuestion(`answer: ${questionOptions[Number(char) - 1]}`);
+    } else if (questionOpen === 'options' && char === '\t' && questionSelected === questionOptions.length - 1) {
+      questionOpen = 'notes';
+      drawQuestionScreen();
+    } else if (questionOpen === 'raw' && composer === '' && char >= '1' && char <= '3') {
+      // Вопрос открыт, поле пусто: цифра выбирает вариант, Enter — вариант по умолчанию.
+      closeQuestion(`picked: ${char}`);
+    } else if (questionOpen === 'raw' && composer === '' && (char === '\r' || char === '\n')) {
+      closeQuestion('picked: default');
+    } else if (char === '\r' || char === '\n') {
       const sent = composer;
       composer = '';
       submit(sent, 'enter');
@@ -431,6 +574,7 @@ function typed(text) {
       composer += char;
     }
   }
+  if (notesChanged && questionOpen === 'notes') drawQuestionScreen();
 }
 
 process.on('SIGHUP', () => process.exit(129));

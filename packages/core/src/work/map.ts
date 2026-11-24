@@ -4,7 +4,7 @@ import { validatePlanStorage } from './plans.js';
 import { validatePlanEffects } from './plan-effects.js';
 import { compactStoredTexts } from './stored-texts.js';
 import { validateResources } from './resource-policy.js';
-import { SWARM_ROLES, SWARM_STATUSES, isSwarmTag, isSwarmTerminal } from './swarms.js';
+import { SWARM_COVERAGES, SWARM_ROLES, SWARM_STATUSES, isSwarmSlice, isSwarmTag, isSwarmTerminal } from './swarms.js';
 import { EFFORT_TOKEN, type EffortLevel } from '../providers.js';
 import type { LetterTx } from './letter-store.js';
 import { defaultSessionName, NEW_LABEL } from './names.js';
@@ -16,6 +16,7 @@ import type {
   MessageVia,
   SessionLifecycle,
   SessionResult,
+  SessionTrial,
   WindowWorkMap,
   WorkMap,
   WorkProvider,
@@ -23,6 +24,7 @@ import type {
   SessionRole,
   WorksIndex,
 } from './types.js';
+import { normalizeTrial, normalizeTrialTrace, traceDeletedSession } from './trial-trace.js';
 import type { WorkSwarm } from './swarms.js';
 
 /**
@@ -117,6 +119,8 @@ export interface NewSession {
   /** Облегчённый запуск (C2.2): решение при создании; без поля — запись как до этого куска. */
   lean?: boolean;
   workspace?: WorkSession['workspace'];
+  /** Плечо опыта, разыгранное хостом при создании; без поля — сессия вне опыта. */
+  trial?: SessionTrial;
 }
 
 /**
@@ -160,6 +164,7 @@ export function addSession(
     ...(init.model === undefined ? {} : { model: init.model }),
     ...(init.effort === undefined ? {} : { effort: init.effort }),
     ...(init.lean === undefined ? {} : { lean: init.lean }),
+    ...(init.trial === undefined ? {} : { trial: init.trial }),
   };
   map.sessions.push(session);
   return session;
@@ -202,6 +207,8 @@ export function removeSession(
     }
   }
   letters.flagDeleted(sessionId);
+  // Опыт с пакетом состояния: след сессии с назначением — той же записью карты (комнаты ещё на месте).
+  traceDeletedSession(map, letters, removed, now);
 
   const deleted = map.work.deletedSessions ?? [];
   if (!deleted.includes(sessionId)) deleted.push(sessionId);
@@ -302,6 +309,7 @@ export function transitionSession(
     delete session.autoSleep;
     delete session.autoSleepPending;
     delete session.queued;
+    delete session.wakeBlocked;
   }
   session.history.push(entry);
   if (to === 'active' && session.startedAt === null) session.startedAt = at;
@@ -615,6 +623,7 @@ export function normalizeMap(data: unknown, source: string): WorkMap {
   validatePlanEffects(map);
   validateDecisionJournalStorage(map);
   validateResources(map);
+  normalizeTrialTrace(map.work as unknown as Record<string, unknown>);
   return map;
 }
 
@@ -686,6 +695,10 @@ function isRecipeSnapshot(value: unknown): boolean {
 
 const isIsoTime = (value: unknown): value is string => typeof value === 'string' && !Number.isNaN(Date.parse(value));
 
+/** Пороги входа комнаты: id сессии → неотрицательное целое. */
+const isJoinedSeq = (value: unknown): boolean =>
+  isRecord(value) && Object.values(value).every((seq) => Number.isInteger(seq) && (seq as number) >= 0);
+
 /** Журнал участия комнаты: записи с id сессии, моментом входа и уходом (`null` — ещё в комнате). */
 function isMemberLog(value: unknown): boolean {
   return Array.isArray(value) && value.every((entry) =>
@@ -719,6 +732,8 @@ function migrateRoom(room: unknown, sessions: WorkSession[]): void {
   // Журнал участия (спека расхода токенов, 4.1): битый убирается — комната читается как созданная до журнала,
   // а карта из-за него не становится нечитаемой.
   if (room['memberLog'] !== undefined && !isMemberLog(room['memberLog'])) delete room['memberLog'];
+  // Пороги входа (`joinedSeq`): битое поле убирается, комната читается как без порогов.
+  if (room['joinedSeq'] !== undefined && !isJoinedSeq(room['joinedSeq'])) delete room['joinedSeq'];
 }
 
 /**
@@ -740,8 +755,14 @@ function migrateSwarm(swarm: unknown, map: WorkMap): boolean {
     if (!Number.isInteger(member['n'])) member['n'] = 1;
     if (typeof member['addedAt'] !== 'string') member['addedAt'] = createdAt;
     if (typeof member['handedAt'] !== 'string') member['handedAt'] = null;
+    // Срез и покрытие участника (спека «видимые дыры», 3.1): битое и отсутствующее — `null`; у королевы всегда `null`.
+    const slice = member['slice'];
+    member['slice'] = member['role'] !== 'queen' && isSwarmSlice(slice) ? slice.trim() : null;
+    member['coverage'] = member['role'] !== 'queen' && (SWARM_COVERAGES as readonly unknown[]).includes(member['coverage']) ? member['coverage'] : null;
   }
   swarm['members'] = members;
+  const announced = swarm['announced'];
+  swarm['announced'] = typeof announced === 'number' && Number.isInteger(announced) && announced >= 0 && announced <= members.length ? announced : 0;
   if (!members.some((member) => member['sessionId'] === swarm['queen'] && member['role'] === 'queen')) return false;
 
   const creator = swarm['creator'];
@@ -765,6 +786,9 @@ function migrateSession(session: Record<string, unknown>): void {
   session['startedAtProcess'] ??= null;
   session['launchedBy'] ??= null;
   if (session['provider'] !== 'codex' || !isCodexThreadBinding(session['codexThreadBinding'])) delete session['codexThreadBinding'];
+  const transcript = session['qwenTranscript'];
+  if (session['provider'] !== 'qwen' || !isRecord(transcript) || typeof transcript['path'] !== 'string' || transcript['path'] === '' || typeof transcript['cwd'] !== 'string' || transcript['cwd'] === '') delete session['qwenTranscript'];
+  else session['qwenTranscript'] = { path: transcript['path'], cwd: transcript['cwd'] };
   // Роли появились 2026-09-08: до них сессия запускалась только сама собой.
   if (!Object.hasOwn(session, 'role')) {
     session['role'] = typeof session['agent'] === 'string' && session['agent'] !== ''
@@ -802,6 +826,9 @@ function normalizeBinding(entry: unknown): Record<string, unknown> | null {
     !AGENT_REASONS.includes(String(entry['reason'])) || !['handover', 'transcript'].includes(String(entry['carried']))) return null;
   for (const key of ['model', 'effort', 'providerSessionId', 'startedAt']) if (!nullableString(entry[key])) entry[key] = null;
   if (entry['usage'] !== undefined && !isRecord(entry['usage'])) delete entry['usage'];
+  const role = entry['role'];
+  if (role !== undefined && role !== null && !(isRecord(role) && ['builtin', 'claude', 'codex'].includes(String(role['source'])) &&
+    typeof role['name'] === 'string' && role['name'] !== '')) delete entry['role'];
   if (entry['costUsd'] !== undefined && entry['costUsd'] !== null && !(typeof entry['costUsd'] === 'number' && Number.isFinite(entry['costUsd']) && entry['costUsd'] >= 0)) delete entry['costUsd'];
   return entry;
 }
@@ -821,4 +848,19 @@ function normalizeAgentFields(session: Record<string, unknown>): void {
     delete session['switching'];
   }
   if (session['agentRevision'] !== undefined && !nullableString(session['agentRevision'])) delete session['agentRevision'];
+  const wakeBlocked = session['wakeBlocked'];
+  if (wakeBlocked !== undefined && wakeBlocked !== null &&
+    !(isRecord(wakeBlocked) && typeof wakeBlocked['since'] === 'string' && typeof wakeBlocked['reason'] === 'string')) {
+    delete session['wakeBlocked'];
+  }
+  const silentEnding = session['silentEnding'];
+  if (silentEnding !== undefined && silentEnding !== null && !(isRecord(silentEnding) &&
+    nullableString(silentEnding['assignment']) && nullableString(silentEnding['nudgedAt']) &&
+    Array.isArray(silentEnding['told']) && silentEnding['told'].every((kind) => kind === 'exit' || kind === 'stop' || kind === 'close' || kind === 'turn'))) {
+    delete session['silentEnding'];
+  }
+  // Плечо опыта: ровно два значения, имя по правилу настройки, корректное время и метка. Запись, не прошедшая проверку, не
+  // стирается и не становится «плеча нет»: она заменяется явным состоянием «назначение повреждено», которое переживает
+  // чтение и запись карты (план опыта, 1.1). Само состояние читается обратно как есть.
+  if (session['trial'] !== undefined) session['trial'] = normalizeTrial(session['trial']);
 }

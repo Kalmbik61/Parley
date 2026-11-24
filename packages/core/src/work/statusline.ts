@@ -6,7 +6,7 @@
  *
  * Скрипт делает две вещи с файлами и печатает короткую строку:
  * 1. Если во входе есть `rate_limits` (подписки Pro и Max, после первого ответа модели), атомарно
- *    пишет `{ at, rateLimits }` в `limits/<сессия>.json` каталога работы. Оттуда лимиты
+ *    пишет `{ at, changedAt, rateLimits }` в `limits/<сессия>.json` каталога работы. Оттуда лимиты
  *    берёт хост. Нет `rate_limits` — файла нет.
  * 2. Если во входе есть `context_window` с числовым `used_percentage`, так же атомарно пишет заполненность контекста
  *    в `context/<сессия>.json` (спека 2026-10-15, 4.1). Нет — файла нет.
@@ -22,7 +22,7 @@
  * строку статуса совсем.
  */
 
-import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { claudeContextFill, CONTEXT_DIR, contextFile } from '../context-fill.js';
@@ -109,7 +109,49 @@ async function saveLimits(
   const rateLimits = input?.['rate_limits'];
   // Окон подписки во входе нет (шлюз, API-ключ, первый ход) — хранить нечего.
   if (claudeLimits(rateLimits, at) === null) return;
-  await writeSessionFile(env, LIMITS_DIR, limitsFile, { at, rateLimits });
+  // `changedAt` — момент работы скрипта, а не ответа API: две работающие сессии могут поменяться местами на
+  // секунды до следующего изменения, а только что достигнутые 100 % ненадолго скрыться — тогда stuck.ts
+  // берёт время из текста ошибки.
+  const changedAt = await previousChangedAt(env, rateLimits, at);
+  await writeSessionFile(env, LIMITS_DIR, limitsFile, { at, changedAt, rateLimits });
+}
+
+/** Равны ли два JSON-значения по содержимому (порядок ключей не важен). */
+function sameJson(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    return (
+      Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((v, i) => sameJson(v, b[i]))
+    );
+  }
+  if (!isRecord(a) || !isRecord(b)) return false;
+  const keys = Object.keys(a);
+  return keys.length === Object.keys(b).length && keys.every((k) => k in b && sameJson(a[k], b[k]));
+}
+
+/**
+ * Когда числа этой сессии последний раз менялись: у прежнего файла сессии те же `rateLimits` —
+ * его `changedAt` (нет поля — его `at`), иначе или без файла — `at`. Простаивающую сессию Claude
+ * Code зовёт с прежними числами: её `at` свежеет, а `changedAt` остаётся, и хост не принимает
+ * это за новое наблюдение (`mergeLimits`).
+ */
+async function previousChangedAt(
+  env: NodeJS.ProcessEnv,
+  rateLimits: unknown,
+  at: string,
+): Promise<string> {
+  const workDir = envValue(env, 'WORK_DIR');
+  const sessionId = envValue(env, 'SESSION_ID');
+  if (workDir === undefined || !path.isAbsolute(workDir)) return at;
+  if (sessionId === undefined || !isFileSafeId(sessionId)) return at;
+  try {
+    const previous: unknown = JSON.parse(await readFile(limitsFile(workDir, sessionId), 'utf8'));
+    if (!isRecord(previous) || !sameJson(previous['rateLimits'], rateLimits)) return at;
+    const kept = previous['changedAt'] ?? previous['at'];
+    return typeof kept === 'string' && !Number.isNaN(Date.parse(kept)) ? kept : at;
+  } catch {
+    return at;
+  }
 }
 
 /** Заполненность контекста (спека 2026-10-15, 4.1): `context/<сессия>.json`; нет `context_window` — файла нет. */

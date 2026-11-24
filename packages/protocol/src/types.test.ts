@@ -15,6 +15,8 @@ describe('HOST_ERROR_REASONS', () => {
       snapshotTooLarge: 'snapshot-too-large',
       // Нормалайзер модели и effort (5.7–5.8): «сессия занята» у `sessions.setEffort` и `sessions.setModel`.
       busy: 'busy',
+      // Смена роли при замене агента (спека 2026-11-12, 2.6): отказ первого запуска, окно показывает текст хоста.
+      roleChange: 'role-change',
       // Рой v1 (спека роя, 4–5): отказы `create_session` / `swarm_add` / `create_swarm` и пороги роёв.
       notQueen: 'not-queen',
       swarmClosed: 'swarm-closed',

@@ -1,13 +1,13 @@
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { resolveMainCheckout, resolveSharedProjectContext } from './project-context.js';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { gitSpawnCount, resetProjectContextCache, resolveMainCheckout, resolveSharedProjectContext, sharedPathIgnored } from './project-context.js';
 import { addBacklogItem } from './backlog.js';
 import { readProjectPreferences, setBacklogRule } from './project-preferences.js';
-import { readSharedFile, workPaths } from './store.js';
+import { readSharedFile, sharedProjectPaths, workPaths } from './store.js';
 
 const run = promisify(execFile);
 let root = '';
@@ -120,5 +120,133 @@ describe('shared project identity', () => {
     const responses = ['GIT_DIR\n', 'true\n', `worktree ${root}\0HEAD x\0\0`, `${root}/missing\n`];
     expect((await resolveSharedProjectContext(root, { readGit: async () => ({ code: 0, stdout: responses.shift() ?? '', stderr: '' }) })).kind).toBe('unavailable');
     expect((await resolveSharedProjectContext(path.join(root, 'deleted'))).kind).toBe('unavailable');
+  });
+});
+
+describe('кэш git-контекста проекта', () => {
+  beforeEach(() => { resetProjectContextCache(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('10 вызовов sharedProjectPaths подряд запускают git один набор раз (4 процесса)', async () => {
+    const main = await repository();
+    const before = gitSpawnCount();
+    for (let index = 0; index < 10; index += 1) await sharedProjectPaths(main);
+    expect(gitSpawnCount() - before).toBe(4);
+  });
+
+  it('10 одновременных вызовов делят один набор процессов', async () => {
+    const main = await repository();
+    const before = gitSpawnCount();
+    await Promise.all(Array.from({ length: 10 }, () => sharedProjectPaths(main)));
+    expect(gitSpawnCount() - before).toBe(4);
+  });
+
+  it('после 10 с проход повторяется', async () => {
+    const main = await repository();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(1_000_000);
+    await sharedProjectPaths(main);
+    const before = gitSpawnCount();
+    vi.setSystemTime(1_000_000 + 9_999);
+    await sharedProjectPaths(main);
+    expect(gitSpawnCount() - before).toBe(0);
+    vi.setSystemTime(1_000_000 + 10_001);
+    await sharedProjectPaths(main);
+    expect(gitSpawnCount() - before).toBe(4);
+  });
+
+  it('изменение .git (новый mtime) сбрасывает кэш', async () => {
+    const main = await repository();
+    await sharedProjectPaths(main);
+    const before = gitSpawnCount();
+    const later = new Date(Date.now() + 60_000);
+    await utimes(path.join(main, '.git'), later, later);
+    await sharedProjectPaths(main);
+    expect(gitSpawnCount() - before).toBe(4);
+  });
+
+  it('git init после закэшированного non-git виден сразу', async () => {
+    const plain = path.join(root, 'plain'); await mkdir(plain);
+    expect(await resolveSharedProjectContext(plain)).toEqual({ kind: 'non-git', projectPath: plain });
+    const before = gitSpawnCount();
+    expect(await resolveSharedProjectContext(plain)).toEqual({ kind: 'non-git', projectPath: plain });
+    expect(gitSpawnCount() - before).toBe(0);
+    await git(plain, 'init', '-b', 'main');
+    expect(await resolveSharedProjectContext(plain)).toMatchObject({ kind: 'git', mainRoot: plain });
+  });
+
+  it('вложенный репозиторий, созданный после кэша, виден сразу', async () => {
+    const main = await repository(); const nested = path.join(main, 'nested');
+    expect(await resolveMainCheckout(nested)).toBe(main);
+    await git(nested, 'init', '-b', 'main');
+    expect(await resolveMainCheckout(nested)).toBe(nested);
+  });
+
+  it('удалённый worktree не обслуживается из кэша', async () => {
+    const main = await repository(); const linked = path.join(root, 'linked');
+    await git(main, 'worktree', 'add', '-b', 'linked', linked);
+    expect(await resolveSharedProjectContext(linked)).toMatchObject({ kind: 'git', mainRoot: main });
+    await git(main, 'worktree', 'remove', '--force', linked);
+    expect(await resolveSharedProjectContext(linked)).toEqual({ kind: 'unavailable', reason: 'project-unavailable' });
+  });
+
+  it('unavailable не кэшируется: второй вызов снова запускает git', async () => {
+    const bare = path.join(root, 'bare'); await git(root, 'init', '--bare', bare);
+    const before = gitSpawnCount();
+    expect((await resolveSharedProjectContext(bare)).kind).toBe('unavailable');
+    expect((await resolveSharedProjectContext(bare)).kind).toBe('unavailable');
+    expect(gitSpawnCount() - before).toBe(4);
+  });
+
+  it('sharedPathIgnored: повторные вызовы — один check-ignore; правки всех видимых .gitignore и exclude сбрасывают', async () => {
+    const main = await repository();
+    const context = (await sharedProjectPaths(main)).context;
+    if (context.kind !== 'git') throw new Error('expected a git context');
+    const file = path.join(main, '.parley', 'backlog.md');
+    const before = gitSpawnCount();
+    for (let index = 0; index < 5; index += 1) expect(await sharedPathIgnored(context, file)).toBe(false);
+    expect(gitSpawnCount() - before).toBe(1);
+
+    await writeFile(path.join(main, '.gitignore'), '.parley/\n');
+    expect(await sharedPathIgnored(context, file)).toBe(true);
+    expect(await sharedPathIgnored(context, file)).toBe(true);
+    expect(gitSpawnCount() - before).toBe(2);
+
+    await rm(path.join(main, '.gitignore'));
+    expect(await sharedPathIgnored(context, file)).toBe(false);
+    await mkdir(path.join(main, '.parley'));
+    await writeFile(path.join(main, '.parley', '.gitignore'), '*\n');
+    expect(await sharedPathIgnored(context, file)).toBe(true);
+
+    await rm(path.join(main, '.parley'), { recursive: true });
+    expect(await sharedPathIgnored(context, file)).toBe(false);
+    await mkdir(path.join(main, '.git', 'info'), { recursive: true });
+    await writeFile(path.join(main, '.git', 'info', 'exclude'), '.parley/\n');
+    expect(await sharedPathIgnored(context, file)).toBe(true);
+  });
+
+  it('сбой git в check-ignore не кэшируется и не считается «игнорируется»', async () => {
+    const nowhere = path.join(root, 'nowhere');
+    const context = { kind: 'git', projectPath: nowhere, mainRoot: nowhere, checkoutRoot: nowhere } as const;
+    const before = gitSpawnCount();
+    expect(await sharedPathIgnored(context, path.join(nowhere, 'a'))).toBe(false);
+    expect(await sharedPathIgnored(context, path.join(nowhere, 'a'))).toBe(false);
+    expect(gitSpawnCount() - before).toBe(2);
+  });
+
+  it('с options.readGit кэш не используется', async () => {
+    const plain = path.join(root, 'plain'); await mkdir(plain);
+    let calls = 0;
+    const readGit = async (args: readonly string[]) => {
+      calls += 1;
+      return args[0] === 'rev-parse' && args[1] === '--local-env-vars'
+        ? { code: 0, stdout: 'GIT_DIR\n', stderr: '' }
+        : { code: 128, stdout: '', stderr: 'fatal: not a git repository (or any of the parent directories): .git\n' };
+    };
+    const before = gitSpawnCount();
+    expect(await resolveSharedProjectContext(plain, { readGit })).toEqual({ kind: 'non-git', projectPath: plain });
+    expect(await resolveSharedProjectContext(plain, { readGit })).toEqual({ kind: 'non-git', projectPath: plain });
+    expect(calls).toBe(4);
+    expect(gitSpawnCount() - before).toBe(0);
   });
 });

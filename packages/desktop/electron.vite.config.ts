@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { readdirSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname as dirOf, join, resolve } from 'node:path';
@@ -51,11 +52,32 @@ function pdfjsAssets(): Plugin {
   };
 }
 
+/** Сборка из git: SHA, дата коммита, правки отслеживаемых файлов. Нет git или `.git` — пусто. */
+function gitBuildInfo(): { commit: string | null; commitDate: string | null; dirty: boolean } {
+  const git = (...args: string[]): string => execFileSync('git', args, { cwd: dirname, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
+  try {
+    const commit = git('rev-parse', '--short=8', 'HEAD');
+    const commitDate = git('show', '-s', '--format=%cs', 'HEAD');
+    let dirty = false;
+    try {
+      git('diff', '--quiet', 'HEAD', '--');
+    } catch {
+      dirty = true;
+    }
+    return { commit, commitDate, dirty };
+  } catch {
+    return { commit: null, commitDate: null, dirty: false };
+  }
+}
+
 export default defineConfig({
   main: {
     plugins: [externalizeDepsPlugin()],
     // Дайджест образа relay: release.yml кладёт его в env сборки; без него в бандле остаётся заглушка (image.ts).
-    define: { __PARLEY_RELAY_IMAGE_DIGEST__: JSON.stringify(process.env.PARLEY_RELAY_IMAGE_DIGEST ?? '') },
+    define: {
+      __PARLEY_RELAY_IMAGE_DIGEST__: JSON.stringify(process.env.PARLEY_RELAY_IMAGE_DIGEST ?? ''),
+      __PARLEY_BUILD__: JSON.stringify(gitBuildInfo()),
+    },
   },
   preload: {
     plugins: [externalizeDepsPlugin()],

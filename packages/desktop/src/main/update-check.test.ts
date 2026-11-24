@@ -10,6 +10,7 @@ import {
   compareVersions,
   createUpdateChecker,
   fetchLatestRelease,
+  fetchLatestReleaseResult,
   isNewerVersion,
   MAX_RESPONSE_BYTES,
   parseLatestRelease,
@@ -599,5 +600,131 @@ describe('updateCheckAllowed — проверка только у собранн
     expect(updateCheckAllowed({}, true)).toBe(true);
     expect(updateCheckAllowed({ PARLEY_UPDATE_CHECK: 'on' }, true)).toBe(true);
     expect(updateCheckAllowed({ PARLEY_UPDATE_CHECK: ' OFF ' }, true)).toBe(false);
+  });
+});
+
+describe('fetchLatestReleaseResult', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+  const status = (code: number): UpdateFetch => vi.fn<UpdateFetch>(async () => respond({ message: 'x' }, { status: code }));
+
+  it('200 со стабильным релизом — ok', async () => {
+    await expect(fetchLatestReleaseResult(fetchOf())).resolves.toEqual({
+      ok: true,
+      info: { version: '0.2.0', url: RELEASE_URL },
+    });
+  });
+
+  it.each([403, 429])('HTTP %i — rate_limited', async (code) => {
+    await expect(fetchLatestReleaseResult(status(code))).resolves.toEqual({ ok: false, reason: 'rate_limited' });
+  });
+
+  it('404 — bad_response', async () => {
+    await expect(fetchLatestReleaseResult(status(404))).resolves.toEqual({ ok: false, reason: 'bad_response' });
+  });
+
+  it('500 — network', async () => {
+    await expect(fetchLatestReleaseResult(status(500))).resolves.toEqual({ ok: false, reason: 'network' });
+  });
+
+  it('отказ fetch — network', async () => {
+    const fetch = vi.fn<UpdateFetch>(async () => {
+      throw new TypeError('fetch failed');
+    });
+    await expect(fetchLatestReleaseResult(fetch)).resolves.toEqual({ ok: false, reason: 'network' });
+  });
+
+  it('таймаут — network', async () => {
+    vi.useFakeTimers();
+    const fetch = vi.fn<UpdateFetch>(() => new Promise<Response>(() => {}));
+    const pending = fetchLatestReleaseResult(fetch, 1000);
+    await vi.advanceTimersByTimeAsync(1000);
+    await expect(pending).resolves.toEqual({ ok: false, reason: 'network' });
+  });
+
+  it('тело больше предела — bad_response', async () => {
+    const fetch = vi.fn<UpdateFetch>(async () => new Response('x'.repeat(MAX_RESPONSE_BYTES + 1), { status: 200 }));
+    await expect(fetchLatestReleaseResult(fetch)).resolves.toEqual({ ok: false, reason: 'bad_response' });
+  });
+
+  it('не JSON — bad_response', async () => {
+    const fetch = vi.fn<UpdateFetch>(async () => new Response('<html>', { status: 200 }));
+    await expect(fetchLatestReleaseResult(fetch)).resolves.toEqual({ ok: false, reason: 'bad_response' });
+  });
+
+  it('prerelease — bad_response', async () => {
+    await expect(fetchLatestReleaseResult(fetchOf(release({ prerelease: true })))).resolves.toEqual({
+      ok: false,
+      reason: 'bad_response',
+    });
+  });
+});
+
+describe('createUpdateChecker — checkNow и lastCheck', () => {
+  function make(options: { enabled?: boolean; current?: string; fetch?: UpdateFetch } = {}) {
+    const fetch = vi.fn<UpdateFetch>(options.fetch ?? (async () => respond(release())));
+    const onUpdate = vi.fn<(info: { version: string; url: string }) => void>();
+    const checker = createUpdateChecker({
+      currentVersion: options.current ?? '0.1.0',
+      fetch,
+      isEnabled: () => options.enabled ?? true,
+      onUpdate,
+      now: () => 1234,
+    });
+    return { fetch, onUpdate, checker };
+  }
+
+  it('при isEnabled() === false всё равно идёт в сеть; новее — available и один onUpdate', async () => {
+    const { fetch, onUpdate, checker } = make({ enabled: false });
+    await expect(checker.checkNow()).resolves.toEqual({ kind: 'available', latest: '0.2.0', checkedAt: 1234 });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(onUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['0.2.0', '0.3.0'])('версия запущенного окна %s — current', async (current) => {
+    const { onUpdate, checker } = make({ current });
+    await expect(checker.checkNow()).resolves.toEqual({ kind: 'current', latest: '0.2.0', checkedAt: 1234 });
+    expect(onUpdate).not.toHaveBeenCalled();
+  });
+
+  it('неудача — failed с причиной, без исключения', async () => {
+    const { checker } = make({
+      fetch: async () => {
+        throw new TypeError('x');
+      },
+    });
+    await expect(checker.checkNow()).resolves.toEqual({ kind: 'failed', reason: 'network', checkedAt: 1234 });
+  });
+
+  it('два вызова подряд — один запрос и один промис', async () => {
+    const { fetch, checker } = make();
+    const first = checker.checkNow();
+    const second = checker.checkNow();
+    expect(second).toBe(first);
+    await first;
+    expect(fetch).toHaveBeenCalledTimes(1);
+    await checker.checkNow();
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('lastCheck: null до проверки, после ручной — её итог', async () => {
+    const { checker } = make();
+    expect(checker.lastCheck()).toBeNull();
+    const result = await checker.checkNow();
+    expect(checker.lastCheck()).toEqual(result);
+  });
+
+  it('lastCheck после плановой проверки', async () => {
+    vi.useFakeTimers();
+    try {
+      const { checker } = make();
+      checker.start();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(checker.lastCheck()).toEqual({ kind: 'available', latest: '0.2.0', checkedAt: 1234 });
+      checker.stop();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

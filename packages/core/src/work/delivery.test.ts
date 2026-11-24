@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import type { SessionActivity } from './activity.js';
+import { activityOf as foldActivity, presentedActivity, type SessionActivity } from './activity.js';
+import { bareEvent } from './events.js';
 import { oneLine } from '../counters.js';
 import {
   deliveryAction,
+  heldWarning,
   isPointerText,
   LIMIT_RETURN_TEXT,
   limitReturnText,
@@ -12,8 +14,9 @@ import {
   settleDelayMs,
   wakesAtOnce,
 } from './delivery.js';
+import { reportLetterText } from './task-giver.js';
 import type { SessionNeed } from './stuck.js';
-import { HUMAN, type Message, type Room, type WorkSession } from './types.js';
+import { HUMAN, SYSTEM, type Message, type Room, type WorkSession } from './types.js';
 
 const sessionOf = (patch: Partial<WorkSession> = {}): WorkSession => ({
   id: 's-01',
@@ -167,6 +170,37 @@ describe('pointerText', () => {
   });
 });
 
+describe('pointerText: название, записанное в карту мимо addRoom', () => {
+  // eslint-disable-next-line no-control-regex
+  const CONTROL_CHAR = /[\x00-\x1f\x7f-\x9f]/;
+  const dirty = [roomOf('r-01', 'a\r\x1b[201~!rm -rf\n')];
+  const letters = [messageOf({ roomId: 'r-01' })];
+
+  it('указатель без управляющих знаков и узнаётся isPointerText', () => {
+    const text = pointerText(letters, dirty);
+    expect(text).not.toMatch(CONTROL_CHAR);
+    expect(isPointerText(text)).toBe(true);
+  });
+
+  it('возврат после лимита тоже чистый и узнаётся isPointerText', () => {
+    const text = limitReturnText(letters, dirty);
+    expect(text).not.toMatch(CONTROL_CHAR);
+    expect(isPointerText(text)).toBe(true);
+  });
+
+  it('название в 500 знаков: указатель не длиннее постоянной части плюс 80', () => {
+    const empty = pointerText(letters, [roomOf('r-01', '')]);
+    const text = pointerText(letters, [roomOf('r-01', 'я'.repeat(500))]);
+    expect(Array.from(text).length).toBeLessThanOrEqual(Array.from(empty).length + 80);
+    expect(isPointerText(text)).toBe(true);
+  });
+
+  it('id комнаты из повреждённой карты тоже чистится', () => {
+    const text = pointerText([messageOf({ roomId: 'r-01\r!x' })], []);
+    expect(text).not.toMatch(CONTROL_CHAR);
+  });
+});
+
 describe('isPointerText', () => {
   const rooms = [roomOf('r-01', 'Second'), roomOf('r-02', 'Ревью «схемы»')];
   const forms = [
@@ -189,7 +223,8 @@ describe('isPointerText', () => {
   });
 
   it('длинное название комнаты: oneLine обрезал хвост `Call check_inbox.` — всё равно указатель', () => {
-    const text = pointerText([messageOf({ roomId: 'r-01' })], [roomOf('r-01', 'очень длинное название '.repeat(10))]);
+    // Указатель сборок до 0.33: название комнаты тогда не резалось (сейчас `pointerText` режет его до 80 знаков).
+    const text = `New messages (1) in r-01 "${'очень длинное название '.repeat(10)}". Call check_inbox.`;
     const cut = oneLine(text);
     expect(cut.endsWith('…')).toBe(true);
     expect(cut).not.toContain('check_inbox');
@@ -290,6 +325,19 @@ describe('deliveryAction', () => {
     expect(
       deliveryAction({ ...base, unread: [message], pointed: new Set(['m-01']) }),
     ).toEqual({ kind: 'none', reason: 'already-pointed' });
+  });
+
+  it('2б-1. частичное чтение: указанные письма нового указателя не дают, новое письмо — один указатель на всё', () => {
+    const ids = Array.from({ length: 70 }, (_, index) => `m-${String(index + 1).padStart(2, '0')}`);
+    const unread = ids.map((id) => messageOf({ id }));
+    const pointed = new Set(ids);
+    expect(deliveryAction({ ...base, unread, pointed })).toEqual({ kind: 'none', reason: 'already-pointed' });
+    const fresh = messageOf({ id: 'm-71' });
+    expect(deliveryAction({ ...base, unread: [...unread, fresh], pointed })).toEqual({
+      kind: 'type-pointer',
+      text: 'New messages (71). Call check_inbox.',
+      letterIds: [...ids, 'm-71'],
+    });
   });
 
   it('2в. удалённые письма в счёт не идут', () => {
@@ -639,6 +687,21 @@ describe('deliveryAction', () => {
       kind: 'type-pointer',
     });
   });
+
+  it('10. тишина открытого хода (false-done): письмо печатается по сырому значению, показанное — busy', () => {
+    // Настоящая свёртка: `UserPromptSubmit`, последняя запись +5 с, сейчас +45 с, `Stop` не приходил.
+    const at = (s: number): string => new Date(Date.parse('2026-09-05T10:00:00.000Z') + s * 1000).toISOString();
+    const raw = foldActivity({
+      events: [bareEvent(at(0), 'UserPromptSubmit')],
+      log: { lastRecordAt: at(5), lastUserRecordAt: null },
+      now: Date.parse(at(45)),
+      silenceThresholdMs: 30_000,
+    });
+    expect(raw.quietTurn).toBe(true);
+    expect(deliveryAction({ ...base, activity: raw })).toMatchObject({ kind: 'type-pointer' });
+    // Клиентам тот же ход показан как идущий: на доставку это не влияет, она читает сырое значение.
+    expect(deliveryAction({ ...base, activity: presentedActivity(raw) })).toEqual({ kind: 'none', reason: 'busy' });
+  });
 });
 
 describe('wakesAtOnce — срочность письма для получателя s-02', () => {
@@ -931,5 +994,89 @@ describe('deliveryAction — окно тишины (план «меньше хо
       kind: 'type-pointer',
       queue: true,
     });
+  });
+});
+
+describe('письмо-обновление итога — не срочное', () => {
+  const T0 = Date.parse('2026-10-27T10:00:00.000Z');
+  const report = (update: boolean): Message =>
+    messageOf({ id: 'm-01', from: SYSTEM, to: ['s-02'], roomId: null, kind: 'note', at: new Date(T0).toISOString(),
+      text: reportLetterText('s-03', 'done', 'Ready', update ? { rooms: ['r-01'], update: true } : { rooms: ['r-01'] }) });
+  const idle: Parameters<typeof deliveryAction>[0] = {
+    session: sessionOf({ id: 's-02' }),
+    activity: activityOf('idle'),
+    hasDraft: false,
+    paused: false,
+    unread: [report(true)],
+    rooms: [],
+    pointed: new Set<string>(),
+    inFlight: false,
+    resumeAllowed: true,
+    hooked: true,
+    now: T0,
+  };
+
+  it('wakesAtOnce: обновление — нет, обычное письмо о сдаче — да', () => {
+    expect(wakesAtOnce(report(true), 's-02')).toBe(false);
+    expect(wakesAtOnce(report(false), 's-02')).toBe(true);
+  });
+
+  it('settleDelayMs: обновление ждёт SETTLE_MS', () => {
+    expect(settleDelayMs([report(true)], 's-02', T0)).toBe(SETTLE_MS);
+  });
+
+  it('deliveryAction: одно обновление — settling, с обычным письмом о сдаче — указатель', () => {
+    expect(deliveryAction(idle)).toEqual({ kind: 'none', reason: 'settling', retryInMs: SETTLE_MS });
+    const regular = { ...report(false), id: 'm-02' };
+    expect(deliveryAction({ ...idle, unread: [report(true), regular] }).kind).toBe('type-pointer');
+  });
+});
+
+describe('heldWarning — send_message предупреждает об адресате, которого письмо не поднимет', () => {
+  const asleep = (patch: Partial<WorkSession> = {}): WorkSession =>
+    sessionOf({ id: 's-02', lifecycle: 'sleeping', providerSessionId: 'p-1', ...patch });
+
+  it('wakeBlocked: предупреждение с причиной', () => {
+    const blocked = sessionOf({ id: 's-02', wakeBlocked: { since: '2026-11-10T10:00:00.000Z', reason: 'role-provider-mismatch' } });
+    expect(heldWarning(blocked, 0, 6)).toBe('@s02 cannot be woken (role-provider-mismatch): it reads this when the human resumes it');
+  });
+
+  it('wakeBlocked идёт раньше прочих: спящая без id и с исчерпанным часом всё равно называет причину', () => {
+    const blocked = asleep({ providerSessionId: null, wakeBlocked: { since: '2026-11-10T10:00:00.000Z', reason: 'x' } });
+    expect(heldWarning(blocked, 6, 6)).toBe('@s02 cannot be woken (x): it reads this when the human resumes it');
+  });
+
+  it('спит без providerSessionId и без прежних агентов: поднимать нечем', () => {
+    expect(heldWarning(asleep({ providerSessionId: null }), 0, 6)).toBe(
+      '@s02 is asleep with no conversation to resume: it reads this when the human starts it',
+    );
+  });
+
+  it('спит без providerSessionId, но после замены агента: будильник её поднимает — предупреждения нет', () => {
+    const switched = asleep({ providerSessionId: null, previousAgents: [{ provider: 'codex' } as NonNullable<WorkSession['previousAgents']>[number]] });
+    expect(heldWarning(switched, 0, 6)).toBeNull();
+  });
+
+  it('спит не по решению хоста, час подъёмов исчерпан: предупреждение о лимите', () => {
+    expect(heldWarning(asleep(), 6, 6)).toBe(
+      '@s02 reached its hourly resume limit: it reads this when the limit frees or the human resumes it',
+    );
+  });
+
+  it('ровно resumeRate - 1 подъёмов: предупреждения нет', () => {
+    expect(heldWarning(asleep(), 5, 6)).toBeNull();
+  });
+
+  it('усыплённая хостом: при исчерпанном часе то же предупреждение, ниже лимита — нет', () => {
+    const slept = asleep({ autoSleep: { reason: 'idle', at: '2026-11-10T10:00:00.000Z', waitTarget: null } });
+    expect(heldWarning(slept, 6, 6)).toBe(
+      '@s02 reached its hourly resume limit: it reads this when the limit frees or the human resumes it',
+    );
+    expect(heldWarning(slept, 5, 6)).toBeNull();
+  });
+
+  it('живая и ожидающая сессия: предупреждения нет', () => {
+    expect(heldWarning(sessionOf({ id: 's-02', lifecycle: 'active' }), 99, 6)).toBeNull();
+    expect(heldWarning(sessionOf({ id: 's-02', lifecycle: 'pending' }), 99, 6)).toBeNull();
   });
 });

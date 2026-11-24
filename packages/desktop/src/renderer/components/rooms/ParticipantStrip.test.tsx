@@ -338,3 +338,42 @@ it('opens the personal plan even when no steps have been published', () => {
   expect(open).toHaveBeenCalledWith('s-01');
   expect(session).not.toHaveBeenCalled();
 });
+
+describe('ParticipantStrip — метка пункта плана', () => {
+  // Спиннер состояния несёт задержку анимации от текущего времени: сравниваем разметку без неё.
+  const stable = (html: string): string => html.replace(/animation-delay: -?\d+ms;/g, '');
+  const renderTagged = (itemTags?: ReadonlyMap<string, number[]>) =>
+    render(<ParticipantStrip participants={[participant()]} onOpenSession={vi.fn()} onOpenPlan={vi.fn()} now={new Date()} {...(itemTags === undefined ? {} : { itemTags })} />);
+
+  it('метка пункта стоит у участника', () => {
+    renderTagged(new Map([['s-01', [2]]]));
+    expect(card('s-01').querySelector('[data-participant-items]')?.textContent).toBe('#2');
+  });
+
+  it('больше двух пунктов — два и +N', () => {
+    renderTagged(new Map([['s-01', [1, 2, 5, 7]]]));
+    expect(card('s-01').querySelector('[data-participant-items]')?.textContent).toBe('#1 #2 +2');
+  });
+
+  it('метки стоят первыми во второй строке, первая строка карточки не меняется', () => {
+    const plain = render(<ParticipantStrip participants={[participant()]} onOpenSession={vi.fn()} onOpenPlan={vi.fn()} now={new Date()} />);
+    const header = (): string => stable((card('s-01').querySelector('button') as HTMLElement).outerHTML);
+    const before = header();
+    plain.unmount();
+    renderTagged(new Map([['s-01', [3]]]));
+    expect(header()).toBe(before);
+    const row = card('s-01').querySelector('[data-participant-items]')!.parentElement!;
+    expect(row.firstElementChild).toBe(card('s-01').querySelector('[data-participant-items]'));
+    expect(row.className).toContain('mb-[9px]');
+  });
+
+  it('без меток разметка прежняя', () => {
+    const plain = render(<ParticipantStrip participants={[participant()]} onOpenSession={vi.fn()} onOpenPlan={vi.fn()} now={new Date()} />);
+    const html = stable(plain.container.innerHTML);
+    plain.unmount();
+    expect(stable(renderTagged(new Map([['s-02', [1]]])).container.innerHTML)).toBe(html);
+    cleanup();
+    expect(stable(renderTagged(new Map()).container.innerHTML)).toBe(html);
+    expect(html.includes('data-participant-items')).toBe(false);
+  });
+});

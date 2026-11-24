@@ -28,11 +28,17 @@ import type { AuthService } from '../providers/auth-service.js';
 import type { CustomCheckService } from '../providers/custom-check.js';
 import type { LimitsService } from '../limits/limits-service.js';
 import type { CodexCatalog } from '../providers/codex-catalog.js';
+import type { OpencodeAuthHint } from '../providers/opencode-auth-hint.js';
+import type { OpencodeCatalog } from '../providers/opencode-catalog.js';
+import type { QwenCatalog } from '../providers/qwen-catalog.js';
 import type { ProviderVersions } from '../providers/versions.js';
 import type { CliUpdates } from '../providers/updates.js';
 import type { CliUpdateRunner } from '../providers/update-run.js';
+import type { CliInstaller } from '../providers/install-run.js';
 import type { PtyManager } from '../pty/pty-manager.js';
 import type { SessionsService } from '../sessions/sessions-service.js';
+import type { KimiSessions } from '../kimi/sessions.js';
+import type { KimiAuth } from '../providers/kimi-auth.js';
 import type { SwarmsService } from '../swarms/swarms-service.js';
 import type { WakeService } from '../wake/wake-service.js';
 import type { WorksService } from '../works/works-service.js';
@@ -58,13 +64,17 @@ import { createJournalHandlers } from './journal.js';
 import { createMemoryHandlers } from './memory.js';
 import { hostInfo, hostShutdown } from './host.js';
 import { mailMarkRead } from './mail.js';
+import { createProcessesHandlers } from './processes.js';
 import { createPtyHandlers } from './pty.js';
+import type { ProcessMonitor } from '../pty/process-monitor.js';
 import { createCustomProviderHandlers } from './custom-providers.js';
 import {
   createProvidersCheck,
   createProvidersClearKey,
   createProvidersList,
   createProvidersRefreshLimits,
+  createProvidersCheckUpdates,
+  createProvidersInstall,
   createProvidersSkipUpdate,
   createProvidersUpdate,
   createProvidersSetKey,
@@ -98,6 +108,8 @@ export interface MethodDeps {
   activity: ActivityService;
   pty: PtyManager;
   sessions: SessionsService;
+  kimi?: Pick<KimiSessions, 'state' | 'setConfig'>;
+  kimiAuth?: KimiAuth;
   /** Жизненный цикл роя: `sessions.close` сообщает ему о закрытии королевы человеком; без него закрытая королева — упавший рой. */
   swarms?: Pick<SwarmsService, 'humanClosed'>;
   wake: WakeService;
@@ -108,6 +120,8 @@ export interface MethodDeps {
   sweeper?: WorktreeSweeper;
   /** Лента вида «Chat» (`feed.*`); без неё методов ленты у хоста нет. */
   feed?: FeedService;
+  /** Процессы PTY сессий для тулбара (`processes.*`); без монитора методов у хоста нет. */
+  processMonitor?: Pick<ProcessMonitor, 'subscribe' | 'refresh'>;
   /**
    * Кэшированный каталог ролей хоста для `roles.list` и `recipes.list`. Хост отдаёт его же инструментам агентов
    * (`list_roles`), чтобы кэш был один; без него методы заводят свой.
@@ -128,8 +142,14 @@ export interface MethodDeps {
   cliUpdates?: CliUpdates;
   /** Запуск `<cli> update`; без него `providers.update` отвечает `bad_request`. */
   cliUpdateRunner?: CliUpdateRunner;
+  /** Установка CLI установщиком вендора; без неё `providers.install` отвечает `bad_request`. */
+  cliInstaller?: CliInstaller;
   /** Каталог моделей Codex из пробы CLI: `providers.list` просит его обновиться, когда он устарел; без него — не просит. */
   codexCatalog?: CodexCatalog;
+  /** Каталог моделей Qwen Code: `providers.list` просит его обновиться в фоне, когда он устарел; без него — не просит. */
+  qwenCatalog?: QwenCatalog;
+  opencodeCatalog?: OpencodeCatalog;
+  opencodeAuth?: OpencodeAuthHint;
   /** Лимиты подписок (`providers.list`); без них у провайдеров `limits: null`. */
   limits?: LimitsService;
   /** Сжатие контекста по клику человека (спека 2026-10-15); без него методов сжатия у хоста нет. */
@@ -223,6 +243,8 @@ export const WORKS_GATED_METHODS = [
   'feed.unsubscribe',
   'feed.decide',
   'feed.interrupt',
+  'kimi.getState',
+  'kimi.setConfig',
 ] as const satisfies readonly MethodName[];
 
 /** Уведомления того же рода: activity.seen сверяет сессию со снимком работ. */
@@ -252,6 +274,7 @@ export interface HostHandlers {
 export function createHostHandlers(deps: MethodDeps): HostHandlers {
   const pty = createPtyHandlers(deps);
   const sessions = createSessionHandlers(deps);
+  const { kimi } = deps;
   const wake = createWakeHandlers(deps);
   const worktrees = createWorktreesHandlers(deps);
   const changes = createChangesHandlers(deps);
@@ -292,12 +315,14 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     'works.rename': worksRename as AnyHandler,
     'works.setStatus': worksSetStatus as AnyHandler,
     'works.setCloseFinished': worksSetCloseFinished as AnyHandler,
-    'providers.list': createProvidersList(deps.providerVersions, deps.limits, deps.glmCheck, deps.codexCatalog, deps.customCheck, deps.auth, deps.cliUpdates) as AnyHandler,
+    'providers.list': createProvidersList(deps.providerVersions, deps.limits, deps.glmCheck, deps.codexCatalog, deps.customCheck, deps.auth, deps.cliUpdates, deps.qwenCatalog, deps.opencodeCatalog, deps.opencodeAuth, deps.kimiAuth) as AnyHandler,
     'providers.setKey': createProvidersSetKey(deps.limits, deps.glmCheck, deps.customCheck) as AnyHandler,
     'providers.clearKey': createProvidersClearKey(deps.limits, deps.glmCheck, deps.customCheck) as AnyHandler,
     // Метод есть всегда (hello перечисляет все METHODS); без службы проверки пропускать нечего.
     'providers.skipUpdate': createProvidersSkipUpdate(deps.cliUpdates) as AnyHandler,
     'providers.update': createProvidersUpdate(deps.cliUpdateRunner) as AnyHandler,
+    'providers.install': createProvidersInstall(deps.cliInstaller) as AnyHandler,
+    'providers.checkUpdates': createProvidersCheckUpdates(deps.providerVersions, deps.cliUpdates) as AnyHandler,
     ...(deps.limits === undefined
       ? {}
       : { 'providers.refreshLimits': createProvidersRefreshLimits(deps.limits, deps.providerVersions, deps.auth) as AnyHandler }),
@@ -321,6 +346,7 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     'pty.attach': pty.ptyAttach as AnyHandler,
     'pty.detach': pty.ptyDetach as AnyHandler,
     'pty.send': pty.ptySend as AnyHandler,
+    'pty.screenText': pty.ptyScreenText as AnyHandler,
     'roles.list': createRolesList(roleCatalog, deps.works) as AnyHandler,
     'recipes.list': createRecipesList(roleCatalog) as AnyHandler,
     'sessions.create': sessions.sessionsCreate as AnyHandler,
@@ -340,6 +366,12 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
           'sessions.cancelCompact': compaction.cancel as AnyHandler,
         }),
     'sessions.setModel': sessions.sessionsSetModel as AnyHandler,
+    ...(kimi === undefined ? {} : {
+      'kimi.getState': async ({ ref }: Params<'kimi.getState'>) => kimi.state(ref),
+      'kimi.setConfig': async ({ ref, configId, value }: Params<'kimi.setConfig'>) => ({
+        config: await kimi.setConfig(ref, configId, value),
+      }),
+    }),
     'sessions.switchOptions': sessions.sessionsSwitchOptions as AnyHandler,
     'sessions.switchAgent': sessions.sessionsSwitchAgent as AnyHandler,
     'sessions.resumeInterrupted': sessions.sessionsResumeInterrupted as AnyHandler,
@@ -364,6 +396,7 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     'rooms.send': roomsSend as AnyHandler,
     'worktrees.available': worktrees.worktreesAvailable as AnyHandler,
     'worktrees.diff': worktrees.worktreesDiff as AnyHandler,
+    'worktrees.version': worktrees.worktreesVersion as AnyHandler,
     'worktrees.commit': worktrees.worktreesCommit as AnyHandler,
     'worktrees.merge': worktrees.worktreesMerge as AnyHandler,
     'worktrees.discard': worktrees.worktreesDiscard as AnyHandler,
@@ -372,6 +405,7 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     'worktrees.leftovers': worktrees.worktreesLeftovers as AnyHandler,
     'worktrees.removeCopy': worktrees.worktreesRemoveCopy as AnyHandler,
     'changes.project': changes.changesProject as AnyHandler,
+    'changes.version': changes.changesVersion as AnyHandler,
     'changes.commitProject': changes.changesCommitProject as AnyHandler,
     'swarms.create': createSwarmsCreate(deps.sessions) as AnyHandler,
     'swarms.cancel': swarmsCancel as AnyHandler,
@@ -401,6 +435,13 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     methods['feed.unsubscribe'] = feed.feedUnsubscribe as AnyHandler;
     methods['feed.decide'] = feed.feedDecide as AnyHandler;
     methods['feed.interrupt'] = feed.feedInterrupt as AnyHandler;
+  }
+  const processes = deps.processMonitor === undefined
+    ? undefined
+    : createProcessesHandlers({ monitor: deps.processMonitor, pty: deps.pty });
+  if (processes !== undefined) {
+    methods['processes.subscribe'] = processes.processesSubscribe as AnyHandler;
+    methods['processes.unsubscribe'] = processes.processesUnsubscribe as AnyHandler;
   }
   if (deps.browserAgent !== undefined) {
     const endpoint = deps.browserAgent;
@@ -453,5 +494,14 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
     }
   }
 
-  return { methods, notifications, counters: { ptyAttached: pty.attachedCount }, dropClient: (client) => { pty.dropClient(client); deps.works.sync?.dropClient(client.id); } };
+  return {
+    methods,
+    notifications,
+    counters: { ptyAttached: pty.attachedCount },
+    dropClient: (client) => {
+      pty.dropClient(client);
+      processes?.dropClient(client);
+      deps.works.sync?.dropClient(client.id);
+    },
+  };
 }

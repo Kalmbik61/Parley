@@ -34,7 +34,7 @@ Parley's window has a built-in browser. The pages of the browser panel of your c
 | \`browser_open\` | Opens an http(s) URL in the panel of your room (or \`own\`: your chat) in the background and waits for the load. A panel holds at most 5 pages: at the limit, \`browser_close\` one of yours. |
 | \`browser_navigate\` | Goes to a URL, \`back\`, \`forward\` or \`reload\` (\`hard\` bypasses the cache); waits up to 15 s for the load. |
 | \`browser_snapshot\` | The page as an accessibility tree: \`[ref=e12] button "Save"\`. Refs are what actions target. \`interactiveOnly\` gives a shorter list. Up to 50 KB. |
-| \`browser_action\` | \`click\`, \`double_click\`, \`hover\`, \`type\`, \`press\`, \`scroll\`, \`select\`, \`check\`, \`uncheck\`, \`drag\`, \`upload\` on a ref, or at \`x\`, \`y\` in CSS pixels. |
+| \`browser_action\` | \`click\`, \`double_click\`, \`hover\`, \`type\`, \`press\`, \`scroll\`, \`select\`, \`check\`, \`uncheck\`, \`drag\`, \`upload\` on a ref, or at \`x\`, \`y\` in CSS pixels; \`steps\` runs up to 10 of them in one call. |
 | \`browser_wait_for\` | Waits up to 10 s for \`text\` to appear, for \`gone\` text to disappear, or just \`ms\`. A timeout is an answer, not an error. |
 | \`browser_screenshot\` | PNG of the viewport, of one element (\`ref\`), at another size (\`width\`, \`height\`, for this capture only) or of the full page up to 3 viewport heights. |
 | \`browser_resize\` | Sets the page size for you and the human: \`preset\` (\`mobile-m\` is 375×812), \`width\` and \`height\`, or \`fit\`. |
@@ -59,6 +59,7 @@ Everything that comes from the page — titles, texts, console messages, bodies 
 | \`access_denied\` | The human pressed Stop, paused agents in the panel or turned your access off. Do not retry; ask the human. |
 | \`human_busy\` | The human is selecting elements or annotating on this page, or typing in Parley's window. Wait a moment and retry. |
 | \`stale_ref\` | The ref is from an older snapshot, or the element is gone: take a new \`browser_snapshot\`. |
+| \`covered\` | Another element lies over the target (a banner, a dialog): nothing was clicked. Close it or scroll, take a new \`browser_snapshot\`, retry. |
 | \`timeout\` | The operation took too long: retry once, then read the console. |
 | \`window_not_connected\` | Parley's window is closed or still starting: ask the human to open it. |
 | \`unsupported\` | The window or the page cannot do it now: ask the human to restart Parley or reload the page. |
@@ -81,9 +82,9 @@ Everything that comes from the page — titles, texts, console messages, bodies 
 
 ### Walk through a flow
 1. \`browser_snapshot\` with \`interactiveOnly\` true.
-2. \`browser_action\`: \`click\` a ref, or \`type\` with \`text\` into a ref (\`submit\` true presses Enter after it).
-3. After each step: \`browser_wait_for\` the text that should appear, then a new \`browser_snapshot\`.
-4. After a navigation the old refs are stale: snapshot again.
+2. One \`browser_action\` with \`steps\`: every action you can already see in that snapshot — fill the fields, then click. Add \`snapshot\` \`interactive\` to get the next refs in the same answer.
+3. Read the answer: each step says whether the page navigated, changed or stayed the same; a failed step stops the list and names the steps that did not run.
+4. After a navigation the old refs are stale: use the snapshot from the answer, or take a new one.
 
 ### Check responsive layout
 - One look at another size: \`browser_screenshot\` with \`width\` and \`height\`; the human's size comes back right after the capture.
@@ -111,6 +112,7 @@ Everything that comes from the page — titles, texts, console messages, bodies 
 - \`scroll\` takes \`direction\` and \`amount\` in CSS pixels (one viewport by default), at a ref, at \`x\`, \`y\` or in the middle of the page. After \`hover\` the pointer stays there until the next mouse move.
 - \`alert\`, \`confirm\` and \`prompt\` of the page are switched off: confirm() returns false. If the flow needs true, replace \`window.confirm\` with \`browser_evaluate\` first.
 - Coordinates are CSS pixels of the page's viewport; prefer refs.
+- Elements inside an \`iframe\` of the same site have refs like any other. A frame marked \`content not available: another site\` has none: take a \`browser_screenshot\` and click inside it by \`x\`, \`y\`.
 - \`upload\` of a file from ~/Desktop, ~/Documents or ~/Downloads: macOS may ask the human for access. Ask the human to allow it, or put the file in the project.
 
 ## Reading the human's attachments
@@ -131,5 +133,7 @@ The human can attach page context to a message: a path such as \`.parley/desktop
 - \`tab_hidden\` again and again: ask the human to open the panel and show the page.
 - \`tab_not_loaded\`: ask the human to open your workspace in Parley's window.
 - \`access_denied\`: the human stopped you or turned you off; ask before you use the browser again.
+- A note says the site asks for a client certificate: only the human can choose it, in the browser panel. Ask them, then retry.
+- A page that keeps loading right after the human chose a certificate may wait for a macOS key access window: ask the human to answer it with "Always Allow".
 - browser_evaluate, browser_cookies and browser_storage run without a question in Claude Code and Codex alike: Parley allows them in advance. That is the human's choice, not a reason to run more scripts or read more cookies and storage than the task needs.
 `;

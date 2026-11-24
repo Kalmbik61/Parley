@@ -9,6 +9,7 @@ const TOKEN = 'ab'.repeat(32);
 const opened: Array<{ client: Client; server: ReturnType<typeof createParleyServer> }> = [];
 let endpoint: Server | undefined;
 let answer: { status: number; body: unknown };
+const REPORT_ARRIVES = 'Its report (done or failed) reaches you as a letter: wait for it with wait_for("inbox", 1500).';
 const requests: Array<{ url: string | undefined; authorization: string | undefined; body: unknown }> = [];
 
 async function startEndpoint(): Promise<string> {
@@ -74,7 +75,8 @@ describe('create_session MCP', () => {
     const args = { provider: 'codex', label: 'Review', task: 'Review changes', model: 'gpt-6-astra', effort: 'high', role: 'builtin:reviewer', worktree: true };
     const result = await call(client, args);
     expect(result.isError).not.toBe(true);
-    expect(JSON.parse(result.text)).toEqual({ sessionId: 's-02', provider: 'codex' });
+    expect(JSON.parse(result.text.split('\n')[0]!)).toEqual({ sessionId: 's-02', provider: 'codex' });
+    expect(result.text.split('\n').at(-1)).toBe(REPORT_ARRIVES);
     expect(requests).toEqual([{ url: '/agent/sessions', authorization: `Bearer ${TOKEN}`, body: args }]);
   });
 
@@ -83,9 +85,10 @@ describe('create_session MCP', () => {
     answer.body = { ok: true, result: { sessionId: 's-02', provider: 'codex', held: 'folder-trust' } };
     const result = await call(client);
     expect(result.isError).not.toBe(true);
-    const [json, sentence] = result.text.split('\n');
+    const [json, sentence, arrives] = result.text.split('\n');
     expect(JSON.parse(json!)).toEqual({ sessionId: 's-02', provider: 'codex', held: 'folder-trust' });
     expect(sentence).toBe('The session waits for the human to trust the folder; it starts by itself after that.');
+    expect(arrives).toBe(REPORT_ARRIVES);
   });
 
   it('без held фразы про ожидание нет', async () => {
@@ -104,7 +107,7 @@ describe('create_session MCP', () => {
       expect(sentence).toBe(
         'The session is queued: this machine is at its agent limit or low on memory. It starts by itself when a slot frees; wait_for on its id waits for it as for a running session.',
       );
-      expect(rest).toEqual([]);
+      expect(rest).toEqual([REPORT_ARRIVES]);
     }
   });
 
@@ -112,7 +115,7 @@ describe('create_session MCP', () => {
     const client = await connect(await startEndpoint());
     expect((await call(client)).text).not.toContain('queued');
     answer.body = { ok: true, result: { sessionId: 's-07', provider: 'claude', queued: 'something-new' } };
-    expect((await call(client)).text.split('\n')).toHaveLength(1);
+    expect((await call(client)).text.split('\n')).toHaveLength(2);
   });
 
   it('explains unavailable host support without mutating a map', async () => {
@@ -125,7 +128,9 @@ describe('create_session MCP', () => {
   it('preserves validation and budget refusals from the host', async () => {
     const client = await connect(await startEndpoint());
     answer.body = { ok: false, error: { code: 'resource-budget', message: 'The workspace new-session limit is exhausted.' } };
-    expect(await call(client)).toEqual({ isError: true, text: 'resource-budget: The workspace new-session limit is exhausted.' });
+    const refused = await call(client);
+    expect(refused).toEqual({ isError: true, text: 'resource-budget: The workspace new-session limit is exhausted.' });
+    expect(refused.text).not.toContain(REPORT_ARRIVES);
     expect(requests).toHaveLength(1);
   });
 

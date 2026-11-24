@@ -6,7 +6,7 @@
 
 import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
-import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -26,13 +26,29 @@ import {
   parleyHome,
   readJsonlRecords,
 } from '@parley/core';
-import { FEED_SCHEMA_VERSION, progressResult } from '@parley/protocol';
-import type { EventData } from '@parley/protocol';
+import { FEED_MAIL_FEATURE, FEED_RESYNC_FEATURE, FEED_SCHEMA_VERSION, progressResult } from '@parley/protocol';
+import type { EventData, SessionRef } from '@parley/protocol';
 import { fakeClient, fakeFeedDeps, hookRequest, REF } from '../../test/feed-fakes.js';
 import type { FakeFeedDeps } from '../../test/feed-fakes.js';
 import { makePng } from '../../test/png.js';
 import { HostError } from '../errors.js';
-import { createFeedService, FEED_MAX_ITEMS, readRecordsTail } from './feed-service.js';
+import {
+  createFeedService,
+  FEED_BATCH_MS,
+  FEED_CLIENT_DROP_BYTES,
+  FEED_IDLE_EVICT_MS,
+  FEED_MAX_ITEMS,
+  FEED_SEED_CONCURRENCY,
+  readRecordsTail,
+  SEED_RECORD_WINDOW,
+  TERMINAL_MESSAGE_POLL_MS,
+  TERMINAL_MESSAGE_WAIT_MS,
+  TERMINAL_PROMPT_CONFIRM_MS,
+  TERMINAL_PROMPT_FIND_MS,
+  TERMINAL_PROMPT_FIND_STEP_MS,
+  TERMINAL_PROMPT_WATCH_MS,
+  withoutMail,
+} from './feed-service.js';
 import type { FeedService, FeedServiceOptions } from './feed-service.js';
 import * as progressModule from './progress.js';
 import * as codexSource from './codex-source.js';
@@ -535,7 +551,7 @@ describe('feed.progress source, quota and lifecycle', () => {
     expect(ofKind((await service.snapshot(REF)).items, 'tool')).toHaveLength(1);
   });
 
-  it.each(['provider', 'providerSessionId', 'startedAtProcess'] as const)('invalidates existing state on %s change without resetting Chat', async (field) => {
+  it.each(['provider', 'providerSessionId', 'startedAtProcess'] as const)('invalidates progress on %s change; only provider takeover replaces Chat', async (field) => {
     const stamp = provenance();
     start();
     send(pre('old', 'Read', {}));
@@ -544,11 +560,11 @@ describe('feed.progress source, quota and lifecycle', () => {
     const previous = { ...stamp };
     stamp[field] = field === 'provider' ? 'codex' : 'SECRET-new';
     fakes.setSessions([{ ref: REF }]);
-    expect(await service.progress(REF, fakeClient())).toMatchObject({ availability: 'unavailable', recent: [], revision: before.revision });
+    expect(await service.progress(REF, fakeClient())).toMatchObject({ availability: 'unavailable', recent: [], revision: before.revision + (field === 'provider' ? 1 : 0) });
     Object.assign(stamp, previous);
     fakes.setSessions([{ ref: REF }]);
     expect(await service.progress(REF, fakeClient())).toMatchObject({ availability: 'unavailable', recent: [] });
-    expect(ofKind((await service.snapshot(REF)).items, 'tool')).toHaveLength(1);
+    expect(ofKind((await service.snapshot(REF)).items, 'tool')).toHaveLength(field === 'provider' ? 0 : 1);
   });
 
   it('invalidates a restart event even before the work map publishes a new process stamp', async () => {
@@ -1087,11 +1103,18 @@ describe('снимок и дельты', () => {
     expect(full.items.length).toBeGreaterThan(cut.items.length);
     expect(ofKind(full.items, 'text')).toHaveLength(3);
     expect(cut).toMatchObject({ revision: full.revision, schemaVersion: full.schemaVersion, mode: full.mode });
-    expect(fakes.log.info).toHaveBeenLastCalledWith('лента: снимок', expect.objectContaining({
-      scope: 'attention',
-      items: 3,
-      sentBytes: expect.any(Number),
-    }));
+    // Лёгкий вызов `scope: 'attention'` на живой ленте без сева строку не пишет (D5-2): последняя строка — от полного снимка.
+    expect(fakes.log.info).toHaveBeenLastCalledWith('лента: снимок', expect.objectContaining({ scope: null }));
+  });
+
+  it('scope attention: живая лента без сева — строки журнала нет; тот же вызов без scope — строка есть', async () => {
+    start();
+    send(prompt('go'));
+    await service.snapshot(REF, undefined, 'attention');
+    expect(fakes.log.info.mock.calls.filter(([msg]) => msg === 'лента: снимок')).toHaveLength(0);
+
+    await service.snapshot(REF);
+    expect(fakes.log.info.mock.calls.filter(([msg]) => msg === 'лента: снимок')).toHaveLength(1);
   });
 
   it('scope attention: пустая лента — пусто; без prompt — последний text вообще; без text — только карточки', async () => {
@@ -1197,6 +1220,68 @@ describe('снимок и дельты', () => {
       'b',
       'c',
     ]);
+  });
+
+  describe('буфер окна выше FEED_CLIENT_DROP_BYTES', () => {
+    const MIB = 1024 * 1024;
+    const resyncs = (client: ReturnType<typeof fakeClient>) =>
+      client.sent.filter((message) => 'event' in message && message.event === 'feed.resync');
+
+    it('окно с признаком и буфером 40 МиБ: подписки сняты, feed.resync на каждую, дельта ушла раньше', () => {
+      vi.useFakeTimers();
+      const other = { ...REF, sessionId: 's-02' };
+      fakes = fakeFeedDeps([{ ref: REF }, { ref: other }]);
+      start();
+      const window = fakeClient(() => true, { features: [FEED_RESYNC_FEATURE], writableLength: () => 40 * MIB });
+      service.subscribe(REF, window);
+      service.subscribe(other, window);
+      const stays = fakeClient();
+      service.subscribe(REF, stays);
+
+      send(prompt('a'));
+      vi.advanceTimersByTime(50);
+
+      expect(feedChanged(window)).toHaveLength(1);
+      expect(window.sent.map((message) => ('event' in message ? message.event : null))).toEqual(['feed.changed', 'feed.resync', 'feed.resync']);
+      expect(resyncs(window).map((message) => (message as { data: EventData<'feed.resync'> }).data.ref.sessionId).sort()).toEqual([other.sessionId, REF.sessionId].sort());
+      expect(fakes.log.info).toHaveBeenCalledWith('лента: клиент отписан по буферу', { op: 'feed.clientDropped', client: 'test', queuedBytes: 40 * MIB, feeds: 2 });
+
+      send(prompt('b'));
+      vi.advanceTimersByTime(50);
+      expect(feedChanged(window)).toHaveLength(1);
+      expect(feedChanged(stays)).toHaveLength(2);
+    });
+
+    it('без признака feed-resync подписка остаётся (старое окно, мост телефона)', () => {
+      vi.useFakeTimers();
+      start();
+      const old = fakeClient(() => true, { writableLength: () => 40 * MIB });
+      service.subscribe(REF, old);
+
+      send(prompt('a'));
+      vi.advanceTimersByTime(50);
+      send(prompt('b'));
+      vi.advanceTimersByTime(50);
+
+      expect(feedChanged(old)).toHaveLength(2);
+      expect(resyncs(old)).toHaveLength(0);
+    });
+
+    it('ровно 32 МиБ — подписка остаётся', () => {
+      vi.useFakeTimers();
+      start();
+      const edge = fakeClient(() => true, { features: [FEED_RESYNC_FEATURE], writableLength: () => FEED_CLIENT_DROP_BYTES });
+      service.subscribe(REF, edge);
+
+      send(prompt('a'));
+      vi.advanceTimersByTime(50);
+      send(prompt('b'));
+      vi.advanceTimersByTime(50);
+
+      expect(FEED_CLIENT_DROP_BYTES).toBe(32 * MIB);
+      expect(feedChanged(edge)).toHaveLength(2);
+      expect(resyncs(edge)).toHaveLength(0);
+    });
   });
 
   it('снимок и подписка неизвестной сессии — not_found', async () => {
@@ -1828,6 +1913,22 @@ describe('сев из журнала', () => {
     expect(reader.files).toHaveLength(2);
   });
 
+  it('mail: the Claude session transcript shows delivered letters, a subagent transcript does not', async () => {
+    const { root, session } = await history();
+    const mailLog = path.join(FIXTURES, 'mail', 'claude-tools.transcript.jsonl');
+    await copyFile(mailLog, session);
+    await copyFile(mailLog, path.join(root, '-proj', 'sess', 'subagents', 'agent-ad2fe21e96ffde3ba.jsonl'));
+    fakes.setSessions([{ ref: REF, provider: 'glm' }]);
+    fakes.setLogFile(session);
+    start({ roots: () => [root] });
+
+    const main = await service.snapshot(REF, undefined, undefined, fakeClient(undefined, { features: [FEED_MAIL_FEATURE] }));
+    expect(main.items.filter((item) => item.kind === 'mail').map((item) => item.id)).toEqual(['mail:m-9001', 'mail:m-9003', 'mail:m-9010']);
+    const agent = await service.snapshot(REF, 'ad2fe21e96ffde3ba');
+    expect(agent.items.some((item) => item.kind === 'tool' && item.toolUseId === 'toolu_mail_check')).toBe(true);
+    expect(agent.items.some((item) => item.kind === 'mail')).toBe(false);
+  });
+
   it('GLM transcript discovered after subscription seeds and sends a delta', async () => {
     const { root } = await history();
     fakes.setSessions([{ ref: REF, provider: 'glm' }]);
@@ -1839,6 +1940,27 @@ describe('сев из журнала', () => {
 
     fakes.setLogFile(path.join(root, '-proj', 'write.jsonl'));
     fakes.emitLog();
+    await vi.waitFor(() => expect(feedChanged(client)).toHaveLength(1));
+    expect(ofKind(feedChanged(client)[0]?.upsert ?? [], 'tool').length).toBeGreaterThan(0);
+    expect(reader.files).toHaveLength(1);
+  });
+
+  it('сессия без providerSessionId, активная: журнал появился — сеется, а изменение, её не задевшее, не сеет', async () => {
+    const { root } = await history();
+    const reader = countingReader();
+    start({ roots: () => [root], readRecords: reader.read });
+    const client = fakeClient();
+    service.subscribe(REF, client);
+    await expect(service.snapshot(REF)).resolves.toMatchObject({ items: [] });
+
+    fakes.setLogFile(path.join(root, '-proj', 'write.jsonl'));
+    // Чужое изменение: индекс сообщает, что запись эту сессию не задела.
+    fakes.emitLog({ affects: () => false });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(reader.files).toHaveLength(0);
+    expect(feedChanged(client)).toHaveLength(0);
+
+    fakes.emitLog({ affects: (session) => session.id === REF.sessionId });
     await vi.waitFor(() => expect(feedChanged(client)).toHaveLength(1));
     expect(ofKind(feedChanged(client)[0]?.upsert ?? [], 'tool').length).toBeGreaterThan(0);
     expect(reader.files).toHaveLength(1);
@@ -1874,6 +1996,18 @@ describe('сев из журнала', () => {
     expect(lines).toHaveLength(2);
     expect(lines[0]?.[1]).toMatchObject({ sessionId: REF.sessionId, workId: REF.workId, seedMs: expect.any(Number) });
     expect(lines[1]?.[1]).toMatchObject({ seedMs: null });
+  });
+
+  it('scope attention с севом из журнала пишет строку: seedMs числом, scope и sentBytes', async () => {
+    const { root } = await history();
+    fakes.setLogFile(path.join(root, '-proj', 'write.jsonl'));
+    start({ roots: () => [root], readRecords: countingReader().read });
+
+    await service.snapshot(REF, undefined, 'attention');
+
+    const lines = fakes.log.info.mock.calls.filter(([msg]) => msg === 'лента: снимок');
+    expect(lines).toHaveLength(1);
+    expect(lines[0]?.[1]).toMatchObject({ scope: 'attention', sentBytes: expect.any(Number), seedMs: expect.any(Number) });
   });
 
   it('журнал ещё не известен индексу — следующий снимок сеет, когда он появится', async () => {
@@ -2052,6 +2186,186 @@ describe('сев из журнала', () => {
       Array.from({ length: 10 }, (_, i) => i + 15),
     );
     expect(await readRecordsTail(file, 100)).toHaveLength(25);
+  });
+
+  it('readRecordsTail с maxBytes меньше файла: записи последних байт по порядку, неполная первая отброшена', async () => {
+    const dir = await tempRoot();
+    const file = path.join(dir, 'big.jsonl');
+    const lines = Array.from({ length: 25 }, (_, i) => JSON.stringify({ type: 'user', i }));
+    await writeFile(file, `${lines.join('\n')}\n`);
+    // Каждая строка `{"type":"user","i":N}` — 20 байт с переводом для N < 10 и 21 для N >= 10.
+    const tail = await readRecordsTail(file, SEED_RECORD_WINDOW, 100);
+    const got = tail.map((record) => record['i'] as number);
+    expect(got.length).toBeGreaterThan(0);
+    expect(got.length).toBeLessThan(25);
+    expect(got).toEqual(Array.from({ length: got.length }, (_, i) => 25 - got.length + i));
+    expect(await readRecordsTail(file, SEED_RECORD_WINDOW, 100_000)).toHaveLength(25);
+  });
+
+  /** Журнал из строк JSON; `prompt` — запись пользователя, `filler` — запись, из которой лента не делает элементов. */
+  const userLine = (n: number, text = `prompt ${n}`) =>
+    JSON.stringify({
+      sessionId: 's',
+      type: 'user',
+      uuid: `u${n}`,
+      timestamp: `2026-10-02T10:00:${String(n % 60).padStart(2, '0')}.000Z`,
+      message: { role: 'user', content: text },
+    });
+  const fillerLine = (n: number) => JSON.stringify({ sessionId: 's', type: 'attachment', uuid: `f${n}`, pad: 'x'.repeat(2000) });
+
+  async function writeLog(lines: string[]): Promise<{ root: string; file: string }> {
+    const dir = await tempRoot();
+    const root = path.join(dir, 'projects');
+    await mkdir(path.join(root, '-proj'), { recursive: true });
+    const file = path.join(root, '-proj', 'tail.jsonl');
+    await writeFile(file, `${lines.join('\n')}\n`);
+    return { root, file };
+  }
+
+  function sizedReader() {
+    const sizes: (number | undefined)[] = [];
+    const read = (file: string, maxBytes?: number): Promise<RawRecord[]> => {
+      sizes.push(maxBytes);
+      return readRecordsTail(file, SEED_RECORD_WINDOW, maxBytes);
+    };
+    return { sizes, read };
+  }
+
+  it('хвост растёт вдвое, пока лента не полна: результат равен чтению целиком', async () => {
+    const lines = [userLine(1), userLine(2), userLine(3), ...Array.from({ length: 40 }, (_, i) => fillerLine(i))];
+    const { root, file } = await writeLog(lines);
+    fakes.setLogFile(file);
+    const reader = sizedReader();
+    start({ roots: () => [root], readRecords: reader.read, seedTailBytes: 1024 });
+
+    const grown = await service.snapshot(REF);
+    const size = (await stat(file)).size;
+    expect(reader.sizes[0]).toBe(1024);
+    reader.sizes.forEach((bytes, index) => expect(bytes).toBe(1024 * 2 ** index));
+    expect(reader.sizes.at(-1) as number).toBeGreaterThanOrEqual(size);
+    expect(reader.sizes.at(-2) as number).toBeLessThan(size);
+    const whole = await createFeedService(fakes.deps, { roots: () => [root] }).snapshot(REF);
+    expect(grown.items).toEqual(whole.items);
+    expect(ofKind(grown.items, 'prompt')).toHaveLength(3);
+  });
+
+  it('полная лента из первого хвоста — одно чтение', async () => {
+    const { root, file } = await writeLog(Array.from({ length: 40 }, (_, i) => userLine(i)));
+    fakes.setLogFile(file);
+    const reader = sizedReader();
+    start({ roots: () => [root], readRecords: reader.read, seedTailBytes: 1024, maxItems: 3 });
+
+    const snapshot = await service.snapshot(REF);
+    expect(reader.sizes).toEqual([1024]);
+    expect(snapshot.items).toHaveLength(3);
+  });
+
+  it('запись длиннее хвоста попадает в ленту следующим шагом', async () => {
+    const big = 'я'.repeat(5000);
+    const { root, file } = await writeLog([userLine(1, 'first'), userLine(2, big)]);
+    fakes.setLogFile(file);
+    const reader = sizedReader();
+    start({ roots: () => [root], readRecords: reader.read, seedTailBytes: 1024 });
+
+    const snapshot = await service.snapshot(REF);
+    expect(reader.sizes.length).toBeGreaterThan(1);
+    expect(ofKind(snapshot.items, 'prompt').map((item) => item.text)).toEqual(['first', big]);
+  });
+
+  describe('очередь посевов', () => {
+    const refOf = (n: number) => ({ ...REF, sessionId: `q-${n}` });
+
+    /** Читатель на отложенных промисах: помнит порядок обращений (по имени файла сессии) и число идущих разом. */
+    async function queueSetup(count: number) {
+      const { root, file } = await history().then(async (h) => ({ root: h.root, file: path.join(h.root, '-proj', 'write.jsonl') }));
+      const refs = Array.from({ length: count }, (_, i) => refOf(i + 1));
+      fakes.setSessions(refs.map((ref) => ({ ref })));
+      for (const ref of refs) {
+        const own = path.join(root, '-proj', `${ref.sessionId}.jsonl`);
+        await copyFile(file, own);
+        fakes.setSessionLogFile(ref.sessionId, own);
+      }
+      const order: string[] = [];
+      const gates = new Map<string, () => void>();
+      let active = 0;
+      let peak = 0;
+      const read = async (own: string): Promise<RawRecord[]> => {
+        const name = path.basename(own, '.jsonl');
+        order.push(name);
+        active += 1;
+        peak = Math.max(peak, active);
+        await new Promise<void>((resolve) => gates.set(name, resolve));
+        active -= 1;
+        return [];
+      };
+      const release = (name: string) => {
+        const gate = gates.get(name);
+        expect(gate, `читатель ${name} ещё не обратился`).toBeDefined();
+        gates.delete(name);
+        gate?.();
+      };
+      start({ roots: () => [root], readRecords: read });
+      return { refs, order, release, peak: () => peak, running: () => active, gates };
+    }
+
+    it('не больше двух посевов разом, все сеются', async () => {
+      const q = await queueSetup(5);
+      for (const ref of q.refs) fakes.emitStart(ref);
+      await vi.waitFor(() => expect(q.order).toHaveLength(FEED_SEED_CONCURRENCY));
+      expect(q.running()).toBe(2);
+      while (q.order.length < 5 || q.gates.size > 0) {
+        const name = q.order.find((candidate) => q.gates.has(candidate));
+        if (name === undefined) {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          continue;
+        }
+        q.release(name);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      expect(q.order).toHaveLength(5);
+      expect(q.peak()).toBeLessThanOrEqual(2);
+    });
+
+    it('снимок окна обгоняет фоновые посевы', async () => {
+      const q = await queueSetup(5);
+      for (const ref of q.refs.slice(0, 4)) fakes.emitStart(ref);
+      await vi.waitFor(() => expect([...q.order].sort()).toEqual(['q-1', 'q-2']));
+      const snapshot = service.snapshot(q.refs[4] as typeof REF);
+      q.release('q-1');
+      await vi.waitFor(() => expect(q.order.slice(2)).toEqual(['q-5']));
+      q.release('q-2');
+      q.release('q-5');
+      await snapshot;
+      await vi.waitFor(() => expect(q.order.slice(3).sort()).toEqual(['q-3', 'q-4']));
+      for (const name of ['q-3', 'q-4']) await vi.waitFor(() => q.release(name));
+    });
+
+    it('снимок поднимает свой фоновый посев', async () => {
+      const q = await queueSetup(4);
+      for (const ref of q.refs) fakes.emitStart(ref);
+      await vi.waitFor(() => expect([...q.order].sort()).toEqual(['q-1', 'q-2']));
+      const snapshot = service.snapshot(q.refs[3] as typeof REF);
+      q.release('q-1');
+      await vi.waitFor(() => expect(q.order.slice(2)).toEqual(['q-4']));
+      q.release('q-2');
+      q.release('q-4');
+      await snapshot;
+      await vi.waitFor(() => expect(q.order).toHaveLength(4));
+      expect(q.order.filter((name) => name === 'q-4')).toHaveLength(1);
+      await vi.waitFor(() => q.release('q-3'));
+    });
+
+    it('stop() отпускает очередь: ждущий снимок завершается пустой лентой', async () => {
+      const q = await queueSetup(3);
+      for (const ref of q.refs.slice(0, 2)) fakes.emitStart(ref);
+      await vi.waitFor(() => expect([...q.order].sort()).toEqual(['q-1', 'q-2']));
+      const waiting = service.snapshot(q.refs[2] as typeof REF);
+      await service.stop();
+      await expect(waiting).resolves.toMatchObject({ items: [] });
+      expect([...q.order].sort()).toEqual(['q-1', 'q-2']);
+      q.release('q-1');
+      q.release('q-2');
+    });
   });
 
   it('снимок субагента по agentId — из его журнала, revision 0', async () => {
@@ -2306,6 +2620,47 @@ describe('прерывание Esc по записи журнала (решен�
 
   const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 30));
 
+  describe('изменение журнала будит только ленты своих сессий', () => {
+    const REF_B: SessionRef = { ...REF, sessionId: 's-02' };
+    const only = (sessionId: string) => ({ affects: (session: { id: string }) => session.id === sessionId });
+
+    /** Две сессии с открытым ходом; шпион пишет, у какой сессии спросили журнал при проверке прерываний. */
+    async function twoOpenTurns(): Promise<string[]> {
+      fakes = fakeFeedDeps([{ ref: REF }, { ref: REF_B }]);
+      const root = await tempRoot();
+      await logUnder(root);
+      const asked: string[] = [];
+      const logFile = fakes.deps.activity.logFile;
+      vi.spyOn(fakes.deps.activity, 'logFile').mockImplementation((ref) => {
+        asked.push(ref.sessionId);
+        return logFile(ref);
+      });
+      start({ roots: () => [root] });
+      service.onHook(hookRequest(prompt('go'), REF));
+      service.onHook(hookRequest(prompt('go'), REF_B));
+      asked.length = 0;
+      return asked;
+    }
+
+    it('изменение журнала A не трогает ленту B', async () => {
+      const asked = await twoOpenTurns();
+      // Вторая рассылка идёт сразу за первой: если бы первая задела B, B спросили бы дважды.
+      fakes.emitLog(only(REF.sessionId));
+      fakes.emitLog(only(REF_B.sessionId));
+      await vi.waitFor(() => expect(asked.length).toBeGreaterThanOrEqual(2));
+      await settle();
+      expect(asked).toEqual([REF.sessionId, REF_B.sessionId]);
+    });
+
+    it('без аргумента (первый полный список) — все ленты', async () => {
+      const asked = await twoOpenTurns();
+      fakes.emitLog();
+      await vi.waitFor(() => expect(asked.length).toBeGreaterThanOrEqual(2));
+      await settle();
+      expect([...asked].sort()).toEqual([REF.sessionId, REF_B.sessionId]);
+    });
+  });
+
   it('запись о прерывании новее начала хода: черта interrupted, вызов отклонён, удержанный вопрос — {} и questionHeld(false)', async () => {
     const root = await tempRoot();
     const file = await logUnder(root);
@@ -2463,6 +2818,71 @@ describe('лента Codex', () => {
     });
     const sub = await service.snapshot(REF, 'th-child');
     expect(sub.items.some((entry) => entry.kind === 'tool' && entry.toolUseId === 'cc1')).toBe(true);
+  });
+
+  const mailCall = (n: number, id: string, thread: string) =>
+    item(n, thread, {
+      type: 'McpToolCall',
+      id,
+      server: 'parley',
+      tool: 'check_inbox',
+      arguments: {},
+      status: 'completed',
+      result: { content: [{ type: 'text', text: JSON.stringify({ messages: [{ id: `m-${id}`, from: 's-9', fromLabel: null, at: '2030-01-05T10:00:00.000Z', text: 'hello', kind: 'note', room: null }] }) }] },
+    });
+
+  it('mail: the Codex root feed shows delivered letters, the child agent snapshot does not', async () => {
+    await writeRollout(file, [meta('th-main'), started(1), subagent(2, 'th-child', 'started'), mailCall(3, 'root-mail', 'th-main')]);
+    const childFile = path.join(dir, 'child.jsonl');
+    await writeRollout(childFile, [childMeta('th-child', 'th-main', 3), parentCopy(1), parentCopy(2), task(3, 'Read the mail'), mailCall(4, 'child-mail', 'th-child')]);
+    fakes.setChildLogFile('th-child', childFile);
+    start();
+    const root = await service.snapshot(REF, undefined, undefined, fakeClient(undefined, { features: [FEED_MAIL_FEATURE] }));
+    expect(root.items.filter((entry) => entry.kind === 'mail').map((entry) => entry.id)).toEqual(['mail:m-root-mail']);
+    const sub = await service.snapshot(REF, 'th-child');
+    expect(sub.items.some((entry) => entry.kind === 'tool' && entry.toolUseId === 'child-mail')).toBe(true);
+    expect(sub.items.some((entry) => entry.kind === 'mail')).toBe(false);
+  });
+
+  it('сессия Codex без providerSessionId, активная: журнал появился — сеется по изменению, задевшему её', async () => {
+    await writeRollout(file, [meta('th-main'), started(1)]);
+    fakes.setLogFile(null);
+    start();
+    const client = fakeClient();
+    service.subscribe(REF, client);
+    await service.snapshot(REF);
+
+    fakes.setLogFile(file);
+    fakes.emitLog({ affects: () => false });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(feedChanged(client)).toHaveLength(0);
+
+    await appendRollout(file, [userMessage(2, 'um1', 'go')]);
+    fakes.emitLog({ affects: (session) => session.id === REF.sessionId });
+    await vi.waitFor(() =>
+      expect(feedChanged(client).flatMap((delta) => delta.upsert.map((entry) => entry.kind))).toContain('prompt'),
+    );
+  });
+
+  it('журнал порождённого треда задел родителя (affects по предкам): лента родителя перечитывает агента', async () => {
+    await writeRollout(file, [meta('th-main'), started(1), subagent(2, 'th-child', 'started')]);
+    const childFile = path.join(dir, 'child.jsonl');
+    await writeRollout(childFile, [childMeta('th-child', 'th-main', 3), parentCopy(1), parentCopy(2), task(3, 'Найди newAgent'), command(4, 'cc1', 'rg newAgent', 'th-child')]);
+    fakes.setChildLogFile('th-child', childFile);
+    start();
+    await service.snapshot(REF);
+    await vi.waitFor(async () => {
+      const card = (await service.snapshot(REF)).items.find((entry) => entry.kind === 'agent');
+      expect(card).toMatchObject({ toolCount: 1 });
+    });
+
+    // Дописан журнал ребёнка; индекс сообщает об изменении, которое задело сессию родителя (запись в цепочке предков).
+    await appendRollout(childFile, [command(5, 'cc2', 'rg other', 'th-child')]);
+    fakes.emitLog({ affects: (session) => session.id === REF.sessionId });
+    await vi.waitFor(async () => {
+      const card = (await service.snapshot(REF)).items.find((entry) => entry.kind === 'agent');
+      expect(card).toMatchObject({ toolCount: 2 });
+    });
   });
 
   it('Stop у Codex — только Esc, без стирания промпта', () => {
@@ -3336,8 +3756,9 @@ describe('картинки результатов инструментов (пл
       }) as typeof setInterval);
       try {
         start({ imagesDir });
-        expect(created.map((entry) => entry.ms)).toEqual([FEED_IMAGE_SWEEP_MS]);
-        expect(created[0]?.timer.hasRef()).toBe(false);
+        // Таймеров два: уборка картинок (шесть часов) и обход простаивающих лент (раз в минуту); ни один не держит процесс.
+        expect(created.map((entry) => entry.ms)).toEqual([FEED_IMAGE_SWEEP_MS, 60_000]);
+        expect(created.every((entry) => !entry.timer.hasRef())).toBe(true);
       } finally {
         spy.mockRestore();
       }
@@ -3375,6 +3796,9 @@ describe('картинки результатов инструментов (пл
 it('attention peek reads settled reducer cards before the batched delta flush', async () => {
   vi.useFakeTimers();
   start();
+  // Ленты нет в памяти — карточек нет; лента есть, но не посеяна и не живая — неизвестно.
+  expect(service.peekAttention(REF)).toEqual([]);
+  service.noteMode(REF, 'plan');
   expect(service.peekAttention(REF)).toBeUndefined();
   send(prompt('go'));
   send(pre('t1', 'Bash', { command: 'ls' }));
@@ -3384,4 +3808,766 @@ it('attention peek reads settled reducer cards before the batched delta flush', 
   service.decide(REF, 'permission:t1', { kind: 'permission', behavior: 'allow' });
   expect(service.peekAttention(REF)).toEqual([]);
   expect(snapshot.items.some((item) => item.kind === 'permission' && item.state === 'pending')).toBe(true);
+});
+
+describe('выгрузка лент (решение 5)', () => {
+  const MINUTE = 60_000;
+
+  /** Журнал без процесса: чтения считает счётчик; часы и обход — на фальшивых таймерах (файлы читаются обычным путём). */
+  async function evictSetup(): Promise<{ reads: string[] }> {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
+    const root = path.join(await tempRoot(), 'projects');
+    await mkdir(path.join(root, '-proj'), { recursive: true });
+    const file = path.join(root, '-proj', 'write.jsonl');
+    await copyFile(path.join(FIXTURES, 'transcript-p5b-write.jsonl'), file);
+    fakes.setLogFile(file);
+    fakes.setProcess(null);
+    const reads: string[] = [];
+    start({
+      roots: () => [root],
+      readRecords: async (own) => {
+        reads.push(own);
+        return (await readJsonlRecords(own)).records;
+      },
+    });
+    return { reads };
+  }
+
+  it('закрытая сессия — лента уходит сразу, следующий снимок сеет заново', async () => {
+    const { reads } = await evictSetup();
+    const first = await service.snapshot(REF);
+    expect(first.items.length).toBeGreaterThan(0);
+    await service.snapshot(REF);
+    expect(reads).toHaveLength(1);
+    fakes.setSessions([{ ref: REF, lifecycle: 'closed' }]);
+    expect(fakes.log.info).toHaveBeenCalledWith('лента выгружена', { op: 'feed.evicted', sessionId: REF.sessionId, reason: 'closed' });
+    const again = await service.snapshot(REF);
+    expect(reads).toHaveLength(2);
+    expect(again.items).toEqual(first.items);
+  });
+
+  it('работа в архиве — лента уходит сразу', async () => {
+    const { reads } = await evictSetup();
+    await service.snapshot(REF);
+    fakes.setSessions([{ ref: REF, archived: true }]);
+    await service.snapshot(REF);
+    expect(reads).toHaveLength(2);
+  });
+
+  it('без подписчиков 10 минут — уходит, 9 — нет', async () => {
+    const stays = await evictSetup();
+    await service.snapshot(REF);
+    vi.advanceTimersByTime(9 * MINUTE);
+    await service.snapshot(REF);
+    expect(stays.reads).toHaveLength(1);
+    await service.stop();
+
+    fakes = fakeFeedDeps();
+    const leaves = await evictSetup();
+    await service.snapshot(REF);
+    vi.advanceTimersByTime(FEED_IDLE_EVICT_MS);
+    await service.snapshot(REF);
+    expect(leaves.reads).toHaveLength(2);
+  });
+
+  it('не уходит при подписчике; после ухода последнего закрытая лента уходит сразу', async () => {
+    const { reads } = await evictSetup();
+    const client = fakeClient();
+    service.subscribe(REF, client);
+    await service.snapshot(REF);
+    fakes.setSessions([{ ref: REF, lifecycle: 'closed' }]);
+    vi.advanceTimersByTime(20 * MINUTE);
+    await service.snapshot(REF);
+    expect(reads).toHaveLength(1);
+    service.unsubscribe(REF, client);
+    await service.snapshot(REF);
+    expect(reads).toHaveLength(2);
+  });
+
+  it('не уходит при удержанном хуке (карточка ждёт человека)', async () => {
+    await evictSetup();
+    send(prompt('go'));
+    send(pre('t1', 'Bash', { command: 'ls' }));
+    send(permission('Bash', { command: 'ls' }));
+    fakes.setSessions([{ ref: REF, lifecycle: 'closed' }]);
+    vi.advanceTimersByTime(20 * MINUTE);
+    expect(service.peekAttention(REF)?.map((card) => card.cardId)).toEqual(['permission:t1']);
+  });
+
+  it('не уходит при живом процессе', async () => {
+    const { reads } = await evictSetup();
+    fakes.setProcess({ pid: 1 });
+    await service.snapshot(REF);
+    fakes.setSessions([{ ref: REF, lifecycle: 'closed' }]);
+    vi.advanceTimersByTime(20 * MINUTE);
+    await service.snapshot(REF);
+    expect(reads).toHaveLength(1);
+  });
+
+  it('peekAttention без ленты — пустой список; после выгрузки тоже', async () => {
+    await evictSetup();
+    expect(service.peekAttention(REF)).toEqual([]);
+    await service.snapshot(REF);
+    fakes.setSessions([{ ref: REF, lifecycle: 'closed' }]);
+    expect(service.peekAttention(REF)).toEqual([]);
+  });
+
+  it('обход не держит процесс и снимается в stop()', async () => {
+    await evictSetup();
+    const before = vi.getTimerCount();
+    expect(before).toBeGreaterThan(0);
+    await service.stop();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe('mail items: per-client gate (spec 2026-11-12 §3.5)', () => {
+  const mailResponse = [{ type: 'text', text: JSON.stringify({ messages: [{ id: 'm-1', from: 's-9', fromLabel: null, at: '2030-01-05T10:00:00.000Z', text: 'hello', kind: 'note', room: null }] }) }];
+  const deliver = (): void => {
+    send(prompt('go'));
+    send(pre('t1', 'mcp__parley__check_inbox', {}));
+    send(post('t1', 'mcp__parley__check_inbox', {}, mailResponse));
+  };
+  const mailIn = (items: readonly FeedItem[]): FeedItem[] => items.filter((item) => item.kind === 'mail');
+
+  it('snapshot: only a client with feed-mail gets mail, subscribed or not, and a caller without a client does not', async () => {
+    start();
+    deliver();
+    const oldClient = fakeClient();
+    const newClient = fakeClient(undefined, { features: [FEED_MAIL_FEATURE] });
+
+    expect(mailIn((await service.snapshot(REF, undefined, undefined, newClient)).items).map((item) => item.id)).toEqual(['mail:m-1']);
+    expect(mailIn((await service.snapshot(REF, undefined, undefined, oldClient)).items)).toEqual([]);
+    expect(mailIn((await service.snapshot(REF)).items)).toEqual([]);
+    service.subscribe(REF, oldClient);
+    service.subscribe(REF, newClient);
+    expect(mailIn((await service.snapshot(REF, undefined, undefined, oldClient)).items)).toEqual([]);
+    expect(mailIn((await service.snapshot(REF, undefined, undefined, newClient)).items)).toHaveLength(1);
+    // The ring itself is unchanged by the gate.
+    expect(ofKind((await service.snapshot(REF, undefined, undefined, oldClient)).items, 'tool')).toHaveLength(1);
+  });
+
+  it('snapshots of an old and a new client carry the same revision', async () => {
+    start();
+    deliver();
+    const oldSnap = await service.snapshot(REF, undefined, undefined, fakeClient());
+    const newSnap = await service.snapshot(REF, undefined, undefined, fakeClient(undefined, { features: [FEED_MAIL_FEATURE] }));
+    expect(oldSnap.revision).toBe(newSnap.revision);
+    expect(newSnap.items.length).toBe(oldSnap.items.length + 1);
+  });
+
+  it('delta: an old and a new client on one feed get their own views with equal revisions', async () => {
+    start();
+    const oldClient = fakeClient();
+    const newClient = fakeClient(undefined, { features: [FEED_MAIL_FEATURE] });
+    service.subscribe(REF, oldClient);
+    service.subscribe(REF, newClient);
+    deliver();
+    await service.snapshot(REF);
+
+    const oldDeltas = feedChanged(oldClient);
+    const newDeltas = feedChanged(newClient);
+    expect(oldDeltas.length).toBeGreaterThan(0);
+    expect(oldDeltas.map((delta) => delta.revision)).toEqual(newDeltas.map((delta) => delta.revision));
+    expect(oldDeltas.flatMap((delta) => delta.upsert).some((item) => item.kind === 'mail')).toBe(false);
+    expect(newDeltas.flatMap((delta) => delta.upsert).filter((item) => item.kind === 'mail').map((item) => item.id)).toEqual(['mail:m-1']);
+    expect(oldDeltas.flatMap((delta) => delta.upsert).filter((item) => item.kind === 'tool')).toHaveLength(newDeltas.flatMap((delta) => delta.upsert).filter((item) => item.kind === 'tool').length);
+  });
+
+  it('delta: a mail item trimmed out of the ring leaves the old client\'s removed list', async () => {
+    start({ maxItems: 2 });
+    const oldClient = fakeClient();
+    const newClient = fakeClient(undefined, { features: [FEED_MAIL_FEATURE] });
+    service.subscribe(REF, oldClient);
+    service.subscribe(REF, newClient);
+    send(pre('t1', 'mcp__parley__check_inbox', {}));
+    send(post('t1', 'mcp__parley__check_inbox', {}, mailResponse));
+    await service.snapshot(REF);
+    send(pre('t2', 'Bash', { command: 'ls' }));
+    send(pre('t3', 'Bash', { command: 'pwd' }));
+    await service.snapshot(REF);
+
+    expect(feedChanged(newClient).flatMap((delta) => delta.removed)).toContain('mail:m-1');
+    expect(feedChanged(oldClient).flatMap((delta) => delta.removed).filter((id) => id.startsWith('mail:'))).toEqual([]);
+    expect(feedChanged(oldClient).map((delta) => delta.revision)).toEqual(feedChanged(newClient).map((delta) => delta.revision));
+  });
+
+  it('withoutMail: a mail-only delta stays as an empty delta with the same revision', () => {
+    const mail = { id: 'mail:m-1', at: 't', kind: 'mail', via: 'pointer', toolUseId: null, letters: [] } as FeedItem;
+    const data = { ref: REF, revision: 7, upsert: [mail], removed: ['mail:m-0'], mode: null };
+    expect(withoutMail(data)).toEqual({ ref: REF, revision: 7, upsert: [], removed: [], mode: null });
+  });
+});
+
+describe('inline mail: live item and reseed (spec 2026-11-12, M4)', () => {
+  const POINTER = 'New messages (2) in r-90 "Demo room" and direct. Call check_inbox.';
+  const mailRaw = (name: string) => readFileSync(path.join(FIXTURES, 'mail', name), 'utf8');
+  const attachmentText = (): string => {
+    const line = mailRaw('claude-inline.transcript.jsonl').split('\n').map((l) => (l.trim() === '' ? null : (JSON.parse(l) as { attachment?: { hookEvent?: string; content?: string[] } }))).find((r) => r?.attachment?.hookEvent === 'UserPromptSubmit');
+    return line!.attachment!.content![0]!;
+  };
+  const JOURNAL_AT = '2030-01-05T10:00:00.040Z';
+  const mailsOf = (items: readonly FeedItem[]) => items.filter((item) => item.kind === 'mail');
+  const gate = () => fakeClient(undefined, { features: [FEED_MAIL_FEATURE] });
+
+  async function transcript(withAttachment: boolean): Promise<{ root: string; file: string }> {
+    const dir = await tempRoot();
+    const root = path.join(dir, 'projects');
+    const file = path.join(root, '-proj', 'sess.jsonl');
+    await mkdir(path.dirname(file), { recursive: true });
+    const lines = mailRaw('claude-inline.transcript.jsonl').split('\n').filter((l) => l.trim() !== '').filter((l) => withAttachment || !l.includes('"UserPromptSubmit"'));
+    await writeFile(file, `${lines.join('\n')}\n`);
+    return { root, file };
+  }
+
+  it('live: the pointer prompt, then mail:<first id>; a repeat of the notice leaves one item', async () => {
+    start();
+    send({ hook_event_name: 'UserPromptSubmit', session_id: SESSION, prompt: POINTER });
+    service.delivered(REF, attachmentText(), JOURNAL_AT);
+    service.delivered(REF, attachmentText(), JOURNAL_AT);
+    service.delivered(REF, 'not a delivery', JOURNAL_AT);
+    const items = (await service.snapshot(REF, undefined, undefined, gate())).items;
+    expect(items.map((item) => item.kind)).toEqual(['prompt', 'mail']);
+    expect(items[1]).toMatchObject({ id: 'mail:m-9001', via: 'pointer', toolUseId: null, at: JOURNAL_AT });
+  });
+
+  async function reseeded(withAttachment: boolean, journal: Array<{ at: string; text: string }>): Promise<FeedItem[]> {
+    const { root, file } = await transcript(withAttachment);
+    fakes.setSessions([{ ref: REF, provider: 'glm' }]);
+    fakes.setLogFile(file);
+    start({ roots: () => [root], readMailJournal: async () => journal });
+    return (await service.snapshot(REF, undefined, undefined, gate())).items;
+  }
+
+  it('reseed with the attachment gives the live item, at included, in the same place', async () => {
+    start();
+    send({ hook_event_name: 'UserPromptSubmit', session_id: SESSION, prompt: POINTER });
+    service.delivered(REF, attachmentText(), JOURNAL_AT);
+    const live = mailsOf((await service.snapshot(REF, undefined, undefined, gate())).items)[0];
+    await service.stop();
+    fakes = fakeFeedDeps();
+
+    const items = await reseeded(true, [{ at: JOURNAL_AT, text: attachmentText() }]);
+    // The seed closes the open turn with a `turn` mark; the mail stays right after the pointer prompt.
+    expect(items.map((item) => item.kind)).toEqual(['prompt', 'mail', 'turn']);
+    expect(mailsOf(items)[0]).toEqual(live);
+  });
+
+  it('reseed without the attachment, journal line present: the same item after the pointer prompt', async () => {
+    const items = await reseeded(false, [{ at: JOURNAL_AT, text: attachmentText() }]);
+    expect(items.map((item) => item.kind)).toEqual(['prompt', 'mail', 'turn']);
+    expect(mailsOf(items)[0]).toMatchObject({ id: 'mail:m-9001', at: JOURNAL_AT, via: 'pointer' });
+  });
+
+  it('reseed with the attachment and no journal line: the item is parsed from the attachment', async () => {
+    const items = await reseeded(true, []);
+    expect(items.map((item) => item.kind)).toEqual(['prompt', 'mail', 'turn']);
+    expect(mailsOf(items)[0]).toMatchObject({ id: 'mail:m-9001', at: '2030-01-05T10:00:00.050Z' });
+  });
+
+  it('a subagent snapshot reads no journal', async () => {
+    const { root, file } = await transcript(true);
+    await mkdir(path.join(root, '-proj', 'sess', 'subagents'), { recursive: true });
+    await copyFile(file, path.join(root, '-proj', 'sess', 'subagents', 'agent-abc.jsonl'));
+    fakes.setSessions([{ ref: REF, provider: 'glm' }]);
+    fakes.setLogFile(file);
+    start({ roots: () => [root], readMailJournal: async () => [{ at: JOURNAL_AT, text: attachmentText() }] });
+    const sub = await service.snapshot(REF, 'abc', undefined, gate());
+    expect(mailsOf(sub.items)).toEqual([]);
+  });
+});
+
+describe('вопрос терминала Codex становится карточкой (план слоя 2, задача 3)', () => {
+  const PROMPTS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../core/src/feed/codex/__fixtures__/prompts');
+  const screenOf = (name: string): string[] => readFileSync(path.join(PROMPTS, `${name}.txt`), 'utf8').split('\n');
+  const QUESTION = 'Which color do you prefer?';
+  // Часы — поддельные: поиск (100 мс), присмотр (1 с) и проверка после решения (1,5 с) идут по ним без реального ожидания.
+  const advance = async (ms: number): Promise<void> => {
+    await vi.advanceTimersByTimeAsync(ms);
+  };
+  const FIND_WINDOW = TERMINAL_PROMPT_FIND_MS + TERMINAL_PROMPT_FIND_STEP_MS;
+
+  type Card = FeedPermissionCard | FeedQuestionCard;
+  const cardsOf = async (): Promise<Card[]> =>
+    (await service.snapshot(REF)).items.filter((item): item is Card => item.kind === 'permission' || item.kind === 'question');
+  const pendingOf = async (): Promise<Card[]> => (await cardsOf()).filter((card) => card.state === 'pending');
+  const blockedWith = (screen: string, need: 'approval' | 'question' | 'startup' = 'approval'): void => {
+    fakes.setScreen(screenOf(screen));
+    fakes.emitActivity(REF, 'blocked', need);
+  };
+  /** Таймеры службы без карточки и поиска: интервалы уборки; сверяем с ними, что поиск, присмотр и проверка сняты. */
+  let baseTimers = 0;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    fakes.setSessions([{ ref: REF, provider: 'codex' }]);
+    start();
+    baseTimers = vi.getTimerCount();
+  });
+  afterEach(async () => {
+    await service.stop();
+    vi.useRealTimers();
+  });
+
+  it('ожидание + экран одобрения команды: одна ждущая карточка permission с via terminal, decisions — window', async () => {
+    blockedWith('command-approval-80x24');
+    const [card] = (await pendingOf()) as FeedPermissionCard[];
+    expect(card).toMatchObject({ kind: 'permission', toolName: 'Bash', toolInput: { command: 'touch created.txt' }, via: 'terminal' });
+    expect((await service.snapshot(REF)).decisions).toBe('window');
+  });
+
+  it('первый сев журнала сохраняет уже показанную карточку и возможность ответить по её id', async () => {
+    const client = fakeClient();
+    service.subscribe(REF, client);
+    blockedWith('command-approval-80x24');
+    await advance(FEED_BATCH_MS);
+    const [card] = await pendingOf();
+    expect(card).toBeDefined();
+
+    const file = path.join(await tempRoot(), 'codex.jsonl');
+    await writeFile(file, `${JSON.stringify({
+      timestamp: new Date().toISOString(),
+      type: 'turn_context',
+      payload: { model: 'gpt-6-astra' },
+    })}\n`);
+    fakes.setLogFile(file);
+    const seeded = await service.snapshot(REF);
+    expect(seeded.items).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'notice' }), card]));
+    expect(seeded.decisions).toBe('window');
+    expect(service.decide(REF, card!.cardId, { kind: 'permission', behavior: 'allow' })).toEqual({ applied: true, state: 'allowed' });
+    expect(fakes.writes).toEqual(['1']);
+    expect(await cardsOf()).toEqual([expect.objectContaining({ cardId: card!.cardId, state: 'allowed' })]);
+  });
+
+  it('повторные события активности и время не плодят карточек: одна на вопрос', async () => {
+    fakes.setScreen(screenOf('command-approval-80x24'));
+    for (let attempt = 0; attempt < 3; attempt += 1) fakes.emitActivity(REF, 'blocked', 'approval');
+    await advance(FIND_WINDOW);
+    fakes.emitActivity(REF, 'blocked', 'approval');
+    await advance(TERMINAL_PROMPT_WATCH_MS * 3);
+    expect(await cardsOf()).toHaveLength(1);
+    expect(await pendingOf()).toHaveLength(1);
+  });
+
+  it('ждущая карточка хука уже есть — карточка по экрану не заводится', async () => {
+    service.onHook(hookRequest({ hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: { command: 'ls' } }));
+    expect(await pendingOf()).toHaveLength(1);
+    blockedWith('command-approval-80x24');
+    await advance(FIND_WINDOW);
+    const cards = await cardsOf();
+    expect(cards).toHaveLength(1);
+    expect('via' in cards[0]!).toBe(false);
+  });
+
+  it('карточка хука приходит, пока ждёт карточка по экрану: карточка экрана уступает, decisions остаётся window', async () => {
+    blockedWith('command-approval-80x24');
+    expect(await pendingOf()).toHaveLength(1);
+    service.onHook(hookRequest({ hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: { command: 'ls' } }));
+    const cards = await cardsOf();
+    expect(cards.filter((card) => card.state === 'pending').map((card) => 'via' in card)).toEqual([false]);
+    expect(cards.filter((card) => card.state === 'elsewhere')).toHaveLength(1);
+    expect((await service.snapshot(REF)).decisions).toBe('window');
+  });
+
+  it('экран не узнан за срок поиска — карточки нет, поиск снят: таймеров сверх уборки нет', async () => {
+    blockedWith('idle-80x24');
+    expect(vi.getTimerCount()).toBeGreaterThan(baseTimers);
+    await advance(FIND_WINDOW);
+    expect(vi.getTimerCount()).toBe(baseTimers);
+    fakes.setScreen(screenOf('command-approval-80x24'));
+    await advance(TERMINAL_PROMPT_WATCH_MS);
+    expect(await cardsOf()).toHaveLength(0);
+  });
+
+  it.each([
+    ['перестала быть blocked', (): void => fakes.emitActivity(REF, 'working')],
+    ['ждёт не одобрения (startup)', (): void => fakes.emitActivity(REF, 'blocked', 'startup')],
+  ])('поиск идёт, вопрос ещё не узнан, сессия %s: поиск снят, экран с вопросом карточки не заводит', async (_name, stopWaiting) => {
+    blockedWith('idle-80x24');
+    expect(vi.getTimerCount()).toBeGreaterThan(baseTimers);
+    stopWaiting();
+    expect(vi.getTimerCount()).toBe(baseTimers);
+    fakes.setScreen(screenOf('command-approval-80x24'));
+    await advance(FIND_WINDOW);
+    expect(await cardsOf()).toHaveLength(0);
+    expect((await service.snapshot(REF)).decisions).toBeUndefined();
+  });
+
+  it('decide: allow → клавиша 1, карточка allowed, decisions возвращён, присмотр и поиск сняты', async () => {
+    blockedWith('command-approval-80x24');
+    const [card] = await pendingOf();
+    expect(service.decide(REF, card!.cardId, { kind: 'permission', behavior: 'allow' })).toEqual({ applied: true, state: 'allowed' });
+    expect(fakes.writes).toEqual(['1']);
+    expect((await cardsOf())[0]).toMatchObject({ state: 'allowed' });
+    expect((await service.snapshot(REF)).decisions).toBeUndefined();
+    // Остался только таймер проверки после решения.
+    expect(vi.getTimerCount()).toBe(baseTimers + 1);
+  });
+
+  it('decide: allow + always → клавиша 2; deny → клавиша 3', async () => {
+    blockedWith('command-approval-80x24');
+    const [first] = await pendingOf();
+    service.decide(REF, first!.cardId, { kind: 'permission', behavior: 'allow', always: true });
+    expect(fakes.writes).toEqual(['2']);
+    fakes.writes.length = 0;
+    // Codex показал одобрение правки; сессия всё ещё ждёт — после проверки поиск идёт заново.
+    fakes.setScreen(screenOf('patch-approval-80x24'));
+    await advance(TERMINAL_PROMPT_CONFIRM_MS);
+    const [second] = await pendingOf();
+    expect(second).toMatchObject({ toolName: 'apply_patch' });
+    expect(service.decide(REF, second!.cardId, { kind: 'permission', behavior: 'deny' })).toEqual({ applied: true, state: 'denied' });
+    expect(fakes.writes).toEqual(['3']);
+  });
+
+  it('вопрос с вариантами: ответ — подпись варианта → цифра варианта, карточка answered', async () => {
+    blockedWith('question-options-80x24', 'question');
+    const [card] = (await pendingOf()) as FeedQuestionCard[];
+    expect(card!.questions[0]!.question).toBe(QUESTION);
+    expect(service.decide(REF, card!.cardId, { kind: 'question', answers: { [QUESTION]: 'Blue' } })).toEqual({ applied: true, state: 'answered' });
+    expect(fakes.writes).toEqual(['3']);
+  });
+
+  it('пустой ответ ни клавишей, ни своим текстом не выражается: applied false, записи нет, карточка ждёт', async () => {
+    blockedWith('question-options-80x24', 'question');
+    const [card] = await pendingOf();
+    expect(service.decide(REF, card!.cardId, { kind: 'question', answers: { [QUESTION]: '  ' } })).toEqual({ applied: false, state: 'pending' });
+    expect(fakes.writes).toEqual([]);
+    expect(await pendingOf()).toHaveLength(1);
+  });
+
+  // Заменяет прежний случай задачи 3 («свой ответ → applied false»): с задачей 4 свой ответ печатает хост по шагам.
+  it('свой ответ клавишей не выражается — его печатает хост по шагам (задача 4): карточка answered, первая клавиша — стрелка', async () => {
+    blockedWith('question-options-80x24', 'question');
+    const [card] = await pendingOf();
+    expect(service.decide(REF, card!.cardId, { kind: 'question', answers: { [QUESTION]: 'purple' } })).toEqual({ applied: true, state: 'answered' });
+    expect(fakes.writes).toEqual(['\u001b[B']);
+    expect(await pendingOf()).toHaveLength(0);
+  });
+
+  it('экран сменился до решения: записи нет, карточка elsewhere, ответ applied false, decisions возвращён', async () => {
+    blockedWith('command-approval-80x24');
+    const [card] = await pendingOf();
+    fakes.setScreen(screenOf('patch-approval-80x24'));
+    expect(service.decide(REF, card!.cardId, { kind: 'permission', behavior: 'allow' })).toEqual({ applied: false, state: 'elsewhere' });
+    expect(fakes.writes).toEqual([]);
+    expect((await cardsOf())[0]).toMatchObject({ state: 'elsewhere' });
+    expect((await service.snapshot(REF)).decisions).toBeUndefined();
+    expect(vi.getTimerCount()).toBe(baseTimers);
+  });
+
+  it('перерисовка того же вопроса (метка › сместилась) решению не мешает', async () => {
+    blockedWith('command-approval-80x24');
+    const [card] = await pendingOf();
+    fakes.setScreen(screenOf('command-approval-second-selected-80x24'));
+    expect(service.decide(REF, card!.cardId, { kind: 'permission', behavior: 'allow' })).toMatchObject({ applied: true });
+    expect(fakes.writes).toEqual(['1']);
+  });
+
+  it('вопрос исчез без решения — по присмотру карточка elsewhere, decisions возвращён, присмотр снят', async () => {
+    blockedWith('command-approval-80x24');
+    await pendingOf();
+    expect(vi.getTimerCount()).toBe(baseTimers + 1);
+    fakes.setScreen(screenOf('idle-80x24'));
+    await advance(TERMINAL_PROMPT_WATCH_MS);
+    expect((await cardsOf())[0]).toMatchObject({ state: 'elsewhere' });
+    expect((await service.snapshot(REF)).decisions).toBeUndefined();
+    expect(vi.getTimerCount()).toBe(baseTimers);
+  });
+
+  it('сессия перестала ждать — карточка elsewhere сразу, присмотр снят', async () => {
+    blockedWith('command-approval-80x24');
+    await pendingOf();
+    fakes.emitActivity(REF, 'working');
+    expect((await cardsOf())[0]).toMatchObject({ state: 'elsewhere' });
+    expect(vi.getTimerCount()).toBe(baseTimers);
+  });
+
+  it('выход процесса — карточка stale, таймеров не осталось, новый экран карточки не заводит', async () => {
+    blockedWith('command-approval-80x24');
+    await pendingOf();
+    fakes.emitExit(REF);
+    expect((await cardsOf())[0]).toMatchObject({ state: 'stale' });
+    expect(vi.getTimerCount()).toBe(baseTimers);
+    fakes.setScreen(screenOf('patch-approval-80x24'));
+    await advance(FIND_WINDOW + TERMINAL_PROMPT_WATCH_MS);
+    expect(await cardsOf()).toHaveLength(1);
+  });
+
+  it('сессия Claude с тем же экраном и нужда startup — карточки нет', async () => {
+    fakes.setSessions([{ ref: REF, provider: 'claude' }]);
+    blockedWith('command-approval-80x24');
+    await advance(FIND_WINDOW);
+    expect(await cardsOf()).toHaveLength(0);
+    fakes.setSessions([{ ref: REF, provider: 'codex' }]);
+    blockedWith('command-approval-80x24', 'startup');
+    await advance(FIND_WINDOW);
+    expect(await cardsOf()).toHaveLength(0);
+  });
+
+  it('два экрана вопроса подряд — две карточки, по одной на экран', async () => {
+    blockedWith('question-two-first-80x24', 'question');
+    const [first] = await pendingOf();
+    expect(first).toMatchObject({ kind: 'question' });
+    expect(service.decide(REF, first!.cardId, { kind: 'question', answers: { [QUESTION]: 'Green' } })).toMatchObject({ applied: true });
+    expect(fakes.writes).toEqual(['2']);
+    // Codex показал второй вопрос; сессия всё ещё ждёт — после проверки поиск идёт заново.
+    fakes.setScreen(screenOf('question-two-second-80x24'));
+    await advance(TERMINAL_PROMPT_CONFIRM_MS);
+    const [second] = (await pendingOf()) as FeedQuestionCard[];
+    expect(second!.questions[0]!.question).toBe('Which size do you prefer?');
+    expect(second!.cardId).not.toBe(first!.cardId);
+    expect((await cardsOf()).filter((card) => card.kind === 'question')).toHaveLength(2);
+  });
+
+  it('клавиша не сработала (тот же вопрос на экране): запись в журнал без текста экрана и новая карточка', async () => {
+    blockedWith('command-approval-80x24');
+    const [card] = await pendingOf();
+    service.decide(REF, card!.cardId, { kind: 'permission', behavior: 'allow' });
+    await advance(TERMINAL_PROMPT_CONFIRM_MS);
+    expect(fakes.log.info).toHaveBeenCalledWith('вопрос терминала не снят ответом', expect.objectContaining({ op: 'feed.terminalPrompt', outcome: 'not-applied' }));
+    expect(await pendingOf()).toHaveLength(1);
+    for (const call of [...fakes.log.info.mock.calls, ...fakes.log.warn.mock.calls]) expect(JSON.stringify(call)).not.toContain('touch created.txt');
+  });
+
+  it('подписчик видит возврат decisions: дельта с window, затем дельта с decisions null (поле есть и равно null)', async () => {
+    const client = fakeClient();
+    service.subscribe(REF, client);
+    await service.snapshot(REF);
+    blockedWith('command-approval-80x24');
+    await advance(FEED_BATCH_MS);
+    const opened = feedChanged(client).at(-1);
+    expect(opened?.decisions).toBe('window');
+    const [card] = await pendingOf();
+    service.decide(REF, card!.cardId, { kind: 'permission', behavior: 'allow' });
+    await advance(FEED_BATCH_MS);
+    const closed = feedChanged(client).at(-1);
+    expect(closed).toBeDefined();
+    expect('decisions' in closed!).toBe(true);
+    expect(closed?.decisions).toBeNull();
+    // Ещё одна дельта без смены decisions его не повторяет.
+    fakes.emitActivity(REF, 'working');
+    service.noteMode(REF, 'plan');
+    await advance(FEED_BATCH_MS);
+    expect('decisions' in feedChanged(client).at(-1)!).toBe(false);
+  });
+
+  it('stop() снимает поиск, присмотр и проверку: таймеров службы не остаётся', async () => {
+    blockedWith('command-approval-80x24');
+    const [card] = await pendingOf();
+    service.decide(REF, card!.cardId, { kind: 'permission', behavior: 'allow' });
+    await service.stop();
+    expect(vi.getTimerCount()).toBe(0);
+    fakes.setScreen(screenOf('idle-80x24'));
+    await advance(TERMINAL_PROMPT_CONFIRM_MS * 2);
+    await expect(service.stop()).resolves.toBeUndefined();
+  });
+});
+
+describe('свой ответ и отказ с текстом по вопросу терминала Codex (план слоя 2, задача 4)', () => {
+  const PROMPTS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../core/src/feed/codex/__fixtures__/prompts');
+  const screenOf = (name: string): string[] => readFileSync(path.join(PROMPTS, `${name}.txt`), 'utf8').split('\n');
+  const QUESTION = 'Which color do you prefer?';
+  const DOWN = '\u001b[B';
+  const advance = async (ms: number): Promise<void> => {
+    await vi.advanceTimersByTimeAsync(ms);
+  };
+  type Card = FeedPermissionCard | FeedQuestionCard;
+  const cardsOf = async (): Promise<Card[]> =>
+    (await service.snapshot(REF)).items.filter((item): item is Card => item.kind === 'permission' || item.kind === 'question');
+  const pendingOf = async (): Promise<Card[]> => (await cardsOf()).filter((card) => card.state === 'pending');
+  const sendMock = vi.fn<(params: { ref: SessionRef; text: string; submit: boolean }) => Promise<{ inserted: boolean; submitted: boolean; reason: null }>>(async () => ({ inserted: true, submitted: true, reason: null }));
+
+  /** Экран вопроса с меткой › на варианте `at`: подписи прежние, сдвигается только метка. */
+  const withSelected = (lines: readonly string[], at: number): string[] =>
+    lines.map((line) => {
+      const match = /^\s*›?\s*(\d)\. (.*)$/.exec(line);
+      return match === null ? line : `  ${Number(match[1]) - 1 === at ? '› ' : '  '}${match[1]}. ${match[2]}`;
+    });
+
+  /** Codex отвечает на клавиши хоста: стрелки двигают метку, Tab открывает заметки, текст появляется, Enter снимает вопрос. */
+  function liveQuestion(): void {
+    let state: 'prompt' | 'notes' | 'typed' | 'answered' = 'prompt';
+    let selected = 0;
+    // Экраны одного прогона Codex: вопрос и поле заметок с теми же подписями вариантов.
+    const base = screenOf('question-other-selected-80x24');
+    const show = (): void =>
+      fakes.setScreen(
+        state === 'prompt'
+          ? withSelected(base, selected)
+          : state === 'notes'
+            ? screenOf('question-notes-open-80x24')
+            : state === 'typed'
+              ? screenOf('question-notes-typed-80x24')
+              : screenOf('question-answered-80x24'),
+      );
+    show();
+    const pty = fakes.deps.pty as unknown as { write: (ref: SessionRef, data: string) => void };
+    const original = pty.write;
+    pty.write = (ref, data): void => {
+      original(ref, data);
+      if (state === 'prompt') {
+        if (data === DOWN) selected += 1;
+        else if (data === '\t' && selected === 3) state = 'notes';
+      } else if (state === 'notes') {
+        if (data !== '\r') state = 'typed';
+      } else if (state === 'typed' && data === '\r') state = 'answered';
+      show();
+    };
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    sendMock.mockClear();
+    fakes.setSessions([{ ref: REF, provider: 'codex' }]);
+    (fakes.deps as unknown as { send?: typeof sendMock }).send = sendMock;
+    start();
+  });
+  afterEach(async () => {
+    await service.stop();
+    vi.useRealTimers();
+  });
+
+  it('свой ответ на вопрос: карточка answered сразу, в терминал уходит путь стрелки, Tab, текст, Enter', async () => {
+    liveQuestion();
+    fakes.emitActivity(REF, 'blocked', 'question');
+    const [card] = await pendingOf();
+    expect(service.decide(REF, card!.cardId, { kind: 'question', answers: { [QUESTION]: 'purple please' } })).toEqual({ applied: true, state: 'answered' });
+    await advance(0);
+    expect(fakes.writes).toEqual([DOWN, DOWN, DOWN, '\t', 'purple please', '\r']);
+    expect((await cardsOf())[0]).toMatchObject({ state: 'answered' });
+    // Пока печаталось, новой карточки по тому же вопросу не заводили.
+    expect(await pendingOf()).toHaveLength(0);
+    expect(fakes.log.info).not.toHaveBeenCalledWith('свой ответ на вопрос терминала не доведён', expect.anything());
+  });
+
+  it('шаг не показался: печать останавливается, запись в журнал с исходом и без текста ответа', async () => {
+    fakes.setScreen(screenOf('question-options-80x24'));
+    fakes.emitActivity(REF, 'blocked', 'question');
+    const [card] = await pendingOf();
+    expect(service.decide(REF, card!.cardId, { kind: 'question', answers: { [QUESTION]: 'purple please' } })).toMatchObject({ applied: true });
+    await advance(2_000);
+    expect(fakes.writes).toEqual([DOWN]);
+    expect(fakes.log.info).toHaveBeenCalledWith('свой ответ на вопрос терминала не доведён', expect.objectContaining({ op: 'feed.terminalPrompt', outcome: 'own-answer-timeout' }));
+    for (const call of [...fakes.log.info.mock.calls, ...fakes.log.warn.mock.calls]) expect(JSON.stringify(call)).not.toContain('purple');
+  });
+
+  it('экран сменился до решения — свой ответ не печатается, карточка elsewhere', async () => {
+    fakes.setScreen(screenOf('question-options-80x24'));
+    fakes.emitActivity(REF, 'blocked', 'question');
+    const [card] = await pendingOf();
+    fakes.setScreen(screenOf('command-approval-80x24'));
+    expect(service.decide(REF, card!.cardId, { kind: 'question', answers: { [QUESTION]: 'purple please' } })).toEqual({ applied: false, state: 'elsewhere' });
+    await advance(2_000);
+    expect(fakes.writes).toEqual([]);
+  });
+
+  it('выход процесса посреди печати: ожидание снято, клавиш больше нет, таймеров нет, поиск не запускается', async () => {
+    const baseline = vi.getTimerCount();
+    fakes.setScreen(screenOf('question-options-80x24'));
+    fakes.emitActivity(REF, 'blocked', 'question');
+    const [card] = await pendingOf();
+    expect(service.decide(REF, card!.cardId, { kind: 'question', answers: { [QUESTION]: 'purple please' } })).toMatchObject({ applied: true });
+    expect(fakes.writes).toEqual([DOWN]);
+    // Печать ждёт, пока метка сдвинется: идёт ожидание шага.
+    expect(vi.getTimerCount()).toBeGreaterThan(baseline);
+    fakes.emitExit(REF);
+    await advance(0);
+    // Тот же экран с вопросом после выхода: печать не продолжается, поиск не запускается.
+    fakes.setScreen(screenOf('question-options-80x24'));
+    await advance(10_000);
+    expect(fakes.writes).toEqual([DOWN]);
+    expect(await pendingOf()).toHaveLength(0);
+    expect(vi.getTimerCount()).toBe(baseline);
+    expect(fakes.log.info).not.toHaveBeenCalledWith('свой ответ на вопрос терминала не доведён', expect.anything());
+  });
+
+  it('stop() посреди печати: ожидание снято, таймеров службы не остаётся, клавиш больше нет', async () => {
+    fakes.setScreen(screenOf('question-options-80x24'));
+    fakes.emitActivity(REF, 'blocked', 'question');
+    const [card] = await pendingOf();
+    service.decide(REF, card!.cardId, { kind: 'question', answers: { [QUESTION]: 'purple please' } });
+    expect(fakes.writes).toEqual([DOWN]);
+    await service.stop();
+    expect(vi.getTimerCount()).toBe(0);
+    await advance(10_000);
+    expect(fakes.writes).toEqual([DOWN]);
+  });
+
+  it('отказ с текстом: другая нужда при blocked (startup) не считается готовностью; текст уходит, когда blocked снят', async () => {
+    fakes.setScreen(screenOf('command-approval-80x24'));
+    fakes.emitActivity(REF, 'blocked', 'approval');
+    const [card] = await pendingOf();
+    service.decide(REF, card!.cardId, { kind: 'permission', behavior: 'deny', message: 'use another way' });
+    fakes.emitActivity(REF, 'blocked', 'startup');
+    await advance(TERMINAL_MESSAGE_POLL_MS * 3);
+    expect(sendMock).not.toHaveBeenCalled();
+    fakes.emitActivity(REF, 'idle');
+    await advance(TERMINAL_MESSAGE_POLL_MS);
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(sendMock).toHaveBeenCalledWith({ ref: REF, text: 'use another way', submit: true });
+  });
+
+  it('отказ с текстом: клавиша 3, карточка denied; текст уходит сообщением человека, когда сессия перестала ждать', async () => {
+    fakes.setScreen(screenOf('command-approval-80x24'));
+    fakes.emitActivity(REF, 'blocked', 'approval');
+    const [card] = await pendingOf();
+    expect(service.decide(REF, card!.cardId, { kind: 'permission', behavior: 'deny', message: ' use another way ' })).toEqual({ applied: true, state: 'denied' });
+    expect(fakes.writes).toEqual(['3']);
+    await advance(TERMINAL_MESSAGE_POLL_MS * 3);
+    expect(sendMock).not.toHaveBeenCalled();
+    // Codex прервал ход и готов к вводу: заголовок Ready — сессия больше не ждёт.
+    fakes.emitActivity(REF, 'working');
+    await advance(TERMINAL_MESSAGE_POLL_MS);
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(sendMock).toHaveBeenCalledWith({ ref: REF, text: 'use another way', submit: true });
+    expect(fakes.log.info).toHaveBeenCalledWith('отказ с текстом по вопросу терминала', expect.objectContaining({ outcome: 'denial-message-sent' }));
+    for (const call of fakes.log.info.mock.calls) expect(JSON.stringify(call)).not.toContain('another way');
+  });
+
+  it('отказ с текстом, а сессия не перестала ждать за срок: текст не печатается, в журнале исход без текста', async () => {
+    fakes.setScreen(screenOf('command-approval-80x24'));
+    fakes.emitActivity(REF, 'blocked', 'approval');
+    const [card] = await pendingOf();
+    service.decide(REF, card!.cardId, { kind: 'permission', behavior: 'deny', message: 'use another way' });
+    await advance(TERMINAL_MESSAGE_WAIT_MS + TERMINAL_MESSAGE_POLL_MS);
+    expect(sendMock).not.toHaveBeenCalled();
+    expect(fakes.log.info).toHaveBeenCalledWith('отказ с текстом по вопросу терминала', expect.objectContaining({ outcome: 'denial-message-timeout' }));
+    for (const call of fakes.log.info.mock.calls) expect(JSON.stringify(call)).not.toContain('another way');
+    // После срока сообщение не уходит и позже.
+    fakes.emitActivity(REF, 'working');
+    await advance(TERMINAL_MESSAGE_POLL_MS * 3);
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  it('отказ без текста: только клавиша 3, сообщения нет', async () => {
+    fakes.setScreen(screenOf('command-approval-80x24'));
+    fakes.emitActivity(REF, 'blocked', 'approval');
+    const [card] = await pendingOf();
+    expect(service.decide(REF, card!.cardId, { kind: 'permission', behavior: 'deny' })).toEqual({ applied: true, state: 'denied' });
+    fakes.emitActivity(REF, 'working');
+    await advance(TERMINAL_MESSAGE_POLL_MS * 3);
+    expect(fakes.writes).toEqual(['3']);
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  it('у хоста нет отправителя: клавиша 3 уходит, текст нет, в журнале исход без текста', async () => {
+    delete (fakes.deps as unknown as { send?: unknown }).send;
+    fakes.setScreen(screenOf('command-approval-80x24'));
+    fakes.emitActivity(REF, 'blocked', 'approval');
+    const [card] = await pendingOf();
+    service.decide(REF, card!.cardId, { kind: 'permission', behavior: 'deny', message: 'use another way' });
+    expect(fakes.writes).toEqual(['3']);
+    expect(fakes.log.info).toHaveBeenCalledWith('отказ с текстом по вопросу терминала', expect.objectContaining({ outcome: 'denial-message-unavailable' }));
+  });
+
+  it('выход процесса до отправки снимает ожидание текста', async () => {
+    fakes.setScreen(screenOf('command-approval-80x24'));
+    fakes.emitActivity(REF, 'blocked', 'approval');
+    const [card] = await pendingOf();
+    service.decide(REF, card!.cardId, { kind: 'permission', behavior: 'deny', message: 'use another way' });
+    fakes.emitExit(REF);
+    fakes.emitActivity(REF, 'working');
+    await advance(TERMINAL_MESSAGE_POLL_MS * 3);
+    expect(sendMock).not.toHaveBeenCalled();
+  });
 });

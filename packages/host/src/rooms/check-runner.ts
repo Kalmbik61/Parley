@@ -14,7 +14,11 @@ export interface CheckRunnerContext {
   planId: string;
   resultId: string;
   now?: () => Date;
+  /** Отмена: убить группу процессов проверки, не читать журнал песочницы, итог `cancelled`. */
+  signal?: AbortSignal;
 }
+/** Потолок срока проверки: старые планы с большим `timeoutMs` читаются как есть, но живут не дольше. */
+export const CHECK_TIMEOUT_MAX_MS = 30 * 60_000;
 const exec = promisify(execFile);
 // Depending on macOS reporting state, denials come from sandboxd or directly from the kernel.
 const predicate = '(subsystem == "com.apple.sandbox.reporting" OR sender == "Sandbox") AND eventMessage CONTAINS "deny(1)"';
@@ -33,8 +37,8 @@ function specDirectory(id: string): string {
 }
 const stamp = (date: Date) => date.toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, '+0000');
 
-async function sandboxLog(start: Date, end: Date): Promise<string> {
-  return (await exec('/usr/bin/log', ['show', '--start', stamp(start), '--end', stamp(end), '--style', 'compact', '--predicate', predicate], { timeout: 10_000, maxBuffer: 8 * 1024 * 1024 })).stdout;
+async function sandboxLog(start: Date, end: Date, signal?: AbortSignal): Promise<string> {
+  return (await exec('/usr/bin/log', ['show', '--start', stamp(start), '--end', stamp(end), '--style', 'compact', '--predicate', predicate], { timeout: 10_000, maxBuffer: 8 * 1024 * 1024, signal })).stdout;
 }
 
 function outsideWrites(log: string, pid: number | undefined, executable: string, roots: string[]): { lines: string[]; attributed: boolean } {
@@ -67,14 +71,16 @@ export async function run(ctx: CheckRunnerContext, spec: CheckSpec, sha: string,
   let ownsCheckout = false;
   let tmp: string | undefined;
   let tail = Buffer.alloc(0);
+  const abort = ctx.signal;
   const append = (data: Buffer) => { tail = Buffer.concat([tail, data]).subarray(-tailLimit); };
   try {
+    if (abort?.aborted) { result.summary = 'cancelled'; return result; }
     try {
-      await exec('/usr/bin/sandbox-exec', ['-p', '(version 1)(allow default)', '/usr/bin/true'], { timeout: 5000 });
+      await exec('/usr/bin/sandbox-exec', ['-p', '(version 1)(allow default)', '/usr/bin/true'], { timeout: 5000, signal: abort });
       const probe = new Date();
-      await sandboxLog(new Date(probe.getTime() - 1000), probe);
+      await sandboxLog(new Date(probe.getTime() - 1000), probe, abort);
     } catch {
-      result.summary = 'confinement-unavailable'; return result;
+      result.summary = abort?.aborted ? 'cancelled' : 'confinement-unavailable'; return result;
     }
     if (Object.keys(spec.env).some(key => /^(ANTHROPIC_|CLAUDE_CODE_|OPENAI_)|_(TOKEN|KEY|SECRET)$/i.test(key))) {
       result.summary = 'env-not-allowed'; return result;
@@ -104,7 +110,7 @@ export async function run(ctx: CheckRunnerContext, spec: CheckSpec, sha: string,
     result.outputTail = path.join(dir, 'output.tail');
     // Host git must not inherit a caller's GIT_DIR, filters, hooks or alternate object store.
     const gitEnv = { PATH: process.env.PATH ?? '/usr/bin:/bin', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_TERMINAL_PROMPT: '0' };
-    const git = async (...args: string[]) => (await exec('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', ...args], { env: gitEnv, timeout: 30_000, maxBuffer: 4 * 1024 * 1024 })).stdout.trim();
+    const git = async (...args: string[]) => (await exec('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', ...args], { env: gitEnv, timeout: 30_000, maxBuffer: 4 * 1024 * 1024, signal: abort })).stdout.trim();
     ownsCheckout = true;
     await git('-c', 'init.templateDir=', 'clone', '--no-hardlinks', '--no-checkout', '--', attemptsEngineGitPath(project, ctx.workId), checkout);
     try { await access(path.join(checkout, '.git/objects/info/alternates')); throw new Error('checkout-has-alternates'); } catch (error) {
@@ -134,6 +140,7 @@ export async function run(ctx: CheckRunnerContext, spec: CheckSpec, sha: string,
     const profile = path.join(dir, 'profile.sb');
     const template = await readFile(new URL('../../../../scripts/gates/runner-profile-kill.sb', import.meta.url), 'utf8');
     await writeFile(profile, template.replace('__CHECKOUT__', JSON.stringify(checkout)).replace('__TMP__', JSON.stringify(tmp)));
+    if (abort?.aborted) { result.summary = 'cancelled'; return result; }
     const windowStart = new Date();
     let timedOut = false;
     let launchError: Error | undefined;
@@ -153,7 +160,9 @@ export async function run(ctx: CheckRunnerContext, spec: CheckSpec, sha: string,
       }
     };
     await new Promise<void>(resolve => {
-      const timer = setTimeout(() => { timedOut = true; killGroup(); resolve(); }, spec.timeoutMs);
+      const timer = setTimeout(() => { timedOut = true; killGroup(); resolve(); }, Math.min(spec.timeoutMs, CHECK_TIMEOUT_MAX_MS));
+      // Отмена убивает ту же группу процессов, что и срок; resolve придёт от события exit.
+      abort?.addEventListener('abort', killGroup, { once: true });
       child.stdout.on('data', append); child.stderr.on('data', append);
       child.once('error', error => { clearTimeout(timer); launchError = error; resolve(); });
       child.once('exit', (code, value) => {
@@ -161,6 +170,7 @@ export async function run(ctx: CheckRunnerContext, spec: CheckSpec, sha: string,
         killGroup(); resolve();
       });
     });
+    abort?.removeEventListener('abort', killGroup);
     // A detached descendant can retain pipes after its parent exits. Never await close unboundedly.
     if (!closed) await new Promise<void>(resolve => {
       const finish = () => { clearTimeout(timer); child.off('close', finish); resolve(); };
@@ -174,7 +184,7 @@ export async function run(ctx: CheckRunnerContext, spec: CheckSpec, sha: string,
       let output = '';
       let warnings = '';
       try {
-        const listing = await exec('/usr/sbin/lsof', ['-t', '+D', dir], { encoding: 'utf8', timeout: 5000, killSignal: 'SIGKILL', maxBuffer: 1024 * 1024 });
+        const listing = await exec('/usr/sbin/lsof', ['-t', '+D', dir], { encoding: 'utf8', timeout: abort?.aborted ? 1000 : 5000, killSignal: 'SIGKILL', maxBuffer: 1024 * 1024 });
         output = listing.stdout;
         warnings = listing.stderr;
       } catch (error) {
@@ -194,15 +204,17 @@ export async function run(ctx: CheckRunnerContext, spec: CheckSpec, sha: string,
         }
       }
     } catch { orphanScanUnavailable = true; }
+    // Отменённая проверка журнал песочницы не читает: итог всё равно не пишется в карту.
+    if (abort?.aborted) { result.summary = 'cancelled'; return result; }
     const records: string[] = [];
     try {
       // sandboxd/kernel publication is asynchronous; an immediate empty read is not evidence.
       for (const delay of [1500, 1000]) {
-        await sleep(delay);
-        records.push(await sandboxLog(new Date(windowStart.getTime() - 1000), new Date(Date.now() + 1000)));
+        await sleep(delay, undefined, { signal: abort });
+        records.push(await sandboxLog(new Date(windowStart.getTime() - 1000), new Date(Date.now() + 1000), abort));
       }
     } catch {
-      result.summary = 'confinement-unavailable (sandbox log)'; return result;
+      result.summary = abort?.aborted ? 'cancelled' : 'confinement-unavailable (sandbox log)'; return result;
     }
     const logs = records.join('\n');
     const violations = outsideWrites(logs, pid, spec.argv[0]!, [checkout, tmp, '/dev']);
@@ -214,7 +226,7 @@ export async function run(ctx: CheckRunnerContext, spec: CheckSpec, sha: string,
     else if (signal) result.summary = `killed-by-signal: ${signal}`;
     else { result.verdict = result.exitCode === 0 ? 'pass' : 'fail'; result.summary = result.exitCode === 0 ? 'passed' : `exit-code: ${result.exitCode}`; }
   } catch (error) {
-    result.summary = error instanceof Error ? error.message : String(error);
+    result.summary = abort?.aborted ? 'cancelled' : error instanceof Error ? error.message : String(error);
   } finally {
     try {
       if (result.outputTail) await writeFile(result.outputTail, tail);

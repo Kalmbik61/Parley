@@ -73,7 +73,7 @@ export function ConsentView({ card, deciding, note, onDecide }: ConsentViewProps
       <div className="font-semibold text-foreground">{isSwitch ? S.dialogs.agentSwitch.title : S.island.consentTitle}</div>
       {card.kind === 'agent-switch' ? (
         <>
-          <div data-testid="island-consent-switch" className="text-sm [overflow-wrap:anywhere]">
+          <div data-testid="island-consent-switch" className="text-sm whitespace-pre-line [overflow-wrap:anywhere]">
             {switchRequestText(card)}
           </div>
           <div className="text-[13px] text-muted-foreground [overflow-wrap:anywhere]">{S.island.consentRequestedBy(who, 'request_agent_switch')}</div>

@@ -3,10 +3,11 @@ import { EFFORT_TOKEN_RE, PROTOCOL_VERSION } from './index.js';
 import type { EffortOption } from './index.js';
 import { METHODS, NOTIFICATIONS } from './methods.js';
 import type { Params, PermissionModeChoice, Result } from './methods.js';
+import type { RoleChange } from './consents.js';
 import type { CustomAccountInfo, CustomProviderInfo } from './custom-providers.js';
 import type { EventData } from './events.js';
 import type { FeedDecisions } from './feed.js';
-import type { Capabilities, CliUpdate, FeedCardState, FeedDecision, FeedItem, ModelOption, ProviderCheck, ProviderCheckReason, ProviderLimits } from './types.js';
+import type { Capabilities, CliStatus, CliUpdate, FeedCardState, FeedDecision, FeedItem, ModelOption, ProviderCheck, ProviderCheckReason, ProviderLimits } from './types.js';
 import { PROVIDER_CHECK_REASONS } from './types.js';
 import * as protocolExports from './index.js';
 import { progressLine, progressResult, type ProgressResult } from './feed-progress.js';
@@ -185,6 +186,25 @@ describe('pty.send', () => {
   });
 });
 
+describe('pty.screenText', () => {
+  const ref = { projectPath: '/p', workId: 'w-0001', sessionId: 's-01' };
+
+  it('rows необязателен, а если есть — целое от 1 до 200; лишние ключи и пропуск ref отвергаются', () => {
+    expect(METHODS['pty.screenText'].safeParse({ ref }).success).toBe(true);
+    expect(METHODS['pty.screenText'].safeParse({ ref, rows: 1 }).success).toBe(true);
+    expect(METHODS['pty.screenText'].safeParse({ ref, rows: 200 }).success).toBe(true);
+    expect(METHODS['pty.screenText'].safeParse({ ref, rows: 0 }).success).toBe(false);
+    expect(METHODS['pty.screenText'].safeParse({ ref, rows: 201 }).success).toBe(false);
+    expect(METHODS['pty.screenText'].safeParse({ ref, rows: 2.5 }).success).toBe(false);
+    expect(METHODS['pty.screenText'].safeParse({ ref, rows: 24, extra: 1 }).success).toBe(false);
+    expect(METHODS['pty.screenText'].safeParse({ rows: 24 }).success).toBe(false);
+  });
+
+  it('результат — строки экрана', () => {
+    expectTypeOf<Result<'pty.screenText'>>().toEqualTypeOf<{ lines: string[] }>();
+  });
+});
+
 describe('ревью изменений (кусок 8.1)', () => {
   const ref = { projectPath: '/p', workId: 'w-0001', sessionId: 's-01' };
 
@@ -199,6 +219,14 @@ describe('ревью изменений (кусок 8.1)', () => {
     expect(METHODS['worktrees.mergeCheck'].safeParse({}).success).toBe(false);
     expect(METHODS['changes.project'].safeParse({ ref }).success).toBe(true);
     expect(METHODS['changes.project'].safeParse({ ref, patch: false }).success).toBe(true);
+  });
+
+  it('worktrees.version и changes.version — только ref, ответ { version: string }', () => {
+    for (const name of ['worktrees.version', 'changes.version'] as const) {
+      expect(METHODS[name].safeParse({ ref }).success).toBe(true);
+      expect(METHODS[name].safeParse({}).success).toBe(false);
+      expectTypeOf<Result<typeof name>>().toEqualTypeOf<{ version: string }>();
+    }
   });
 
   it('changes.commitProject: сообщение 1–10 000 символов', () => {
@@ -375,6 +403,39 @@ describe('providers.skipUpdate и providers.list.update (спека 2026-11-02)'
     expect([busy.state, finished.state]).toEqual(['busy', 'done']);
   });
 
+  it('providers.install: {provider}, ответ busy или done с итогом установки', () => {
+    expect(METHODS['providers.install'].safeParse({ provider: 'qwen' }).success).toBe(true);
+    expect(METHODS['providers.install'].safeParse({}).success).toBe(false);
+    expect(METHODS['providers.install'].safeParse({ provider: 7 }).success).toBe(false);
+    // Лишние поля не проходят в обработчик: ни URL, ни аргументы из запроса.
+    expect(METHODS['providers.install'].parse({ provider: 'qwen', args: ['--evil'], url: 'https://x' })).toEqual({ provider: 'qwen' });
+    const busy: Result<'providers.install'> = { state: 'busy' };
+    const done: Result<'providers.install'> = {
+      state: 'done',
+      ok: false,
+      version: null,
+      output: 'tail',
+      error: 'The installer exited with code 1',
+      manualCommand: 'curl -fsSL https://claude.ai/install.sh | bash',
+      pathNote: '/Users/x/.local/bin is not on your shell PATH; Parley finds qwen there',
+      smoke: { ok: false, output: '' },
+    };
+    expect([busy, done]).toHaveLength(2);
+  });
+
+  it('providers.checkUpdates: {provider}, ответ — cli; cli в providers.list необязателен и круговой обход схемы цел', () => {
+    expect(METHODS['providers.checkUpdates'].safeParse({ provider: 'qwen' }).success).toBe(true);
+    expect(METHODS['providers.checkUpdates'].safeParse({}).success).toBe(false);
+    expect(METHODS['providers.checkUpdates'].safeParse({ provider: 7 }).success).toBe(false);
+    const cli: CliStatus = { installed: null, latest: '0.28.0', method: null, checkedAt: '2026-11-11T00:00:00.000Z', state: 'missing', lastError: null };
+    const result: Result<'providers.checkUpdates'> = { cli };
+    expect(JSON.parse(JSON.stringify(result))).toEqual(result);
+    const list: Result<'providers.list'> = { providers: [{ id: 'qwen', label: 'Qwen', available: false, cli }] };
+    expect(list.providers[0]?.cli?.state).toBe('missing');
+    expectTypeOf<CliStatus['state']>().toEqualTypeOf<'missing' | 'up-to-date' | 'available' | 'skipped' | 'unknown'>();
+    expect(Object.keys(METHODS)).toContain('providers.checkUpdates');
+  });
+
   it('update в providers.list необязателен (старый хост молчит) и может быть null', () => {
     const update: CliUpdate = { latest: '0.166.0', method: 'standalone', checkedAt: '2026-11-02T00:00:00.000Z' };
     const list: Result<'providers.list'> = {
@@ -469,6 +530,7 @@ describe('модель, усилие и поля providers.list (дизайн к
       check?: ProviderCheck | null;
       custom?: CustomProviderInfo | null;
       update?: CliUpdate | null;
+      cli?: CliStatus;
     }>();
     // Хост до дизайна комнат отдаёт элементы без новых полей — тип обязан это допускать.
     const legacy: Result<'providers.list'> = { providers: [{ id: 'claude', label: 'Claude', available: true }] };
@@ -967,6 +1029,12 @@ describe('sessions.switchOptions / sessions.switchAgent', () => {
     expect(r.success && r.data.carry).toBe('handover');
     const full = parse({ ref, requestId, provider: 'claude', model: null, effort: 'high', carry: 'transcript', force: true });
     expect(full.success && full.data.carry).toBe('transcript');
+  });
+  it('roleChange is optional; bad shape is refused; switchOptions targets may carry a role change', () => {
+    expect(parse({ ref, requestId, provider: 'qwen', roleChange: { from: 'builtin:architect', to: null } }).success).toBe(true);
+    expect(parse({ ref, requestId, provider: 'qwen', roleChange: { from: '' , to: null } }).success).toBe(false);
+    expect(parse({ ref, requestId, provider: 'qwen', roleChange: { to: null } }).success).toBe(false);
+    expectTypeOf<Result<'sessions.switchOptions'>['targets'][number]['roleChange']>().toEqualTypeOf<RoleChange | null | undefined>();
   });
   it('кривой requestId, провайдер, carry и effort отклоняются', () => {
     expect(parse({ ref, requestId: 'nope', provider: 'codex' }).success).toBe(false);

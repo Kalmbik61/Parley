@@ -530,6 +530,18 @@ describe('сервис сна агентов', () => {
     expect(sessionOf(codex).lifecycle).toBe('active');
   });
 
+  it('сторож держит сон: holdsSleep истинно — сессия старше порога не засыпает; ложно — засыпает', async () => {
+    const held = await startSession();
+    const free = await startSession();
+    boot({ silentTurns: { holdsSleep: (ref) => ref.sessionId === held.sessionId } });
+    clock = T0 + 61 * MIN;
+    await advance(AUTO_SLEEP_TICK_MS);
+
+    expect(slept()).toEqual([free.sessionId]);
+    expect(sessionOf(held).lifecycle).toBe('active');
+    expect(hasMarkKey(held)).toBe(false);
+  });
+
   it('сессию в смене агента (switching) не трогает', async () => {
     const ref = await startSession({
       patch: (session) => {
@@ -1249,8 +1261,8 @@ describe('сервис сна: по давлению и ради слота', ()
   });
 
   it('при warn — не больше одной сессии за 30 с, самая давняя первой', async () => {
-    const middle = await idleFor(20);
-    const oldest = await idleFor(30);
+    const middle = await idleFor(34);
+    const oldest = await idleFor(38);
     const newest = await idleFor(10);
     boot({ pressure: sensor });
 
@@ -1262,7 +1274,7 @@ describe('сервис сна: по давлению и ради слота', ()
     expect(logs).toContainEqual({
       level: 'info',
       msg: 'агент усыплён',
-      data: { ref: oldest, reason: 'pressure', idleMin: 30 },
+      data: { ref: oldest, reason: 'pressure', idleMin: 38 },
     });
 
     // Следующая — не раньше чем через 30 с после прошлого сна по давлению.
@@ -1274,6 +1286,16 @@ describe('сервис сна: по давлению и ради слота', ()
     expect(slept()).toEqual([oldest.sessionId, middle.sessionId]);
     expect(sessionOf(middle).autoSleep?.reason).toBe('pressure');
     expect(sessionOf(newest).lifecycle).toBe('active');
+  });
+
+  it('тишина открытого хода не усыпляет и при critical', async () => {
+    await startSession({ activity: idleActivity(NOW - 10 * MIN, { activity: 'unseen', quietTurn: true }) });
+    boot({ pressure: sensor });
+
+    await reading('critical', NOW);
+    await reading('critical', NOW + PRESSURE_PACE_MS.critical);
+
+    expect(stops).toEqual([]);
   });
 
   it('при critical — одна сессия за 10 с', async () => {
@@ -1308,8 +1330,8 @@ describe('сервис сна: по давлению и ради слота', ()
     },
   );
 
-  it('простой 4 мин при warn не засыпает, ровно на пороге в 5 мин — засыпает', async () => {
-    const ref = await idleFor(4);
+  it('при warn: 29 мин не засыпает, 30 — засыпает', async () => {
+    const ref = await idleFor(29);
     boot({ pressure: sensor });
 
     await reading('warn', NOW);
@@ -1317,6 +1339,34 @@ describe('сервис сна: по давлению и ради слота', ()
 
     await reading('warn', NOW + MIN);
     expect(slept()).toEqual([ref.sessionId]);
+  });
+
+  it('при critical: 4 мин не засыпает, 5 — засыпает', async () => {
+    const ref = await idleFor(4);
+    boot({ pressure: sensor });
+
+    await reading('critical', NOW);
+    expect(stops).toEqual([]);
+
+    await reading('critical', NOW + MIN);
+    expect(slept()).toEqual([ref.sessionId]);
+  });
+
+  it('поднятая после сна при critical не засыпает раньше 15 мин', async () => {
+    const ref = await startSession({
+      activity: idleActivity(NOW - 14 * MIN),
+      patch: (session) => {
+        session.history.push({ event: 'sleeping', at: iso(T0) }, { event: 'active', at: iso(T0 + MIN) });
+      },
+    });
+    boot({ pressure: sensor });
+
+    await reading('critical', NOW);
+    expect(stops).toEqual([]);
+
+    await reading('critical', NOW + MIN);
+    expect(slept()).toEqual([ref.sessionId]);
+    expect(sessionOf(ref).autoSleep?.reason).toBe('pressure');
   });
 
   it('порог давления берётся из настройки на каждом чтении', async () => {
@@ -1361,6 +1411,24 @@ describe('сервис сна: по давлению и ради слота', ()
     expect(slept()).toEqual([other.sessionId]);
     expect(sessionOf(awake).lifecycle).toBe('active');
     expect(hasMarkKey(awake)).toBe(false);
+  });
+
+  it('сторож держит сон и под давлением, и ради слота: пока held — никто не засыпает, отпустил — засыпает', async () => {
+    const ref = await idleFor(30);
+    let held = true;
+    const service = boot({ pressure: sensor, silentTurns: { holdsSleep: () => held } });
+    await quiet();
+
+    await reading('critical', NOW);
+    expect(service.slotCandidate()).toBe(false);
+    expect(await service.freeSlot()).toBe(false);
+    expect(stops).toEqual([]);
+    expect(sessionOf(ref).lifecycle).toBe('active');
+
+    held = false;
+    expect(service.slotCandidate()).toBe(true);
+    expect(await service.freeSlot()).toBe(true);
+    expect(slept()).toEqual([ref.sessionId]);
   });
 
   // Работающих агентов хост не трогает никогда; полный набор причин проверяет `autoSleepVerdict` в core.

@@ -26,6 +26,7 @@ export type {
   CapabilitySkill,
   CapabilitySource,
   CapacitySnapshot,
+  CliStatus,
   CliUpdate,
   CompactResult,
   NoticeKind,
@@ -51,6 +52,13 @@ export {
   FEED_DECISION_ANSWER_LIMIT,
   FEED_DECISION_MESSAGE_LIMIT,
   FEED_CODEX_FEATURE,
+  FEED_QWEN_FEATURE,
+  QWEN_FEED_MIN_VERSION,
+  FEED_OPENCODE_FEATURE,
+  OPENCODE_FEED_MIN_VERSION,
+  FEED_RESYNC_FEATURE,
+  FEED_MAIL_FEATURE,
+  FEED_MAIL_TEXT_LIMIT,
   FEED_IMAGE_MIME_LIMIT,
   FEED_IMAGE_PATH_LIMIT,
   FEED_IMAGES_PER_CALL,
@@ -76,8 +84,10 @@ export type {
   Result,
   Results,
 } from './methods.js';
+export type { SessionProcess, SessionProcessesSnapshot } from './processes.js';
 export type { EventData, EventName, Events } from './events.js';
 export {
+  BadFrameError,
   LineDecoder,
   LineTooLongError,
   MAX_LINE_BYTES,
@@ -227,6 +237,7 @@ export type {
   AssistantJobChanged,
   AssistantJobCorrelation,
   AssistantJobOrigin,
+  AssistantJournalItem,
   AssistantMethodResults,
   AssistantOrigin,
   AssistantPhase,
@@ -246,7 +257,11 @@ export type { TelegramMethodResults, TelegramPolling, TelegramStatus } from './t
 export { voiceProviderMethodSchemas } from './voice-provider.js';
 export type { VoiceProviderCheck, VoiceProviderCheckCode, VoiceProviderMethodResults, VoiceProviderState } from './voice-provider.js';
 export { consentMethodSchemas } from './consents.js';
-export type { AgentSwitchCard, ConsentCard, ConsentMethodResults, FolderTrustCard, ProjectMcpCard, ProjectMcpServer, TrustRecord } from './consents.js';
+export type { AgentSwitchCard, ConsentCard, ConsentMethodResults, FolderTrustCard, ProjectMcpCard, ProjectMcpServer, RoleChange, RoleChangeAck, TrustRecord } from './consents.js';
 export { CODEX_ACCOUNT_PREFIX, CUSTOM_PROVIDER_PREFIX, customProviderMethodSchemas, isCodexAccountId, isCustomProviderId, isManagedProviderId } from './custom-providers.js';
+export type { QwenAuthHints } from './qwen-auth.js';
 export type { CustomAccountInfo, CustomEndpointInfo, CustomProviderAuth, CustomProviderInfo, CustomProviderKind, CustomProviderMethodResults, CustomProviderSaveParams, CustomProviderModels } from './custom-providers.js';
 export type * from './human-overview.js';
+
+export { kimiConfigOption, kimiElicitationSchema, kimiPermissionOption, kimiResponse } from './kimi.js';
+export type { KimiConfigOption, KimiMethodResults, KimiPermissionContent, KimiRequest, KimiResponse, KimiState } from './kimi.js';

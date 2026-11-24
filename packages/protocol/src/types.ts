@@ -45,6 +45,22 @@ export interface CliUpdate {
   checkedAt: string;
 }
 
+/**
+ * Состояние CLI провайдера в `providers.list.cli` (спека Qwen, §4.4): видно всегда, не только когда есть новая версия.
+ * `method` — способ установки (`null`, пока CLI не установлен); `checkedAt` — ISO-время последней проверки источника
+ * (`null` — не проверяли); `lastError` — почему последняя проверка не удалась (`offline`, `http 503`, `parse`).
+ */
+export interface CliStatus {
+  installed: string | null;
+  latest: string | null;
+  method: string | null;
+  checkedAt: string | null;
+  state: 'missing' | 'up-to-date' | 'available' | 'skipped' | 'unknown';
+  lastError: string | null;
+  /** Когда проверка в последний раз удалась; `checkedAt` — последняя попытка, в том числе неудачная. Старый хост поля не шлёт. */
+  lastSuccessAt?: string | null;
+}
+
 export type ProviderCheckReason = (typeof PROVIDER_CHECK_REASONS)[number];
 
 /**
@@ -125,7 +141,8 @@ export interface LiveTask {
  * - `folder-trust` — запуск Codex удержан до согласия человека на папку проекта (спека 2026-10-21, 4.2);
  * - `settling` — письма несрочные (заметка всем без упоминания): указатель ждёт тишины в комнате;
  * - `provider-missing` — провайдера сессии больше нет в реестре: она ждёт, пока человек продолжит её на другом;
- * - `queued` — запуск сессии стоит в очереди машины: потолок живых CLI полон или память на пределе (спека ёмкости, 4.2).
+ * - `queued` — запуск сессии стоит в очереди машины: потолок живых CLI полон или память на пределе (спека ёмкости, 4.2);
+ * - `wake-blocked` — два подъёма подряд не удались: будильник сессию больше не поднимает, письма ждут человека.
  */
 export type MailWait =
   | 'busy'
@@ -142,7 +159,8 @@ export type MailWait =
   | 'folder-trust'
   | 'settling'
   | 'provider-missing'
-  | 'queued';
+  | 'queued'
+  | 'wake-blocked';
 
 /**
  * Сжатие контекста сессии (спека 2026-10-15, 5.6): просьба ждёт, пока агент освободится; идёт; закончено, а новой
@@ -279,7 +297,11 @@ export type NoticeKind =
   | 'swarm-done'
   | 'swarm-failed'
   // Запуск человека пошёл сверх потолка машины (спека ёмкости, 4.2, «Классы запусков»): `ref` — запущенная сессия.
-  | 'machine-over-limit';
+  | 'machine-over-limit'
+  // Зависимости не склонированы в новую копию: корень копий на другом томе или не на APFS (раз на проект за запуск хоста).
+  | 'deps-clone-unavailable'
+  // Склонированные зависимости не совпали с lock-файлом копии: агент ставит их сам (раз на проект за запуск хоста).
+  | 'deps-clone-mismatch';
 
 export interface HostNotice {
   kind: NoticeKind;
@@ -338,6 +360,8 @@ export type ErrorCode =
  *   обновите окно (P35);
  * - `snapshot-too-large` (`internal`) — даже компактный снимок работ не влезает в кадр (тысячи сессий или комнат):
  *   хост его не шлёт, окну остаётся сказать об этом человеку (P35).
+ * - `role-change` (`conflict`) — первый запуск после замены агента отказан: роль read-only на новом провайдере не
+ *   работает (спека 2026-11-12, 2.6); `message` — английский текст хоста с выходом, окно показывает его как есть.
  * - `busy` (`conflict`) — смену модели или effort идущей сессии хост сейчас не делает: агент работает или ждёт
  *   человека, держат фоновые задачи, в поле ввода терминала черновик, ползунок `/effort` уже открыт или идёт
  *   другая смена той же сессии (нормалайзер модели и effort, 5.7–5.8).
@@ -355,6 +379,7 @@ export const HOST_ERROR_REASONS = {
   clientUpgradeRequired: 'client-upgrade-required',
   snapshotTooLarge: 'snapshot-too-large',
   busy: 'busy',
+  roleChange: 'role-change',
   notQueen: 'not-queen',
   swarmClosed: 'swarm-closed',
   swarmMember: 'swarm-member',

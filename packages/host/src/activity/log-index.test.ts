@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile, appendFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rename, rm, writeFile, appendFile, stat, utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -115,6 +115,7 @@ describe('createLogIndex', () => {
       // Не `endedAt`: служебные записи после конца хода работой не считаются.
       lastRecordAt: found?.lastWorkRecordAt ?? null,
       lastUserRecordAt: found?.lastUserRecordAt ?? null,
+      lastInterruptAt: null,
     });
   });
 
@@ -155,6 +156,7 @@ describe('createLogIndex', () => {
     expect(idx.log(session({ providerSessionId: 'limited' }))).toEqual({
       lastRecordAt: '2026-10-12T10:01:00.000Z',
       lastUserRecordAt: '2026-10-12T10:00:00.000Z',
+      lastInterruptAt: null,
       lastApiError: { at: '2026-10-12T10:01:00.000Z', error: 'rate_limit', text },
     });
     expect(idx.log(session({ providerSessionId: 'plain' }))).not.toHaveProperty('lastApiError');
@@ -644,6 +646,127 @@ describe('createLogIndex', () => {
     });
   });
 
+  describe('reindex: карты по одному файлу равны полной сборке', () => {
+    interface Meta {
+      id: string;
+      parent?: string;
+    }
+    const AT = '2026-10-04T12:00:00.000Z';
+
+    async function put(name: string, meta: Meta): Promise<string> {
+      const dir = path.join(codexRoot, '2026', '10', '04');
+      await mkdir(dir, { recursive: true });
+      const file = path.join(dir, name);
+      await writeFile(
+        file,
+        `${JSON.stringify({
+          type: 'session_meta',
+          timestamp: AT,
+          payload: { id: meta.id, cwd: '/codex', source: 'cli', ...(meta.parent === undefined ? {} : { parent_thread_id: meta.parent }) },
+        })}\n`,
+      );
+      return file;
+    }
+
+    /** Индексатор без памяти: файл, переписанный под другим id, читается заново, а не дочитывается с прежнего состояния. */
+    const stateless = (): ReturnType<typeof createSessionIndexer> => ({
+      claude: (...args) => createSessionIndexer().claude(...args),
+      codex: (file) => createSessionIndexer().codex(file),
+    });
+
+    const codexSession = (id: string): WorkSession => session({ provider: 'codex', providerSessionId: id });
+
+    it('reindex: из двух файлов с одним id побеждает перечитанный последним; удалён победитель — виден оставшийся', async () => {
+      const first = await put('rollout-2026-10-04T12-00-00-dup.jsonl', { id: 'dup' });
+      const second = await put('rollout-2026-10-04T12-00-00-dup_other.jsonl', { id: 'dup' });
+      const idx = index({ indexer: stateless() });
+      await idx.start();
+
+      await idx.reindex(first);
+      await idx.reindex(second);
+      expect(idx.index(codexSession('dup'))?.file).toBe(second);
+      await idx.reindex(first);
+      expect(idx.index(codexSession('dup'))?.file).toBe(first);
+
+      await rm(first);
+      await idx.reindex(first);
+      expect(idx.index(codexSession('dup'))?.file).toBe(second);
+      await rm(second);
+      await idx.reindex(second);
+      expect(idx.index(codexSession('dup'))).toBeUndefined();
+    });
+
+    it('reindex: потомок с другим parent_thread_id переходит к новому родителю; удалённый пропадает из childLogs', async () => {
+      await put('rollout-2026-10-04T12-00-00-pa.jsonl', { id: 'pa' });
+      await put('rollout-2026-10-04T12-00-00-pb.jsonl', { id: 'pb' });
+      const child = await put('rollout-2026-10-04T12-00-00-kid.jsonl', { id: 'kid', parent: 'pa' });
+      const idx = index({ indexer: stateless() });
+      await idx.start();
+      const threads = (parent: string): string[] => idx.childLogs(codexSession(parent)).map((entry) => entry.threadId);
+      expect(threads('pa')).toEqual(['kid']);
+
+      await put('rollout-2026-10-04T12-00-00-kid.jsonl', { id: 'kid', parent: 'pb' });
+      await idx.reindex(child);
+      expect(threads('pa')).toEqual([]);
+      expect(threads('pb')).toEqual(['kid']);
+
+      await rm(child);
+      await idx.reindex(child);
+      expect(threads('pb')).toEqual([]);
+    });
+
+    it('последовательность правок по одному файлу даёт то же, что полная сборка по файлам в порядке перечитывания', async () => {
+      const names = ['f1', 'f2', 'f3', 'kid'].map((name) => `rollout-2026-10-04T12-00-00-${name}.jsonl`);
+      const [f1, f2, f3, kid] = names as [string, string, string, string];
+      const initial: Array<[string, Meta]> = [
+        [f1, { id: 'A' }],
+        [f2, { id: 'dupe' }],
+        [kid, { id: 'K', parent: 'A' }],
+      ];
+      // Модель: файлы в порядке последнего перечитывания; полная сборка — победитель по id последний, дети — по parent.
+      const model = new Map<string, Meta>();
+      for (const [name, meta] of initial) {
+        await put(name, meta);
+        model.set(name, meta);
+      }
+      const idx = index({ indexer: stateless() });
+      await idx.start();
+      const file = (name: string): string => path.join(codexRoot, '2026', '10', '04', name);
+
+      const check = (): void => {
+        const winners = new Map<string, string>();
+        for (const [name, meta] of model) winners.set(meta.id, file(name));
+        for (const id of ['A', 'B', 'K', 'dupe']) {
+          expect(idx.index(codexSession(id))?.file, `индекс ${id}`).toBe(winners.get(id));
+        }
+        for (const parent of ['A', 'B']) {
+          const expected = winners.has(parent)
+            ? [...model].filter(([, meta]) => meta.parent === parent).map(([name, meta]) => `${meta.id}\u0000${file(name)}`).sort()
+            : [];
+          const actual = idx.childLogs(codexSession(parent)).map((entry) => `${entry.threadId}\u0000${entry.file}`).sort();
+          expect(actual, `дети ${parent}`).toEqual(expected);
+        }
+      };
+      const change = async (name: string, meta: Meta | null): Promise<void> => {
+        if (meta === null) await rm(file(name));
+        else await put(name, meta);
+        model.delete(name);
+        if (meta !== null) model.set(name, meta);
+        await idx.reindex(file(name));
+        check();
+      };
+
+      check();
+      await change(f3, { id: 'dupe' }); // второй файл с тем же id: побеждает перечитанный последним
+      await change(f2, { id: 'dupe' }); // перечитан первый: победитель теперь он
+      await change(f2, { id: 'B' }); // у файла сменился id: dupe вернулся к f3
+      await change(kid, { id: 'K', parent: 'B' }); // ребёнок переехал к другому родителю
+      await change(f3, null); // файл пропал: у dupe победителя нет
+      await change(f1, null); // пропал родитель A
+      await change(f1, { id: 'A' }); // вернулся
+    });
+  });
+
   // Несколько корней Claude: свои провайдеры пишут историю в свою папку (спека своих провайдеров 5.6).
   describe('корни своих провайдеров', () => {
     const answer = (id: string, msg: string, at: string, input: number): string =>
@@ -776,5 +899,147 @@ describe('createLogIndex', () => {
         await rm(lateRoot, { recursive: true, force: true });
       }
     });
+  });
+});
+
+describe('кэш индекса между запусками', () => {
+  let cacheDir = '';
+  let cacheFile = '';
+
+  beforeEach(async () => {
+    // Временный каталог вместо домашнего: ~/.parley тесты не трогают.
+    cacheDir = await mkdtemp(path.join(tmpdir(), 'parley-log-cache-'));
+    cacheFile = path.join(cacheDir, 'log-index-cache.json');
+  });
+  afterEach(async () => {
+    await rm(cacheDir, { recursive: true, force: true });
+  });
+
+  const cached = (version = 'v1') => index({ cache: { file: cacheFile, version } });
+  const titled = (id: string, title: string): string =>
+    `${JSON.stringify({ type: 'user', sessionId: id, timestamp: '2026-09-05T09:00:00.000Z', message: { role: 'user', content: 'привет' } })}\n` +
+    `${JSON.stringify({ type: 'custom-title', customTitle: title, sessionId: id })}\n`;
+  const titleOf = (idx: LogIndex, id: string): string | null | undefined => idx.index(session({ providerSessionId: id }))?.title;
+  /** Три сессии Claude и один rollout Codex. */
+  async function writeHistory(): Promise<string[]> {
+    const files = [
+      await writeClaudeSession('a', titled('a', 'title-a')),
+      await writeClaudeSession('b', titled('b', 'title-b')),
+      await writeClaudeSession('c', titled('c', 'title-c')),
+    ];
+    const dir = path.join(codexRoot, '2026', '10', '04');
+    await mkdir(dir, { recursive: true });
+    const rollout = path.join(dir, 'rollout-2026-10-04T12-00-01-x1.jsonl');
+    await writeFile(
+      rollout,
+      `${JSON.stringify({ timestamp: '2026-10-04T12:00:01.000Z', type: 'session_meta', payload: { id: 'x1', cwd: '/tmp/p' } })}\n`,
+    );
+    return [...files, rollout];
+  }
+  const readCache = async (): Promise<{ format: number; version: string; entries: Record<string, { key: string; index: { title?: string } }> }> =>
+    JSON.parse(await readFile(cacheFile, 'utf8'));
+
+  it('первый старт пишет файл: format 1, версия, ключи — пути всех логов', async () => {
+    const files = await writeHistory();
+    const stats = await cached().start();
+
+    expect(stats).toEqual({ files: 4, parsed: 4 });
+    const written = await readCache();
+    expect(written.format).toBe(1);
+    expect(written.version).toBe('v1');
+    expect(Object.keys(written.entries).sort()).toEqual([...files].sort());
+    expect((await stat(cacheFile)).mode & 0o777).toBe(0o600);
+  });
+
+  it('второй старт по неизменённому дереву ничего не разбирает; запись берётся из кэша', async () => {
+    await writeHistory();
+    await cached().start();
+    const written = await readCache();
+    const entry = Object.values(written.entries).find((value) => value.index.title === 'title-b');
+    if (entry === undefined) throw new Error('нет записи b');
+    entry.index.title = 'из кэша';
+    await writeFile(cacheFile, JSON.stringify(written));
+
+    const second = cached();
+    expect(await second.start()).toEqual({ files: 4, parsed: 0 });
+    expect(titleOf(second, 'b')).toBe('из кэша');
+    expect(titleOf(second, 'a')).toBe('title-a');
+  });
+
+  it('дописанный файл разбирается заново', async () => {
+    const [a] = await writeHistory();
+    await cached().start();
+    await appendFile(a as string, `${JSON.stringify({ type: 'custom-title', customTitle: 'новый', sessionId: 'a' })}\n`);
+
+    const second = cached();
+    expect(await second.start()).toEqual({ files: 4, parsed: 1 });
+    expect(titleOf(second, 'a')).toBe('новый');
+  });
+
+  it('усечённый файл разбирается заново', async () => {
+    const [a] = await writeHistory();
+    await cached().start();
+    await writeFile(a as string, titled('a', 'short').split('\n')[0] + '\n');
+
+    const second = cached();
+    expect((await second.start())?.parsed).toBe(1);
+    expect(titleOf(second, 'a')).not.toBe('title-a');
+  });
+
+  it('файл заменён другим того же размера с возвращённым mtime — разбирается заново', async () => {
+    const [a] = await writeHistory();
+    await cached().start();
+    const before = await stat(a as string);
+    const replacement = `${a}.new`;
+    await writeFile(replacement, titled('a', 'title-Z'));
+    expect((await stat(replacement)).size).toBe(before.size);
+    await utimes(replacement, before.atime, before.mtime);
+    await rename(replacement, a as string);
+
+    const second = cached();
+    expect((await second.start())?.parsed).toBe(1);
+    expect(titleOf(second, 'a')).toBe('title-Z');
+  });
+
+  it('исчезнувший файл выпадает из нового кэша', async () => {
+    const [a] = await writeHistory();
+    await cached().start();
+    await rm(a as string);
+
+    const second = cached();
+    expect(await second.start()).toEqual({ files: 3, parsed: 0 });
+    expect(Object.keys((await readCache()).entries)).not.toContain(a);
+    expect(titleOf(second, 'a')).toBeUndefined();
+  });
+
+  it.each([
+    ['битый JSON', () => '{"format":1,'],
+    ['чужой format', (text: string) => text.replace('"format":1', '"format":2')],
+    ['чужая версия', (text: string) => text.replace('"version":"v1"', '"version":"v0"')],
+    ['не объект', () => '[]'],
+    ['запись с чужим путём в index.file', (text: string) => text.replaceAll('"file":"', '"file":"/elsewhere')],
+  ])('%s: полный разбор, файл переписан годным', async (_name, damage) => {
+    await writeHistory();
+    await cached().start();
+    await writeFile(cacheFile, damage(await readFile(cacheFile, 'utf8')));
+
+    expect(await cached().start()).toEqual({ files: 4, parsed: 4 });
+    const written = await readCache();
+    expect(written.version).toBe('v1');
+    expect(Object.keys(written.entries)).toHaveLength(4);
+    expect(await cached().start()).toEqual({ files: 4, parsed: 0 });
+  });
+
+  it('другая версия хоста при годном файле — полный разбор', async () => {
+    await writeHistory();
+    await cached().start();
+    expect(await cached('v2').start()).toEqual({ files: 4, parsed: 4 });
+    expect((await readCache()).version).toBe('v2');
+  });
+
+  it('cache: null — файл не пишется', async () => {
+    await writeHistory();
+    await index({ cache: null }).start();
+    await expect(stat(cacheFile)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });

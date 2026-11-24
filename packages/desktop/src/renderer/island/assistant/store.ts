@@ -150,6 +150,8 @@ export interface AssistantStoreState {
   setLiveActive(active: boolean): void;
   decide(decision: 'send' | 'cancel'): Promise<void>;
   reset(): Promise<void>;
+  /** Остановить идущий план: хост доводит текущий шаг и не начинает следующие. */
+  stopPlan(proposalId: string): Promise<void>;
   /** Сообщение порта голоса: кусок, срыв по длине или состояние движка. */
   speechMessage(message: IslandTtsMessage): void;
   /** Пришли настройки речи: выключение глушит речь, включение греет движок. Первое значение — точка отсчёта. */
@@ -158,6 +160,11 @@ export interface AssistantStoreState {
   toggleSpeak(): void;
   /** Кадр голоса для лица; `null` — голос молчит. */
   voiceFrame(): VoiceFrame | null;
+  /**
+   * Второй путь служебного итога (Live не активен): остров открывается без захвата клавиатуры, текст озвучивается
+   * обычной озвучкой, если включено «Speak answers» и она свободна (идущий ответ помощника не обрывается).
+   */
+  deliverService(text: string): void;
 }
 
 /** Речь одного хода: предложения по `utteranceId` в порядке синтеза. */
@@ -554,6 +561,9 @@ export function createAssistantStore(): UseBoundStore<StoreApi<AssistantStoreSta
           set({ deciding: null });
         }
       },
+      stopPlan: async (proposalId) => {
+        await deps?.call('assistant.stopPlan', { proposalId }).catch(() => {});
+      },
       reset: async () => {
         set({ queue: [], sending: null, history: [], cardError: null });
         await deps?.call('assistant.reset', {});
@@ -582,6 +592,13 @@ export function createAssistantStore(): UseBoundStore<StoreApi<AssistantStoreSta
         if (was === undefined || was === on) return;
         if (!on) hush();
         else if (voiceReady()) void deps?.speech?.api.warmup().catch(() => undefined);
+      },
+      deliverService: (text) => {
+        set({ open: true, collapsed: false, byHover: false });
+        if (deps?.speech === undefined || speechSettings()?.enabled !== true || !canSpeak() || talk !== null) return;
+        const current = newTalk(get().host.turn);
+        for (const sentence of current.feed.push(current.turn, text, true)) say(current, sentence);
+        end(current);
       },
       toggleSpeak: () => {
         const speech = deps?.speech;

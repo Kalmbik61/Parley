@@ -25,11 +25,22 @@ export interface HistoryService {
   stop(): void;
   removeWork(projectPath: string, workId: string, capturedRoomIds: readonly string[]): Promise<void>;
 }
+const freshState = (projectPath: string, workId: string): HistoryState => ({
+  projectPath, workId, rooms: new Set<string>(), common: null, roomSources: new Map<string, string>(), pending: new Set<string>(), dirty: false,
+});
 interface HistoryState {
   projectPath: string;
   workId: string;
   rooms: Set<string>;
-  source: string | null;
+  /** Общий отпечаток работы: сменился — пересобираются все комнаты. */
+  common: string | null;
+  /** Отпечатки комнат на момент последней проверки. */
+  roomSources: Map<string, string>;
+  /** Комнаты, которым нужна пересборка; упавшая возвращается сюда. */
+  pending: Set<string>;
+  /** Версия и создание записи, под которыми считан отпечаток: прежние — работа не менялась. */
+  version?: number;
+  incarnation?: number;
   dirty: boolean;
   timer?: ReturnType<typeof setTimeout>;
   running?: Promise<void>;
@@ -54,14 +65,16 @@ export function createHistoryService(
     tops: roomLetterTops,
   };
   /**
-   * Отпечаток всего, от чего зависит история комнат работы: поля комнат, которые печатает `renderRoomHistory` (название,
-   * режим, время создания, ведущий, участники, id и название рецепта), подписи и роли участников, название работы и номер
-   * новейшего письма каждой комнаты. Письма не правятся и уходят только вместе с комнатой (она меняет список комнат), поэтому
-   * новейший номер ловит каждую запись; тексты лент не читаются, а запрос — `MAX(seq)` на комнату, цена от числа комнат, не
-   * писем (спека хранилища 6.2). Решение в слоте, журнал участия и архив в историю не входят — правка их историю не пересобирает.
+   * Отпечатки всего, от чего зависит история комнат работы. Общий: id и название работы, `deletedSessions`, подписи и роли
+   * сессий (их печатает каждая комната; сменился — пересобираются все комнаты). По комнате: поля, которые печатает
+   * `renderRoomHistory` (название, режим, время создания, ведущий, участники, id и название рецепта), и номер новейшего
+   * письма комнаты. Письма не правятся и уходят только вместе с комнатой (она меняет список комнат); пометка «удалено» и
+   * отметки прочтения в историю не входят, а удаление сессии меняет `deletedSessions` и подписи, то есть общий отпечаток.
+   * Тексты лент не читаются, а запрос — `MAX(seq)` на комнату, цена от числа комнат, не писем (спека хранилища 6.2).
+   * Решение в слоте, журнал участия, планы и архив в историю не входят — правка их историю не пересобирает.
    * Работу сняли, пока она была в снимке, — писем нет: ложной ошибки истории не будет.
    */
-  const identity = (entry: WorkEntry): string => {
+  const identity = (entry: WorkEntry): { common: string; rooms: Map<string, string> } => {
     const { work, rooms, sessions } = entry.map;
     let tops: Record<string, number> = {};
     try {
@@ -69,14 +82,17 @@ export function createHistoryService(
     } catch (error) {
       if (!(error instanceof WorkNotFoundError)) throw error;
     }
-    return JSON.stringify([
-      work.id,
-      work.title,
-      work.deletedSessions ?? [],
-      rooms.map((room) => [room.id, room.title, room.mode ?? 'free', room.createdAt, room.lead, room.members, room.recipe?.id ?? null, room.recipe?.name ?? null]),
-      sessions.map((session) => [session.id, session.label, session.role ?? null]),
-      tops,
-    ]);
+    return {
+      common: JSON.stringify([
+        work.id,
+        work.title,
+        work.deletedSessions ?? [],
+        sessions.map((session) => [session.id, session.label, session.role ?? null]),
+      ]),
+      rooms: new Map(rooms.map((room) => [room.id, JSON.stringify([
+        room.id, room.title, room.mode ?? 'free', room.createdAt, room.lead, room.members, room.recipe?.id ?? null, room.recipe?.name ?? null, tops[room.id] ?? null,
+      ])])),
+    };
   };
   const states = new Map<string, HistoryState>();
   const noticed = new Set<string>();
@@ -102,7 +118,7 @@ export function createHistoryService(
     // Manual deletion sees a fresher map than the watcher cache. Keep its room IDs
     // even when a stale cached entry postpones cleanup until cache convergence.
     const key = keyOf(projectPath, workId);
-    const state = states.get(key) ?? { projectPath, workId, rooms: new Set<string>(), source: null, dirty: false };
+    const state = states.get(key) ?? freshState(projectPath, workId);
     const rooms = new Set([...state.rooms, ...capturedRoomIds]);
     if (rooms.size > 30_000) throw new Error('invalid history room IDs');
     state.rooms = rooms;
@@ -111,7 +127,7 @@ export function createHistoryService(
     // The authoritative entry can reappear while the deletion proof was read.
     if (stopped || works.entry(projectPath, workId)) return;
     const result = await io.remove(projectPath, workId, [...state.rooms]);
-    if (result.failed.length) notify({ projectPath, workId, rooms: new Set(), source: null, dirty: false }, result.failed.length);
+    if (result.failed.length) notify(freshState(projectPath, workId), result.failed.length);
   }
   async function process(state: HistoryState): Promise<void> {
     do {
@@ -125,9 +141,11 @@ export function createHistoryService(
       }
       let failed = 0;
       for (const room of entry.map.rooms) {
+        if (!state.pending.has(room.id)) continue;
         if (stopped || !works.entry(state.projectPath, state.workId)) return;
+        state.pending.delete(room.id);
         try { await io.rebuild(state.projectPath, state.workId, room.id); }
-        catch { failed++; }
+        catch { failed++; state.pending.add(room.id); }
       }
       if (failed) notify(state, failed);
     } while (state.dirty && !stopped);
@@ -141,18 +159,28 @@ export function createHistoryService(
       state.running = process(state).catch(() => notify(state, 1)).finally(() => { delete state.running; });
     }, delay);
   }
-  function check(entry: WorkEntry): void {
+  function check(entry: WorkEntry, always = false): void {
     const key = keyOf(entry.projectPath, entry.map.work.id);
     if (!entry.map.rooms.length) return;
     let state = states.get(key);
     if (!state) {
-      state = { projectPath: entry.projectPath, workId: entry.map.work.id, rooms: new Set(), source: null, dirty: false };
+      state = freshState(entry.projectPath, entry.map.work.id);
       states.set(key, state);
     }
-    let source: string;
-    try { source = identity(entry); } catch { notify(state, 1); return; }
+    // Та же версия записи — та же карта и те же письма: отпечаток не считаем (письма без записи карты — `scanMail`).
+    if (!always && entry.version !== undefined && entry.version === state.version && entry.incarnation === state.incarnation) return;
+    let next: { common: string; rooms: Map<string, string> };
+    try { next = identity(entry); } catch { notify(state, 1); return; }
     for (const room of entry.map.rooms) state.rooms.add(room.id);
-    if (source !== state.source) { state.source = source; state.dirty = true; schedule(state); }
+    const all = next.common !== state.common;
+    for (const [id, source] of next.rooms) if (all || state.roomSources.get(id) !== source) state.pending.add(id);
+    // Первый проход после старта отпечатков не помнит: все комнаты в очереди, а лишнюю запись снимает проверка владения файла.
+    for (const id of state.pending) if (!next.rooms.has(id)) state.pending.delete(id);
+    state.common = next.common;
+    state.roomSources = next.rooms;
+    if (entry.version !== undefined && entry.incarnation !== undefined) { state.version = entry.version; state.incarnation = entry.incarnation; }
+    else { delete state.version; delete state.incarnation; }
+    if (state.pending.size) { state.dirty = true; schedule(state); }
   }
   function scan(): void {
     const current = new Set<string>();
@@ -166,7 +194,7 @@ export function createHistoryService(
   function scanMail(notice: MailNotice): void {
     if (stopped || !notice.journal.added.length) return;
     const entry = works.entry(notice.projectPath, notice.workId);
-    if (entry) check(entry);
+    if (entry) check(entry, true);
   }
   return {
     start() { if (off || stopped) return; off = works.onChange(scan); offMail = works.onMail(scanMail); scan(); },

@@ -52,6 +52,12 @@ it('registers the window-only decisions list and room history actions', () => {
     expect(handlers.methods[name]).toBeTypeOf('function');
 });
 
+it('registers the optional worktrees.version and changes.version', () => {
+  const { deps } = fakeDeps(Promise.resolve());
+  const handlers = createHostHandlers(deps);
+  for (const name of ['worktrees.version', 'changes.version'] as const) expect(handlers.methods[name]).toBeTypeOf('function');
+});
+
 it('registers opt-in works.sync behind readiness and releases its client on disconnect', async () => {
   let ready!: () => void;
   const { deps } = fakeDeps(new Promise<void>(resolve => { ready = resolve; }));
@@ -267,9 +273,18 @@ describe('методы на старте хоста ждут первого чт
         'feed.unsubscribe',
         'feed.decide',
         'feed.interrupt',
+        'kimi.getState',
+        'kimi.setConfig',
       ].sort(),
     );
     expect([...WORKS_GATED_NOTIFICATIONS]).toEqual(['activity.seen']);
+  });
+
+  it('pty.screenText зарегистрирован и не входит в перечень ждущих работ (экран не зависит от снимка работ)', () => {
+    const { deps } = fakeDeps(new Promise<void>(() => {}));
+    const handlers = createHostHandlers(deps);
+    expect(handlers.methods['pty.screenText']).toBeTypeOf('function');
+    expect(WORKS_GATED_METHODS).not.toContain('pty.screenText');
   });
 
   it('до worksReady ни один из них не трогает сервисы; после — трогает', async () => {
@@ -332,4 +347,27 @@ it('browser.agentResult: сообщение 5000 знаков — агенту 2
 it('без приёмника агента метода browser.agentResult нет', () => {
   const { deps } = fakeDeps(Promise.resolve());
   expect(createHostHandlers(deps).methods['browser.agentResult']).toBeUndefined();
+});
+
+it('processes.* регистрируются только при мониторе процессов, снимка работ не ждут, а dropClient снимает подписки клиента', async () => {
+  const names = ['processes.subscribe', 'processes.unsubscribe'] as const;
+  const { deps } = fakeDeps(Promise.resolve());
+  for (const name of names) expect(createHostHandlers(deps).methods).not.toHaveProperty(name);
+
+  const stop = vi.fn();
+  const monitor = { subscribe: vi.fn(() => stop), refresh: vi.fn(async () => {}) };
+  const handlers = createHostHandlers({
+    ...deps,
+    pty: { ...deps.pty, get: () => ({}), on: () => () => {} } as never,
+    processMonitor: monitor,
+  });
+  for (const name of names) {
+    expect(handlers.methods[name]).toBeTypeOf('function');
+    expect(WORKS_GATED_METHODS as readonly string[]).not.toContain(name);
+  }
+  const client = { send: () => true } as never;
+  await handlers.methods['processes.subscribe']!({ ref } as never, { client } as unknown as RequestInfo);
+  expect(monitor.subscribe).toHaveBeenCalledTimes(1);
+  handlers.dropClient(client);
+  expect(stop).toHaveBeenCalledTimes(1);
 });

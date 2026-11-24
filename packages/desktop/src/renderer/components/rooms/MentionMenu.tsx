@@ -64,7 +64,7 @@ export function MentionMenu({ items, selected, reveal, onPick, onHover }: Mentio
             index === selected && 'bg-[color-mix(in_srgb,var(--color-text)_9%,transparent)]',
           )}
         >
-          <AgentIcon provider={member.provider} size={16} />
+          <AgentIcon provider={member.provider} size={16} sessionId={member.id} />
           <span className="min-w-0 max-w-[70%] truncate font-semibold">{member.label}</span>
           {member.lead ? (
             <span title={S.rooms.lead} className="shrink-0 text-[11px] text-accent-700">

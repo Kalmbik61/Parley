@@ -160,7 +160,7 @@ test.describe('архив комнат и проектов, 800×500 с длин
     }
   };
 
-  test('(а) комната: Archive… с флажком → ссылка «1 archived room» → архивная строка и вкладка только для чтения → Reopen', async () => {
+  test('(а) комната: Archive… с флажком → заголовок «Archived rooms» → архивная строка и вкладка только для чтения → Reopen', async () => {
     test.setTimeout(120_000);
     const window = await launch();
     const { workId } = await call<{ workId: string }>(window, 'works.create', { projectPath: project, title: LONG_WORK, goal: '' });
@@ -195,15 +195,17 @@ test.describe('архив комнат и проектов, 800×500 с длин
     expect(archivedMap.messages.some((message) => message.roomId === roomId && message.text === 'Room archived by the human.')).toBe(true);
     await expect.poll(async () => (await mapOf(workId)).sessions.map((session) => session.lifecycle)).toEqual(['sleeping', 'sleeping', 'sleeping']);
 
-    // Комната ушла из строк, внизу карточки — ссылка.
+    // Комната ушла из строк, внизу карточки — заголовок блока «Archived rooms».
     await expect(openRow).toHaveCount(0);
-    await expect(archivedLink).toHaveText('1 archived room');
+    await expect(archivedLink).toHaveText('Archived rooms1');
+    await expect(archivedLink).toHaveAttribute('aria-expanded', 'false');
     await expect(archivedList).toHaveCount(0);
-    expect(await sidebarProblems(window, 'a2 ссылка «1 archived room»')).toEqual([]);
+    expect(await sidebarProblems(window, 'a2 заголовок «Archived rooms»')).toEqual([]);
 
-    // Раскрытие: приглушённая строка архивной комнаты; подпись ссылки меняется.
+    // Раскрытие: приглушённая строка архивной комнаты; подпись заголовка та же, меняется aria-expanded.
     await archivedLink.click();
-    await expect(archivedLink).toHaveText('Hide archived rooms');
+    await expect(archivedLink).toHaveAttribute('aria-expanded', 'true');
+    await expect(archivedLink).toHaveText('Archived rooms1');
     const archivedRow = archivedList.locator(`[data-room-row="${roomId}"]`);
     await expect(archivedRow).toHaveCount(1);
     await expect(archivedRow).toHaveAttribute('data-dimmed', '');
@@ -262,8 +264,8 @@ test.describe('архив комнат и проектов, 800×500 с длин
     await expect(again).toBeHidden();
     await expect.poll(async () => (await mapOf(workId)).rooms[0]?.archivedAt ?? null).not.toBeNull();
     await expect(archivedLink).toBeVisible();
-    // Раскрытие помнится по работе: строка уже под ссылкой или ссылка предлагает её раскрыть.
-    if ((await archivedLink.textContent()) !== 'Hide archived rooms') await archivedLink.click();
+    // Раскрытие помнится по работе: блок уже раскрыт или заголовок предлагает его раскрыть.
+    if ((await archivedLink.getAttribute('aria-expanded')) !== 'true') await archivedLink.click();
     await expect(archivedRow).toHaveCount(1);
     await archivedRow.locator('> div').first().click({ button: 'right' });
     await window.locator('[data-room-action="reopen"]').click();

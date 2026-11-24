@@ -1,5 +1,5 @@
 /**
- * Режим помощника `parley-mcp` (спека 2026-10-14, 7.1): четырнадцать инструментов разговора, а `link_request` и `request_status` только для
+ * Режим помощника `parley-mcp` (спека 2026-10-14, 7.1): пятнадцать инструментов разговора, а `link_request` и `request_status` только для
  * job, каждый — POST в маршрут хоста `/assistant/<имя>` с токеном. Карту работ сервер сам не читает: всё знает хост.
  */
 
@@ -270,6 +270,18 @@ export const ASSISTANT_TOOLS: Tool[] = [
     },
   },
   {
+    name: 'action_status',
+    description:
+      'Read the outcome of an action that Parley ran right away for you. Call it when a propose_* tool answered "Still running" with an action id: it waits for the action to end for a while and tells what was done, or answers "Still running" again. Only the run that started the action can read it. It never runs or repeats anything.',
+    inputSchema: {
+      type: 'object',
+      properties: { id: { type: 'string', description: 'The action id from the "Still running" answer, for example p12.' } },
+      required: ['id'],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true },
+  },
+  {
     name: 'schedule_check',
     description:
       'Ask Parley to wake you later to check something; say the time back to the person. This is not a card. Give in_minutes (from now) or at (a local time), and every_minutes to repeat. what is what to check and report.',
@@ -359,6 +371,7 @@ export const JOB_TOOL_ALLOWLIST: readonly string[] = [
   'propose_decision',
   'propose_room_decision',
   'propose_actions',
+  'action_status',
   'link_request',
   'request_status',
 ];
@@ -382,6 +395,7 @@ export const JOB_CANCEL_SAFE_TOOLS: readonly string[] = [
   'propose_decision',
   'propose_room_decision',
   'propose_actions',
+  'action_status',
   'link_request',
   'request_status',
 ];
@@ -390,8 +404,27 @@ export interface AssistantServerOptions {
   /** База маршрута хоста (`PARLEY_ASSISTANT_URL`), без завершающего `/`. */
   url: string;
   token: string;
+  /** `'auto'` — автономный режим (`PARLEY_ASSISTANT_MODE`): описания `propose_*` без карточки. */
+  mode?: 'auto';
   /** Для тестов. */
   fetch?: typeof fetch;
+}
+
+const AUTO_TAIL = 'Autonomous mode is on: Parley does this at once, without a card. The reply says what happened and whether a retry is allowed.';
+
+/** Автономный режим: хвост описания о карточке заменён; прочие описания и порядок те же. */
+const AUTO_DESCRIPTIONS: Readonly<Record<string, ReadonlyArray<readonly [string, string]>>> = {
+  propose_message: [[' after the person confirms.', ' when it is sent.'], [' Nothing is sent: the person sees a card and confirms or cancels it.', ` ${AUTO_TAIL}`]],
+  propose_room: [[' Nothing is created: the person sees a card and confirms or cancels it.', ` ${AUTO_TAIL}`]],
+  propose_decision: [[' Nothing is decided: the person sees a card and confirms or cancels it.', ` ${AUTO_TAIL}`]],
+  propose_room_decision: [[' Nothing is decided: the person sees a card and confirms or cancels it.', ` ${AUTO_TAIL}`]],
+  propose_actions: [['Prepare one card with a plan of actions; the person confirms it with the card\'s button.', 'Prepare one plan of actions.'], [' Nothing happens until the person clicks.', ` ${AUTO_TAIL}`]],
+};
+
+function autoTool(tool: Tool): Tool {
+  const edits = AUTO_DESCRIPTIONS[tool.name];
+  if (edits === undefined) return tool;
+  return { ...tool, description: edits.reduce((text, [from, to]) => text.replace(from, to), tool.description ?? '') };
 }
 
 /** Transport-only JSON envelope: core does not depend on the host protocol package. */
@@ -404,10 +437,13 @@ const failure = (text: string): ToolResult => ({ content: [{ type: 'text', text 
 export function createAssistantServer(options: AssistantServerOptions): Server {
   const call = options.fetch ?? fetch;
   const server = new Server({ name: ASSISTANT_MCP_NAME, version: '0.0.0' }, { capabilities: { tools: {} } });
+  // action_status нужен только автономному запуску: без режима модель видит те же инструменты, что и раньше.
+  const offered = options.mode === 'auto' ? ASSISTANT_TOOLS : ASSISTANT_TOOLS.filter((tool) => tool.name !== 'action_status');
   const tools = options.token.startsWith(JOB_TOKEN_PREFIX)
-    ? ASSISTANT_TOOLS.filter((tool) => JOB_TOOL_ALLOWLIST.includes(tool.name))
-    : ASSISTANT_TOOLS.filter((tool) => !JOB_ONLY_TOOLS.includes(tool.name));
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
+    ? offered.filter((tool) => JOB_TOOL_ALLOWLIST.includes(tool.name))
+    : offered.filter((tool) => !JOB_ONLY_TOOLS.includes(tool.name));
+  const listed = options.mode === 'auto' ? tools.map(autoTool) : tools;
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: listed }));
   server.setRequestHandler(CallToolRequestSchema, async (request): Promise<ToolResult> => {
     const name = request.params.name;
     if (!tools.some((tool) => tool.name === name)) return failure(`unknown tool ${name}`);

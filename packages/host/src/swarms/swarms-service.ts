@@ -27,15 +27,20 @@ import {
   limitsFromConfig,
   liveLead,
   loadConfig,
+  memberOutcome,
   parleyNote,
+  swarmDeadline,
   swarmOfSession,
   swarmProgress,
   updateMap,
 } from '@parley/core';
-import type { LetterTx, ResourceLimits, SwarmStatus, WorkMap, WorkSession, WorkSwarm } from '@parley/core';
+import type { LetterTx, ResourceLimits, SwarmStatus, WorkMap, WorkSession, WorkSwarm, WorkSwarmMember } from '@parley/core';
 import { refKey } from '@parley/protocol';
 import type { NoticeKind, SessionRef } from '@parley/protocol';
 import type { HostContext } from '../context.js';
+import { waveLetter } from './briefs.js';
+import type { WaveEntry } from './briefs.js';
+import { memberName } from './spawn.js';
 import type { SessionsService } from '../sessions/sessions-service.js';
 import type { AutoSleepService } from '../sleep/auto-sleep-service.js';
 import type { WorksService } from '../works/works-service.js';
@@ -44,12 +49,17 @@ import type { WorksService } from '../works/works-service.js';
 export const SWARM_TICK_MS = 30_000;
 /** Сколько после `expiredAt` ждать `report` королевы, прежде чем отдать итог без сводки (3.0). */
 export const SWARM_EXPIRY_GRACE_MS = 10 * 60_000;
+/** Трутень спит без итога столько от `endedAt`: считается сданным с неудачей, рой не ждёт его до конца срока. */
+export const DRONE_SILENT_MS = 2 * 60_000;
+
+/** Пределы роя, которые читает сервис: срок жизни и число сессий (остаток в письме конца волны). */
+type SwarmLimits = Pick<ResourceLimits, 'swarmMinutes' | 'swarmSessions'>;
 
 export interface SwarmsServiceOptions {
   /** Часы; тесты подставляют свои. */
   now?: () => number;
   /** Срок жизни роя; по умолчанию из настроек хоста. */
-  limits?: () => Promise<Pick<ResourceLimits, 'swarmMinutes'>>;
+  limits?: () => Promise<SwarmLimits>;
 }
 
 export interface SwarmsService {
@@ -94,9 +104,11 @@ function elapsed(swarm: WorkSwarm, endMs: number): string {
 const isLive = (session: WorkSession | undefined): session is WorkSession =>
   session !== undefined && session.lifecycle !== 'closed';
 
-/** Участник уже не работает: сдал, упал, закрыт или удалён. */
-function isSettled(session: WorkSession | undefined, handedAt: string | null): boolean {
-  return handedAt !== null || session === undefined || session.lifecycle === 'closed' || session.result === 'failed';
+/** Участник уже не работает: сдал, упал, закрыт, удалён или спит без итога не меньше `DRONE_SILENT_MS` от `endedAt`. */
+function isSettled(session: WorkSession | undefined, handedAt: string | null, nowMs: number): boolean {
+  if (handedAt !== null || session === undefined || session.lifecycle === 'closed' || session.result === 'failed') return true;
+  return session.lifecycle === 'sleeping' && session.result === null && session.endedAt !== null &&
+    nowMs - Date.parse(session.endedAt) >= DRONE_SILENT_MS;
 }
 
 /** Итог просроченного роя ушёл без сводки, а королева потом сдала `report` со сводкой. */
@@ -165,7 +177,11 @@ export function createSwarmsService(
   function deliveryText(swarm: WorkSwarm, endMs: number): string {
     const { handed, total } = swarmProgress(swarm);
     const verdict = swarm.status === 'done' ? 'done' : swarm.status === 'cancelled' ? 'cancelled' : 'failed';
-    const head = `Swarm ${swarm.id} [${swarm.tag}] ${verdict}, ${handed}/${total} handed in, ${elapsed(swarm, endMs)}`;
+    // Частичные сдачи называем всегда (3.6): итог видит и человек, даже если королева о них умолчала. `declared` — это история
+    // самооценок, а не остаток дыр: продолжатель мог закрыть пробел.
+    const partial = swarm.members.filter((member) => memberOutcome(member, undefined) === 'partial').length;
+    const declared = partial === 0 ? '' : ` (${partial} declared partial)`;
+    const head = `Swarm ${swarm.id} [${swarm.tag}] ${verdict}, ${handed}/${total} handed in${declared}, ${elapsed(swarm, endMs)}`;
     const reason = swarm.status === 'done' || swarm.failure === null ? '' : `\nReason: ${swarm.failure}`;
     const summary = swarm.result?.summary ?? '';
     const tail = `\n\nThe queen's full report: get_map {session: "${swarm.queen}", field: "summary"}`;
@@ -201,7 +217,7 @@ export function createSwarmsService(
     letters: LetterTx,
     swarm: WorkSwarm,
     projectPath: string,
-    limits: Pick<ResourceLimits, 'swarmMinutes'> | null,
+    limits: SwarmLimits | null,
     effects: Effects,
   ): void {
     const nowMs = now();
@@ -252,10 +268,31 @@ export function createSwarmsService(
       } else if (
         swarm.status === 'running' &&
         workers.length > 0 &&
-        workers.every((member) => isSettled(sessionOf(member.sessionId), member.handedAt))
+        workers.every((member) => isSettled(sessionOf(member.sessionId), member.handedAt, nowMs))
       ) {
         swarm.status = 'collecting';
-        noteQueen(letters, queen, `All members of swarm ${swarm.id} have handed in. Write the summary: call report with the combined result.`, at);
+        // Волна (3.5): участники после `announced`; граница — счётчик, а не время. `announced` стоит в этой же записи.
+        const announced = swarm.announced ?? 0;
+        const entry = (member: WorkSwarmMember): WaveEntry => ({
+          name: memberName(member.role, member.n),
+          sessionId: member.sessionId,
+          slice: member.slice ?? null,
+          outcome: memberOutcome(member, sessionOf(member.sessionId)),
+        });
+        const wave = swarm.members.slice(announced).filter((member) => member.role !== 'queen').map(entry);
+        const earlierNotClosed = swarm.members.slice(0, announced).filter(
+          (member) => member.role !== 'queen' && entry(member).outcome !== 'covered',
+        ).length;
+        const deadline = limits === null ? null : swarmDeadline(swarm, limits);
+        const left = limits === null
+          ? null
+          : {
+              sessions: Math.max(0, limits.swarmSessions - swarm.members.length),
+              swarmSessions: limits.swarmSessions,
+              minutes: deadline === null ? null : Math.max(0, Math.ceil((deadline - nowMs) / 60_000)),
+            };
+        swarm.announced = swarm.members.length;
+        noteQueen(letters, queen, waveLetter({ swarmId: swarm.id, wave, earlierNotClosed, left }), at);
       }
     }
 
@@ -330,7 +367,7 @@ export function createSwarmsService(
     return sleep;
   }
 
-  async function reconcileWork(projectPath: string, workId: string, limits: Pick<ResourceLimits, 'swarmMinutes'> | null): Promise<void> {
+  async function reconcileWork(projectPath: string, workId: string, limits: SwarmLimits | null): Promise<void> {
     const effects: Effects = { close: [], sleep: [], notices: [] };
     await updateMap(projectPath, workId, (map, letters) => {
       for (const swarm of map.swarms ?? []) reconcileSwarm(map, letters, swarm, projectPath, limits, effects);
@@ -367,15 +404,21 @@ export function createSwarmsService(
       again = true;
       return running;
     }
-    running = (async () => {
-      do {
-        again = false;
-        await pass();
-      } while (again && !stopped);
-    })().finally(() => {
-      running = null;
-    });
-    return running;
+    // `running` сбрасывается в том же шаге, где цикл решил выйти: сброс в `.finally` оставлял окно в несколько микрозадач,
+    // и вызов из него ставил `again` уже после проверки, а получал обещание, которое никакого прохода больше не сделает.
+    // `await pass()` всегда уступает ход, поэтому `finally` не сработает раньше присваивания ниже.
+    const current = (async () => {
+      try {
+        do {
+          again = false;
+          await pass();
+        } while (again && !stopped);
+      } finally {
+        running = null;
+      }
+    })();
+    running = current;
+    return current;
   }
 
   const trigger = (): void => {

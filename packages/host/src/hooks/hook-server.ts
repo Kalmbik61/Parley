@@ -14,7 +14,7 @@ import { randomBytes } from 'node:crypto';
 import { createServer } from 'node:http';
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import type { AddressInfo, Socket } from 'node:net';
-import { CODEX_HOOK_EVENTS, FEED_HOOK_EVENTS } from '@parley/core';
+import { byFamily, CODEX_HOOK_EVENTS, FEED_HOOK_EVENTS, QWEN_HOOK_EVENTS } from '@parley/core';
 import { refKey } from '@parley/protocol';
 import type { SessionRef } from '@parley/protocol';
 import type { Log } from '../log.js';
@@ -34,18 +34,50 @@ const CLOSE_FLUSH_MS = 1_000;
 
 const FEED_EVENTS: ReadonlySet<string> = new Set(FEED_HOOK_EVENTS);
 const CODEX_EVENTS: ReadonlySet<string> = new Set(CODEX_HOOK_EVENTS);
+/** Qwen Code: the events its per-session system settings file sends (spec 2026-11-11, 3.3). */
+const QWEN_EVENTS: ReadonlySet<string> = new Set(QWEN_HOOK_EVENTS);
+/** Neutral family: no hook event is accepted. */
+const NO_EVENTS: ReadonlySet<string> = new Set();
 
 /** Принятое событие хука одной сессии. */
 export interface HookRequest {
   ref: SessionRef;
   /** stdin-JSON Claude Code как есть; `hook_event_name` — из `FEED_HOOK_EVENTS`. */
   body: Record<string, unknown>;
+  /** Ревизия агента запуска (`PARLEY_AGENT_REVISION`), под которым выдан токен; `undefined` — запуск без неё. */
+  agentRevision?: string;
   /** Ответ хуку (200, JSON). Второй и следующие вызовы ничего не делают. */
   respond(json: HookResponse): void;
+  /** Запрос уже отвечен кем-то (в том числе `{}` при закрытии сервера) или закрыт другой стороной: новый ответ ничего не отправит. */
+  answered(): boolean;
   /**
    * Запрос закрыт другой стороной раньше ответа (CLI оборвал хук, процесс вышел). Слушатель
    * вызывается один раз и только если ответа ещё не было.
    */
+  onAbandon(listener: () => void): void;
+}
+
+/**
+ * Запрос к защищённому пути приёмника (`guarded`). Токен запуска, заголовок сессии и предел тела проверены той же точкой,
+ * что у `/hooks`; сессия взята из регистрации токена, а не из тела или заголовков запроса.
+ */
+export interface GuardedRequest {
+  /** Сессия из регистрации токена. */
+  ref: SessionRef;
+  /** Провайдер запуска, под которым выдан токен. */
+  provider: string;
+  agentRevision?: string;
+  /** Тело запроса как есть, уже в пределе. */
+  text: string;
+  /** Ответ 200 с JSON. Один: повтор ничего не делает; на выключении всем, кому не ответили, уходит `{}`. */
+  respond(json: unknown): void;
+  /** Отказ без тела, с логом хоста; соединение закрывается. */
+  reject(status: number, reason: string): void;
+  /** Закрывает соединение без ответа (испытательный сбой). */
+  destroy(): void;
+  /** Запрос уже отвечен, отвергнут или закрыт другой стороной. */
+  answered(): boolean;
+  /** Соединение закрыто раньше ответа: слушатель зовётся один раз. */
   onAbandon(listener: () => void): void;
 }
 
@@ -59,6 +91,11 @@ export interface HookServerOptions {
    * пути; обработчик сам проверяет свой токен, читает тело и отвечает.
    */
   routes?: Readonly<Record<string, (req: IncomingMessage, res: ServerResponse) => void>>;
+  /**
+   * Пути, которым приёмник сам проверяет доступ так же, как `/hooks` (только POST, точное совпадение): токен запуска →
+   * регистрация, `X-Parley-Session` сверяется с ней, тело не больше `bodyLimit`. Обработчик получает уже проверенный запрос.
+   */
+  guarded?: Readonly<Record<string, (request: GuardedRequest) => void>>;
 }
 
 export interface HookServer {
@@ -73,7 +110,7 @@ export interface HookServer {
    * отзывается. `providerSessionId` — id сессии у Claude Code; `null` — сверять `session_id` не с чем,
    * первый принятый хук его запомнит. `provider` задаёт набор принимаемых событий (у Codex свой).
    */
-  register(ref: SessionRef, providerSessionId: string | null, provider?: string): string;
+  register(ref: SessionRef, providerSessionId: string | null, provider?: string, agentRevision?: string): string;
   /** Отзывает токен сессии: её хуки дальше — 401. */
   unregister(ref: SessionRef): void;
   /** `{}` всем висящим запросам, затем закрывает сервер и все соединения. */
@@ -86,8 +123,10 @@ interface Registration {
   ref: SessionRef;
   token: string;
   providerSessionId: string | null;
+  provider: string;
   /** События, которые принимает этот запуск: у Claude Code и Codex наборы разные. */
   events: ReadonlySet<string>;
+  agentRevision?: string;
 }
 
 /** Строка заголовка: у повторённого заголовка Node отдаёт массив — такой не принимаем. */
@@ -105,7 +144,7 @@ export function createHookServer(options: HookServerOptions): HookServer {
   const byToken = new Map<string, Registration>();
   const tokenOfSession = new Map<string, string>();
   /** Запросы, которым ещё не ответили: на выключении получают `{}`. */
-  const open = new Map<(json: HookResponse) => void, ServerResponse>();
+  const open = new Map<(json: unknown) => void, ServerResponse>();
   let address: string | null = null;
   let base: string | null = null;
   let closing: Promise<void> | null = null;
@@ -155,21 +194,42 @@ export function createHookServer(options: HookServerOptions): HookServer {
       route(req, res);
       return;
     }
-    if (req.method !== 'POST' || pathname !== HOOK_PATH) {
+    const guarded =
+      req.method === 'POST' && options.guarded !== undefined && Object.hasOwn(options.guarded, pathname)
+        ? options.guarded[pathname]
+        : undefined;
+    if (guarded === undefined && (req.method !== 'POST' || pathname !== HOOK_PATH)) {
       reject(req, res, 404, 'route');
       return;
     }
+    // Единая точка проверки: токен запуска → регистрация, заголовок сессии сверяется с ней, предел тела. Путь пакета и `/hooks`
+    // проходят её одинаково; сессию дальше называет только регистрация.
+    const registration = authorize(req, res);
+    if (registration === undefined) return;
+    readBody(req, res, (text) => {
+      if (guarded === undefined) accept(req, res, registration, text);
+      else acceptGuarded(req, res, registration, text, guarded);
+    });
+  }
+
+  /** Токен из `Authorization` → регистрация; `X-Parley-Session` совпадает с её сессией. Иначе отказ и `undefined`. */
+  function authorize(req: IncomingMessage, res: ServerResponse): Registration | undefined {
     const auth = headerOf(req, 'authorization');
     const token = auth?.startsWith('Bearer ') === true ? auth.slice('Bearer '.length).trim() : '';
     const registration = token === '' ? undefined : byToken.get(token);
     if (registration === undefined) {
       reject(req, res, 401, 'token');
-      return;
+      return undefined;
     }
     if (headerOf(req, 'x-parley-session') !== registration.ref.sessionId) {
       reject(req, res, 404, 'session-header');
-      return;
+      return undefined;
     }
+    return registration;
+  }
+
+  /** Тело не больше `bodyLimit` (по заголовку и по прочитанному); слишком большое — 413 и закрытое соединение. */
+  function readBody(req: IncomingMessage, res: ServerResponse, done: (text: string) => void): void {
     const declared = Number(headerOf(req, 'content-length') ?? '0');
     if (Number.isFinite(declared) && declared > bodyLimit) {
       reject(req, res, 413, 'body-size');
@@ -198,12 +258,77 @@ export function createHookServer(options: HookServerOptions): HookServer {
     req.on('end', () => {
       if (rejected) return;
       try {
-        accept(req, res, registration, Buffer.concat(chunks, size).toString('utf8'));
+        done(Buffer.concat(chunks, size).toString('utf8'));
       } catch (error) {
         log.warn('приёмник хуков: сбой обработки события', { error: String(error) });
         if (!res.headersSent) reject(req, res, 400, 'internal');
       }
     });
+  }
+
+  /** Учёт открытого запроса: один ответ, `{}` на выключении, слушатель обрыва. Общий у `/hooks` и защищённых путей. */
+  function track(res: ServerResponse): {
+    respond(json: unknown): void;
+    answered(): boolean;
+    onAbandon(listener: () => void): void;
+  } {
+    let answered = false;
+    let abandon: (() => void) | null = null;
+    const respond = (json: unknown): void => {
+      if (answered) return;
+      answered = true;
+      open.delete(respond);
+      if (res.writableEnded || res.destroyed) return;
+      const payload = JSON.stringify(json);
+      res.writeHead(200, {
+        'Content-Type': 'application/json',
+        'Content-Length': String(Buffer.byteLength(payload)),
+      });
+      res.end(payload);
+    };
+    open.set(respond, res);
+    res.on('close', () => {
+      if (answered) return;
+      answered = true;
+      open.delete(respond);
+      abandon?.();
+    });
+    // Сбой записи ответа (CLI закрыл сокет первым) — не повод падать: `close` уже всё снял.
+    res.on('error', () => {});
+    return {
+      respond,
+      answered: () => answered,
+      onAbandon(listener) {
+        abandon = listener;
+      },
+    };
+  }
+
+  function acceptGuarded(
+    req: IncomingMessage,
+    res: ServerResponse,
+    registration: Registration,
+    text: string,
+    handler: (request: GuardedRequest) => void,
+  ): void {
+    const tracked = track(res);
+    const request: GuardedRequest = {
+      ref: registration.ref,
+      provider: registration.provider,
+      ...(registration.agentRevision === undefined ? {} : { agentRevision: registration.agentRevision }),
+      text,
+      respond: tracked.respond,
+      reject: (status, reason) => reject(req, res, status, reason),
+      destroy: () => req.socket.destroy(),
+      answered: tracked.answered,
+      onAbandon: tracked.onAbandon,
+    };
+    try {
+      handler(request);
+    } catch (error) {
+      log.warn('приёмник хуков: обработчик защищённого пути упал', { error: String(error) });
+      tracked.respond({});
+    }
   }
 
   function accept(
@@ -248,37 +373,14 @@ export function createHookServer(options: HookServerOptions): HookServer {
       registration.providerSessionId = sessionId;
     }
 
-    let answered = false;
-    let abandon: (() => void) | null = null;
-    const respond = (json: HookResponse): void => {
-      if (answered) return;
-      answered = true;
-      open.delete(respond);
-      if (res.writableEnded || res.destroyed) return;
-      const payload = JSON.stringify(json);
-      res.writeHead(200, {
-        'Content-Type': 'application/json',
-        'Content-Length': String(Buffer.byteLength(payload)),
-      });
-      res.end(payload);
-    };
-    open.set(respond, res);
-    res.on('close', () => {
-      if (answered) return;
-      answered = true;
-      open.delete(respond);
-      abandon?.();
-    });
-    // Сбой записи ответа (CLI закрыл сокет первым) — не повод падать: `close` уже всё снял.
-    res.on('error', () => {});
-
+    const { respond, answered, onAbandon } = track(res);
     const request: HookRequest = {
       ref: registration.ref,
       body,
+      ...(registration.agentRevision === undefined ? {} : { agentRevision: registration.agentRevision }),
       respond,
-      onAbandon(listener) {
-        abandon = listener;
-      },
+      answered,
+      onAbandon,
     };
     try {
       options.onHook(request);
@@ -309,7 +411,7 @@ export function createHookServer(options: HookServerOptions): HookServer {
     },
     url: () => address,
     origin: () => base,
-    register(ref, providerSessionId, provider = 'claude') {
+    register(ref, providerSessionId, provider = 'claude', agentRevision) {
       const key = refKey(ref);
       const previous = tokenOfSession.get(key);
       if (previous !== undefined) byToken.delete(previous);
@@ -318,7 +420,9 @@ export function createHookServer(options: HookServerOptions): HookServer {
         ref: { ...ref },
         token,
         providerSessionId,
-        events: provider === 'codex' ? CODEX_EVENTS : FEED_EVENTS,
+        provider,
+        events: byFamily(provider, { claude: FEED_EVENTS, codex: CODEX_EVENTS, qwen: QWEN_EVENTS, opencode: NO_EVENTS, neutral: NO_EVENTS }),
+        ...(agentRevision === undefined ? {} : { agentRevision }),
       });
       tokenOfSession.set(key, token);
       return token;

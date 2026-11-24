@@ -86,7 +86,14 @@ interface RawOptions {
   signal?: AbortSignal;
 }
 
-async function boot(options: { now?: () => number; pollMs?: number } = {}) {
+async function boot(
+  options: {
+    now?: () => number;
+    pollMs?: number;
+    onList?: (ref: SessionRef, generation: number | null) => void;
+    generationOf?: (ref: SessionRef) => number | null;
+  } = {},
+) {
   const registry = createBrowserEndpoint({ log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() }, clients: () => [], roomsOf: () => [] });
   const ref: SessionRef = { projectPath: project, workId, sessionId: 's-01' };
   const ownToken = registry.register(ref);
@@ -122,6 +129,8 @@ async function boot(options: { now?: () => number; pollMs?: number } = {}) {
     contextFor,
     log,
     ...(options.now === undefined ? {} : { now: options.now }),
+    ...(options.onList === undefined ? {} : { onList: options.onList }),
+    ...(options.generationOf === undefined ? {} : { generationOf: options.generationOf }),
   });
   // Закрытия соединений считает сам тест: его слушатель `close` ставится раньше хостового, и когда счётчик вырос,
   // обработчик хоста этого же закрытия уже отработал.
@@ -392,6 +401,70 @@ describe('маршрут /agent/tools: инструменты агента в п
     notifyMail();
     expect(JSON.parse(textOf(await pending))).toMatchObject({ state: 'message' });
     await expect.poll(() => waiters() + mailWaiters(), POLL).toBe(0);
+  });
+
+  it('a served tool list tells the host the session\'s MCP client is connected; a refused one does not', async () => {
+    const listed: SessionRef[] = [];
+    const { post, raw, ref, contextFor } = await boot({ onList: (from) => listed.push(from) });
+    expect((await raw({ op: 'list', launch: {} }, { token: null })).status).toBe(401);
+    contextFor.mockImplementationOnce(async () => {
+      throw new Error('settings are unreadable');
+    });
+    await post({ op: 'list', launch: {} });
+    expect(listed).toEqual([]);
+    expect(toolNames(await post({ op: 'list', launch: {} }))).toContain('get_map');
+    expect(listed).toEqual([ref]);
+  });
+
+  /** A list whose executor waits for `release`: the request is pending while the test revokes, closes or restarts. */
+  async function pendingList(options: { generationOf?: (ref: SessionRef) => number | null } = {}) {
+    const listed: Array<{ ref: SessionRef; generation: number | null }> = [];
+    const booted = await boot({ ...options, onList: (from, generation) => listed.push({ ref: from, generation }) });
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    booted.contextFor.mockImplementationOnce(async (target, launch) => {
+      await gate;
+      return booted.standard(target, launch);
+    });
+    return { ...booted, listed, release };
+  }
+
+  it('a list answered after the token was revoked is 401 and does not certify anyone (Qwen readiness)', async () => {
+    const { raw, registry, ref, contextFor, listed, release } = await pendingList();
+    const pending = raw({ op: 'list', launch: {} });
+    await expect.poll(() => contextFor.mock.calls.length, POLL).toBe(1);
+    registry.unregister(ref);
+    // The restarted process gets its own token; the old request still must not count for it.
+    registry.register(ref);
+    release();
+    expect((await pending).status).toBe(401);
+    expect(listed).toEqual([]);
+  });
+
+  it('a list whose connection closed while it ran does not certify anyone', async () => {
+    const { raw, contextFor, closes, listed, release } = await pendingList();
+    const controller = new AbortController();
+    const pending = raw({ op: 'list', launch: {} }, { signal: controller.signal }).catch(() => null);
+    await expect.poll(() => contextFor.mock.calls.length, POLL).toBe(1);
+    controller.abort();
+    await pending;
+    await expect.poll(() => closes(), POLL).toBe(1);
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(listed).toEqual([]);
+  });
+
+  it('a served list reports the generation the request arrived in, not the one current when it was answered', async () => {
+    let generation = 1;
+    const { post, ref, contextFor, listed, release } = await pendingList({ generationOf: () => generation });
+    const pending = post({ op: 'list', launch: {} });
+    await expect.poll(() => contextFor.mock.calls.length, POLL).toBe(1);
+    generation = 2;
+    release();
+    expect(toolNames(await pending)).toContain('get_map');
+    expect(listed).toEqual([{ ref, generation: 1 }]);
   });
 
   it('answers a failure to build the executor with ok: false internal, and the next request builds it again', async () => {

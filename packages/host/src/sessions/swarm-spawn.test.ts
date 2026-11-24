@@ -36,7 +36,7 @@ const fakeWorks = (): WorksService => ({
   firstReadDone: () => false, onChange: () => () => {}, stop: async () => {},
 });
 const fakeActivity = (): ActivityService => ({
-  start: async () => {}, get: () => undefined, markSeen: () => {}, onChange: () => () => {}, stop: async () => {},
+  start: async () => {}, get: () => undefined, markSeen: () => {}, logFile: () => null, onChange: () => () => {}, stop: async () => {},
 });
 
 let project = '';
@@ -74,8 +74,8 @@ const createSwarm = (by: string | null = caller, tag = 'Research', objective = '
     swarm: { kind: 'create', tag, objective },
   });
 
-const addMember = (by: string, role: 'drone' | 'verifier' = 'drone', label = '', task = 'Read packages/core'): Promise<SessionRef> =>
-  sessions.create({ projectPath: project, workId, ...base, label, task, requestedBy: by, swarm: { kind: 'add', role } });
+const addMember = (by: string, role: 'drone' | 'verifier' = 'drone', label = '', task = 'Read packages/core', slice: string | null = null): Promise<SessionRef> =>
+  sessions.create({ projectPath: project, workId, ...base, label, task, requestedBy: by, swarm: { kind: 'add', role, slice } });
 
 async function refusal(run: Promise<unknown>): Promise<HostError> {
   try { await run; } catch (error) { expect(error).toBeInstanceOf(HostError); return error as HostError; }
@@ -114,7 +114,7 @@ describe('create_swarm', () => {
     expect(session.task).toContain('sw-01');
     expect(session.task).toContain('swarm_add');
     expect(session.task).toContain('90 minutes');
-    expect(session.task).toContain('Wait for the Parley letter that all members have handed in');
+    expect(session.task).toContain('Wait for the Parley letter that the wave has finished');
     expect(after.resources).toMatchObject({ swarmsCreated: 1, swarmSpawned: 1, spawned: 0 });
     expect(after.resources?.recent?.map((entry) => [entry.kind, entry.room])).toEqual([['swarm', null], ['swarm-session', null]]);
   });
@@ -147,7 +147,7 @@ describe('create_swarm', () => {
 
   it('человеку нельзя swarm_add, движку — рой', async () => {
     await createSwarm();
-    const noCaller = await refusal(sessions.create({ projectPath: project, workId, ...base, label: '', task: 'x', swarm: { kind: 'add', role: 'drone' } }));
+    const noCaller = await refusal(sessions.create({ projectPath: project, workId, ...base, label: '', task: 'x', swarm: { kind: 'add', role: 'drone', slice: null } }));
     expect(noCaller.code).toBe('bad_request');
     const engine = await refusal(sessions.create({ projectPath: project, workId, ...base, label: '', task: 'x', requestedBy: ENGINE, swarm: { kind: 'create', tag: 'T', objective: 'x' } }));
     expect(engine.code).toBe('bad_request');
@@ -169,10 +169,22 @@ describe('swarm_add', () => {
     expect(member.createdBy).toBeUndefined();
     expect(member.task).toContain('Read packages/core');
     expect(member.task).toContain('Read only');
-    expect(member.task).toContain('report done');
+    expect(member.task).toContain('status done and `coverage`');
     expect(after.resources).toMatchObject({ swarmSpawned: 5, swarmsCreated: 1 });
     expect(after.resources?.recent?.filter((entry) => entry.kind === 'swarm-session')).toHaveLength(5);
     expect(after.resources?.recent?.filter((entry) => entry.kind === 'swarm')).toHaveLength(1);
+  });
+
+  it('срез участника пишется в запись вместе с coverage null; у королевы и без среза — null; announced стоит 0', async () => {
+    const queen = await createSwarm();
+    const sliced = await addMember(queen.sessionId, 'drone', '', 'Read packages/core', 'host/sessions');
+    const plain = await addMember(queen.sessionId, 'verifier');
+    const swarm = (await map()).swarms![0]!;
+    const entry = (ref: SessionRef) => swarm.members.find((member) => member.sessionId === ref.sessionId);
+    expect(entry(queen)).toMatchObject({ slice: null, coverage: null });
+    expect(entry(sliced)).toMatchObject({ slice: 'host/sessions', coverage: null, handedAt: null });
+    expect(entry(plain)).toMatchObject({ slice: null, coverage: null });
+    expect(swarm.announced).toBe(0);
   });
 
   it('не королева (посторонний, трутень) — not-queen, ничего не пишется', async () => {

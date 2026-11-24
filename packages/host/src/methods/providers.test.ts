@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -9,6 +9,7 @@ import type { RequestInfo } from '../context.js';
 import { startHost } from '../host.js';
 import type { HostOptions, RunningHost } from '../host.js';
 import { hostPaths } from '../paths.js';
+import { VERSION_NULL_TTL_MS } from '../providers/versions.js';
 import type { ProviderVersions } from '../providers/versions.js';
 import { createProvidersList } from './providers.js';
 
@@ -93,11 +94,20 @@ const byId = (providers: ProviderItem[], id: string): ProviderItem => {
 };
 
 describe('providers.list: модели, усилие и версия CLI (дизайн комнат, 3.2)', () => {
-  it('retries an unknown Codex version on list without restarting the host', async () => {
-    let codexCalls = 0;
-    const client = await boot({ probeVersion: async command => command === 'codex' ? (++codexCalls === 1 ? null : '0.162.0') : '2.1.300' });
-    expect(byId(await list(client), 'codex').version).toBe('0.162.0');
-    expect(codexCalls).toBe(2);
+  it('retries an unknown Codex version on list after the negative cache expires', async () => {
+    // Часы кэша версий — `Date.now`, снятый при старте хоста: фальшивая `Date` ставится до `boot`.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      let codexCalls = 0;
+      const client = await boot({ probeVersion: async command => command === 'codex' ? (++codexCalls === 1 ? null : '0.162.0') : '2.1.300' });
+      expect(byId(await list(client), 'codex').version).toBeNull();
+      expect(codexCalls).toBe(1);
+      vi.setSystemTime(Date.now() + VERSION_NULL_TTL_MS + 1);
+      expect(byId(await list(client), 'codex').version).toBe('0.162.0');
+      expect(codexCalls).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('claude, codex и glm принимают effort; GLM использует версию Claude Code', async () => {
@@ -112,12 +122,15 @@ describe('providers.list: модели, усилие и версия CLI (диз
     expect(byId(providers, 'codex')).toMatchObject({ label: 'Codex', effort: true, version: '0.44.0' });
     expect(byId(providers, 'glm')).toMatchObject({ label: 'GLM', effort: true, version: '2.1.276', available: false });
     expect(byId(providers, 'glm').models?.length).toBeGreaterThan(0);
+    expect(byId(providers, 'claude').family).toBe('claude');
+    expect(byId(providers, 'codex').family).toBe('codex');
+    expect(byId(providers, 'glm').family).toBe('claude');
     expect(typeof byId(providers, 'claude').available).toBe('boolean');
   });
 
   it('без пробы версий нет: null у всех — это окно и тесты, где команды не запускаются', async () => {
     const providers = await list(await boot());
-    expect(providers.map((provider) => provider.version)).toEqual([null, null, null]);
+    expect(providers.map((provider) => provider.version)).toEqual([null, null, null, null, null, null]);
   });
 
   it('проба падает — версия null, список отвечает', async () => {
@@ -131,7 +144,7 @@ describe('providers.list: модели, усилие и версия CLI (диз
     expect(providers.every((provider) => provider.version === null)).toBe(true);
   });
 
-  it('обычные версии кэшируются; GLM заново проверяет версию Claude Code при каждом list', async () => {
+  it('версии кэшируются по отпечатку бинаря: GLM берёт версию Claude Code из кэша, пока бинарь тот же', async () => {
     process.env['PARLEY_CLAUDE_BIN'] = process.execPath;
     extraEnv.push('PARLEY_CLAUDE_BIN');
     const calls: string[] = [];
@@ -145,7 +158,8 @@ describe('providers.list: модели, усилие и версия CLI (диз
     await list(client);
     await list(client);
     await list(client);
-    expect(calls.sort()).toEqual(['claude', 'claude', 'claude', 'claude', 'codex']);
+    expect(calls.filter((command) => command === 'claude')).toHaveLength(1);
+    expect([...new Set(calls)].sort()).toEqual(['claude', 'codex', 'kimi', 'opencode', 'qwen']);
   });
 
   it('первый providers.list дожидается пробы, а не отвечает пустой версией', async () => {
@@ -196,9 +210,9 @@ describe('providers.list: модели, усилие и версия CLI (диз
         providersJson: {
           codex: { models: [{ id: 'my-new-model', label: 'Моя новая' }] },
           // Свой провайдер без {model} в шаблоне: список окну не нужен — модель до команды не доедет.
-          opencode: {
-            badge: 'OpenCode',
-            command: 'opencode',
+          plain: {
+            badge: 'Plain',
+            command: 'plain',
             args: ['{prompt}'],
             models: [{ id: 'a', label: 'А' }],
           },
@@ -216,7 +230,7 @@ describe('providers.list: модели, усилие и версия CLI (диз
     );
 
     expect(byId(providers, 'codex').models).toEqual([{ id: 'my-new-model', label: 'Моя новая' }]);
-    expect(byId(providers, 'opencode')).toMatchObject({ models: null, effort: false });
+    expect(byId(providers, 'plain')).toMatchObject({ models: null, effort: false });
     expect(byId(providers, 'smart')).toMatchObject({ models: [{ id: 'fast', label: 'Быстрая' }], effort: true });
     expect(byId(providers, 'claude').models).toBeNull();
   });
@@ -307,8 +321,11 @@ describe('providers.list: лимиты подписок и событие provid
     ageMs = 0,
   ): Promise<void> {
     await mkdir(path.join(workDir, 'limits'), { recursive: true });
+    const file = path.join(workDir, 'limits', `${session}.json`);
+    // Как скрипт строки статуса: во временный файл и `rename`. Хост перечитывает каталог лимитов, только когда сменился
+    // его mtime, а запись на месте mtime каталога не меняет.
     await writeFile(
-      path.join(workDir, 'limits', `${session}.json`),
+      `${file}.tmp`,
       JSON.stringify({
         at: new Date(Date.now() - ageMs).toISOString(),
         rateLimits: {
@@ -317,6 +334,7 @@ describe('providers.list: лимиты подписок и событие provid
         },
       }),
     );
+    await rename(`${file}.tmp`, file);
   }
 
   /** Ближайшее событие `name`; не пришло за пять секунд — ошибка. Ожидание одно, брошенных нет. */
@@ -537,7 +555,7 @@ describe('providers.list: аккаунт подписки и состояние 
       custom: { kind: 'claude-account', link: false, signedIn: true, signingIn: false },
     });
     expect(row?.custom).toMatchObject({ folder: expect.stringContaining('custom-claude-2') });
-    expect(providers.map((provider) => provider.id)).toEqual(['claude', 'codex', 'glm', 'custom-claude-2']);
+    expect(providers.map((provider) => provider.id)).toEqual(['claude', 'codex', 'glm', 'qwen', 'opencode', 'kimi', 'custom-claude-2']);
     expect(asked).toEqual(['custom-claude-2']);
   });
 
@@ -549,5 +567,32 @@ describe('providers.list: аккаунт подписки и состояние 
     expect((await accountRows(null, true)).row).toMatchObject({
       available: false, needs: 'sign-in', custom: { signedIn: null, signingIn: true },
     });
+  });
+});
+
+
+describe('providers.list: Qwen Code sign-in hints (spec 2026-11-11, 3.6)', () => {
+  it('qwen carries hints only (presence and two non-secret strings); no secret leaves the host; other rows have none', async () => {
+    const qwenHome = await mkdtemp(path.join(tmpdir(), 'parley-qwen-home-'));
+    homes.push(qwenHome);
+    await writeFile(
+      path.join(qwenHome, 'settings.json'),
+      JSON.stringify({
+        security: { auth: { selectedType: 'openai', apiKey: 'SECRET-SETTINGS-KEY' } },
+        env: { OPENAI_API_KEY: 'SECRET-SETTINGS-ENV' },
+        modelProviders: [{ apiKey: 'SECRET-PROVIDER-KEY' }],
+        model: { name: 'qwen3-coder-plus' },
+      }),
+    );
+    await writeFile(path.join(qwenHome, 'oauth_creds.json'), '{"access_token":"SECRET-OAUTH"}');
+    process.env['QWEN_HOME'] = qwenHome;
+    process.env['OPENAI_API_KEY'] = 'SECRET-ENV-KEY';
+    extraEnv.push('QWEN_HOME', 'OPENAI_API_KEY');
+    await boot({});
+    const { providers } = await createProvidersList()({}, {} as RequestInfo);
+    const qwen = providers.find((provider) => provider.id === 'qwen');
+    expect(qwen?.qwenAuth).toEqual({ selectedType: 'openai', model: 'qwen3-coder-plus', oauthFilePresent: true, envKeyPresent: true, hint: 'configured' });
+    expect(JSON.stringify(providers)).not.toContain('SECRET');
+    expect(providers.filter((provider) => provider.id !== 'qwen').every((provider) => !('qwenAuth' in provider))).toBe(true);
   });
 });

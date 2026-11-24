@@ -94,25 +94,35 @@ export function codexUsageObservation(raw: RawRecord): UsageObservation | null {
 }
 
 /**
- * Один ledger: наблюдения родителя, затем подагентов с `child: true`. Запись агента, которую родитель
- * уже записал у себя: без общего id ответа она не склеивается, и чем из двух копий её считать, не
- * доказать — не учитывается, итог неполный (`markAmbiguous`).
+ * Наблюдение подагента в ledger родителя. Запись агента, которую родитель уже записал у себя: без общего id
+ * ответа она не склеивается, и чем из двух копий её считать, не доказать — не учитывается, итог неполный
+ * (`markAmbiguous`). Одно правило для полного проигрыша и для дочитывания новых наблюдений.
  */
+export function observeClaudeChild(
+  ledger: UsageLedger,
+  sidechain: ClaudeSidechain,
+  agentId: string | null,
+  observation: UsageObservation,
+): void {
+  const { agents, unidentified } = sidechain;
+  const unmerged = observation.kind === 'delta' && observation.id.startsWith('line:');
+  if ((agents.has(agentId) || agents.has(null)) && (unmerged || unidentified)) {
+    ledger.markAmbiguous();
+    return;
+  }
+  ledger.observe({ ...observation, child: true });
+}
+
+/** Один ledger: наблюдения родителя, затем подагентов с `child: true` (правило — `observeClaudeChild`). */
 export function replayClaudeUsage(
   ledger: UsageLedger,
   parent: { observations: readonly UsageObservation[]; sidechain: ClaudeSidechain },
   subagents: ReadonlyArray<{ agentId: string | null; observations: readonly UsageObservation[] }>,
 ): void {
   for (const observation of parent.observations) ledger.observe(observation);
-  const { agents, unidentified } = parent.sidechain;
   for (const subagent of subagents) {
     for (const observation of subagent.observations) {
-      const unmerged = observation.kind === 'delta' && observation.id.startsWith('line:');
-      if ((agents.has(subagent.agentId) || agents.has(null)) && (unmerged || unidentified)) {
-        ledger.markAmbiguous();
-        continue;
-      }
-      ledger.observe({ ...observation, child: true });
+      observeClaudeChild(ledger, parent.sidechain, subagent.agentId, observation);
     }
   }
 }

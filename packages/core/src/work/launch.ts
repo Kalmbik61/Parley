@@ -22,6 +22,7 @@ import { findRunnerBinary } from './find-binary.js';
 import { CLAUDE_LEAN_ENV, CLAUDE_LEAN_FLAGS, codexLeanFlags, readCodexMcpServerIds, readUserPluginIds } from './lean.js';
 import { writeNativeContext, writeNativeSkillCatalog, stampNativeContext, type NativeContextDescriptor } from './native-context.js';
 import { CLAUDE_PROJECTS_DIR_KEY, claudeProjectRoots } from '../discover.js';
+import { defaultQwenRoot, discoverQwenSessions } from '../qwen/discover.js';
 import { isServiceText, type SessionIndex } from '../session-index.js';
 import { bothEnv, envValue } from '../names.js';
 import { userClaudeConfigDir, wantLinks } from '../custom-provider-dir.js';
@@ -45,7 +46,7 @@ import type { RoleCatalog } from '../roles/types.js';
 import type { RequiredRolePermissions } from '../roles/catalog.js';
 import { CHANNEL_VALUE, NO_CHANNEL_WARNING } from './channel.js';
 import { loadBrief, writeBrief } from './brief.js';
-import { BROWSER_PRIORITY_RULE, CODEX_APPROVAL_GUIDANCE, CODEX_TOOL_EXAMPLES, linkedSettingsRule, systemGuidance } from './guidance.js';
+import { BROWSER_PRIORITY_RULE, CODEX_APPROVAL_GUIDANCE, CODEX_TOOL_EXAMPLES, OPENCODE_TOOL_EXAMPLES, linkedSettingsRule, systemGuidance } from './guidance.js';
 import { assignmentsBlock } from './plan-tasks.js';
 import { readGlobalParleyMd, readParleyMd } from './parley-md.js';
 import { readProjectMemory } from './project-memory.js';
@@ -54,12 +55,17 @@ import { leadRecipeBlock } from './recipe-lead.js';
 import { buildSessionLayer, developerInstructions, validateLayerArguments, type SessionLayerInput, type SessionLayerWarning } from './session-layer.js';
 import { addSession, isCodexThreadBinding, removeSession, transitionSession, type NewSession } from './map.js';
 import { NEW_LABEL } from './names.js';
-import { mcpConfigValue, writeMcpConfig, type AgentChannel } from './mcp-config.js';
-import { finishSession, linkProviderSession, type MetricsRoots } from './metrics.js';
-import { writeWorkSettings } from './settings-file.js';
+import { CLAUDE_MCP_AUTO_BACKGROUND_MS, mcpConfig, mcpConfigValue, writeMcpConfig, type AgentChannel } from './mcp-config.js';
+import { finishSession, linkProviderSession, type FinishOptions, type MetricsRoots } from './metrics.js';
+import { packetBridgeCommand, writeSessionSettings, writeWorkSettings } from './settings-file.js';
+import { ensureStateDir } from './state-dir.js';
+import { QWEN_SYSTEM_SETTINGS_ENV, writeQwenSettings } from './qwen-settings-file.js';
+import { OPENCODE_SERVER_URL_SLOT, opencodeServerEnv } from './opencode-config.js';
+import { opencodeRoleLaunch } from './opencode-role.js';
 import { CLAUDE_SKILL_BUDGET_ENV, CODEX_SKILL_CATALOG_OVERRIDE, claudeSkillReduction, codexSkillRoute } from './skill-reduction.js';
 import { isPointerText } from './delivery.js';
 import { createWork, deleteSessionFiles, parleyHome, readMap, SharedStateError, updateMap, workPaths } from './store.js';
+import { withTrialAssignment, type TrialProtocolOptions } from './trial-ledger.js';
 import type { LaunchedBy, WorkMap, WorkSession } from './types.js';
 
 /** Чего хочет запуск сверх самой сессии. */
@@ -111,6 +117,12 @@ export interface LaunchOptions {
    */
   codexHookCommand?: string;
   /**
+   * Мост пакета состояния комнаты (спека 2026-11-16, 3.5): запускатель `PARLEY_HOME/bin/parley-packet-hook` и адрес пути
+   * пакета приёмника хуков. Хост передаёт его при включённой настройке `roomPacket`; в файл настроек он попадает только у
+   * провайдера `claude` и только вместе с `hookUrl`. Нет поля — файл настроек как раньше.
+   */
+  packetBridge?: { launcher: string; url: string };
+  /**
    * Доверие к папке, которое хост выдал запуску Codex: `realpath` папки проекта и cwd сессии (спека 2026-10-21, 4.3).
    * С ним в шаблон ложится `{trust}` — `-c projects={…}` из `trustArgs`, и Codex не показывает экран доверия. Нет поля —
    * подстановка выпадает. Остальным провайдерам игнорируется.
@@ -153,6 +165,25 @@ export interface LaunchPlan {
   warnings: string[];
   /** Safe warning codes for host logging and deduplicated notices. */
   diagnostics?: Array<SessionLayerWarning | { code: 'role-missing'; message: string }>;
+  /**
+   * The first message of a new conversation that the runner cannot take as an argument: the host types it once the
+   * session is ready. Qwen Code only (spec 2026-11-11, 3.4 amendment): its `-i` turn would go out before its MCP
+   * discovery ends. Absent — nothing to type.
+   */
+  deferredPrompt?: string;
+  /**
+   * OpenCode 2.x (spec 2026-11-12, 4.2–4.3): the environment of the session's `opencode serve`, which the host starts
+   * before the TUI — the config documents and the update switch. `args` carry `OPENCODE_SERVER_URL_SLOT` where the
+   * host puts the server's address; the password is the host's own and never in the plan.
+   */
+  opencodeServer?: { env: Record<string, string> };
+  /** Kimi Code owns the session id and receives the Parley MCP server over ACP. */
+  kimiAcp?: {
+    sessionId?: string;
+    mcpServers: Array<{ type: 'stdio'; name: string; command: string; args: string[]; env: Array<{ name: string; value: string }> }>;
+    prompt?: string;
+    instructions?: string;
+  };
 }
 
 async function entryOf(provider: string): Promise<ProviderEntry> {
@@ -227,6 +258,29 @@ async function claudeConversationExists(id: string, roots: string[] = claudeProj
 }
 
 /**
+ * Is there a Qwen Code transcript for this id: the bound path (from `SessionStart`) or `<id>.jsonl` under
+ * `<qwenHome>/projects/*\/chats`. Qwen creates it with the first prompt, and `qwen --resume` of a session that slept before
+ * that fails, so such a session starts again with the same id (`--session-id`), as Claude's does. Like Claude's check, only
+ * an exact "no" counts: a history root that cannot be read leaves the plain `--resume`.
+ */
+async function qwenConversationExists(id: string, bound?: string): Promise<boolean> {
+  if (bound !== undefined) {
+    try {
+      if ((await stat(bound)).isFile()) return true;
+    } catch {
+      // The bound file is gone: look by id.
+    }
+  }
+  const root = defaultQwenRoot();
+  try {
+    await readdir(root);
+  } catch {
+    return true;
+  }
+  return (await discoverQwenSessions(root)).some((found) => found.id === id.toLowerCase());
+}
+
+/**
  * Корни, где искать разговор записи провайдера: известна своя папка конфигурации (аккаунт Claude, свой провайдер) —
  * только её `projects`, чтобы транскрипт чужого аккаунта не сошёл за свой. Подмена тестов и записи без своей
  * папки — все корни, как раньше.
@@ -298,7 +352,11 @@ async function plan(
     forkFrom !== undefined ||
     (mode === 'resume' &&
       session.providerSessionId !== null &&
-      (!isClaudeCode(entry) || (await claudeConversationExists(session.providerSessionId, conversationRoots(entry)))));
+      (isClaudeCode(entry)
+        ? await claudeConversationExists(session.providerSessionId, conversationRoots(entry))
+        : entry.runner.mcpConfig === 'qwen-system-settings'
+          ? await qwenConversationExists(session.providerSessionId, session.qwenTranscript?.path)
+          : true));
   let providerSessionId: string | null = null;
 
   // Navigator launches isolate the generated settings file per session; off keeps the work path.
@@ -317,8 +375,12 @@ async function plan(
 
   // Нативная роль Claude берёт список инструментов у себя: Skill и `find_skill` ей не гарантированы (спека, 6.1).
   const nativeClaudeRole = !workspace && (role.nativeAgent !== null || (isClaudeCode(entry) && options.layer?.nativeClaudeRole === true));
-  // Сервер `parley`, а с ним `find_skill`, доходит до агента только шаблоном с `{mcpConfig}`.
-  const mcpRoute = template.includes('{mcpConfig}') && entry.runner.mcpConfig !== undefined;
+  // Сервер `parley`, а с ним `find_skill`, доходит до агента по виду маршрута: файл конфига и `-c` Codex — шаблоном с
+  // `{mcpConfig}`, системный файл настроек Qwen Code — окружением процесса, без подстановки.
+  const opencode = entry.runner.mcpConfig === 'opencode-server';
+  const kimi = entry.runner.mcpConfig === 'kimi-acp';
+  const mcpRoute = entry.runner.mcpConfig === 'qwen-system-settings' || opencode || kimi
+    || (entry.runner.mcpConfig !== undefined && template.includes('{mcpConfig}'));
 
   // Доверие к папке — только Codex, только то, что выдал хост (`options.trust`), и только если шаблон несёт `{trust}`:
   // иначе пара не уйдёт в процесс, и в родной контекст навигатора ей тоже нечего попадать (диагностика пробела ниже).
@@ -460,6 +522,7 @@ async function plan(
   }
   if (template.includes('{settingsFile}')) {
     const hasProjectMcp = options.projectMcp !== undefined && (options.projectMcp.enabled.length > 0 || options.projectMcp.disabled.length > 0);
+    const packetBridge = entry.id === 'claude' && options.hookUrl !== undefined && options.packetBridge !== undefined ? options.packetBridge : undefined;
     // Плагины пользователя lean выключает вместе с модом jev одним списком. Файл — свой у сессии: в общем файле работы
     // список лёг бы и на сессии без lean.
     if (lean && isClaudeCode(entry)) {
@@ -467,8 +530,11 @@ async function plan(
     }
     subs.settingsFile = await writeWorkSettings(projectPath, workId, {
       ...(options.hookUrl === undefined ? {} : { hookUrl: options.hookUrl }),
-      ...(skillNavigator || lean || workspace || hasProjectMcp ? { sessionId: session.id } : {}),
+      // Файл с мостом пакета — свой у сессии: общий файл работы отдал бы мост сессиям, которым он не положен.
+      ...(skillNavigator || lean || workspace || hasProjectMcp || packetBridge !== undefined ? { sessionId: session.id } : {}),
       ...(hasProjectMcp ? { projectMcp: options.projectMcp } : {}),
+      // Только провайдер `claude`: GLM и прочие аккаунты на том же CLI срез не затрагивает.
+      ...(packetBridge === undefined ? {} : { packetBridge: packetBridgeCommand(packetBridge.launcher, packetBridge.url, 'PARLEY_HOOK_TOKEN') }),
       ...(workspace ? { autonomous: true } : {}),
       ...(disablePlugins.length > 0 ? { disablePlugins } : {}),
       // Инструменты `browser_*` у сессии есть, только когда канал агента лёг в конфиг MCP (спека браузера, 5.1).
@@ -485,6 +551,22 @@ async function plan(
         : { model: options.model ?? session.model ?? entry.runner.settingsModel }),
     });
   }
+  // Qwen Code: сервер `parley` и хуки — в системном файле настроек сессии (спека 2026-11-11, 3.3). Режим одобрений —
+  // стартовый `auto` у каждой сессии, новой и продолженной (решение DA1, спека 2026-11-12, 9.2); `--yolo` — никогда. Режим,
+  // переключённый внутри TUI, Parley не запоминает: следующий запуск снова стартует с `auto`.
+  let qwenSettingsFile: string | undefined;
+  if (entry.runner.mcpConfig === 'qwen-system-settings') {
+    const written = await writeQwenSettings(projectPath, workId, session.id, {
+      mcp: params,
+      ...(options.hookUrl === undefined ? {} : { hookUrl: options.hookUrl }),
+      ...(options.agent !== undefined ? { allowBrowser: true } : {}),
+    });
+    qwenSettingsFile = written.file;
+    if (written.kept.length > 0) {
+      warnings.push(`The Qwen system settings file sets ${written.kept.join(', ')}; Parley keeps the administrator's value instead of its default.`);
+    }
+    subs.approvalMode = 'auto';
+  }
   if (skillList === 'removed') subs.skillCatalog = CODEX_SKILL_CATALOG_OVERRIDE;
   // Хуки Codex — только в режиме `parley` настройки `codexWriteApprovals` (спека 2026-10-21, 5.2): без доверия в `/hooks`
   // Codex остановил бы старт экраном ревью, а в `auto` хук `PermissionRequest` шёл бы раньше авторевьюера.
@@ -498,10 +580,13 @@ async function plan(
   }
   const hasSystemLayer = template.includes('{systemPrompt}');
   const hasDeveloperLayer = template.includes('{developerInstructions}');
+  // OpenCode has no prompt flag: the layer goes to a per-session file that the server config lists as `instructions`
+  // (spec 2026-11-12, §4.6 amendment; observed on 2.2.7: the file reaches the model's system prompt).
+  const hasInstructionsLayer = opencode;
   if (options.layer?.role?.trim()) {
     const deliverable = nativeClaudeRole
       ? role.nativeAgent !== null && template.includes('{agent}')
-      : hasSystemLayer || hasDeveloperLayer;
+      : hasSystemLayer || hasDeveloperLayer || hasInstructionsLayer;
     if (!deliverable) throw new Error('role-delivery-unavailable: this runner cannot deliver the required role.');
   }
   if (entry.id === 'codex' && !hasDeveloperLayer) {
@@ -520,14 +605,16 @@ async function plan(
   }
   // One current layer for launch/new/resume; only its provider channel differs.
   let blockBytes;
-  if (hasSystemLayer || hasDeveloperLayer) {
+  let instructionsFile: string | undefined;
+  const hasSessionLayer = hasSystemLayer || hasDeveloperLayer || hasInstructionsLayer;
+  const [globalParley, parley] = hasSessionLayer || kimi
+    ? await Promise.all([readGlobalParleyMd(parleyHome()), readParleyMd(projectPath)])
+    : [];
+  diagnostics.push(...(globalParley?.warnings ?? []), ...(parley?.warnings ?? []));
+  const fileRules = { globalParleyMd: globalParley?.text ?? '', parleyMd: parley?.text ?? '' };
+  if (hasSessionLayer) {
     const map = await readMap(projectPath, workId);
     const brief = quiet ? await writtenBrief(projectPath, workId, session.id) : null;
-    const [globalParley, parley] = await Promise.all([
-      readGlobalParleyMd(parleyHome()),
-      readParleyMd(projectPath),
-    ]);
-    diagnostics.push(...globalParley.warnings, ...parley.warnings);
     let memoryItems: MemoryItem[] = [];
     try { memoryItems = (await readProjectMemory(projectPath)).items; }
     catch (error) {
@@ -558,7 +645,7 @@ async function plan(
       ...(role.role ? { role: role.roleText } : {}),
       nativeClaudeRole,
       guidance: systemGuidance(map, session.id, {
-        skillNavigator: skillNavigator && !nativeClaudeRole && template.includes('{mcpConfig}') && mcp !== undefined,
+        skillNavigator: skillNavigator && !nativeClaudeRole && mcpRoute,
         ...(entry.id === 'codex' ? { toolProfile: 'short' as const } : {}),
         ...(skillList === undefined ? {} : { skillList }),
         // Цель стоит в брифе, который уйдёт тем же запуском (системным слоем или первым сообщением): дважды не нужна.
@@ -568,19 +655,23 @@ async function plan(
       // забылось бы. Несут их лишь раннеры с `{systemPrompt}`/`{developerInstructions}`; у остальных блока нет
       // (известное ограничение), и задание доходит письмом и чтением `plan_tasks`.
       assignments: assignmentsBlock(map, session.id),
-      bridge: [entry.id === 'codex' && !workspace ? CODEX_APPROVAL_GUIDANCE : '', entry.id === 'codex' ? CODEX_TOOL_EXAMPLES : '', bridge].filter(Boolean).join('\n\n'),
+      bridge: [entry.id === 'codex' && !workspace ? CODEX_APPROVAL_GUIDANCE : '', entry.id === 'codex' ? CODEX_TOOL_EXAMPLES : '', opencode ? OPENCODE_TOOL_EXAMPLES : '', bridge].filter(Boolean).join('\n\n'),
       links,
       // Правило — только там, где у агента есть `browser_open`: канал выдан и сервер MCP доходит шаблоном с `{mcpConfig}`.
       ...(options.agent !== undefined && mcpRoute ? { browser: BROWSER_PRIORITY_RULE } : {}),
       ...(brief === null ? {} : { brief }),
-      globalParleyMd: globalParley.text,
-      parleyMd: parley.text,
+      ...fileRules,
       memoryItems,
     });
     blockBytes = layer.blockBytes;
     diagnostics.push(...layer.warnings);
     if (hasSystemLayer) subs.systemPrompt = layer.text;
     if (hasDeveloperLayer) subs.developerInstructions = developerInstructions(layer.text);
+    if (hasInstructionsLayer) {
+      // Rewritten on every launch and resume: the layer is current, as with the other channels.
+      instructionsFile = path.join(paths.dir, 'settings', `${session.id}-opencode-instructions.md`);
+      await writeSessionSettings(await ensureStateDir(projectPath), paths.dir, instructionsFile, `${layer.text}\n`);
+    }
   }
 
   // Модель и усилие считает роль (`prepareSessionRole` выше): явный выбор запуска, иначе записанный в
@@ -601,14 +692,14 @@ async function plan(
     // комнаты, роли, решения) — одна строка с новой ревизией и отсылкой к карте. Без изменений и без нового
     // поручения указатель на письма уходит как был, и повторного подбора скилла ему не навязывают.
     let notice = '';
-    if (!quiet && template.includes('{prompt}')) {
+    if (!quiet && (template.includes('{prompt}') || kimi)) {
       const loaded = await loadBrief(projectPath, workId, session.id, { create: false });
       if (loaded?.refreshed) {
         notice = `Your brief changed (revision ${loaded.previous ?? 'none'} is outdated): the task, rooms, roles or decisions were amended. Call get_map for the current state before continuing.`;
       }
     }
     const prompt = [notice, options.prompt ?? ''].filter((part) => part !== '').join('\n\n');
-    if (prompt !== '' && template.includes('{prompt}')) subs.prompt = prompt;
+    if (prompt !== '' && (template.includes('{prompt}') || kimi)) subs.prompt = prompt;
   } else {
     // Быстрая сессия стартует без промпта: карту и правила агент получает
     // через MCP, бриф ей не пишется (5.1). Тихая — тоже: её бриф уже уехал
@@ -621,12 +712,42 @@ async function plan(
     const first = [brief, handover, pointer].filter((part) => part !== '').join('\n\n');
     if (first !== '') subs.prompt = first;
     if (entry.linkBy === 'session-id') {
-      providerSessionId = session.providerSessionId ?? randomUUID();
+      // OpenCode takes only ids that start with `ses` (spike §6); `-s` creates the session or continues it.
+      providerSessionId = session.providerSessionId ?? (opencode ? `ses_${randomUUID()}` : randomUUID());
       subs.sessionUuid = providerSessionId;
     }
   }
+  // OpenCode: the TUI attaches to the host's server (the slot below) and names its session; writable roles start with
+  // `--auto` (spec 4.10), read-only ones rely on the deny rules of the server config (4.8). The config goes to the
+  // server, not to the TUI (spike §1).
+  let opencodeServer: LaunchPlan['opencodeServer'];
+  if (opencode) {
+    subs.serverUrl = OPENCODE_SERVER_URL_SLOT;
+    const id = resuming ? subs.providerSessionId : providerSessionId;
+    if (id !== undefined && id !== null) subs.sessionId = id;
+    const launch = opencodeRoleLaunch(role);
+    if (launch.autoFlag !== undefined) subs.autoFlag = launch.autoFlag;
+    opencodeServer = { env: opencodeServerEnv({
+      mcp: params,
+      readOnly: launch.readOnly,
+      ...(subs.model === undefined ? {} : { model: subs.model }),
+      ...(instructionsFile === undefined ? {} : { instructions: [instructionsFile] }),
+    }) };
+  }
+
+  const kimiInstructions = kimi ? buildSessionLayer({ guidance: '', ...fileRules }).text : '';
+  const kimiAcp: LaunchPlan['kimiAcp'] = kimi ? {
+    ...(resuming && subs.providerSessionId !== undefined ? { sessionId: subs.providerSessionId } : {}),
+    mcpServers: Object.entries(mcpConfig(params).mcpServers).map(([name, server]) => ({
+      ...server, name, env: Object.entries(server.env).map(([name, value]) => ({ name, value })),
+    })),
+    ...(subs.prompt === undefined ? {} : { prompt: subs.prompt }),
+    ...(kimiInstructions === '' ? {} : { instructions: kimiInstructions }),
+  } : undefined;
 
   const { command, args } = resuming ? resumeCommand(entry, subs) : startCommand(entry, subs);
+  const deferredPrompt = (entry.runner.mcpConfig === 'qwen-system-settings' || opencode) && !resuming && subs.prompt !== undefined && !template.includes('{prompt}')
+    ? subs.prompt : undefined;
   if (forkFrom !== undefined) {
     // Форк, а не продолжение копии (5.4.1, п. 1): у нового агента свой id, и один разговор не живёт в двух корнях.
     const at = args.findIndex((arg, index) => arg === '--resume' && args[index + 1] === forkFrom);
@@ -656,11 +777,18 @@ async function plan(
         ...(skillList === undefined ? {} : { SKILL_LIST_REDUCED: '1' }) }),
       ...(isClaudeCode(entry) && skillList === 'names' ? CLAUDE_SKILL_BUDGET_ENV : {}),
       ...(lean && isClaudeCode(entry) ? CLAUDE_LEAN_ENV : {}),
+      // Значение, уже заданное человеком в окружении хоста, остаётся: процесс его унаследует.
+      ...(isClaudeCode(entry) && process.env['CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS'] === undefined
+        ? { CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS: String(CLAUDE_MCP_AUTO_BACKGROUND_MS) } : {}),
       ...(workspace ? { TMPDIR: path.join(workspace.path, '.parley-tmp') } : {}),
+      ...(qwenSettingsFile === undefined ? {} : { [QWEN_SYSTEM_SETTINGS_ENV]: qwenSettingsFile }),
     },
     providerSessionId,
     warnings,
     diagnostics,
+    ...(deferredPrompt === undefined ? {} : { deferredPrompt }),
+    ...(opencodeServer === undefined ? {} : { opencodeServer }),
+    ...(kimiAcp === undefined ? {} : { kimiAcp }),
   };
 }
 
@@ -751,12 +879,21 @@ export interface NewSessionResult {
 export async function createNewSession(
   projectPath: string,
   workId: string | null,
+  trial?: NewSession['trial'],
+  protocol?: TrialProtocolOptions,
 ): Promise<NewSessionResult> {
   const id = workId ?? (await createWork(projectPath, { title: UNTITLED_WORK, goal: '' })).work.id;
   let created: WorkSession | undefined;
-  await updateMap(projectPath, id, (map) => {
-    created = addSession(map, { provider: 'claude', label: NEW_LABEL, task: '' });
-  });
+  // Назначение идёт по протоколу списка: намерение — прямо перед записью карты, отмена или подтверждение — после неё.
+  await withTrialAssignment(
+    trial,
+    { projectPath, workId: id },
+    (assigned) => updateMap(projectPath, id, (map) => {
+      created = addSession(map, { provider: 'claude', label: NEW_LABEL, task: '', ...(assigned === undefined ? {} : { trial: assigned }) });
+    }),
+    () => created!.id,
+    protocol,
+  );
   if (created === undefined) throw new Error(`session in workspace ${id} was not created`);
   return { workId: id, session: created };
 }
@@ -825,12 +962,21 @@ export async function createPendingSession(
   workId: string,
   init: NewSession,
   admit?: (map: WorkMap, sessionId: string) => void,
+  protocol?: TrialProtocolOptions,
 ): Promise<string> {
   let created = '';
-  const map = await updateMap(projectPath, workId, (current) => {
-    created = addSession(current, init).id;
-    admit?.(current, created);
-  });
+  // Назначение (`init.trial`) идёт по протоколу списка; бриф пишется после него, и его сбой отменой не считается.
+  const { trial, ...rest } = init;
+  const map = await withTrialAssignment(
+    trial,
+    { projectPath, workId },
+    (assigned) => updateMap(projectPath, workId, (current) => {
+      created = addSession(current, assigned === undefined ? rest : { ...rest, trial: assigned }).id;
+      admit?.(current, created);
+    }),
+    () => created,
+    protocol,
+  );
   await writeBrief(projectPath, map, created);
   return created;
 }
@@ -985,7 +1131,7 @@ export async function finishExited(
   workId: string,
   sessionId: string,
   exit: { exitCode: number; signal: number | undefined },
-  roots: MetricsRoots = {},
+  roots: MetricsRoots & Pick<FinishOptions, 'logFileOf'> = {},
 ): Promise<void> {
   const session = (await readMap(projectPath, workId)).sessions.find(
     (candidate) => candidate.id === sessionId,

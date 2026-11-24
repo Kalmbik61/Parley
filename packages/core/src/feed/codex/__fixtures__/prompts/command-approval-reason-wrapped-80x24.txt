@@ -1,0 +1,24 @@
+
+› Run exactly this shell command and nothing else: touch c1.txt
+
+
+• I’ll run touch c1.txt in the workspace.
+
+• Running touch c1.txt
+
+
+  Would you like to run the following command?
+
+  Environment: local
+
+  Reason: May I run `touch c1.txt` with write access? The workspace sandbox is
+  read-only.
+
+  $ touch c1.txt
+
+
+› 1. Yes, proceed (y)
+  2. Yes, and don't ask again for commands that start with `touch c1.txt` (p)
+  3. No, and tell Codex what to do differently (esc)
+
+  Press enter to confirm or esc to cancel

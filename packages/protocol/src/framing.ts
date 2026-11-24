@@ -42,6 +42,14 @@ export class LineTooLongError extends Error {
   }
 }
 
+/** Сообщение `SyntaxError` в новых Node содержит кусок разбираемого текста, поэтому наружу его не пропускаем. */
+export class BadFrameError extends Error {
+  constructor() {
+    super('frame is not valid JSON');
+    this.name = 'BadFrameError';
+  }
+}
+
 /**
  * Режет поток байт на строки по `\n`. Строки копятся как байты, а не как
  * текст, — байт `\n` (0x0A) в UTF-8 не встречается внутри многобайтового
@@ -62,7 +70,13 @@ export class LineDecoder {
       if (newline - start > MAX_LINE_BYTES) throw new LineTooLongError();
       const line = data.toString('utf8', start, newline);
       start = newline + 1;
-      if (line.length > 0) messages.push(JSON.parse(line));
+      if (line.length > 0) {
+        try {
+          messages.push(JSON.parse(line));
+        } catch {
+          throw new BadFrameError();
+        }
+      }
     }
     const restLength = data.length - start;
     if (restLength > MAX_LINE_BYTES) throw new LineTooLongError();

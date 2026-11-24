@@ -472,6 +472,34 @@ describe('transitionSession: сон по решению хоста', () => {
   });
 });
 
+describe('transitionSession: wakeBlocked', () => {
+  const T2 = '2026-11-10T10:05:00.000Z';
+  const mapWith = (lifecycle: SessionLifecycle, withBlocked = true): WorkMap => {
+    const map = emptyMap();
+    const session = addSession(map, { provider: 'claude', label: 'план', task: 't' });
+    session.lifecycle = lifecycle;
+    if (withBlocked) session.wakeBlocked = { since: '2026-11-10T10:00:00.000Z', reason: 'launch failed' };
+    return map;
+  };
+
+  it('active и closed снимают wakeBlocked: ключ уходит, null не пишется', () => {
+    for (const [from, to] of [['sleeping', 'active'], ['pending', 'active'], ['sleeping', 'closed'], ['active', 'closed']] as const) {
+      const session = transitionSession(mapWith(from), 's-01', to, { at: T2 });
+      expect('wakeBlocked' in session, `${from} → ${to}`).toBe(false);
+    }
+  });
+
+  it('active → sleeping поле не трогает', () => {
+    const session = transitionSession(mapWith('active'), 's-01', 'sleeping', { at: T2, exitCode: 0 });
+    expect(session.wakeBlocked).toEqual({ since: '2026-11-10T10:00:00.000Z', reason: 'launch failed' });
+  });
+
+  it('обычные переходы сессии без поля ключа не заводят', () => {
+    const session = transitionSession(mapWith('sleeping', false), 's-01', 'active', { at: T2 });
+    expect('wakeBlocked' in session).toBe(false);
+  });
+});
+
 describe('transitionSession: запись очереди машины', () => {
   const T = '2026-10-31T10:00:00.000Z';
   const T2 = '2026-10-31T10:05:00.000Z';
@@ -1583,10 +1611,10 @@ describe('рои в карте (спека роя v1, 2.1–2.2)', () => {
   const swarmOf = (patch: Partial<WorkSwarm> = {}): WorkSwarm => ({
     id: 'sw-01', tag: 'Research', creator: { kind: 'human' }, objective: 'Audit', queen: 's-01',
     members: [
-      { sessionId: 's-01', role: 'queen', n: 1, addedAt: AT, handedAt: null },
-      { sessionId: 's-02', role: 'drone', n: 1, addedAt: AT, handedAt: null },
+      { sessionId: 's-01', role: 'queen', n: 1, addedAt: AT, handedAt: null, slice: null, coverage: null },
+      { sessionId: 's-02', role: 'drone', n: 1, addedAt: AT, handedAt: null, slice: null, coverage: null },
     ],
-    status: 'running', createdAt: AT, endedAt: null, result: null, failure: null, seenAt: null, expiredAt: null,
+    status: 'running', createdAt: AT, endedAt: null, result: null, failure: null, seenAt: null, expiredAt: null, announced: 0,
     ...patch,
   });
   /** Карта с тремя сессиями, комнатой r-01 и роем в сыром виде, как он лежит в файле. */
@@ -1662,6 +1690,52 @@ describe('рои в карте (спека роя v1, 2.1–2.2)', () => {
     expect(parsed.swarms?.[0]).toMatchObject({ endedAt: null, result: null, failure: null, seenAt: null, expiredAt: null });
   });
 
+  describe('срез, покрытие и announced (спека «видимые дыры», 3.1)', () => {
+    const drone = (patch: Record<string, unknown>): never => ({ sessionId: 's-02', role: 'drone', n: 1, addedAt: AT, handedAt: AT, ...patch }) as never;
+    const queen = (patch: Record<string, unknown> = {}): never => ({ sessionId: 's-01', role: 'queen', n: 1, addedAt: AT, handedAt: null, ...patch }) as never;
+    const readSwarm = (patch: Record<string, unknown>) => read(withSwarms({ ...swarmOf(), ...patch })).swarms![0]!;
+
+    it('верные значения сохраняются, срез без пробелов по краям', () => {
+      const parsed = readSwarm({ members: [queen(), drone({ slice: '  host/sessions ', coverage: 'partial' })], announced: 1 });
+      expect(parsed.members[1]).toMatchObject({ slice: 'host/sessions', coverage: 'partial' });
+      expect(parsed.announced).toBe(1);
+      expect(readSwarm({ members: [queen(), drone({ coverage: 'covered' })] }).members[1]?.coverage).toBe('covered');
+    });
+
+    it.each([
+      ['нет полей', {}],
+      ['срез не строка', { slice: 7, coverage: 'ok' }],
+      ['пустой срез, покрытие вне перечня', { slice: '   ', coverage: 'full' }],
+      ['срез с переводом строки', { slice: 'a\nb', coverage: null }],
+      ['срез с CR/LF по краям', { slice: '\r\nhost\r\n', coverage: null }],
+      ['срез с LF в конце', { slice: 'host\n', coverage: null }],
+      ['срез с CR в начале', { slice: '\rhost', coverage: null }],
+      ['срез длиннее 60', { slice: 'x'.repeat(61), coverage: 3 }],
+    ])('неверное и отсутствующее (%s) читается как null и null', (_name, patch) => {
+      const parsed = readSwarm({ members: [queen(), drone(patch)] });
+      expect(parsed.members[1]).toMatchObject({ slice: null, coverage: null });
+      expect(parsed.announced).toBe(0);
+    });
+
+    it('у королевы срез и покрытие всегда null', () => {
+      const parsed = readSwarm({ members: [queen({ slice: 'x', coverage: 'covered' }), drone({})] });
+      expect(parsed.members[0]).toMatchObject({ slice: null, coverage: null });
+    });
+
+    it.each([[3], [-1], [0.5], ['1'], [null], [undefined]])('announced = %j читается как 0, если он не целое от 0 до длины массива', (announced) => {
+      expect(readSwarm({ members: [queen(), drone({})], announced }).announced).toBe(0);
+    });
+
+    it('announced равный длине массива сохраняется', () => {
+      expect(readSwarm({ members: [queen(), drone({})], announced: 2 }).announced).toBe(2);
+    });
+
+    it('значения переживают запись и повторное чтение', () => {
+      const parsed = readSwarm({ members: [queen(), drone({ slice: 'host', coverage: 'partial' })], announced: 2 });
+      expect(read(withSwarms(parsed)).swarms![0]).toEqual(parsed);
+    });
+  });
+
   describe('removeSession', () => {
     const NOW = '2026-10-28T12:00:00.000Z';
 
@@ -1710,5 +1784,58 @@ describe('рои в карте (спека роя v1, 2.1–2.2)', () => {
       removeSession(map, lt(map), 's-03', NOW);
       expect(map.swarms).toEqual([swarmOf()]);
     });
+  });
+});
+
+describe('плечо опыта с пакетом состояния (Э-1)', () => {
+  const trial = { name: '2026-11', arm: 'control' as const, at: '2026-11-17T10:00:00.000Z', tag: '0123456789abcdef0123456789abcdef' };
+  const roundTrip = (value: unknown) => {
+    const map = emptyMap();
+    const session = addSession(map, { provider: 'claude', label: '', task: '' });
+    Object.assign(session, { trial: value });
+    return parseMap(JSON.stringify(map), 'map.json').sessions[0]!;
+  };
+
+  it('addSession кладёт назначение в запись; без входа поля нет вовсе', () => {
+    const map = emptyMap();
+    const plain = addSession(map, { provider: 'claude', label: '', task: '' });
+    const drawn = addSession(map, { provider: 'claude', label: '', task: '', trial });
+    expect(plain).not.toHaveProperty('trial');
+    expect(drawn.trial).toEqual(trial);
+    expect(drawn.history).toEqual([{ event: 'pending', at: expect.any(String) }]);
+  });
+
+  it('назначение переживает запись и чтение карты, оба плеча', () => {
+    for (const arm of ['packet', 'control'] as const) {
+      expect(roundTrip({ ...trial, arm }).trial).toEqual({ ...trial, arm });
+    }
+  });
+
+  it('запись с недопустимым значением не стирается: она становится явным состоянием «назначение повреждено», которое переживает запись и чтение карты', () => {
+    for (const bad of [
+      { ...trial, arm: 'both' },
+      { ...trial, arm: undefined },
+      { ...trial, name: '' },
+      { ...trial, name: 'Upper' },
+      { ...trial, name: 'a'.repeat(33) },
+      { ...trial, at: 'yesterday' },
+      { ...trial, at: 5 },
+      { ...trial, tag: undefined },
+      { ...trial, tag: 'abc' },
+      { ...trial, tag: '0123456789ABCDEF0123456789ABCDEF' },
+      'control',
+      null,
+      [],
+    ]) {
+      const read = roundTrip(bad);
+      expect(read.trial, JSON.stringify(bad)).toEqual({ damaged: true });
+      // Цикл запись-чтение: повреждённое состояние читается как оно само, а не как «плеча нет» и не как допустимое плечо.
+      const map = emptyMap();
+      map.sessions.push(read);
+      const again = parseMap(JSON.stringify(parseMap(JSON.stringify(map), 'map.json')), 'map.json').sessions[0]!;
+      expect(again.trial).toEqual({ damaged: true });
+    }
+    // Допустимое назначение повреждённым не становится.
+    expect(roundTrip(trial).trial).toEqual(trial);
   });
 });

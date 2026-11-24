@@ -73,17 +73,21 @@ export async function hostToolContext(
     turnBoundary?: TurnBoundarySource;
     /** Числа машины и активность сессии для `get_capacity`; `null` — хост не смог ответить. Нет — поля `capacity` нет. */
     capacity?: (ref: SessionRef) => Promise<CapacityFacts | null>;
+    /** Есть ли у сессии зарегистрированный канал агента (регистрация хоста, не запрос): от этого зависят имена инструментов канала в пакете. */
+    agentChannel?: (ref: SessionRef) => boolean;
   },
 ): Promise<McpContext> {
   const { config } = await loadConfig();
   return {
     ...launch,
+    ...(deps.agentChannel?.(ref) === true ? { hasAgentChannel: true } : {}),
     projectPath: ref.projectPath,
     workId: ref.workId,
     workDir: workPaths(ref.projectPath, ref.workId).dir,
     sessionId: ref.sessionId,
     channel: false,
     messageRate: config.messageRate,
+    resumeRate: config.resumeRate,
     worktreeRoot: config.worktreeRoot,
     // Исключение — «строки неизвестны»: `get_map {field: "providers"}` отдаст локальный реестр с пометкой, а не откажет целиком.
     providerRows: async () => {

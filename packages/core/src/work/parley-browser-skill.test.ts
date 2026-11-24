@@ -83,9 +83,16 @@ describe('скилл parley-browser: тело', () => {
       'macOS may ask',
       'moves the mouse',
       'Parley allows them in advance',
+      'content not available: another site',
     ]) {
       expect(body, phrase).toContain(phrase);
     }
+  });
+
+  it('Troubleshooting: строки про клиентский сертификат и окно доступа macOS к ключу', () => {
+    const troubleshooting = body.slice(body.indexOf('## Troubleshooting'));
+    expect(troubleshooting).toContain('A note says the site asks for a client certificate: only the human can choose it, in the browser panel. Ask them, then retry.');
+    expect(troubleshooting).toContain('may wait for a macOS key access window: ask the human to answer it with "Always Allow".');
   });
 
   it('старых запретов этапов B2/C в тексте нет', () => {
@@ -104,5 +111,6 @@ describe('скилл parley-browser: тело', () => {
     expect(body).toContain('an older Parley window: ask the human to update Parley');
     expect(body).toContain('| `human_busy` |');
     expect(body).toContain('| `stale_ref` |');
+    expect(body).toContain('| `covered` |');
   });
 });

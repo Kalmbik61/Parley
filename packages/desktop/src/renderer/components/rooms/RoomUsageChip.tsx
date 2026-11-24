@@ -1,7 +1,7 @@
 /**
  * Значок расхода токенов в шапке комнаты (спека расхода токенов, 3.1–3.3): `↑1.2M ↓84k`, по клику — поповер с итогом,
  * провайдерами, участниками, Copy и Refresh. Хост спрашивается только при `active` (6.3): при открытии, при смене состава
- * или архива и раз в минуту, пока вкладка активна; рост токенов участников сам по себе запроса не рождает, а кнопка
+ * или архива и раз в минуту, пока вкладка активна и окно видно; рост токенов участников сам по себе запроса не рождает, а кнопка
  * Refresh спрашивает сразу, но не чаще раза в 5 секунд. Старый хост метода не знает — значка нет.
  */
 
@@ -20,6 +20,7 @@ import {
   type UsageLabels,
 } from '../../lib/usage-format.js';
 import { useHostStore } from '../../store/host.js';
+import { useUiStore } from '../../store/ui.js';
 import { Button } from '../../ui/button.js';
 import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover.js';
 
@@ -29,6 +30,49 @@ const U = S.usage;
 export const ROOM_USAGE_MIN_INTERVAL_MS = 60_000;
 /** Refresh не чаще раза в 5 секунд. */
 export const ROOM_USAGE_REFRESH_MIN_MS = 5_000;
+
+interface SharedUsage {
+  pending: Promise<RoomUsage> | null;
+  at: number;
+  value: RoomUsage | null;
+}
+/** Общий на мост запрос: значки одной комнаты (разделённые панели) делят один вызов хоста. WeakMap — чтобы тесты не делили состояние. */
+const sharedByBridge = new WeakMap<ParleyBridge, Map<string, SharedUsage>>();
+
+/** Запрос в полёте отдаётся всем; ответ моложе `ROOM_USAGE_REFRESH_MIN_MS` — тоже. Отказ не запоминается. */
+function sharedUsage(
+  bridge: ParleyBridge,
+  params: { projectPath: string; workId: string; roomId: string },
+  identity: string,
+): Promise<RoomUsage> {
+  let rooms = sharedByBridge.get(bridge);
+  if (rooms === undefined) {
+    rooms = new Map();
+    sharedByBridge.set(bridge, rooms);
+  }
+  let slot = rooms.get(identity);
+  if (slot === undefined) {
+    slot = { pending: null, at: 0, value: null };
+    rooms.set(identity, slot);
+  }
+  if (slot.pending !== null) return slot.pending;
+  if (slot.value !== null && Date.now() - slot.at < ROOM_USAGE_REFRESH_MIN_MS) return Promise.resolve(slot.value);
+  const own = slot;
+  const pending = bridge.call('rooms.usage', params).then(
+    (value) => {
+      own.pending = null;
+      own.value = value;
+      own.at = Date.now();
+      return value;
+    },
+    (error: unknown) => {
+      own.pending = null;
+      throw error;
+    },
+  );
+  own.pending = pending;
+  return pending;
+}
 
 /** Колонки одной ширины в итоге и в списке участников: две сетки не разъезжаются. */
 const GRID = 'grid grid-cols-[minmax(0,1fr)_repeat(4,4.5rem)] items-baseline gap-x-3 gap-y-1';
@@ -45,6 +89,7 @@ export interface RoomUsageChipProps {
 export function RoomUsageChip({ bridge, entry, roomId, active, providers }: RoomUsageChipProps): JSX.Element | null {
   const supported = useHostSupports('rooms.usage');
   const connected = useHostStore((state) => state.status.state === 'connected');
+  const documentVisible = useUiStore((state) => state.documentVisible);
   const projectPath = entry.projectPath;
   const workId = entry.map.work.id;
   const room = entry.map.rooms.find((candidate) => candidate.id === roomId);
@@ -70,7 +115,7 @@ export function RoomUsageChip({ bridge, entry, roomId, active, providers }: Room
     lastRequest.current = Date.now();
     const asked = identity;
     setLoading(true);
-    bridge.call('rooms.usage', { projectPath, workId, roomId }).then(
+    sharedUsage(bridge, { projectPath, workId, roomId }, identity).then(
       (value) => {
         if (currentIdentity.current !== asked) return;
         setUsage(value);
@@ -88,13 +133,21 @@ export function RoomUsageChip({ bridge, entry, roomId, active, providers }: Room
   const requestRef = useRef(request);
   requestRef.current = request;
 
-  // Поводы спросить: активация, смена комнаты или состава, затем таймер раз в минуту, пока `active`.
+  // Автоматические поводы (вход, смена состава, возврат окна) — не чаще `ROOM_USAGE_REFRESH_MIN_MS` с прошлого запроса.
+  const requestIfDue = (): void => {
+    if (Date.now() - lastRequest.current < ROOM_USAGE_REFRESH_MIN_MS) return;
+    request();
+  };
+  const requestIfDueRef = useRef(requestIfDue);
+  requestIfDueRef.current = requestIfDue;
+
+  // Поводы спросить: активация, смена комнаты или состава, возврат окна, затем таймер раз в минуту, пока `active` и окно видно.
   useEffect(() => {
-    if (!active || !supported || !connected) return;
-    requestRef.current();
+    if (!active || !supported || !connected || !documentVisible) return;
+    requestIfDueRef.current();
     const timer = setInterval(() => requestRef.current(), ROOM_USAGE_MIN_INTERVAL_MS);
     return () => clearInterval(timer);
-  }, [active, supported, connected, identity, composition]);
+  }, [active, supported, connected, documentVisible, identity, composition]);
 
   const refresh = (): void => {
     if (Date.now() - lastRequest.current < ROOM_USAGE_REFRESH_MIN_MS) return;

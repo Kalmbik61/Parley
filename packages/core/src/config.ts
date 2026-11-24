@@ -21,6 +21,7 @@ import {
   type ResourceLimits,
 } from './work/resource-policy.js';
 import { parleyHome } from './work/store.js';
+import { isTrialName } from './work/types.js';
 
 /**
  * Как решаются одобрения пишущих ролей Codex (спека 2026-10-21, 5.2): `auto` — авторевьюер самого Codex, `parley` — хуки
@@ -74,8 +75,9 @@ export interface ParleyConfig extends ResourceLimits {
    */
   sleepAfterMinutes: number;
   /**
-   * Сколько минут простоя хватает, чтобы хост усыпил агента ради памяти или свободного слота, когда машине тесно
-   * (спека сна агентов и ёмкости, 4.2). Работает только при включённом сне (`sleepAfterMinutes > 0`). 1…60.
+   * Сколько минут простоя хватает, чтобы хост усыпил агента ради памяти (`critical`) или свободного слота, когда машине
+   * тесно (спека сна агентов и ёмкости, 4.2); при `warn` порог не ниже 30, для поднятой после сна сессии не ниже 15
+   * (`hurriedSleepMinutes`). Умолчание 15. Работает только при включённом сне (`sleepAfterMinutes > 0`). 1…60.
    */
   sleepUnderPressureMinutes: number;
   /**
@@ -117,6 +119,21 @@ export interface ParleyConfig extends ResourceLimits {
    * методов нет в `hello.methods` моста, вызов получает `unknown_method`. Окно и прочие клиенты не затронуты.
    */
   remoteCreate: boolean;
+  /**
+   * Переключатель автономного режима помощника (спека 2026-11-15-assistant-autonomous-mode-design). Выключен по
+   * умолчанию; пока его никто не читает.
+   */
+  assistantAutonomy: boolean;
+  /**
+   * Пакет состояния комнаты после сжатия контекста у Claude (спека 2026-11-16, 3.5): мост-хук на `SessionStart`.
+   * Выключен по умолчанию; хост проверяет значение на каждом запросе моста, файл настроек сессии читает его при запуске.
+   */
+  roomPacket: boolean;
+  /**
+   * Имя идущего опыта с пакетом состояния (план опыта 2026-11-17, 1.1): пустая строка — опыта нет; непустая — строчные
+   * латинские буквы, цифры и дефис, до 32 знаков. Новые сессии Claude получают плечо, пока имя задано и `roomPacket` включён.
+   */
+  roomPacketTrial: string;
   /** Дневной лимит платного голоса в минутах: 1…600. */
   voiceDailyMinutes: number;
   /** Шрифт панели терминала в окне (кусок 1.10 плана окна). */
@@ -138,7 +155,7 @@ export const DEFAULT_CONFIG: Readonly<ParleyConfig> = {
   messageRate: 20,
   resumeRate: 6,
   sleepAfterMinutes: 60,
-  sleepUnderPressureMinutes: 5,
+  sleepUnderPressureMinutes: 15,
   machineConcurrent: 'auto',
   agentSkills: true,
   skillNavigator: true,
@@ -150,6 +167,9 @@ export const DEFAULT_CONFIG: Readonly<ParleyConfig> = {
   telegramCards: true,
   leanAgents: true,
   remoteCreate: true,
+  assistantAutonomy: false,
+  roomPacket: false,
+  roomPacketTrial: '',
   voiceDailyMinutes: 30,
   // Терминал окна (кусок 1.3 плана окна, спека 4.3).
   fontFamily: "'SF Mono', Menlo, monospace",
@@ -180,6 +200,9 @@ export const ENV_NAMES: Readonly<Record<keyof ParleyConfig, string>> = {
   telegramCards: 'TELEGRAM_CARDS',
   leanAgents: 'LEAN_AGENTS',
   remoteCreate: 'REMOTE_CREATE',
+  assistantAutonomy: 'ASSISTANT_AUTONOMY',
+  roomPacket: 'ROOM_PACKET',
+  roomPacketTrial: 'ROOM_PACKET_TRIAL',
   voiceDailyMinutes: 'VOICE_DAILY_MINUTES',
   fontFamily: 'FONT_FAMILY',
   fontSize: 'FONT_SIZE',
@@ -224,6 +247,10 @@ type Complain = (message: string) => void;
 
 const isPositiveInt = (value: unknown): value is number =>
   typeof value === 'number' && Number.isInteger(value) && value > 0;
+
+/** Имя опыта или пустая строка («опыта нет»). */
+const isRoomPacketTrial = (value: unknown): value is string => value === '' || isTrialName(value);
+const ROOM_PACKET_TRIAL_EXPECTED = 'an empty string or a name of lowercase letters, digits and hyphens, up to 32 characters';
 
 const isFontFamily = (value: unknown): value is string =>
   typeof value === 'string' && value.trim() !== '';
@@ -353,6 +380,9 @@ function fromFile(data: Record<string, unknown>, complain: Complain): ConfigPatc
   take('telegramCards', (value) => typeof value === 'boolean', 'true or false');
   take('leanAgents', (value) => typeof value === 'boolean', 'true or false');
   take('remoteCreate', (value) => typeof value === 'boolean', 'true or false');
+  take('assistantAutonomy', (value) => typeof value === 'boolean', 'true or false');
+  take('roomPacket', (value) => typeof value === 'boolean', 'true or false');
+  take('roomPacketTrial', isRoomPacketTrial, ROOM_PACKET_TRIAL_EXPECTED);
   take('voiceDailyMinutes', isVoiceDailyMinutes, VOICE_DAILY_MINUTES_EXPECTED);
   take('fontFamily', isFontFamily, 'a non-empty string');
   take('fontSize', isFontSize, FONT_SIZE_EXPECTED);
@@ -377,7 +407,7 @@ function fromEnv(env: NodeJS.ProcessEnv, complain: Complain): ConfigPatch {
   const nameOf = (key: keyof ParleyConfig): string => envName(env, ENV_NAMES[key]) ?? ENV_NAMES[key];
 
   const flag = (
-    key: 'channelPush' | 'agentSkills' | 'skillNavigator' | 'leanAgents' | 'remoteCreate'
+    key: 'channelPush' | 'agentSkills' | 'skillNavigator' | 'leanAgents' | 'remoteCreate' | 'assistantAutonomy' | 'roomPacket'
     | 'telegramEnabled' | 'telegramNeedsYou' | 'telegramFinished' | 'telegramMail' | 'telegramCards',
   ): void => {
     const value = text(key);
@@ -450,6 +480,13 @@ function fromEnv(env: NodeJS.ProcessEnv, complain: Complain): ConfigPatch {
   flag('telegramCards');
   flag('leanAgents');
   flag('remoteCreate');
+  flag('assistantAutonomy');
+  flag('roomPacket');
+  const roomPacketTrial = text('roomPacketTrial');
+  if (roomPacketTrial !== undefined) {
+    if (isRoomPacketTrial(roomPacketTrial)) patch.roomPacketTrial = roomPacketTrial;
+    else complain(`${nameOf('roomPacketTrial')}: expected ${ROOM_PACKET_TRIAL_EXPECTED}`);
+  }
   const voiceDailyMinutes = text('voiceDailyMinutes');
   if (voiceDailyMinutes !== undefined) {
     const parsed = Number(voiceDailyMinutes);
@@ -537,6 +574,8 @@ const BOOLEAN_KEYS: ReadonlySet<keyof ParleyConfig> = new Set([
   'skillNavigator',
   'leanAgents',
   'remoteCreate',
+  'assistantAutonomy',
+  'roomPacket',
   'telegramEnabled',
   'telegramNeedsYou',
   'telegramFinished',
@@ -560,6 +599,10 @@ export function parseSetting<K extends keyof ParleyConfig>(
   if (key === 'codexWriteApprovals') {
     if (isCodexWriteApprovals(text)) return { value: text as ParleyConfig[K] };
     return { error: `${key}: expected ${CODEX_WRITE_APPROVALS_EXPECTED}` };
+  }
+  if (key === 'roomPacketTrial') {
+    if (isRoomPacketTrial(text)) return { value: text as ParleyConfig[K] };
+    return { error: `${key}: expected ${ROOM_PACKET_TRIAL_EXPECTED}` };
   }
   if (key === 'worktreeRoot') {
     if (isWorktreeRoot(text)) return { value: text as ParleyConfig[K] };

@@ -118,6 +118,14 @@ export interface CodexTerminalParser {
 }
 
 export function createCodexTerminalParser(): CodexTerminalParser {
+  return createOscReader(signalOfOsc);
+}
+
+/**
+ * Читатель последовательностей OSC в потоке терминала: тело каждой (`Ps;Pt`) отдаётся `signalOf`, непустые ответы — в
+ * порядке появления. Общий для Codex (заголовок, OSC 9) и Qwen Code (OSC 7501, `qwen-terminal.ts`).
+ */
+export function createOscReader<T>(signalOf: (body: string) => T | null): { feed(chunk: string): T[] } {
   /** Начало OSC, оборванное границей чанка (или одинокий `ESC` на конце): продолжится в следующем. */
   let pending = '';
 
@@ -125,7 +133,7 @@ export function createCodexTerminalParser(): CodexTerminalParser {
     feed(chunk) {
       const data = pending + chunk;
       pending = '';
-      const signals: CodexSignal[] = [];
+      const signals: T[] = [];
       let at = 0;
 
       scan: while (at < data.length) {
@@ -140,7 +148,7 @@ export function createCodexTerminalParser(): CodexTerminalParser {
         for (let index = bodyStart; index < data.length; index += 1) {
           const char = data[index];
           if (char === BEL || char === ST_C1) {
-            const signal = signalOfOsc(data.slice(bodyStart, index));
+            const signal = signalOf(data.slice(bodyStart, index));
             if (signal !== null) signals.push(signal);
             at = index + 1;
             continue scan;
@@ -149,7 +157,7 @@ export function createCodexTerminalParser(): CodexTerminalParser {
             // `ESC \` — терминатор; другой `ESC` обрывает OSC, и на нём начинается новая последовательность.
             if (index + 1 >= data.length) break;
             if (data[index + 1] === '\\') {
-              const signal = signalOfOsc(data.slice(bodyStart, index));
+              const signal = signalOf(data.slice(bodyStart, index));
               if (signal !== null) signals.push(signal);
               at = index + 2;
               continue scan;

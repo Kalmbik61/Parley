@@ -6,7 +6,7 @@ import { buildRoleCatalog, resolveRoleChoice, RoleChoiceError, type RoleChoice, 
 import { discoverCodexRoles } from '../roles/codex.js';
 import { readCodexRoleContext, type CodexContextOptions } from '../roles/context.js';
 import { findRunnerBinary } from './find-binary.js';
-import { claudeConfigDirFor, isClaudeCode, loadProviders, type ProviderEntry } from '../providers.js';
+import { byFamily, claudeConfigDirFor, isClaudeCode, loadProviders, providerFamily, type ProviderEntry } from '../providers.js';
 import type { RoleCatalog } from '../roles/types.js';
 import type { SessionRole, WorkSession } from './types.js';
 
@@ -126,21 +126,33 @@ export async function sessionRoleCatalog(cwd: string, options: SessionRoleCatalo
 /** Prove native option positions with the supported default template grammar only.
  * Unknown arity, option terminators and positional channel values cannot prove delivery.
  * Other providers may explicitly use the same Claude-like layer grammar for role text.
+ * Qwen Code has its own (spec 2026-11-11, 3.6): `--session-id`, `--resume`, `--approval-mode`, `--append-system-prompt`
+ * and `-m`, each with a value; no first-prompt flag (3.4 amendment). Anything else fails closed.
  */
-function nativeRolePairs(template: readonly string[], codex: boolean): Map<string, string[]> | null {
-  const valueFlags = codex
-    ? new Set(['-c', '--config', '--model', '-a'])
-    : new Set(['--session-id', '--resume', '--mcp-config', '--settings', '--append-system-prompt',
-      '--dangerously-load-development-channels', '--model', '--effort', '--agent', '--disallowedTools']);
+type RoleGrammar = 'claude' | 'codex' | 'qwen' | 'opencode';
+const ROLE_VALUE_FLAGS: Readonly<Record<RoleGrammar, ReadonlySet<string>>> = {
+  codex: new Set(['-c', '--config', '--model', '-a']),
+  claude: new Set(['--session-id', '--resume', '--mcp-config', '--settings', '--append-system-prompt',
+    '--dangerously-load-development-channels', '--model', '--effort', '--agent', '--disallowedTools']),
+  qwen: new Set(['--session-id', '--resume', '--approval-mode', '--append-system-prompt', '-m']),
+  // OpenCode takes no role flags: its roles arrive through the session config (spec 2026-11-12), so any flag fails closed.
+  opencode: new Set(),
+};
+const roleGrammarOf = (entry: ProviderEntry): RoleGrammar =>
+  entry.id === 'codex' ? 'codex' : providerFamily(entry) === 'qwen' ? 'qwen' : providerFamily(entry) === 'opencode' ? 'opencode' : 'claude';
+
+function nativeRolePairs(template: readonly string[], grammar: RoleGrammar): Map<string, string[]> | null {
+  const codex = grammar === 'codex';
+  const valueFlags = ROLE_VALUE_FLAGS[grammar];
   const pairs = new Map<string, string[]>();
   for (let i = 0; i < template.length; i++) {
     const flag = template[i]!;
     // `{leanFlags}` — готовые флаги облегчённого запуска отдельным элементом, у Claude и у Codex.
-    if (flag === '{leanFlags}' || (codex && (flag === '--no-daemon' || flag === '{codexHooks}' || flag === '{approvals}' || flag === '{trust}'))) continue;
+    if ((flag === '{leanFlags}' && grammar !== 'qwen') || (codex && (flag === '--no-daemon' || flag === '{codexHooks}' || flag === '{approvals}' || flag === '{trust}'))) continue;
     if (codex && i === 0 && flag === 'resume' && template[i + 1] === '{providerSessionId}') { i++; continue; }
-    // `--` прямо перед хвостовым `{prompt}` — закрывает вариадические флаги, а не канал роли.
-    if (flag === '--' && template[i + 1] === '{prompt}' && i + 2 === template.length) { i++; continue; }
-    if (flag === '{prompt}' && i === template.length - 1) continue;
+    // `--` прямо перед хвостовым `{prompt}` — закрывает вариадические флаги, а не канал роли. Qwen has neither.
+    if (grammar !== 'qwen' && flag === '--' && template[i + 1] === '{prompt}' && i + 2 === template.length) { i++; continue; }
+    if (grammar !== 'qwen' && flag === '{prompt}' && i === template.length - 1) continue;
     if (!valueFlags.has(flag)) return null;
     const value = template[++i];
     if (value === undefined || value.startsWith('-')) return null;
@@ -167,6 +179,14 @@ export function assertRoleDelivery(entry: ProviderEntry, choice: ResolvedRoleCho
   // отказ (спека 2026-10-21, 5.1). У других провайдеров песочница — всегда требование и по-прежнему отказывает.
   const sandboxRequired = choice.sandboxMode !== null
     && !(entry.id === 'codex' && choice.sandboxMode === 'workspace-write' && !choice.readOnly && choice.role?.source !== 'codex');
+  // OpenCode (spec 2026-11-12, 4.8, DO4): no native roles and no role flags. A read-only role is enforced by the deny rules
+  // of the per-session config (`opencodeRoleLaunch`), the role text travels with the session guidance, and the start mode
+  // is decided by `opencodeRoleLaunch` too, so the template carries no role channel to prove. A Claude or Codex native role
+  // does not carry over.
+  if (providerFamily(entry) === 'opencode') {
+    if (choice.nativeAgent !== null) throw new RoleChoiceError('role-permissions-unavailable');
+    return;
+  }
   for (const template of templates) {
     if (entry.id === 'codex' && (choice.readOnly || sandboxRequired)) {
       // Native flags can supersede sandbox_mode=-c. Refuse ambiguous custom delivery.
@@ -182,7 +202,7 @@ export function assertRoleDelivery(entry: ProviderEntry, choice: ResolvedRoleCho
     }
     const required = choice.nativeAgent !== null || choice.roleText !== '' || sandboxRequired || choice.readOnly;
     if (!required) continue; // Plain custom runners keep their existing compatibility/warning behavior.
-    const pairs = nativeRolePairs(template, entry.id === 'codex');
+    const pairs = nativeRolePairs(template, roleGrammarOf(entry));
     if (!pairs) throw new RoleChoiceError('role-permissions-unavailable');
     // A native Claude body may use --agent alone. Any present common layer must still use its native route.
     if (template.includes('{systemPrompt}') && (entry.id === 'codex' || !singleRoleValue(pairs, '--append-system-prompt', '{systemPrompt}'))) throw new RoleChoiceError('role-permissions-unavailable');
@@ -204,6 +224,63 @@ export async function prepareSessionRole(cwd: string, entry: ProviderEntry, choi
   const resolved = resolveRoleChoice(current, isClaudeCode(entry) ? { ...choice, claudeCode: true } : choice);
   assertRoleDelivery(entry, resolved);
   return resolved;
+}
+
+/**
+ * Роль, с которой сессию можно запустить на `entry`: прежняя, если она того же семейства, что цель, и принимается;
+ * иначе одноимённая роль семейства цели; иначе `null` (умолчания провайдера). Семейство решает первым и без каталога:
+ * в режиме `existing` отсутствующая в каталоге роль не отказ, и ответ зависел бы от того, что в каталоге есть.
+ * Встроенная роль проверяется так же (`existing`): без одноимённого варианта цель либо принимает её, либо `null`.
+ * Ловит только `RoleChoiceError`, остальные ошибки идут наружу.
+ */
+export async function roleForProvider(cwd: string, entry: ProviderEntry, role: SessionRole | null, catalog?: RoleCatalog): Promise<SessionRole | null> {
+  if (role === null) return role;
+  const accepts = async (candidate: SessionRole, mode: 'existing' | 'create'): Promise<boolean> => {
+    try {
+      await prepareSessionRole(cwd, entry, { roleId: roleId(candidate), provider: entry.id, mode }, catalog);
+      return true;
+    } catch (error) {
+      if (error instanceof RoleChoiceError) return false;
+      throw error;
+    }
+  };
+  // A built-in role has no per-family variant: the target accepts it or the session continues without a role
+  // (spec 2026-11-12, 2.1). Read-only built-ins are refused by Qwen Code and `neutral` runners.
+  if (role.source === 'builtin') return await accepts(role, 'existing') ? role : null;
+  // Qwen Code has no native roles: a Claude or Codex role does not carry over (spec 2026-11-11, 3.6, D10).
+  const source = byFamily(entry, { claude: 'claude' as const, codex: 'codex' as const, qwen: null, opencode: null, neutral: null });
+  if (source === role.source) return await accepts(role, 'existing') ? role : null;
+  if (source === null) return null;
+  const sameName: SessionRole = { source, name: role.name };
+  return await accepts(sameName, 'create') ? sameName : null;
+}
+
+export interface RoleChange { from: string; to: string | null; readOnlyLost: boolean; text: string }
+
+/**
+ * The change of a session role when it continues on `entry` (spec 2026-11-12, 2.2): `null` when the role stays the same
+ * or the session has none. `readOnlyLost` compares the catalog's resolved `readOnly` of both roles. `text` is one English
+ * sentence for people, the same on every surface.
+ */
+export async function roleChangeOnSwitch(cwd: string, entry: ProviderEntry, targetLabel: string, role: SessionRole | null, catalog?: RoleCatalog): Promise<RoleChange | null> {
+  if (role === null) return null;
+  const current = catalog ?? await sessionRoleCatalog(cwd, { codex: role.source === 'codex' || entry.id === 'codex', provider: entry });
+  const next = await roleForProvider(cwd, entry, role, current);
+  const from = roleId(role)!;
+  const to = roleId(next);
+  if (from === to) return null;
+  const readOnly = (id: string | null): boolean => id !== null && (current.roles.find(item => item.id === id)?.readOnly ?? false);
+  // Fail closed: a native Codex role can be read-only (`sandbox_mode = "read-only"`); when its settings could not be read
+  // (role missing from the catalog or any Codex diagnostic), it counts as read-only and the switch needs the ack.
+  const unverified = role.source === 'codex' && (!current.roles.some(item => item.id === from) || current.diagnostics.some(item => item.source === 'codex'));
+  const readOnlyLost = (readOnly(from) || unverified) && !readOnly(to);
+  const fromName = current.roles.find(item => item.id === from)?.name ?? from;
+  const after = next === null ? 'without a role' : `as ${next.name} (${next.source})`;
+  const kind = readOnly(from) ? 'is a read-only role' : 'may be a read-only role (its Codex settings could not be verified)';
+  const text = readOnlyLost
+    ? `${fromName} ${kind} and does not run on ${targetLabel}. The session will continue ${after}, and can edit files and run commands.`
+    : `Role ${fromName} does not run on ${targetLabel}. The session will continue ${after}.`;
+  return { from, to, readOnlyLost, text };
 }
 
 export interface RoleSummary {

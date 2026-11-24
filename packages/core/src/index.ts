@@ -50,6 +50,7 @@ export { extendCodexSessionIndex } from './codex/index-session.js';
 export type { CodexIndexState } from './codex/index-session.js';
 export { createSessionIndexer } from './session-indexer.js';
 export type { SessionIndexer, SessionIndexerOptions } from './session-indexer.js';
+export { cleanInline, cleanMultiline, startsShellLine, stripEscapes } from './text-clean.js';
 export { readJsonlTail } from './jsonl-tail.js';
 export type { TailCursor, TailHandler, TailResult } from './jsonl-tail.js';
 export { indexSubsession, readSubagentMeta } from './subsession.js';
@@ -58,20 +59,53 @@ export { buildIndex, buildSessionTree, loadSessionTree } from './session-tree.js
 export type { SessionTree } from './session-tree.js';
 export { readSessionWorkflows, readWorkflowDescriptor } from './workflow.js';
 export type { WorkflowInfo } from './workflow.js';
-export { claudeSource, codexSource, watchSessions } from './watch.js';
+export { claudeSource, codexSource, qwenSource, watchSessions } from './watch.js';
 export type { SessionChange, SessionWatcher, WatchOptions, WatchSource } from './watch.js';
 export { gitBranch } from './git.js';
 export { buildAllSessions } from './all-sessions.js';
+export type { IndexReuse } from './index-reuse.js';
 export type { AllSessionsOptions } from './all-sessions.js';
-export { defaultCodexRoot, discoverCodexSessions } from './codex/discover.js';
+export { codexLogId, defaultCodexRoot, discoverCodexSessions } from './codex/discover.js';
 export type { DiscoveredCodexSession } from './codex/discover.js';
+export { qwenHome } from './qwen/home.js';
+export { QWEN_HOOK_EVENTS, QwenSettingsError } from './work/qwen-settings-file.js';
+export { qwenAuthHints } from './qwen/auth-state.js';
+export { defaultQwenRoot, discoverQwenSessions, isQwenTranscriptPath, qwenLogId } from './qwen/discover.js';
+export type { DiscoveredQwenSession } from './qwen/discover.js';
+export { buildQwenIndex, extendQwenSessionIndex, indexQwenSession, QwenIndexAccumulator } from './qwen/index-session.js';
+export type { QwenIndexState } from './qwen/index-session.js';
+export { qwenBindingCandidate, qwenBindingHolds } from './qwen/binding.js';
+export type { QwenTranscriptBinding } from './qwen/binding.js';
+export type { QwenAuthDeps, QwenAuthHint, QwenAuthHints } from './qwen/auth-state.js';
+export {
+  OPENCODE_CLI_CONFIG_ENV,
+  OPENCODE_CONFIG_ENV,
+  OPENCODE_DISABLE_AUTOUPDATE_ENV,
+  OPENCODE_PASSWORD_ENV,
+  OPENCODE_READ_ONLY_DENY,
+  OPENCODE_SERVER_URL_SLOT,
+  buildOpencodeConfig,
+  opencodeCliConfigContent,
+  opencodeConfigContent,
+  opencodePermissions,
+  opencodeServerEnv,
+} from './work/opencode-config.js';
+export type { OpencodeConfig, OpencodeConfigParams, OpencodePermission } from './work/opencode-config.js';
+export { opencodeRoleLaunch, OPENCODE_AUTO_FLAG } from './work/opencode-role.js';
+export type { OpencodeRoleLaunch } from './work/opencode-role.js';
+export { emptyOpencodeBridgeState, mapOpencodeEvent } from './feed/opencode/events.js';
+export type { OpencodeBridgeState, OpencodeJournalRecord, OpencodeMapped, OpencodeUsageFact } from './feed/opencode/events.js';
+export { applyOpencodeMessages, emptyOpencodeCursor, feedFromOpencodeMessages, mailFromExecute } from './feed/opencode/apply-opencode.js';
+export type { OpencodeCursor, OpencodeUsage } from './feed/opencode/apply-opencode.js';
 export { buildCodexIndex, indexCodexSession } from './codex/index-session.js';
-export { readCodexLimits } from './codex/limits.js';
+export { CODEX_LIMITS_DAY_DIRS, createCodexLimitsReader, readCodexLimits } from './codex/limits.js';
+export type { CodexLimitsReader } from './codex/limits.js';
 export { dropExpiredWindows, mergeLimits, readWorkLimits } from './limits.js';
 export type { LimitWindow, ProviderLimits } from './limits.js';
 export {
   claudeContextFill,
   codexContextFill,
+  qwenContextFill,
   CODEX_BASELINE_TOKENS,
   CONTEXT_DIR,
   contextFile,
@@ -87,6 +121,8 @@ export {
   agentEnv,
   assistantCommand,
   codexModelsFile,
+  qwenModelsFile,
+  opencodeModelsFile,
   commandBinary,
   commandInPath,
   effortsFor,
@@ -96,6 +132,8 @@ export {
   providerReadinessError,
   loadProviders,
   isClaudeCode,
+  providerFamily,
+  byFamily,
   isManagedEntry,
   managedRecord,
   ownsHookToken,
@@ -201,7 +239,7 @@ export {
 export type { DotState, SessionAxes, StateWordKey } from './work/session-state.js';
 export { isUnreadFor, lookupIn, recipientsOf, unreadFor } from './work/letters.js';
 export type { LetterLookup } from './work/letters.js';
-export { channelStats, letterById, letterCount, mapLetterReader, mapLetterTx, markHumanRead, previewLetterTx, readLetters, roomLetterTops, storeLetterReader, storeLetterReads, unreadCount, unreadLetters, withLetterSnapshot, writeLetters } from './work/letter-store.js';
+export { channelStats, letterById, letterCount, mapLetterReader, mapLetterTx, markHumanRead, previewLetterTx, readLetters, roomLetterTops, storeLetterReader, storeLetterReads, unreadCount, unreadLetters, withLetterSnapshot, writeLetters, writeLettersAsync } from './work/letter-store.js';
 export type { LetterJournal, LetterQuery, LetterReads, LetterTx, NewLetter, UnreadOptions } from './work/letter-store.js';
 export {
   LETTER_PAGE_MAX_ITEMS,
@@ -321,7 +359,10 @@ export {
   parsePorcelainPaths,
   plannedWorktree,
   projectChanges,
+  projectVersion,
+  VERSION_MAX_PATHS,
   worktreeDiff,
+  worktreeVersion,
 } from './work/worktree.js';
 export type {
   BranchCommit,
@@ -412,10 +453,13 @@ export type { TrustFile, TrustRecord } from './work/trust.js';
 export {
   BinaryNotFoundError,
   findBinary,
+  expectedRunnerBinary,
   findRunnerBinary,
   overrideValue,
   overrideVariable,
+  resolveRunnerBinary,
 } from './work/find-binary.js';
+export type { RunnerBinary, RunnerBinarySource } from './work/find-binary.js';
 export { GUIDE } from './work/guide.js';
 export { SKILL_MD } from './work/skill.js';
 export { PARLEY_BROWSER_SKILL_MD, PARLEY_BROWSER_SKILL_NAME } from './work/parley-browser-skill.js';
@@ -482,7 +526,7 @@ export {
   telegramTokenFingerprint,
   maskTelegramTokens,
 } from './telegram.js';
-export { DEFAULT_BACKGROUND_HOLD_MS, activityOf, hookedSince } from './work/activity.js';
+export { DEFAULT_BACKGROUND_HOLD_MS, DEFAULT_QUIET_TURN_HOLD_MS, activityOf, hookedSince, presentedActivity } from './work/activity.js';
 export type {
   Activity,
   ActivityLog,
@@ -527,6 +571,9 @@ export type {
 export {
   PARLEY_STARTUP_NOTIFICATION,
   PERMISSION_ANSWERED_EVENT,
+  INLINE_MAIL_EVENT,
+  ROOM_PACKET_EVENT,
+  PACKET_BRIDGE_EVENT,
   TERMINAL_WORKING_EVENT,
   bareEvent,
   eventRecordOf,
@@ -535,6 +582,15 @@ export {
   textOf,
   watchEvents,
 } from './work/events.js';
+export type { EventsFamily } from './work/events.js';
+export {
+  JOURNAL_CUT_SEARCH,
+  JOURNAL_ROTATE_BUDGET_MS,
+  JOURNAL_ROTATE_BYTES,
+  rotateJournal,
+  rotateWorkJournals,
+} from './work/journal-rotate.js';
+export type { JournalRotation } from './work/journal-rotate.js';
 export type {
   BackgroundTask,
   EventRecord,
@@ -544,6 +600,7 @@ export type {
 } from './work/events.js';
 export {
   deliveryAction,
+  heldWarning,
   isPointerText,
   LIMIT_RETURN_TEXT,
   limitReturnText,
@@ -554,8 +611,26 @@ export {
   wakesAtOnce,
 } from './work/delivery.js';
 export type { DeliveryAction, DeliveryInput } from './work/delivery.js';
-export { autoSleepVerdict, deliveredSince, inboxFenced } from './work/auto-sleep.js';
-export type { AutoSleepBlock, AutoSleepInput, AutoSleepVerdict } from './work/auto-sleep.js';
+export { isTaskLetter, reportRecipients } from './work/task-giver.js';
+export {
+  lastTaskLetter,
+  nudgeText,
+  silentEndingText,
+  silentTurnEnd,
+  silentTurnStep,
+  tellSilentEnding,
+} from './work/silent-endings.js';
+export type { SilentEnding, SilentEndingKind, SilentEndingMark } from './work/silent-endings.js';
+export type { ReportRecipient } from './work/task-giver.js';
+export {
+  autoSleepVerdict,
+  deliveredSince,
+  hurriedSleepMinutes,
+  inboxFenced,
+  RESUMED_SLEEP_FLOOR_MINUTES,
+  WARN_SLEEP_MINUTES,
+} from './work/auto-sleep.js';
+export type { AutoSleepBlock, AutoSleepInput, AutoSleepVerdict, SleepHurry } from './work/auto-sleep.js';
 export {
   AUTO_MACHINE_SHARE,
   HUMAN_OVERFLOW,
@@ -581,6 +656,8 @@ export {
   FEED_HOOK_EVENTS,
   HOOK_COMMAND,
   HOOK_EVENTS,
+  PACKET_BRIDGE_TIMEOUT_SEC,
+  packetBridgeCommand,
   workSettings,
   workSettingsJson,
   writeWorkSettings,
@@ -654,7 +731,11 @@ export {
   createParleyServer,
   createToolRunner,
   finishedState,
+  takeInlineMail,
+  sessionRoomPacket,
+  INLINE_MAIL_MAX_CHARS,
 } from './mcp/tools.js';
+export type { RoomPacketResult } from './work/room-packet.js';
 export type { ToolRunner } from './mcp/tools.js';
 export type { MapChanges } from './mcp/watch-map.js';
 export { HUMAN, MESSAGE_KINDS, SYSTEM, PARLEY, ENGINE } from './work/types.js';
@@ -690,6 +771,7 @@ export type {
   WorkStatus,
   WorksIndex,
   WorktreeInfo,
+  WorktreeSeed,
   CloneWorkspace,
   ArtifactsWorkspace,
 } from './work/types.js';
@@ -702,8 +784,8 @@ export type { RoleChoice, RequiredRolePermissions, ResolvedRoleChoice } from './
 export type { RoleCatalog, RoleDefinition, RoleDiagnostic } from './roles/types.js';
 export { readCodexRoleContext, projectCodexRoleContext, readCodexNativeContext } from './roles/context.js';
 export type { CodexRoleContext, CodexContextOptions, CodexNativeContext } from './roles/context.js';
-export { sessionRole, roleId, roleFromId, sessionRoleCatalog, prepareSessionRole, assertRoleDelivery, roleSummaries, roleProvider, roleModel } from './work/agents.js';
-export type { SessionRoleCatalogOptions, RoleSummary, RoleList } from './work/agents.js';
+export { sessionRole, roleId, roleFromId, sessionRoleCatalog, prepareSessionRole, roleForProvider, roleChangeOnSwitch, assertRoleDelivery, roleSummaries, roleProvider, roleModel } from './work/agents.js';
+export type { SessionRoleCatalogOptions, RoleChange, RoleSummary, RoleList } from './work/agents.js';
 export type { SessionRole } from './work/types.js';
 
 // Shared project domain. Runtime workPaths continue to use their original local project path.
@@ -749,6 +831,13 @@ export { proposeCompletion } from './work/proposals.js';
 export type { ProposalOptions } from './work/proposals.js';
 export type { MapCompact, MapCompactMail } from './work/types.js';
 export type { RoomMode, PlanMode, PlanStatus, PlanItemStatus, PlanDraft, PlanItemInput, PlanItem, PlanEvidence, PlanSubmission, PlanCheckpoint, RoomPlan, PlanExportIntent } from './work/types.js';
+export type { SessionTrial, DamagedTrial, TrialArm, DamagedTrace, TrialSegment, TrialSessionTrace, TrialRoomRow, TrialUnknownParticipation, TrialTrace } from './work/types.js';
+export { isDamagedTrial, isTrialName, isTrialTag, TRIAL_ARMS, TRIAL_TAG_PATTERN } from './work/types.js';
+export { isDamagedTrace, trialSegments, trialUnknownParticipation } from './work/trial-trace.js';
+export type { TrialSegments, TrialSegmentSource } from './work/trial-trace.js';
+export type { TrialLedgerIo } from './work/trial-ledger.js';
+export { appendTrialLedger, parseTrialLedger, readTrialLedger, trialLedgerFile, unresolvedIntents, withTrialAssignment } from './work/trial-ledger.js';
+export type { TrialCancelLine, TrialConfirmLine, TrialIntentLine, TrialLedger, TrialLedgerLine, TrialTarget, TrialProtocolOptions, UnresolvedIntent } from './work/trial-ledger.js';
 export type { AutonomousDraft, AttemptChannelRequest, AutonomousPlan, PlanAttempt, HandoffManifest, HandoffManifestInput, Receipt, CheckSpec, CheckResult, Integration, AutonomousBudget, AutonomousOp } from './work/types.js';
 
 export { parseProjectMemory, readProjectMemory, addProjectMemory, updateProjectMemory, removeProjectMemory, undoProjectMemory } from './work/project-memory.js';
@@ -758,7 +847,7 @@ export type { RememberInput, RememberOptions, MemorySuggestionResult, UndoableMe
 export { formatMemoryFactBlock, MEMORY_MAX_BYTES, MEMORY_TRUNCATION_MARKER } from './work/session-layer.js';
 export type { MemoryLayerWarning, SessionLayerWarning } from './work/session-layer.js';
 
-export { capturePlanNotice, reservePlanEffects, flushPlanEffects, resumablePlanLetter, summarizePlanEffects } from './work/plan-effects.js';
+export { capturePlanNotice, reservePlanEffects, PLAN_LETTERS_PER_HOUR, flushPlanEffects, resumablePlanLetter, summarizePlanEffects } from './work/plan-effects.js';
 export type { PlanEffect, PlanBacklogIntent } from './work/types.js';
 export type { PlanEffectsSummary, PlanReservation } from './work/plan-effects.js';
 
@@ -811,21 +900,25 @@ export type {
 } from './work/capacity-report.js';
 
 export {
+  SWARM_COVERAGES,
   SWARM_OBJECTIVE_MAX,
   SWARM_ROLES,
+  SWARM_SLICE_MAX,
   SWARM_STATUSES,
   SWARM_SUMMARY_MAX,
   SWARM_TAG_MAX,
+  isSwarmSlice,
   isSwarmTag,
   isSwarmExpired,
   isSwarmTerminal,
+  memberOutcome,
   memberState,
   swarmDeadline,
   swarmMemberIds,
   swarmOfSession,
   swarmProgress,
 } from './work/swarms.js';
-export type { SwarmCreator, SwarmMemberState, SwarmRole, SwarmStatus, WorkSwarm, WorkSwarmMember } from './work/swarms.js';
+export type { SwarmCoverage, SwarmCreator, SwarmMemberOutcome, SwarmMemberState, SwarmRole, SwarmStatus, WorkSwarm, WorkSwarmMember } from './work/swarms.js';
 
 export { captureDecisionJournal, flushDecisionJournal, validateDecisionJournalStorage, DecisionJournalError, readDecisionJournalFiles, classifyDecisionFile, DECISION_LIST_MAX_FILES } from './work/decision-journal.js';
 export type { DecisionJournalIntent, DecisionJournalCode, DecisionJournalFlushResult, DecisionJournalFile, DecisionJournalListing, DecisionFileState } from './work/decision-journal.js';
@@ -895,5 +988,31 @@ export { JOB_CANCEL_SAFE_TOOLS, JOB_ONLY_TOOLS, JOB_TOKEN_PREFIX, JOB_TOOL_ALLOW
 export type { AgentPlanStatus, AgentPlanItem, AgentPlanState, AgentPlanSummary, AgentPlan, PlanCall } from './agent-plan.js';
 export { fetchLatestVersion, installMethod, isNewer } from './cli-updates.js';
 export type { CliUpdateProvider, InstallMethod, LatestVersionSource } from './cli-updates.js';
+export { CLI_TOOLS, LATEST_SOURCE_URLS, isOpenCodeLegacy, parseOpenCodeVersion } from './cli-tools.js';
+export type {
+  CliDescriptor,
+  CliInstallMethod,
+  CliInstallPlan,
+  CliLatestSource,
+  CliPlatform,
+  CliTool,
+  CliUpdatePlan,
+} from './cli-tools.js';
 export { sessionWorktreeFinished } from './work/worktree-owner.js';
 export type { WorktreeLeftover } from './work/worktree-owner.js';
+export {
+  INCLUDE_MAX_ENTRIES,
+  INCLUDE_MAX_FILE_BYTES,
+  listIncludePaths,
+  resolveIncludePaths,
+  WORKTREE_INCLUDE_FILE,
+} from './work/worktree-include.js';
+export {
+  LOCK_FILE_NAMES,
+  SEED_MAX_ENTRIES,
+  SEED_TIMEOUT_MS,
+  describeSeed,
+  seedWorktree,
+  toWorktreeSeed,
+} from './work/worktree-seed.js';
+export type { SeedDeps, SeedReport, SeedSkip, SeedSkipReason } from './work/worktree-seed.js';

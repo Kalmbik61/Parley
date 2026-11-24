@@ -32,6 +32,14 @@ describe('AgentIcon — брендовые значки (решение 6)', () 
     expect(imageOf(container)?.getAttribute('src')).toMatch(/codex-light\.svg$/);
   });
 
+  it('opencode — opencode.svg (нейтральная монограмма «Oc») в обеих темах, без буквы', () => {
+    const { container } = render(<AgentIcon provider="opencode" />);
+    expect(imageOf(container)?.getAttribute('src')).toMatch(/opencode\.svg$/);
+    expect(container.textContent).toBe('');
+    act(() => useUiStore.setState({ dark: true }));
+    expect(imageOf(container)?.getAttribute('src')).toMatch(/opencode\.svg$/);
+  });
+
   it('claude одинаков в обеих темах', () => {
     useUiStore.setState({ dark: true });
     const { container } = render(<AgentIcon provider="claude" />);
@@ -130,6 +138,15 @@ describe('AgentIcon — аккаунты подписки (спека подпи
     expect(imageOf(container)?.getAttribute('src')).toMatch(/claude\.svg$/);
   });
 
+  it('an account row with an unknown family gets the neutral Parley icon; a codex family gets the Codex icon', () => {
+    useProvidersStore.setState({ providers: [row('custom-claude-2', account, 'mystery' as never), row('custom-claude-3', account, 'codex' as never)] });
+    const unknown = render(<AgentIcon provider="custom-claude-2" />);
+    expect(imageOf(unknown.container)?.getAttribute('src')).toMatch(/parley\.svg$/);
+    unknown.unmount();
+    const codex = render(<AgentIcon provider="custom-claude-3" />);
+    expect(imageOf(codex.container)?.getAttribute('src')).toMatch(/codex/);
+  });
+
   it('свой провайдер с адресом (в том числе без kind у хоста до подписок) — значок Parley', () => {
     useProvidersStore.setState({ providers: [row('custom-kimi', endpoint), row('custom-glm2', { ...endpoint, kind: 'endpoint' })] });
     const kimi = render(<AgentIcon provider="custom-kimi" />);
@@ -180,5 +197,40 @@ describe('AgentIcon — аккаунты подписки (спека подпи
     expect(imageOf(container)?.getAttribute('src')).toMatch(/parley\.svg$/);
     act(() => useProvidersStore.setState({ providers: [row('custom-claude-2', account)] }));
     expect(imageOf(container)?.getAttribute('src')).toMatch(/claude\.svg$/);
+  });
+});
+
+describe('AgentIcon — кольцо цвета агента (спека доски комнаты 5.1)', () => {
+  it('без sessionId разметка прежняя: data-agent-icon на картинке, обёртки нет', () => {
+    const { container } = render(<AgentIcon provider="claude" />);
+    expect(container.firstElementChild?.tagName).toBe('IMG');
+    expect(imageOf(container)?.getAttribute('data-agent-icon')).toBe('');
+    expect(container.querySelector('[data-agent-colour]')).toBeNull();
+  });
+
+  it('с sessionId — обёртка с data-agent-icon и data-agent-colour, у картинки атрибута нет', () => {
+    const { container } = render(<AgentIcon provider="claude" size={14} sessionId="s-11" />);
+    const ring = container.firstElementChild as HTMLElement;
+    expect(ring.tagName).toBe('SPAN');
+    expect(ring.getAttribute('data-agent-icon')).toBe('');
+    expect(ring.getAttribute('data-agent-colour')).toBe('3');
+    expect(ring.style.width).toBe('14px');
+    expect(ring.style.outlineOffset).toBe('2px');
+    expect(imageOf(container)?.getAttribute('data-agent-icon')).toBeNull();
+    expect(container.querySelectorAll('[data-agent-icon]').length).toBe(1);
+  });
+
+  it('буква неизвестного провайдера тоже получает кольцо', () => {
+    const { container } = render(<AgentIcon provider="zeta" sessionId="s-2" />);
+    const ring = container.firstElementChild as HTMLElement;
+    expect(ring.getAttribute('data-agent-colour')).toBe('2');
+    expect(container.textContent).toBe('Z');
+    expect(container.querySelectorAll('[data-agent-icon]').length).toBe(1);
+  });
+
+  it('sessionId не вида s-N — как без него', () => {
+    const { container } = render(<AgentIcon provider="claude" sessionId="human" />);
+    expect(container.firstElementChild?.tagName).toBe('IMG');
+    expect(container.querySelector('[data-agent-colour]')).toBeNull();
   });
 });

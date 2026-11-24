@@ -773,6 +773,30 @@ it("лид из окна — живой лид: закрытый назначе�
   );
 });
 
+it("проверяющего нет в комнате: проверку берёт живой лид, лид-исполнитель только решает", () => {
+  const plan = planOf({
+    items: [
+      itemWith(1, { status: "done", owner: "s-02", verifier: "s-03" }),
+      itemWith(2, { status: "done", owner: "s-01", verifier: "s-03" }),
+    ],
+  });
+  const { container } = render(
+    <PlanPanel
+      entry={dutyEntry(plan)}
+      roomId="r-01"
+      bridge={createFakeBridge()}
+    />,
+  );
+  expect(dutiesOf(itemNode(container, 1))).toEqual([
+    "Owner S02 Checker: Awaiting verification by s-03",
+    "Verifier S01 Builder must verify",
+  ]);
+  expect(dutiesOf(itemNode(container, 2))).toEqual([
+    "Owner S01 Builder: Awaiting verification by s-03",
+    "Lead S01 Builder must resolve the block",
+  ]);
+});
+
 it("в режиме checklist проверяющего нет, а сделанный пункт обязанностей не даёт", () => {
   const plan = planOf({
     mode: "checklist",

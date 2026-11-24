@@ -10,23 +10,23 @@ import type { BacklogService, BacklogServiceOptions } from './backlog-service.js
 let root: string;
 let services: BacklogService[];
 let value: BacklogSnapshot;
-let callbacks: Map<string, () => void>;
+let callbacks: Map<string, (filename?: string | null) => void>;
 let handles: { directory: string; close: ReturnType<typeof vi.fn>; error?: (() => void) | undefined }[];
 beforeEach(async () => {
   root = await realpath(await mkdtemp(path.join(tmpdir(), 'parley-backlog-watch-')));
   services = []; callbacks = new Map(); handles = [];
   value = { projectPath: root, sharedProjectPath: root, version: 'v1', file: { relativePath: '.parley/backlog.md', exists: false }, items: [], suggestions: [], rule: 'ask', diagnostics: [] };
 });
-afterEach(async () => { services.forEach(service => service.close()); await rm(root, { recursive: true, force: true }); });
+afterEach(async () => { vi.useRealTimers(); services.forEach(service => service.close()); await rm(root, { recursive: true, force: true }); });
 function service(options: BacklogServiceOptions = {}) {
   const read = vi.fn(async (projectPath: string) => ({ ...value, projectPath }));
-  const watchDirectory = vi.fn((directory: string, changed: () => void) => {
+  const watchDirectory = vi.fn((directory: string, changed: (filename?: string | null) => void) => {
     callbacks.set(directory, changed);
     const handle = { directory, close: vi.fn(), error: undefined as (() => void) | undefined };
     handles.push(handle);
     return { close: handle.close, on: (_event: 'error', listener: () => void) => { handle.error = listener; } };
   });
-  const result = createBacklogService({ debounceMs: 0, snapshot: read, watchDirectory, ...options }); services.push(result);
+  const result = createBacklogService({ debounceMs: 0, minIntervalMs: 0, snapshot: read, watchDirectory, ...options }); services.push(result);
   return { result, read, watchDirectory };
 }
 describe('bounded project backlog subscriptions', () => {
@@ -148,6 +148,51 @@ describe('bounded project backlog subscriptions', () => {
     await vi.waitFor(() => expect(canonicalNotify).toHaveBeenCalledWith({ projectPath: root }));
     expect(canonicalNotify.mock.calls.some(([event]) => event.unavailable)).toBe(false);
     expect(aliasNotify).not.toHaveBeenCalled(); expect(read).toHaveBeenLastCalledWith(root); expect(handles[0]!.close).not.toHaveBeenCalled();
+  });
+
+  describe('root event filter and minimum read interval', () => {
+    const pause = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
+    it('an event named .eslintcache does not schedule a read', async () => {
+      const { result, read } = service(); await result.subscribe(root, 'one', vi.fn());
+      callbacks.get(root)!('.eslintcache'); callbacks.get(root)!('tsconfig.tsbuildinfo'); await pause(60);
+      expect(read).toHaveBeenCalledTimes(1);
+    });
+    it('events for the backlog files, the state directory, .git and nameless events schedule a read', async () => {
+      const { result, read } = service(); await result.subscribe(root, 'one', vi.fn());
+      let reads = 1;
+      for (const name of ['TODOS.md', 'todo.md', '.parley', '.git', '.gitignore', 'TODOS.md.tmp4242', '.TODOS.md.swp', null, undefined]) {
+        callbacks.get(root)!(name);
+        reads += 1; await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(reads));
+      }
+    });
+    it('100 events within 100 ms give one read', async () => {
+      const { result, read } = service({ debounceMs: 30 }); await result.subscribe(root, 'one', vi.fn());
+      for (let index = 0; index < 100; index++) callbacks.get(root)!(index % 2 === 0 ? 'TODOS.md' : null);
+      await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(2)); await pause(120);
+      expect(read).toHaveBeenCalledTimes(2);
+    });
+    it('two reads are at least minIntervalMs apart and the last event is not dropped', async () => {
+      const starts: number[] = [];
+      const { result } = service({ minIntervalMs: 300, snapshot: async projectPath => { starts.push(Date.now()); return { ...value, projectPath }; } });
+      await result.subscribe(root, 'one', vi.fn());
+      for (let index = 0; index < 10; index++) callbacks.get(root)!('TODOS.md');
+      await vi.waitFor(() => expect(starts).toHaveLength(2), { timeout: 3000 });
+      callbacks.get(root)!('TODOS.md');
+      await vi.waitFor(() => expect(starts).toHaveLength(3), { timeout: 3000 });
+      expect(starts[1]! - starts[0]!).toBeGreaterThanOrEqual(290); expect(starts[2]! - starts[1]!).toBeGreaterThanOrEqual(290);
+    });
+    it('an ignored name is picked up by one slow fallback read', async () => {
+      const { result, read } = service(); await result.subscribe(root, 'one', vi.fn());
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+      callbacks.get(root)!('.eslintcache'); callbacks.get(root)!('.eslintcache');
+      await vi.advanceTimersByTimeAsync(29_000); expect(read).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(2_000); await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+      await vi.advanceTimersByTimeAsync(29_000); expect(read).toHaveBeenCalledTimes(2);
+    });
+    it('refuses a minimum interval outside 0 to 10000', () => {
+      expect(() => createBacklogService({ minIntervalMs: 10_001 })).toThrow();
+      expect(() => createBacklogService({ minIntervalMs: -1 })).toThrow();
+    });
   });
 
 });

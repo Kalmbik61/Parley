@@ -268,7 +268,13 @@ describe('PrimaryAction (тест 1)', () => {
 describe('Слияние (тест 2)', () => {
   it('подтверждение с числами → worktrees.merge; conflict → тост и раскрытые Conflicts с файлами ответа', async () => {
     bridge.setHandler('worktrees.diff', () => diff({ commits: [COMMIT], files: [file('a.ts', 3, 1)], stats: { additions: 3, deletions: 1 } }));
-    bridge.setHandler('worktrees.merge', () => ({ ok: false as const, reason: 'conflict' as const, files: ['src/x.ts'] }));
+    // После отказа вид обновляется (D7-12), и mergeCheck хоста видит тот же конфликт, что и ответ слияния.
+    let merged = false;
+    bridge.setHandler('worktrees.mergeCheck', (): MergeCheck => (merged ? { status: 'conflicts', files: ['src/x.ts'] } : { status: 'clean' }));
+    bridge.setHandler('worktrees.merge', () => {
+      merged = true;
+      return { ok: false as const, reason: 'conflict' as const, files: ['src/x.ts'] };
+    });
     renderPanel();
     fireEvent.click(await screen.findByRole('button', { name: 'Merge into master' }));
     expect(within(dialog()).getByText('Merge harnas/w-a/s02 into master?')).toBeTruthy();
@@ -304,6 +310,89 @@ describe('Слияние (тест 2)', () => {
     await flush();
     expect(toast).toHaveBeenCalledWith('Merged into master');
     await waitFor(() => expect(count('worktrees.diff')).toBe(2));
+  });
+});
+
+describe('Защита слияния (D7-12)', () => {
+  const MERGEABLE = (): WorktreeDiff => diff({ commits: [COMMIT], files: [file('a.ts')] });
+
+  it('два нажатия подтверждения слияния шлют один worktrees.merge; пока идёт вызов, кнопка неактивна', async () => {
+    bridge.setHandler('worktrees.diff', MERGEABLE);
+    let release: () => void = () => {};
+    bridge.setHandler('worktrees.merge', async () => {
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return { ok: true as const, commit: 'd'.repeat(40) } as never;
+    });
+    renderPanel();
+    fireEvent.click(await screen.findByRole('button', { name: 'Merge into master' }));
+    const confirm = within(dialog()).getByRole('button', { name: 'Merge into master' });
+    // Оба нажатия — в одном такте, до перерисовки: защита не должна зависеть от disabled.
+    act(() => {
+      confirm.click();
+      confirm.click();
+    });
+    await flush();
+    const main = screen.getByRole('button', { name: 'Merge into master' }) as HTMLButtonElement;
+    expect(main.disabled).toBe(true);
+    fireEvent.click(main);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    await act(async () => {
+      release();
+      await Promise.resolve();
+    });
+    await flush();
+    expect(count('worktrees.merge')).toBe(1);
+    expect(toast).toHaveBeenCalledTimes(1);
+  });
+
+  it('ошибка worktrees.merge — тост, обновление списка и снятая занятость', async () => {
+    bridge.setHandler('worktrees.diff', MERGEABLE);
+    bridge.setHandler('worktrees.merge', () => {
+      throw { code: 'timeout', message: 'git завис' };
+    });
+    renderPanel();
+    fireEvent.click(await screen.findByRole('button', { name: 'Merge into master' }));
+    const before = count('worktrees.diff');
+    fireEvent.click(within(dialog()).getByRole('button', { name: 'Merge into master' }));
+    await flush();
+    expect(toast.error).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(count('worktrees.diff')).toBe(before + 1));
+    expect((screen.getByRole('button', { name: 'Merge into master' }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('отказ ok: false (грязная база) — тост, обновление списка и снятая занятость', async () => {
+    bridge.setHandler('worktrees.diff', MERGEABLE);
+    bridge.setHandler('worktrees.merge', () => ({ ok: false as const, reason: 'base_dirty' as const, files: [] }));
+    renderPanel();
+    fireEvent.click(await screen.findByRole('button', { name: 'Merge into master' }));
+    const before = count('worktrees.diff');
+    fireEvent.click(within(dialog()).getByRole('button', { name: 'Merge into master' }));
+    await flush();
+    expect(toast.error).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(count('worktrees.diff')).toBe(before + 1));
+    expect((screen.getByRole('button', { name: 'Merge into master' }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('отказ conflict вызывает и onConflicts (секция Conflicts), и обновление списка', async () => {
+    bridge.setHandler('worktrees.diff', MERGEABLE);
+    // Хост после обновления видит тот же конфликт, что и ответ слияния.
+    let merged = false;
+    bridge.setHandler('worktrees.mergeCheck', (): MergeCheck => (merged ? { status: 'conflicts', files: ['src/x.ts'] } : { status: 'clean' }));
+    bridge.setHandler('worktrees.merge', () => {
+      merged = true;
+      return { ok: false as const, reason: 'conflict' as const, files: ['src/x.ts'] };
+    });
+    renderPanel();
+    fireEvent.click(await screen.findByRole('button', { name: 'Merge into master' }));
+    const before = count('worktrees.diff');
+    fireEvent.click(within(dialog()).getByRole('button', { name: 'Merge into master' }));
+    await flush();
+    expect(toast.error).toHaveBeenCalledWith('Merge conflict in src/x.ts');
+    await waitFor(() => expect(count('worktrees.diff')).toBe(before + 1));
+    const conflicts = await screen.findByRole('region', { name: 'Conflicts' });
+    expect(within(conflicts).getByText('src/x.ts')).toBeTruthy();
   });
 });
 
@@ -640,6 +729,79 @@ describe('Discard worktree… (тест 8)', () => {
     await flush();
     expect(vi.mocked(toast.error).mock.calls[0]?.[0]).toMatch(/^Couldn't discard worktree: /);
     expect(screen.queryByText('The worktree was discarded')).toBeNull();
+  });
+
+  it('повторный Discard во время вызова не шлёт второй worktrees.discard', async () => {
+    bridge.setHandler('worktrees.diff', () => diff({ commits: [COMMIT], files: [file('a.ts')] }));
+    let release: () => void = () => {};
+    bridge.setHandler('worktrees.discard', async () => {
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return { ok: true as const };
+    });
+    renderPanel();
+    await screen.findByRole('button', { name: 'Merge into master' });
+    await openDiscard();
+    fireEvent.click(within(dialog()).getByRole('button', { name: 'Discard' }));
+    await flush();
+    await openDiscard();
+    fireEvent.click(within(dialog()).getByRole('button', { name: 'Discard' }));
+    await flush();
+    expect(count('worktrees.discard')).toBe(1);
+    await act(async () => {
+      release();
+      await Promise.resolve();
+    });
+    await flush();
+    expect(count('worktrees.discard')).toBe(1);
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it('отказ диалога о несохранённых буферах снимает замок: следующий Discard идёт', async () => {
+    const own: TabSpec = { kind: 'file', id: tabId.file({ kind: 'worktree', sessionId: 's-02' }, 'a.ts'), root: { kind: 'worktree', sessionId: 's-02' }, path: 'a.ts' };
+    useLayoutStore.setState({ layouts: { [KEY]: [own, term('s-02')].reduce((acc, tab) => openTab(acc, tab), emptyLayout()) } });
+    let answer = false;
+    useLayoutStore.getState().setCloseGuard(async () => answer);
+    try {
+      bridge.setHandler('worktrees.diff', () => diff({ commits: [COMMIT], files: [file('a.ts')] }));
+      renderPanel();
+      await screen.findByRole('button', { name: 'Merge into master' });
+      await openDiscard();
+      fireEvent.click(within(dialog()).getByRole('button', { name: 'Discard' }));
+      await flush();
+      expect(count('worktrees.discard')).toBe(0);
+      answer = true;
+      await openDiscard();
+      fireEvent.click(within(dialog()).getByRole('button', { name: 'Discard' }));
+      await flush();
+      expect(count('worktrees.discard')).toBe(1);
+    } finally {
+      useLayoutStore.getState().setCloseGuard(null);
+    }
+  });
+
+  it('ошибка discard — тост, обновление списка и снятый замок', async () => {
+    bridge.setHandler('worktrees.diff', () => diff({ commits: [COMMIT], files: [file('a.ts')] }));
+    let fail = true;
+    bridge.setHandler('worktrees.discard', () => {
+      if (fail) throw { code: 'timeout', message: 'git завис' };
+      return { ok: true as const };
+    });
+    renderPanel();
+    await screen.findByRole('button', { name: 'Merge into master' });
+    const before = count('worktrees.diff');
+    await openDiscard();
+    fireEvent.click(within(dialog()).getByRole('button', { name: 'Discard' }));
+    await flush();
+    expect(toast.error).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(count('worktrees.diff')).toBe(before + 1));
+    // Замок снят: повторная попытка доходит до хоста.
+    fail = false;
+    await openDiscard();
+    fireEvent.click(within(dialog()).getByRole('button', { name: 'Discard' }));
+    await flush();
+    expect(count('worktrees.discard')).toBe(2);
   });
 });
 

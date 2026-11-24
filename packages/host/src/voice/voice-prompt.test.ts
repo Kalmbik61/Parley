@@ -18,6 +18,16 @@ describe('VOICE_PROMPT', () => {
     expect(VOICE_PROMPT).toContain('confirm it on the screen');
   });
 
+  it('режим-нейтральные строки: помощник делает или готовит карточку, голос повторяет исход из итога', () => {
+    expect(VOICE_PROMPT).toContain(
+      '- Parley assistant: knows the state of Parley rooms, sessions, background jobs, works and builds, and can change things in Parley for the user: it either does the action at once or prepares a card for the user to confirm on screen. The result says which of the two happened.',
+    );
+    expect(VOICE_PROMPT).toContain(
+      'When the result says an action was done, say what was done. When the result says a card was prepared, say that you prepared a card and the user should confirm it on the screen. Never say an action was done unless the result says so.',
+    );
+    expect(VOICE_PROMPT).not.toContain('Never say an action was done before the user confirms');
+  });
+
   it('конфиг сессии: модель, инструкции, клиентская делегация без задержки подтверждения и один Decisions-триггер эмоции', () => {
     const config = liveSessionConfig();
     expect(config).toMatchObject({ model: 'gpt-live-1', instructions: VOICE_PROMPT, delegation: { type: 'client' } });

@@ -9,6 +9,7 @@ import type { MergeCheck, WindowWorkEntry } from '@parley/core';
 import { HOST_ERROR_REASONS, refKey, type SessionRef } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
+import { useHostSupports } from '../lib/capabilities.js';
 import { workingEnded } from '../lib/turn-end.js';
 import { useActivityStore } from '../store/activity.js';
 import { useHostStore } from '../store/host.js';
@@ -17,6 +18,35 @@ import { useReviewStore } from './store.js';
 
 /** Спека 11.1: обновление не чаще раза в 2 с — кроме `refresh()`. */
 const THROTTLE_MS = 2000;
+
+/** Сравнение ответов без `patch` (окно всегда просит `patch: false`, но чужой хост мог его прислать). */
+function sameSource(prev: ChangesSource, next: ChangesSource): boolean {
+  const text = (source: ChangesSource): string => JSON.stringify(source, (name, value: unknown) => (name === 'patch' ? undefined : value));
+  return text(prev) === text(next);
+}
+
+/**
+ * Можно ли пропустить полный запрос по версии набора изменений. Неверный пропуск хуже лишнего запроса,
+ * поэтому любое сомнение (нет метода, ошибка версии, изменчивая версия, другая цель или вид запроса,
+ * нечего показывать) — полный запрос.
+ */
+export function canSkipReload(input: {
+  supported: boolean;
+  /** Версия, которую вернул хост; `null` — вызов не удался. */
+  fetched: string | null;
+  /** Версия, снятая ДО полного запроса, ответ которого сейчас показан. */
+  remembered: { kind: string; version: string } | null;
+  /** Цель (ref) и вид запроса; чужая запомненная версия не годится. */
+  kind: string;
+  /** Показанный ответ получен успешно. */
+  shownOk: boolean;
+}): boolean {
+  if (!input.supported || input.fetched === null || input.remembered === null || !input.shownOk) return false;
+  if (input.fetched.startsWith('volatile:')) return false;
+  return input.remembered.kind === input.kind && input.remembered.version === input.fetched;
+}
+
+type Outcome = { next: ChangesSource; version: string | null } | { skip: true } | { err: unknown };
 
 type Mode = 'none' | 'pending' | 'worktree' | 'project';
 
@@ -38,6 +68,11 @@ export function useChanges(input: {
     session === undefined ? 'none' : worktree === null ? 'project' : worktree.createdAt === null ? 'pending' : 'worktree';
   const branch = worktree?.branch ?? '';
   const base = worktree?.base ?? '';
+
+  // Поддержка метода версии читается через ref: обрыв связи не должен перезапускать эффект и сбрасывать вид.
+  const hasVersion = useHostSupports(mode === 'project' ? 'changes.version' : 'worktrees.version');
+  const hasVersionRef = useRef(hasVersion);
+  hasVersionRef.current = hasVersion;
 
   const [source, setSource] = useState<ChangesSource | null>(null);
   const [loading, setLoading] = useState(false);
@@ -68,9 +103,22 @@ export function useChanges(input: {
     const ref: SessionRef = { projectPath, workId, sessionId };
     const key = refKey(ref);
     let disposed = false;
-    let seq = 0;
-    let lastAt = Number.NEGATIVE_INFINITY;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    // Один запрос в полёте на цель (D7-3): триггер во время запроса ставит один отложенный повтор.
+    let running = false;
+    let pending: 'none' | 'throttled' | 'now' = 'none';
+    // Дроссель считается от конца предыдущего запроса, а не от начала.
+    let lastEnd = Number.NEGATIVE_INFINITY;
+    // Ответ, поставленный под явный refresh() во время запроса, устарел: его не применяем.
+    let stale = false;
+    // Следующий ответ отдаётся новым объектом даже при равных данных (refresh и конец хода агента):
+    // содержимое файла могло смениться при тех же числах строк, а вкладка диффа по объекту перечитывает стороны.
+    let forceNew = false;
+    let lastSource: ChangesSource | null = null;
+    // Версия набора изменений, снятая ДО полного запроса, чей ответ показан (после запроса снятая версия
+    // потеряла бы правку, попавшую между ними). Привязана к цели и виду запроса.
+    const kind = `${key}|${mode}|${withCheck ? 'check' : 'plain'}`;
+    let remembered: { kind: string; version: string } | null = null;
     setSource(null);
 
     const fetchSource = async (): Promise<ChangesSource> => {
@@ -90,45 +138,106 @@ export function useChanges(input: {
       return { kind: 'worktree', branch, base, diff, check };
     };
 
-    const run = (): void => {
-      if (timer !== null) clearTimeout(timer);
-      timer = null;
-      lastAt = Date.now();
-      seq += 1;
-      const mine = seq;
-      setLoading(true);
-      // Ответ прежнего запроса (другой сессии или устаревший) отбрасывается: победил свежий.
-      const current = (): boolean => !disposed && mine === seq;
-      fetchSource().then(
-        (next) => {
-          if (!current()) return;
-          // Каждая загрузка — новый объект: по нему вкладка диффа перечитывает стороны (8.3).
-          setSource(next);
+    const fetchVersion = async (): Promise<string | null> => {
+      try {
+        const answer =
+          mode === 'project'
+            ? await bridge.call('changes.version', { ref })
+            : await bridge.call('worktrees.version', { ref });
+        return typeof answer.version === 'string' && answer.version !== '' ? answer.version : null;
+      } catch {
+        // Любая ошибка версии (в том числе worktree-missing): полный запрос скажет, что на самом деле.
+        return null;
+      }
+    };
+
+    const execute = async (force: boolean): Promise<Outcome> => {
+      let version: string | null = null;
+      if (force) {
+        // Явный refresh и конец хода версию не проверяют; запомненная версия больше не описывает показанное.
+        remembered = null;
+      } else if (hasVersionRef.current) {
+        version = await fetchVersion();
+        if (canSkipReload({ supported: true, fetched: version, remembered, kind, shownOk: lastSource !== null })) {
+          return { skip: true };
+        }
+      }
+      return { next: await fetchSource(), version };
+    };
+
+    const finish = (outcome: Outcome, force: boolean): void => {
+      running = false;
+      lastEnd = Date.now();
+      if (disposed) return;
+      if (!stale) {
+        if ('skip' in outcome) {
+          // Версия та же: показанный ответ верен, запрос не делался.
+          setLoading(false);
+        } else if ('next' in outcome) {
+          remembered =
+            outcome.version === null || outcome.version.startsWith('volatile:')
+              ? null
+              : { kind, version: outcome.version };
+          // Равный ответ оставляет прежний объект: вкладка диффа не перечитывает файлы (D7-2).
+          if (force || lastSource === null || !sameSource(lastSource, outcome.next)) {
+            lastSource = outcome.next;
+            setSource(outcome.next);
+          }
           setError(null);
           setLoading(false);
-        },
-        (err: unknown) => {
-          if (!current()) return;
-          const info = decodeIpcError(err);
+        } else {
+          remembered = null;
+          const info = decodeIpcError(outcome.err);
           if (info.data?.['reason'] === HOST_ERROR_REASONS.worktreeMissing) {
             // Папки worktree нет (отброшен не из этого окна или до перезапуска): признак в сторе —
             // вкладки показывают своё состояние и снимают загрузку, повторов нет (раунд 8, пункт 1).
             console.warn('[parley] changes', info.code, info.message);
             useReviewStore.getState().markDiscarded(key);
-            setLoading(false);
-            return;
+          } else {
+            setError(changesErrorText(info));
           }
-          setError(changesErrorText(info));
           setLoading(false);
-        },
-      );
+        }
+      }
+      stale = false;
+      const next = pending;
+      pending = 'none';
+      if (next === 'now') run();
+      else if (next === 'throttled') request();
     };
 
-    const request = (): void => {
+    function run(): void {
+      if (timer !== null) clearTimeout(timer);
+      timer = null;
+      running = true;
+      stale = false;
+      const force = forceNew;
+      forceNew = false;
+      setLoading(true);
+      execute(force).then(
+        (outcome) => finish(outcome, force),
+        (err: unknown) => finish({ err }, force),
+      );
+    }
+
+    function request(): void {
+      if (running) {
+        if (pending === 'none') pending = 'throttled';
+        return;
+      }
       if (timer !== null) return;
-      const wait = lastAt + THROTTLE_MS - Date.now();
+      const wait = lastEnd + THROTTLE_MS - Date.now();
       if (wait <= 0) run();
       else timer = setTimeout(run, wait);
+    }
+
+    // Явный refresh не ждёт дросселя, но и не накладывается на идущий запрос: тот ответ устарел.
+    const refreshNow = (): void => {
+      forceNew = true;
+      if (running) {
+        pending = 'now';
+        stale = true;
+      } else run();
     };
 
     // Событие несёт весь снимок, объекты у каждого события новые, а карты малы: сравнение
@@ -144,7 +253,10 @@ export function useChanges(input: {
     });
 
     const offActivity = useActivityStore.subscribe((state, prev) => {
-      if (workingEnded(prev.byRef[key]?.activity, state.byRef[key]?.activity)) request();
+      if (workingEnded(prev.byRef[key]?.activity, state.byRef[key]?.activity)) {
+        forceNew = true;
+        request();
+      }
     });
 
     // Связь вернулась — заново (fix-7.3): оболочка при обрыве не перемонтируется.
@@ -152,7 +264,7 @@ export function useChanges(input: {
       if (state.connections !== prev.connections) request();
     });
 
-    refreshRef.current = run;
+    refreshRef.current = refreshNow;
     run();
 
     return () => {

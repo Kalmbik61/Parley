@@ -14,7 +14,7 @@
 
 import { useMemo } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import { CODEX_FEED_MIN_VERSION, FEED_CODEX_FEATURE, FEED_MIN_VERSION, isCustomProviderId, refKey, type SessionRef } from '@parley/protocol';
+import { CODEX_FEED_MIN_VERSION, FEED_CODEX_FEATURE, FEED_MIN_VERSION, FEED_OPENCODE_FEATURE, FEED_QWEN_FEATURE, OPENCODE_FEED_MIN_VERSION, QWEN_FEED_MIN_VERSION, isCustomProviderId, refKey, type SessionRef } from '@parley/protocol';
 import type { TabSpec, TerminalView } from '../../shared/layout-types.js';
 import { useActivityStore, type ActivityEntry } from '../store/activity.js';
 import { useHostStore } from '../store/host.js';
@@ -28,7 +28,7 @@ export interface FeedAvailabilityInput {
   /** `WorkSession.provider`: встроенный или свой провайдер. */
   provider: string;
   /** Семейство текущей записи; нет поля у старого хоста — Claude только по id. */
-  family?: 'claude' | null | undefined;
+  family?: 'claude' | 'codex' | 'qwen' | 'opencode' | null | undefined;
   /** Версия CLI провайдера из `providers.list`; `null` — неизвестна. */
   version: string | null;
 }
@@ -46,11 +46,19 @@ export type FeedUnavailableReason = 'host-unsupported' | 'provider-unsupported' 
 
 export function feedUnavailableReason({ hostMethods: methods, features, provider, family, version }: FeedAvailabilityInput): FeedUnavailableReason | null {
   if (!methods.has('feed.snapshot')) return 'host-unsupported';
+  if (provider === 'kimi') return methods.has('kimi.getState') ? null : 'host-unsupported';
   if (provider === 'codex') {
     if (!features?.has(FEED_CODEX_FEATURE)) return 'host-unsupported';
+  } else if (family === 'qwen') {
+    // Qwen Code: the feed is built from its transcript; a host without the feature has no qwen branch.
+    if (!features?.has(FEED_QWEN_FEATURE)) return 'host-unsupported';
+  } else if (family === 'opencode') {
+    // OpenCode: the feed is built from the messages API of the session's server; a host without the feature has no opencode branch.
+    if (!features?.has(FEED_OPENCODE_FEATURE)) return 'host-unsupported';
   } else if (family !== 'claude' && !(family === undefined && provider === 'claude')) return 'provider-unsupported';
   if (version === null || semver(version) === null) return 'unknown-version';
-  return atLeast(version, provider === 'codex' ? CODEX_FEED_MIN_VERSION : FEED_MIN_VERSION) ? null : 'old-version';
+  const min = provider === 'codex' ? CODEX_FEED_MIN_VERSION : family === 'qwen' ? QWEN_FEED_MIN_VERSION : family === 'opencode' ? OPENCODE_FEED_MIN_VERSION : FEED_MIN_VERSION;
+  return atLeast(version, min) ? null : 'old-version';
 }
 
 export function feedAvailable(input: FeedAvailabilityInput): boolean {
@@ -71,13 +79,16 @@ export function feedAvailability(
   input: FeedAvailabilityInput & { loaded: boolean },
 ): boolean | null {
   if (!input.hostMethods.has('feed.snapshot')) return false;
+  if (input.provider === 'kimi') return feedAvailable(input);
   if (
     !input.loaded &&
     (input.provider === 'claude' ||
       input.provider === 'glm' ||
       input.provider === 'codex' ||
       isCustomProviderId(input.provider) ||
-      input.family === 'claude')
+      input.family === 'claude' ||
+      input.family === 'qwen' ||
+      input.family === 'opencode')
   )
     return null;
   if (!input.loaded) return false;
@@ -155,12 +166,11 @@ export function useHostHasFeed(): boolean {
  * именно её записи, в том числе у GLM.
  */
 export function useFeedAvailability(): (provider: string) => boolean | null {
-  const hasFeed = useHostHasFeed();
   const providers = useProvidersStore((state) => state.providers);
   const loaded = useProvidersStore((state) => state.loaded);
   const status = useHostStore((state) => state.status);
   const features = useMemo(() => hostFeatures(status), [status]);
-  const methods = hasFeed ? FEED_METHODS : NO_METHODS;
+  const methods = useMemo(() => hostMethods(status), [status]);
   return (provider) => {
     const info = providers.find((entry) => entry.id === provider);
     return feedAvailability({
@@ -173,9 +183,6 @@ export function useFeedAvailability(): (provider: string) => boolean | null {
     });
   };
 }
-
-const FEED_METHODS: ReadonlySet<string> = new Set(['feed.snapshot']);
-const NO_METHODS: ReadonlySet<string> = new Set();
 
 /** Та же проверка вне React — для действия палитры `chat.toggleView`. */
 export function feedAvailableNow(provider: string): boolean {

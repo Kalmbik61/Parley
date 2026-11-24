@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { lstat, realpath, stat } from 'node:fs/promises';
 import type { Stats } from 'node:fs';
+import { homedir } from 'node:os';
 import path from 'node:path';
 import { TextDecoder } from 'node:util';
 
@@ -16,7 +17,30 @@ export interface ProjectContextOptions {
   readGit?: (args: readonly string[], env: NodeJS.ProcessEnv) => Promise<ProjectGitResult>;
 }
 
+/** Сколько живёт ответ git: подстраховка для того, что нельзя дёшево отследить (см. отпечатки ниже). */
+export const PROJECT_CONTEXT_TTL_MS = 10_000;
+const CACHE_LIMIT = 256;
+let spawned = 0;
+/** Только для тестов: сколько процессов `git` запущено этим модулем. */
+export function gitSpawnCount(): number { return spawned; }
+
+interface Cached<T> { stamp: string; at: number; value: Promise<T> }
+const identities = new Map<string, Cached<SharedProjectContext> & { mainRoot: string | null }>();
+const ignores = new Map<string, Cached<ProjectGitResult>>();
+/** Только для тестов. */
+export function resetProjectContextCache(): void { identities.clear(); ignores.clear(); }
+function remember<T>(map: Map<string, T>, key: string, entry: T): void {
+  map.delete(key);
+  map.set(key, entry);
+  while (map.size > CACHE_LIMIT) map.delete(map.keys().next().value as string);
+}
+/** Кэш только для вызовов без подмен: `readGit` и `env` делают ответ тестовым и детерминированным. */
+const cacheable = (options: ProjectContextOptions): boolean => options.readGit === undefined && options.env === undefined;
+const lstatMark = (file: string): Promise<string> => lstat(file).then(info => `${info.ino}:${info.mtimeMs}`, () => '-');
+const statMark = (file: string): Promise<string> => stat(file).then(info => `${info.mtimeMs}:${info.size}`, () => '-');
+
 async function nativeGit(args: readonly string[], env: NodeJS.ProcessEnv): Promise<ProjectGitResult> {
+  spawned += 1;
   return new Promise(resolve => {
     const child = execFile('git', [...args], {
       env, encoding: 'buffer', timeout: 5000, maxBuffer: 1024 * 1024,
@@ -67,7 +91,7 @@ async function hasNoRepositoryMarker(cwd: string): Promise<boolean> {
  * https://git-scm.com/docs/git-worktree#_commands
  * https://git-scm.com/docs/git-rev-parse#Documentation/git-rev-parse.txt---local-env-vars
  */
-async function resolveProjectIdentity(
+async function readProjectIdentity(
   projectPath: string, options: ProjectContextOptions = {},
 ): Promise<SharedProjectContext> {
   const unavailable = { kind: 'unavailable', reason: 'git-context-unverified' } as const;
@@ -118,6 +142,44 @@ async function resolveProjectIdentity(
   } catch { return { kind: 'unavailable', reason: 'project-unavailable' }; }
 }
 
+/**
+ * Личность проекта с кэшем на 10 с по `realpath`. Отпечаток: `.git` (ino и mtime) в каждой папке от проекта до корня
+ * ФС — ловит `git init`, замену репозитория и вложенный репозиторий — и, для git, `<mainRoot>/.git/worktrees`
+ * (добавили или убрали worktree). Исчезнувшая или перенесённая папка проекта кэш не обслуживает: `realpath` и `stat`
+ * идут каждый раз, а ключ — настоящий путь. Не кэшируется `unavailable`. Смена остального (например, голый
+ * репозиторий в предке) видна не позже чем через TTL.
+ */
+async function resolveProjectIdentity(
+  projectPath: string, options: ProjectContextOptions = {},
+): Promise<SharedProjectContext> {
+  if (!cacheable(options)) return readProjectIdentity(projectPath, options);
+  let cwd: string;
+  try {
+    cwd = await realpath(projectPath);
+    if (!(await stat(cwd)).isDirectory()) return readProjectIdentity(projectPath, options);
+  } catch { return readProjectIdentity(projectPath, options); }
+  const folders: string[] = [];
+  for (let folder = cwd, depth = 0; depth < 128; depth++) {
+    folders.push(folder);
+    const parent = path.dirname(folder);
+    if (parent === folder) break;
+    folder = parent;
+  }
+  const chain = (await Promise.all(folders.map(folder => lstatMark(path.join(folder, '.git'))))).join(',');
+  const worktrees = async (mainRoot: string): Promise<string> => `${chain}|${await lstatMark(path.join(mainRoot, '.git', 'worktrees'))}`;
+  const hit = identities.get(cwd);
+  if (hit !== undefined && Date.now() - hit.at < PROJECT_CONTEXT_TTL_MS &&
+      (hit.mainRoot === null ? chain : await worktrees(hit.mainRoot)) === hit.stamp) return { ...(await hit.value) };
+  const entry: Cached<SharedProjectContext> & { mainRoot: string | null } = {
+    stamp: chain, at: Date.now(), mainRoot: null, value: readProjectIdentity(cwd, options),
+  };
+  remember(identities, cwd, entry);
+  const context = await entry.value;
+  if (context.kind === 'unavailable') { if (identities.get(cwd) === entry) identities.delete(cwd); }
+  else if (context.kind === 'git') { entry.mainRoot = context.mainRoot; entry.stamp = await worktrees(context.mainRoot); }
+  return { ...context };
+}
+
 /** Preserve the explicit nested folder in the corresponding main checkout. */
 export async function resolveSharedProjectContext(projectPath: string, options: ProjectContextOptions = {}): Promise<SharedProjectContext> {
   const identity = await resolveProjectIdentity(projectPath, options);
@@ -138,13 +200,49 @@ export async function resolveMainCheckout(projectPath: string, options: ProjectC
 }
 
 
-/** Read-only diagnostic. Root/custom ignore rules are never changed. Unknown Git output is not proof. */
+async function readIgnored(context: Extract<SharedProjectContext, { kind: 'git' }>, file: string,
+  options: ProjectContextOptions): Promise<ProjectGitResult> {
+  const env = { ...Object.fromEntries(Object.entries(options.env ?? process.env)
+    .filter(([key]) => !key.startsWith('GIT_'))), LC_ALL: 'C', LANG: 'C' };
+  return (options.readGit ?? nativeGit)(['--no-optional-locks', '-c', 'core.fsmonitor=false',
+    '-C', context.projectPath, 'check-ignore', '--no-index', '--', path.relative(context.projectPath, file)], env);
+}
+
+/**
+ * Отпечаток всего, что видит `check-ignore`: `.gitignore` в каждой папке от файла до основного корня, `info/exclude` и
+ * `config` репозитория, глобальные конфиг и `ignore` в обычных местах. Файл, на который указывает свой `core.excludesFile`
+ * вне этих мест, отследить дёшево нельзя: такая правка видна не позже чем через TTL.
+ */
+async function ignoreStamp(context: Extract<SharedProjectContext, { kind: 'git' }>, file: string): Promise<string> {
+  const files: string[] = [];
+  for (let folder = path.dirname(file), depth = 0; depth < 128; depth++) {
+    files.push(path.join(folder, '.gitignore'));
+    const parent = path.dirname(folder);
+    if (folder === context.mainRoot || parent === folder) break;
+    folder = parent;
+  }
+  const home = homedir();
+  const xdg = process.env['XDG_CONFIG_HOME'] || path.join(home, '.config');
+  files.push(path.join(context.mainRoot, '.git', 'info', 'exclude'), path.join(context.mainRoot, '.git', 'config'),
+    path.join(home, '.gitconfig'), path.join(xdg, 'git', 'config'), path.join(xdg, 'git', 'ignore'));
+  return (await Promise.all(files.map(statMark))).join(',');
+}
+
+/**
+ * Read-only diagnostic. Root/custom ignore rules are never changed. Unknown Git output is not proof.
+ * Ответ (код 0 «игнорируется», 1 «нет») держится 10 с под отпечатком `ignoreStamp`; любой другой исход git не кэшируется.
+ */
 export async function sharedPathIgnored(context: Exclude<SharedProjectContext, { kind: 'unavailable' }>, file: string,
   options: ProjectContextOptions = {}): Promise<boolean> {
   if (context.kind !== 'git') return false;
-  const env = { ...Object.fromEntries(Object.entries(options.env ?? process.env)
-    .filter(([key]) => !key.startsWith('GIT_'))), LC_ALL: 'C', LANG: 'C' };
-  const result = await (options.readGit ?? nativeGit)(['--no-optional-locks', '-c', 'core.fsmonitor=false',
-    '-C', context.projectPath, 'check-ignore', '--no-index', '--', path.relative(context.projectPath, file)], env);
+  if (!cacheable(options)) return (await readIgnored(context, file, options)).code === 0;
+  const key = `${context.projectPath}\0${file}`;
+  const stamp = await ignoreStamp(context, file);
+  const hit = ignores.get(key);
+  if (hit !== undefined && hit.stamp === stamp && Date.now() - hit.at < PROJECT_CONTEXT_TTL_MS) return (await hit.value).code === 0;
+  const entry: Cached<ProjectGitResult> = { stamp, at: Date.now(), value: readIgnored(context, file, options) };
+  remember(ignores, key, entry);
+  const result = await entry.value;
+  if (result.code !== 0 && result.code !== 1 && ignores.get(key) === entry) ignores.delete(key);
   return result.code === 0;
 }

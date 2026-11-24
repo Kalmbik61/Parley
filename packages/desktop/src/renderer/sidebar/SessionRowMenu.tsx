@@ -22,6 +22,7 @@ import { useRef, useState, type ReactNode } from 'react';
 import { toast } from 'sonner';
 import type { SessionStatus, WorkSession } from '@parley/core';
 import { liveStatus } from '@parley/core/session-state';
+import { HOST_ERROR_REASONS } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import type { TabSpec } from '../../shared/layout-types.js';
@@ -95,9 +96,11 @@ export function SessionRowMenu({ workKey, projectPath, workId, session, bridge, 
   const call = (method: 'sessions.resume' | 'sessions.stop' | 'sessions.close' | 'sessions.delete'): void => {
     bridge.call(method, { ref }).catch((error: unknown) => {
       console.warn(`[parley] ${method}`, error);
-      // Возобновление отказывает по бюджету: человеку нужна причина и что делать, строка её не покажет.
+      // Возобновление отказывает по бюджету или по роли после замены агента: человеку нужна причина и что делать,
+      // строка её не покажет.
       const failure = decodeIpcError(error);
-      if (method === 'sessions.resume' && failure.data?.['code'] === 'resource-budget') toast(startErrorText(failure, S.errors.actions.resumeNamed(label)));
+      const explained = failure.data?.['code'] === 'resource-budget' || failure.data?.['reason'] === HOST_ERROR_REASONS.roleChange;
+      if (method === 'sessions.resume' && explained) toast(startErrorText(failure, S.errors.actions.resumeNamed(label)));
     });
   };
 

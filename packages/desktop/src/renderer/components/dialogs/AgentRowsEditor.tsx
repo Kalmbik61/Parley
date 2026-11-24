@@ -16,6 +16,7 @@ import { effortChoices } from '../../lib/effort-choices.js';
 import { sessionTag } from '../../lib/participant.js';
 import { useUiStore } from '../../store/ui.js';
 import { Button } from '../../ui/button.js';
+import { Input } from '../../ui/input.js';
 import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover.js';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../ui/select.js';
 import { AgentIcon } from '../AgentIcon.js';
@@ -123,15 +124,17 @@ export function AgentRowsEditor({
         {agents.map((row, index) => {
           const role = roleOf(env, row);
           const info = infoOf(env, row);
-          const roleModel = roleModelOf(role, providerIdOf(env, row));
+          const chosenId = providerIdOf(env, row);
+          const roleModel = roleModelOf(role, chosenId);
           const displayedModel = row.modelTouched ? chosenModel(row, info) : roleModel;
-          const models = info?.models ?? null;
-          const efforts = effortChoices(info, chosenModel(row, info));
+          const chosenKimi = chosenId === 'kimi';
+          const models = chosenKimi ? null : info?.models ?? null;
+          const efforts = chosenKimi ? null : effortChoices(info, chosenModel(row, info));
           // Без касания показывается умолчание роли, если оно есть среди уровней модели, иначе `Default`.
           const roleEffort = role?.effort ?? null;
           const roleEffortListed = roleEffort !== null && efforts?.some((level) => level.id === roleEffort) === true;
           const displayedEffort = row.effortTouched ? chosenEffort(row, info) : roleEffortListed ? roleEffort : null;
-          const chosenId = providerIdOf(env, row);
+          const chosenQwen = info?.family === 'qwen';
           const result = results[row.key];
           const rowLocked = busy || result?.status === 'started';
           const isLead = row.key === lead;
@@ -146,7 +149,7 @@ export function AgentRowsEditor({
                   <SelectTrigger aria-label={text.roleField} className="min-w-[132px] max-w-[180px]"><SelectValue /></SelectTrigger>
                   <SelectContent className={LIST_HEIGHT}>
                     <SelectItem value="none">{text.noRole}</SelectItem>
-                    {env.roles.map(item => <SelectItem key={item.id} value={item.id}>{item.readOnly ? '🔒 ' : ''}{S.roles.option(item.name, item.source)}</SelectItem>)}
+                    {env.roles.map(item => <SelectItem key={item.id} value={item.id} disabled={item.readOnly === true && chosenQwen} title={item.readOnly === true && chosenQwen ? S.roles.readOnlyUnavailableOnQwen : undefined}>{item.readOnly ? '🔒 ' : ''}{S.roles.option(item.name, item.source)}</SelectItem>)}
                   </SelectContent>
                 </Select>
                 {lead !== null ? (
@@ -168,6 +171,8 @@ export function AgentRowsEditor({
                 <div role="radiogroup" aria-label={text.agentGroup(index + 1)} onKeyDown={radioGroupKeyDown} className="flex shrink-0 gap-1">
                   {(env.providers ?? []).map((provider) => {
                     const on = provider.id === chosenId;
+                    // A read-only role cannot run on Qwen Code yet: its pill is off while such a role is chosen.
+                    const readOnlyOnQwen = provider.family === 'qwen' && role?.readOnly === true;
                     return (
                       <Popover
                         key={provider.id}
@@ -183,8 +188,8 @@ export function AgentRowsEditor({
                             role="radio"
                             aria-checked={on}
                             tabIndex={on ? 0 : -1}
-                            title={role !== undefined && role.source !== 'builtin' ? S.roles.providerLocked : providerName(provider.id, provider.label)}
-                            disabled={rowLocked || (role !== undefined && role.source !== 'builtin')}
+                            title={role !== undefined && role.source !== 'builtin' ? S.roles.providerLocked : readOnlyOnQwen ? S.roles.readOnlyUnavailableOnQwen : providerName(provider.id, provider.label)}
+                            disabled={rowLocked || (role !== undefined && role.source !== 'builtin') || readOnlyOnQwen}
                             onClick={() => {
                               if (provider.available && !on) {
                                 onUpdate(row.key, { provider: provider.id, providerTouched: true, model: null, modelTouched: false, effort: null, effortTouched: false });
@@ -249,10 +254,24 @@ export function AgentRowsEditor({
                       ))}
                     </SelectContent>
                   </Select>
+                ) : chosenQwen ? (
+                  // Qwen Code has no model catalog: a typed model id, empty is Default (spec 2026-11-11, 3.6).
+                  <Input
+                    aria-label={text.modelField}
+                    placeholder={text.modelTyped}
+                    value={displayedModel ?? ''}
+                    disabled={rowLocked}
+                    maxLength={200}
+                    onChange={(event) => onUpdate(row.key, { model: event.target.value.trim() === '' ? null : event.target.value.trim(), modelTouched: true })}
+                    className="min-w-[120px] flex-1"
+                  />
                 ) : (
                   <span className="min-w-0 flex-1" />
                 )}
-                {!row.effortTouched && roleEffort !== null && !roleEffortListed ? <span data-role-effort className="text-xs text-muted-foreground">{S.roles.defaultEffort(roleEffort)}</span> : null}
+                {chosenKimi && info?.available === true ? (
+                  <p className="text-xs text-muted-foreground">{S.providerCard.kimi.chooseInChat}</p>
+                ) : null}
+                {!chosenKimi && !row.effortTouched && roleEffort !== null && !roleEffortListed ? <span data-role-effort className="text-xs text-muted-foreground">{S.roles.defaultEffort(roleEffort)}</span> : null}
                 <div className="ml-auto flex items-center gap-2">
                 {efforts === null ? null : (
                   <Select
@@ -304,6 +323,9 @@ export function AgentRowsEditor({
                 </button>
                 </div>
               </div>
+              {info?.family === 'opencode' && role?.readOnly === true ? (
+                <p data-role-note className="min-w-0 break-words text-xs text-muted-foreground">{S.roles.opencodeReadOnlyNote}</p>
+              ) : null}
               {row.roleMissing === null ? null : (
                 <p role="status" data-role-missing className="min-w-0 break-words text-xs text-destructive">{S.recipes.roleMissing(row.roleMissing)}</p>
               )}

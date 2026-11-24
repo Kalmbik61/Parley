@@ -85,11 +85,15 @@ const exists = async (file: string): Promise<boolean> =>
   );
 
 describe('файл лимитов', () => {
-  it('rate_limits во входе → limits/<сессия>.json с { at, rateLimits }, как пришло', async () => {
+  it('rate_limits во входе → limits/<сессия>.json с { at, changedAt, rateLimits }, как пришло', async () => {
     await run(input());
 
     const written = JSON.parse(await readFile(path.join(workDir, limitsFile), 'utf8')) as unknown;
-    expect(written).toEqual({ at: '2026-09-29T12:00:00.000Z', rateLimits });
+    expect(written).toEqual({
+      at: '2026-09-29T12:00:00.000Z',
+      changedAt: '2026-09-29T12:00:00.000Z',
+      rateLimits,
+    });
   });
 
   it('старые сессии (R3): адрес из HARNAS_* тоже читается; оба набора — главнее PARLEY_*', async () => {
@@ -97,6 +101,7 @@ describe('файл лимитов', () => {
     await run(input(), { env: legacy });
     expect(JSON.parse(await readFile(path.join(workDir, limitsFile), 'utf8'))).toEqual({
       at: '2026-09-29T12:00:00.000Z',
+      changedAt: '2026-09-29T12:00:00.000Z',
       rateLimits,
     });
 
@@ -118,6 +123,64 @@ describe('файл лимитов', () => {
       rateLimits: { five_hour: { used_percentage: number } };
     };
     expect(written.rateLimits.five_hour.used_percentage).toBe(61);
+  });
+
+  describe('changedAt: когда числа сессии последний раз менялись', () => {
+    const at = (offsetMs: number) => ({ now: () => NOW + offsetMs });
+    const readFileJson = async (): Promise<{ at: string; changedAt: string }> =>
+      JSON.parse(await readFile(path.join(workDir, limitsFile), 'utf8')) as { at: string; changedAt: string };
+
+    it('те же числа в новом вызове — changedAt прежний, at свежий', async () => {
+      await run(input(), at(0));
+      await run(input(), at(60_000));
+      expect(await readFileJson()).toMatchObject({
+        at: '2026-09-29T12:01:00.000Z',
+        changedAt: '2026-09-29T12:00:00.000Z',
+      });
+    });
+
+    it('те же числа в другом порядке ключей — тоже без изменений', async () => {
+      await run(input(), at(0));
+      const reordered = {
+        seven_day: { resets_at: NOW_SEC + 86_400, used_percentage: 41.2 },
+        five_hour: { resets_at: NOW_SEC + 3600, used_percentage: 58 },
+      };
+      await run(input({ rate_limits: reordered }), at(60_000));
+      expect((await readFileJson()).changedAt).toBe('2026-09-29T12:00:00.000Z');
+    });
+
+    it('числа изменились — changedAt = at', async () => {
+      await run(input(), at(0));
+      await run(
+        input({ rate_limits: { ...rateLimits, seven_day: { used_percentage: 10, resets_at: NOW_SEC + 86_400 } } }),
+        at(60_000),
+      );
+      expect(await readFileJson()).toMatchObject({
+        at: '2026-09-29T12:01:00.000Z',
+        changedAt: '2026-09-29T12:01:00.000Z',
+      });
+    });
+
+    it('прежний файл без changedAt (старая версия скрипта) — его at', async () => {
+      await mkdir(path.join(workDir, 'limits'));
+      await writeFile(
+        path.join(workDir, limitsFile),
+        JSON.stringify({ at: '2026-09-29T08:00:00.000Z', rateLimits }),
+        'utf8',
+      );
+      await run(input(), at(60_000));
+      expect(await readFileJson()).toMatchObject({
+        at: '2026-09-29T12:01:00.000Z',
+        changedAt: '2026-09-29T08:00:00.000Z',
+      });
+    });
+
+    it('прежний файл битый — changedAt = at', async () => {
+      await mkdir(path.join(workDir, 'limits'));
+      await writeFile(path.join(workDir, limitsFile), '{oops', 'utf8');
+      await run(input(), at(0));
+      expect((await readFileJson()).changedAt).toBe('2026-09-29T12:00:00.000Z');
+    });
   });
 
   it('без rate_limits файл не пишется и каталог limits не заводится', async () => {

@@ -5,6 +5,7 @@
 import type { DevtoolsBatch, DevtoolsSnapshot, ResponseBody, ViewportSpec } from './browser-devtools.js';
 import type { ContextKind } from './context-markdown.js';
 import type { BrowserAuthCancel, BrowserAuthRequest } from './basic-auth.js';
+import type { BrowserCertCancel, BrowserCertRequest } from './client-cert.js';
 import type { BrowserOwner } from './layout-types.js';
 
 /** Единственный раздел `<webview>`: страж main (`main/browser/guard.ts`) другой не пускает. */
@@ -277,6 +278,12 @@ export interface BrowserApi {
   onAuthCancel(listener: (e: BrowserAuthCancel) => void): () => void;
   /** Ответ оверлея: логин и пароль или `null` — отмена. Пароль идёт только main ↔ окно этой вкладки. */
   authResponse(requestId: string, credentials: { username: string; password: string } | null): Promise<void>;
+  /** Сайт просит клиентский сертификат (`browser:cert-request`): окно показывает слой выбора над вкладкой. */
+  onCertRequest(listener: (e: BrowserCertRequest) => void): () => void;
+  /** Запрос снят main'ом (вкладка ушла со страницы или закрыта): окно убирает слой (`browser:cert-cancel`). */
+  onCertCancel(listener: (e: BrowserCertCancel) => void): () => void;
+  /** Ответ слоя: отпечаток выбранного сертификата и «запомнить для сайта» или `null` — «не сейчас». */
+  certResponse(requestId: string, answer: { fingerprint: string; remember: boolean } | null): Promise<void>;
   /** Окно ответило на `focus` события активности (`browser:agent-focus-ready`); `ok` — фокус на `<webview>`, видимость не требуется. */
   agentFocusReady(id: string, ok: boolean): Promise<void>;
 }

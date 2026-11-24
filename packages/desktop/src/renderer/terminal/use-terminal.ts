@@ -383,6 +383,10 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
       setSearch(null);
       setTerminal(null);
       termRef.current = null;
+      // xterm 5.5 оставляет отложенные вызовы viewport после open/reset. После dispose
+      // они не должны читать размеры уже освобождённого рендерера.
+      const viewport = (term as unknown as { _core?: { viewport?: { syncScrollArea(immediate?: boolean): void } } })._core?.viewport;
+      if (viewport !== undefined) viewport.syncScrollArea = () => {};
       term.dispose();
     };
     // Терминал заводится заново только при смене контейнера или сессии.

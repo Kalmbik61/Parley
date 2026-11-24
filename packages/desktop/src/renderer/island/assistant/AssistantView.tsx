@@ -85,6 +85,8 @@ export interface AssistantViewProps {
   onSubmit(text: string): void;
   onMic(): void;
   onDecide(decision: 'send' | 'cancel'): void;
+  /** Остановить идущий план; нет — хост не умеет, кнопки «Stop» нет. */
+  onStopPlan?(proposalId: string): void;
   /** Первое касание вида забирает клавиатуру: открытый сам остров не фокусируем. */
   onTakeKeyboard(): void;
   onUnqueue(id: number): void;
@@ -145,7 +147,7 @@ function actionsLabel(steps: readonly ActionStepView[]): string {
 const STEP_MARK: Record<ActionsReport['steps'][number]['status'], string> = { done: '✓', failed: '✗', running: '…', skipped: '–', waiting: '' };
 
 /** Отчёт о плане `actions`: шаги со значками, строка итога и пометки сделанных шагов. */
-function PlanReport({ report }: { report: ActionsReport }): JSX.Element {
+function PlanReport({ report, stop }: { report: ActionsReport; stop: JSX.Element | null }): JSX.Element {
   return (
     <div data-testid="assistant-report" className="flex shrink-0 flex-col gap-1 text-[13px]">
       <ol className="flex flex-col gap-0.5">
@@ -166,12 +168,22 @@ function PlanReport({ report }: { report: ActionsReport }): JSX.Element {
       <div data-testid="assistant-report-line" className={report.status === 'stopped' ? 'text-[var(--status-warning-text)]' : 'text-[var(--color-accent)]'}>
         {reportLine(report)}
       </div>
+      {stop}
       {report.notes.map((note) => (
         <div key={note} className="text-muted-foreground [overflow-wrap:anywhere]">
           {note}
         </div>
       ))}
     </div>
+  );
+}
+
+/** Значок автономного режима: предупреждающий цвет, подсказка о действиях без подтверждения. */
+function AutoBadge(): JSX.Element {
+  return (
+    <span data-testid="assistant-auto" title={S.assistant.autoBadgeHint} className="shrink-0 rounded px-1 text-[11px] font-semibold uppercase tracking-wide text-[var(--status-warning-text)] ring-1 ring-[var(--status-warning-text)]">
+      {S.assistant.autoBadge}
+    </span>
   );
 }
 
@@ -351,9 +363,30 @@ export function AssistantView(props: AssistantViewProps): JSX.Element {
     const element = scrollRef.current;
     if ((proposalId === null && queue.length === 0 && history.length === 0) || element === null) return;
     element.scrollTop = element.scrollHeight;
-  }, [proposalId, queue.length, history.length, sending, host.turn, host.answer, props.cardError, props.notice]);
+  }, [proposalId, queue.length, history.length, sending, host.turn, host.answer, props.cardError, props.notice, host.watchNote]);
   // Отчёт плана живёт, пока нет карточки; он заменяет «Done ✓». Карточку `actions` Enter не подтверждает — только кнопка.
   const report = proposal === null ? (host.report ?? null) : null;
+  // «Stop» плана: после нажатия, пока план идёт, вместо кнопки — подпись «Stopping…».
+  const [stoppedId, setStoppedId] = useState<string | null>(null);
+  const stop =
+    report === null || report.status !== 'running' || props.onStopPlan === undefined ? null : stoppedId === report.proposalId ? (
+      <span className="text-[13px] text-muted-foreground">{S.assistant.stopping}</span>
+    ) : (
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        data-testid="assistant-stop-plan"
+        className="shrink-0 self-start"
+        onMouseDown={(event) => event.preventDefault()}
+        onClick={() => {
+          setStoppedId(report.proposalId);
+          props.onStopPlan?.(report.proposalId);
+        }}
+      >
+        {S.assistant.stopPlan}
+      </Button>
+    );
   const submit = (): void => {
     if (draft.trim() === '' && proposal !== null && proposal.action !== 'actions' && armed && deciding === null) props.onDecide('send');
     else props.onSubmit(draft);
@@ -361,7 +394,9 @@ export function AssistantView(props: AssistantViewProps): JSX.Element {
   const question = sending ?? host.question;
   const compact = props.live !== undefined && props.live.phase !== 'idle';
   // Компактный вид показывает одну строку: отказ Live, затем уведомление острова, затем причину закрытой карточки.
-  const compactNotice = props.live?.notice ?? props.notice ?? (proposal === null ? props.cardError : null);
+  // Заметка слежения хоста (`watchNote`) показывается как уведомление острова и пропадает со следующим ходом.
+  const notice = props.notice ?? host.watchNote ?? null;
+  const compactNotice = props.live?.notice ?? notice ?? (proposal === null ? props.cardError : null);
   return (
     <div data-testid="assistant-view" data-compact={compact || undefined} onPointerDownCapture={props.onTakeKeyboard} className="island-reveal flex w-[420px] flex-col gap-2 px-3 pb-3 pt-1.5 text-sm" style={{ maxHeight: props.maxHeight }}>
       {compact || pending === null ? null : (
@@ -393,7 +428,13 @@ export function AssistantView(props: AssistantViewProps): JSX.Element {
           className="absolute inset-0"
         />
       </div>
-      {compact ? null : (
+      {compact ? (
+        host.autonomous === true ? (
+          <div className="flex justify-center">
+            <AutoBadge />
+          </div>
+        ) : null
+      ) : (
         <div data-testid="assistant-status" className="flex items-center justify-center gap-1.5 text-[13px] text-muted-foreground">
           <span
             data-testid="assistant-status-dot"
@@ -401,6 +442,7 @@ export function AssistantView(props: AssistantViewProps): JSX.Element {
             {...(dotColor === undefined ? {} : { style: { background: dotColor } })}
           />
           {statusLabel(host, input, sending !== null)}
+          {host.autonomous === true ? <AutoBadge /> : null}
         </div>
       )}
       {/* Середина сжимается первой (`min-h-0`); пустая не занимает места и не добавляет зазор. Нажатие на ней не тащит
@@ -429,7 +471,7 @@ export function AssistantView(props: AssistantViewProps): JSX.Element {
             {sending === null && host.outcome === 'sent' ? <div data-testid="assistant-sent" className="text-[13px] text-[var(--color-accent)]">{S.assistant.sent}</div> : null}
             {sending === null && host.outcome === 'cancelled' ? <div className="text-[13px] text-muted-foreground">{S.assistant.cancelled}</div> : null}
             {sending === null && host.outcome === 'done' && report === null ? <div data-testid="assistant-done" className="text-[13px] text-[var(--color-accent)]">{S.assistant.done}</div> : null}
-            {report === null ? null : <PlanReport report={report} />}
+            {report === null ? null : <PlanReport report={report} stop={stop} />}
             {/* Карточку закрыл хост с причиной (уже отвечена, решение пересмотрено, задача не ушла): карточки уже нет, причина — рядом с итогом. */}
             {sending === null && proposal === null && props.cardError !== null ? (
               <div data-testid="assistant-outcome-note" className="text-[13px] text-[var(--status-warning-text)]">
@@ -471,6 +513,14 @@ export function AssistantView(props: AssistantViewProps): JSX.Element {
             </button>
           </div>
         ))}
+        {compact && report !== null ? (
+          <div className="flex shrink-0 items-center justify-between gap-2 text-[13px]">
+            <span data-testid="assistant-report-line" className={report.status === 'stopped' ? 'text-[var(--status-warning-text)]' : 'text-[var(--color-accent)]'}>
+              {reportLine(report)}
+            </span>
+            {stop}
+          </div>
+        ) : null}
         {compact ? (
           compactNotice === null ? null : (
             <div data-testid={props.live?.notice != null ? 'assistant-live-notice' : 'assistant-notice'} className="text-[13px] text-muted-foreground">
@@ -479,7 +529,7 @@ export function AssistantView(props: AssistantViewProps): JSX.Element {
           )
         ) : (
           <>
-            {props.notice === null ? null : <div data-testid="assistant-notice" className="text-[13px] text-muted-foreground">{props.notice}</div>}
+            {notice === null ? null : <div data-testid="assistant-notice" className="text-[13px] text-muted-foreground">{notice}</div>}
             {props.live?.notice == null ? null : (
               <div data-testid="assistant-live-notice" className="text-[13px] text-muted-foreground">
                 {props.live.notice}

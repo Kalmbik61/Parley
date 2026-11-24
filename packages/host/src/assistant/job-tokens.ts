@@ -1,14 +1,15 @@
 /**
  * Токены job Assistant Core (план голоса, T1): у каждого job свой токен MCP помощника, привязанный к `jobId`.
  * Токен разговора job не получает и не наследует. Токен живёт только в памяти и только пока идёт прогон: после
- * `revoke` маршруты помощника отвечают ему 401. Здесь же хост сам записывает, что job делал (вызовы инструментов и
+ * `revoke` маршруты помощника отвечают ему 401. С токеном хранится неизменяемая запись допуска прогона (спека автономии §5.2). Здесь же хост сам записывает, что job делал (вызовы инструментов и
  * карточки): модель этих записей не пишет и не правит, поэтому `JobResult.cards` и `toolRefs` ей не верить не нужно.
  */
 
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { JOB_TOKEN_PREFIX, sessionMention, sessionTag } from '@parley/core';
 import { normalizeHumanText } from '@parley/core/assistant';
 import type { HumanOverviewV1 } from '@parley/protocol';
+import type { JobAdmission } from './assistant-endpoint.js';
 
 /** Вызов инструмента job, как его увидел хост. Аргументов (текст человека) здесь нет. */
 export interface JobToolRef {
@@ -32,11 +33,15 @@ export interface JobRecord {
 }
 
 export interface JobTokens {
-  /** Новый токен job; прежний токен того же job перестаёт действовать. */
-  issue(jobId: string): string;
+  /** Новый токен job с записью допуска этого прогона; прежний токен того же job перестаёт действовать. */
+  issue(jobId: string, start: Pick<JobAdmission, 'origin' | 'autoAtStart'>): string;
   /** Токен перестаёт действовать; записи о job остаются до `take`. */
   revoke(jobId: string): void;
-  /** `jobId` по токену; `null` — это не токен действующего job. Сравнение в постоянное время. */
+  /** Запись допуска по токену; `null` — это не токен действующего job. Сравнение в постоянное время. */
+  admissionOf(token: string): JobAdmission | null;
+  /** Запись допуска действующего прогона job; `null` — токен job отозван или не выдавался. */
+  current(jobId: string): JobAdmission | null;
+  /** `jobId` по токену (`admissionOf(token)?.jobId`). */
   jobOf(token: string): string | null;
   recordTool(jobId: string, tool: string, ok: boolean): void;
   recordCard(jobId: string, card: JobCardRef): void;
@@ -48,7 +53,7 @@ export interface JobTokens {
 }
 
 export function createJobTokens(now: () => number = Date.now): JobTokens {
-  const byJob = new Map<string, Buffer>();
+  const byJob = new Map<string, { token: Buffer; admission: JobAdmission }>();
   const records = new Map<string, JobRecord>();
   const recordOf = (jobId: string): JobRecord => {
     let record = records.get(jobId);
@@ -58,24 +63,28 @@ export function createJobTokens(now: () => number = Date.now): JobTokens {
     }
     return record;
   };
+  const admissionOf = (token: string): JobAdmission | null => {
+    const given = Buffer.from(token);
+    let found: JobAdmission | null = null;
+    // Перебор без раннего выхода: время не зависит от того, чей токен подошёл.
+    for (const { token: expected, admission } of byJob.values()) {
+      if (given.length === expected.length && timingSafeEqual(given, expected)) found = admission;
+    }
+    return found;
+  };
   return {
-    issue(jobId) {
+    issue(jobId, start) {
       const token = `${JOB_TOKEN_PREFIX}${randomBytes(32).toString('hex')}`;
-      byJob.set(jobId, Buffer.from(token));
+      const admission: JobAdmission = Object.freeze({ ...start, kind: 'job', runId: randomUUID(), jobId });
+      byJob.set(jobId, { token: Buffer.from(token), admission });
       return token;
     },
     revoke(jobId) {
       byJob.delete(jobId);
     },
-    jobOf(token) {
-      const given = Buffer.from(token);
-      let found: string | null = null;
-      // Перебор без раннего выхода: время не зависит от того, чей токен подошёл.
-      for (const [jobId, expected] of byJob) {
-        if (given.length === expected.length && timingSafeEqual(given, expected)) found = jobId;
-      }
-      return found;
-    },
+    admissionOf,
+    current: (jobId) => byJob.get(jobId)?.admission ?? null,
+    jobOf: (token) => admissionOf(token)?.jobId ?? null,
     recordTool(jobId, tool, ok) {
       if (!byJob.has(jobId)) return; // отозванный токен ничего не пишет
       recordOf(jobId).toolRefs.push({ tool, ok, at: now() });

@@ -11,10 +11,20 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { inject } from 'vitest';
+
+declare module 'vitest' {
+  export interface ProvidedContext {
+    parleyTestHomeRoot?: string;
+  }
+}
 
 const running = process.env['PARLEY_TEST_HOME'];
+// Корень прогона создаёт и убирает главный процесс (`sandbox-home-root.ts`): здесь `exit` не наступает, vitest гасит
+// процесс файла сигналом. Без корня (конфиг без `globalSetup`) дом ложится прямо во временную папку, как прежде.
+const root = inject('parleyTestHomeRoot');
 // Файлов тестов много, а каталог нужен один на процесс: имя живёт в окружении.
-const home = running ?? mkdtempSync(path.join(tmpdir(), 'parley-test-home-'));
+const home = running ?? mkdtempSync(root === undefined ? path.join(tmpdir(), 'parley-test-home-') : root + path.sep);
 
 if (running === undefined) {
   process.env['PARLEY_TEST_HOME'] = home;

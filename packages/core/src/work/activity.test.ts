@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { activityOf, hookedSince, type Activity, type ActivityLog } from './activity.js';
+import { DEFAULT_QUIET_TURN_HOLD_MS, activityOf, hookedSince, presentedActivity, type Activity, type ActivityLog } from './activity.js';
 import {
   PARLEY_STARTUP_NOTIFICATION,
   PERMISSION_ANSWERED_EVENT,
@@ -523,8 +523,9 @@ describe('activityOf: субагенты по id и фоновые задачи 
     });
     expect(released.activity).toBe('unseen');
     expect(released.turnEndedAt).toBe(quiet);
-    // Ход окончен — обычные субагенты в списке не остаются.
-    expect(released.tasks).toEqual([]);
+    // Тишина открытого хода (`Stop` не приходил): ход ещё идёт, агент в списке остаётся.
+    expect(released.quietTurn).toBe(true);
+    expect(released.tasks.map((item) => item.id)).toEqual(['a']);
   });
 
   it('обычный субагент (не фоновый) тишину не отменяет: держит только снимок', () => {
@@ -3030,3 +3031,166 @@ describe('activityOf: runningBackground — работающие задачи п
     expect(activityOf({ events: null, now: NOW }).runningBackground).toEqual([]);
   });
 });
+
+describe('activityOf: idle_prompt не сдвигает конец хода (false-done, этап A)', () => {
+  const T = (s: number): string => new Date(Date.parse(AT) + s * 1000).toISOString();
+  const at = (events: EventRecord[], seen = false, s = 100): ReturnType<typeof activityOf> =>
+    activityOf({ events, seen, now: Date.parse(AT) + s * 1000 });
+
+  it('Stop T, idle_prompt T+60: turnEndedAt = T, turnBoundaryAt = T+60; просмотренная — idle', () => {
+    const events = [event('Stop', null, T(0)), event('Notification', 'idle_prompt', T(60))];
+    const result = at(events, true);
+    expect(result.turnEndedAt).toBe(T(0));
+    expect(result.turnBoundaryAt).toBe(T(60));
+    expect(result.activity).toBe('idle');
+  });
+
+  it('UserPromptSubmit, idle_prompt без Stop: ход окончен временем idle_prompt', () => {
+    const result = at([event('UserPromptSubmit', null, T(0)), event('Notification', 'idle_prompt', T(60))]);
+    expect(result.turnEndedAt).toBe(T(60));
+  });
+
+  it('Stop, SessionStart(resume), idle_prompt: turnEndedAt = время idle_prompt', () => {
+    const result = at([
+      event('Stop', null, T(0)),
+      hook('SessionStart', { source: 'resume' }, T(10)),
+      event('Notification', 'idle_prompt', T(60)),
+    ]);
+    expect(result.turnEndedAt).toBe(T(60));
+  });
+
+  it('StopFailure, idle_prompt: turnEndedAt не меняется, need на месте', () => {
+    const failed = hook('StopFailure', { error: 'rate_limit' }, T(0));
+    const without = at([failed]);
+    const result = at([failed, event('Notification', 'idle_prompt', T(60))]);
+    expect(result.turnEndedAt).toBe(without.turnEndedAt);
+    expect(result.need).not.toBeNull();
+    expect(result.need).toEqual(without.need);
+  });
+
+  it('Stop с фоновой задачей, idle_prompt с ней же, SubagentStop: turnEndedAt = время SubagentStop', () => {
+    const result = at([
+      event('UserPromptSubmit', null, T(0)),
+      hook('Stop', { backgroundTasks: [task('a')] }, T(10)),
+      hook('Notification', { notificationType: 'idle_prompt', backgroundTasks: [task('a')] }, T(60)),
+      hook('SubagentStop', { agentId: 'a', backgroundTasks: [] }, T(80)),
+    ]);
+    expect(result.turnEndedAt).toBe(T(80));
+  });
+});
+
+describe('activityOf: тишина открытого хода (false-done, этап B)', () => {
+  const T = (s: number): string => new Date(Date.parse(AT) + s * 1000).toISOString();
+  const run = (
+    events: EventRecord[] | null,
+    recordS: number | null,
+    nowS: number,
+    extra: { backgroundHoldMs?: number; quietTurnHoldMs?: number; userS?: number } = {},
+  ): ReturnType<typeof activityOf> =>
+    activityOf({
+      events,
+      log:
+        recordS === null
+          ? null
+          : { lastRecordAt: T(recordS), lastUserRecordAt: extra.userS === undefined ? null : T(extra.userS) },
+      now: Date.parse(AT) + nowS * 1000,
+      silenceThresholdMs: 30_000,
+      ...(extra.backgroundHoldMs === undefined ? {} : { backgroundHoldMs: extra.backgroundHoldMs }),
+      ...(extra.quietTurnHoldMs === undefined ? {} : { quietTurnHoldMs: extra.quietTurnHoldMs }),
+    });
+  const prompt = event('UserPromptSubmit', null, T(0));
+
+  it('1. открытый ход, тишина 40 с: сырое unseen + quietTurn; показанное working без поля', () => {
+    const raw = run([prompt], 5, 45);
+    expect(raw.activity).toBe('unseen');
+    expect(raw.quietTurn).toBe(true);
+    expect(raw.turnEndedAt).toBe(T(5));
+    const shown = presentedActivity(raw);
+    expect(shown.activity).toBe('working');
+    expect(shown.turnEndedAt).toBeNull();
+    expect('quietTurn' in shown).toBe(false);
+  });
+
+  it('presentedActivity без quietTurn возвращает тот же объект', () => {
+    const plain = run([prompt], 5, 10);
+    expect(presentedActivity(plain)).toBe(plain);
+  });
+
+  it('2. новая запись — working без флага; затем Stop — unseen, turnEndedAt = Stop', () => {
+    const live = run([prompt], 50, 55);
+    expect(live.activity).toBe('working');
+    expect(live.quietTurn).toBeUndefined();
+    const stopped = run([prompt, event('Stop', null, T(60))], 50, 61);
+    expect(stopped.activity).toBe('unseen');
+    expect(stopped.quietTurn).toBeUndefined();
+    expect(stopped.turnEndedAt).toBe(T(60));
+  });
+
+  it('3. тишина дольше quietTurnHoldMs: unseen без флага', () => {
+    const result = run([prompt], 5, 5 + 120, { quietTurnHoldMs: 60_000 });
+    expect(result.activity).toBe('unseen');
+    expect(result.quietTurn).toBeUndefined();
+  });
+
+  it('3б. по умолчанию предел 15 минут, а не backgroundHoldMs (час): 14 мин — флаг, 16 мин — без флага', () => {
+    expect(DEFAULT_QUIET_TURN_HOLD_MS).toBe(15 * 60 * 1000);
+    expect(run([prompt], 5, 5 + 14 * 60).quietTurn).toBe(true);
+    const late = run([prompt], 5, 5 + 16 * 60);
+    expect(late.activity).toBe('unseen');
+    expect(late.quietTurn).toBeUndefined();
+  });
+
+  it('4. events: null, только лог, тишина: unseen без флага', () => {
+    const result = run(null, 5, 45);
+    expect(result.activity).not.toBe('working');
+    expect(result.quietTurn).toBeUndefined();
+  });
+
+  it('5. Stop, новая запись, тишина: unseen без флага', () => {
+    const result = run([prompt, event('Stop', null, T(2))], 5, 45);
+    expect(result.activity).toBe('unseen');
+    expect(result.quietTurn).toBeUndefined();
+  });
+
+  it('6. PermissionRequest, ответ, тишина: флаг есть', () => {
+    const result = run([prompt, event('PermissionRequest', null, T(3))], 5, 45, { userS: 4 });
+    expect(result.quietTurn).toBe(true);
+  });
+
+  it('7. SubagentStart, тишина: флаг есть, tasks содержит агента', () => {
+    const result = run([prompt, hook('SubagentStart', { agentId: 'a1' }, T(3))], 5, 45);
+    expect(result.quietTurn).toBe(true);
+    expect(result.tasks.map((t) => t.id)).toEqual(['a1']);
+  });
+});
+
+describe('activityOf: прерывание Esc (false-done, этап D)', () => {
+  const T = (s: number): string => new Date(Date.parse(AT) + s * 1000).toISOString();
+  const run = (events: EventRecord[], recordS: number, interruptS: number, nowS: number): ReturnType<typeof activityOf> =>
+    activityOf({
+      events,
+      log: { lastRecordAt: T(recordS), lastUserRecordAt: T(recordS), lastInterruptAt: T(interruptS) },
+      now: Date.parse(AT) + nowS * 1000,
+      silenceThresholdMs: 30_000,
+    });
+  const prompt = event('UserPromptSubmit', null, T(0));
+
+  it('1. запись прерывания, тишина 40 с: unseen без quietTurn; показанное тоже unseen', () => {
+    const raw = run([prompt], 5, 5, 45);
+    expect(raw.activity).toBe('unseen');
+    expect(raw.quietTurn).toBeUndefined();
+    expect(presentedActivity(raw).activity).toBe('unseen');
+  });
+
+  it('2. после прерывания новый UserPromptSubmit, тишина 40 с: quietTurn', () => {
+    const raw = run([prompt, event('UserPromptSubmit', null, T(8))], 5, 5, 50);
+    expect(raw.quietTurn).toBe(true);
+  });
+
+  it('3. после прерывания новая запись работы без промпта, тишина 40 с: quietTurn', () => {
+    const raw = run([prompt], 10, 5, 50);
+    expect(raw.activity).toBe('unseen');
+    expect(raw.quietTurn).toBe(true);
+  });
+});
+

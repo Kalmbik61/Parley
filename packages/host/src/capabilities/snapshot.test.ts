@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, realpath, rm, symlink, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createSafeCapabilitiesService, mergeSnapshotRows } from './snapshot.js';
+import { CAPABILITY_PROJECT_CACHE_LIMIT, createSafeCapabilitiesService, mergeSnapshotRows } from './snapshot.js';
 import type { ProviderSnapshotResult, SnapshotContext } from './snapshot.js';
 import type { SnapshotEntry } from './redact.js';
 import type { CapabilityProvider, CapabilitySnapshot } from '@parley/protocol';
@@ -30,6 +30,19 @@ function deferred<T>() { let resolve!: (value: T) => void; const promise = new P
   pending.resolve(ready()); await vi.waitFor(() => expect(service.get(root).columns.codex.phase).toBe('ready'));
   const returned = service.get(root); returned.rows.splice(0); expect(service.get(root).rows.length).toBeGreaterThan(0);
   expect(service.get(root).rows.find(row => row.kind === 'mcp' && row.name === 'parley')?.claude[0]).toMatchObject({ scope: 'builtin', enabled: null, status: 'unknown' });
+  service.dispose();
+ });
+ it('кэш проектов не растёт выше предела и вытесняет самый давно использованный', async () => {
+  const claude = vi.fn(async () => ready()); const codex = vi.fn(async () => ready());
+  const service = createSafeCapabilitiesService({ context: async () => context, readers: { claude, codex } });
+  const total = CAPABILITY_PROJECT_CACHE_LIMIT + 6;
+  for (let index = 0; index < total; index++) {
+   const project = path.join(root, `p${index}`); service.get(project);
+   await vi.waitFor(() => { const value = service.get(project); expect(value.columns.claude.phase).toBe('ready'); expect(value.columns.codex.phase).toBe('ready'); });
+  }
+  expect(claude).toHaveBeenCalledTimes(total);
+  service.get(path.join(root, `p${total - 1}`)); expect(claude).toHaveBeenCalledTimes(total);
+  service.get(path.join(root, 'p0')); await vi.waitFor(() => expect(claude).toHaveBeenCalledTimes(total + 1));
   service.dispose();
  });
  it('ignores stale completion after a newer refresh and shutdown', async () => {

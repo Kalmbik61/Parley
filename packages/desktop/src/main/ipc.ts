@@ -5,7 +5,7 @@ import { DECISION_FILE_NAME, METHODS, NOTIFICATIONS, SHARED_FILE_PATH, progressR
 import type { MethodName, NotificationName, Result } from '@parley/protocol';
 import type { BrowserWindow, IpcMain, NativeTheme, Session, WebContents } from 'electron';
 import { clampNoteText } from '../shared/app-note.js';
-import type { AppNote, CloseAnswer, DiagnosticsSaveResult, FocusTarget, UpdateInfo } from '../shared/bridge.js';
+import type { AboutInfo, AppNote, UpdateCheckResult, CloseAnswer, DiagnosticsSaveResult, FocusTarget, UpdateResult, UpdateState } from '../shared/bridge.js';
 import { splitUrlCredentials } from '../shared/basic-auth.js';
 import { encodeIpcError } from '../shared/ipc-error.js';
 import { DEVTOOLS_LIMITS, isViewportSpec, type DevtoolsSnapshot } from '../shared/browser-devtools.js';
@@ -32,6 +32,7 @@ import type { TtsService } from './assistant/tts.js';
 import { parseAnnotationPins, type createAnnotate } from './browser/annotate.js';
 import type { AgentOps } from './browser/agent-ops.js';
 import type { BasicAuth } from './browser/basic-auth.js';
+import type { ClientCert } from './browser/client-cert.js';
 import { parseContextInput } from './browser/context-files.js';
 import type { createDesignMode } from './browser/design-mode.js';
 import type { Emulation } from './browser/emulation.js';
@@ -155,7 +156,7 @@ export function isFocusTarget(value: unknown): value is FocusTarget {
         typeof ref.workId === 'string' &&
         typeof ref.sessionId === 'string' &&
         (value.cardId === undefined || isValidPathArg(value.cardId)) &&
-        (value.view === undefined || value.view === 'terminal' && value.cardId === undefined)
+        (value.view === undefined || (value.view === 'terminal' || value.view === 'chat') && value.cardId === undefined)
       );
     }
     case 'mail':
@@ -232,14 +233,26 @@ export interface RegisterIpcOptions {
   showNotification: (note: AppNote) => void;
   /** Отложенная цель клика для окна, которое ещё грузилось (`app:take-focus-target`, кусок 4.3). */
   takeFocusTarget: () => FocusTarget | null;
-  /** Релиз новее запущенной версии, найденный проверкой main (`app:get-update`, V6 плана релиза 0.1.0); `null` — нет или проверка выключена. */
-  getUpdate: () => Promise<UpdateInfo | null>;
+  /** Состояние самообновления (`app:get-update-state`, спека self-update §5.1); `idle` — ничего не найдено или проверка выключена. */
+  getUpdateState: () => UpdateState;
+  /** Клик «Download»/«Retry» (`app:download-update`); из состояний, где скачивать нечего, установщик ничего не делает. */
+  downloadUpdate: () => Promise<void>;
+  /** Клик «Cancel» (`app:cancel-update-download`). */
+  cancelUpdateDownload: () => Promise<void>;
+  /** Клик «Restart now» (`app:install-update`). */
+  installUpdate: () => Promise<void>;
+  /** Итог прошлой замены, прочитанный при старте (`app:take-update-result`): один раз, дальше `null`. */
+  takeUpdateResult: () => UpdateResult | null;
   /**
    * Версия окна (`app.getVersion()`): страница сверяет с ней версию хоста (`app:version`, 0.2.0). `null` —
    * окно не собрано (`pnpm dev`, E2E): Electron, запущенный файлом `out/main/index.js`, не находит
    * `package.json` и отдаёт свою версию, а не версию Parley, — сверять нечего.
    */
   appVersion: string | null;
+  /** Сведения для Settings → About (`app:about-info`); сеть не трогает. */
+  aboutInfo: () => AboutInfo;
+  /** «Check now» (`app:check-for-updates`): итог проверки; не бросает. */
+  checkForUpdates: () => Promise<UpdateCheckResult>;
   /**
    * Окно сохранило `ui.json` (`app:save-ui`): main реагирует на смену настроек сразу — включённая проверка новой
    * версии идёт тут же (`main/update-check.ts`, `settingsChanged`). Вызывается после записи; не бросает.
@@ -319,6 +332,8 @@ export interface RegisterIpcOptions {
     agent: Pick<AgentOps, 'openTabResult' | 'registerTab' | 'captureReady' | 'stop' | 'focusReady'>;
     /** HTTP basic-auth гостей (main/browser/basic-auth.ts): пара из адреса и ответ окна на запрос логина. */
     basicAuth: Pick<BasicAuth, 'remember' | 'claimPage' | 'answer'>;
+    /** Клиентский сертификат гостей (main/browser/client-cert.ts): ответ окна на запрос выбора. */
+    clientCert: Pick<ClientCert, 'answer' | 'clear'>;
   };
 }
 
@@ -407,8 +422,14 @@ export function registerIpc(options: RegisterIpcOptions): void {
     chooseFiles,
     showNotification,
     takeFocusTarget,
-    getUpdate,
+    getUpdateState,
+    downloadUpdate,
+    cancelUpdateDownload,
+    installUpdate,
+    takeUpdateResult,
     appVersion,
+    aboutInfo,
+    checkForUpdates,
     onUiSaved,
     setBadge,
     layoutStore,
@@ -557,8 +578,15 @@ export function registerIpc(options: RegisterIpcOptions): void {
 
   ipcMain.handle('app:take-focus-target', withIpcError(() => takeFocusTarget()));
 
-  ipcMain.handle('app:get-update', withIpcError(() => getUpdate()));
+  // Обработчики не берут аргументов окна (спека self-update §5.1): версию, адрес и путь выбирает main.
+  ipcMain.handle('app:get-update-state', withIpcError(() => getUpdateState()));
+  ipcMain.handle('app:download-update', withIpcError(() => downloadUpdate()));
+  ipcMain.handle('app:cancel-update-download', withIpcError(() => cancelUpdateDownload()));
+  ipcMain.handle('app:install-update', withIpcError(() => installUpdate()));
+  ipcMain.handle('app:take-update-result', withIpcError(() => takeUpdateResult()));
   ipcMain.handle('app:version', withIpcError(async () => appVersion));
+  ipcMain.handle('app:check-for-updates', withIpcError(() => checkForUpdates()));
+  ipcMain.handle('app:about-info', withIpcError(async () => aboutInfo()));
 
   ipcMain.on('app:set-badge', (_event, count: number) => {
     setBadge(count);
@@ -967,6 +995,9 @@ export function registerIpc(options: RegisterIpcOptions): void {
     withIpcError(async () => {
       await browser.session.clearStorageData();
       await browser.session.clearCache();
+      // Выборы клиентского сертификата «для сайта» (файл main): стираются вместе с данными раздела. Выбор, на который Chromium
+      // уже ответил в этом запуске, он помнит до перезапуска — сбросить его нельзя.
+      await browser.clientCert.clear();
     }),
   );
 
@@ -1020,6 +1051,19 @@ export function registerIpc(options: RegisterIpcOptions): void {
         throw new HostError('bad_request', 'invalid credentials');
       }
       browser.basicAuth.answer(requestId, { username, password }, sender);
+    }),
+  );
+
+  // Ответ окна на `browser:cert-request`: отпечаток выбранного сертификата или `null` («не сейчас»). Принимается только от
+  // окна-хозяина запроса, отпечаток обязан быть из списка этого запроса (проверяет `clientCert.answer`).
+  ipcMain.handle(
+    'browser:cert-response',
+    withIpcError(async (rawEvent, requestId: unknown, fingerprint: unknown, remember: unknown) => {
+      const sender = (rawEvent as { sender: WebContents }).sender;
+      if (typeof requestId !== 'string' || requestId.length === 0 || requestId.length > 64) throw new HostError('bad_request', 'invalid certificate request id');
+      if (fingerprint !== null && (typeof fingerprint !== 'string' || fingerprint.length > 256)) throw new HostError('bad_request', 'invalid certificate fingerprint');
+      if (typeof remember !== 'boolean') throw new HostError('bad_request', 'invalid remember flag');
+      browser.clientCert.answer(requestId, fingerprint, fingerprint === null ? false : remember, sender);
     }),
   );
 

@@ -278,6 +278,32 @@ export function createUsageLedger(options: UsageLedgerOptions = {}) {
   let ambiguous = false;
   let lastAt: string | null = null;
   let descendants = false;
+  // Итог без окон считается по ходу: число вкладов и по полю — сумма и число известных значений.
+  let count = 0;
+  const sums = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalInput: 0 };
+  const knownCount = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalInput: 0 };
+  /** Сумма вышла за безопасное целое: поле неизвестно навсегда (вклады только растут). */
+  const overflowed = new Set<keyof UsageCounters>();
+  const addContribution = (item: UsageCounters): void => {
+    count++;
+    for (const field of FIELDS) {
+      const value = item[field];
+      if (value === null) continue;
+      knownCount[field]++;
+      const total = sums[field] + value;
+      if (Number.isSafeInteger(total)) sums[field] = total;
+      else overflowed.add(field);
+    }
+  };
+  const removeContribution = (item: UsageCounters): void => {
+    count--;
+    for (const field of FIELDS) {
+      const value = item[field];
+      if (value === null) continue;
+      knownCount[field]--;
+      if (!overflowed.has(field)) sums[field] -= value;
+    }
+  };
 
   return {
     observe(observation: UsageObservation): void {
@@ -303,25 +329,37 @@ export function createUsageLedger(options: UsageLedgerOptions = {}) {
       if (observation.child === true) descendants = true;
 
       if (observation.kind === 'delta') {
-        const known = deltas.get(observation.id);
-        deltas.set(observation.id, known === undefined ? counters : maxCounters(known, counters));
+        const seen = deltas.get(observation.id);
+        const merged = seen === undefined ? counters : maxCounters(seen, counters);
+        deltas.set(observation.id, merged);
+        if (spans === null) {
+          if (seen !== undefined) removeContribution(seen);
+          addContribution(merged);
+        }
         return;
       }
 
       const periods = streams.get(observation.stream);
       if (periods === undefined) {
         streams.set(observation.stream, [counters]);
+        if (spans === null) addContribution(counters);
         return;
       }
       const current = periods[periods.length - 1]!;
       if (observation.reset === true) {
         periods.push(counters);
+        if (spans === null) addContribution(counters);
         return;
       }
       if (FIELDS.some((field) => counters[field] !== null && current[field] !== null && counters[field]! < current[field]!)) {
         ambiguous = true;
       }
-      periods[periods.length - 1] = maxCounters(current, counters);
+      const merged = maxCounters(current, counters);
+      periods[periods.length - 1] = merged;
+      if (spans === null) {
+        removeContribution(current);
+        addContribution(merged);
+      }
     },
 
     /** Адаптер нашёл перекрытие, которое нечем разрешить: запись не учтена, итог неполный. */
@@ -331,9 +369,10 @@ export function createUsageLedger(options: UsageLedgerOptions = {}) {
 
     summary(): UsageSummary {
       const sliced = spans === null ? null : sliceStreams(points, spans);
-      const contributions = [...deltas.values(), ...(sliced === null ? [...streams.values()].flat() : sliced.parts)];
+      const contributions = sliced === null ? null : [...deltas.values(), ...sliced.parts];
+      const total = contributions === null ? count : contributions.length;
       const unclear = ambiguous || sliced?.ambiguous === true;
-      if (contributions.length === 0) {
+      if (total === 0) {
         // Срез: в окна не попало ничего, а записи с usage в логе есть — расход в окнах известен и равен нулю по полям,
         // которые лог сообщает (у Codex записи в кэш нет — она остаётся неизвестной).
         if (sliced !== null && reported.size > 0) {
@@ -354,11 +393,17 @@ export function createUsageLedger(options: UsageLedgerOptions = {}) {
       const totals = unknownCounters();
       let mixed = false;
       for (const field of FIELDS) {
-        const known = contributions.filter((item) => item[field] !== null);
+        const present =
+          contributions === null ? knownCount[field] : contributions.filter((item) => item[field] !== null).length;
         // Поле есть не у всех записей — сумма была бы заниженной, поэтому неизвестна.
-        if (known.length === contributions.length) {
-          totals[field] = contributions.reduce<number | null>((acc, item) => sum(acc, item[field]), 0);
-        } else if (known.length > 0) {
+        if (present === total) {
+          totals[field] =
+            contributions === null
+              ? overflowed.has(field)
+                ? null
+                : sums[field]
+              : contributions.reduce<number | null>((acc, item) => sum(acc, item[field]), 0);
+        } else if (present > 0) {
           mixed = true;
         }
       }

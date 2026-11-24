@@ -13,6 +13,7 @@ export {
   FEED_IMAGE_TTL_MS,
   FEED_IMAGES_PER_CALL,
   FEED_INPUT_LIMIT,
+  FEED_MAIL_TEXT_LIMIT,
   FEED_PATCH_LINES,
   FEED_RESULT_LIMIT,
   FEED_TEXT_LIMIT,
@@ -26,15 +27,21 @@ export type {
   FeedError,
   FeedImageRef,
   FeedItem,
+  FeedMail,
+  FeedMailLetter,
   FeedNotice,
   FeedNoticeData,
   FeedPatchHunk,
   FeedPermissionCard,
+  FeedPermissionOption,
+  FeedPermissionPreview,
   FeedPlanCard,
   FeedPrompt,
   FeedQuestion,
   FeedQuestionCard,
+  FeedQuestionField,
   FeedQuestionOption,
+  FeedQuestionValue,
   FeedState,
   FeedStream,
   FeedText,
@@ -51,6 +58,8 @@ export {
   emptyFeedState,
   settleCards,
 } from './reduce.js';
+export { mailFromInline, mailFromTool } from './mail.js';
+export type { MailJournalEntry } from './mail-seed.js';
 export { stashFeedImages } from './images.js';
 export { feedFromTranscript, interruptedAt, retryFromTranscript } from './from-transcript.js';
 export type { FeedFromTranscriptOptions } from './from-transcript.js';
@@ -64,3 +73,10 @@ export { codexAgentMeta, emptyCodexAgentMeta, withCodexAgentMeta } from './codex
 export type { CodexAgentMeta } from './codex/codex-agents.js';
 export { applyCodexHookEvent, CODEX_EARLY_TOOLS, CODEX_HOOK_EVENTS } from './codex/apply-codex-hook.js';
 export type { CodexHookEvent } from './codex/apply-codex-hook.js';
+export { applyCodexTerminalPrompt } from './codex/apply-terminal-prompt.js';
+export { codexPromptKey, recogniseCodexPrompt } from './codex/terminal-prompt.js';
+export type { CodexPrompt, CodexPromptOption } from './codex/terminal-prompt.js';
+export { applyQwenRecords, emptyQwenCursor, feedFromQwenTranscript } from './qwen/apply-qwen.js';
+export type { QwenCursor, QwenUsage } from './qwen/apply-qwen.js';
+export { parseQwenLine, qwenRecordOf, splitQwenChunk } from './qwen/transcript-record.js';
+export type { QwenRecord } from './qwen/transcript-record.js';

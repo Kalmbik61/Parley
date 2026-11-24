@@ -1,0 +1,10 @@
+{"id":"evt_demo21","created":1794478240287,"type":"permission.asked","data":{"id":"per_demo01","sessionID":"ses_demo00000001","action":"shell","resources":["ls"],"save":["*"],"source":{"type":"tool","messageID":"msg_demo03","id":"call_2"}}}
+{"id":"evt_demo22","created":1794478263371,"type":"permission.replied","data":{"sessionID":"ses_demo00000001","requestID":"per_demo01","reply":"once"}}
+{"id":"evt_demo23","created":1794478290000,"type":"session.tool.input.started","data":{"sessionID":"ses_demo00000001","assistantMessageID":"msg_demo03","id":"call_3","name":"write"}}
+{"id":"evt_demo24","created":1794478297459,"type":"session.tool.failed","data":{"sessionID":"ses_demo00000001","assistantMessageID":"msg_demo03","id":"call_3","error":{"type":"tool.execution","message":"Invalid arguments for tool write"},"executed":false}}
+{"id":"evt_demo29","created":1794478298000,"type":"session.tool.input.started","data":{"sessionID":"ses_demo00000001","assistantMessageID":"msg_demo03","id":"call_5","name":"execute"}}
+{"id":"evt_demo30","created":1794478298500,"type":"session.tool.success","data":{"sessionID":"ses_demo00000001","assistantMessageID":"msg_demo03","id":"call_5","content":[{"type":"text","text":"Error: boom from execute"}],"metadata":{"toolCalls":[],"error":true},"executed":false}}
+{"id":"evt_demo25","created":1794478300000,"type":"session.execution.interrupted","data":{"sessionID":"ses_demo00000001","reason":"shutdown"}}
+{"id":"evt_demo26","created":1794478310000,"type":"session.execution.failed","data":{"sessionID":"ses_demo00000001","error":{"type":"provider.invalid-request","message":"mock model failure","status":400}}}
+{"id":"evt_demo27","created":1794478320000,"type":"session.created","data":{"sessionID":"ses_demo_other","slug":"other"}}
+{"id":"evt_demo28","created":1794478330000,"type":"session.inbox.enqueued","data":{"inboxID":"msg_demo09","sessionID":"ses_demo00000001","item":{"type":"synthetic","payload":{}}}}

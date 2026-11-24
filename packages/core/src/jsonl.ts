@@ -26,15 +26,21 @@ export interface JsonlStats {
  *
  * `signal` прерывает чтение: файл закрывается, записи после остановки колбэк не получает,
  * промис отклоняется причиной остановки (`AbortError`) — неполный разбор за итог не сойдёт.
+ *
+ * `options.start` > 0 — чтение с этого байта: первая (неполная) строка отбрасывается, номера строк
+ * считаются от `start`.
  */
 export async function forEachJsonlRecord(
   file: string,
   onRecord: (record: RawRecord, lineNo: number) => void,
   signal?: AbortSignal,
+  options: { start?: number } = {},
 ): Promise<JsonlStats> {
   signal?.throwIfAborted();
   const stats: JsonlStats = { lines: 0, parsed: 0, malformed: 0, lastLineMalformed: false };
-  const input = createReadStream(file, 'utf8');
+  const start = options.start ?? 0;
+  let partial = start > 0;
+  const input = createReadStream(file, start > 0 ? { encoding: 'utf8', start } : 'utf8');
   // Сигнал закрывает интерфейс и тогда, когда цикл ждёт следующего куска файла.
   const rl = createInterface({
     input,
@@ -47,6 +53,10 @@ export async function forEachJsonlRecord(
     for await (const line of rl) {
       // Строки, прочитанные до остановки, уже не разбираются.
       if (signal?.aborted === true) break;
+      if (partial) {
+        partial = false;
+        continue;
+      }
       lineNo++;
       const trimmed = line.trim();
       if (!trimmed) continue;

@@ -323,7 +323,7 @@ describe('бриф: роль в комнате', () => {
     expect(brief).toContain('do not start the work until the lead names your part');
     // Свой токен упоминания — по нему участник узнаёт свою часть.
     expect(brief).toContain('yours is `@s03`');
-    expect(brief).toMatch(/report to the lead in the room/);
+    expect(brief).toMatch(/when done call `report`: it notifies the lead/);
     expect(brief).not.toContain('you are the lead');
   });
 
@@ -331,6 +331,7 @@ describe('бриф: роль в комнате', () => {
     const brief = buildBrief(mapWithRoom(), 's-02');
 
     expect(LEAD_ROLE).toContain('with one `wait_for("inbox", 1500)`, not by each participant\'s id');
+    expect(LEAD_ROLE).toContain('put it in the same message as the call it follows;');
     expect(brief).toContain('Wait for positions and reports with one `wait_for("inbox", 1500)`, not by each participant\'s id;');
     // Развилка с «закончить ход» (M2): ответ running при уже собранных позициях — предложить решение, не молчать до пробуждения.
     expect(LEAD_ROLE).toContain('if it answers `running` while you already hold some positions, propose a decision on them instead of ending the turn.');
@@ -339,7 +340,7 @@ describe('бриф: роль в комнате', () => {
   it('участнику: раздачу частей не подтверждать — следующее письмо ведущему уже результат', () => {
     const role = memberRole('@s03');
 
-    expect(role).toContain('Do not acknowledge the assignment of parts: your next message to the lead is the result.');
+    expect(role).toContain('Do not acknowledge the assignment of parts.');
     expect(buildBrief(mapWithRoom(), 's-03')).toContain(role);
   });
 
@@ -556,6 +557,38 @@ describe('бриф сессии: worktree', () => {
     expect(brief).not.toContain("The human's window");
     // Строка стоит в разделе своей сессии, до контекста и правил.
     expect(brief.indexOf('Worktree:')).toBeLessThan(brief.indexOf('## Context'));
+  });
+
+  it('строка зависимостей после правил копии', () => {
+    const map = mapWithSessions();
+    const session = map.sessions.find((candidate) => candidate.id === 's-02');
+    if (session === undefined) throw new Error('нет s-02');
+    session.worktree = {
+      path: '/tmp/worktrees/proj-a1b2c3/w-0042-s-02',
+      branch: 'harnas/w-0042/s-02',
+      base: 'master',
+      createdAt: null,
+      seed: { at: '2026-11-11T10:00:00.000Z', cloned: 1, first: 'node_modules' },
+    };
+
+    const brief = buildBrief(map, 's-02');
+    const rules = 'The rules for working in a worktree are in `read_guide`, topic `worktrees`.';
+    const line =
+      'Dependencies: `node_modules` was cloned from the main checkout; lock files match, no install is needed.';
+    expect(brief).toContain(`${rules}\n${line}\n`);
+  });
+
+  it('без seed бриф прежний', () => {
+    const map = mapWithSessions();
+    const session = map.sessions.find((candidate) => candidate.id === 's-02');
+    if (session === undefined) throw new Error('нет s-02');
+    session.worktree = {
+      path: '/tmp/worktrees/proj-a1b2c3/w-0042-s-02',
+      branch: 'harnas/w-0042/s-02',
+      base: 'master',
+      createdAt: null,
+    };
+    expect(buildBrief(map, 's-02')).not.toContain('Dependencies:');
   });
 
   it('сессия без worktree: бриф о worktree молчит', () => {

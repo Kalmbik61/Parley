@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { PROVIDERS } from '../providers.js';
 import { addSession, transitionSession } from './map.js';
-import { finishSession, linkProviderSession, readSessionMetrics, silenceMs } from './metrics.js';
+import { finishSession, linkProviderSession, readSessionMetrics, silenceMs, sleepSessions } from './metrics.js';
 import { createWork, readMap, updateMap, workVersion } from './store.js';
 
 /** Фикстуры Claude — реальные сессии из ~/.claude/projects, обезличенные. */
@@ -424,6 +424,47 @@ describe('finishSession', () => {
     expect(session?.metrics).toBeNull();
   });
 
+  it('finishSession с logFileOf берёт известный путь', async () => {
+    const workId = await workWithActiveSession('session-1');
+    // Корень истории пуст: без известного пути лог не найти.
+    await finishSession(project, workId, 's-01', 'sleeping', {
+      claudeRoot,
+      logFileOf: () => path.join(FIXTURES, '-Users-dev-project-1', 'session-1.jsonl'),
+    });
+
+    const [session] = (await readMap(project, workId)).sessions;
+    expect(session?.metrics?.durationMs).toBe(SESSION_1.durationMs);
+    expect(session?.metrics?.tokens).toEqual(SESSION_1.tokens);
+  });
+
+  it('logFileOf не знает лога, и лога нет вовсе — прежний итог остаётся, не нули', async () => {
+    const workId = await workWithActiveSession('session-1');
+    const previous = { durationMs: 5, tokens: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4 }, toolCalls: { Bash: 1 } };
+    await updateMap(project, workId, (current) => {
+      const target = current.sessions[0];
+      if (target !== undefined) target.metrics = previous;
+    });
+
+    await finishSession(project, workId, 's-01', 'sleeping', { claudeRoot, logFileOf: () => null });
+
+    const [session] = (await readMap(project, workId)).sessions;
+    expect(session?.lifecycle).toBe('sleeping');
+    expect(session?.metrics).toEqual(previous);
+  });
+
+  it('sleepSessions с logFileOf берёт известный путь', async () => {
+    const workId = await workWithActiveSession('session-1');
+
+    const slept = await sleepSessions(project, workId, ['s-01'], {
+      claudeRoot,
+      logFileOf: () => path.join(FIXTURES, '-Users-dev-project-1', 'session-1.jsonl'),
+    });
+
+    expect(slept).toEqual(['s-01']);
+    const [session] = (await readMap(project, workId)).sessions;
+    expect(session?.metrics?.durationMs).toBe(SESSION_1.durationMs);
+  });
+
   it('недопустимый переход — карта в базе не меняется', async () => {
     const map = await createWork(project, { title: 'Авторизация' });
     await updateMap(project, map.work.id, (current) => {
@@ -436,6 +477,23 @@ describe('finishSession', () => {
       /invalid transition/,
     );
     expect(workVersion(project, map.work.id)).toBe(before);
+  });
+
+  it('уход в sleeping уже спящей сессии — пустая запись, без ошибки', async () => {
+    const workId = await workWithActiveSession('session-1');
+    // Так сессию усыпила бы сверка живости, пока выход процесса читал логи.
+    await updateMap(project, workId, (current) => {
+      current.sessions[0]!.autoSleepPending = { reason: 'idle', at: '2026-08-26T13:00:00.000Z', waitTarget: null };
+      transitionSession(current, 's-01', 'sleeping', { at: '2026-08-26T13:00:01.000Z' });
+    });
+    const before = workVersion(project, workId);
+
+    await finishSession(project, workId, 's-01', 'sleeping', { exitCode: 0 });
+
+    expect(workVersion(project, workId)).toBe(before);
+    const [session] = (await readMap(project, workId)).sessions;
+    expect(session?.history.filter((step) => step.event === 'sleeping')).toHaveLength(1);
+    expect(session?.autoSleep).toBeDefined();
   });
 
   it('сессии с таким id нет — ошибка', async () => {

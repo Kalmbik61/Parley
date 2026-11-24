@@ -1,6 +1,6 @@
 /**
  * Форма сжатия одной сессии (спека 2026-10-15, 3.2): поле с готовой инструкцией, Compact / Cancel. Текст живёт, пока
- * открыт поповер: форма монтируется заново при каждом открытии. У Codex поле неактивно — его `/compact` без фокуса.
+ * открыт поповер: форма монтируется заново при каждом открытии. У Codex и Qwen Code поле неактивно — их команды сжатия без фокуса.
  */
 
 import { useState } from 'react';
@@ -20,8 +20,11 @@ export interface CompactFormProps {
   onCancel: () => void;
 }
 
+/** Providers whose compaction command takes no focus: Codex `/compact` and Qwen Code `/compress`. Only the Claude family has one. */
+const NO_FOCUS: ReadonlySet<string> = new Set(['codex', 'qwen']);
+
 export function CompactForm({ provider, defaultText, phase, onCompact, onCancel }: CompactFormProps): JSX.Element {
-  const codex = provider === 'codex';
+  const codex = NO_FOCUS.has(provider);
   const [text, setText] = useState(defaultText);
   return (
     <div className="flex flex-col gap-2">
@@ -37,7 +40,7 @@ export function CompactForm({ provider, defaultText, phase, onCompact, onCancel 
           className="resize-none text-xs"
         />
       </label>
-      {codex ? <p className="m-0 text-muted-foreground">{C.codexNoFocus}</p> : null}
+      {codex ? <p className="m-0 text-muted-foreground">{provider === 'qwen' ? C.qwenNoFocus : C.codexNoFocus}</p> : null}
       <div className="flex justify-end">
         {phase === 'pending' ? (
           <Button type="button" size="xs" variant="outline" data-testid="compact-cancel" onClick={onCancel}>

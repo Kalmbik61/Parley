@@ -41,7 +41,7 @@ describe('loadConfig', () => {
       messageRate: 20,
       resumeRate: 6,
       sleepAfterMinutes: 60,
-      sleepUnderPressureMinutes: 5,
+      sleepUnderPressureMinutes: 15,
       machineConcurrent: 'auto',
       agentSkills: true,
       skillNavigator: true,
@@ -53,6 +53,9 @@ describe('loadConfig', () => {
       telegramCards: true,
       leanAgents: true,
       remoteCreate: true,
+      assistantAutonomy: false,
+      roomPacket: false,
+      roomPacketTrial: '',
       voiceDailyMinutes: 30,
       fontFamily: "'SF Mono', Menlo, monospace",
       fontSize: 14,
@@ -87,7 +90,7 @@ describe('loadConfig', () => {
       messageRate: 5,
       resumeRate: 6,
       sleepAfterMinutes: 60,
-      sleepUnderPressureMinutes: 5,
+      sleepUnderPressureMinutes: 15,
       machineConcurrent: 'auto',
       agentSkills: true,
       skillNavigator: true,
@@ -99,6 +102,9 @@ describe('loadConfig', () => {
       telegramCards: true,
       leanAgents: true,
       remoteCreate: true,
+      assistantAutonomy: false,
+      roomPacket: false,
+      roomPacketTrial: '',
       voiceDailyMinutes: 30,
       fontFamily: "'SF Mono', Menlo, monospace",
       fontSize: 14,
@@ -118,7 +124,7 @@ describe('loadConfig', () => {
       messageRate: 7,
       resumeRate: 6,
       sleepAfterMinutes: 60,
-      sleepUnderPressureMinutes: 5,
+      sleepUnderPressureMinutes: 15,
       machineConcurrent: 'auto',
       agentSkills: true,
       skillNavigator: true,
@@ -130,6 +136,9 @@ describe('loadConfig', () => {
       telegramCards: true,
       leanAgents: true,
       remoteCreate: true,
+      assistantAutonomy: false,
+      roomPacket: false,
+      roomPacketTrial: '',
       voiceDailyMinutes: 30,
       fontFamily: "'SF Mono', Menlo, monospace",
       fontSize: 14,
@@ -394,6 +403,9 @@ describe('переменные окружения: PARLEY_* и прежние HA
     ['telegramCards', 'TELEGRAM_CARDS', 'off', false],
     ['leanAgents', 'LEAN_AGENTS', 'off', false],
     ['remoteCreate', 'REMOTE_CREATE', 'off', false],
+    ['assistantAutonomy', 'ASSISTANT_AUTONOMY', 'on', true],
+    ['roomPacket', 'ROOM_PACKET', 'on', true],
+    ['roomPacketTrial', 'ROOM_PACKET_TRIAL', '2026-11', '2026-11'],
     ['voiceDailyMinutes', 'VOICE_DAILY_MINUTES', '45', 45],
     ['fontFamily', 'FONT_FAMILY', 'Menlo', 'Menlo'],
     ['fontSize', 'FONT_SIZE', '18', 18],
@@ -661,6 +673,79 @@ describe('remoteCreate setting (mobile spec 4.2, decision 5)', () => {
   });
 });
 
+describe('assistantAutonomy setting', () => {
+  it('выключен по умолчанию; parseSetting принимает булево и отвергает остальное', () => {
+    expect(DEFAULT_CONFIG.assistantAutonomy).toBe(false);
+    expect(parseSetting('assistantAutonomy', 'true')).toEqual({ value: true });
+    expect(parseSetting('assistantAutonomy', 'maybe')).toEqual({ error: 'assistantAutonomy: expected 0 or 1' });
+  });
+  it('окружение включает и запирает ключ; файл читается; неверное значение — предупреждение', async () => {
+    expect((await loadConfig(file(), {})).config.assistantAutonomy).toBe(false);
+    const fromEnv = await loadConfig(file(), { PARLEY_ASSISTANT_AUTONOMY: '1' });
+    expect(fromEnv.config.assistantAutonomy).toBe(true);
+    expect(fromEnv.fromEnv).toContain('assistantAutonomy');
+    await write({ assistantAutonomy: true });
+    expect((await loadConfig(file(), {})).config.assistantAutonomy).toBe(true);
+    await write({ assistantAutonomy: 'yes please' });
+    const bad = await loadConfig(file(), {});
+    expect(bad.config.assistantAutonomy).toBe(false);
+    expect(bad.warning).toContain('assistantAutonomy');
+  });
+});
+
+describe('roomPacket setting', () => {
+  it('выключен по умолчанию; parseSetting (settings.set) принимает булево и отвергает остальное', () => {
+    expect(DEFAULT_CONFIG.roomPacket).toBe(false);
+    expect(parseSetting('roomPacket', '1')).toEqual({ value: true });
+    expect(parseSetting('roomPacket', 'off')).toEqual({ value: false });
+    expect(parseSetting('roomPacket', 'maybe')).toEqual({ error: 'roomPacket: expected 0 or 1' });
+  });
+  it('окружение PARLEY_ROOM_PACKET включает и запирает ключ; файл читается; неверное значение — предупреждение', async () => {
+    expect((await loadConfig(file(), {})).config.roomPacket).toBe(false);
+    const fromEnv = await loadConfig(file(), { PARLEY_ROOM_PACKET: '1' });
+    expect(fromEnv.config.roomPacket).toBe(true);
+    expect(fromEnv.fromEnv).toContain('roomPacket');
+    await write({ roomPacket: true });
+    expect((await loadConfig(file(), {})).config.roomPacket).toBe(true);
+    await write({ roomPacket: 'yes please' });
+    const badFile = await loadConfig(file(), {});
+    expect(badFile.config.roomPacket).toBe(false);
+    expect(badFile.warning).toContain('roomPacket');
+    const badEnv = await loadConfig(file(), { PARLEY_ROOM_PACKET: 'sometimes' });
+    expect(badEnv.config.roomPacket).toBe(false);
+    expect(badEnv.warning).toContain('PARLEY_ROOM_PACKET');
+  });
+});
+
+describe('roomPacketTrial setting', () => {
+  it('пустая строка по умолчанию; parseSetting принимает имя опыта и пустую строку, отвергает остальное', () => {
+    expect(DEFAULT_CONFIG.roomPacketTrial).toBe('');
+    expect(parseSetting('roomPacketTrial', '2026-11')).toEqual({ value: '2026-11' });
+    expect(parseSetting('roomPacketTrial', '')).toEqual({ value: '' });
+    expect(parseSetting('roomPacketTrial', 'a'.repeat(32))).toEqual({ value: 'a'.repeat(32) });
+    for (const bad of ['Trial', 'a b', 'a_b', 'a'.repeat(33), 'опыт', ' x']) {
+      expect(parseSetting('roomPacketTrial', bad)).toHaveProperty('error');
+    }
+  });
+  it('читается из файла и окружения; неверное значение — предупреждение, значение по умолчанию', async () => {
+    expect((await loadConfig(file(), {})).config.roomPacketTrial).toBe('');
+    await write({ roomPacketTrial: '2026-11' });
+    expect((await loadConfig(file(), {})).config.roomPacketTrial).toBe('2026-11');
+    const fromEnv = await loadConfig(file(), { PARLEY_ROOM_PACKET_TRIAL: 'next-one' });
+    expect(fromEnv.config.roomPacketTrial).toBe('next-one');
+    expect(fromEnv.fromEnv).toContain('roomPacketTrial');
+    await write({ roomPacketTrial: 'Bad Name' });
+    const badFile = await loadConfig(file(), {});
+    expect(badFile.config.roomPacketTrial).toBe('');
+    expect(badFile.warning).toContain('roomPacketTrial');
+    await write({ roomPacketTrial: true });
+    expect((await loadConfig(file(), {})).warning).toContain('roomPacketTrial');
+    const badEnv = await loadConfig(file(), { PARLEY_ROOM_PACKET_TRIAL: 'UPPER' });
+    expect(badEnv.config.roomPacketTrial).toBe('');
+    expect(badEnv.warning).toContain('PARLEY_ROOM_PACKET_TRIAL');
+  });
+});
+
 describe('voiceDailyMinutes setting', () => {
   it('the daily limit is bounded', () => {
     expect(DEFAULT_CONFIG.voiceDailyMinutes).toBe(30);
@@ -793,9 +878,9 @@ describe('sleepAfterMinutes setting', () => {
 describe('sleepUnderPressureMinutes setting', () => {
   const EXPECTED = 'expected an integer from 1 to 60';
 
-  it('по умолчанию 5; файл и окружение задают порог, окружение запирает ключ', async () => {
-    expect(DEFAULT_CONFIG.sleepUnderPressureMinutes).toBe(5);
-    expect((await loadConfig(file(), {})).config.sleepUnderPressureMinutes).toBe(5);
+  it('по умолчанию 15; файл и окружение задают порог, окружение запирает ключ', async () => {
+    expect(DEFAULT_CONFIG.sleepUnderPressureMinutes).toBe(15);
+    expect((await loadConfig(file(), {})).config.sleepUnderPressureMinutes).toBe(15);
 
     // Путь `settings.set` хоста: parseSetting → saveConfig → loadConfig.
     expect(parseSetting('sleepUnderPressureMinutes', '20')).toEqual({ value: 20 });
@@ -805,8 +890,8 @@ describe('sleepUnderPressureMinutes setting', () => {
     expect(fromFile.warning).toBeNull();
     expect(fromFile.fromEnv).toEqual([]);
 
-    const fromEnv = await loadConfig(file(), { PARLEY_SLEEP_UNDER_PRESSURE_MINUTES: '15' });
-    expect(fromEnv.config.sleepUnderPressureMinutes).toBe(15);
+    const fromEnv = await loadConfig(file(), { PARLEY_SLEEP_UNDER_PRESSURE_MINUTES: '25' });
+    expect(fromEnv.config.sleepUnderPressureMinutes).toBe(25);
     // Ключ пришёл из окружения: файл его не перекроет, хост покажет замок с именем переменной.
     expect(fromEnv.fromEnv).toEqual(['sleepUnderPressureMinutes']);
     expect(fromEnv.warning).toBeNull();
@@ -827,7 +912,7 @@ describe('sleepUnderPressureMinutes setting', () => {
     for (const bad of [0, 61]) {
       await write({ sleepUnderPressureMinutes: bad });
       const fromFile = await loadConfig(file(), {});
-      expect(fromFile.config.sleepUnderPressureMinutes, String(bad)).toBe(5);
+      expect(fromFile.config.sleepUnderPressureMinutes, String(bad)).toBe(15);
       expect(fromFile.warning, String(bad)).toBe(`sleepUnderPressureMinutes: ${EXPECTED}`);
     }
 
@@ -835,7 +920,7 @@ describe('sleepUnderPressureMinutes setting', () => {
     // Пробелы вместо числа — не ноль и не «выключено»: Number('  ') === 0 вне границ.
     for (const bad of ['0', 'abc', '  ']) {
       const fromEnv = await loadConfig(file(), { PARLEY_SLEEP_UNDER_PRESSURE_MINUTES: bad });
-      expect(fromEnv.config.sleepUnderPressureMinutes, JSON.stringify(bad)).toBe(5);
+      expect(fromEnv.config.sleepUnderPressureMinutes, JSON.stringify(bad)).toBe(15);
       expect(fromEnv.warning, JSON.stringify(bad)).toBe(`PARLEY_SLEEP_UNDER_PRESSURE_MINUTES: ${EXPECTED}`);
       expect(fromEnv.fromEnv, JSON.stringify(bad)).toEqual([]);
     }

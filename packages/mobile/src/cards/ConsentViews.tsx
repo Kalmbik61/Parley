@@ -173,6 +173,12 @@ function ClassicConsentCard({
             <Text allowFontScaling style={[typography.footnote, { color: c.label2 }]}>
               Asked by {card.requestedBy.label} · Allow stops {switchLabel ?? 'the session'} now and continues it there.
             </Text>
+            {card.roleChange === undefined ? null : (
+              // Its own line, never truncated: the human must read the whole sentence before Allow.
+              <Text testID="consent-role-change" allowFontScaling style={[typography.footnote, { color: card.roleChange.readOnlyLost ? c.danger : c.label2 }]}>
+                {card.roleChange.text}
+              </Text>
+            )}
           </>
         )}
       </Pressable>

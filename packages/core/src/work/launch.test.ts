@@ -36,7 +36,7 @@ import { defaultSessionName } from './names.js';
 import { submitPlanItem } from './plans.js';
 import { resolveProposal, setProposal } from './proposals.js';
 import { addRoom } from './rooms.js';
-import { CLOSE_SESSION_PERMISSION, workSettingsJson } from './settings-file.js';
+import { CLOSE_SESSION_PERMISSION, packetBridgeCommand, workSettingsJson } from './settings-file.js';
 import { createWork, readMap, updateMap, workPaths, workVersion } from './store.js';
 import { createWorktree } from './worktree.js';
 import { grantTrust, revokeTrust } from './trust.js';
@@ -222,6 +222,22 @@ const sessionEnv = (workDir: string, sessionId: string): Record<string, string> 
   HARNAS_SKILL_NAVIGATOR: '0',
   PARLEY_NATIVE_CONTEXT_REVISION: expect.any(String),
   HARNAS_NATIVE_CONTEXT_REVISION: expect.any(String),
+});
+
+describe('createNewSession: назначение плеча опыта пишется той же записью (Э-1, уточнение 9)', () => {
+  it('назначение ложится в запись сессии при создании, на обоих путях (проект без работ и выбранная работа); без него поля нет', async () => {
+    const trial = { name: 'exp-a', arm: 'control' as const, at: '2026-11-17T10:00:00.000Z', tag: '0123456789abcdef0123456789abcdef' };
+    const fresh = await createNewSession(project, null, trial);
+    expect((await readMap(project, fresh.workId)).sessions[0]?.trial).toEqual(trial);
+    expect(fresh.session.trial).toEqual(trial);
+
+    const { workId } = await pending('claude');
+    const chosen = await createNewSession(project, workId, { ...trial, arm: 'packet' });
+    const plain = await createNewSession(project, workId);
+    const map = await readMap(project, workId);
+    expect(map.sessions.find((session) => session.id === chosen.session.id)?.trial).toEqual({ ...trial, arm: 'packet' });
+    expect(map.sessions.find((session) => session.id === plain.session.id)).not.toHaveProperty('trial');
+  });
 });
 
 describe('метки быстрой сессии и автозаголовок', () => {
@@ -461,7 +477,7 @@ describe('план запуска', () => {
 
     expect(plan.command).toBe('claude');
     expect(plan.cwd).toBe(project);
-    expect(plan.env).toEqual(sessionEnv(paths.dir, sessionId));
+    expect(plan.env).toEqual({ ...sessionEnv(paths.dir, sessionId), CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS: '1860000' });
     expect(plan.providerSessionId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-/);
     expect(plan.args.slice(0, 2)).toEqual(['--session-id', plan.providerSessionId]);
 
@@ -557,6 +573,30 @@ describe('план запуска', () => {
     const resumed = await planResume(project, workId, await sessionOf(workId, sessionId));
     expect(resumed.args[resumed.args.indexOf('--settings') + 1]).toBe(file);
     expect(await readFile(file, 'utf8')).toBe(workSettingsJson());
+  });
+
+  it('packetBridge: мост пакета комнаты только у claude и только с hookUrl; файл — свой у сессии; без него файл прежний', async () => {
+    const url = 'http://127.0.0.1:41234/hooks';
+    const packetBridge = { launcher: '/h/bin/parley-packet-hook', url: 'http://127.0.0.1:41234/hooks/packet' };
+    const bridge = packetBridgeCommand(packetBridge.launcher, packetBridge.url, 'PARLEY_HOOK_TOKEN');
+    const settingsOf = async (plan: { args: string[] }): Promise<string> => readFile(plan.args[plan.args.indexOf('--settings') + 1] as string, 'utf8');
+
+    const claude = await pending('claude');
+    const withBridge = await planLaunch(project, claude.workId, await sessionOf(claude.workId, claude.sessionId), { hookUrl: url, packetBridge });
+    expect(withBridge.args[withBridge.args.indexOf('--settings') + 1]).toBe(path.join(workPaths(project, claude.workId).dir, 'settings', `${claude.sessionId}.json`));
+    expect(await settingsOf(withBridge)).toBe(workSettingsJson({ hookUrl: url, packetBridge: bridge }));
+    expect(await settingsOf(withBridge)).toContain('"timeout": 2');
+
+    // Без hookUrl регистрации нет — моста нет; без packetBridge файл общий и прежний.
+    const noUrl = await planLaunch(project, claude.workId, await sessionOf(claude.workId, claude.sessionId), { packetBridge });
+    expect(await settingsOf(noUrl)).toBe(workSettingsJson());
+    const plain = await planLaunch(project, claude.workId, await sessionOf(claude.workId, claude.sessionId), { hookUrl: url });
+    expect(await settingsOf(plain)).toBe(workSettingsJson({ hookUrl: url }));
+
+    // GLM — тот же CLI, но срез его не затрагивает.
+    const glm = await pending('glm');
+    const glmPlan = await planLaunch(project, glm.workId, await sessionOf(glm.workId, glm.sessionId), { hookUrl: url, packetBridge });
+    expect(await settingsOf(glmPlan)).not.toContain('parley-packet-hook');
   });
 
   it('у claude ни notify, ни каталога codex-журнала запуск не добавляет', async () => {
@@ -1650,7 +1690,7 @@ describe('common session layer delivery', () => {
     }
   });
 
-  it.each(['claude', 'glm'])('%s gets global rules in a project without PARLEY.md', async (provider) => {
+  it.each(['claude', 'glm', 'qwen'])('%s gets global rules in a project without PARLEY.md', async (provider) => {
     const { workId, sessionId } = await pending(provider);
     const session = await sessionOf(workId, sessionId);
     await writeFile(path.join(home, 'PARLEY.md'), 'Use global fixtures.');
@@ -1658,6 +1698,31 @@ describe('common session layer delivery', () => {
     const layer = plan.args[plan.args.indexOf('--append-system-prompt') + 1];
     expect(layer).toContain('Global user rules (PARLEY.md):\nUse global fixtures.');
     expect(layer).not.toContain('Team rules of this project');
+  });
+
+  it('writes the OpenCode session instructions with global Parley rules', async () => {
+    const { workId, sessionId } = await pending('opencode');
+    const session = await sessionOf(workId, sessionId);
+    await writeFile(path.join(home, 'PARLEY.md'), 'Use global fixtures.');
+    const plan = await planLaunch(project, workId, session);
+    const config = JSON.parse(plan.opencodeServer!.env['OPENCODE_CONFIG_CONTENT']!) as { instructions: string[] };
+    expect(await readFile(config.instructions[0]!, 'utf8')).toContain('Global user rules (PARLEY.md):\nUse global fixtures.');
+  });
+
+  it('loads both rule files for Kimi and refreshes them on resume', async () => {
+    const { workId, sessionId } = await pending('kimi');
+    const session = await sessionOf(workId, sessionId);
+    const file = path.join(home, 'PARLEY.md');
+    await writeFile(file, 'Original global rule.');
+    await writeFile(path.join(project, 'PARLEY.md'), 'Project rule.');
+    const fresh = await planNew(project, workId, session);
+    expect(fresh.kimiAcp).toMatchObject({
+      instructions: 'Global user rules (PARLEY.md):\nOriginal global rule.\n\nTeam rules of this project (PARLEY.md):\nProject rule.',
+    });
+    expect(fresh.kimiAcp?.prompt).toBeUndefined();
+    await writeFile(file, 'Updated global rule.');
+    const resumed = await planResume(project, workId, { ...session, providerSessionId: 'kimi-session' });
+    expect(resumed.kimiAcp).toMatchObject({ sessionId: 'kimi-session', instructions: expect.stringContaining('Updated global rule.') });
   });
 
   it('reports global rule read failures without dropping project rules', async () => {
@@ -3539,5 +3604,33 @@ describe('доверие к папке у Claude Code (спека мобильн
     } finally {
       await chmod(dir, 0o700);
     }
+  });
+});
+
+describe('порог фонового режима MCP у Claude Code', () => {
+  const KEY = 'CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS';
+  const saved = process.env[KEY];
+  afterEach(() => {
+    if (saved === undefined) delete process.env[KEY]; else process.env[KEY] = saved;
+  });
+  const envOf = async (provider: string) => {
+    const { workId, sessionId } = await pending(provider);
+    return (await planLaunch(project, workId, await sessionOf(workId, sessionId))).env;
+  };
+
+  it('Claude, GLM и свой провайдер получают порог, Codex — нет', async () => {
+    delete process.env[KEY];
+    await writeCustomProviders(
+      [{ id: 'custom-local', label: 'Local', preset: 'other', baseUrl: 'http://127.0.0.1:9/anthropic', auth: 'bearer',
+        models: { opus: 'm-big', sonnet: 'm-mid', haiku: 'm-small', subagent: 'm-mid' }, contextWindow: null, linkClaude: false }],
+      customProvidersFile(),
+    );
+    for (const provider of ['claude', 'glm', 'custom-local']) expect((await envOf(provider))[KEY]).toBe('1860000');
+    expect(await envOf('codex')).not.toHaveProperty(KEY);
+  });
+
+  it('значение из окружения хоста остаётся', async () => {
+    process.env[KEY] = '5000';
+    expect(await envOf('claude')).not.toHaveProperty(KEY);
   });
 });

@@ -59,12 +59,14 @@ export interface PlanDuty {
 /**
  * Обязанности по одному пункту, в порядке owner, verifier, lead. Выполненный пункт обязанностей не даёт;
  * автономный план — тоже (пункты ведёт движок).
- * Лид (`liveLeadId` не `null`) нужен только заблокированному пункту; кто жив и состоит в комнате — забота вызывающего.
+ * Лид (`liveLeadId` не `null`) нужен заблокированному пункту и сданному пункту с недоступным проверяющим
+ * (`verifierUnavailable`); кто жив и состоит в комнате — забота вызывающего.
  */
 export function planItemDuties(
   plan: RoomPlan,
   item: PlanItem,
   liveLeadId: string | null,
+  verifierUnavailable = false,
 ): PlanDuty[] {
   // В автономном плане пункты ведёт движок (попытки attempt_*): обязанностей у сессий нет.
   if (plan.mode === "autonomous" || planItemSatisfied(plan, item)) return [];
@@ -96,7 +98,18 @@ export function planItemDuties(
       kind: "verification",
       by: item.verifier,
     });
-  if (verified && item.verifier !== null && item.verifier !== item.owner) {
+  if (
+    verified &&
+    verifierUnavailable &&
+    item.verifier !== null &&
+    item.status === "done"
+  ) {
+    // Проверка уходит ведущему; ведущий-исполнитель проверять не может и предлагает поправку с другим проверяющим.
+    if (liveLeadId !== null)
+      if (liveLeadId === item.owner)
+        duty("lead", liveLeadId, "resolve-block");
+      else duty("verifier", liveLeadId, "verify");
+  } else if (verified && item.verifier !== null && item.verifier !== item.owner) {
     if (item.status === "done") duty("verifier", item.verifier, "verify");
     else
       duty("verifier", item.verifier, "wait", {

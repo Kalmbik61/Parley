@@ -83,7 +83,7 @@ export function ConfirmDialog({
         className={secondary === undefined ? 'w-80 max-w-80' : 'w-[30rem] max-w-[calc(100vw-2rem)]'}
       >
         <DialogTitle {...(titleHint === undefined ? null : { title: titleHint })}>{title}</DialogTitle>
-        {description !== undefined ? <DialogDescription>{description}</DialogDescription> : null}
+        {description !== undefined ? <DialogDescription className="whitespace-pre-line">{description}</DialogDescription> : null}
         {checkbox === undefined ? null : (
           <label className="flex items-center gap-2 text-sm">
             <Checkbox checked={checked} onCheckedChange={(value) => setChecked(value === true)} />

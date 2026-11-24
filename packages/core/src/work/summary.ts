@@ -11,6 +11,7 @@
 import { spawn } from 'node:child_process';
 import { adapterV1 } from '../adapter-v1.js';
 import { defaultCodexRoot, discoverCodexSessions } from '../codex/discover.js';
+import { defaultQwenRoot, discoverQwenSessions } from '../qwen/discover.js';
 import { claudeRootFor, discoverSessions } from '../discover.js';
 import { forEachJsonlRecord, type RawRecord } from '../jsonl.js';
 import {
@@ -91,6 +92,27 @@ async function codexLines(file: string): Promise<Line[]> {
   return lines;
 }
 
+/** Replies of a Qwen Code transcript: real user prompts and the assistant's own text (not thinking, tools or system records). */
+async function qwenLines(file: string): Promise<Line[]> {
+  const lines: Line[] = [];
+  await forEachJsonlRecord(file, (raw) => {
+    const type = str(raw, 'type');
+    const isUser = type === 'user' && str(raw, 'provenance') === 'real_user';
+    if (!isUser && type !== 'assistant') return;
+    const parts = asRecord(raw['message'])?.['parts'];
+    if (!Array.isArray(parts)) return;
+    const text = parts
+      .map((part) => {
+        const record = asRecord(part);
+        return record === null || record['thought'] === true ? null : str(record, 'text');
+      })
+      .filter((value): value is string => value !== null)
+      .join('\n');
+    if (text !== '') lines.push({ role: isUser ? 'user' : 'assistant', text });
+  });
+  return lines;
+}
+
 /** Лог провайдера по id сессии и способ разобрать его в реплики. */
 async function transcriptSource(
   provider: WorkProvider,
@@ -110,6 +132,11 @@ async function transcriptSource(
       (session) => session.id === providerSessionId,
     );
     return found === undefined ? null : codexLines(found.file);
+  }
+  if (provider === 'qwen') {
+    const root = roots.qwenRoot ?? defaultQwenRoot();
+    const found = (await discoverQwenSessions(root)).find((session) => session.id === providerSessionId.toLowerCase());
+    return found === undefined ? null : qwenLines(found.file);
   }
   return null;
 }

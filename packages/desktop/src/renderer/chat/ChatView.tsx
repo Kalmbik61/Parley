@@ -66,6 +66,7 @@
 import { useCallback, useEffect, useMemo, useState, type DragEvent } from 'react';
 import { toast } from 'sonner';
 import type { FeedItem } from '@parley/core';
+import { needReason } from '@parley/core/stuck';
 import { HOST_ERROR_REASONS, refKey, type ModelOption, type PendingLetter, type SessionRef } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
@@ -113,6 +114,7 @@ import { Composer } from './Composer.js';
 import { currentModel, hasPendingCard, runningAgents, switchDividers, turnActive, type SwitchDivider } from './feed-model.js';
 import { FeedList, type PendingLetterRow } from './FeedList.js';
 import { ImagePreviewHost } from './ImagePreview.js';
+import { KimiConfigMenu } from './KimiConfigMenu.js';
 import { pasteClipboardImage } from './paste-image.js';
 import { isSlashCommand, withQuote } from './reply.js';
 import { ReplyPlate } from './ReplyPlate.js';
@@ -122,6 +124,7 @@ import { useChatUiStore, type Queued } from './ui-store.js';
 import { useFeed } from './use-feed.js';
 import { SwitchBanner, switchBannerKind } from './SwitchBanner.js';
 import { WaitingBanner } from './WaitingBanner.js';
+import { TerminalPromptPanel } from './TerminalPromptPanel.js';
 
 export interface ChatViewProps {
   workKey: string;
@@ -211,6 +214,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
   const feed = useFeed(sessionRef);
   const chatFold = useUiStore((state) => state.ui.chatFold);
   const codex = provider === 'codex';
+  const kimi = provider === 'kimi';
   const items = feed?.items ?? NO_ITEMS;
   const sent = useAssistantSent(bridge, sessionRef, useHostSupports('assistant.sent'));
   const viaIds = useMemo(() => viaAssistantIds(items, sent), [items, sent]);
@@ -224,7 +228,11 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
   );
   const sessionName = session === undefined ? null : sessionRowLabel(session.id, session.label);
   const waiting = blocked && !hasPendingCard(items);
-  const showBanner = useHeldFor(waiting, BANNER_DELAY_MS);
+  // Панель вопроса терминала: когда хост умеет читать экран; вопрос старта (доверие папке, вход) её тоже показывает.
+  const canReadScreen = useHostSupports('pty.screenText');
+  const need = useActivityStore((state) => activityFor(state.byRef, sessionRef)?.activity.need ?? null);
+  const startupWait = canReadScreen && need?.kind === 'startup' && !hasPendingCard(items);
+  const showBanner = useHeldFor(waiting || startupWait, BANNER_DELAY_MS);
   const canSwitch = useHostSupports('sessions.switchAgent');
   const providerMissing = useProviderMissing(provider);
   const providerList = useProvidersStore((state) => state.providers);
@@ -235,21 +243,26 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
   const canInterrupt = useHostSupports('feed.interrupt');
   const canSetModel = useHostSupports('sessions.setModel');
   const canSetEffort = useHostSupports('sessions.setEffort');
+  const canReadKimiConfig = useHostSupports('kimi.getState');
+  const canSetKimiConfig = useHostSupports('kimi.setConfig');
   const [modeBusy, setModeBusy] = useState(false);
   const [choiceBusy, setChoiceBusy] = useState(false);
   const providerInfo = useProvidersStore((state) => state.providers.find((item) => item.id === provider));
+  // Текст ожидания без известной нужды: у Qwen и OpenCode свой (одобрения идут в терминале), у прочих общий.
+  const waitingText = providerInfo?.family === 'qwen' ? S.chat.waitingBanner.qwenApproval : providerInfo?.family === 'opencode' ? S.chat.waitingBanner.opencodeApproval : S.chat.waitingBanner.text;
   const models = providerInfo?.models ?? NO_MODELS;
   // Уровни модели из карты — тот же список, по которому хост проверит выбор; модели в карте нет — уровни «Default».
   const efforts = effortChoices(providerInfo, storedModel);
   // Подпись модели: что CLI запустил на деле (лента), иначе выбор из карты подписью каталога.
-  const modelLabel = currentModel(items) ?? (storedModel === null ? null : modelCaption(models, storedModel));
+  const modelLabel = kimi ? null : currentModel(items) ?? (storedModel === null ? null : modelCaption(models, storedModel));
   const occupied = useActivityStore((state) => occupation(activityFor(state.byRef, sessionRef)?.activity));
   const busyReason = occupied === 'agent' ? S.chat.choice.agentWorking : occupied === 'background' ? S.chat.choice.backgroundTasks : null;
+  const kimiDisabled = canSetKimiConfig ? (active ? S.chat.choice.agentWorking : busyReason) : S.chat.kimi.readOnly;
   // Модель неживой сессии меняется только в карте (хост ответит `restarted: false`), уровень — только у живой: его ставит
   // ползунок самого CLI.
   const modelDisabled = live ? busyReason : null;
   const effortDisabled = live ? busyReason : S.chat.choice.notLive;
-  const showChoice = !codex && canSetModel && canSetEffort && (models.length > 0 || efforts !== null);
+  const showChoice = !codex && !kimi && canSetModel && canSetEffort && (models.length > 0 || efforts !== null);
   // Карточка неживой сессии — то же правило, что у `TerminalSurface`.
   const showCard = useWorksStore((state) => {
     const entry = state.entries.find((item) => item.projectPath === sessionRef.projectPath && item.map.work.id === sessionRef.workId);
@@ -285,7 +298,6 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
   );
   // Письма, которые сессия ещё не забрала, — серыми за очередью окна. Причина та же, что в строке доставки комнаты, а пока
   // сжатие ждёт или идёт — сжатие: будильник тогда пишет просто `busy`.
-  const need = useActivityStore((state) => activityFor(state.byRef, sessionRef)?.activity.need ?? null);
   const letters = useMemo(() => {
     const pending = metrics?.pendingLetters ?? NO_PENDING;
     if (pending.length === 0) return NO_LETTERS;
@@ -516,6 +528,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
           view="chat"
           available
           provider={provider}
+          processes={{ bridge, sessionRef, active: visible && live }}
           metrics={metrics}
           contextChip={
             metrics === null || session === undefined || sessionName === null ? undefined : (
@@ -533,8 +546,12 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
             )
           }
           model={codex && modelLabel !== null && storedEffort !== null ? `${modelLabel} · ${storedEffort}` : modelLabel}
+          sessionConfig={kimi && live && canReadKimiConfig ? (
+            <KimiConfigMenu key={sessionKey} bridge={bridge} sessionRef={sessionRef}
+              disabledReason={kimiDisabled} />
+          ) : undefined}
           {...(codex && feed?.mode != null ? { modeLabelText: modeLabel(feed.mode) } : {})}
-          {...(canSetMode && !codex ? { modeMenu: { mode: feed?.mode ?? null, busy: modeBusy || !live, onSelect: setMode } } : {})}
+          {...(canSetMode && !codex && !kimi ? { modeMenu: { mode: feed?.mode ?? null, busy: modeBusy || !live, onSelect: setMode } } : {})}
           {...(showChoice
             ? {
                 choiceMenu: {
@@ -576,7 +593,18 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
         </ImagePreviewHost>
         {showCard ? <NotRunningCard sessionRef={sessionRef} onResume={() => resumeSession(bridge, sessionRef)} /> : null}
         {switchKind !== null && session !== undefined ? <SwitchBanner session={session} kind={switchKind} sessionRef={sessionRef} label={providerLabel} /> : null}
-        {showBanner ? <WaitingBanner workKey={workKey} tabId={tab.id} /> : null}
+        {showBanner && canReadScreen ? (
+          <TerminalPromptPanel
+            workKey={workKey}
+            tabId={tab.id}
+            sessionRef={sessionRef}
+            bridge={bridge}
+            title={need === null ? waitingText : needReason(need, new Date(), providerName(provider, providerInfo?.label ?? ''))}
+            active={visible}
+          />
+        ) : showBanner ? (
+          <WaitingBanner workKey={workKey} tabId={tab.id} {...(providerInfo?.family === 'qwen' || providerInfo?.family === 'opencode' ? { text: waitingText } : {})} />
+        ) : null}
         {trustCard === undefined ? null : <WaitingForTrust cardId={trustCard.id} testId="chat-waiting-for-trust" className="mx-3 mb-2" />}
         {showHooksHint ? (
           <div data-testid="codex-hooks-hint" className="mx-3 mb-2 flex min-w-0 items-center gap-2 rounded-lg bg-foreground/5 px-3 py-2 text-xs">
@@ -595,6 +623,9 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
           source={suggestionSource}
           slashCommands={!codex}
           codex={codex}
+          qwen={providerInfo?.family === 'qwen'}
+          opencode={providerInfo?.family === 'opencode'}
+          kimi={kimi}
           onPickFiles={pickFiles}
           onPasteImage={pasteImage}
           dictationId={`chat:${sessionKey}`}

@@ -22,8 +22,6 @@ import {
   ENGINE,
   resume,
   settleOp,
-  DEFAULT_CONFIG,
-  loadConfig,
   capturePlanNotice,
   reservePlanEffects,
   PlanConflictError,
@@ -41,7 +39,7 @@ import {
   setRoomOwner,
   updateMap,
   workExists,
-  writeLetters,
+  writeLettersAsync,
   type MessageVia,
   type Room,
   type WorkMap,
@@ -172,8 +170,8 @@ export async function deliverRecipeToNewLeads(projectPath: string, map: WorkMap)
 export async function sendHumanLetter(input: Params<'rooms.send'>, options: { via?: MessageVia } = {}): Promise<string> {
   const { projectPath, workId, roomId, to, text, kind, replyTo } = input;
   assertWork(projectPath, workId);
-  // Письмо человека — только письма, без разбора карты (спека хранилища 6.2): `writeLetters` кладёт одну строку.
-  return writeLetters(projectPath, workId, (letters, map) => {
+  // Письмо человека — только письма, без разбора карты (спека хранилища 6.2): `writeLettersAsync` кладёт одну строку.
+  return await writeLettersAsync(projectPath, workId, (letters, map) => {
     if (roomId !== null) {
       // Нет комнаты или она в архиве — `bad_request`: писать в архивную нельзя, пока человек не вернёт её (`rooms.reopen`).
       const room = openRoom(map, roomId);
@@ -242,7 +240,6 @@ export async function addRoomMember(input: Params<'rooms.addMember'>): Promise<s
  */
 export async function resolveRoomProposal(input: Params<'rooms.resolveProposal'>): Promise<string> {
   const { projectPath, workId, roomId, proposalId, action, note, rev, planId, planRev } = input;
-  const rate = (await loadConfig()).config.messageRate ?? DEFAULT_CONFIG.messageRate;
   assertWork(projectPath, workId);
   let messageId = '';
   await updateMap(projectPath, workId, (map, letters) => {
@@ -251,7 +248,7 @@ export async function resolveRoomProposal(input: Params<'rooms.resolveProposal'>
       messageId = resolveAutonomousProposal(map, letters, roomId, proposalId, action, { note, rev, ...(planId === undefined ? {} : { planId }), ...(planRev === undefined ? {} : { planRev }) });
       if (action === 'return' && completion?.kind === 'completion')
         capturePlanNotice(map, letters, roomId, 'completion-returned', messageId, completion.planId);
-      reservePlanEffects(map, letters, rate);
+      reservePlanEffects(map, letters);
     } catch (error) {
       throw asHostError(error);
     }

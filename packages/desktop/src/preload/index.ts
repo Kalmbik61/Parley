@@ -3,8 +3,9 @@ import type { WorksSyncSurfaceBatch, WorksSyncSurfaceStatus } from '@parley/prot
 import type { WorksSyncBridge } from '../shared/bridge.js';
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { EventMessage, EventName, MethodName, NotificationName } from '@parley/protocol';
-import type { AppNote, CloseAnswer, DiagnosticsSaveResult, FocusTarget, ParleyBridge, HostStatus, UpdateInfo } from '../shared/bridge.js';
+import type { AboutInfo, AppNote, UpdateCheckResult, CloseAnswer, DiagnosticsSaveResult, FocusTarget, ParleyBridge, HostStatus, UpdateResult, UpdateState } from '../shared/bridge.js';
 import type { BrowserAuthCancel, BrowserAuthRequest } from '../shared/basic-auth.js';
+import type { BrowserCertCancel, BrowserCertRequest } from '../shared/client-cert.js';
 import type { DevtoolsBatch, DevtoolsSnapshot, ResponseBody, ViewportSpec } from '../shared/browser-devtools.js';
 import type {
   AgentActivity,
@@ -70,8 +71,10 @@ const browserAgentActivityListeners = new Set<(e: AgentActivity) => void>();
 const browserAgentResizeListeners = new Set<(e: AgentResize) => void>();
 const browserAuthRequestListeners = new Set<(e: BrowserAuthRequest) => void>();
 const browserAuthCancelListeners = new Set<(e: BrowserAuthCancel) => void>();
+const browserCertRequestListeners = new Set<(e: BrowserCertRequest) => void>();
+const browserCertCancelListeners = new Set<(e: BrowserCertCancel) => void>();
 const windowFocusListeners = new Set<(focused: boolean) => void>();
-const updateListeners = new Set<(info: UpdateInfo) => void>();
+const updateListeners = new Set<(state: UpdateState) => void>();
 const voiceProgressListeners = new Set<(progress: DownloadProgress) => void>();
 const assistantVoiceStateListeners = new Set<(state: TtsEngineState) => void>();
 /** Цель клика, пришедшая, пока у `onFocusTarget` не было слушателей (кусок 4.3). */
@@ -170,6 +173,14 @@ ipcRenderer.on('browser:auth-cancel', (_event, e: BrowserAuthCancel) => {
   for (const listener of browserAuthCancelListeners) listener(e);
 });
 
+ipcRenderer.on('browser:cert-request', (_event, e: BrowserCertRequest) => {
+  for (const listener of browserCertRequestListeners) listener(e);
+});
+
+ipcRenderer.on('browser:cert-cancel', (_event, e: BrowserCertCancel) => {
+  for (const listener of browserCertCancelListeners) listener(e);
+});
+
 ipcRenderer.on('app:window-focus', (_event, focused: boolean) => {
   for (const listener of windowFocusListeners) listener(focused);
 });
@@ -183,8 +194,8 @@ ipcRenderer.on('remote:event', (_event, payload: RemoteEvent) => {
   for (const listener of remoteListeners) listener(payload);
 });
 
-ipcRenderer.on('app:update-available', (_event, info: UpdateInfo) => {
-  for (const listener of updateListeners) listener(info);
+ipcRenderer.on('app:update-state', (_event, state: UpdateState) => {
+  for (const listener of updateListeners) listener(state);
 });
 
 ipcRenderer.on('voice:progress', (_event, progress: DownloadProgress) => {
@@ -308,6 +319,8 @@ const bridge = {
     chooseFolder: () => ipcRenderer.invoke('app:choose-folder') as Promise<string | null>,
     chooseFiles: () => ipcRenderer.invoke('app:choose-files') as Promise<string[]>,
     version: () => ipcRenderer.invoke('app:version') as Promise<string | null>,
+    checkForUpdates: () => ipcRenderer.invoke('app:check-for-updates') as Promise<UpdateCheckResult>,
+    aboutInfo: () => ipcRenderer.invoke('app:about-info') as Promise<AboutInfo>,
     restartHost: () => ipcRenderer.invoke('app:restart-host') as Promise<void>,
     reconnect: () => ipcRenderer.invoke('app:reconnect') as Promise<void>,
     loadLayout: (workKey: string) =>
@@ -386,16 +399,27 @@ const bridge = {
     answerClose: (answer: CloseAnswer) => {
       ipcRenderer.send('app:close-answer', answer);
     },
-    onUpdateAvailable: (listener: (info: UpdateInfo) => void) => {
-      updateListeners.add(listener);
-      // Найденное до подписки (окно ещё грузилось или показывало «Connecting…»); отписавшемуся ответ не нужен.
-      void (ipcRenderer.invoke('app:get-update') as Promise<UpdateInfo | null>)
-        .then((info) => {
-          if (info !== null && updateListeners.has(listener)) listener(info);
+    getUpdateState: () => ipcRenderer.invoke('app:get-update-state') as Promise<UpdateState>,
+    onUpdateState: (listener: (state: UpdateState) => void) => {
+      // Событие, пришедшее раньше ответа на запрос, новее ответа: ответ его не затирает.
+      let fresh = false;
+      const wrapped = (state: UpdateState): void => {
+        fresh = true;
+        listener(state);
+      };
+      updateListeners.add(wrapped);
+      // Состояние до подписки (окно ещё грузилось или показывало «Connecting…»); отписавшемуся ответ не нужен.
+      void (ipcRenderer.invoke('app:get-update-state') as Promise<UpdateState>)
+        .then((state) => {
+          if (!fresh && updateListeners.has(wrapped)) listener(state);
         })
         .catch(() => {});
-      return () => updateListeners.delete(listener);
+      return () => updateListeners.delete(wrapped);
     },
+    downloadUpdate: () => ipcRenderer.invoke('app:download-update') as Promise<void>,
+    cancelUpdateDownload: () => ipcRenderer.invoke('app:cancel-update-download') as Promise<void>,
+    installUpdate: () => ipcRenderer.invoke('app:install-update') as Promise<void>,
+    takeUpdateResult: () => ipcRenderer.invoke('app:take-update-result') as Promise<UpdateResult | null>,
   },
   remote: {
     call: <N extends RemoteCallName>(name: N, params: RemoteCalls[N]['params']) =>
@@ -514,6 +538,16 @@ const bridge = {
     },
     authResponse: (requestId: string, credentials: { username: string; password: string } | null) =>
       ipcRenderer.invoke('browser:auth-response', requestId, credentials === null ? null : credentials.username, credentials?.password) as Promise<void>,
+    onCertRequest: (listener: (e: BrowserCertRequest) => void) => {
+      browserCertRequestListeners.add(listener);
+      return () => browserCertRequestListeners.delete(listener);
+    },
+    onCertCancel: (listener: (e: BrowserCertCancel) => void) => {
+      browserCertCancelListeners.add(listener);
+      return () => browserCertCancelListeners.delete(listener);
+    },
+    certResponse: (requestId: string, answer: { fingerprint: string; remember: boolean } | null) =>
+      ipcRenderer.invoke('browser:cert-response', requestId, answer === null ? null : answer.fingerprint, answer?.remember === true) as Promise<void>,
     agentStop: (webContentsId: number) => ipcRenderer.invoke('browser:agent-stop', webContentsId) as Promise<void>,
     agentFocusReady: (id: string, ok: boolean) => ipcRenderer.invoke('browser:agent-focus-ready', id, ok) as Promise<void>,
   },

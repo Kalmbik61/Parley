@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { BRIEF_MAX_BYTES, CONTEXT_LIMITS, ContextBudgetError, assertWithinBudget, inlineOrRef, textHash } from './context-budget.js';
+import { describeSeed } from './worktree-seed.js';
 import { storeLetterReads, type LetterReads } from './letter-store.js';
 import { isMember, isRoomArchived, liveLead } from './rooms.js';
 import { ensureStateDir } from './state-dir.js';
@@ -14,7 +15,7 @@ import { HUMAN, type WorkMap, type WorkSession } from './types.js';
  * порождённых агентом и созданных руками сессий.
  */
 const RULES =
-  'Call `get_map` first. Answer a `question` with `send_message` and do not end a turn with one unanswered; do not answer a `note` or a `decision`; mark an agreement with one `kind: decision` message. Before finishing you must call `report` — otherwise the result will not go anywhere. Details: `read_guide`.';
+  'Call `get_map` first. Answer a `question` with `send_message` and do not end a turn with one unanswered; do not answer a `note` or a `decision`; mark an agreement with one `kind: decision` message. Before finishing you must call `report`: it notifies your room lead, room owner or task giver; without it the result goes nowhere. Details: `read_guide`.';
 
 /** Сколько решений треда, коллег и источников контекста бриф называет сам; остальное — по ссылке на `get_map`. */
 const MAX_DECISIONS = 5;
@@ -36,14 +37,14 @@ const REVISION_LINE = /^Brief revision: ([0-9a-f]{12})\n/m;
  * Оба текста экспортированы: их же несёт `roomTask` в `check_inbox` (`mcp/tools.ts`), бриф и письмо не разойдутся.
  */
 export const LEAD_ROLE =
-  "you are the lead. The human sets a task for everyone in the room — collect the participants' positions (each answers in the room with one message), propose a decision with `propose_decision` and do not start the work before acceptance. While a decision waits (the room's `proposal` in `get_map` is not `null`), a new human message to everyone is not a new task: do not collect positions again. Such a message is a correction to the waiting decision: if it changes the substance, take it into account and replace the text with a repeated `propose_decision`, otherwise do nothing. Accepted — hand out the parts with mentions like `@s07`; returned — redo it and propose again. Wait for positions and reports with one `wait_for(\"inbox\", 1500)`, not by each participant's id; if it answers `running` while you already hold some positions, propose a decision on them instead of ending the turn. Answer the human in the room without `to`, with `replyTo` set to the id of the message you answer. Keep personal steps in publish_agent_plan and plan-item positions in plan_progress. Send the room owner one consolidated update only for a ready milestone, a blocker needing intervention, changed agreements or a cross-room dependency; never forward routine steps or repeated status. Escalate urgent blockers immediately. Hand implementation to standard-tier sessions (Executor); strong models prepare, lead and review, and take code only for a named reason. If Parley reports a participant as stuck, do not hand its part to others on your own: follow topic `stuck` of `read_guide`.";
+  "you are the lead. The human sets a task for everyone in the room — collect the participants' positions (each answers in the room with one message), propose a decision with `propose_decision` and do not start the work before acceptance. While a decision waits (the room's `proposal` in `get_map` is not `null`), a new human message to everyone is not a new task: do not collect positions again. Such a message is a correction to the waiting decision: if it changes the substance, take it into account and replace the text with a repeated `propose_decision`, otherwise do nothing. Accepted — hand out the parts with mentions like `@s07`; returned — redo it and propose again. Wait for positions and reports with one `wait_for(\"inbox\", 1500)`, not by each participant's id; put it in the same message as the call it follows; if it answers `running` while you already hold some positions, propose a decision on them instead of ending the turn. Answer the human in the room without `to`, with `replyTo` set to the id of the message you answer. Keep personal steps in publish_agent_plan and plan-item positions in plan_progress. Your own `report` sends the finished result to the room owner; message the owner yourself only for a ready milestone, a blocker needing intervention, changed agreements or a cross-room dependency; never forward routine steps or repeated status. Escalate urgent blockers immediately. Hand implementation to standard-tier sessions (Executor); strong models prepare, lead and review, and take code only for a named reason. If Parley reports a participant as stuck, do not hand its part to others on your own: follow topic `stuck` of `read_guide`.";
 
 /**
  * Участнику нужен его токен: по нему в раздаче частей он находит своё. Задача человека — не реплика
  * коллеги: ответ нужен и на письмо вида `note`, иначе правило брифа «do not answer a `note`» с ней спорит.
  */
 export const memberRole = (mention: string): string =>
-  `The human sets a task for everyone in the room — speak up in one message to the room (answer even if the human's message is a \`note\`) with \`replyTo\` set to the id of the human's message, so the window quotes it; do not start the work until the lead names your part (the lead hands out parts with mentions, yours is \`${mention}\`), and when done report to the lead in the room. Do not acknowledge the assignment of parts: your next message to the lead is the result. While a decision waits (the room's \`proposal\` in \`get_map\` is not \`null\`), a new human message to everyone is not a new task: do not write positions again. If Parley reports a participant as stuck, do not call the human about it: the lead does.`;
+  `The human sets a task for everyone in the room — speak up in one message to the room (answer even if the human's message is a \`note\`) with \`replyTo\` set to the id of the human's message, so the window quotes it; do not start the work until the lead names your part (the lead hands out parts with mentions, yours is \`${mention}\`), and when done call \`report\`: it notifies the lead; post in the room only what the lead must read in full. Do not acknowledge the assignment of parts. While a decision waits (the room's \`proposal\` in \`get_map\` is not \`null\`), a new human message to everyone is not a new task: do not write positions again. If Parley reports a participant as stuck, do not call the human about it: the lead does.`;
 
 /**
  * Время решения — местное и короткое: бриф читают рядом с человеком, которому
@@ -96,12 +97,13 @@ export function buildBrief(map: WorkMap, sessionId: string, letters: LetterReads
   } else if (session.workspace?.kind === 'clone') {
     lines.push(`Clone: isolated clone of the integration branch at ${session.workspace.sha}; the engine captures your tree on attempt_submit; do not commit, do not touch git, do not write outside this folder. Use .parley-tmp inside this clone as your only temporary directory; the engine excludes it, and the root folders .omc, .omx, .claude, .codex and .agents, from captured trees. Folder: \`${session.workspace.path}\`.`, '');
   } else if (session.worktree !== null) {
-    const { branch, base, path: folder } = session.worktree;
+    const { branch, base, path: folder, seed } = session.worktree;
     lines.push(
       `Worktree: branch \`${branch}\` off base \`${base}\`, folder \`${folder}\`.`,
       'The rules for working in a worktree are in `read_guide`, topic `worktrees`.',
-      '',
     );
+    if (seed !== null && seed !== undefined) lines.push(describeSeed(seed));
+    lines.push('');
   }
 
   if (session.contextFrom.length > 0) {

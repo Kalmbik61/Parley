@@ -69,16 +69,16 @@ describe('workDb', () => {
     expect(modes.every(([, mode]) => mode === 0o600)).toBe(true);
   });
 
-  it('создаёт parley.db в PARLEY_HOME с WAL и user_version = 14', () => {
+  it('создаёт parley.db в PARLEY_HOME с WAL и user_version = 16', () => {
     expect(WORK_DB_FILE).toBe('parley.db');
-    expect(WORK_DB_SCHEMA_VERSION).toBe(14);
+    expect(WORK_DB_SCHEMA_VERSION).toBe(16);
     expect(existsSync(home)).toBe(false);
 
     workDb();
 
     expect(existsSync(path.join(home, 'parley.db'))).toBe(true);
     expect(pragma('journal_mode')).toBe('wal');
-    expect(pragma('user_version')).toBe(14);
+    expect(pragma('user_version')).toBe(16);
   });
 
   it('шаг 4 создаёт таблицы Assistant Core: idempotency_key уникален, состояния ограничены', () => {
@@ -156,7 +156,7 @@ describe('workDb', () => {
     closeWorkDb();
 
     expect(indexColumns('messages_sender')).toEqual(['project_path', 'work_id', 'room_id', 'sender', 'seq']);
-    expect(pragma('user_version')).toBe(14);
+    expect(pragma('user_version')).toBe(16);
     expect(workDb().prepare('SELECT id, sender FROM messages').all()).toEqual([{ id: 'm-01', sender: 'human' }]);
     expect(workDb().prepare('SELECT id FROM works').all()).toEqual([{ id: 'w-0001' }]);
   });
@@ -190,7 +190,7 @@ describe('workDb', () => {
   it('база версии 1 (письма в entries) поднимается до 2 при открытии: письмо в таблице с кандидатом, строки message ушли, версия работы прежняя', () => {
     writeV1(goodLetter);
 
-    expect(pragma('user_version')).toBe(14);
+    expect(pragma('user_version')).toBe(16);
 
     const db = workDb();
     expect(db.prepare('SELECT seq, id, sender, recipients, body FROM messages').all()).toEqual([
@@ -217,7 +217,7 @@ describe('workDb', () => {
     check.prepare(`UPDATE entries SET json = ?`).run(goodLetter);
     check.close();
 
-    expect(pragma('user_version')).toBe(14);
+    expect(pragma('user_version')).toBe(16);
   });
 
   it('отдаёт один и тот же дескриптор, пока PARLEY_HOME не меняется', () => {
@@ -229,7 +229,7 @@ describe('workDb', () => {
     insertEntry('w-0001', 'a');
     closeWorkDb();
 
-    expect(pragma('user_version')).toBe(14);
+    expect(pragma('user_version')).toBe(16);
     const works = workDb().prepare('SELECT id FROM works').all();
     expect(works).toEqual([{ id: 'w-0001' }]);
     expect(countEntries()).toBe(1);
@@ -493,9 +493,75 @@ describe('реестр миграций', () => {
     const db = workDb();
     const column = (db.prepare('PRAGMA table_info(assistant_jobs)').all() as Array<{ name: string; type: string; notnull: number }>).find((row) => row.name === 'context_json');
     expect(column).toMatchObject({ type: 'TEXT', notnull: 0 });
-    const step = MIGRATIONS[MIGRATIONS.length - 1]!;
+    const step = MIGRATIONS[13]!;
     expect(step.version).toBe(14);
     expect(() => step.up(db)).not.toThrow();
+  });
+
+  it('шаг 15 добавляет nullable progress_json и result_state в assistant_cards; повтор на базе с колонками не падает', () => {
+    const db = workDb();
+    const columns = db.prepare('PRAGMA table_info(assistant_cards)').all() as Array<{ name: string; type: string; notnull: number }>;
+    expect(columns.find((row) => row.name === 'progress_json')).toMatchObject({ type: 'TEXT', notnull: 0 });
+    expect(columns.find((row) => row.name === 'result_state')).toMatchObject({ type: 'TEXT', notnull: 0 });
+    const step = MIGRATIONS[14]!;
+    expect(step.version).toBe(15);
+    expect(() => step.up(db)).not.toThrow();
+  });
+
+  it('шаг 16 добавляет nullable result_json в assistant_cards; повтор на базе с колонкой не падает', () => {
+    const db = workDb();
+    const columns = db.prepare('PRAGMA table_info(assistant_cards)').all() as Array<{ name: string; type: string; notnull: number }>;
+    expect(columns.find((row) => row.name === 'result_json')).toMatchObject({ type: 'TEXT', notnull: 0 });
+    const step = MIGRATIONS[15]!;
+    expect(step.version).toBe(16);
+    expect(() => step.up(db)).not.toThrow();
+  });
+
+  it('база версии 14 поднимается до последней: строки карточек целы, новые столбцы пусты', () => {
+    mkdirSync(home, { recursive: true });
+    const db = open(path.join(home, 'v14.db'));
+    try {
+      runMigrations(db, MIGRATIONS.slice(0, 14));
+      db.prepare(
+        `INSERT INTO assistant_cards (proposal_id, kind, view_json, payload_json, source, state, revision, expires_at, created_at, decided_at, decided_via, outcome) VALUES ('p1', 'message', '{}', '{}', 'island', 'decided', 2, 100, 1, 5, 'island', 'sent')`,
+      ).run();
+      runMigrations(db);
+      expect(version(db)).toBe(WORK_DB_SCHEMA_VERSION);
+      expect(db.prepare("SELECT state, outcome, progress_json, result_json, result_state FROM assistant_cards WHERE proposal_id = 'p1'").get()).toEqual({ state: 'decided', outcome: 'sent', progress_json: null, result_json: null, result_state: null });
+    } finally {
+      db.close();
+    }
+  });
+
+  it('база версии 15 (её уже открывал прежний код) поднимается до 16 через runMigrations: обычные и автономные строки целы, повторное открытие ничего не меняет', () => {
+    mkdirSync(home, { recursive: true });
+    const file = path.join(home, 'v15.db');
+    const db = open(file);
+    runMigrations(db, MIGRATIONS.slice(0, 15));
+    expect(version(db)).toBe(15);
+    expect(db.prepare('PRAGMA table_info(assistant_cards)').all().some((column) => column['name'] === 'result_json')).toBe(false);
+    const insert = db.prepare(
+      `INSERT INTO assistant_cards (proposal_id, kind, view_json, payload_json, source, state, revision, expires_at, created_at, decided_at, decided_via, outcome, progress_json, result_state) VALUES (?, 'message', '{}', '{}', 'island', 'decided', 2, 100, 1, 5, ?, ?, ?, ?)`,
+    );
+    insert.run('p1', 'island', 'sent', null, null);
+    insert.run('p2', 'auto', 'done', '{"steps":1,"started":[1],"confirmed":[1]}', 'pending');
+    runMigrations(db);
+    expect(version(db)).toBe(16);
+    const select = 'SELECT proposal_id, decided_via, outcome, progress_json, result_json, result_state FROM assistant_cards ORDER BY proposal_id';
+    const after = db.prepare(select).all();
+    expect(after).toEqual([
+      { proposal_id: 'p1', decided_via: 'island', outcome: 'sent', progress_json: null, result_json: null, result_state: null },
+      { proposal_id: 'p2', decided_via: 'auto', outcome: 'done', progress_json: '{"steps":1,"started":[1],"confirmed":[1]}', result_json: null, result_state: 'pending' },
+    ]);
+    db.close();
+    const again = open(file);
+    try {
+      runMigrations(again);
+      expect(version(again)).toBe(16);
+      expect(again.prepare(select).all()).toEqual(after);
+    } finally {
+      again.close();
+    }
   });
 
   it('база версии 12 поднимается до 13 с сохранением строк voice_telemetry', () => {

@@ -140,6 +140,7 @@ room r-02 is archived: only the human can reopen it
   «N more closed», стоит ссылка `N archived room(s)`. Клик раскрывает приглушённые строки архивных
   комнат (`data-dimmed`), повторный клик сворачивает. Состояние хранится в памяти, по образцу
   `useExpandedClosed` (`WorkCard.tsx:99-111`). Клавиши → и ← работают как у «N more closed»
+  Уточнение пользователя 2026-11-15 (docs/plans/2026-11-15-sidebar-closed-block-plan.md): ссылка стала заголовком-переключателем `Archived rooms` с числом и шевроном, стоит после блока `Closed sessions`; у блока длиннее 10 строк `Hide archived rooms` повторяется внизу.
   (`use-sidebar-keys.ts:321`).
 - Сессии архивной комнаты. `homeRooms` (`sort.ts:200`) ставит сессию сначала в открытую комнату и
   только потом в архивную. Если домашняя комната сессии архивная:

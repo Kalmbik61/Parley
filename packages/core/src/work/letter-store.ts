@@ -32,7 +32,8 @@ import {
 } from './letter-tables.js';
 import { recipientsOf, unreadFor, unreadForHuman } from './letters.js';
 import { addMessage, maxNumber } from './map.js';
-import { applyMapUpdate, letterDb, readMapView, readTransaction, storeDb, type UpdateMapOptions } from './store.js';
+import { deepFreeze, freezeMaps } from './works.js';
+import { applyLettersAsync, applyMapUpdate, letterDb, readMapView, readTransaction, storeDb, type UpdateMapOptions } from './store.js';
 import { HUMAN, type Message, type MessageKind, type MessageVia, type WindowWorkMap, type WorkMap } from './types.js';
 
 /** Новое письмо. Номер `m-NN` выдаёт хранилище; `readBy` и `at` задают тесты и переезд, у обычного письма их нет. */
@@ -80,8 +81,6 @@ export interface LetterTx {
   count(q: Omit<LetterQuery, 'limit'>): number;
   /** Непрочитанное читателем: у сессии — правила `isUnreadFor` (`letters.ts`), у `human` — `isHumanUnread`. */
   unreadFor(reader: string): Message[];
-  /** Сессия вошла в комнату: все рассылки комнаты без её отметки и не от неё становятся ей непрочитанными. */
-  joined(roomId: string, reader: string): void;
   /** Сессия вышла из комнаты: рассылки комнаты ей больше не непрочитанные (письма с явным `to` остаются адресату). */
   left(roomId: string, reader: string): void;
   /** Комната ушла в архив: у неё нет адресатов-сессий, человеку её письма остаются непрочитанными. */
@@ -208,7 +207,7 @@ function channelStatsOf(map: Pick<WindowWorkMap, 'messages'>): Record<string, { 
 /**
  * `LetterTx` над картой с письмами в памяти `map` (ссылку на `map.messages` не держим: `deleteRoom` подменяет массив) и
  * признак «письма были записаны». Для тестов правил комнат и планов и для читателей без базы: письма в базе кладёт
- * `createTableLetterTx`. Непрочитанное считается по всем письмам карты, поэтому `joined`, `left`, `archived` и
+ * `createTableLetterTx`. Непрочитанное считается по всем письмам карты, поэтому `left`, `archived` и
  * `effectCancelled` здесь ничего не делают.
  *
  * `savepoint` ведёт журнал отмен только своих методов: объекты, которые держит вызывающий, остаются теми же, а
@@ -266,7 +265,6 @@ export function mapLetterTx(map: WindowWorkMap): { letters: LetterTx; wrote: () 
     count: (q) => countLetters(map, q),
     unreadFor: (reader) => unreadOf(map, reader),
 
-    joined() {},
     left() {},
     archived() {},
     effectCancelled() {},
@@ -339,7 +337,8 @@ export function mapLetterTx(map: WindowWorkMap): { letters: LetterTx; wrote: () 
  * чтения (правила и комнаты). Ничего не записала — версия работы, `updatedAt` и подписчики `onMapWritten` не
  * шевелятся. `touch: false` — `updatedAt` не сдвигается, когда запись всё же была.
  *
- * `fn` не должна возвращать части `map` (саму карту, комнаты, сессии): при пустой записи карта — тот же объект, что лежит
+ * Правки `map` из `fn` не записываются: запись писем не пересобирает карту (`lettersOnly`); меняющим карту нужен
+ * `updateMap`. `fn` не должна возвращать части `map` (саму карту, комнаты, сессии): при пустой записи карта — тот же объект, что лежит
  * в кэше карт, и результат, который вызывающий потом изменит, испортил бы кэш. Письма из `letters` — свои копии.
  */
 export function writeLetters<T>(
@@ -350,7 +349,26 @@ export function writeLetters<T>(
 ): T {
   let result: T | undefined;
   applyMapUpdate(projectPath, workId, (map, letters) => {
-    result = fn(letters, map);
+    // В тестах `fn` видит замороженную копию: правка карты из неё не записывается (быстрый путь её не увидит) и должна
+    // быть `TypeError`, а не тихой потерей. `LetterTx` работает с настоящей картой — `deleteRoom` двигает `messageSeq`.
+    result = fn(letters, freezeMaps ? deepFreeze(structuredClone(map)) : map);
+  }, { ...options, lettersOnly: true });
+  return result as T;
+}
+
+/**
+ * `writeLetters` для хоста: чужой замок базы ждётся срезами по 10 мс с паузой цикла событий до прежнего срока, а не сном
+ * внутри SQLite (хост — один поток). Остальное — как у `writeLetters`; синхронная версия остаётся для процессов инструментов.
+ */
+export async function writeLettersAsync<T>(
+  projectPath: string,
+  workId: string,
+  fn: (letters: LetterTx, map: Readonly<WorkMap>) => T,
+  options?: Pick<UpdateMapOptions, 'touch' | 'lockTimeoutMs'>,
+): Promise<T> {
+  let result: T | undefined;
+  await applyLettersAsync(projectPath, workId, (map, letters) => {
+    result = fn(letters, freezeMaps ? deepFreeze(structuredClone(map)) : map);
   }, options);
   return result as T;
 }
@@ -501,7 +519,6 @@ export function previewLetterTx(projectPath: string, workId: string, map: WorkMa
     query: (q) => readLetters(projectPath, workId, q),
     count: (q) => letterCount(projectPath, workId, q),
     unreadFor: (reader) => unreadLetters(projectPath, workId, reader, { map }),
-    joined() {},
     left() {},
     archived() {},
     reopened() {},
@@ -532,7 +549,7 @@ export async function markHumanRead(projectPath: string, workId: string, message
 
   // Под блокировкой отбираем заново: другой клиент мог отметить часть писем между чтениями.
   let marked = 0;
-  writeLetters(
+  await writeLettersAsync(
     projectPath,
     workId,
     (letters) => {

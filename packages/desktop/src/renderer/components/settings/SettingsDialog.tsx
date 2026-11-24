@@ -4,7 +4,8 @@
  * «Вид» (`ui.json.appearance`, спека 4.7), «Терминал» и «Агенты» (прежние
  * поля `config.json` через `settings.set`, как раньше), «Уведомления»
  * (`ui.json.notifications` и переключатель острова `ui.json.island.enabled`, блок «Island» — звук и движение острова
- * `ui.json.island.sound`/`motion`, #9 §5, — а под ними — переключатель проверки новой версии `ui.json.checkForUpdates`, V6 плана релиза 0.1.0). Поля «Тема» (палитры ушедшего TUI) нет: тему
+ * `ui.json.island.sound`/`motion`, #9 §5), «About» (версия, сборка, «Check now», переключатель проверки новой версии
+ * `ui.json.checkForUpdates` и строка самообновления — с 0.38; V6 плана релиза 0.1.0). Поля «Тема» (палитры ушедшего TUI) нет: тему
  * окна задаёт «Вид» (спека 4.9).
  *
  * Заблокированное переменной окружения поле неактивно и подписано «задано
@@ -43,6 +44,7 @@ import { ToggleGroup, ToggleGroupItem } from '../../ui/toggle-group.js';
 import { VoiceSettings } from '../../voice/VoiceSettings.js';
 import { hostMethods } from '../../lib/capabilities.js';
 import { useHostStore } from '../../store/host.js';
+import { AboutSettings } from './AboutSettings.js';
 import { AssistantSettings } from './AssistantSettings.js';
 import { ProjectsSettings } from './ProjectsSettings.js';
 import { ProvidersSettings } from './ProvidersSettings.js';
@@ -69,9 +71,10 @@ const SECTION_LABELS: Record<SettingsSection, string> = {
   providers: S.settings.sections.providers,
   projects: S.settings.sections.projects,
   remote: S.settings.sections.remote,
+  about: S.settings.sections.about,
 };
 
-const SECTION_ORDER: readonly SettingsSection[] = ['appearance', 'terminal', 'agents', 'projects', 'providers', 'notifications', 'browser', 'voice', 'assistant', 'remote'];
+const SECTION_ORDER: readonly SettingsSection[] = ['appearance', 'terminal', 'agents', 'projects', 'providers', 'notifications', 'browser', 'voice', 'assistant', 'remote', 'about'];
 
 type FieldErrors = Partial<Record<keyof ParleyConfig, string>>;
 
@@ -693,17 +696,6 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
             ) : null}
             {/* Electron на macOS не сообщает о запрете уведомлений — подсказка стоит всегда (спека 7.4). */}
             <p className="text-xs text-muted-foreground">{S.settings.notificationsHint}</p>
-            {/* Проверка новой версии (V6 плана релиза 0.1.0): строка та же, что у уведомлений, а смысл свой — сеть. */}
-            {uiLoaded ? (
-              <>
-                <NotificationRow
-                  label={S.settings.checkForUpdates}
-                  checked={ui.checkForUpdates}
-                  onCheckedChange={(checked) => patchUi({ checkForUpdates: checked })}
-                />
-                <p className="text-xs text-muted-foreground">{S.settings.checkForUpdatesHint}</p>
-              </>
-            ) : null}
             {config !== null ? (
               <TelegramSettings bridge={bridge} config={config} locked={locked} save={save} hostMethods={hostMethods(hostStatus)} />
             ) : null}
@@ -732,7 +724,13 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
 
           <TabsContent value="providers" className="mt-0"><ProvidersSettings /></TabsContent>
 
-          <TabsContent value="assistant" className="mt-0">{uiLoaded ? <AssistantSettings /> : null}</TabsContent>
+          <TabsContent value="assistant" className="mt-0">{uiLoaded ? (
+              <AssistantSettings bridge={bridge} config={config} locked={locked} save={save} error={errors.assistantAutonomy} />
+            ) : null}</TabsContent>
+
+          <TabsContent value="about" className="mt-0">
+            <AboutSettings bridge={bridge} />
+          </TabsContent>
 
           <TabsContent value="remote" className="mt-0">
             <RemoteSettings bridge={bridge} config={config} locked={locked} save={save} error={errors.remoteCreate} />

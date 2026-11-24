@@ -17,13 +17,13 @@ const sig = (r: CardRow): string => {
 };
 
 describe('card parity fixture (window side)', () => {
-  for (const showClosed of [false, true]) {
-    it(`cardRows and archivedRows, showClosed=${showClosed}`, () => {
-      const want = fixture.expected[String(showClosed)];
-      expect(cardRows(map, showClosed).map(sig)).toEqual(want.rows);
-      expect(archivedRows(map, showClosed).map((r) => `${r.room.id}[${r.sessions.map((m) => m.id).join(',')}]`)).toEqual(want.archived);
-    });
-  }
+  // 2026-11-15: the window no longer has a `showClosed` view of the card (closed sessions go to the «Closed sessions» block,
+  // `closedRows`), so only the collapsed case of the shared fixture applies; the phone still follows the old rule.
+  it('cardRows and archivedRows, collapsed card', () => {
+    const want = fixture.expected['false'];
+    expect(cardRows(map).map(sig)).toEqual(want.rows);
+    expect(archivedRows(map).map((r) => `${r.room.id}[${r.sessions.map((m) => m.id).join(',')}]`)).toEqual(want.archived);
+  });
 
   it('closed count of the card', () => {
     expect(treeOrder(map.sessions).filter(({ session }) => session.lifecycle === 'closed').length).toBe(fixture.expected.closedCount);

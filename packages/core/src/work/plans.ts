@@ -72,6 +72,14 @@ function participant(
       ))
   );
 }
+/** Названный проверяющий недоступен: сессия закрыта или не в комнате (HUMAN доступен всегда). */
+export function planVerifierUnavailable(
+  map: WorkMap,
+  room: Room,
+  item: PlanItem,
+): boolean {
+  return item.verifier !== null && !participant(map, room, item.verifier);
+}
 export function requirePlanLead(map: WorkMap, room: Room, actor: string): void {
   if (
     isRoomClosed(map, room) ||
@@ -755,8 +763,20 @@ export function verifyPlanItem(
       (!humanReturn && (plan.status !== "active" || item.status !== "done"))
     )
       throw new PlanConflictError();
-    if (actor !== HUMAN && (actor !== item.verifier || actor === item.owner))
-      throw new RoomRuleError("only the independent verifier can verify");
+    const itemRoom = planRoom(draft, plan.roomId);
+    // Исполнитель никогда не проверяет свой пункт, даже будучи ведущим: эта проверка первая.
+    if (
+      actor !== HUMAN &&
+      (actor === item.owner ||
+        (actor !== item.verifier &&
+          !(
+            liveLead(draft, itemRoom) === actor &&
+            planVerifierUnavailable(draft, itemRoom, item)
+          )))
+    )
+      throw new RoomRuleError(
+        "only the independent verifier, or the live lead when that verifier is unavailable, can verify",
+      );
     if (!["verified", "returned"].includes(verdict) || !text(note))
       throw new RoomRuleError("verification needs a note");
     log(item, actor, verdict, note, at);
@@ -949,6 +969,7 @@ export function setRoomMode(
     return written;
   }, letters);
 }
+const OWNER_CLOSED_NOTE = "Owner is closed or deleted.";
 /** P23 consumes transitions for delivery; closed owners never retain an actionable assignment. */
 export function reconcileRoomPlans(
   map: WorkMap,
@@ -966,13 +987,25 @@ export function reconcileRoomPlans(
         capturePlanSnapshot(draft, plan, "cancelled");
         continue;
       }
-      for (const item of plan.items)
-        if (
-          !liveOwner(draft, room, item.owner, plan.mode) &&
-          item.status !== "blocked" &&
-          !planItemSatisfied(plan, item)
-        )
-          log(item, "system", "blocked", "Owner is closed or deleted.", at);
+      for (const item of plan.items) {
+        if (liveOwner(draft, room, item.owner, plan.mode)) continue;
+        // Сданный пункт ждёт проверяющего: закрытие исполнителя его не блокирует.
+        if (item.status === "done") continue;
+        if (item.status === "blocked") {
+          // Пункт, который 0.32.0 заблокировал при ожидании проверки, возвращается в `done` с прежними уликами.
+          const last = item.log[item.log.length - 1];
+          if (
+            last?.by === "system" &&
+            last.status === "blocked" &&
+            last.note === OWNER_CLOSED_NOTE &&
+            item.log[item.log.length - 2]?.status === "done"
+          )
+            log(item, "system", "done", null, at);
+          continue;
+        }
+        if (!planItemSatisfied(plan, item))
+          log(item, "system", "blocked", OWNER_CLOSED_NOTE, at);
+      }
     }
   });
 }

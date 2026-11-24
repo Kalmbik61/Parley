@@ -25,8 +25,11 @@ import {
   newText,
   newTool,
   parseTaskNotification,
+  putMail,
 } from './reduce.js';
-import type { FeedError, FeedState, FeedTool, FeedToolStatus } from './types.js';
+import { mailFromInline } from './mail.js';
+import { insertJournalMail, mailJournalIndex, type MailJournalEntry } from './mail-seed.js';
+import type { FeedError, FeedMail, FeedState, FeedTool, FeedToolStatus } from './types.js';
 
 const AGENT_TOOLS = new Set(['Agent', 'Task']);
 /** Запись прерывания: «[Request interrupted by user]», «… for tool use]». */
@@ -140,6 +143,7 @@ function onToolResult(
   block: Record<string, unknown>,
   toolUseResult: unknown,
   at: string,
+  mail: boolean,
 ): void {
   const toolUseId = textOf(block['tool_use_id']);
   if (toolUseId === null) return;
@@ -156,10 +160,22 @@ function onToolResult(
   if (tool === undefined) return;
   const rejected = typeof toolUseResult === 'string' && toolUseResult.startsWith(REJECTED);
   const status: FeedToolStatus = rejected ? 'rejected' : isError ? 'failed' : 'done';
-  draft.put(finishTool(tool, status, responseOf(toolUseResult, block['content']), at));
+  const finished = finishTool(tool, status, responseOf(toolUseResult, block['content']), at);
+  draft.put(finished);
+  if (mail) putMail(draft, finished);
 }
 
-function onUser(draft: FeedDraft, raw: RawRecord, content: unknown, at: string): void {
+/** Контекст хука `UserPromptSubmit` с письмами хоста; прочие вложения (SessionStart и др.) в ленту не идут. */
+function onAttachment(draft: FeedDraft, attachment: unknown, at: string, journal: ReadonlyMap<string, FeedMail>): void {
+  if (!isRecord(attachment) || attachment['type'] !== 'hook_additional_context' || attachment['hookEvent'] !== 'UserPromptSubmit') return;
+  const content = attachment['content'];
+  for (const text of Array.isArray(content) ? content : []) {
+    const parsed = typeof text === 'string' ? mailFromInline(text, at) : null;
+    if (parsed !== null) draft.put(journal.get(parsed.id) ?? parsed);
+  }
+}
+
+function onUser(draft: FeedDraft, raw: RawRecord, content: unknown, at: string, mail: boolean): void {
   if (typeof content === 'string') {
     onUserText(draft, content, 0, at);
     return;
@@ -169,7 +185,7 @@ function onUser(draft: FeedDraft, raw: RawRecord, content: unknown, at: string):
   let images = 0;
   for (const block of content) {
     if (!isRecord(block)) continue;
-    if (block['type'] === 'tool_result') onToolResult(draft, block, raw['toolUseResult'], at);
+    if (block['type'] === 'tool_result') onToolResult(draft, block, raw['toolUseResult'], at, mail);
     else if (block['type'] === 'image') images += 1;
     else if (block['type'] === 'text' && typeof block['text'] === 'string')
       texts.push(block['text']);
@@ -225,6 +241,17 @@ const EPOCH = new Date(0).toISOString();
 export interface FeedFromTranscriptOptions {
   /** Сколько последних элементов вернуть; нет — все. */
   limit?: number;
+  /**
+   * Чей это журнал: сессии (`root`, по умолчанию) или субагента (`child`). Письма в ленту субагента не идут:
+   * их вызовы почты — не доставка этой сессии.
+   */
+  context?: 'root' | 'child';
+  /**
+   * Журнал почты Parley сессии (`mail/<сессия>.jsonl`): доставки вместе с указателем. Записи `attachment` журнала
+   * Claude лишь указывают место, содержимое и время берутся отсюда; доставки без такой записи встают после указателя.
+   * Только для `root`.
+   */
+  mailJournal?: readonly MailJournalEntry[];
 }
 
 /**
@@ -234,8 +261,10 @@ export interface FeedFromTranscriptOptions {
  */
 export function feedFromTranscript(
   records: Iterable<RawRecord>,
-  { limit }: FeedFromTranscriptOptions = {},
+  { limit, context = 'root', mailJournal }: FeedFromTranscriptOptions = {},
 ): FeedState {
+  const mail = context === 'root';
+  const journal = mail ? mailJournalIndex(mailJournal) : new Map<string, FeedMail>();
   const draft = new FeedDraft(emptyFeedState());
   let seq = 0;
   let at = EPOCH;
@@ -247,7 +276,7 @@ export function feedFromTranscript(
     const message = isRecord(raw['message']) ? raw['message'] : null;
 
     if (record.type === 'user') {
-      if (!record.isMeta) onUser(draft, raw, message?.['content'], at);
+      if (!record.isMeta) onUser(draft, raw, message?.['content'], at, mail);
     } else if (record.type === 'assistant') {
       onAssistant(draft, raw, uuid, record.messageId, message?.['content'], at);
     } else if (record.type === 'system' && raw['subtype'] === 'api_error') {
@@ -264,13 +293,16 @@ export function feedFromTranscript(
       } else {
         draft.put({ id: `turn:${uuid}`, at, kind: 'turn', durationMs });
       }
+    } else if (mail && record.type === 'attachment') {
+      onAttachment(draft, raw['attachment'], at, journal);
     } else if (record.type === 'permission-mode') {
       const mode = raw['permissionMode'];
       if (typeof mode === 'string' && mode !== '') draft.permissionMode = mode;
     }
-    // `queue-operation`, `attachment`, `mode`, заголовки и прочее служебное в ленту не идут.
+    // `queue-operation`, `mode`, заголовки и прочее служебное в ленту не идут.
   }
-  const state = draft.done().state;
+  let state = draft.done().state;
+  if (journal.size > 0) state = { ...state, items: insertJournalMail(state.items, journal) };
   return limit === undefined || state.items.length <= limit
     ? state
     : { ...state, items: state.items.slice(state.items.length - limit) };

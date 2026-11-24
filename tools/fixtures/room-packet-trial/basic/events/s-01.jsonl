@@ -1,0 +1,10 @@
+{"hook_event_name":"UserPromptSubmit"}
+{"hook_event_name":"SessionStart","source":"compact"}
+{"hook_event_name":"ParleyRoomPacket","revision":"aaaaaaaaaaaa","bytes":900,"reason":"sent"}
+{"hook_event_name":"ParleyRoomPacketBridge","outcome":"printed","requestMs":20}
+{"hook_event_name":"SessionStart","source":"compact"}
+{"hook_event_name":"ParleyRoomPacket","revision":"bbbbbbbbbbbb","bytes":1200,"reason":"sent"}
+{"hook_event_name":"ParleyRoomPacketBridge","outcome":"printed","requestMs":25}
+{"hook_event_name":"SessionStart","source":"compact"}
+{"hook_event_name":"ParleyRoomPacket","revision":null,"bytes":0,"reason":"no-packet"}
+{"hook_event_name":"ParleyRoomPacketBridge","outcome":"empty","requestMs":30}

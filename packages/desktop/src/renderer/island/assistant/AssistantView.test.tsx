@@ -811,3 +811,74 @@ describe('компактный вид во время Live (V4)', () => {
     expect(screen.getByText(S.assistant.escToClose)).toBeTruthy();
   });
 });
+
+describe('A8: значок автономного режима и стоп плана', () => {
+  const RUNNING = { proposalId: 'p9', status: 'running', steps: [{ line: 'a', status: 'done' }, { line: 'b', status: 'running' }, { line: 'c', status: 'waiting' }], failedStep: null, reason: null, notes: [] } as const;
+  const liveOn = { phase: 'live', humanSpeaking: false, modelPlaying: false, checking: false, emotion: 'calm', notice: null, onToggle: vi.fn() } as const;
+
+  it('значок есть при autonomous: true — в обычном и компактном виде', () => {
+    const { rerender } = render(<AssistantView {...props({}, { autonomous: true })} />);
+    expect(screen.getByTestId('assistant-auto').textContent).toBe(S.assistant.autoBadge);
+    expect(screen.getByTestId('assistant-auto').getAttribute('title')).toBe(S.assistant.autoBadgeHint);
+    rerender(<AssistantView {...props({ live: liveOn }, { autonomous: true })} />);
+    expect(screen.getByTestId('assistant-auto')).toBeTruthy();
+    expect(screen.queryByTestId('assistant-status')).toBeNull();
+  });
+
+  it('значка нет при false и при отсутствии поля', () => {
+    const { rerender } = render(<AssistantView {...props({}, { autonomous: false })} />);
+    expect(screen.queryByTestId('assistant-auto')).toBeNull();
+    rerender(<AssistantView {...props({}, {})} />);
+    expect(screen.queryByTestId('assistant-auto')).toBeNull();
+    rerender(<AssistantView {...props({ live: liveOn }, { autonomous: false })} />);
+    expect(screen.queryByTestId('assistant-auto')).toBeNull();
+  });
+
+  it('компактный вид с идущим планом: строка хода и «Stop», без полного отчёта', () => {
+    render(<AssistantView {...props({ live: liveOn, onStopPlan: vi.fn() }, { report: RUNNING })} />);
+    expect(screen.queryByTestId('assistant-report')).toBeNull();
+    expect(screen.getByTestId('assistant-report-line').textContent).toContain('Running step 2 of 3');
+    expect(screen.getByTestId('assistant-stop-plan').textContent).toBe(S.assistant.stopPlan);
+  });
+
+  it('клик «Stop» зовёт onStopPlan с id плана, затем вместо кнопки — «Stopping…»', () => {
+    const onStopPlan = vi.fn();
+    render(<AssistantView {...props({ onStopPlan }, { report: RUNNING })} />);
+    fireEvent.click(screen.getByTestId('assistant-stop-plan'));
+    expect(onStopPlan).toHaveBeenCalledWith('p9');
+    expect(screen.queryByTestId('assistant-stop-plan')).toBeNull();
+    expect(screen.getByText(S.assistant.stopping)).toBeTruthy();
+  });
+
+  it('то же в компактном виде', () => {
+    const onStopPlan = vi.fn();
+    render(<AssistantView {...props({ live: liveOn, onStopPlan }, { report: RUNNING })} />);
+    fireEvent.click(screen.getByTestId('assistant-stop-plan'));
+    expect(onStopPlan).toHaveBeenCalledWith('p9');
+    expect(screen.getByText(S.assistant.stopping)).toBeTruthy();
+  });
+
+  it('без onStopPlan или у законченного плана кнопки нет', () => {
+    const { rerender } = render(<AssistantView {...props({}, { report: RUNNING })} />);
+    expect(screen.queryByTestId('assistant-stop-plan')).toBeNull();
+    rerender(<AssistantView {...props({ onStopPlan: vi.fn() }, { report: { ...RUNNING, status: 'done' } })} />);
+    expect(screen.queryByTestId('assistant-stop-plan')).toBeNull();
+  });
+});
+
+describe('W4: watchNote', () => {
+  it('заметка слежения показана строкой уведомления и пропадает, когда хост её сбросил', () => {
+    const { rerender } = render(<AssistantView {...props({}, { watchNote: 'Two follow-up messages were dropped.' })} />);
+    expect(screen.getByTestId('assistant-notice').textContent).toBe('Two follow-up messages were dropped.');
+    rerender(<AssistantView {...props({}, { watchNote: null })} />);
+    expect(screen.queryByTestId('assistant-notice')).toBeNull();
+  });
+
+  it('собственное уведомление острова важнее заметки; в компактном виде заметка тоже видна', () => {
+    const live = { phase: 'live', humanSpeaking: false, modelPlaying: false, checking: false, emotion: 'calm', notice: null, onToggle: vi.fn() } as const;
+    const { rerender } = render(<AssistantView {...props({ notice: 'Island notice' }, { watchNote: 'Dropped.' })} />);
+    expect(screen.getByTestId('assistant-notice').textContent).toBe('Island notice');
+    rerender(<AssistantView {...props({ live }, { watchNote: 'Dropped.' })} />);
+    expect(screen.getByTestId('assistant-notice').textContent).toBe('Dropped.');
+  });
+});

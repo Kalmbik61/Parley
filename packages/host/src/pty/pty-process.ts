@@ -19,6 +19,8 @@ export interface PtyLaunch {
    * (`codex-input.ts`). Не задан — обычный агент, состояние которого ведут хуки.
    */
   provider?: string;
+  /** A structured provider can register its already-open process with the session lifecycle. */
+  process?: PtyProcess;
 }
 
 export interface ExitInfo {

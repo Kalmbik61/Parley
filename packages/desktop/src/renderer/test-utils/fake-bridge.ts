@@ -6,6 +6,7 @@
  */
 
 import type { BrowserAuthCancel, BrowserAuthRequest } from '../../shared/basic-auth.js';
+import type { BrowserCertCancel, BrowserCertRequest } from '../../shared/client-cert.js';
 import type {
   ConsentCard,
   EventData,
@@ -17,7 +18,7 @@ import type {
   Result,
   TrustRecord,
 } from '@parley/protocol';
-import type { AppNote, CloseAnswer, DiagnosticsSaveResult, FocusTarget, ParleyBridge, HostStatus, UpdateInfo } from '../../shared/bridge.js';
+import type { AppNote, CloseAnswer, DiagnosticsSaveResult, FocusTarget, ParleyBridge, HostStatus, UpdateCheckResult, UpdateResult, UpdateState } from '../../shared/bridge.js';
 import type { DevtoolsBatch, DevtoolsSnapshot, ResponseBody } from '../../shared/browser-devtools.js';
 import type {
   AgentActivity,
@@ -98,12 +99,18 @@ export interface FakeBridge extends ParleyBridge {
   emitFocusTarget(target: FocusTarget): void;
   /** Отложенная цель main: первый подписчик onFocusTarget получает её сразу, как через app:take-focus-target. */
   setPendingFocusTarget(target: FocusTarget | null): void;
-  /** Проверка main нашла релиз новее: событие `app:update-available` слушателям `onUpdateAvailable` (V6 плана релиза 0.1.0). */
-  emitUpdate(info: UpdateInfo): void;
+  /** Состояние самообновления изменилось: событие `app:update-state` слушателям `onUpdateState`; оно же — текущее состояние. */
+  emitUpdateState(state: UpdateState): void;
   /** Версия окна, которую отдаёт `app.version` (0.2.0); по умолчанию — та же, что у хоста моста: `0.0.0-test`; `null` — несобранное окно. */
   setAppVersion(version: string | null): void;
-  /** Найденное до подписки (`app:get-update`): каждый новый подписчик `onUpdateAvailable` получает его сразу; `null` — ничего. */
-  setPendingUpdate(info: UpdateInfo | null): void;
+  /** Ответ `app.checkForUpdates`; по умолчанию `{ kind: 'unavailable' }`. */
+  setCheckForUpdatesResult(result: UpdateCheckResult): void;
+  /** Текущее состояние без события (`app:get-update-state`): каждый новый подписчик `onUpdateState` получает его сразу. */
+  setUpdateState(state: UpdateState): void;
+  /** Итог прошлой замены: `takeUpdateResult` отдаёт его один раз, дальше `null`. */
+  setUpdateResult(result: UpdateResult | null): void;
+  /** Вызовы `downloadUpdate`, `cancelUpdateDownload`, `installUpdate`, `takeUpdateResult` по порядку (все без параметров). */
+  readonly updateCalls: Array<'download' | 'cancel' | 'install' | 'takeResult'>;
   readonly badges: number[];
   /** Вызовы `app.reconnect` и `app.restartHost` по порядку (экран «No connection to host», fix-final-b). */
   readonly hostActions: Array<'reconnect' | 'restartHost'>;
@@ -248,6 +255,10 @@ export interface FakeBridge extends ParleyBridge {
   emitAuthRequest(e: BrowserAuthRequest): void;
   /** Запрос снят main'ом: событие `browser:auth-cancel` слушателям `browser.onAuthCancel`. */
   emitAuthCancel(e: BrowserAuthCancel): void;
+  /** Сайт просит клиентский сертификат: событие `browser:cert-request` слушателям `browser.onCertRequest`. */
+  emitCertRequest(e: BrowserCertRequest): void;
+  /** Запрос сертификата снят main'ом: событие `browser:cert-cancel` слушателям `browser.onCertCancel`. */
+  emitCertCancel(e: BrowserCertCancel): void;
   /** Фокус окна macOS: событие `app:window-focus` слушателям `app.onWindowFocus` (кусок 9.2b). */
   emitWindowFocus(focused: boolean): void;
   /** Ответ browser.pickStart; по умолчанию null. Отказ — объект с code, как у прочих отказов подставного моста. */
@@ -324,9 +335,12 @@ export function createFakeBridge(): FakeBridge {
   const appNotified: AppNote[] = [];
   const focusTargetListeners = new Set<(target: FocusTarget) => void>();
   let pendingFocusTarget: FocusTarget | null = null;
-  const updateListeners = new Set<(info: UpdateInfo) => void>();
+  const updateListeners = new Set<(state: UpdateState) => void>();
+  const updateCalls: Array<'download' | 'cancel' | 'install' | 'takeResult'> = [];
+  let updateState: UpdateState = { phase: 'idle' };
+  let updateResult: UpdateResult | null = null;
   let appVersion: string | null = '0.0.0-test';
-  let pendingUpdate: UpdateInfo | null = null;
+  let checkForUpdatesResult: UpdateCheckResult = { kind: 'unavailable' };
   const badges: number[] = [];
   const hostActions: Array<'reconnect' | 'restartHost'> = [];
   const layoutSaves: Array<{ workKey: string; layout: WorkLayout }> = [];
@@ -395,6 +409,8 @@ export function createFakeBridge(): FakeBridge {
   const agentResizeListeners = new Set<(e: AgentResize) => void>();
   const authRequestListeners = new Set<(e: BrowserAuthRequest) => void>();
   const authCancelListeners = new Set<(e: BrowserAuthCancel) => void>();
+  const certRequestListeners = new Set<(e: BrowserCertRequest) => void>();
+  const certCancelListeners = new Set<(e: BrowserCertCancel) => void>();
   const windowFocusListeners = new Set<(focused: boolean) => void>();
   let voiceModels: VoiceModelId[] = [];
   let transcribeResult: TranscribeResult = { text: 'dictated text' };
@@ -615,6 +631,12 @@ export function createFakeBridge(): FakeBridge {
     emitAuthRequest: (e) => {
       for (const listener of authRequestListeners) listener(e);
     },
+    emitCertRequest: (e) => {
+      for (const listener of certRequestListeners) listener(e);
+    },
+    emitCertCancel: (e) => {
+      for (const listener of certCancelListeners) listener(e);
+    },
     emitAuthCancel: (e) => {
       for (const listener of authCancelListeners) listener(e);
     },
@@ -832,6 +854,17 @@ export function createFakeBridge(): FakeBridge {
       authResponse: async (requestId, credentials) => {
         browserCalls.push({ method: 'authResponse', args: [requestId, credentials] });
       },
+      onCertRequest: (listener) => {
+        certRequestListeners.add(listener);
+        return () => certRequestListeners.delete(listener);
+      },
+      onCertCancel: (listener) => {
+        certCancelListeners.add(listener);
+        return () => certCancelListeners.delete(listener);
+      },
+      certResponse: async (requestId, answer) => {
+        browserCalls.push({ method: 'certResponse', args: [requestId, answer] });
+      },
       agentStop: async (webContentsId) => {
         browserCalls.push({ method: 'agentStop', args: [webContentsId] });
       },
@@ -979,6 +1012,22 @@ export function createFakeBridge(): FakeBridge {
       chooseFolder: async () => null,
       chooseFiles: async () => chosenFiles,
       version: async () => appVersion,
+      checkForUpdates: async () => checkForUpdatesResult,
+      aboutInfo: async () => ({
+        version: '0.0.0-test',
+        commit: '2b52d262',
+        commitDate: '2026-11-17',
+        dirty: false,
+        arch: 'arm64',
+        electron: '44.0.0',
+        chrome: '140.0.0.0',
+        node: '24.0.0',
+        os: 'macOS 15.0',
+        appPath: '/Applications/Parley.app',
+        dataDir: '~/.parley',
+        updateChecks: false,
+        lastCheck: null,
+      }),
       restartHost: async () => {
         hostActions.push('restartHost');
       },
@@ -1106,10 +1155,26 @@ export function createFakeBridge(): FakeBridge {
       answerClose: (answer) => {
         closeAnswers.push(answer);
       },
-      onUpdateAvailable: (listener) => {
+      getUpdateState: async () => updateState,
+      onUpdateState: (listener) => {
         updateListeners.add(listener);
-        if (pendingUpdate !== null) listener(pendingUpdate);
+        listener(updateState);
         return () => updateListeners.delete(listener);
+      },
+      downloadUpdate: async () => {
+        updateCalls.push('download');
+      },
+      cancelUpdateDownload: async () => {
+        updateCalls.push('cancel');
+      },
+      installUpdate: async () => {
+        updateCalls.push('install');
+      },
+      takeUpdateResult: async () => {
+        updateCalls.push('takeResult');
+        const result = updateResult;
+        updateResult = null;
+        return result;
       },
     },
 
@@ -1132,15 +1197,23 @@ export function createFakeBridge(): FakeBridge {
     setPendingFocusTarget: (target) => {
       pendingFocusTarget = target;
     },
-    emitUpdate: (info) => {
-      for (const listener of updateListeners) listener(info);
+    emitUpdateState: (state) => {
+      updateState = state;
+      for (const listener of updateListeners) listener(state);
     },
     setAppVersion: (version) => {
       appVersion = version;
     },
-    setPendingUpdate: (info) => {
-      pendingUpdate = info;
+    setCheckForUpdatesResult: (result) => {
+      checkForUpdatesResult = result;
     },
+    setUpdateState: (state) => {
+      updateState = state;
+    },
+    setUpdateResult: (result) => {
+      updateResult = result;
+    },
+    updateCalls,
     emitAppearance: (next) => {
       for (const listener of appearanceListeners) listener(next);
     },

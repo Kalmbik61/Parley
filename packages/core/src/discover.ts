@@ -1,5 +1,5 @@
 import { readdirSync, type Dirent } from 'node:fs';
-import { readdir } from 'node:fs/promises';
+import { lstat, readdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { CODEX_ACCOUNT_PREFIX, customProviderDir, isCustomProviderId, isValidCustomProviderId } from './custom-providers.js';
@@ -204,4 +204,21 @@ export function sessionFileForPath(changedPath: string, root: string): string | 
   // <project>/<id>/subagents/... — подсессия, отвечает родительский файл.
   if (segments[2] !== 'subagents') return null;
   return path.join(root, project, `${second}${JSONL}`);
+}
+
+/** Файл `<uuid>.jsonl` в каталоге проекта одного из корней истории; симлинки и не-файлы пропускаются. */
+export async function findClaudeSessionFile(id: string, roots: readonly string[]): Promise<string | null> {
+  for (const root of roots) {
+    let projects: Dirent[];
+    try { projects = await readdir(root, { withFileTypes: true }); } catch { continue; }
+    for (const project of projects) {
+      if (!project.isDirectory()) continue;
+      const file = path.join(root, project.name, `${id}.jsonl`);
+      try {
+        const info = await lstat(file);
+        if (info.isFile()) return file;
+      } catch { /* В этом каталоге проекта такого транскрипта нет. */ }
+    }
+  }
+  return null;
 }

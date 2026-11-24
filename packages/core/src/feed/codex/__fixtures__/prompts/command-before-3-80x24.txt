@@ -1,0 +1,24 @@
+
+
+⚠ Heads up, you have less than 25% of your weekly limit left. Run /status for a
+  breakdown.
+
+• I’ll run the command as written.
+
+• Running touch d1.txt
+
+
+  Would you like to run the following command?
+
+  Environment: local
+
+  Reason: May I run `touch d1.txt` with write access to the workspace?
+
+  $ touch d1.txt
+
+
+› 1. Yes, proceed (y)
+  2. Yes, and don't ask again for commands that start with `touch d1.txt` (p)
+  3. No, and tell Codex what to do differently (esc)
+
+  Press enter to confirm or esc to cancel

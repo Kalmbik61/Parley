@@ -4,6 +4,172 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
+## 0.39.0
+
+### Added
+
+- **Kimi Code as a built-in provider.** Parley runs the official `kimi` CLI (`kimi acp`) as a native session and shows it in Chat: tool requests arrive as permission cards you can grant or deny, questions as question cards you can answer, and the session settings Kimi supports can be changed in Chat while no turn is running. A disconnected session resumes with its identity and the model Kimi confirmed. Kimi must be signed in (`kimi login`); a signed-out Kimi refuses to launch and says so. Not in this version: transcript history of past turns in Chat. Verified against a separate ACP test process; a live Kimi account was not available at acceptance.
+- Codex: command approvals, edit approvals and questions that Codex shows in its terminal now appear as cards with buttons in Chat, on the island, in Telegram and on the phone, in every approvals mode. Other terminal prompts are answered in the Chat panel.
+- Qwen Code: questions and permission requests now open the question and permission cards in Chat, with the options of the native dialog: pick one or more options, type a custom answer, review the answers, and approve or deny the operation. A layout Parley does not recognize is answered in the in-chat terminal panel. Verified against Qwen Code 0.27.2 with the English layout.
+- Chat: when an agent waits at a prompt in its terminal, the prompt is shown in Chat and you can answer it there with keys or text, without opening the terminal. Works for Codex, Claude Code, Qwen Code and OpenCode.
+
+### Fixed
+
+- An open Chat keeps receiving replies when its session continues on Qwen Code: the messages Qwen has already written and its next replies appear without reopening the Chat.
+
+## 0.38.0
+
+### Added
+
+- Sessions: the session toolbar shows the session's branch, and the sidebar branch icons of worktree sessions that share a base branch are colored the same.
+- Built-in browser, agents: the snapshot now includes the content of frames of the same site, with refs that actions can target.
+- Built-in browser, agents: browser_action takes a list of up to 10 steps and can return a fresh snapshot in the same answer, so a form takes one call instead of one per field.
+- Built-in browser: sites that ask for a client certificate (SSO over mTLS) now show a chooser over the tab. The choice can be saved per site; "Clear browsing data" removes the saved choices, and a site already answered in this run asks again after Parley restarts.
+
+### Changed
+
+- Built-in browser, agents: a click on an element covered by a banner or a dialog is refused with "covered" instead of landing on the cover, and every action says whether the page navigated, changed or stayed the same.
+
+## 0.37.1
+
+### Added
+
+- **Settings → About.** A new section shows the Parley version, the build (commit, date, architecture, and `modified` when tracked files were changed), the host version, Electron, Chromium, Node and macOS versions, and the paths of the app and of Parley's data. **Check now** asks GitHub for the latest release at once, also when the automatic check is off, and says what happened: Parley is the latest version, a newer one is available, GitHub could not be reached, GitHub's rate limit was reached, or GitHub sent an unexpected answer. **Release notes** opens the release page of the running version, and **Copy info** puts these details on the clipboard with the home folder written as `~`.
+
+### Changed
+
+- **The update switch and the update row moved from Notifications to About.** **Check for updates automatically** and the row with **Update** now live in Settings → About; the row is shown also when the automatic check is off, so a release found by **Check now** can be installed.
+
+## 0.37.0
+
+### Added
+
+- **A room state packet for Claude sessions after context compaction (experimental, off by default).** When the `roomPacket` setting is on, a Claude Code session whose context was just compacted receives a short packet built from the Parley store: its place in the room, the room's active plan with the items it owns or verifies, the proposal waiting for the human, the history of accepted decisions, room questions addressed to it that have no linked reply, and the exact names of the Parley tools it can call. The packet is at most 8 KiB and is assembled by code, with no model involved. Delivery uses a second command hook on `SessionStart`: it asks the host for the packet only when the source is a compaction, waits at most 1.5 seconds and never blocks the session. The same packet can be read at any time with `get_map {field: "packet"}`. There is no switch in the window yet: turn the setting on with `"roomPacket": true` in `config.json` or `PARLEY_ROOM_PACKET=1`. It applies to sessions started afterwards; turning it off takes effect at once. Other providers are not affected.
+
+- **An experiment on the room state packet (off by default).** A new `roomPacketTrial` setting is an empty string, which means no experiment, or a name of lowercase letters, digits and hyphens up to 32 characters, which is the name of the running one. While `roomPacket` is on and a name is set, each new Claude session is assigned at random, with probability 1/2, to the arm `packet` or the arm `control`. Only the `packet` arm gets the bridge and the packet; `control` never gets them, not even after the experiment ends, and a session with no arm gets no packet while the experiment runs. The assignment is stored in the session record and is not shown to agents by `get_map`; every assignment is also appended to the list `trials/<name>.jsonl` in the Parley home. Deleting a session or a room that took part leaves a trace in the work map that the count needs. The script `tools/room-packet-trial.ts` counts the result from Claude Code transcripts and writes nothing to the Parley home or to the transcripts: `--status --trial <name>` shows how the experiment is going without comparing the arms, and `--final --trial <name> --cutoff <ISO time>` gives the final calculation. With the experiment off, nothing changes.
+
+- **A room can show its plan as a board.** A Feed / Board switch in the room header opens the plan as columns of cards: Waiting, In progress, In review and Done (Verified in Verified and Autonomous plans). Each card names the item, its agent with the agent's state, what the agent is doing, what is in the way, what the item waits for and who must check it; a notice above the columns reminds you of a decision that waits for you or a stopped plan. Clicking a card opens the item with its details and a jump to the session or to the plan list in the feed. Every agent session now has its own colour ring around its icon (eight colours, derived from the session number) in the sidebar, the room header, the feed, the mention menu and on the board; a participant card shows the plan items the agent holds, and a room card on the project board shows the plan progress and who is working. The board only shows the plan: it changes nothing, and the chosen view is remembered per room tab.
+
+## 0.36.0
+
+### Added
+
+- **Parley updates itself on a click.** When the toast announces a new release, **Update** downloads the archive from GitHub, checks it against the release's `SHA256SUMS.txt`, unpacks it next to the app and offers **Restart now**; the same button is in Settings → Notifications. Restarting is an ordinary quit, so it asks about unsaved files and running sessions and stops the agents, and cancelling any question keeps the old version. A small script then swaps the app and opens the new one; the old app stays next to it as `.Parley.app.old` until the new version has started once, and after a failed swap Parley starts the previous version and says why. Where Parley cannot replace itself (a disk image, a folder you cannot write to) the toast keeps **Download** and the manual steps. macOS asks for the permissions again, as after any manual update. If an update stops half way and Parley is gone, run `mv /Applications/.Parley.app.old /Applications/Parley.app`. Not in this version: no update without a click, no resume of a download, and the release is verified by its published checksum only.
+
+- **Autonomous mode for the assistant.** A new switch in Settings → Assistant, **Autonomous mode**, is off by default. When it is on, an action you ask the assistant for on the island runs at once, without a confirmation card; the card is still recorded, and Settings → Assistant lists the **Recent actions**. Telegram and the phone still ask with a card, as before. The island shows an **Auto** badge, the progress of a multi-step plan and a **Stop** button (in the compact Live view too). The assistant now also reports the answer of a session it gave work to: by voice while Live is on, otherwise as a card on the island that is read aloud as usual. This needs a window and a host that both know the mode; with an older window the island has no badge and no Stop button, and the result is announced like any other result. The host database gets two schema migrations (15 and 16).
+
+### Changed
+
+- **Closed sessions and archived rooms sit in their own blocks in the sidebar.** A work card now ends with a **Closed sessions** block and an **Archived rooms** block, each under a header with a chevron and a count that opens and closes it. Closed sessions are no longer mixed into the card's tree or into the rooms: newest first, flat, and finished swarms come first. Under a block with more than 10 rows a second **Hide closed** / **Hide archived rooms** button closes it from the bottom. → and ← still open and close both blocks at once.
+
+- **The assistant's voice prompt no longer promises a confirmation card for every action.** The lines about actions in `VOICE_PROMPT` are worded the same whether autonomous mode is on or off.
+
+- **Continuing a session on a provider where its role cannot run no longer leaves it stuck.** A switch used to write the new provider into the session and then every launch failed with `role-permissions-unavailable` (for example a read-only Architect moved to Qwen Code). Now a built-in role the target does not accept becomes "no role", and Parley says so before it switches: the "Continue on another provider" dialog shows one sentence about the role change above the button, and an agent's `request_agent_switch` card shows the same sentence in the window, the island and Telegram (the phone shows it too). When the change lifts a read-only restriction, the switch needs that confirmation: a request without it is refused with the same sentence and nothing is changed. After a confirmed switch with a role change you get one notice instead of the dialog's own toast. A session already stuck by an earlier version is refused at launch with a message that names the provider to continue it on again. Not in this version: the phone's "Continue on another provider" sheet does not show the role change (a read-only loss is refused there with the sentence), and switching back does not restore the earlier role.
+
+### Fixed
+
+- **The Claude limit follows a reset inside a window.** After the vendor reset the Claude limits in the middle of a window, Parley kept showing the old, higher percentage until the window ended: in the status bar, on the provider card, in the number agents read and in the suggested switch target. It now follows the sessions that saw the new usage, and existing limit files need no cleanup.
+
+- **A collapsed room counts the agents its expanded view shows.** The provider badges under a collapsed room counted every participant, closed ones too, so a room could show six Claude agents while expanding it listed four. Closed participants are no longer counted: the expanded room does not list them either, they are in the **Closed sessions** block of the card.
+
+## 0.35.0
+
+### Added
+
+- **Delivered mail in the Chat view.** When Parley delivers messages to an agent, the recipient's Chat shows them as a mail card with the sender, kind, room and text, for Claude Code (both the delivery that arrives with the next prompt and the `check_inbox` / `wait_for` results), Codex (including calls made inside `exec`), Qwen Code and OpenCode (results returned through its `execute` tool). The cards survive closing and reopening a session and restarting Parley, because Parley keeps a journal of delivered mail per session. They need a window and a host that both know the `feed-mail` feature, so the phone and older windows look the same as before.
+
+- **Qwen Code sessions start in `auto`.** Every new or resumed Qwen Code session starts with the approval mode `auto`; a mode you switch inside Qwen Code is not remembered, and `--yolo` is never used.
+
+- **Qwen Code model list from the CLI.** The model picker for Qwen Code is read from `qwen --acp` (at start, every six hours and after you sign in to Qwen Code) instead of a typed id only; it falls back to the typed id when the list is not available.
+
+- **OpenCode 2.x as a built-in provider.** Parley starts the official `opencode` CLI (2.0.0 or newer) in a terminal session attached to a private server that Parley runs for that session on 127.0.0.1, with Parley's tools, and shows it in the Chat view with its history (OpenCode 2.2.7 or newer). A sleeping session resumes the same conversation. OpenCode 1.x is never run: the card says "OpenCode 1.x found" and offers Install… for 2.x. Models come from `opencode models` (pick one when you start a session, or keep the default); read-only roles run with edit, shell, web and subagent tools denied. Settings → Providers → OpenCode shows how many providers `opencode auth list` reports as connected (sign in inside OpenCode with Connect provider, or run `opencode auth login --standalone`; the count is a hint and is never stored). Parley's tools are called from OpenCode's `execute` tool as `tools.parley.<name>()`. While a session runs, the unauthenticated `/health` and `/doc` pages of its local server answer on 127.0.0.1 (the web UI and the API description, no session data); every other route needs the session's password. OpenCode was verified against 2.2.7 with a mock model, not yet with a live model account.
+
+### Fixed
+
+- Cancelling the quit question (⌘Q, then Cancel) no longer cuts the window off from the host: the host connection and the workspace sync are closed only when the app really exits, and the quit question always gets the real session count. ([#226](https://github.com/Kalmbik61/Parley/pull/226))
+- A swarm check is no longer skipped when it is requested just as the previous one is finishing. ([#227](https://github.com/Kalmbik61/Parley/pull/227))
+
+## 0.34.0
+
+Qwen Code is now a built-in provider that runs the official `qwen` CLI, and the CLIs can be installed and updated from Settings → Providers. Qwen Code was verified against qwen 0.27.2 with a mock model, not yet with a live Qwen account.
+
+### Added
+
+- **Qwen Code as a built-in provider.** Parley starts the official `qwen` CLI (0.27.2 or newer) in a terminal session with Parley's tools, and shows it in the Chat view with its history. A sleeping session resumes the same conversation. Settings → Providers → Qwen Code shows a sign-in hint (sign in inside `qwen` with `/auth`; the hint is not a check) and has Install… and Update. Built-in roles run on Qwen Code except the read-only ones. Not in this version: several accounts, keys held by Parley, usage limits, autonomous rooms, the assistant, and starting from the phone. The custom preset for Alibaba keys is renamed "Qwen models in Claude Code (Alibaba key)"; its id and existing providers do not change.
+
+- **Install and update CLIs from Settings → Providers.** Claude Code, Codex and Qwen Code can be installed with Install… (macOS and Linux; a confirmation shows the exact command, the source and what is trusted), the CLI version is always shown with Check now or Up to date, and Update now also works for Qwen Code. Parley downloads and runs only the vendor's installer, only when you confirm.
+
+## 0.33.0
+
+The first three waves of a full review of 0.32.0: agents reliably hear each other, silent endings and stuck plans are reported, and the host stays responsive with many sessions. Agents also spend fewer model responses on mail, and new session worktrees get their dependencies.
+
+### Added
+
+- New session worktrees get their dependencies without an install: Parley clones the ignored folders listed in the project's `.worktreeinclude` (for example `node_modules`) from the main checkout — copy-on-write on APFS, so it takes seconds and almost no disk — and the brief tells the agent whether the lock files match.
+
+### Fixed
+
+- Parley no longer stalls when many sessions resume or the assistant is asked for an overview: chat feeds load from the end of the log, two at a time with the visible tab first, idle feeds leave memory, and a window that stops reading is reconnected instead of growing the host's memory. ([#217](https://github.com/Kalmbik61/Parley/pull/217))
+- Large workspaces stay responsive while agents exchange messages: a message is saved without rebuilding the workspace map, Parley no longer freezes while an agent's write holds the database, only the room that received a message has its history file rebuilt, and get_map list pages keep working while the workspace changes. ([#213](https://github.com/Kalmbik61/Parley/pull/213))
+- Plans no longer get stuck: a submitted item can still be verified after its owner closes, a closed verifier's review goes to the room lead, assignments are sent again when a workspace is reopened, Resume retries blocked items of an autonomous plan, plan letters no longer wait behind other Parley messages, and old delivery records are pruned. Cancelling an autonomous plan or quitting no longer waits for a running check, and the host recalculates plans only for workspaces that changed. ([#210](https://github.com/Kalmbik61/Parley/pull/210))
+- Continuing a session on another provider no longer leaves it unable to start when its role belongs to the old provider: Parley picks the matching role (or none) and tells you which one it took. ([#207](https://github.com/Kalmbik61/Parley/pull/207))
+- A session that failed to start twice in a row is no longer resumed on every new letter: you get one notice, and the room lead and the senders of its unread mail get one letter saying the session cannot be woken. ([#207](https://github.com/Kalmbik61/Parley/pull/207))
+- `send_message` now warns when the recipient cannot be woken, so the sender knows the message will be read only after you resume the session. ([#207](https://github.com/Kalmbik61/Parley/pull/207))
+- A message pointer that gets no answer is typed again after 30 seconds and after 2 minutes, and a session that is resumed gets a pointer for the mail that was waiting for it. ([#207](https://github.com/Kalmbik61/Parley/pull/207))
+- Unsent text left in a terminal that holds back mail now produces a notice after 5 minutes instead of waiting silently. ([#207](https://github.com/Kalmbik61/Parley/pull/207))
+- Parley's background host no longer dies when a connected program sends a malformed message, when an internal error slips through, or when a log write fails, so running agents keep working; stopping the host now always finishes within 15 seconds and releases its lock. ([#204](https://github.com/Kalmbik61/Parley/pull/204))
+- Room titles can no longer carry line breaks or terminal control codes into other agents' terminals; the phone can no longer send shell commands (`!…`) to a session. ([#200](https://github.com/Kalmbik61/Parley/pull/200))
+- When a room member hands in its result with `report`, the room lead now gets a letter, and a room lead's result reaches the room owner; the session that created the reporter is told too. The `report` answer names who was told, and the same result repeated within a minute does not wake them again. ([#202](https://github.com/Kalmbik61/Parley/pull/202))
+- **An agent is no longer put to sleep in the middle of its turn.** ([#203](https://github.com/Kalmbik61/Parley/pull/203)) A Claude turn that stayed silent during a long command or tool call counted as finished after 30 seconds, and when memory was tight Parley could stop the agent 5 minutes later, killing the command. Sleep now follows the window: a silent open turn counts as working for up to 15 minutes of silence.
+- The host log no longer reports "invalid transition sleeping → sleeping" when an agent falls asleep. ([#203](https://github.com/Kalmbik61/Parley/pull/203))
+- A session added to a room now gets a short note instead of the room's whole history, and a large inbox arrives in pages instead of one answer the agent could not read. Closed sessions no longer collect unread messages. ([#206](https://github.com/Kalmbik61/Parley/pull/206))
+- The Changes and Diff tabs no longer pile up overlapping requests or re-read every file when nothing changed, huge untracked files no longer stall the review, the island and the room usage chip poll far less, and Merge and Discard ignore double clicks and always refresh. ([#215](https://github.com/Kalmbik61/Parley/pull/215))
+- When an agent with a task stops, crashes or is stopped or closed by you without a result, or ends its turn without reporting, the session that gave the task and the room lead now get a letter. Stuck notices also reach the task giver, and a swarm no longer waits for a crashed drone until its time limit. ([#209](https://github.com/Kalmbik61/Parley/pull/209))
+- **The host stays responsive with many sessions.** ([#212](https://github.com/Kalmbik61/Parley/pull/212)) A change in one workspace no longer makes the host recompute every session of every workspace, and archived or idle workspaces no longer hold file watchers. A session whose log is written without pause now gets its token numbers refreshed at least every few seconds.
+- After a restart, the background host no longer re-reads your whole Claude Code and Codex history: it keeps an index of the logs it has already read and reads only the ones that changed (the first start after an update still reads everything once). The 30-second limits check now looks only at recent and running Codex logs, putting a session to sleep no longer scans all your logs, and hook journals of stopped sessions are trimmed at start instead of growing forever. ([#218](https://github.com/Kalmbik61/Parley/pull/218))
+
+### Changed
+
+- An agent can create at most five rooms per hour and can no longer take a session out of a room you set up unless it leads that room. ([#202](https://github.com/Kalmbik61/Parley/pull/202))
+- **Idle agents are put to sleep for memory less eagerly.** ([#203](https://github.com/Kalmbik61/Parley/pull/203)) "Sleep idle agents sooner when the machine is busy" now defaults to 15 minutes (was 5) and applies when memory is critical or a queued launch needs a slot; on a memory warning agents fall asleep after at least 30 minutes. An agent woken by a letter or Resume stays awake at least 15 minutes after its last turn before memory can put it to sleep. A value you set yourself still applies.
+- Parley starts fewer duplicate helper processes when many agents share a project: Codex role lookups, CLI version checks, binary verification, the Codex skill catalog read at launch and git queries are cached or shared, the window asks for role summaries once per project, and the backlog panel ignores unrelated file changes. The window should stay more responsive with dozens of sessions. ([#214](https://github.com/Kalmbik61/Parley/pull/214))
+- **Wakes after a Parley sleep count toward "Session wake-ups per hour".** ([#203](https://github.com/Kalmbik61/Parley/pull/203)) Two agents writing to each other can no longer wake each other without limit: a session put to sleep by Parley is woken by mail at most that many times per hour (6 by default); further mail waits and the window says so.
+- Claude Code no longer moves Parley's `wait_for` to the background after two minutes: Parley raises the client's threshold above the longest wait, so a waiting agent gets its mail at once instead of spending a turn on "still running" and answering late.
+- When Parley wakes a Claude-family agent for new mail, the letters now arrive together with the wake line, so the agent no longer spends a separate turn on `check_inbox`. If the letters do not fit, the rest stays unread and the agent is told to call `check_inbox`.
+- Agents are told to put `wait_for` in the same message as the call it follows, and Codex agents to wait in one script. In our measurement a waiting Claude agent went from 10 model responses to 7 and a Codex agent from 22 to 7 (one Codex run each); the numbers come from two designed scenarios, not from everyday use, see [docs/research/2026-11-11-mail-turns/README.md](docs/research/2026-11-11-mail-turns/README.md).
+
+### Updating
+
+- The first start after the update reads the whole Claude Code and Codex history once and then keeps an index, so later starts are faster.
+- At start Parley trims hook journals larger than 1 MiB of sleeping and closed sessions. The cut part is not kept and cannot be restored.
+- "Sleep idle agents sooner when the machine is busy" now defaults to 15 minutes instead of 5; a value you set yourself still applies.
+- A window from an older version keeps working with the new host.
+
+### What is not proven yet
+
+- None of these changes was checked in the packaged app on a real workload: chat feed loading with a long log and feed eviction, a reconnect with several chats open, host start time with a real history, the hook journal trimming on real data, and the letters about silent endings with real CLIs.
+
+## 0.32.0
+
+**Impact**
+
+- **Goal:** See which shell commands a session is running, and stop showing a session that is still in its turn as finished.
+- **Behaviour:** The session toolbar gets a "N shell" chip with the running commands of the open session's terminal: executable name, elapsed time, CPU and memory, never arguments, paths or environment. A Claude turn that stays silent for more than 30 seconds is shown as working everywhere (window, island, phone, assistant, Telegram) for up to 15 minutes of silence, and one finished turn gives one Done. The phone still cannot call `processes.*`. The protocol schema does not change for the activity fix.
+- **Numbers:** Shell chip (PR #196): `ps` median 21.8 ms and maximum 25.3 ms at 993 rows (10 runs); a full poll median 25 ms and maximum 97 ms at 988 rows (162 polls); on 16 real terminals the 13 idle ones gave an empty list; a rewritten `argv[0]` carrying a fake token left no trace in 323 snapshots. Activity fix (PR #198): before it, one workspace had 2145 idle reminders right after a `Stop` against 3354 `Stop`, and 1099 pauses longer than 30 s inside 334 of 2246 turns (14.9%, an upper bound); live check 7 of 7 passed with one Claude Code 2.1.319 session on `haiku`. CI on master at 041f20a7 passed.
+- **Screens:** The chip with its list open, from the E2E run of PR #196: ![The "2 shell" chip with zsh and sleep listed](https://github.com/Kalmbik61/Parley/blob/bfaf1b32f88f/docs/audits/2026-11-09/session-processes-chip.png?raw=true). The activity fix has no new UI.
+- **For the human:** Update the Mac app. Open a session with a long command running and click the "N shell" chip. The chip counts processes, not commands, so one test run can show `17 shell`.
+- **Risk:** Low to medium. For Codex the process list is approximate: startup `git` stays visible for 39–68 s, and a command run directly under `node` is hidden. Long executable names are cut to 16 characters on macOS. A turn that ends with neither `Stop` nor an interrupt record stays working for up to 15 minutes, and a command silent for more than 15 minutes shows one false Done before returning to working. `host.diagnostics` and agent tools still read the raw state, so they can say `unseen` while the window says working.
+- **Cost:** About 25 ms of `ps` every 2 seconds, only while a live session tab is displayed. The activity fix adds no polling. CPU share and tokens not measured.
+- **Verdict:** Ready to release.
+
+### Added
+
+- **Running shell commands in the session toolbar** ([#196](https://github.com/Kalmbik61/Parley/pull/196)). A "N shell" chip appears next to "N agents running" while the session's terminal has running commands; click it for a list with each command's executable name, elapsed time, CPU and memory. Only the executable name is shown, never arguments, paths or environment. The host reads the process tree of each subscribed session with one shared `ps` every 2 seconds and only while the tab is open. Known limitation: for Codex the list is approximate. It may include Codex helper processes (for example `git` at startup) and miss a command that Codex runs directly under `node`, and the list says so.
+
+### Fixed
+
+- **A running session no longer looks finished** ([#198](https://github.com/Kalmbik61/Parley/pull/198)). A Claude session in the middle of a turn that stays silent for more than 30 seconds (a long tool call or a slow reply) is shown as working in the window, on the island, on the phone, by the assistant and in Telegram, instead of as done, for up to 15 minutes of silence; after that it counts as finished. A turn interrupted with Esc is shown as done about 30 seconds later. The idle reminder after a finished turn no longer creates a second Done or returns a viewed session to unseen.
+
 ## 0.31.0
 
 **Impact**

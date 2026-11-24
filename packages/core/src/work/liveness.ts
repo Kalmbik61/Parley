@@ -36,10 +36,17 @@ const DEAD_SILENCE_FACTOR = 10;
 /** Тики ядра в секунде: `USER_HZ` на Linux практически всегда 100. */
 const USER_HZ = 100;
 
+/** Сколько ждать `ps`: зависший процесс не должен держать сверку живости. */
+export const PS_TIMEOUT_MS = 2000;
+
 /** macOS: `ps` печатает локальное время старта с точностью до секунды. */
 async function startedAtBsd(pid: number): Promise<string | null> {
   // В русской локали `ps` печатает дату по-русски, `Date` её не разбирает: формат нужен английский.
-  const { stdout } = await run('ps', ['-o', 'lstart=', '-p', String(pid)], { env: { ...process.env, LC_ALL: 'C' } });
+  const { stdout } = await run('ps', ['-o', 'lstart=', '-p', String(pid)], {
+    env: { ...process.env, LC_ALL: 'C' },
+    timeout: PS_TIMEOUT_MS,
+    killSignal: 'SIGKILL',
+  });
   const at = new Date(stdout.trim());
   return Number.isNaN(at.getTime()) ? null : at.toISOString();
 }
@@ -65,11 +72,14 @@ async function startedAtLinux(pid: number): Promise<string | null> {
  * Время старта процесса по данным ОС. `null` — процесса нет или система такого
  * не рассказывает; тогда сверять нечего и расхождением это не считается.
  */
-export async function processStartedAt(pid: number): Promise<string | null> {
+export async function processStartedAt(
+  pid: number,
+  readPs: (pid: number) => Promise<string | null> = startedAtBsd,
+): Promise<string | null> {
   if (!Number.isInteger(pid) || pid <= 0) return null;
   try {
     if (process.platform === 'linux') return await startedAtLinux(pid);
-    if (process.platform === 'darwin') return await startedAtBsd(pid);
+    if (process.platform === 'darwin') return await readPs(pid);
     return null;
   } catch {
     return null;
@@ -116,6 +126,8 @@ export async function checkSession(
 
   const actual = await processStartedAt(session.pid);
   const expected = session.startedAtProcess;
+  // Неизвестное время старта (сбой, таймаут или непонятный ответ `ps`) читается как «живой»: ложно похоронить
+  // живую сессию дороже одного лишнего прохода, следующая сверка спросит снова.
   if (actual === null || expected === null) return { alive: true };
   const diff = Math.abs(Date.parse(actual) - Date.parse(expected));
   return { alive: Number.isNaN(diff) || diff <= START_TOLERANCE_MS };
@@ -128,12 +140,17 @@ export interface ReconcileOptions extends MetricsRoots {
   lockTimeoutMs?: number;
   /** Pid процессов, которые держит PTY этого хоста: у `active` сессий с такими pid время старта у ОС не спрашивают (`owned`). */
   ownedPids?: ReadonlySet<number>;
+  /** Лог сессии из индекса логов хоста: без него лог ищется по истории (`readSessionMetrics`). */
+  logFileOf?: (session: WorkSession) => string | null;
 }
 
 /** Время последней записи лога сессии; `null` — лога такого провайдера мы не читаем. */
-async function lastRecordOf(session: WorkSession, roots: MetricsRoots): Promise<string | null> {
+async function lastRecordOf(
+  session: WorkSession,
+  roots: MetricsRoots & Pick<ReconcileOptions, 'logFileOf'>,
+): Promise<string | null> {
   if (session.providerSessionId === null) return null;
-  const live = await readSessionMetrics(session.provider, session.providerSessionId, roots);
+  const live = await readSessionMetrics(session.provider, session.providerSessionId, roots, roots.logFileOf?.(session) ?? null);
   return live?.lastRecordAt ?? null;
 }
 

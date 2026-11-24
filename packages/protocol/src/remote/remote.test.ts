@@ -121,6 +121,17 @@ describe('allowlist', () => {
     expect(checkRemoteParams('pty.send', null)).toBe(false);
   });
 
+  it('consents.decide takes roleChange only as a {from, to} ack with allow', () => {
+    const base = { id: 'c-1', decision: 'allow' };
+    expect(checkRemoteParams('consents.decide', base)).toBe(true);
+    expect(checkRemoteParams('consents.decide', { ...base, roleChange: { from: 'builtin:architect', to: null } })).toBe(true);
+    expect(checkRemoteParams('consents.decide', { ...base, roleChange: { from: 'a', to: 'b' } })).toBe(true);
+    expect(checkRemoteParams('consents.decide', { ...base, roleChange: { from: '', to: null } })).toBe(false);
+    expect(checkRemoteParams('consents.decide', { ...base, roleChange: { from: 'a', to: 5 } })).toBe(false);
+    expect(checkRemoteParams('consents.decide', { ...base, roleChange: { from: 'a'.repeat(201), to: null } })).toBe(false);
+    expect(checkRemoteParams('consents.decide', { ...base, roleChange: { from: 'a', to: null, text: 'x' } })).toBe(false);
+    expect(checkRemoteParams('consents.decide', { id: 'c-1', decision: 'deny', roleChange: { from: 'a', to: null } })).toBe(false);
+  });
   it('A27: consents.decide takes allow or deny only', () => {
     expect(checkRemoteParams('consents.decide', { id: 'c-1', decision: 'allow' })).toBe(true);
     expect(checkRemoteParams('consents.decide', { id: 'c-1', decision: 'deny' })).toBe(true);

@@ -12,6 +12,11 @@
     "parley-token-benchmark.ts",
     "parley-token-benchmark.test.ts",
     "parley-token-benchmark-drive.ts",
-    "parley-token-benchmark-drive.test.ts"
+    "parley-token-benchmark-drive.test.ts",
+    "mail-turns-bench.ts",
+    "mail-turns-bench.test.ts",
+    "room-packet-trial.ts",
+    "room-packet-trial.test.ts",
+    "fixtures/room-packet-trial/make-basic.ts"
   ]
 }

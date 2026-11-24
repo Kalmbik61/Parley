@@ -1,7 +1,7 @@
 import type { Socket } from 'node:net';
 import { describe, expect, it, vi } from 'vitest';
 import { encodeLine } from '@parley/protocol';
-import { createClient, remoteMayReceive } from './client.js';
+import { CLIENT_HARD_CAP_BYTES, createClient, remoteMayReceive } from './client.js';
 
 /** Сокет-заглушка: всё записанное — в `written`. */
 function fakeSocket(): { socket: Socket; written: string[] } {
@@ -14,6 +14,9 @@ function fakeSocket(): { socket: Socket; written: string[] } {
       return true;
     }),
     end: vi.fn(),
+    destroy: vi.fn(() => {
+      (socket as { destroyed: boolean }).destroyed = true;
+    }),
   } as unknown as Socket;
   return { socket, written };
 }
@@ -102,5 +105,33 @@ describe('граница отправки клиента remote (спека мо
     client.send({ event: 'telegram.changed', data: {} } as never);
     client.sendLine?.('произвольная строка\n');
     expect(written).toEqual([encodeLine({ event: 'telegram.changed', data: {} } as never), 'произвольная строка\n']);
+  });
+});
+
+describe('потолок буфера записи клиента', () => {
+  it('буфер выше 64 МиБ — сокет закрыт, send отдаёт false, onOverflow получил объём', () => {
+    const { socket } = fakeSocket();
+    const queued = CLIENT_HARD_CAP_BYTES + 1;
+    (socket as unknown as { writableLength: number }).writableLength = queued;
+    const onOverflow = vi.fn();
+    const client = createClient(socket, 'window', [], undefined, onOverflow);
+
+    expect(client.send({ id: 1, result: null })).toBe(false);
+    expect(socket.destroy).toHaveBeenCalledTimes(1);
+    expect(onOverflow).toHaveBeenCalledWith(queued);
+    // Закрытому сокету больше ничего не пишем.
+    expect(client.send({ id: 2, result: null })).toBe(false);
+    expect(socket.write).toHaveBeenCalledTimes(1);
+  });
+
+  it('между 4 и 64 МиБ — сокет жив, send отдаёт false, как раньше', () => {
+    const { socket } = fakeSocket();
+    (socket as unknown as { writableLength: number }).writableLength = 8 * 1024 * 1024;
+    const onOverflow = vi.fn();
+    const client = createClient(socket, 'window', [], undefined, onOverflow);
+
+    expect(client.send({ id: 1, result: null })).toBe(false);
+    expect(socket.destroy).not.toHaveBeenCalled();
+    expect(onOverflow).not.toHaveBeenCalled();
   });
 });

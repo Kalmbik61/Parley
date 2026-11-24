@@ -380,3 +380,15 @@ describe('CustomProviderPanel: сессии удаляемого провайд�
     expect(useSwitchAgentStore.getState().ref).toEqual({ projectPath: '/tmp/proj', workId: 'w-0054', sessionId: 's-1' });
   });
 });
+
+
+describe('Qwen preset label', () => {
+  it('reads "Qwen models in Claude Code (Alibaba key)" and keeps its id', async () => {
+    const { CUSTOM_PRESETS } = await import('./custom-presets.js');
+    const preset = (CUSTOM_PRESETS as ReadonlyArray<{ id: string; label: string }>).find((item) => item.id === 'qwen');
+    expect(preset?.label).toBe('Qwen models in Claude Code (Alibaba key)');
+    render(<CustomProviderPanel providerId="new" onSaved={vi.fn()} onDeleted={vi.fn()} />);
+    const tile = screen.getByRole('button', { name: /^Qwen models in Claude Code \(Alibaba key\)/ });
+    expect(tile.querySelector('img')?.getAttribute('src')).toMatch(/qwen\.svg$/);
+  });
+});

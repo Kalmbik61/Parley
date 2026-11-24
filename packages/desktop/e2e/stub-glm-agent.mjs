@@ -1,14 +1,20 @@
 #!/usr/bin/env node
 // Изолированный Claude Code для GLM E2E: только stdin и HTTP-хуки на loopback.
 // Записывает признаки окружения, а не ключ, заголовки или полный settings/argv.
-import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { Buffer } from 'node:buffer';
 import http from 'node:http';
 import path from 'node:path';
 import { URL } from 'node:url';
 
+// Обновление из Parley (`claude update`): стаб помечает себя обновлённым в HOME и дальше отвечает новой версией.
+const updatedMark = path.join(process.env.HOME ?? '', '.stub-claude-updated');
+if (process.argv[2] === 'update') {
+  writeFileSync(updatedMark, '1');
+  process.exit(0);
+}
 if (process.argv[2] === '--version') {
-  process.stdout.write('2.1.287 (Claude Code)\n');
+  process.stdout.write(`${existsSync(updatedMark) ? '9.9.9' : '2.1.287'} (Claude Code)\n`);
   process.exit(0);
 }
 

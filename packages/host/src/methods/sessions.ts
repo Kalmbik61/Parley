@@ -89,7 +89,7 @@ export function createSessionHandlers(deps: SessionMethodDeps): SessionHandlers 
     },
 
     sessionsStop: async (params) => {
-      await deps.sessions.stop(params.ref);
+      await deps.sessions.stop(params.ref, 'human');
       return { ok: true };
     },
 
@@ -101,7 +101,7 @@ export function createSessionHandlers(deps: SessionMethodDeps): SessionHandlers 
     sessionsClose: async (params) => {
       // До закрытия: сверка роёв может прийти раньше, чем метод вернётся.
       deps.swarms?.humanClosed(params.ref);
-      await deps.sessions.close(params.ref);
+      await deps.sessions.close(params.ref, 'human');
       return { ok: true };
     },
 
@@ -211,7 +211,7 @@ export function createSessionHandlers(deps: SessionMethodDeps): SessionHandlers 
 
     // Замена агента на месте (спека 2026-10-30, 5.2–5.3): правила, порядок и восстановление — в сервисе.
     sessionsSwitchOptions: async ({ ref }) => deps.sessions.switchOptions(ref),
-    sessionsSwitchAgent: async ({ ref, requestId, provider, model, effort, carry, force }) =>
+    sessionsSwitchAgent: async ({ ref, requestId, provider, model, effort, carry, force, roleChange }) =>
       deps.sessions.switchAgent(ref, {
         requestId,
         provider,
@@ -219,6 +219,7 @@ export function createSessionHandlers(deps: SessionMethodDeps): SessionHandlers 
         ...(model === undefined ? {} : { model }),
         ...(effort === undefined ? {} : { effort }),
         ...(force === undefined ? {} : { force }),
+        ...(roleChange === undefined ? {} : { roleChange }),
       }),
 
     sessionsResumeInterrupted: async (params) => {

@@ -22,17 +22,45 @@ import type { EventData, EventName, SessionRef } from '@parley/protocol';
 import type { HostContext } from '../context.js';
 import { swarmsCancel, swarmsSeen } from '../methods/swarms.js';
 import type { WorksService } from '../works/works-service.js';
-import { SWARM_EXPIRY_GRACE_MS, SWARM_TICK_MS, createSwarmsService } from './swarms-service.js';
+import { DRONE_SILENT_MS, SWARM_EXPIRY_GRACE_MS, SWARM_TICK_MS, createSwarmsService } from './swarms-service.js';
 import type { SwarmsService, SwarmsServiceOptions } from './swarms-service.js';
 
 const START = '2026-10-28T12:00:00.000Z';
 const MIN = 60_000;
+
+/**
+ * Журнал записей карты: после каждого `updateMap` (и теста, и службы) снимок роя из базы — статус, `announced`, число
+ * участников и число писем `parley` королеве. Так тест видит границы записей, а не только итог (3.5: одна запись).
+ */
+const commits = vi.hoisted(() => ({ log: [] as Array<{ status: string; announced: number; members: number; letters: number }> }));
+vi.mock('@parley/core', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@parley/core')>();
+  return {
+    ...original,
+    updateMap: async (...args: Parameters<typeof original.updateMap>) => {
+      const result = await original.updateMap(...args);
+      const map = original.readStoredMap(args[0], args[1]);
+      const swarm = map.swarms?.[0];
+      if (swarm !== undefined) {
+        commits.log.push({
+          status: swarm.status,
+          announced: swarm.announced ?? 0,
+          members: swarm.members.length,
+          letters: map.messages.filter((message) => message.from === original.PARLEY && message.to.includes(swarm.queen)).length,
+        });
+      }
+      return result;
+    },
+  };
+});
 
 let home = '';
 let project = '';
 let workId = '';
 let listeners: Array<() => void> = [];
 let stoppers: Array<() => Promise<void>> = [];
+/** Запущенные в тесте службы: `emit` ждёт конца их сверки, а не фиксированные 80 мс. */
+let booted: SwarmsService[] = [];
 let notices: Array<{ event: EventName; data: EventData<EventName> }> = [];
 let closeCalls: string[] = [];
 let logErrors: string[] = [];
@@ -43,8 +71,10 @@ beforeEach(async () => {
   home = await mkdtemp(path.join(tmpdir(), 'parley-swarms-home-'));
   project = await mkdtemp(path.join(tmpdir(), 'parley-swarms-project-'));
   process.env['PARLEY_HOME'] = home;
+  commits.log = [];
   listeners = [];
   stoppers = [];
+  booted = [];
   notices = [];
   closeCalls = [];
   logErrors = [];
@@ -118,13 +148,16 @@ const fakeAutoSleep = {
 
 async function emit(): Promise<void> {
   for (const listener of listeners) listener();
+  // Сверка идёт на настоящем диске, и на загруженной машине 80 мс не хватает: ждём сам проход (идущий или новый).
+  await Promise.all(booted.map((service) => service.reconcile()));
   await quiet();
 }
 
-function boot(options: SwarmsServiceOptions = { limits: async () => ({ swarmMinutes: 0 }) }): SwarmsService {
+function boot(options: SwarmsServiceOptions = { limits: async () => ({ swarmMinutes: 0, swarmSessions: 16 }) }): SwarmsService {
   const service = createSwarmsService(fakeHost(), fakeWorks, fakeSessions, options, fakeAutoSleep);
   service.start();
   stoppers.push(() => service.stop());
+  booted.push(service);
   return service;
 }
 
@@ -217,6 +250,15 @@ async function report(id: string, result: 'done' | 'failed', summary: string): P
     session.summary = summary;
     setResult(map, id, result);
   });
+}
+
+/** Участник сдаёт `report done` с самооценкой: покрытие пишется раньше результата, как делает инструмент `report`. */
+async function handIn(id: string, coverage: 'covered' | 'partial' | null): Promise<void> {
+  await updateMap(project, workId, (map) => {
+    const member = map.swarms![0]!.members.find((candidate) => candidate.sessionId === id)!;
+    member.coverage = coverage;
+  });
+  await report(id, 'done', `сдача ${id}`);
 }
 
 async function setLifecycle(id: string, to: SessionLifecycle): Promise<void> {
@@ -329,6 +371,61 @@ describe('переходы', () => {
     expect(lettersTo(queen)).toHaveLength(1);
   });
 
+  it('все сдали с покрытием covered — письмо «all 2 members handed in and declared full coverage»', async () => {
+    const { queen, drones } = await makeSwarm({ drones: 2 });
+    boot();
+    await handIn(drones[0]!, 'covered');
+    await handIn(drones[1]!, 'covered');
+    await emit();
+
+    const [text] = lettersTo(queen).map((letter) => letter.text);
+    expect(lettersTo(queen)).toHaveLength(1);
+    expect(text!.split('\n')[0]).toBe('Wave finished in swarm sw-01: all 2 members handed in and declared full coverage.');
+    expect(text).not.toContain('Not closed');
+  });
+
+  it('трутень спит без итога: до DRONE_SILENT_MS рой идёт и писем нет, с него — collecting и текст с именем трутня', async () => {
+    expect(DRONE_SILENT_MS).toBe(120_000);
+    for (const age of [0, 60_000, 119_999, 120_000, 600_000]) {
+      const { queen, drones } = await makeSwarm({ drones: 1 });
+      await updateMap(project, workId, (map) => {
+        transitionSession(map, drones[0]!, 'sleeping', { at: new Date(Date.parse(START) - age).toISOString() });
+      });
+      boot();
+      await emit();
+
+      if (age < DRONE_SILENT_MS) {
+        expect(swarmOf().status, `${age}`).toBe('running');
+        expect(lettersTo(queen), `${age}`).toHaveLength(0);
+      } else {
+        expect(swarmOf().status, `${age}`).toBe('collecting');
+        expect(lettersTo(queen).map((letter) => letter.text.split('\n').slice(0, 3)), `${age}`).toEqual([[
+          'Wave finished in swarm sw-01: 1 member — 1 did not hand in.',
+          'Not closed:',
+          `- Drone 1 (${drones[0]}): did not hand in`,
+        ]]);
+      }
+      await stoppers.pop()?.();
+      listeners = [];
+    }
+  });
+
+  it('закрытый человеком трутень назван в письме, сдавший — нет', async () => {
+    const { queen, drones } = await makeSwarm({ drones: 2 });
+    boot();
+    await report(drones[0]!, 'done', 'a');
+    await setLifecycle(drones[1]!, 'closed');
+    await emit();
+
+    expect(swarmOf().status).toBe('collecting');
+    expect(lettersTo(queen).map((letter) => letter.text.split('\n').slice(0, 4))).toEqual([[
+      'Wave finished in swarm sw-01: 2 members — 1 coverage not stated, 1 did not hand in.',
+      'Not closed:',
+      `- Drone 1 (${drones[0]}): coverage not stated`,
+      `- Drone 2 (${drones[1]}): did not hand in`,
+    ]]);
+  });
+
   it('сданный трутень, чью сессию ещё не закрыли, не держит рой: handedAt терминален сам по себе', async () => {
     const { queen, drones } = await makeSwarm({ drones: 1 });
     await updateMap(project, workId, (map) => {
@@ -336,7 +433,7 @@ describe('переходы', () => {
     });
     // Закрытие не успевает: хост занят, а рой уже сверен.
     const slow = { close: vi.fn(() => new Promise<void>(() => {})) };
-    const service = createSwarmsService(fakeHost(), fakeWorks, slow, { limits: async () => ({ swarmMinutes: 0 }) });
+    const service = createSwarmsService(fakeHost(), fakeWorks, slow, { limits: async () => ({ swarmMinutes: 0, swarmSessions: 16 }) });
     service.start();
     await quiet();
 
@@ -477,11 +574,187 @@ describe('переходы', () => {
 });
 
 // ---------------------------------------------------------------------------------------------
+// Письмо конца волны и итог (спека «видимые дыры», 3.5–3.6)
+// ---------------------------------------------------------------------------------------------
+
+describe('письмо конца волны', () => {
+  const FULL = { swarmMinutes: 90, swarmSessions: 16 };
+
+  it('announced стоит в той же записи, что collecting и письмо: рой, счётчик и письмо видны разом', async () => {
+    const { queen, drones } = await makeSwarm({ drones: 2 });
+    boot({ limits: async () => FULL });
+    await handIn(drones[0]!, 'partial');
+    await handIn(drones[1]!, 'covered');
+    await emit();
+
+    const map = stored();
+    expect(map.swarms![0]).toMatchObject({ status: 'collecting', announced: 3 });
+    expect(lettersTo(queen)).toHaveLength(1);
+    expect(lettersTo(queen)[0]!.text).toContain('Wave finished in swarm sw-01: 2 members — 1 covered, 1 partial.');
+    expect(lettersTo(queen)[0]!.text).toContain(`- Drone 1 (${drones[0]}): partial`);
+    expect(lettersTo(queen)[0]!.text).toContain('Left: 13 of 16 swarm sessions, 90 min.');
+  });
+
+  it('граница записи: ни одна запись карты не несёт collecting, announced и письмо порознь', async () => {
+    const { drones } = await makeSwarm({ drones: 2 });
+    boot({ limits: async () => FULL });
+    await handIn(drones[0]!, 'partial');
+    await handIn(drones[1]!, 'covered');
+    await emit();
+
+    const states = commits.log.map((entry) => `${entry.status}/${entry.announced === entry.members ? 'announced' : 'open'}/${entry.letters}`);
+    // Каждая записанная версия карты — либо «ещё не собрали» (running, announced не равен числу участников, писем нет),
+    // либо «собрали» (collecting, announced равен числу участников, ровно одно письмо): третьего состояния нет.
+    for (const state of states) expect(['running/open/0', 'collecting/announced/1'], state).toContain(state);
+    // Переход произошёл ровно один раз и целиком в одной записи: до него running/open/0, после — только collecting/announced/1.
+    const first = states.indexOf('collecting/announced/1');
+    expect(first).toBeGreaterThan(0);
+    expect(states.slice(0, first).every((state) => state === 'running/open/0')).toBe(true);
+    expect(states.slice(first).every((state) => state === 'collecting/announced/1')).toBe(true);
+  });
+
+  it.each([
+    ['в ту же миллисекунду', START],
+    ['при откате часов', '2026-10-28T11:00:00.000Z'],
+  ])('вторая волна перечисляет только участников после announced: добавленный %s', async (_name, addedAt) => {
+    const { queen, drones } = await makeSwarm({ drones: 2 });
+    boot({ limits: async () => FULL });
+    await handIn(drones[0]!, 'partial');
+    await handIn(drones[1]!, 'covered');
+    await emit();
+    expect(lettersTo(queen)).toHaveLength(1);
+
+    // Королева добавляет трутня: рой снова работает (как `admitSwarmSession`), срез и покрытие ещё не известны.
+    let extra = '';
+    await updateMap(project, workId, (map) => {
+      const session = addSession(map, { provider: 'claude', label: 'Трутень 3', task: 'исследовать' });
+      transitionSession(map, session.id, 'active');
+      extra = session.id;
+      const swarm = map.swarms![0]!;
+      swarm.members.push({ sessionId: extra, role: 'drone', n: 3, addedAt, handedAt: null, slice: 'mobile', coverage: null });
+      swarm.status = 'running';
+    });
+    await handIn(extra, 'covered');
+    await emit();
+
+    const letters = lettersTo(queen);
+    expect(letters).toHaveLength(2);
+    expect(letters[1]!.text.split('\n')).toEqual([
+      'Wave finished in swarm sw-01: 1 member handed in and declared full coverage.',
+      'Earlier waves: 1 member not closed; your register says which of those gaps are closed since.',
+      'Left: 12 of 16 swarm sessions, 90 min.',
+      expect.stringContaining("Coverage is the member's own estimate."),
+    ]);
+    expect(swarmOf().announced).toBe(4);
+  });
+
+  it('повторная сверка и перезапуск хоста после записи письма его не дублируют', async () => {
+    const { queen, drones } = await makeSwarm({ drones: 1 });
+    const first = boot({ limits: async () => FULL });
+    await handIn(drones[0]!, 'partial');
+    await emit();
+    await first.reconcile();
+    await emit();
+    expect(lettersTo(queen)).toHaveLength(1);
+
+    await stoppers.pop()?.();
+    listeners = [];
+    boot({ limits: async () => FULL });
+    await emit();
+    expect(lettersTo(queen)).toHaveLength(1);
+    expect(swarmOf()).toMatchObject({ status: 'collecting', announced: 2 });
+  });
+
+  it('участник в pending не даёт волне закончиться', async () => {
+    const { queen, drones } = await makeSwarm({ drones: 2 });
+    await updateMap(project, workId, (map) => {
+      map.sessions.find((session) => session.id === drones[1])!.lifecycle = 'pending';
+    });
+    boot({ limits: async () => FULL });
+    await handIn(drones[0]!, 'covered');
+    await emit();
+
+    expect(swarmOf().status).toBe('running');
+    expect(lettersTo(queen)).toHaveLength(0);
+  });
+
+  it('рой, застигнутый обновлением в collecting без announced, нового письма не получает', async () => {
+    const { queen, drones } = await makeSwarm({ drones: 1, patch: { status: 'collecting' } });
+    await updateMap(project, workId, (map) => { delete map.swarms![0]!.announced; });
+    boot({ limits: async () => FULL });
+    await handIn(drones[0]!, 'partial');
+    await emit();
+
+    expect(swarmOf()).toMatchObject({ status: 'collecting', announced: 0 });
+    expect(lettersTo(queen)).toHaveLength(0);
+  });
+
+  it('королева, сдавшая раньше конца волны, письма конца волны не получает', async () => {
+    const { queen, drones } = await makeSwarm({ drones: 2 });
+    boot({ limits: async () => FULL });
+    await handIn(drones[0]!, 'covered');
+    await report(queen, 'done', 'рано');
+    await emit();
+
+    expect(swarmOf().status).toBe('done');
+    expect(lettersTo(queen)).toHaveLength(0);
+  });
+
+  it('лимиты не прочитаны — письмо без строки Left', async () => {
+    const { queen, drones } = await makeSwarm({ drones: 1 });
+    boot({ limits: async () => { throw new Error('нет настроек'); } });
+    await handIn(drones[0]!, 'partial');
+    await emit();
+
+    const [letter] = lettersTo(queen);
+    expect(letter?.text).toContain('Wave finished in swarm sw-01: 1 member — 1 partial.');
+    expect(letter?.text).not.toContain('Left:');
+  });
+
+  it('без срока жизни: Left называет «no time limit»', async () => {
+    const { queen, drones } = await makeSwarm({ drones: 1 });
+    boot({ limits: async () => ({ swarmMinutes: 0, swarmSessions: 2 }) });
+    await handIn(drones[0]!, 'covered');
+    await emit();
+
+    expect(lettersTo(queen)[0]!.text).toContain('Left: 0 of 2 swarm sessions, no time limit.');
+  });
+
+  it('заголовок итога создателю: «(K declared partial)» при частичных сдачах и прежний текст без них', async () => {
+    for (const [coverage, expected] of [
+      ['partial', /^Swarm sw-01 \[Research\] done, 2\/2 handed in \(1 declared partial\), \d+:\d{2}/],
+      ['covered', /^Swarm sw-01 \[Research\] done, 2\/2 handed in, \d+:\d{2}/],
+    ] as const) {
+      let creator = '';
+      const { queen, drones } = await makeSwarm({
+        drones: 2,
+        extra: (map) => {
+          const session = addSession(map, { provider: 'claude', label: 'Создатель', task: 'x' });
+          transitionSession(map, session.id, 'active');
+          creator = session.id;
+        },
+      });
+      await updateMap(project, workId, (map) => { map.swarms![0]!.creator = { kind: 'session', sessionId: creator }; });
+      boot({ limits: async () => FULL });
+      await handIn(drones[0]!, 'covered');
+      await handIn(drones[1]!, coverage);
+      await emit();
+      await report(queen, 'done', 'итог');
+      await emit();
+
+      expect(lettersTo(creator)[0]!.text, coverage).toMatch(expected);
+      await stoppers.pop()?.();
+      listeners = [];
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
 // Срок жизни (3.0)
 // ---------------------------------------------------------------------------------------------
 
 describe('срок жизни', () => {
-  const limits = (swarmMinutes: number): SwarmsServiceOptions => ({ limits: async () => ({ swarmMinutes }) });
+  const limits = (swarmMinutes: number): SwarmsServiceOptions => ({ limits: async () => ({ swarmMinutes, swarmSessions: 16 }) });
 
   it('таймер срабатывает без снимков карты: failed, expiredAt, участники закрыты, письмо королеве', async () => {
     const { queen, drones } = await makeSwarm({ drones: 2 });
@@ -501,6 +774,8 @@ describe('срок жизни', () => {
     expect(letters).toHaveLength(1);
     expect(letters[0]!.text).toContain('sw-01');
     expect(letters[0]!.text).toContain('90 min');
+    // Просрочка идёт прежним путём: письма конца волны нет.
+    expect(letters[0]!.text).not.toContain('Wave finished');
     // Итог ждёт сдачи королевы.
     expect(swarm.result).toBeNull();
     expect(notices).toHaveLength(0);
@@ -812,7 +1087,7 @@ describe('сон королевы завершённого роя', () => {
 
   it('итог ещё не доставлен — королеву не трогает', async () => {
     const { queen } = await makeSwarm({ drones: 1 });
-    boot({ limits: async () => ({ swarmMinutes: 90 }) });
+    boot({ limits: async () => ({ swarmMinutes: 90, swarmSessions: 16 }) });
     await emit();
     expect(sleepRequests).toEqual([]);
 
@@ -901,7 +1176,7 @@ describe('сон королевы завершённого роя', () => {
 
   it('без сервиса сна рой завершается как прежде, ошибок нет', async () => {
     const { queen } = await makeLetterSwarm({ drones: 0 });
-    const service = createSwarmsService(fakeHost(), fakeWorks, fakeSessions, { limits: async () => ({ swarmMinutes: 0 }) });
+    const service = createSwarmsService(fakeHost(), fakeWorks, fakeSessions, { limits: async () => ({ swarmMinutes: 0, swarmSessions: 16 }) });
     service.start();
     stoppers.push(() => service.stop());
     await report(queen, 'done', 'сводка');

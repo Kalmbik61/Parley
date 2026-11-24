@@ -12,7 +12,7 @@
  * ручной `resume`, а живой PTY закрытой в карте сессии хост гасит сам.
  */
 
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomInt, randomUUID } from 'node:crypto';
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import {
@@ -35,6 +35,7 @@ import {
   type AgentBinding,
   type LaunchClass,
   type LetterTx,
+  type NewSession,
   type LimitAlternative,
   type MachineTicket,
   type ProviderLimits,
@@ -43,6 +44,11 @@ import {
   limitsFromConfig,
   prepareSessionRole,
   roleId,
+  roleChangeOnSwitch,
+  roleFromId,
+  sessionRole,
+  sessionRoleCatalog,
+  type RoleChange,
   type SessionRole,
   type WorkSession,
   type RoleCatalog,
@@ -70,6 +76,9 @@ import {
   isTrusted,
   loadConfig,
   loadProviders,
+  byFamily,
+  providerFamily,
+  type ProviderFamily,
   isClaudeCode,
   isAccountRecord,
   isManagedEntry,
@@ -104,16 +113,20 @@ import {
   sessionMention,
   sessionTag,
   settleAttempt,
+  setResult,
   startSession,
+  OPENCODE_PASSWORD_ENV,
+  OPENCODE_SERVER_URL_SLOT,
   swarmOfSession,
   SYSTEM,
   ENGINE,
+  describeSeed,
   transitionSession,
   trustKey,
   updateMap,
   workPaths,
   writeBrief,
-  writeLetters,
+  writeLettersAsync,
   type CodexWriteApprovals,
   type EffortLevel,
   type ParleyConfig,
@@ -131,11 +144,17 @@ import type { HostContext } from '../context.js';
 import { HostError } from '../errors.js';
 import { serialized } from '../methods/custom-providers.js';
 import type { HookServer } from '../hooks/hook-server.js';
+import type { OpencodeBridge } from '../opencode/events.js';
+import type { OpencodeSupervisor } from '../opencode/server.js';
+import { createOpencodeSession } from '../opencode/create-session.js';
+import type { KimiSessions } from '../kimi/sessions.js';
 import type { ProviderVersions } from '../providers/versions.js';
 import type { PtyHandle, PtyManager } from '../pty/pty-manager.js';
 import type { WorksService, WorksView } from '../works/works-service.js';
+import { createDepsSeeder, type DepsSeeder } from '../worktrees/deps-seed.js';
 import { gitFailure } from '../worktrees/worktrees-service.js';
 import { createStepTimer } from '../timing.js';
+import { packetGate } from '../hooks/packet-endpoint.js';
 import { admitSwarmSession, swarmBudgetRefusal, swarmMemberRefusal } from '../swarms/spawn.js';
 import type { SwarmSpawn } from '../swarms/spawn.js';
 import { createSkillInstaller } from './agent-skills.js';
@@ -281,9 +300,10 @@ export interface SessionsService {
    * выходе (запуск уже идёт, процесс жив).
    */
   launch(ref: SessionRef, mode: LaunchMode, options?: LaunchChoice): Promise<LaunchOutcome>;
-  stop(ref: SessionRef): Promise<void>;
-  /** Насовсем: `closed` в карте и остановка PTY, если он жив. */
-  close(ref: SessionRef): Promise<void>;
+  /** `cause: 'human'` — остановка по действию человека: сторож тихих концовок пишет об этом письмо; без причины — молча. */
+  stop(ref: SessionRef, cause?: 'human'): Promise<void>;
+  /** Насовсем: `closed` в карте и остановка PTY, если он жив. `by: 'human'` — закрыл человек (письмо сторожа). */
+  close(ref: SessionRef, by?: 'human'): Promise<void>;
   /** `force` — грязный worktree отбрасывается вместе с сессией; без него — `conflict` (спека 8.3). */
   delete(ref: SessionRef, force?: boolean): Promise<void>;
   live(ref: SessionRef): boolean;
@@ -317,6 +337,11 @@ export interface SessionsService {
   /** Куда можно перевести сессию и что останется при ней (спека замены агента, 5.2, 6.10). */
   switchOptions(ref: SessionRef): Promise<Result<'sessions.switchOptions'>>;
   /**
+   * Как сменится роль сессии, если она продолжит на `provider` (спека 2026-11-12, 2.2): `null` — не сменится. Для
+   * карточки согласия на замену; неизвестный провайдер — `null`.
+   */
+  roleChangeFor(ref: SessionRef, provider: string): Promise<RoleChange | null>;
+  /**
    * Замена агента на месте (спека замены агента, 5.3): id, комнаты, дети, почта и worktree остаются, меняется
    * провайдер процесса. Повтор того же `requestId` — тот же ответ (6.13).
    */
@@ -338,6 +363,8 @@ export interface SwitchRequest {
   carry?: 'handover' | 'transcript';
   force?: boolean;
   by?: string;
+  /** Смена роли, которую видел человек (спека 2026-11-12, 2.3); обязательна, только когда теряется read-only. */
+  roleChange?: { from: string; to: string | null };
 }
 
 /**
@@ -363,6 +390,11 @@ export interface SessionsTakeoverOptions {
  */
 export interface SessionsFeedOptions {
   hooks?: Pick<HookServer, 'url' | 'register' | 'unregister'>;
+  /**
+   * The launch's first message the runner could not take as an argument (`LaunchPlan.deferredPrompt`, Qwen Code): the
+   * host types it into this process once it is ready (`WakeService.deferFirst`).
+   */
+  deferFirst?: (ref: SessionRef, pid: number, text: string) => void;
   providerVersions?: ProviderVersions;
   /**
    * Вошёл ли аккаунт подписки с этим id (служба входа, спека подписок 5.4): `true` — вошёл, `false` и `null` (не знаем) —
@@ -381,6 +413,13 @@ export interface SessionsFeedOptions {
    */
   codexHookCommand?: () => Promise<string | undefined>;
   /**
+   * Мост пакета состояния комнаты (спека 2026-11-16, 3.5): запускатель и адрес пути пакета. Зовётся только для `claude` с
+   * адресом приёмника; `undefined` — настройка `roomPacket` выключена или запускатель не записан, моста в файле нет.
+   */
+  packetHook?: () => Promise<{ launcher: string; url: string } | undefined>;
+  /** Источник случайности для розыгрыша плеча опыта: целое от 0 до `max - 1`; по умолчанию `crypto.randomInt`. Для тестов. */
+  random?: (max: number) => number;
+  /**
    * Согласия человека на папку (спека 2026-10-21, 4.2): запуск Codex в проекте без записи в `trust.json` останавливается
    * и заводит карточку. Без сервиса (изолированные тесты) такой запуск не удерживается.
    */
@@ -395,8 +434,19 @@ export interface SessionsFeedOptions {
    * запуск. Всем провайдерам, в отличие от хуков ленты; без него сессии запускаются без инструмента `browser_open`.
    */
   agent?: { url(): string | null; register(ref: SessionRef): string; unregister(ref: SessionRef): void };
+  /** Клон зависимостей в новую копию (спека 2026-11-11, 4.1); без него служба заводит свой через `createDepsSeeder`. */
+  depsSeeder?: Pick<DepsSeeder, 'run'>;
   /** Замена агента сессии (спека 2026-10-30): службы застревания, будильника и лимитов. */
   takeover?: SessionsTakeoverOptions;
+  /**
+   * OpenCode 2.x (spec 2026-11-12, 4.2): the per-session servers. A launch plan with `opencodeServer` starts its server
+   * here before the TUI; the TUI's exit stops it; a server that dies by itself fails the session and stops the TUI.
+   * Without it an OpenCode launch is refused.
+   */
+  opencode?: Pick<OpencodeSupervisor, 'start' | 'stop' | 'onExit'>;
+  /** OpenCode event bridge (spec 4.4, O6): attached once the TUI runs, detached before its server stops. */
+  opencodeEvents?: Pick<OpencodeBridge, 'attach' | 'detach'>;
+  kimi?: KimiSessions;
   /**
    * Потолок машины (спека ёмкости 2026-10-30, 4.2): `CapacityService` хоста. Тип структурный, как у `hooks` и `consents`:
    * сервис ёмкости сам зовёт `launch` сессий, и сессии его не импортируют. `admit` зовётся после бюджета работы и до
@@ -406,6 +456,15 @@ export interface SessionsFeedOptions {
     admit(request: { ref: SessionRef; launchClass: LaunchClass }): Promise<MachineTicket>;
     settle(ref: SessionRef): void;
     pump(): void;
+  };
+  /**
+   * Сторож тихих концовок (план 07, задача 4): ему сообщают выход процесса и Stop/Close человеком. Тип структурный, как у
+   * `capacity`: службу сессии не импортируют. Нет сторожа — писем нет (изолированные тесты).
+   */
+  endings?: {
+    exited(ref: SessionRef, exit: { exitCode: number; signal?: number }, launch: { by: string; runMs: number } | null): Promise<void>;
+    stoppedByHuman(ref: SessionRef): Promise<void>;
+    closedByHuman(ref: SessionRef): Promise<void>;
   };
 }
 
@@ -472,8 +531,22 @@ export function createSessionsService(
   activity: ActivityService,
   feed: SessionsFeedOptions = {},
 ): SessionsService {
-  const { hooks, providerVersions, capacity } = feed;
+  const { hooks, providerVersions, capacity, endings, opencode, opencodeEvents, kimi } = feed;
   const spawnLimits = feed.spawnLimits ?? querySpawnLimits;
+  const random = feed.random ?? ((max: number): number => randomInt(max));
+
+  /**
+   * Плечо опыта с пакетом состояния (план опыта 2026-11-17, 1.1, Э-1): только новая сессия `claude`, пока включён
+   * `roomPacket` и задано имя `roomPacketTrial`; вероятность 1/2. Остальные — без плеча.
+   */
+  async function drawTrial(provider: string): Promise<NewSession['trial']> {
+    if (provider !== 'claude') return undefined;
+    const { config } = await loadConfig();
+    if (!config.roomPacket || config.roomPacketTrial === '') return undefined;
+    return { name: config.roomPacketTrial, arm: random(2) === 0 ? 'packet' : 'control', at: new Date().toISOString(), tag: randomBytes(16).toString('hex') };
+  }
+  /** Предупреждения протокола списка назначений (намерение, отмена, подтверждение) идут в журнал хоста. */
+  const trialProtocol = { warn: (message: string): void => host.log.warn('room packet trial', { message }) };
   const warned = new Set<string>();
   const creationWarnings = new Set<string>();
   const gitWriteGrants = new Map<string, boolean>();
@@ -545,6 +618,13 @@ export function createSessionsService(
   // завершения, `stop()` его дожидается следом за самим выходом процесса.
   const finalizing = new Map<string, Promise<void>>();
 
+  // Почему процесс остановлен хостом: `human` — действие человека (Stop), `quiet` — служебная остановка (смена модели и
+  // агента, сон, архив, закрытие, выключение хоста). Записывается до `pty.stop`, обработчик `exit` забирает синхронно.
+  // Выход без записи — процесс вышел или упал сам; о нём сторож тихих концовок пишет письмо.
+  const exitCauses = new Map<string, 'human' | 'quiet'>();
+  // Кто поднял живой процесс и когда: подъём будильником (`wake`), упавший сразу, — забота «did not resume» будильника.
+  const launchActors = new Map<string, { by: string; startedAt: number }>();
+
   // Запись `active` после старта процесса идёт позже самого `pty.start`: между
   // ними — await-ы (время старта процесса из ОС, запись карты). Процесс, который
   // вышел сразу (провалившийся `--resume`), иначе успел бы записать `sleeping`
@@ -554,6 +634,7 @@ export function createSessionsService(
 
   // Скилл `parley` в проект и в worktree сессии перед каждым запуском (`agent-skills.ts`).
   const installSkill = createSkillInstaller(host);
+  const depsSeeder = feed.depsSeeder ?? createDepsSeeder(host);
 
   // Поколение этого хоста: им подписаны резервы бюджета. Резерв прошлого поколения без свидетельств неоднозначен —
   // он считается занятым и сам по сроку не снимается (`resource-policy.ts`); новая попытка той же сессии его подхватывает.
@@ -577,7 +658,7 @@ export function createSessionsService(
       if (parentId !== null) {
         try {
           // Только письмо: без разбора карты (спека хранилища 6.2).
-          writeLetters(ref.projectPath, ref.workId, (letters, current) => {
+          await writeLettersAsync(ref.projectPath, ref.workId, (letters, current) => {
             if (current.sessions.some((candidate) => candidate.id === parentId)) {
               letters.add({ roomId: null, from: SYSTEM, to: [parentId], text, kind: 'note' });
             }
@@ -654,22 +735,47 @@ export function createSessionsService(
   pty.on('exit', (ref, exit) => {
     const key = refKey(ref);
     const issuedGitGrant = gitWriteGrants.get(key);
+    const cause = exitCauses.get(key);
+    exitCauses.delete(key);
+    const launchActor = launchActors.get(key);
+    launchActors.delete(key);
     // Токен приёмника живёт, пока жив процесс: `SessionEnd` приходит до выхода, позже хуков нет.
     hooks?.unregister(ref);
     feed.agent?.unregister(ref);
     const done = (starting.get(key) ?? Promise.resolve())
       .then(async () => {
+        // OpenCode: the server goes with its TUI (spec 4.2, Stop) — the last poll, then the group; never left behind.
+        opencodeEvents?.detach(ref);
+        await opencode?.stop(ref).catch((error: unknown) => {
+          host.log.error('opencode server did not stop with its session', { ref, error: String(error) });
+        });
         try {
-          await finishExited(ref.projectPath, ref.workId, ref.sessionId, {
-            exitCode: exit.exitCode,
-            signal: exit.signal ?? undefined,
-          });
+          await finishExited(
+            ref.projectPath,
+            ref.workId,
+            ref.sessionId,
+            {
+              exitCode: exit.exitCode,
+              signal: exit.signal ?? undefined,
+            },
+            // Лог берётся из индекса логов хоста: поиск по всей истории на выходе процесса (и на выключении хоста) не нужен.
+            { logFileOf: () => activity.logFile(ref) },
+          );
         } finally {
           if (issuedGitGrant === true) await checkGit(ref);
           else if (issuedGitGrant === undefined) {
             const map = await readMap(ref.projectPath, ref.workId);
             if (needsGitCheck(map.sessions.find(session => session.id === ref.sessionId), undefined)) await checkGit(ref);
           }
+        }
+        // Сторож тихих концовок: письмо только о Stop человека и о выходе без причины; служебная остановка молчит.
+        if (cause === 'human') await endings?.stoppedByHuman(ref);
+        else if (cause === undefined) {
+          await endings?.exited(
+            ref,
+            { exitCode: exit.exitCode, ...(exit.signal === null ? {} : { signal: exit.signal }) },
+            launchActor === undefined ? null : { by: launchActor.by, runMs: Date.now() - launchActor.startedAt },
+          );
         }
       })
       .catch((error: unknown) => {
@@ -681,6 +787,27 @@ export function createSessionsService(
     finalizing.set(key, done);
   });
 
+  // OpenCode: a server that dies while its TUI lives fails the session with a readable reason, and the TUI goes too
+  // (spec 2026-11-12, 4.2 "Server dies first"). The stop is quiet: the notice already tells the human why.
+  opencode?.onExit((ref, exit) => {
+    void (async () => {
+      const text = `${sessionTag(ref.sessionId)} failed: ${exit.reason}${exit.code === null ? '' : ` (exit code ${exit.code})`}. Resume it to start a new server.`;
+      try {
+        await updateMap(ref.projectPath, ref.workId, (map) => {
+          const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
+          if (session !== undefined && session.lifecycle !== 'closed') setResult(map, ref.sessionId, 'failed');
+        });
+      } catch (error) {
+        host.log.error('opencode session failure was not recorded', { ref, error: String(error) });
+      }
+      host.broadcast('host.notice', { kind: 'launch-failed', ref, text, at: new Date().toISOString() });
+      opencodeEvents?.detach(ref);
+      await stop(ref).catch((error: unknown) => {
+        host.log.error('opencode TUI did not stop after its server', { ref, error: String(error) });
+      });
+    })();
+  });
+
   /**
    * Адрес приёмника хуков для запуска — `claude` не ниже `FEED_MIN_VERSION` и `codex` не ниже
    * `CODEX_FEED_MIN_VERSION`, у Codex ещё и в режиме `parley` настройки `codexWriteApprovals` (хукам нужно доверие
@@ -688,8 +815,9 @@ export function createSessionsService(
    * (короткая, ждём её); нет версии, старый CLI и прочие провайдеры — без хуков, окно покажет терминал.
    */
   async function feedHookUrl(provider: string): Promise<string | undefined> {
-    const codex = provider === 'codex';
-    if ((!isClaudeCode(provider) && !codex) || hooks === undefined || providerVersions === undefined) return undefined;
+    const hooked = byFamily(provider, { claude: 'claude' as const, codex: 'codex' as const, qwen: 'qwen' as const, opencode: null, neutral: null });
+    if (hooked === null || hooks === undefined || providerVersions === undefined) return undefined;
+    const codex = hooked === 'codex';
     const url = hooks.url();
     if (url === null) return undefined;
     if (codex && !codexHooksWanted((await loadConfig()).config)) return undefined;
@@ -698,6 +826,8 @@ export function createSessionsService(
     if (entry === undefined) return undefined;
     const version = providerVersions.get(entry.runner.command);
     if (version === null) return undefined;
+    // Qwen Code: the HTTP hook route is required (spec 2026-11-11, 3.3) and verified from the entry's `minVersion`.
+    if (hooked === 'qwen') return entry.runner.minVersion !== undefined && feedSupported(version, entry.runner.minVersion) ? url : undefined;
     return (codex ? codexFeedSupported(version) : feedSupported(version)) ? url : undefined;
   }
 
@@ -748,7 +878,8 @@ export function createSessionsService(
       signedIn: entry.account === undefined ? null : ((await feed.signedIn?.(entry.id)) ?? null),
     });
     const refusal = providerReadinessError(entry, readiness);
-    if (refusal !== null) throw new HostError('bad_request', refusal);
+    if (refusal !== null) throw new HostError('bad_request', refusal,
+      entry.id === 'kimi' && readiness.needs === 'cli' ? { reason: 'kimi-missing-cli' } : undefined);
     return entry;
   }
 
@@ -888,11 +1019,50 @@ export function createSessionsService(
       // Первым: отказ готовности провайдера не оставляет следа в карте, в том числе резерва бюджета.
       const entry = await timer.step('provider', () => readyProvider(session.provider, true));
 
+      // Первый запуск после замены: роль могла остаться чужой для провайдера (карта 0.32.0, замена 0.35.0) или каталог
+      // ролей сменился между заменой и запуском. Та же проверка, что в `runSwitch`; роль чинится в карте до плана запуска.
+      // Потерю read-only молча не чинит (спека 2026-11-12, 2.6–2.7): отказ называет выход, карта не тронута.
+      if (awaitingAgent(session)) {
+        const before = sessionRole(session);
+        const { change } = await timer.step('roleFit', () => roleChangeAt(roleCwd(ref, session), entry, before));
+        if (change?.readOnlyLost === true) {
+          const last = session.previousAgents?.at(-1);
+          const back = last === undefined ? 'on another provider' : `on ${labelOf(await loadProviders(), last.provider)}`;
+          const target = providerLabel(entry);
+          // Первая фраза — та же, что в тексте смены (`<Name> is|may be a read-only role and does not run on <Target>.`).
+          const cause = change.text.slice(0, change.text.indexOf(' The session will continue'));
+          const text = `${cause} Continue ${sessionMention(ref.sessionId)} ${back} again to keep the role; from there you can continue it on ${target} without the role.`;
+          // Окно показывает текст хоста только у `role-missing` (у `launch-failed` — общий): тот же текст и туда.
+          host.broadcast('host.notice', { kind: 'role-missing', ref, text, at: new Date().toISOString() });
+          throw new HostError('conflict', text, { reason: HOST_ERROR_REASONS.roleChange });
+        }
+        if (change !== null) {
+          const after = roleAfter(change);
+          await updateMap(ref.projectPath, ref.workId, (current) => {
+            const record = current.sessions.find((candidate) => candidate.id === ref.sessionId);
+            if (record === undefined) return;
+            record.role = after;
+            delete record.agent;
+            const last = record.previousAgents?.at(-1);
+            if (last !== undefined && last.role === undefined) last.role = before;
+          });
+          session.role = after;
+          delete session.agent;
+          host.broadcast('host.notice', {
+            kind: 'role-missing',
+            ref,
+            text: `${sessionTag(ref.sessionId)} role ${roleId(before)} does not run on ${providerLabel(entry)}: it starts ${after === null ? 'without a role' : `as ${roleId(after)}`}`,
+            at: new Date().toISOString(),
+          });
+        }
+      }
+
       // Согласие человека на папку (спека 2026-10-21, 4.2) — до бюджета, worktree, скилла и PARLEY.md: удержанный запуск
       // ничего не оставляет. Только Codex: у Claude, GLM и своих провайдеров экрана доверия Parley не заменяет.
       // Нет согласия — карточка и `held`; есть — ключи доверия считаются ниже, уже после создания worktree.
       let trusted = false;
-      if (session.provider === 'codex') {
+      // Qwen Code has folder trust off by default (Q10): no consent screen to replace.
+      if (byFamily(session.provider, { claude: false, codex: true, qwen: false, opencode: false, neutral: false })) {
         trusted = await timer.step('trust', () => isTrusted(ref.projectPath));
         if (!trusted && feed.consents !== undefined) {
           const by = options.by ?? 'human';
@@ -1035,7 +1205,7 @@ export function createSessionsService(
           const parentId = session.parent;
           if (parentId !== null) {
             try {
-              writeLetters(ref.projectPath, ref.workId, (letters, current) => {
+              await writeLettersAsync(ref.projectPath, ref.workId, (letters, current) => {
                 if (current.sessions.some((candidate) => candidate.id === parentId)) {
                   letters.add({ roomId: null, from: SYSTEM, to: [parentId], text, kind: 'note' });
                 }
@@ -1059,6 +1229,38 @@ export function createSessionsService(
             delete target.worktree.removedAt;
           }
         }));
+
+        // Клон зависимостей из основной копии (сбой шага запуск не останавливает: `run` не бросает).
+        const seed = await timer.step('deps', () => depsSeeder.run(ref, worktree));
+        if (seed !== null || worktree.seed !== undefined) {
+          // Итог клона не должен ронять запуск: не записался в карту — сессия всё равно стартует.
+          try {
+            await timer.step('deps', () => updateMap(ref.projectPath, ref.workId, (current) => {
+              const target = current.sessions.find((candidate) => candidate.id === ref.sessionId);
+              if (target?.worktree === null || target?.worktree === undefined) return;
+              if (seed !== null) target.worktree.seed = seed;
+              else delete target.worktree.seed;
+            }, { touch: false }));
+            if (seed !== null) worktree.seed = seed;
+            else delete worktree.seed;
+          } catch (error) {
+            host.log.error('итог клона зависимостей не записался в карту', { ref, error: String(error) });
+          }
+        }
+        // Копия поднята из ветки: сессия, у которой каталог убрали, узнаёт об этом заметкой (в брифе первого запуска это не нужно).
+        if (reuseBranch) {
+          const restored = `Your worktree folder was removed while this session was not running and is restored from branch \`${worktree.branch}\`. Its commits are intact.`;
+          const text = seed === null ? restored : `${restored} ${describeSeed(seed)}`;
+          try {
+            await writeLettersAsync(ref.projectPath, ref.workId, (letters, current) => {
+              if (current.sessions.some((candidate) => candidate.id === ref.sessionId)) {
+                letters.add({ roomId: null, from: SYSTEM, to: [ref.sessionId], text, kind: 'note' });
+              }
+            });
+          } catch (mapError) {
+            host.log.error('заметка о поднятой копии не записалась', { ref, error: String(mapError) });
+          }
+        }
       }
 
       // Скилл ставится после worktree: его корень к этому моменту уже на диске. Сбой установки запуск не
@@ -1081,10 +1283,16 @@ export function createSessionsService(
         }
       }
 
-      const { hookUrl, codexHookCommand } = await timer.step('hooks', async () => {
+      const { hookUrl, codexHookCommand, packetBridge } = await timer.step('hooks', async () => {
         const url = await feedHookUrl(session.provider);
-        const codexCommand = url !== undefined && session.provider === 'codex' ? await feed.codexHookCommand?.() : undefined;
-        return { hookUrl: url, codexHookCommand: codexCommand };
+        const codexCommand = url !== undefined && byFamily(session.provider, { claude: false, codex: true, qwen: false, opencode: false, neutral: false })
+          ? await feed.codexHookCommand?.() : undefined;
+        // Мост пакета — только провайдер `claude` и только при действующей регистрации хуков (есть адрес приёмника).
+        // Опыт: плечо «контроль» моста не получает никогда, сессия без плеча — только пока опыт не идёт (`packetGate`).
+        const bridge = url !== undefined && session.provider === 'claude' && feed.packetHook !== undefined &&
+          packetGate(session, (await loadConfig()).config.roomPacketTrial).ok
+          ? await feed.packetHook() : undefined;
+        return { hookUrl: url, codexHookCommand: codexCommand, packetBridge: bridge };
       });
       const roleCatalog = feed.roleCatalog
         ? await timer.step('roles', () => feed.roleCatalog!(session.workspace?.path ?? session.worktree?.path ?? ref.projectPath))
@@ -1097,7 +1305,9 @@ export function createSessionsService(
       // всё остальное, чего человек не решал (файл в worktree отличается от проекта), — в `disabled`: ни один сервер без
       // решения не включается, а вопрос Claude из-за этого не возникает. Только Claude-семейство.
       let projectMcp: { enabled: string[]; disabled: string[] } | undefined;
-      if (entry.runner.command === 'claude' && feed.projectMcp !== undefined) {
+      // `.mcp.json` decisions go into Claude's `--settings` file; Qwen Code reads project MCP servers itself (its own
+      // one-time approval, Q4), and Codex has no such file.
+      if (byFamily(entry, { claude: entry.runner.command === 'claude', codex: false, qwen: false, opencode: false, neutral: false }) && feed.projectMcp !== undefined) {
         const found = await timer.step('projectMcpFinal', () => feed.projectMcp!.inspect(session.workspace?.path ?? session.worktree?.path ?? ref.projectPath, { configDir: claudeConfigDirFor(entry, process.env) }));
         if (found.undecided.length > 0) {
           host.log.warn('project MCP: servers without a decision are disabled for this launch', { ref, servers: found.undecided.map((server) => server.name) });
@@ -1116,7 +1326,7 @@ export function createSessionsService(
             cwd: await trustKey(session.workspace?.path ?? session.worktree?.path ?? ref.projectPath),
           }
         : undefined;
-      const codexApprovals = session.provider === 'codex'
+      const codexApprovals = byFamily(session.provider, { claude: false, codex: true, qwen: false, opencode: false, neutral: false })
         ? await timer.step('approvals', () => codexApprovalsFor(ref, session.provider))
         : undefined;
       const plan = await timer.step('plan', () => planFn(ref.projectPath, ref.workId, session, {
@@ -1127,6 +1337,7 @@ export function createSessionsService(
         ...(roleCatalog === undefined ? {} : { roleCatalog }),
         ...(hookUrl === undefined ? {} : { hookUrl }),
         ...(codexHookCommand === undefined ? {} : { codexHookCommand }),
+        ...(packetBridge === undefined ? {} : { packetBridge }),
         ...(agentChannel === undefined ? {} : { agent: agentChannel }),
         ...(options.prompt === undefined ? {} : { prompt: options.prompt }),
         ...(options.handover === undefined ? {} : { handover: options.handover }),
@@ -1211,31 +1422,67 @@ export function createSessionsService(
         // Тот же признак, что у `launch.ts` в файле настроек: имя переменной в файле и в окружении не разойдутся (К13).
         const name = ownsHookToken(entry) ? 'PARLEY_HOOK_CAPABILITY' : 'PARLEY_HOOK_TOKEN';
         // Мост хука Codex (`codex-hook-bin`) читает адрес и токен из окружения процесса — у Claude они в файле настроек.
-        if (session.provider === 'codex') env['PARLEY_HOOK_URL'] = hookUrl;
+        // Qwen reads both from its system settings file, like Claude.
+        if (byFamily(session.provider, { claude: false, codex: true, qwen: false, opencode: false, neutral: false })) env['PARLEY_HOOK_URL'] = hookUrl;
         env[name] = hooks.register(
           ref,
           plan.providerSessionId ?? session.providerSessionId,
           session.provider,
+          plan.env['PARLEY_AGENT_REVISION'],
         );
+      }
+      // OpenCode (spec 4.2): the session's server first, then the TUI attached to it with the same password. The server
+      // gets the inherited launch environment plus its config documents; the address fills the plan's slot.
+      let args = plan.args;
+      let server: { url: string; password: string } | undefined;
+      if (plan.opencodeServer !== undefined) {
+        if (opencode === undefined) throw new HostError('bad_request', 'OpenCode sessions need the host server supervisor');
+        const serverEnv = plan.opencodeServer.env;
+        try {
+          server = await timer.step('opencode-server', () => opencode.start(ref, { binary: command, cwd: plan.cwd, env, serverEnv }));
+        } catch (error) {
+          if (hookUrl !== undefined) hooks?.unregister(ref);
+          host.broadcast('host.notice', {
+            kind: 'launch-failed', ref,
+            text: `session ${ref.sessionId} failed to launch: ${(error as Error).message}`,
+            at: new Date().toISOString(),
+          });
+          throw new HostError('bad_request', (error as Error).message);
+        }
+        // A NEW session is created on the server first: the TUI makes it only on its first prompt, and until then the brief
+        // would get 404 (spec 4.5). A resume finds its session already there.
+        if (mode !== 'resume' && plan.providerSessionId !== null && plan.providerSessionId !== undefined) {
+          await timer.step('opencode-session', () => createOpencodeSession(server!, plan.providerSessionId!, ref, host.log));
+        }
+        const url = server.url;
+        args = plan.args.map((arg) => (arg === OPENCODE_SERVER_URL_SLOT ? url : arg));
+        env[OPENCODE_PASSWORD_ENV] = server.password;
       }
       // `provider` — процессу не нужен, а хосту нужен: у codex состояние берётся из потока его терминала,
       // и ввод идёт своим порядком (спека комнат, 3.6).
       let handle: PtyHandle;
+      let nativeKimi: Awaited<ReturnType<KimiSessions['start']>> | undefined;
       const previousGitGrant = gitWriteGrants.get(key);
       try {
         // The hook token and inherited host environment are now final. No PTY starts on guard failure.
         handle = await timer.step('spawn', async () => {
-          validateSpawnBudget(command, plan.args, env, await spawnLimits());
+          validateSpawnBudget(command, args, env, await spawnLimits());
           gitWriteGrants.set(key, Boolean(session.provider === 'codex' && !session.workspace && session.worktree &&
             plan.args.some(arg => arg.startsWith('sandbox_workspace_write.writable_roots='))));
+          if (plan.kimiAcp !== undefined) {
+            if (kimi === undefined) throw new HostError('bad_request', 'Kimi Code sessions need the ACP transport');
+            nativeKimi = await kimi.start(ref, { ...plan.kimiAcp, command, args, cwd: plan.cwd, env });
+          }
           const spawned = pty.start(ref, {
+            ...(nativeKimi === undefined ? {} : { process: nativeKimi.process }),
             command,
-            args: plan.args,
+            args,
             cwd: plan.cwd,
             env,
             provider: session.provider,
           });
           processStarted = true;
+          launchActors.set(key, { by: options.by ?? 'human', startedAt: spawned.startedAt });
           // Слот теперь держит сам процесс: резерв машины снимается сразу, пока его никто не посчитал дважды.
           if (machineReserved) {
             machineReserved = false;
@@ -1244,9 +1491,12 @@ export function createSessionsService(
           return spawned;
         });
       } catch (error) {
+        nativeKimi?.process.kill();
         if (previousGitGrant === undefined) gitWriteGrants.delete(key);
         else gitWriteGrants.set(key, previousGitGrant);
         if (hookUrl !== undefined) hooks?.unregister(ref);
+        // The TUI did not start: its server has no one to serve.
+        if (plan.opencodeServer !== undefined) await opencode?.stop(ref).catch(() => {});
         const safe = (error as NodeJS.ErrnoException).code === 'E2BIG'
           ? new SpawnBudgetError('spawn-budget-too-large') : error;
         if (safe instanceof SpawnBudgetError) {
@@ -1254,6 +1504,18 @@ export function createSessionsService(
           throw new HostError('bad_request', safe.message, { code: safe.code, ...safe.details });
         }
         throw safe;
+      }
+      // OpenCode: the event bridge follows the server while this TUI lives (readiness needs the TUI alive).
+      const opencodeSession = plan.providerSessionId ?? session.providerSessionId;
+      if (server !== undefined && opencodeEvents !== undefined && opencodeSession !== null) {
+        const tui = handle;
+        opencodeEvents.attach(ref, {
+          url: server.url,
+          password: server.password,
+          sessionId: opencodeSession,
+          tuiAlive: () => pty.get(ref)?.pid === tui.pid,
+          source: mode === 'resume' && plan.providerSessionId === null ? 'resume' : 'startup',
+        });
       }
       const started = (async () => {
         try {
@@ -1264,7 +1526,7 @@ export function createSessionsService(
           };
           for (let attempt = 1; ; attempt += 1) {
             try {
-              await startSession(ref.projectPath, ref.workId, ref.sessionId, plan.providerSessionId, stamp,
+              await startSession(ref.projectPath, ref.workId, ref.sessionId, nativeKimi?.sessionId ?? plan.providerSessionId, stamp,
                 plan.env['PARLEY_NATIVE_CONTEXT_REVISION']);
               break;
             } catch (error) {
@@ -1280,8 +1542,16 @@ export function createSessionsService(
       })();
       // Выходу нужен только момент, а не результат: ошибку старта получит вызывающий.
       starting.set(key, started.catch(() => {}));
+      if (plan.deferredPrompt !== undefined) {
+        try {
+          feed.deferFirst?.(ref, handle.pid, plan.deferredPrompt);
+        } catch (error) {
+          host.log.error('the deferred first message was not handed to the wake service', { ref, error: String(error) });
+        }
+      }
       try {
         await timer.step('startWrite', () => started);
+        nativeKimi?.activate();
         failed = false;
       } catch (error) {
         // Процесс идёт, а карта о нём не знает: окно по карте показывало бы спящую рядом с живым процессом.
@@ -1307,7 +1577,9 @@ export function createSessionsService(
       if (session.switching !== null && session.switching !== undefined) await finishSwitch(ref);
       return 'started';
     } catch (error) {
-      if (notify && error instanceof HostError) host.broadcast('host.notice', {
+      // Отказ роли (спека 2026-11-12, 2.6) уже ушёл уведомлением `role-missing` со своим текстом: общий `launch-failed`
+      // встал бы первым в строке статуса и спрятал его.
+      if (notify && error instanceof HostError && error.data?.['reason'] !== HOST_ERROR_REASONS.roleChange) host.broadcast('host.notice', {
         kind: 'launch-failed', ref,
         text: `session ${ref.sessionId} failed to launch: ${error.message}`,
         at: new Date().toISOString(),
@@ -1466,6 +1738,9 @@ export function createSessionsService(
     // Own-key: «constructor» и «toString» с провода не должны находить прототипные свойства реестра.
     const entry = Object.hasOwn(registry, provider) ? registry[provider] : undefined;
     if (!entry) throw new HostError('bad_request', `unknown provider ${provider}; see get_map {field: "providers"}`);
+    // Опыт с пакетом состояния: плечо разыгрывается здесь, одним местом для окна, агента, роя и движка, и пишется в запись
+    // сессии при её создании ниже. Пары в записи нет, если опыт не идёт или провайдер не `claude`.
+    const trial = await drawTrial(provider);
     await timer.step('role', async () => {
       await prepareSessionRole(projectPath, entry, { roleId: roleId(role), provider, mode: 'create' }, feed.roleCatalog ? await feed.roleCatalog(projectPath) : undefined);
     });
@@ -1489,7 +1764,7 @@ export function createSessionsService(
     }
 
     if (workId === null) {
-      const created = await timer.step('record', () => createNewSession(projectPath, null));
+      const created = await timer.step('record', () => createNewSession(projectPath, null, trial, trialProtocol));
       const ref = { projectPath, workId: created.workId, sessionId: created.session.id };
       logged.sessionId = ref.sessionId;
       await timer.step('choice', () => applyChoice(ref, label, provider, role, choice, lean));
@@ -1498,7 +1773,7 @@ export function createSessionsService(
     }
 
     if (task === '') {
-      const created = await timer.step('record', () => createNewSession(projectPath, workId));
+      const created = await timer.step('record', () => createNewSession(projectPath, workId, trial, trialProtocol));
       const ref = { projectPath, workId, sessionId: created.session.id };
       logged.sessionId = ref.sessionId;
       await timer.step('choice', () => applyChoice(ref, label, provider, role, choice, lean));
@@ -1524,6 +1799,7 @@ export function createSessionsService(
         role,
         ...choice,
         ...(lean === undefined ? {} : { lean }),
+        ...(trial === undefined ? {} : { trial }),
       }, agentConfig === undefined ? undefined : (map, sessionId) => {
         const limits = limitsFromConfig(agentConfig);
         if (input.swarm !== undefined) {
@@ -1564,7 +1840,7 @@ export function createSessionsService(
         map.resources!.spawned += 1;
         if (room !== null) map.resources!.spawnedByRoom[room] = (map.resources!.spawnedByRoom[room] ?? 0) + 1;
         noteCreation(map, 'session', room, now);
-      }));
+      }, trialProtocol));
       logged.sessionId = sessionId;
       const ref = { projectPath, workId, sessionId };
       if (worktree === true) await timer.step('worktreePlan', () => attachWorktreePlan(ref, true));
@@ -1592,8 +1868,11 @@ export function createSessionsService(
     }
   }
 
-  async function stop(ref: SessionRef): Promise<void> {
-    if (pty.get(ref) !== undefined) await pty.stop(ref);
+  async function stop(ref: SessionRef, cause?: 'human'): Promise<void> {
+    if (pty.get(ref) !== undefined) {
+      exitCauses.set(refKey(ref), cause ?? 'quiet');
+      await pty.stop(ref);
+    }
     // Само событие `exit` уже прошло (см. выше) — если запись карты ещё
     // пишется, дожидаемся её, чтобы вызывающая сторона не читала гонку.
     await finalizing.get(refKey(ref));
@@ -1702,6 +1981,40 @@ export function createSessionsService(
   /** Новый агент ещё не стартовал после замены: прежний агент записан, разговора у нового пока нет. */
   const awaitingAgent = (session: WorkSession): boolean =>
     (session.previousAgents?.length ?? 0) > 0 && session.providerSessionId === null;
+
+  /** Папка, по которой решается роль сессии: та же, что у плана запуска. */
+  const roleCwd = (ref: SessionRef, session: WorkSession): string => session.workspace?.path ?? session.worktree?.path ?? ref.projectPath;
+
+  /**
+   * Смена роли сессии на провайдере `entry` (спека 2026-11-12, 2.2) и каталог, по которому она решена: из него имя роли
+   * для уведомления. Каталог читается один раз, тот же, что у запуска.
+   */
+  async function roleChangeAt(
+    cwd: string,
+    entry: ProviderEntry,
+    role: SessionRole | null,
+  ): Promise<{ change: RoleChange | null; catalog: RoleCatalog | null }> {
+    if (role === null) return { change: null, catalog: null };
+    const catalog = feed.roleCatalog
+      ? await feed.roleCatalog(cwd)
+      : await sessionRoleCatalog(cwd, { codex: role.source === 'codex' || entry.id === 'codex', provider: entry });
+    return { change: await roleChangeOnSwitch(cwd, entry, providerLabel(entry), role, catalog), catalog };
+  }
+
+  const roleAfter = (change: RoleChange): SessionRole | null => (change.to === null ? null : roleFromId(change.to));
+
+  /** Одно уведомление о роли после замены (спека 2026-11-12, 2.5) — с любого клиента. */
+  function roleChangeNotice(ref: SessionRef, change: RoleChange, catalog: RoleCatalog | null, targetLabel: string): void {
+    const name = catalog?.roles.find((role) => role.id === change.from)?.name ?? change.from;
+    const next = roleAfter(change);
+    const after = next === null ? 'without a role' : `as ${next.name} (${next.source})`;
+    host.broadcast('host.notice', {
+      kind: 'role-missing',
+      ref,
+      text: `${sessionMention(ref.sessionId)} continues on ${targetLabel} ${after}: ${name} no longer applies${change.readOnlyLost ? ', and the read-only restriction is lifted' : ''}.`,
+      at: new Date().toISOString(),
+    });
+  }
 
   /** Агент продолжал разговор форком, а файла форка в папке его аккаунта нет: форк вышел до первой записи. */
   async function forkWithoutFile(session: WorkSession): Promise<boolean> {
@@ -1947,6 +2260,23 @@ export function createSessionsService(
     if (carry === 'transcript' && !(isClaudeAccount(session.provider, Object.hasOwn(registry, session.provider) ? registry[session.provider] : undefined) && isClaudeAccount(entry.id, entry))) {
       throw new HostError('bad_request', 'The conversation can be continued only between Claude accounts: use the handover summary');
     }
+    // Роль решается до любых изменений: роль прежнего семейства на цели не запускается (`--agent` или `-c agents` у
+    // чужого CLI), и сессия осталась бы без старта. Отказ роли поглощается (`roleForProvider` ловит только его),
+    // любая другая ошибка обрывает замену, пока карта не тронута. Смена роли сверяется с тем, что видел человек
+    // (спека 2026-11-12, 2.3): потеря read-only без подтверждения и устаревшее подтверждение — отказ до записи `switching`.
+    const previousRole = sessionRole(session);
+    const { change: roleChange, catalog: roleCatalog } = await roleChangeAt(roleCwd(ref, session), entry, previousRole);
+    if (roleChange !== null) {
+      const ack = request.roleChange;
+      if (ack !== undefined && (ack.from !== roleChange.from || ack.to !== roleChange.to)) {
+        throw new HostError('conflict', `The role change has changed since it was shown: ${roleChange.text} Open the dialog again.`);
+      }
+      if (ack === undefined && roleChange.readOnlyLost) {
+        throw new HostError('conflict', `${roleChange.text} Confirm the role change in the Parley window to continue.`);
+      }
+    }
+    const roleChanged = roleChange !== null;
+    const switchRole = roleChange === null ? previousRole : roleAfter(roleChange);
     // Свежая запись перед проверками занятости: за пробу версии CLI лимит мог сброситься, и будильник вернул агента
     // к работе — по старому снимку его погасили бы посреди хода без `force`.
     const current = (await readMap(ref.projectPath, ref.workId)).sessions.find((candidate) => candidate.id === ref.sessionId);
@@ -2042,12 +2372,13 @@ export function createSessionsService(
       await updateMap(ref.projectPath, ref.workId, (current, letters) => {
         const fresh = current.sessions.find((candidate) => candidate.id === ref.sessionId);
         if (fresh?.switching?.id !== request.requestId) throw new HostError('conflict', 'the switch was cancelled');
-        current.sessions = applyAgentSwitch(current, ref.sessionId, target, binding, randomUUID()).sessions;
+        current.sessions = applyAgentSwitch(current, ref.sessionId, roleChanged ? { ...target, role: switchRole } : target, binding, randomUUID()).sessions;
         const line = switchLine(ref.sessionId, targetLabel, target.model ?? null, previousLabel, reason);
         for (const room of roomsOfSession(current, ref.sessionId)) addSystemMessage(current, letters, room.id, line, endedAt);
       });
       applied = true;
       pendingHandovers.set(key, handover);
+      if (roleChange !== null) roleChangeNotice(ref, roleChange, roleCatalog, targetLabel);
 
       const by = request.by ?? 'human';
       // Форка не будет: копия в папке цели убирается, привязка помечается пакетом передачи (5.4.1).
@@ -2084,6 +2415,8 @@ export function createSessionsService(
         }
       } catch (error) {
         // Шаг 9: карта уже с новым провайдером, сессия спит; Resume повторит запуск, обратная замена — тот же метод.
+        // Роль решена до записи `switching` и сверяется ещё раз на первом запуске (`launchHeld`, `awaitingAgent`), так что
+        // Resume не упрётся в ту же роль; неустранимый отказ будильник доведёт до wake-blocked.
         await dropSwitch(ref, request.requestId);
         host.broadcast('host.notice', {
           kind: 'launch-failed',
@@ -2096,7 +2429,11 @@ export function createSessionsService(
       // `held`: запуск Codex ждёт согласия на папку; `queued`: машине тесно, запуск ждёт слота в очереди. И там и там
       // `switching` остаётся до старта нового агента, снимет его сам запуск (`finishSwitch`).
       heldKinds.delete(refKey(ref));
-      return { outcome, carried: transcript === null ? 'handover' : 'transcript' };
+      return {
+        outcome,
+        carried: transcript === null ? 'handover' : 'transcript',
+        ...(roleChanged ? { role: { from: roleId(previousRole) ?? '', to: roleId(switchRole) } } : {}),
+      };
     } catch (error) {
       if (!applied) {
         pendingHandovers.delete(key);
@@ -2131,6 +2468,15 @@ export function createSessionsService(
   const headroom = (limits: ProviderLimits | null): number =>
     limits === null ? -1 : 100 - Math.max(limits.fiveHour?.usedPercent ?? 0, limits.week?.usedPercent ?? 0);
 
+  async function roleChangeFor(ref: SessionRef, provider: string): Promise<RoleChange | null> {
+    const session = (await readMap(ref.projectPath, ref.workId)).sessions.find((candidate) => candidate.id === ref.sessionId);
+    if (session === undefined) return null;
+    const registry = await loadProviders();
+    const entry = Object.hasOwn(registry, provider) ? registry[provider] : undefined;
+    if (entry === undefined) return null;
+    return (await roleChangeAt(roleCwd(ref, session), entry, sessionRole(session))).change;
+  }
+
   async function switchOptions(ref: SessionRef): Promise<Result<'sessions.switchOptions'>> {
     const map = await readMap(ref.projectPath, ref.workId);
     const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
@@ -2157,6 +2503,24 @@ export function createSessionsService(
       }
     };
     const limitsOf = (id: string): ProviderLimits | null => feed.takeover?.limits?.(id) ?? null;
+    // Смена роли на каждой цели (спека 2026-11-12, 2.4): каталог читается один раз на вызов; цель, чью запись не
+    // прочитать, — `null`.
+    const role = sessionRole(session);
+    const cwd = roleCwd(ref, session);
+    let catalog: RoleCatalog | undefined;
+    try {
+      catalog = role !== null && feed.roleCatalog ? await feed.roleCatalog(cwd) : undefined;
+    } catch (error) {
+      host.log.warn('каталог ролей для замены агента не прочитался', { ref, error: String(error) });
+    }
+    const roleChangeOf = async (entry: ProviderEntry): Promise<RoleChange | null> => {
+      if (role === null) return null;
+      try {
+        return await roleChangeOnSwitch(cwd, entry, providerLabel(entry), role, catalog);
+      } catch {
+        return null;
+      }
+    };
 
     const targets: Result<'sessions.switchOptions'>['targets'] = [];
     for (const entry of Object.values(registry)) {
@@ -2170,6 +2534,7 @@ export function createSessionsService(
         needs,
         limits: limitsOf(entry.id),
         transcript: isClaudeAccount(session.provider, currentEntry) && isClaudeAccount(entry.id, entry),
+        roleChange: await roleChangeOf(entry),
       });
     }
 
@@ -2185,8 +2550,9 @@ export function createSessionsService(
     const ready = new Set(targets.filter((target) => target.available).map((target) => target.id));
     const same = alternatives.filter((alternative) => ready.has(alternative.id));
     const best = [...same].sort((a, b) => headroom(b.limits) - headroom(a.limits))[0];
-    const family = currentEntry?.family;
-    const other = targets.find((target) => target.available && (family === undefined || target.family !== family));
+    const family = currentEntry === undefined ? null : providerFamily(currentEntry);
+    const familyOfTarget = (id: string): ProviderFamily | null => providerFamily(registry[id] ?? id);
+    const other = targets.find((target) => target.available && (family === null || familyOfTarget(target.id) !== family));
     const suggested = best?.id ?? other?.id ?? null;
 
     const rooms = map.rooms.filter((room) => room.members.includes(session.id));
@@ -2255,7 +2621,7 @@ export function createSessionsService(
     }
   }
 
-  async function close(ref: SessionRef): Promise<void> {
+  async function close(ref: SessionRef, by?: 'human'): Promise<void> {
     const key = refKey(ref);
     closing.add(key);
     try {
@@ -2272,6 +2638,7 @@ export function createSessionsService(
     } finally {
       closing.delete(key);
     }
+    if (by === 'human') await endings?.closedByHuman(ref);
   }
 
   async function del(ref: SessionRef, force = false): Promise<void> {
@@ -2350,6 +2717,7 @@ export function createSessionsService(
     exclusive,
     setModel,
     switchOptions,
+    roleChangeFor,
     switchAgent,
     clearStaleSwitches,
     live: (ref) => pty.get(ref) !== undefined,
@@ -2379,7 +2747,10 @@ export function createSessionsService(
     },
     async collectInterrupted() {
       interruptedRefs = await findInterrupted(works.snapshot().entries, (ref) =>
-        openEvents(workPaths(ref.projectPath, ref.workId).events)
+        openEvents(workPaths(ref.projectPath, ref.workId).events, (sessionId) => {
+          const provider = works.entry(ref.projectPath, ref.workId)?.map.sessions.find((session) => session.id === sessionId)?.provider;
+          return provider === undefined ? null : providerFamily(provider);
+        })
           .read(ref.sessionId)
           .catch(() => null),
       );

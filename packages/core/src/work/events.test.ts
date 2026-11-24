@@ -48,6 +48,30 @@ describe('openEvents', () => {
     expect(events?.[1]?.notificationType).toBe('permission_prompt');
   });
 
+  it('qwen: a line keeps its own payload timestamp, not the journal mtime; other families and lines without it keep mtime', async () => {
+    const old = '2026-11-11T10:00:00.000Z';
+    await writeFile(
+      journal(),
+      raw({ hook_event_name: 'UserPromptSubmit', prompt: 'old', timestamp: old }) +
+        raw({ hook_event_name: 'Stop' }) +
+        raw({ hook_event_name: 'Stop', timestamp: 'not a date' }),
+      'utf8',
+    );
+
+    const [stamped, bare, broken] = (await openEvents(dir, 'qwen').read(SESSION)) ?? [];
+    expect(stamped).toMatchObject({ at: old, atFromPayload: true });
+    for (const event of [bare, broken]) {
+      expect(event?.at).not.toBe(old);
+      expect(event?.atFromPayload).toBeUndefined();
+    }
+    const [claude] = (await openEvents(dir, 'claude').read(SESSION)) ?? [];
+    expect(claude?.at).not.toBe(old);
+    expect(claude?.atFromPayload).toBeUndefined();
+    // The OpenCode bridge writes the event's own time the same way (O6).
+    const [opencode] = (await openEvents(dir, 'opencode').read(SESSION)) ?? [];
+    expect(opencode).toMatchObject({ at: old, atFromPayload: true });
+  });
+
   // Пункт 7.
   it('пропускает битые строки и строки без имени события', async () => {
     await writeFile(
@@ -109,6 +133,21 @@ describe('openEvents', () => {
     expect(first).toHaveLength(1);
     expect(second).toHaveLength(2);
     expect(second).not.toBe(first);
+  });
+
+  it('чтение без новых строк отдаёт тот же массив, а записи в нём — те же объекты', async () => {
+    await writeFile(journal(), line('UserPromptSubmit') + line('Stop'), 'utf8');
+    const log = openEvents(dir);
+
+    const first = await log.read(SESSION);
+    const again = await log.read(SESSION);
+    await appendFile(journal(), line('UserPromptSubmit'), 'utf8');
+    const grown = await log.read(SESSION);
+
+    expect(again).toBe(first);
+    expect(grown).not.toBe(first);
+    expect(grown?.[0]).toBe(first?.[0]);
+    expect(grown?.at(-2)).toBe(first?.at(-1));
   });
 
   it('переписанный с нуля журнал читается заново', async () => {

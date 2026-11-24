@@ -14,6 +14,7 @@ import type { HostContext } from '../context.js';
 import type { WindowCounters } from '../health/window-counters.js';
 import { createCodexTerminalParser } from './codex-terminal.js';
 import type { CodexSignal, CodexTerminalParser } from './codex-terminal.js';
+import { createQwenTerminalParser, type QwenStatus, type QwenTerminalParser } from './qwen-terminal.js';
 import { DraftTracker } from './draft.js';
 import { OutputBatcher } from './output-batcher.js';
 import { spawnPty } from './pty-process.js';
@@ -66,6 +67,11 @@ export interface PtyManager {
    * в порядке появления в потоке. Состояние из него выводит сервис активности.
    */
   on(event: 'signal', listener: (ref: SessionRef, signal: CodexSignal) => void): () => void;
+  /**
+   * Qwen Code program status (OSC 7501): only for `provider: 'qwen'` sessions and only from the session's current
+   * process — output of a process the session has already replaced is not reported.
+   */
+  on(event: 'program-status', listener: (ref: SessionRef, status: QwenStatus) => void): () => void;
 }
 
 const DEFAULT_SIZE = { cols: 120, rows: 40 };
@@ -85,6 +91,8 @@ interface Session {
   provider: string | null;
   /** Разбор потока терминала — только у codex: у остальных состояние приходит хуками. */
   terminal: CodexTerminalParser | null;
+  /** OSC 7501 of Qwen Code; other providers — `null`. */
+  programStatus: QwenTerminalParser | null;
   /** Ждущие завершения процесса вызовы `stop()` — резолвятся общим обработчиком `onExit`. */
   stopWaiters: Array<(exit: ExitInfo) => void>;
 }
@@ -108,13 +116,15 @@ type StartListener = (ref: SessionRef) => void;
 type DraftListener = (ref: SessionRef, hasDraft: boolean) => void;
 type HostDraftListener = (ref: SessionRef, hasHostDraft: boolean) => void;
 type SignalListener = (ref: SessionRef, signal: CodexSignal) => void;
+type StatusListener = (ref: SessionRef, status: QwenStatus) => void;
 type PtyListener =
   | OutputListener
   | ExitListener
   | StartListener
   | DraftListener
   | HostDraftListener
-  | SignalListener;
+  | SignalListener
+  | StatusListener;
 
 export function createPtyManager(host: HostContext, windowCounters?: WindowCounters): PtyManager {
   const sessions = new Map<string, Session>();
@@ -124,6 +134,7 @@ export function createPtyManager(host: HostContext, windowCounters?: WindowCount
   const draftListeners = new Set<DraftListener>();
   const hostDraftListeners = new Set<HostDraftListener>();
   const signalListeners = new Set<SignalListener>();
+  const statusListeners = new Set<StatusListener>();
 
   function requireSession(ref: SessionRef): Session {
     const session = sessions.get(refKey(ref));
@@ -138,7 +149,7 @@ export function createPtyManager(host: HostContext, windowCounters?: WindowCount
     // До spawn: хук процесса пишется в журнал только после, и его mtime не раньше этой метки.
     const startedAt = Date.now();
     // Не `process`: имя затенило бы глобальный `process` до конца функции.
-    const ptyProcess = spawnPty(launch, size);
+    const ptyProcess = launch.process ?? spawnPty(launch, size);
     const screen = createScreen(size.cols, size.rows);
     const batcher = new OutputBatcher((data) => {
       for (const listener of outputListeners) listener(ref, data);
@@ -155,6 +166,7 @@ export function createPtyManager(host: HostContext, windowCounters?: WindowCount
       rows: size.rows,
       provider: launch.provider ?? null,
       terminal: launch.provider === 'codex' ? createCodexTerminalParser() : null,
+      programStatus: launch.provider === 'qwen' ? createQwenTerminalParser() : null,
       stopWaiters: [],
     };
     sessions.set(key, session);
@@ -165,6 +177,12 @@ export function createPtyManager(host: HostContext, windowCounters?: WindowCount
       windowCounters?.pty(Buffer.byteLength(data));
       session.screen.write(data);
       session.batcher.push(data);
+      // Bound to the process generation: a replaced process's late output reports nothing.
+      if (session.programStatus !== null && sessions.get(key) === session) {
+        for (const status of session.programStatus.feed(data)) {
+          notifyListeners(Array.from(statusListeners), 'program status listener failed', ref, status);
+        }
+      }
       if (session.terminal === null) return;
       for (const signal of session.terminal.feed(data)) {
         for (const listener of Array.from(signalListeners)) {
@@ -183,16 +201,39 @@ export function createPtyManager(host: HostContext, windowCounters?: WindowCount
       host.busy(key, false);
       session.batcher.dispose();
       session.screen.dispose();
-      host.broadcast('pty.exit', { ref, exitCode: exit.exitCode, signal: exit.signal });
-      for (const listener of exitListeners) listener(ref, exit);
-      for (const resolve of session.stopWaiters) resolve(exit);
+      try {
+        try {
+          host.broadcast('pty.exit', { ref, exitCode: exit.exitCode, signal: exit.signal });
+        } catch (error) {
+          host.log.error('рассылка pty.exit упала', { ref, error: String(error) });
+        }
+        notifyListeners(Array.from(exitListeners), 'PTY exit listener failed', ref, exit);
+      } finally {
+        // Даже сбой рассылки не должен повесить stop().
+        for (const resolve of session.stopWaiters) resolve(exit);
+      }
     });
 
     // Последним: слушатель (methods/pty.ts) шлёт окнам pty.resync, и их pty.attach должен
     // уже застать ручку и обработчики процесса.
-    for (const listener of Array.from(startListeners)) listener(ref);
+    notifyListeners(Array.from(startListeners), 'PTY start listener failed', ref);
 
     return toHandle(session);
+  }
+
+  /** Каждый слушатель — в своём try/catch: один упавший не мешает остальным и пути выхода PTY. */
+  function notifyListeners<Args extends unknown[]>(
+    listeners: Iterable<(...args: Args) => void>,
+    label: string,
+    ...args: Args
+  ): void {
+    for (const listener of listeners) {
+      try {
+        listener(...args);
+      } catch (error) {
+        host.log.error(label, { ref: args[0], error: String(error) });
+      }
+    }
   }
 
   function get(ref: SessionRef): PtyHandle | undefined {
@@ -224,8 +265,9 @@ export function createPtyManager(host: HostContext, windowCounters?: WindowCount
   function on(event: 'draft', listener: DraftListener): () => void;
   function on(event: 'host-draft', listener: HostDraftListener): () => void;
   function on(event: 'signal', listener: SignalListener): () => void;
+  function on(event: 'program-status', listener: StatusListener): () => void;
   function on(
-    event: 'output' | 'exit' | 'start' | 'draft' | 'host-draft' | 'signal',
+    event: 'output' | 'exit' | 'start' | 'draft' | 'host-draft' | 'signal' | 'program-status',
     listener: PtyListener,
   ): () => void {
     if (event === 'output') {
@@ -252,6 +294,11 @@ export function createPtyManager(host: HostContext, windowCounters?: WindowCount
       const typed = listener as SignalListener;
       signalListeners.add(typed);
       return () => signalListeners.delete(typed);
+    }
+    if (event === 'program-status') {
+      const typed = listener as StatusListener;
+      statusListeners.add(typed);
+      return () => statusListeners.delete(typed);
     }
     const typed = listener as DraftListener;
     draftListeners.add(typed);

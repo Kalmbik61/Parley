@@ -23,7 +23,8 @@
  * редьюсер не идёт — из него читаются только ретраи и прерывания, — поэтому картинок там не ищут.
  */
 
-import { lstat, open } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { lstat, open, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import {
@@ -31,9 +32,15 @@ import {
   applyHookEvent,
   applyCodexHookEvent,
   applyCodexRecords,
+  applyCodexTerminalPrompt,
+  applyOpencodeMessages,
+  applyQwenRecords,
+  feedFromOpencodeMessages,
+  feedFromQwenTranscript,
   claudeProjectRoots,
   closeFeedTurn,
   codexAgentMeta,
+  codexPromptKey,
   codexHooksWanted,
   emptyCodexAgentMeta,
   emptyCodexCursor,
@@ -41,20 +48,27 @@ import {
   FEED_IMAGE_SWEEP_MS,
   feedFromCodexRollout,
   feedFromTranscript,
+  mailFromInline,
   forEachJsonlRecord,
   interruptedAt,
   isCodexThreadBinding,
+  byFamily,
   isClaudeCode,
   loadConfig,
   parleyHome,
+  recogniseCodexPrompt,
   retryFromTranscript,
   settleCards,
   turnActive,
   withCodexAgentMeta,
 } from '@parley/core';
+import type { KimiOutput } from '../kimi/sessions.js';
 import type {
   CodexAgentMeta,
   CodexCursor,
+  CodexPrompt,
+  OpencodeCursor,
+  QwenCursor,
   FeedCard,
   FeedCardState,
   FeedDecision,
@@ -65,11 +79,15 @@ import type {
   RolloutRecord,
   WorkSession,
 } from '@parley/core';
-import { FEED_SCHEMA_VERSION, FEED_PROGRESS_RETRY_AFTER_MAX_MS, refKey, sessionRef } from '@parley/protocol';
-import type { FeedDecisions, ProgressResult, Result, SessionRef } from '@parley/protocol';
+import { FEED_MAIL_FEATURE, FEED_SCHEMA_VERSION, FEED_PROGRESS_RETRY_AFTER_MAX_MS, FEED_RESYNC_FEATURE, refKey, sessionRef } from '@parley/protocol';
+import type { FeedDecisions, KimiRequest, KimiResponse, ProgressResult, Result, SendResult, SessionRef } from '@parley/protocol';
 import { projectProgress } from './progress.js';
+import { cleanAnswer, typeOwnAnswer } from './terminal-answer.js';
 import type { ActivityService } from '../activity/activity-service.js';
+import type { LogChange } from '../activity/log-index.js';
+import type { MailJournalEntry } from '@parley/core';
 import type { Client } from '../client.js';
+import { readMailJournal } from './mail-journal.js';
 import type { HostContext } from '../context.js';
 import { HostError } from '../errors.js';
 import { EMPTY_HOOK_RESPONSE, hookDecisionResponse } from '../hooks/decisions.js';
@@ -79,7 +97,11 @@ import type { PendingHooks } from '../hooks/pending.js';
 import type { PtyManager } from '../pty/pty-manager.js';
 import type { WorksService } from '../works/works-service.js';
 import { createRolloutTail } from './codex-source.js';
+import { answerQwenPrompt, recogniseQwenPrompt, type QwenPrompt, type QwenPromptKind } from './qwen-prompt.js';
+import { createQwenTail } from './qwen-source.js';
+import { fetchOpencodeMessages, readOpencodeCache, writeOpencodeCache, type OpencodeAddress } from './opencode-source.js';
 import { createFeedImageStore } from './image-store.js';
+import { kimiInteraction, type KimiInteraction } from './kimi-interactions.js';
 import { stashClaudeRecord, stashCodexRecord, stashHookBody } from './stash.js';
 
 /** Сколько элементов лента сессии держит (решение 2). */
@@ -93,6 +115,23 @@ export const FEED_BATCH_MS = 50;
  * больше пары элементов), а память не растёт с файлом — журналы долгих сессий весят десятки мегабайт.
  */
 export const SEED_RECORD_WINDOW = 10_000;
+/** Сколько посевов лент идёт разом: остальные ждут в очереди (передний — снимок для окна). */
+export const FEED_SEED_CONCURRENCY = 2;
+/** Лента без подписчиков, которой не пользовались столько, уходит из памяти (решение 5 плана 11). */
+export const FEED_IDLE_EVICT_MS = 10 * 60_000;
+/**
+ * Буфер записи окна с признаком `feed-resync` выше этого — хост снимает все его подписки на ленты и шлёт
+ * `feed.resync` на каждую. Вдвое ниже потолка соединения (`CLIENT_HARD_CAP_BYTES`, 64 МиБ), чтобы окно успело
+ * переподписаться до закрытия сокета.
+ */
+export const FEED_CLIENT_DROP_BYTES = 32 * 1024 * 1024;
+/** Как часто обход ищет простаивающие ленты. */
+const FEED_EVICT_SWEEP_MS = 60_000;
+/**
+ * Сколько байт хвоста журнала Claude читается при севе сначала; хвост удваивается, пока не накрыл файл, не набралось
+ * `SEED_RECORD_WINDOW` записей и лента после редьюсера не дошла до `maxItems` или `maxBytes`.
+ */
+export const SEED_TAIL_BYTES = 16 * 1024 * 1024;
 /** Сколько байт хвоста журнала читается в поисках записи о прерывании: несколько последних записей. */
 const INTERRUPT_TAIL_BYTES = 64 * 1024;
 
@@ -122,6 +161,19 @@ export const CODEX_HOOK_GRACE_MS = 15_000;
  */
 export const CODEX_HOLD_MS = 590_000;
 
+/**
+ * Вопрос Codex на экране терминала (план слоя 2, задача 3): сколько и как часто хост ищет вопрос на экране после того,
+ * как сессия стала ждать человека, как часто сверяет экран, пока карточка ждёт, и через сколько после решения
+ * проверяет, что вопрос ушёл с экрана.
+ */
+export const TERMINAL_PROMPT_FIND_MS = 2_000;
+export const TERMINAL_PROMPT_FIND_STEP_MS = 100;
+export const TERMINAL_PROMPT_WATCH_MS = 1_000;
+export const TERMINAL_PROMPT_CONFIRM_MS = 1_500;
+/** Отказ с текстом: сколько после клавиши `3` ждать, пока сессия перестанет ждать (ход прерван), и как часто это сверять. */
+export const TERMINAL_MESSAGE_WAIT_MS = 5_000;
+export const TERMINAL_MESSAGE_POLL_MS = 100;
+
 export interface FeedServiceDeps {
   host: Pick<HostContext, 'log'>;
   works: Pick<WorksService, 'entry' | 'onChange'>;
@@ -130,9 +182,15 @@ export interface FeedServiceDeps {
     'onChange' | 'logFile' | 'childLogFile' | 'questionHeld' | 'permissionAnswered' | 'onLogChange'
   >;
   pty: Pick<PtyManager, 'on' | 'get' | 'write' | 'screenText'>;
+  /**
+   * Тот же отправитель, что у метода `pty.send` (вставка Codex и отдельный Enter): отказ с текстом уходит им обычным
+   * сообщением человека. Нет — текст отказа не отправляется.
+   */
+  send?: (params: { ref: SessionRef; text: string; submit: boolean }) => Promise<SendResult>;
 }
 
 export interface FeedServiceOptions {
+  kimiRespond?: (ref: SessionRef, requestId: string, response: KimiResponse) => void;
   maxItems?: number;
   maxBytes?: number;
   batchMs?: number;
@@ -150,24 +208,71 @@ export interface FeedServiceOptions {
   now?: () => number;
   /** Корни истории Claude Code, внутри которых читаются журналы; по умолчанию — `claudeProjectRoots()`. */
   roots?: () => readonly string[];
-  /** Чтение записей журнала; тесты подставляют счётчик. */
-  readRecords?: (file: string) => Promise<RawRecord[]>;
+  /** Чтение записей журнала (последних `maxBytes` байт); тесты подставляют счётчик. */
+  readRecords?: (file: string, maxBytes?: number) => Promise<RawRecord[]>;
+  /** OpenCode 2.x: where the session's server answers now (the supervisor's `get`); `undefined` — no server runs. */
+  opencodeServer?: (ref: SessionRef) => OpencodeAddress | undefined;
+  /** HTTP for the OpenCode message polls; tests substitute it. */
+  opencodeFetch?: typeof fetch;
+  /** Чтение журнала почты Parley при севе; тесты подставляют своё. */
+  readMailJournal?: (ref: SessionRef) => Promise<MailJournalEntry[]>;
+  /** Первый хвост журнала Claude при севе; по умолчанию `SEED_TAIL_BYTES`. */
+  seedTailBytes?: number;
   /** Каталог файлов картинок ленты; по умолчанию `<дом Parley>/feed-images`. */
   imagesDir?: string;
+  /** Сроки карточек по вопросу терминала Codex; по умолчанию `TERMINAL_PROMPT_*`, тесты ставят короткие. */
+  terminalPrompt?: { findMs?: number; findStepMs?: number; watchMs?: number; confirmMs?: number };
 }
 
 export type FeedSnapshot = Result<'feed.snapshot'>;
 
+const MAIL_ID_PREFIX = 'mail:';
+
+/** Элементы ленты для клиента: `mail` только с признаком `feed-mail` (спека почты 3.5). */
+function mailFor(client: Client | undefined, items: readonly FeedItem[]): FeedItem[] {
+  return client?.features.has(FEED_MAIL_FEATURE) === true ? [...items] : items.filter((item) => item.kind !== 'mail');
+}
+
+/** Дельта без `mail`: из `upsert` уходят элементы, из `removed` — id `mail:…`; `revision` и прочее то же, пустая пачка остаётся. */
+export function withoutMail<D extends { upsert: FeedItem[]; removed: string[] }>(data: D): D {
+  return { ...data, upsert: data.upsert.filter((item) => item.kind !== 'mail'), removed: data.removed.filter((id) => !id.startsWith(MAIL_ID_PREFIX)) };
+}
+
 export interface FeedService {
+  kimiHasHistory(ref: SessionRef): boolean;
+  kimiOutput(ref: SessionRef, event: KimiOutput): void;
+  kimiRequests(ref: SessionRef, requests: readonly KimiRequest[]): void;
+  /**
+   * OpenCode: poll the session's messages now (called on its SSE events); joins the poll in flight. A session without a
+   * feed in memory, a server or a seeded feed does nothing.
+   */
+  opencodePoll(ref: SessionRef): Promise<void>;
+  /**
+   * OpenCode: the last poll before a planned server stop (the supervisor's `beforeStop`): reads the messages from `server`
+   * and stores them in the cache, with or without a feed in memory. Never throws.
+   */
+  opencodeLastPoll(ref: SessionRef, server: OpencodeAddress): Promise<void>;
+  /**
+   * Письма отданы хуку вместе с указателем (`inline-mail`): элемент `mail` встаёт в ленту после указателя-промпта.
+   * `text` — точный `additionalContext`, `at` — время ответа хоста (то же, что в журнале почты). Не письмо — ничего.
+   */
+  delivered(ref: SessionRef, text: string, at: string): void;
   /** Событие хука от приёмника: ответ — сразу или после решения человека. */
   onHook(request: HookRequest): void;
   /** Снимок ленты сессии или, с `agentId`, ленты субагента из его журнала. */
   /**
    * `scope: 'attention'` — в `items` только ждущие карточки и последний `text` после последнего `prompt`
    * (нет `prompt` — последний `text` вообще); с `agentId` игнорируется.
+   *
+   * `client` — кому снимок: элементы `mail` получает только клиент с `feed-mail` в `hello.features`. Без клиента (внутренние
+   * читатели: помощник, Telegram) `mail` не отдаётся, как и клиенту без признака.
    */
-  snapshot(ref: SessionRef, agentId?: string, scope?: 'attention'): Promise<FeedSnapshot>;
-  /** Current pending cards after snapshot preparation; reads reducer state before batched flush. */
+  snapshot(ref: SessionRef, agentId?: string, scope?: 'attention', client?: Client): Promise<FeedSnapshot>;
+  /**
+   * Current pending cards after snapshot preparation; reads reducer state before batched flush. `[]` — the feed is not
+   * in memory (a card exists only with a held hook, and such a feed is never evicted); `undefined` — the feed is in
+   * memory but not ready to answer.
+   */
   peekAttention(ref: SessionRef): readonly FeedCard[] | undefined;
   /** Ограниченная проекция существующей ленты, без подписки и дополнительного source polling. */
   progress(ref: SessionRef, client: Client): Promise<ProgressResult>;
@@ -177,7 +282,7 @@ export interface FeedService {
   dropClient(client: Client): void;
   /** Сколько подписок на ленты держит хост: сумма размеров множеств подписчиков по всем сессиям. */
   subscriberCount(): number;
-  decide(ref: SessionRef, cardId: string, decision: FeedDecision): Result<'feed.decide'>;
+  decide(ref: SessionRef, cardId: string, decision: FeedDecision): Result<'feed.decide'> | Promise<Result<'feed.decide'>>;
   /**
    * Режим разрешений, который хост сверил по подвалу терминала (`sessions.setMode`): ставит его в
    * ленту и шлёт дельту подписчикам, не дожидаясь события хука с `permission_mode`.
@@ -204,6 +309,23 @@ interface CodexAgentTrack {
   cursor: CodexCursor;
   meta: CodexAgentMeta;
   done: boolean;
+}
+
+/** Qwen Code feed: the bound transcript read by its tail (spec 2026-11-11, 3.5). Hooks feed state only, never items. */
+interface QwenFeed {
+  tail: ReturnType<typeof createQwenTail>;
+  cursor: QwenCursor;
+  /** Tails are read one at a time: the position is the tail's own. */
+  queue: Promise<void>;
+}
+
+/** OpenCode 2.x feed: messages read from the session's own server, or from Parley's cache when no server runs (spec 2026-11-12, 4.11). */
+interface OpencodeFeed {
+  cursor: OpencodeCursor;
+  /** Fingerprint of the last applied answer: an equal one changes nothing. */
+  digest: string | null;
+  /** Polls run one at a time. */
+  queue: Promise<void>;
 }
 
 interface CodexFeed {
@@ -262,6 +384,10 @@ interface ProgressClient {
 
 interface SessionFeed {
   ref: SessionRef;
+  /** Provider owning this source; process starts and same-provider resumes do not replace it. */
+  provider: string | undefined;
+  /** Native output may arrive before the works cache publishes a newly created session. */
+  awaitingRegistration: boolean;
   state: FeedState;
   revision: number;
   /** Байты JSON каждого элемента кольца и их сумма. */
@@ -276,6 +402,8 @@ interface SessionFeed {
   /** Сев из журнала уже был (удачный или нет) — второй раз не сеем. */
   seeded: boolean;
   seeding: Promise<void> | undefined;
+  /** Когда лентой пользовались в последний раз (`feedOf`, уход последнего подписчика); от него считается простой. */
+  usedAt: number;
   /** Provenance только для progress; существующая лента и подписчики не сбрасываются. */
   observedSource: SourceStamp | null;
   progressEpoch: ProgressEpoch | null;
@@ -284,10 +412,32 @@ interface SessionFeed {
   transcriptPath: string | null;
   /** Состояние ленты Codex: журнал сессии и журналы её агентов. */
   codex?: CodexFeed;
-  /** Опрос журналов Codex, пока есть подписчики. */
+  /** Qwen Code: state of the feed read from the bound transcript. */
+  qwen?: QwenFeed;
+  /** A native OSC wait belongs to this feed and process, including while the user is navigating between questions. */
+  qwenWait?: {
+    kind: QwenPromptKind;
+    pid: number;
+    watch: NodeJS.Timeout;
+    prompt: QwenPrompt | null;
+    answering: boolean;
+  };
+
+  /** OpenCode 2.x: state of the feed read from the session's server or cache. */
+  opencode?: OpencodeFeed;
+  /** Only the live ACP process may resolve these cards. */
+  kimiInteractions?: Map<string, KimiInteraction>;
+  /**
+   * Qwen Code: when its last turn ended (Stop hook or the journal going idle). The transcript has no end-of-turn record, so
+   * this closes the turn it leaves open; it survives reseeding and a reconnect.
+   */
+  qwenStoppedAt?: string | undefined;
+  /** Опрос журналов Codex и Qwen, пока есть подписчики. */
   codexPoll?: NodeJS.Timeout | undefined;
   /** Кто отвечает на одобрения Codex: `null` — пока неизвестно (у Claude всегда). */
   decisions: FeedDecisions | null;
+  /** `decisions` вернулся к `null` с прошлой дельты: дельта несёт `decisions: null` явно (без поля подписчик оставил бы прежнее). */
+  decisionsReset?: true;
   /** Таймер ожидания первого хука Codex после старта процесса. */
   codexGrace?: NodeJS.Timeout | undefined;
 }
@@ -335,19 +485,30 @@ function insideRoots(file: string, roots: readonly string[]): boolean {
   });
 }
 
-/** Последние `window` записей файла по порядку: кольцевой буфер, файл целиком в память не ложится. */
+/**
+ * Последние `window` записей файла по порядку: кольцевой буфер, файл целиком в память не ложится. С `maxBytes`
+ * меньше файла читаются только его последние байты (первая, неполная строка отбрасывается).
+ */
 export async function readRecordsTail(
   file: string,
   window: number = SEED_RECORD_WINDOW,
+  maxBytes: number = Number.POSITIVE_INFINITY,
 ): Promise<RawRecord[]> {
   const ring: RawRecord[] = [];
   let next = 0;
   let count = 0;
-  await forEachJsonlRecord(file, (record) => {
-    ring[next] = record;
-    next = (next + 1) % window;
-    count += 1;
-  });
+  const { size } = await stat(file);
+  const start = size > maxBytes ? size - maxBytes : 0;
+  await forEachJsonlRecord(
+    file,
+    (record) => {
+      ring[next] = record;
+      next = (next + 1) % window;
+      count += 1;
+    },
+    undefined,
+    { start },
+  );
   return count < window ? ring : [...ring.slice(next), ...ring.slice(0, next)];
 }
 
@@ -373,12 +534,14 @@ export function createFeedService(
   const maxBytes = options.maxBytes ?? FEED_MAX_BYTES;
   const batchMs = options.batchMs ?? FEED_BATCH_MS;
   const now = options.now ?? Date.now;
+  const opencodeFetch = options.opencodeFetch ?? fetch;
   const interruptGraceMs = options.interruptGraceMs ?? INTERRUPT_GRACE_MS;
   const codexHookGraceMs = options.codexHookGraceMs ?? CODEX_HOOK_GRACE_MS;
   const codexHooks =
     options.codexHooks ?? (async (): Promise<boolean> => codexHooksWanted((await loadConfig()).config));
   const roots = options.roots ?? (() => claudeProjectRoots());
-  const readRecords = options.readRecords ?? readRecordsTail;
+  const readRecords = options.readRecords ?? ((file: string, bytes?: number) => readRecordsTail(file, SEED_RECORD_WINDOW, bytes));
+  const seedTailBytes = options.seedTailBytes ?? SEED_TAIL_BYTES;
 
   const imageStore = createFeedImageStore({
     dir: options.imagesDir ?? path.join(parleyHome(), 'feed-images'),
@@ -397,7 +560,11 @@ export function createFeedService(
 
   const feeds = new Map<string, SessionFeed>();
   // Это lock underlying cold seed, не кэш ответа. Removal/timeout не освобождают незавершённый I/O.
-  const coldReads = new Map<string, Promise<void>>();
+  const coldReads = new Map<string, { provider: string; run: Promise<void> }>();
+  // Очередь посевов: не больше `FEED_SEED_CONCURRENCY` разом; впереди — посев для окна (`foreground`), затем по порядку.
+  type SeedWaiter = { key: string; foreground: boolean; start: () => void };
+  const seedWaiters: SeedWaiter[] = [];
+  let seedRunning = 0;
   const progressClients = new Map<Client, ProgressClient>();
   /** Граница запуска живёт до удаления сессии, даже если feed ещё нет или pending уже подтверждён. */
   const progressStarts = new Map<string, ProgressStart>();
@@ -409,6 +576,30 @@ export function createFeedService(
   const graceWaiting = new Map<string, SessionRef>();
   /** Таймеры присмотра за Esc из чата. */
   const interruptTimers = new Set<NodeJS.Timeout>();
+  const terminalFindMs = options.terminalPrompt?.findMs ?? TERMINAL_PROMPT_FIND_MS;
+  const terminalFindStepMs = options.terminalPrompt?.findStepMs ?? TERMINAL_PROMPT_FIND_STEP_MS;
+  const terminalWatchMs = options.terminalPrompt?.watchMs ?? TERMINAL_PROMPT_WATCH_MS;
+  const terminalConfirmMs = options.terminalPrompt?.confirmMs ?? TERMINAL_PROMPT_CONFIRM_MS;
+  /** Карточки по вопросу терминала: ключ сессии → запись о вопросе, пока карточка ждёт (хук Codex такой записи не имеет). */
+  interface TerminalPrompt {
+    cardId: string;
+    fingerprint: string;
+    /** `feed.decisions` до карточки: вернуть при закрытии. */
+    decisionsBefore: FeedDecisions | null;
+    watch: NodeJS.Timeout;
+  }
+  const terminalPrompts = new Map<string, TerminalPrompt>();
+  /** Идущий поиск вопроса на экране (опрос раз в `terminalFindStepMs`) и проверка после решения. */
+  const terminalFinders = new Map<string, NodeJS.Timeout>();
+  const terminalConfirms = new Map<string, NodeJS.Timeout>();
+  /** Сессии, которые сейчас ждут одобрения или ответа (`blocked` с нуждой `approval`/`question`): только им ищется вопрос на экране. */
+  const terminalEligible = new Set<string>();
+  /** Сессии, в которые хост сейчас печатает свой ответ по шагам: поиск и новые карточки по экрану ждут. */
+  const terminalBusy = new Set<string>();
+  /** Идущая печать своего ответа по сессии: `cancel` снимает её ожидания и не даёт продолжиться после выхода процесса. */
+  const terminalTyping = new Map<string, { cancel(): void }>();
+  /** Ожидание конца ожидания сессии после отказа с текстом: затем текст уходит сообщением человека. */
+  const terminalMessages = new Map<string, NodeJS.Timeout>();
   let stopped = false;
 
   const rawPending: PendingHooks = createPendingHooks({
@@ -465,14 +656,25 @@ export function createFeedService(
 
   const at = (): string => new Date(now()).toISOString();
 
-  function feedOf(ref: SessionRef): SessionFeed {
+  function feedOf(ref: SessionRef, nativeProvider?: string): SessionFeed {
     const key = refKey(ref);
     let feed = feeds.get(key);
+    let provider: string | undefined;
+    try { provider = sessionOf(ref).provider; } catch { /* A late hook can outlive the session. */ }
+    const owner = provider ?? nativeProvider ?? feed?.provider;
+    const previous = feed !== undefined && feed.provider !== owner ? feed : undefined;
+    if (previous !== undefined) {
+      invalidateProgress(previous);
+      dropFeed(key);
+      feed = undefined;
+    }
     if (feed === undefined) {
       feed = {
         ref: { ...ref },
+        provider: owner,
+        awaitingRegistration: provider === undefined,
         state: emptyFeedState(),
-        revision: 0,
+        revision: previous?.revision ?? 0,
         sizes: new Map(),
         bytes: 0,
         batch: { upsert: new Map(), removed: new Set() },
@@ -481,14 +683,29 @@ export function createFeedService(
         live: false,
         seeded: false,
         seeding: undefined,
+        usedAt: now(),
         observedSource: sourceOf(ref),
         progressEpoch: null,
-        sourceGeneration: progressStarts.has(key) ? 1 : 0,
+        sourceGeneration: previous?.sourceGeneration ?? (progressStarts.has(key) ? 1 : 0),
         transcriptPath: null,
         decisions: null,
       };
       feeds.set(key, feed);
+      if (previous !== undefined) {
+        // Remove before seeding: clients upsert in place, then remove. One combined delta would delete colliding ids
+        // (or leave their previous positions), so the replacement transcript needs its own following revision.
+        for (const id of previous.batch.removed) feed.batch.removed.add(id);
+        for (const item of previous.state.items) feed.batch.removed.add(item.id);
+        feed.modeChanged = previous.state.permissionMode !== null;
+        flush(feed);
+      }
     }
+    if (provider !== undefined) feed.awaitingRegistration = false;
+    if (!stopped && (subscribers.get(key)?.size ?? 0) > 0 && provider !== undefined &&
+        byFamily(provider, { claude: false, codex: true, qwen: true, opencode: true, neutral: false })) startCodexPoll(feed);
+    feed.usedAt = now();
+    // Whichever caller first observes takeover must publish the new history, even ahead of works.onChange.
+    if (previous !== undefined) void seedAside(ref);
     return feed;
   }
 
@@ -518,6 +735,24 @@ export function createFeedService(
     feed.state = { ...feed.state, items: items.slice(drop) };
     // Ждущая карточка ушла из ленты — решить её окну уже нечем: хуку `{}`, диалог остаётся в терминале.
     if (evicted.length > 0) pending.settle(feed.ref, evicted);
+    for (const id of evicted) {
+      const interaction = feed.kimiInteractions?.get(id);
+      if (interaction === undefined) continue;
+      // Responding publishes a new pending set. Wait until this feed update has finished.
+      queueMicrotask(() => {
+        if (!feedCurrent(feed) || feed.kimiInteractions?.get(id) !== interaction) return;
+        const { request } = interaction;
+        const response: KimiResponse = request.kind === 'permission'
+          ? { kind: 'permission', optionId: null }
+          : { kind: 'elicitation', action: 'cancel' };
+        try {
+          options.kimiRespond?.(feed.ref, request.id, response);
+        } catch {
+          // A transport that has already gone away has nothing left to cancel.
+          feed.kimiInteractions.delete(id);
+        }
+      });
+    }
     pruneProgress(feed);
   }
 
@@ -571,6 +806,8 @@ export function createFeedService(
     if (upsert.size === 0 && removed.size === 0 && !feed.modeChanged) return;
     feed.batch = { upsert: new Map(), removed: new Set() };
     feed.modeChanged = false;
+    const decisionsReset = feed.decisionsReset === true;
+    delete feed.decisionsReset;
     feed.revision += 1;
     // Журнал задержек (спека диагностики, A4): запись нужна и без открытого Chat, поэтому до проверки подписчиков.
     // Эхо промпта человека — не ответ агента: пачка только из промптов метку не снимает.
@@ -592,14 +829,54 @@ export function createFeedService(
       upsert: Array.from(upsert.values()),
       removed: Array.from(removed),
       mode: feed.state.permissionMode,
-      ...(feed.decisions === null ? {} : { decisions: feed.decisions }),
+      ...(feed.decisions === null ? (decisionsReset ? { decisions: null } : {}) : { decisions: feed.decisions }),
     };
+    // Клиенту без `feed-mail` — то же событие без `mail` в `upsert` и `mail:` в `removed`; `revision` тот же, пустая пачка идёт.
+    const plain = withoutMail(data);
     for (const client of Array.from(clients)) {
-      // В отличие от `pty.output`, подписку по буферу не снимаем: он обычно полон собственным большим ответом
-      // окну (снимок ленты на мегабайты), а дельты мелкие и идут пачками раз в 50 мс. Окно об отписке не
-      // узнало бы и ждало дельт вечно; ушедшего клиента снимает `dropClient`.
-      client.send({ event: 'feed.changed', data });
+      client.send({ event: 'feed.changed', data: client.features.has(FEED_MAIL_FEATURE) ? data : plain });
+      // Подписку по буферу снимаем только у окна, которое умеет переподписаться: без `feed.resync` оно об отписке
+      // не узнало бы и ждало дельт вечно (буфер обычно полон собственным большим ответом, снимком ленты на
+      // мегабайты, а дельты мелкие и идут пачками раз в 50 мс), поэтому старому окну и мосту телефона остаётся
+      // только потолок соединения. 32 МиБ — вдвое ниже потолка: окно успевает переподписаться до закрытия сокета.
+      // Зациклиться нельзя: `feed.resync` стоит в конце очереди записи, окно прочтёт его, лишь вычитав весь
+      // накопленный буфер (подписку и снимок оно шлёт уже после этого), а ответ-снимок идёт в тот же буфер — следующая
+      // отписка возможна, лишь когда окно снова накопит больше 32 МиБ.
+      const queuedBytes = client.writableLength();
+      if (client.features.has(FEED_RESYNC_FEATURE) && queuedBytes > FEED_CLIENT_DROP_BYTES) {
+        const refs = removeSubscriptions(client);
+        for (const ref of refs) client.send({ event: 'feed.resync', data: { ref } });
+        log.info('лента: клиент отписан по буферу', {
+          op: 'feed.clientDropped',
+          client: client.name,
+          queuedBytes,
+          feeds: refs.length,
+        });
+      }
     }
+  }
+
+  /** Подписчик ленты ушёл последним: опрос Codex стоит, лента простаивает с этого момента и, возможно, уходит из памяти. */
+  function subscribersGone(key: string): void {
+    subscribers.delete(key);
+    const feed = feeds.get(key);
+    if (feed === undefined) return;
+    stopCodexPoll(feed);
+    feed.usedAt = now();
+    evictIfIdle(feed);
+  }
+
+  /** Снимает клиента со всех лент; возвращает ссылки на сессии, на которые он был подписан. */
+  function removeSubscriptions(client: Client): SessionRef[] {
+    const refs: SessionRef[] = [];
+    // Копия: `evictIfIdle` внутри `subscribersGone` может выгрузить ленту, но подписчиков других лент не трогает.
+    for (const [key, clients] of Array.from(subscribers)) {
+      if (!clients.delete(client)) continue;
+      const [projectPath = '', workId = '', sessionId = ''] = key.split('\u0000');
+      refs.push({ projectPath, workId, sessionId });
+      if (clients.size === 0) subscribersGone(key);
+    }
+    return refs;
   }
 
   /** Снимает ждущие карточки сессии без решения: в ленте — `outcome`, хукам — `{}`. */
@@ -651,9 +928,277 @@ export function createFeedService(
   function setDecisions(feed: SessionFeed, value: FeedDecisions): void {
     if (feed.decisions === value) return;
     feed.decisions = value;
+    delete feed.decisionsReset;
     // Дельта уходит и без элементов: окно должно узнать, кто отвечает на одобрения.
     feed.modeChanged = true;
     schedule(feed);
+  }
+
+  function restoreDecisions(feed: SessionFeed, before: FeedDecisions | null): void {
+    if (feed.decisions === before) return;
+    if (before !== null) {
+      setDecisions(feed, before);
+      return;
+    }
+    feed.decisions = null;
+    feed.decisionsReset = true;
+    feed.modeChanged = true;
+    schedule(feed);
+  }
+
+  function isCodexSession(ref: SessionRef): boolean {
+    try {
+      return byFamily(sessionOf(ref).provider, { claude: false, codex: true, qwen: false, opencode: false, neutral: false });
+    } catch {
+      return false;
+    }
+  }
+
+  /** Вопрос на экране сессии; `null` — экрана нет или вопрос не узнан. Строки экрана дальше этой функции не идут. */
+  function readTerminalPrompt(ref: SessionRef): CodexPrompt | null {
+    const lines = deps.pty.screenText(ref);
+    return lines === undefined ? null : recogniseCodexPrompt(lines);
+  }
+
+  function clearTerminalTimer(timers: Map<string, NodeJS.Timeout>, key: string, kind: 'interval' | 'timeout'): void {
+    const timer = timers.get(key);
+    if (timer === undefined) return;
+    if (kind === 'interval') clearInterval(timer);
+    else clearTimeout(timer);
+    timers.delete(key);
+  }
+
+  /** Снимает запись о вопросе терминала; `outcome` — во что перевести ждущую карточку (`null` — карточку не трогать). */
+  function closeTerminalPrompt(ref: SessionRef, outcome: 'elsewhere' | 'stale' | null): void {
+    const key = refKey(ref);
+    const record = terminalPrompts.get(key);
+    if (record === undefined) return;
+    clearInterval(record.watch);
+    terminalPrompts.delete(key);
+    const feed = feeds.get(key);
+    if (feed === undefined) return;
+    restoreDecisions(feed, record.decisionsBefore);
+    if (outcome !== null) settle(ref, outcome, [record.cardId]);
+  }
+
+  /** Всё, что хост держит по вопросам терминала сессии: поиск, проверку после решения и запись (карточка не меняется). */
+  function dropTerminalState(key: string): void {
+    clearTerminalTimer(terminalFinders, key, 'interval');
+    clearTerminalTimer(terminalConfirms, key, 'timeout');
+    clearTerminalTimer(terminalMessages, key, 'interval');
+    terminalTyping.get(key)?.cancel();
+    terminalTyping.delete(key);
+    terminalBusy.delete(key);
+    const record = terminalPrompts.get(key);
+    if (record === undefined) return;
+    clearInterval(record.watch);
+    terminalPrompts.delete(key);
+    const feed = feeds.get(key);
+    if (feed !== undefined) restoreDecisions(feed, record.decisionsBefore);
+  }
+
+  /** Заводит карточку по узнанному вопросу и берёт её под присмотр: экран сверяется раз в `terminalWatchMs`. */
+  function openTerminalPrompt(feed: SessionFeed, prompt: CodexPrompt): void {
+    const key = refKey(feed.ref);
+    if (!terminalEligible.has(key) || terminalBusy.has(key) || terminalPrompts.has(key) || feed.state.items.some(isPendingCard)) return;
+    const update = applyCodexTerminalPrompt(feed.state, prompt, at());
+    const card = update.changes.find((item): item is FeedCard => isPendingCard(item));
+    if (card === undefined) return;
+    const decisionsBefore = feed.decisions;
+    commit(feed, update);
+    setDecisions(feed, 'window');
+    const watch = setInterval(() => {
+      const record = terminalPrompts.get(key);
+      if (record === undefined) return;
+      // Карточку унёс сев ленты из журнала (он заменяет состояние): запись снята, вопрос на экране ищется заново.
+      const own = feed.state.items.find((item) => isCard(item) && item.cardId === record.cardId);
+      if (own === undefined || !isPendingCard(own)) {
+        closeTerminalPrompt(feed.ref, null);
+        findTerminalPrompt(feed.ref);
+        return;
+      }
+      const seen = readTerminalPrompt(feed.ref);
+      // Ответили в терминале, вопрос сменился или ушёл, сессия перестала ждать: карточка отвечена в другом месте.
+      if (!terminalEligible.has(key) || seen === null || seen.fingerprint !== record.fingerprint) {
+        closeTerminalPrompt(feed.ref, 'elsewhere');
+      }
+    }, terminalWatchMs);
+    watch.unref();
+    terminalPrompts.set(key, { cardId: card.cardId, fingerprint: prompt.fingerprint, decisionsBefore, watch });
+  }
+
+  /**
+   * Сессия Codex ждёт одобрения или ответа: ищет вопрос на экране (каждые `terminalFindStepMs` до `terminalFindMs`) и,
+   * узнав, заводит карточку. Нет ждущей карточки в ленте, нет записи о вопросе и второго поиска — иначе ничего.
+   */
+  function findTerminalPrompt(ref: SessionRef): void {
+    const key = refKey(ref);
+    if (stopped || !terminalEligible.has(key) || terminalBusy.has(key) || terminalPrompts.has(key) || terminalFinders.has(key)) return;
+    const feed = feedOf(ref);
+    if (feed.state.items.some(isPendingCard)) return;
+    const startedAt = now();
+    const finish = (): void => clearTerminalTimer(terminalFinders, key, 'interval');
+    const step = (): void => {
+      // Сессия перестала ждать до того, как вопрос узнали: поиск снят, карточку по экрану не заводим.
+      if (stopped || !terminalEligible.has(key)) return finish();
+      const found = readTerminalPrompt(ref);
+      if (found !== null) {
+        finish();
+        openTerminalPrompt(feed, found);
+        return;
+      }
+      if (now() - startedAt >= terminalFindMs) finish();
+    };
+    const timer = setInterval(step, terminalFindStepMs);
+    timer.unref();
+    terminalFinders.set(key, timer);
+    step();
+  }
+
+  /** После решения человека: через `terminalConfirmMs` вопрос должен уйти с экрана; не ушёл — запись в журнал, поиск заново. */
+  function confirmTerminalAnswer(ref: SessionRef, before: CodexPrompt): void {
+    const key = refKey(ref);
+    clearTerminalTimer(terminalConfirms, key, 'timeout');
+    const timer = setTimeout(() => {
+      terminalConfirms.delete(key);
+      if (stopped || !terminalEligible.has(key)) return;
+      const seen = readTerminalPrompt(ref);
+      // Строки экрана в журнал не идут: только вид вопроса и исход.
+      if (seen !== null && seen.fingerprint === before.fingerprint) {
+        log.info('вопрос терминала не снят ответом', { op: 'feed.terminalPrompt', outcome: 'not-applied', kind: before.kind, sessionId: ref.sessionId });
+      }
+      // Следующий вопрос из нескольких или тот же, если клавиша не сработала: карточка по новому поиску.
+      findTerminalPrompt(ref);
+    }, terminalConfirmMs);
+    timer.unref();
+    terminalConfirms.set(key, timer);
+  }
+
+  /** Свой ответ на вопрос: текст ответа, которого нет среди вариантов карточки; `null` — решение другого вида или пустое. */
+  function ownAnswerOf(prompt: CodexPrompt, decision: FeedDecision): string | null {
+    if (prompt.kind !== 'question' || decision.kind !== 'question') return null;
+    const entries = Object.entries(decision.answers);
+    const answer = decision.answers[prompt.question] ?? (entries.length === 1 ? entries[0]![1] : undefined);
+    return answer !== undefined && cleanAnswer(answer) !== '' ? answer : null;
+  }
+
+  /** Печатает свой ответ по шагам (`typeOwnAnswer`); исход не `done` — запись в журнал хоста без текста. */
+  function startOwnAnswer(ref: SessionRef, prompt: CodexPrompt & { kind: 'question' }, text: string): void {
+    const key = refKey(ref);
+    terminalBusy.add(key);
+    clearTerminalTimer(terminalFinders, key, 'interval');
+    // Ожидания шагов записаны: выход процесса, выгрузка ленты и `stop()` снимают их и печать не продолжается.
+    let cancelled = false;
+    const sleepers = new Set<() => void>();
+    const operation = {
+      cancel(): void {
+        cancelled = true;
+        for (const wake of Array.from(sleepers)) wake();
+      },
+    };
+    terminalTyping.set(key, operation);
+    const sleep = (ms: number): Promise<void> =>
+      new Promise((resolve) => {
+        const wake = (): void => {
+          clearTimeout(timer);
+          sleepers.delete(wake);
+          resolve();
+        };
+        const timer = setTimeout(wake, ms);
+        timer.unref();
+        sleepers.add(wake);
+      });
+    typeOwnAnswer({ pty: deps.pty, sleep, cancelled: () => cancelled || stopped }, ref, prompt, text)
+      .then((outcome) => {
+        // Печать отменена (процесс вышел, лента выгружена, хост остановлен): ни записи в журнал, ни нового поиска.
+        if (cancelled) return;
+        if (outcome !== 'done') {
+          log.info('свой ответ на вопрос терминала не доведён', { op: 'feed.terminalPrompt', outcome: `own-answer-${outcome}`, sessionId: ref.sessionId });
+          return;
+        }
+        // Следующий вопрос из нескольких: проверка и новый поиск, как после ответа клавишей.
+        confirmTerminalAnswer(ref, prompt);
+      })
+      .catch((error: unknown) => {
+        log.warn('свой ответ на вопрос терминала: ошибка', { op: 'feed.terminalPrompt', sessionId: ref.sessionId, error: String(error) });
+      })
+      .finally(() => {
+        if (terminalTyping.get(key) !== operation) return;
+        terminalTyping.delete(key);
+        terminalBusy.delete(key);
+      });
+  }
+
+  /**
+   * Отказ с текстом: клавиша `3` прервала ход Codex; когда сессия перестала ждать (до `TERMINAL_MESSAGE_WAIT_MS`), текст
+   * уходит обычным сообщением человека тем же отправителем, что у `pty.send`. Не дождались — текст не печатается, в журнал
+   * идёт исход без текста.
+   */
+  function sendDenialMessage(ref: SessionRef, message: string): void {
+    const key = refKey(ref);
+    clearTerminalTimer(terminalMessages, key, 'interval');
+    const outcome = (name: string, extra: Record<string, unknown> = {}): void => {
+      log.info('отказ с текстом по вопросу терминала', { op: 'feed.terminalPrompt', outcome: name, sessionId: ref.sessionId, ...extra });
+    };
+    const send = deps.send;
+    if (send === undefined) {
+      outcome('denial-message-unavailable');
+      return;
+    }
+    const startedAt = now();
+    const timer = setInterval(() => {
+      if (stopped) return clearTerminalTimer(terminalMessages, key, 'interval');
+      // Готов, когда сессия вовсе перестала быть `blocked`: другая нужда при `blocked` (startup, лимит) — ещё не готов.
+      const ready = lastActivity.get(key) !== 'blocked';
+      if (!ready && now() - startedAt < TERMINAL_MESSAGE_WAIT_MS) return;
+      clearTerminalTimer(terminalMessages, key, 'interval');
+      if (!ready) return outcome('denial-message-timeout');
+      send({ ref, text: message, submit: true }).then(
+        (result) => outcome(result.submitted ? 'denial-message-sent' : 'denial-message-not-sent', result.submitted ? {} : { reason: result.reason }),
+        (error: unknown) => outcome('denial-message-failed', { error: String(error) }),
+      );
+    }, TERMINAL_MESSAGE_POLL_MS);
+    timer.unref();
+    terminalMessages.set(key, timer);
+  }
+
+  /** Решение по карточке терминала: клавиша уходит, только если экран прямо сейчас даёт тот же отпечаток. */
+  function decideTerminalPrompt(feed: SessionFeed, record: TerminalPrompt, decision: FeedDecision, current: FeedCardState): Result<'feed.decide'> {
+    const seen = readTerminalPrompt(feed.ref);
+    if (seen === null || seen.fingerprint !== record.fingerprint) {
+      closeTerminalPrompt(feed.ref, 'elsewhere');
+      return { applied: false, state: 'elsewhere' };
+    }
+    const keyToPress = codexPromptKey(seen, decision);
+    const own = keyToPress === null ? ownAnswerOf(seen, decision) : null;
+    // Ни клавиши, ни своего ответа: решение этим вопросом не выражается.
+    if (keyToPress === null && own === null) return { applied: false, state: current };
+    const result = applyDecision(feed.state, record.cardId, decision, at());
+    if (!result.applied) return { applied: false, state: current };
+    if (keyToPress === null) {
+      // Свой ответ: карточка закрывается, текст печатается по шагам со сверкой экрана; ответ окну не ждёт конца печати.
+      const next = result.changes.find((item): item is FeedCard => isCard(item) && item.cardId === record.cardId);
+      commit(feed, result);
+      closeTerminalPrompt(feed.ref, null);
+      if (seen.kind === 'question') startOwnAnswer(feed.ref, seen, own as string);
+      return { applied: true, state: next?.state ?? current };
+    }
+    // Между сверкой экрана и записью нет `await`: клавиша уходит в тот вопрос, который только что видели.
+    try {
+      deps.pty.write(feed.ref, keyToPress);
+    } catch {
+      closeTerminalPrompt(feed.ref, 'stale');
+      return { applied: false, state: 'stale' };
+    }
+    const next = result.changes.find((item): item is FeedCard => isCard(item) && item.cardId === record.cardId);
+    commit(feed, result);
+    closeTerminalPrompt(feed.ref, null);
+    confirmTerminalAnswer(feed.ref, seen);
+    // Отказ с текстом: `3` прервал ход, текст пойдёт сообщением, когда Codex будет готов.
+    if (decision.kind === 'permission' && decision.behavior === 'deny' && decision.message !== undefined && decision.message.trim() !== '') {
+      sendDenialMessage(feed.ref, decision.message.trim());
+    }
+    return { applied: true, state: next?.state ?? current };
   }
 
   function clearCodexGrace(feed: SessionFeed): void {
@@ -669,6 +1214,8 @@ export function createFeedService(
     const { ref, body } = request;
     const feed = feedOf(ref);
     clearCodexGrace(feed);
+    // Карточка хука и карточка по экрану вместе не живут: ждущая карточка экрана уступает хуку.
+    if (body['hook_event_name'] === 'PermissionRequest') closeTerminalPrompt(ref, 'elsewhere');
     setDecisions(feed, 'window');
     const update = applyCodexHookEvent(feed.state, stashHookBody(body, saveImage), at());
     commit(feed, update);
@@ -709,8 +1256,23 @@ export function createFeedService(
     } catch {
       provider = undefined;
     }
-    if (provider === 'codex') {
+    const hookFamily = provider === undefined ? 'claude' : byFamily(provider, { claude: 'claude' as const, codex: 'codex' as const, qwen: null, opencode: null, neutral: null });
+    if (hookFamily === 'codex') {
       onCodexHook(request);
+      return;
+    }
+    // Qwen Code, null or unknown family: no Claude hook handling, and the hook is answered at once — Qwen waits for the
+    // HTTP answer (PermissionRequest and PreToolUse up to an hour) before it goes on. A Qwen hook creates no feed items
+    // and no permission cards (spec 2026-11-11, 3.5, Feed ownership); it only prompts the transcript to be read now.
+    if (hookFamily === null) {
+      request.respond(EMPTY_HOOK_RESPONSE);
+      if (provider !== undefined && byFamily(provider, { claude: false, codex: false, qwen: true, opencode: false, neutral: false })) {
+        if (body['hook_event_name'] === 'Stop' || body['hook_event_name'] === 'StopFailure') {
+          const stamp = textOf(body['timestamp']);
+          feedOf(ref).qwenStoppedAt = stamp !== null && !Number.isNaN(Date.parse(stamp)) ? new Date(stamp).toISOString() : at();
+        }
+        void seedAside(ref);
+      }
       return;
     }
     const feed = feedOf(ref);
@@ -760,30 +1322,74 @@ export function createFeedService(
    * известен индексу (он строится после старта хоста, не дожидаясь окна) — сев не состоялся, и его
    * повторит следующий снимок или изменение журналов (`seedAside`).
    */
-  function seed(feed: SessionFeed, provider: string): Promise<void> {
+  function seed(feed: SessionFeed, provider: string, foreground = false): Promise<void> {
     if (stopped) return Promise.resolve();
     const key = refKey(feed.ref);
+    if (foreground) promoteSeed(key);
     const existing = coldReads.get(key);
-    if (existing !== undefined) return existing;
-    const run = provider === 'codex' ? seedCodex(feed) : seedClaude(feed, provider);
+    if (existing !== undefined) return existing.run.then(() => {
+      // The old source still owns the cold-read slot, but may no longer own this SessionRef.
+      if (existing.provider !== provider && feedCurrent(feed) && !feed.live && !feed.seeded) return seed(feed, provider, foreground);
+    });
+    const run = byFamily(provider, {
+      claude: () => seedClaude(feed, provider, foreground),
+      codex: () => seedCodex(feed, foreground),
+      qwen: () => seedQwen(feed, foreground),
+      opencode: () => seedOpencode(feed, foreground),
+      neutral: () => Promise.resolve(),
+    })();
     if (feed.seeding === undefined) return run;
     const held = run.finally(() => {
-      if (coldReads.get(key) === held) coldReads.delete(key);
+      if (coldReads.get(key)?.run === held) coldReads.delete(key);
     });
-    coldReads.set(key, held);
+    coldReads.set(key, { provider, run: held });
     return held;
   }
 
-  function seedClaude(feed: SessionFeed, provider: string): Promise<void> {
+  /**
+   * Место в очереди посевов; ответ — функция освобождения (можно звать повторно). Освободившееся место берёт первый
+   * ждущий с `foreground`, иначе первый по порядку; после `stop()` места не ждут.
+   */
+  function seedSlot(key: string, foreground: boolean): Promise<() => void> {
+    let released = false;
+    const release = (): void => {
+      if (released) return;
+      released = true;
+      seedRunning -= 1;
+      while (seedRunning < FEED_SEED_CONCURRENCY && seedWaiters.length > 0) {
+        const index = seedWaiters.findIndex((waiter) => waiter.foreground);
+        seedWaiters.splice(index === -1 ? 0 : index, 1)[0]?.start();
+      }
+    };
+    return new Promise((resolve) => {
+      const start = (): void => {
+        seedRunning += 1;
+        resolve(release);
+      };
+      if (stopped || (seedRunning < FEED_SEED_CONCURRENCY && seedWaiters.length === 0)) start();
+      else seedWaiters.push({ key, foreground, start });
+    });
+  }
+
+  /** Снимок для окна поднимает уже ждущий в очереди посев той же ленты. */
+  function promoteSeed(key: string): void {
+    for (const waiter of seedWaiters) if (waiter.key === key) waiter.foreground = true;
+  }
+
+  function seedClaude(feed: SessionFeed, provider: string, foreground: boolean): Promise<void> {
     if (feed.seeding !== undefined) return feed.seeding;
     const file = isClaudeCode(provider) ? deps.activity.logFile(feed.ref) : null;
     if (file === null) return Promise.resolve();
     const proof = captureProgress(feed);
+    const key = refKey(feed.ref);
     feed.seeding = (async () => {
+      const release = await seedSlot(key, foreground);
       try {
-        const records = await readTranscript(file);
-        if (records === null || feed.live || !feedCurrent(feed)) return;
-        const seeded = closeBrokenTurn(feedFromTranscript(stashClaude(records), { limit: maxItems }));
+        if (feed.live || !feedCurrent(feed)) return;
+        const journal = await (options.readMailJournal ?? readMailJournal)(feed.ref);
+        const grown = await readFeedTail(file, 'root', journal);
+        if (grown === null || feed.live || !feedCurrent(feed)) return;
+        const seeded = closeBrokenTurn(grown);
         // Режим, который хост уже сверил по подвалу (`noteMode`), свежее записи журнала.
         const state = { ...seeded, permissionMode: feed.state.permissionMode ?? seeded.permissionMode };
         feed.state = state;
@@ -802,6 +1408,7 @@ export function createFeedService(
           error: String(error),
         });
       } finally {
+        release();
         feed.seeded = true;
         feed.seeding = undefined;
       }
@@ -810,7 +1417,7 @@ export function createFeedService(
   }
 
   /** Сев ленты Codex из журнала сессии; потом — журналы её агентов. Хвост остаётся для опроса. */
-  function seedCodex(feed: SessionFeed): Promise<void> {
+  function seedCodex(feed: SessionFeed, foreground = false): Promise<void> {
     if (feed.seeding !== undefined) return feed.seeding;
     const file = deps.activity.logFile(feed.ref);
     if (file === null) return Promise.resolve();
@@ -820,7 +1427,9 @@ export function createFeedService(
     // Привязка сменилась, пока журнал читался: прочитанное принадлежит прежнему журналу, сев повторяется.
     let stale = false;
     const run = (async () => {
+      const release = await seedSlot(refKey(feed.ref), foreground);
       try {
+        if (!feedCurrent(feed)) return;
         const tail = createRolloutTail(file);
         const records = await tail.read();
         if (!feedCurrent(feed)) return;
@@ -831,8 +1440,15 @@ export function createFeedService(
         const seeded = feedFromCodexRollout(stashCodex(records), { limit: maxItems });
         // Ход, оборванный в журнале, закрывается только без живого процесса: у живого он ещё идёт
         // (рестарт хоста — процесс умер с ним).
-        const state =
+        const replayed =
           deps.pty.get(feed.ref) === undefined ? closeBrokenTurn(seeded.state) : seeded.state;
+        // Журнал не содержит карточек по экрану: сохраняем их вместе с id, уже показанными в Chat.
+        const terminalCards = feed.state.items.filter((item) => isCard(item) && 'via' in item && item.via === 'terminal');
+        const state = terminalCards.length === 0 ? replayed : {
+          ...replayed,
+          items: [...replayed.items, ...terminalCards],
+          seq: Math.max(replayed.seq, feed.state.seq),
+        };
         feed.state = state;
         feed.codex = {
           tail, cursor: seeded.cursor, agents: new Map(), queue: Promise.resolve(),
@@ -861,13 +1477,112 @@ export function createFeedService(
           error: String(error),
         });
       } finally {
+        release();
         feed.seeded = true;
         feed.seeding = undefined;
       }
       if (feedCurrent(feed)) await serialCodex(feed, () => syncCodexAgents(feed));
     })();
-    feed.seeding = run.then(() => (stale && feedCurrent(feed) ? seedCodex(feed) : undefined));
+    feed.seeding = run.then(() => (stale && feedCurrent(feed) ? seedCodex(feed, foreground) : undefined));
     return feed.seeding;
+  }
+
+  /**
+   * Qwen Code seed: the transcript the log index trusts for the session (its `sessionId` and `cwd` match the binding),
+   * parsed by the A4 parser. The tail stays for polling. A transcript the index does not know yet seeds nothing; the next
+   * poll or hook tries again. The Chat view of Qwen has no permission cards: the terminal answers approvals.
+   */
+  function seedQwen(feed: SessionFeed, foreground = false): Promise<void> {
+    if (feed.seeding !== undefined) return feed.seeding;
+    const file = deps.activity.logFile(feed.ref);
+    if (file === null) return Promise.resolve();
+    feed.seeding = (async () => {
+      const release = await seedSlot(refKey(feed.ref), foreground);
+      try {
+        if (!feedCurrent(feed)) return;
+        const tail = createQwenTail(file);
+        const records = await tail.read();
+        if (!feedCurrent(feed)) return;
+        const seeded = feedFromQwenTranscript(records, { limit: maxItems });
+        // A turn left open by the transcript is closed only without a live process (a host restart killed it with the host).
+        const state = deps.pty.get(feed.ref) === undefined ? closeBrokenTurn(seeded.state) : closedByQwenStop(feed, seeded.state);
+        // A transcript seed can finish after the native dialog has opened or been answered.
+        const cards = feed.state.items.filter(item => isCard(item) && item.id.startsWith('qwen-dialog:'));
+        feed.state = cards.length ? { ...state, items: [...state.items, ...cards].sort((a, b) => a.at.localeCompare(b.at)) } : state;
+        feed.qwen = { tail, cursor: seeded.cursor, queue: Promise.resolve() };
+        feed.sizes = new Map();
+        feed.bytes = 0;
+        for (const item of feed.state.items) {
+          const size = itemBytes(item);
+          feed.sizes.set(item.id, size);
+          feed.bytes += size;
+        }
+        trim(feed, false);
+        setDecisions(feed, cards.some(isPendingCard) ? 'window' : 'terminal');
+        if (seeded.cursor.skipped > 0) {
+          log.info('qwen feed: unknown transcript records skipped', { sessionId: feed.ref.sessionId, skipped: seeded.cursor.skipped });
+        }
+      } catch (error) {
+        log.warn('qwen feed: transcript not read', { sessionId: feed.ref.sessionId, error: String(error) });
+      } finally {
+        release();
+        feed.seeded = true;
+        feed.seeding = undefined;
+      }
+    })();
+    return feed.seeding;
+  }
+
+  /** The session is bound to another transcript than the one the feed was seeded from: seed again. */
+  async function reseedQwenIfRebound(feed: SessionFeed): Promise<void> {
+    const qwen = feed.qwen;
+    if (qwen === undefined || feed.seeding !== undefined) return;
+    const file = deps.activity.logFile(feed.ref);
+    if (file === null || file === qwen.tail.file) return;
+    feed.state = emptyFeedState();
+    feed.sizes = new Map();
+    feed.bytes = 0;
+    delete feed.qwen;
+    for (const clients of [subscribers.get(refKey(feed.ref))]) {
+      if (clients !== undefined && clients.size > 0) feed.modeChanged = true;
+    }
+    await seedQwen(feed);
+  }
+
+  /** The turn the transcript leaves open is closed by the recorded end of the turn, unless a newer prompt followed it. */
+  function closedByQwenStop(feed: SessionFeed, state: FeedState): FeedState {
+    const stoppedAt = feed.qwenStoppedAt;
+    if (stoppedAt === undefined || !turnActive(state.items)) return state;
+    const prompt = state.items.findLast((item) => item.kind === 'prompt');
+    if (prompt !== undefined && prompt.at > stoppedAt) return state;
+    return closeFeedTurn(state, stoppedAt).state;
+  }
+
+  function closeQwenTurn(feed: SessionFeed): void {
+    const closed = closedByQwenStop(feed, feed.state);
+    if (closed !== feed.state) commit(feed, closeFeedTurn(feed.state, feed.qwenStoppedAt ?? at()));
+  }
+
+  /** New transcript records of a Qwen session go into the feed. */
+  function pollQwen(feed: SessionFeed): Promise<void> {
+    const qwen = feed.qwen;
+    if (qwen === undefined) return Promise.resolve();
+    const run = qwen.queue.then(async () => {
+      if (!feedCurrent(feed) || feed.qwen !== qwen) return;
+      const records = await qwen.tail.read();
+      // The feed was seeded again from another transcript while the tail read: these records are foreign.
+      if (!feedCurrent(feed) || feed.qwen !== qwen) return;
+      if (records.length === 0) {
+        closeQwenTurn(feed);
+        return;
+      }
+      const { update, cursor } = applyQwenRecords(feed.state, records, qwen.cursor);
+      qwen.cursor = cursor;
+      commit(feed, update);
+      closeQwenTurn(feed);
+    });
+    qwen.queue = run.catch(() => {});
+    return run;
   }
 
   /**
@@ -982,6 +1697,152 @@ export function createFeedService(
     }
   }
 
+  /** The OpenCode session id Parley gave the session (`ses_<uuid>`); `null` before the first launch. */
+  function opencodeSessionId(ref: SessionRef): string | null {
+    const id = sessionOf(ref).providerSessionId;
+    return typeof id === 'string' && id !== '' ? id : null;
+  }
+
+  /**
+   * OpenCode seed: a running server first (its messages are the truth and refresh the cache), else Parley's cache, which
+   * keeps the Chat of a closed session or of a restarted host. With neither the feed is empty and the next poll fills it.
+   */
+  function seedOpencode(feed: SessionFeed, foreground = false): Promise<void> {
+    if (feed.seeding !== undefined) return feed.seeding;
+    feed.seeding = (async () => {
+      const release = await seedSlot(refKey(feed.ref), foreground);
+      try {
+        if (!feedCurrent(feed)) return;
+        const id = opencodeSessionId(feed.ref);
+        const address = options.opencodeServer?.(feed.ref);
+        const live = address !== undefined && id !== null ? await fetchOpencodeMessages(address, id, opencodeFetch) : null;
+        const messages = live?.messages ?? (await readOpencodeCache(feed.ref)) ?? [];
+        if (!feedCurrent(feed)) return;
+        const seeded = feedFromOpencodeMessages(messages, { limit: maxItems });
+        // Without a server nothing of the last turn is running any more: an open turn is a broken one.
+        const state = live === null ? closeBrokenTurn(seeded.state) : seeded.state;
+        feed.state = state;
+        feed.opencode = { cursor: seeded.cursor, digest: live?.digest ?? null, queue: Promise.resolve() };
+        feed.sizes = new Map();
+        feed.bytes = 0;
+        for (const item of state.items) {
+          const size = itemBytes(item);
+          feed.sizes.set(item.id, size);
+          feed.bytes += size;
+        }
+        trim(feed, false);
+        setDecisions(feed, 'terminal');
+        if (live !== null) await writeOpencodeCache(feed.ref, live.messages, now()).catch(cacheFailed(feed.ref));
+        if (seeded.cursor.skipped > 0) log.info('opencode feed: unknown messages skipped', { sessionId: feed.ref.sessionId, skipped: seeded.cursor.skipped });
+      } catch (error) {
+        log.warn('opencode feed: messages not read', { sessionId: feed.ref.sessionId, error: String(error) });
+      } finally {
+        release();
+        feed.seeded = true;
+        feed.seeding = undefined;
+      }
+    })();
+    return feed.seeding;
+  }
+
+  const cacheFailed = (ref: SessionRef) => (error: unknown): void => {
+    log.warn('opencode feed: cache not written', { sessionId: ref.sessionId, error: String(error) });
+  };
+
+  /** New messages of an OpenCode session go into the feed and the cache. One poll at a time; a poll in flight is joined. */
+  function pollOpencode(feed: SessionFeed): Promise<void> {
+    const opencode = feed.opencode;
+    if (opencode === undefined) return Promise.resolve();
+    const run = opencode.queue.then(async () => {
+      if (!feedCurrent(feed) || feed.opencode !== opencode) return;
+      const address = options.opencodeServer?.(feed.ref);
+      const id = opencodeSessionId(feed.ref);
+      if (address === undefined || id === null) return;
+      const fetched = await fetchOpencodeMessages(address, id, opencodeFetch);
+      if (fetched === null || !feedCurrent(feed) || feed.opencode !== opencode || fetched.digest === opencode.digest) return;
+      opencode.digest = fetched.digest;
+      const { update, cursor } = applyOpencodeMessages(feed.state, fetched.messages, opencode.cursor);
+      opencode.cursor = cursor;
+      commit(feed, update);
+      await writeOpencodeCache(feed.ref, fetched.messages, now()).catch(cacheFailed(feed.ref));
+    });
+    opencode.queue = run.catch(() => {});
+    return run;
+  }
+
+  function endQwenWait(feed: SessionFeed, outcome: 'elsewhere' | 'stale'): void {
+    const wait = feed.qwenWait;
+    if (!wait) return;
+    clearInterval(wait.watch);
+    delete feed.qwenWait;
+    if (wait.prompt && feedCurrent(feed)) {
+      settle(feed.ref, outcome, [wait.prompt.card.id]);
+      setDecisions(feed, 'terminal');
+    }
+  }
+
+  const unsubscribeQwenStatus = deps.pty.on('program-status', (ref, status) => {
+    const kind = status.state === 'blocked' ? status.kind : null;
+    if (kind !== 'question' && kind !== 'permission') {
+      const feed = feeds.get(refKey(ref));
+      if (feed) endQwenWait(feed, 'elsewhere');
+      return;
+    }
+    const feed = feedOf(ref, 'qwen');
+    const pid = deps.pty.get(ref)?.pid;
+    if (pid === undefined || feed.provider === undefined || !byFamily(feed.provider, { claude: false, codex: false, qwen: true, opencode: false, neutral: false })) return;
+    if (feed.qwenWait?.pid === pid && feed.qwenWait.kind === kind) return;
+    endQwenWait(feed, 'elsewhere');
+    function refresh(): void {
+      const wait = feed.qwenWait;
+      if (!wait || wait.answering || !feedCurrent(feed) || deps.pty.get(ref)?.pid !== pid) return;
+      const parsed = recogniseQwenPrompt(deps.pty.screenText(ref) ?? [], wait.kind, '', at());
+      // When someone is typing a custom answer in the terminal, leave its editor in their hands.
+      const next = parsed?.card.kind === 'question' && !parsed.review && parsed.rows.at(-1)?.selected ? null : parsed;
+      if (next?.fingerprint === wait.prompt?.fingerprint) return;
+      if (wait.prompt) settle(ref, 'elsewhere', [wait.prompt.card.id]);
+      wait.prompt = next;
+      if (!next) {
+        setDecisions(feed, 'terminal');
+        return;
+      }
+      // The next question may arrive under the same OSC wait. Its card gets its own decision identity.
+      const cardId = 'qwen-dialog:' + randomUUID();
+      next.card = { ...next.card, id: cardId, cardId };
+      commit(feed, { state: { ...feed.state, items: [...feed.state.items, next.card] }, changes: [next.card] });
+      setDecisions(feed, 'window');
+    }
+    const watch = setInterval(refresh, terminalWatchMs);
+    watch.unref();
+    feed.qwenWait = { kind, pid, watch, prompt: null, answering: false };
+    refresh();
+  });
+
+  async function decideQwen(feed: SessionFeed, prompt: QwenPrompt, decision: FeedDecision): Promise<Result<'feed.decide'>> {
+    const wait = feed.qwenWait!;
+    if (wait.answering) return { applied: false, state: 'pending' };
+    const current = () => feedCurrent(feed) && feed.qwenWait === wait && wait.prompt === prompt &&
+      deps.pty.get(feed.ref)?.pid === wait.pid;
+    wait.answering = true;
+    try {
+      const applied = await answerQwenPrompt(prompt, decision, {
+        current,
+        screen: () => deps.pty.screenText(feed.ref),
+        write: keys => deps.pty.write(feed.ref, keys),
+      });
+      if (!applied || !current()) return { applied: false, state: 'pending' };
+      const reviewAnswer = decision.kind === 'question' ? decision.values?.answer : undefined;
+      const recorded = prompt.review && prompt.card.kind === 'question' && decision.kind === 'question' && typeof reviewAnswer === 'string'
+        ? { ...decision, answers: { [prompt.card.questions[0]!.question]: reviewAnswer } } : decision;
+      const result = applyDecision(feed.state, prompt.card.id, recorded, at());
+      commit(feed, result);
+      const next = result.changes.find(isCard);
+      return { applied: result.applied, state: next?.state ?? 'pending' };
+    } finally {
+      wait.answering = false;
+    }
+  }
+
   function startCodexPoll(feed: SessionFeed): void {
     if (feed.codexPoll !== undefined || stopped) return;
     const timer = setInterval(() => {
@@ -1014,15 +1875,42 @@ export function createFeedService(
    * Записи журнала; `null` — читать нельзя или нечего: путь не абсолютный или вне корней истории
    * Claude Code, файла нет или это не обычный файл (ссылка, FIFO). Проверки — до открытия файла.
    */
-  async function readTranscript(file: string): Promise<RawRecord[] | null> {
+  async function readTranscript(
+    file: string,
+    maxBytes?: number,
+  ): Promise<{ records: RawRecord[]; size: number } | null> {
     if (!path.isAbsolute(file) || !insideRoots(file, roots())) return null;
+    let size: number;
     try {
       const info = await lstat(file);
       if (!info.isFile()) return null;
+      size = info.size;
     } catch {
       return null;
     }
-    return readRecords(file);
+    return { records: await readRecords(file, maxBytes), size };
+  }
+
+  /**
+   * Лента из хвоста журнала Claude (сессии или субагента): сначала `seedTailBytes`, потом вдвое больше, пока не
+   * выполнено одно из трёх — хвост накрыл файл, набрано `SEED_RECORD_WINDOW` записей или лента после редьюсера
+   * дошла до `maxItems` либо `maxBytes`. В первых двух случаях результат равен чтению файла целиком, в третьем
+   * могут отличаться только самые старые элементы у края хвоста. `null` — читать нельзя (см. `readTranscript`).
+   */
+  async function readFeedTail(file: string, context: 'root' | 'child' = 'root', mailJournal?: readonly MailJournalEntry[]): Promise<FeedState | null> {
+    let bytes = seedTailBytes;
+    for (;;) {
+      const read = await readTranscript(file, bytes);
+      if (read === null) return null;
+      const state = feedFromTranscript(stashClaude(read.records), { limit: maxItems, context, ...(mailJournal === undefined ? {} : { mailJournal }) });
+      if (bytes >= read.size || read.records.length >= SEED_RECORD_WINDOW || state.items.length >= maxItems) return state;
+      let total = 0;
+      for (const item of state.items) {
+        total += itemBytes(item);
+        if (total >= maxBytes) return state;
+      }
+      bytes *= 2;
+    }
   }
 
   /**
@@ -1098,7 +1986,14 @@ export function createFeedService(
   }
 
   function feedCurrent(feed: SessionFeed): boolean {
-    return !stopped && feeds.get(refKey(feed.ref)) === feed;
+    if (stopped || feeds.get(refKey(feed.ref)) !== feed) return false;
+    try {
+      const current = sessionOf(feed.ref).provider;
+      feed.awaitingRegistration = false;
+      return current === feed.provider;
+    } catch {
+      return feed.awaitingRegistration;
+    }
   }
 
   function invalidateProgress(feed: SessionFeed): void {
@@ -1228,12 +2123,27 @@ export function createFeedService(
         flush(known);
         return;
       }
+    } else if (provider !== undefined && byFamily(provider, { claude: false, codex: false, qwen: true, opencode: false, neutral: false })) {
+      const known = feedOf(ref);
+      if (known.qwen !== undefined) {
+        await reseedQwenIfRebound(known);
+        await pollQwen(known);
+        flush(known);
+        return;
+      }
+    } else if (provider !== undefined && byFamily(provider, { claude: false, codex: false, qwen: false, opencode: true, neutral: false })) {
+      const known = feedOf(ref);
+      if (known.opencode !== undefined) {
+        await pollOpencode(known);
+        flush(known);
+        return;
+      }
     } else if (!isClaudeCode(provider)) return;
     const feed = feedOf(ref);
     if (feed.live || feed.seeded || feed.seeding !== undefined) return;
     const before = feed.state;
     await seed(feed, provider);
-    if (stopped || feed.live || feed.state === before) return;
+    if (!feedCurrent(feed) || feed.live || feed.state === before) return;
     const clients = subscribers.get(refKey(feed.ref));
     if (clients === undefined || clients.size === 0) return;
     for (const item of feed.state.items) feed.batch.upsert.set(item.id, item);
@@ -1281,6 +2191,8 @@ export function createFeedService(
     const notFound = (): HostError =>
       new HostError('not_found', `no transcript for agent ${agentId}`);
     if (!SAFE_AGENT_ID.test(agentId)) throw notFound();
+    // Qwen Code has no subagent transcripts in the feed: never fall through to the Claude layout.
+    if (byFamily(sessionOf(ref).provider, { claude: false, codex: false, qwen: true, opencode: true, neutral: false })) throw notFound();
     if (sessionOf(ref).provider === 'codex') {
       const file = deps.activity.childLogFile(ref, agentId);
       if (file === null) throw notFound();
@@ -1289,6 +2201,7 @@ export function createFeedService(
       const { state } = feedFromCodexRollout(stashCodex(records), {
         limit: maxItems,
         historyStart: meta.historyStart,
+        context: 'child',
       });
       return {
         items: tailByBytes(state.items, maxBytes),
@@ -1300,9 +2213,8 @@ export function createFeedService(
     const base = deps.activity.logFile(ref) ?? feeds.get(refKey(ref))?.transcriptPath ?? null;
     if (base === null) throw notFound();
     const file = path.join(base.replace(/\.jsonl$/, ''), 'subagents', `agent-${agentId}.jsonl`);
-    const records = await readTranscript(file);
-    if (records === null) throw notFound();
-    const state = feedFromTranscript(stashClaude(records), { limit: maxItems });
+    const state = await readFeedTail(file, 'child');
+    if (state === null) throw notFound();
     return {
       items: tailByBytes(state.items, maxBytes),
       revision: 0,
@@ -1316,13 +2228,35 @@ export function createFeedService(
     const activity = value.activity.activity;
     const previous = lastActivity.get(key);
     lastActivity.set(key, activity);
+    if (!stopped) {
+      const need = value.activity.need?.kind;
+      if (activity === 'blocked' && (need === 'approval' || need === 'question')) {
+        terminalEligible.add(key);
+        if (isCodexSession(ref)) findTerminalPrompt(ref);
+      } else {
+        // Сессия перестала ждать (или ждёт не этого): идущий поиск снят, ждущая карточка — ответили в терминале.
+        terminalEligible.delete(key);
+        clearTerminalTimer(terminalFinders, key, 'interval');
+        if (terminalPrompts.has(key)) closeTerminalPrompt(ref, 'elsewhere');
+      }
+    }
     if (stopped || activity !== 'idle' || previous === 'idle') return;
     const feed = feeds.get(key);
     if (feed === undefined) return;
     // У Codex запрос одобрения идёт из ячейки code mode, а она живёт дольше хода и приглашения: снятая карточка
     // отдала бы хуку `{}`, Codex ушёл бы в окно TUI, и `exec` ждал бы там без срока (разбор 2026-10-16).
     try {
-      if (sessionOf(feed.ref).provider === 'codex') return;
+      const provider = sessionOf(feed.ref).provider;
+      // Kimi's ACP pending set is authoritative even if activity goes idle.
+      if (provider === 'codex' || provider === 'kimi') return;
+      // Qwen Code has no feed cards to settle (approvals are answered in the terminal). Its journal going idle ends the turn.
+      if (byFamily(provider, { claude: false, codex: false, qwen: true, opencode: false, neutral: false })) {
+        if (turnActive(feed.state.items)) {
+          feed.qwenStoppedAt = at();
+          void seedAside(feed.ref);
+        }
+        return;
+      }
     } catch {
       // Сессии уже нет в работах — поведение прежнее.
     }
@@ -1336,24 +2270,71 @@ export function createFeedService(
     if (ids.length > 0) settle(feed.ref, 'elsewhere', ids);
   });
 
+  /**
+   * Лента уходит из памяти: таймеры пачки и ожидания хука Codex, опрос Codex, эпоха прогресса. Работа, что уже
+   * держит объект ленты (круг `checkInterrupts`, опрос Codex, отложенный `flush`), в него не пишет:
+   * `commit` и `flush` сверяются с `feeds` (`feedCurrent`) и ничего не делают.
+   */
+  function dropFeed(key: string): void {
+    const feed = feeds.get(key);
+    if (feed === undefined) return;
+    if (feed.timer !== undefined) clearTimeout(feed.timer);
+    feed.timer = undefined;
+    clearCodexGrace(feed);
+    stopCodexPoll(feed);
+    if (feed.qwenWait) clearInterval(feed.qwenWait.watch);
+    dropTerminalState(key);
+    pending.settle(feed.ref);
+    feed.progressEpoch?.eligible.clear();
+    feed.progressEpoch = null;
+    feeds.delete(key);
+  }
+
+  /** Сессия закрыта или её работа в архиве (сессии, которой нет в работах, касается `forget`). */
+  function sessionRetired(ref: SessionRef): boolean {
+    const entry = deps.works.entry(ref.projectPath, ref.workId);
+    const session = entry?.map.sessions.find((candidate) => candidate.id === ref.sessionId);
+    return entry !== undefined && session !== undefined &&
+      (entry.map.work.status === 'archived' || session.lifecycle === 'closed');
+  }
+
+  /**
+   * Решение 5: лента уходит, если у неё нет подписчиков, удержанных хуков, живого процесса, идущего посева и
+   * холодного чтения, и при этом сессия закрыта или её работа в архиве, либо лентой не пользовались
+   * `FEED_IDLE_EVICT_MS`. Ленту работающей сессии (живой процесс) не трогаем никогда.
+   */
+  function evictable(feed: SessionFeed): 'closed' | 'idle' | null {
+    const key = refKey(feed.ref);
+    if ((subscribers.get(key)?.size ?? 0) > 0) return null;
+    if (feed.seeding !== undefined || coldReads.has(key)) return null;
+    if (deps.pty.get(feed.ref) !== undefined) return null;
+    if (pending.list(feed.ref).length > 0) return null;
+    if (sessionRetired(feed.ref)) return 'closed';
+    return now() - feed.usedAt >= FEED_IDLE_EVICT_MS ? 'idle' : null;
+  }
+
+  function evictIfIdle(feed: SessionFeed): void {
+    if (stopped || !feedCurrent(feed)) return;
+    const reason = evictable(feed);
+    if (reason === null) return;
+    dropFeed(refKey(feed.ref));
+    log.info('лента выгружена', { op: 'feed.evicted', sessionId: feed.ref.sessionId, reason });
+  }
+
+  const evictSweep = setInterval(() => {
+    for (const feed of Array.from(feeds.values())) evictIfIdle(feed);
+  }, FEED_EVICT_SWEEP_MS);
+  evictSweep.unref();
+
   /** Сессии больше нет в работах: её лента, подписчики и удержанные хуки никому не нужны. */
   function forget(key: string): void {
     progressStarts.delete(key);
-    const feed = feeds.get(key);
-    if (feed !== undefined) {
-      if (feed.timer !== undefined) clearTimeout(feed.timer);
-      feed.timer = undefined;
-      clearCodexGrace(feed);
-      stopCodexPoll(feed);
-      pending.settle(feed.ref);
-      feed.progressEpoch?.eligible.clear();
-      feed.progressEpoch = null;
-      feeds.delete(key);
-    }
+    dropFeed(key);
     lastActivity.delete(key);
     sentAt.delete(key);
     subscribers.delete(key);
     graceWaiting.delete(key);
+    terminalEligible.delete(key);
     clearProgress(key);
   }
 
@@ -1371,7 +2352,9 @@ export function createFeedService(
       if (!alive.has(key)) forget(key);
     }
     for (const start of progressStarts.values()) confirmStart(start.ref);
-    for (const feed of feeds.values()) {
+    for (const feed of Array.from(feeds.values())) evictIfIdle(feed);
+    for (const previous of Array.from(feeds.values())) {
+      const feed = previous.provider === sessionOf(previous.ref).provider ? previous : feedOf(previous.ref);
       const stamp = observeSource(feed);
       if (feed.codex !== undefined) {
         codexBindingCurrent(feed, stamp);
@@ -1391,6 +2374,7 @@ export function createFeedService(
     // Новый процесс не ответит на отправку старого: метка дала бы ложные минуты в `feed.firstDelta`.
     sentAt.delete(refKey(ref));
     const previous = feeds.get(refKey(ref));
+    if (previous) endQwenWait(previous, 'stale');
     let previousStartedAt = previous?.observedSource?.startedAtProcess ?? null;
     if (previousStartedAt === null) {
       try { previousStartedAt = sessionOf(ref).startedAtProcess ?? null; } catch { /* Карта ещё не прочитана. */ }
@@ -1426,23 +2410,29 @@ export function createFeedService(
   }
 
   const unsubscribeExit = deps.pty.on('exit', (ref) => {
+    const exiting = feeds.get(refKey(ref));
+    if (exiting) endQwenWait(exiting, 'stale');
     if (stopped) return;
     confirmStart(ref);
     // Ответа вышедшего процесса не будет: метка отправки не должна дожить до чужой пачки.
     sentAt.delete(refKey(ref));
     graceWaiting.delete(refKey(ref));
+    terminalEligible.delete(refKey(ref));
     const feed = feeds.get(refKey(ref));
     if (feed === undefined) {
       pending.settle(ref);
       return;
     }
     clearCodexGrace(feed);
+    dropTerminalState(refKey(ref));
     // Процесс вышел: висящим хукам `{}`, карточки — `stale` (терминал ответит уже новому процессу),
     // ход закрыт.
     const time = at();
     commit(feed, settleCards(feed.state, 'stale', time));
     pending.settle(feed.ref);
     commit(feed, closeFeedTurn(feed.state, time));
+    // Процесс ушёл: лента закрытой сессии больше никому не нужна.
+    evictIfIdle(feed);
   });
 
   /**
@@ -1451,20 +2441,22 @@ export function createFeedService(
    * журнала хост читает его хвост у лент с идущим ходом и, найдя запись новее начала хода, закрывает
    * ход чертой `interrupted`: идущие вызовы отклонены, ждущие карточки — `elsewhere`, их хукам `{}`.
    * Из того же хвоста читаются `system/api_error`: ретраи не присылают хуков, но должны появляться
-   * в живой ленте. Проверка одна за раз; пришедшее за время чтения изменение — ещё один круг.
+   * в живой ленте. Проверка одна за раз; пришедшее за время чтения изменение — ещё один круг. Изменение
+   * журнала будит только ленты задетых им сессий (`LogChange.affects`): ключи лент ждут в очереди.
    */
   let checkingInterrupts = false;
-  let recheckInterrupts = false;
+  const interruptQueue = new Set<string>();
   async function checkInterrupts(): Promise<void> {
-    if (checkingInterrupts) {
-      recheckInterrupts = true;
-      return;
-    }
+    // Идущий разбор доберёт и ключи, пришедшие за время чтения: очередь он разбирает, пока она не пуста.
+    if (checkingInterrupts) return;
     checkingInterrupts = true;
     try {
-      do {
-        recheckInterrupts = false;
-        for (const feed of Array.from(feeds.values())) {
+      while (interruptQueue.size > 0) {
+        const keys = Array.from(interruptQueue);
+        interruptQueue.clear();
+        for (const key of keys) {
+          const feed = feeds.get(key);
+          if (feed === undefined) continue;
           if (stopped) return;
           const started = feed.state.turnStartedAt;
           if (started === null) continue;
@@ -1496,20 +2488,112 @@ export function createFeedService(
           if (latest === undefined || latest <= started) continue;
           commit(feed, closeFeedTurn(feed.state, at(), { interrupted: true }));
         }
-      } while (recheckInterrupts);
+      }
     } finally {
       checkingInterrupts = false;
     }
   }
-  const unsubscribeLogs = deps.activity.onLogChange(() => {
+  /** Задело ли изменение журнала сессию ленты; сессии в работах нет — не задело. */
+  function touchedBy(change: LogChange, ref: SessionRef): boolean {
+    try {
+      return change.affects(sessionOf(ref));
+    } catch {
+      return false;
+    }
+  }
+  const unsubscribeLogs = deps.activity.onLogChange((change) => {
     if (stopped) return;
+    // Без аргумента (первый полный список) — все ленты; иначе только задетые.
+    const woken = Array.from(feeds.values()).filter((feed) => change === undefined || touchedBy(change, feed.ref));
+    for (const feed of woken) interruptQueue.add(refKey(feed.ref));
     void checkInterrupts();
     // Индекс узнал журнал позже снимка или запуска — ленты без сева сеются сейчас.
-    for (const feed of Array.from(feeds.values())) void seedAside(feed.ref);
+    for (const feed of woken) void seedAside(feed.ref);
   });
 
   return {
     onHook,
+    kimiHasHistory(ref) {
+      return feeds.get(refKey(ref))?.state.items.some((item) => item.kind === 'prompt' || item.kind === 'text') ?? false;
+    },
+    kimiOutput(ref, event) {
+      if (stopped) return;
+      const feed = feedOf(ref, 'kimi');
+      if (feed.provider !== 'kimi') return;
+      feed.live = true;
+      const time = at();
+      if (event.kind === 'end' && event.error === undefined) {
+        commit(feed, closeFeedTurn(feed.state, time, { interrupted: event.reason === 'cancelled' }));
+        return;
+      }
+      const body = event.kind === 'prompt' ? { hook_event_name: 'UserPromptSubmit', prompt: event.text }
+        : event.kind === 'text' ? { hook_event_name: 'MessageDisplay', message_id: event.messageId, delta: event.text }
+        : { hook_event_name: 'StopFailure', error: event.reason, last_assistant_message: event.error };
+      commit(feed, applyHookEvent(feed.state, body, time));
+    },
+    kimiRequests(ref, requests) {
+      if (stopped || options.kimiRespond === undefined) return;
+      const feed = requests.length === 0 ? feeds.get(refKey(ref)) : feedOf(ref, 'kimi');
+      if (feed?.provider !== 'kimi' || !feedCurrent(feed)) return;
+      feed.live = true;
+      setDecisions(feed, 'window');
+      const live = (feed.kimiInteractions ??= new Map());
+      const ids = new Set(requests.map((request) => request.id));
+      const removed: string[] = [];
+      for (const [id, interaction] of live) {
+        if (ids.has(interaction.request.id)) continue;
+        live.delete(id);
+        removed.push(id);
+      }
+      const time = at();
+      const settled = settleCards(feed.state, 'stale', time, removed);
+      const added = requests.flatMap((request) => {
+        const id = `kimi:${request.id}`;
+        if (live.has(id)) return [];
+        const interaction = kimiInteraction(request, time);
+        if (interaction === undefined) return [];
+        live.set(id, interaction);
+        return [interaction.card];
+      });
+      if (added.length === 0 && settled.changes.length === 0) return;
+      commit(feed, {
+        state: { ...settled.state, items: [...settled.state.items, ...added] },
+        changes: [...settled.changes, ...added],
+      });
+    },
+    opencodePoll(ref) {
+      const feed = feeds.get(refKey(ref));
+      if (stopped || feed === undefined || feed.opencode === undefined) return Promise.resolve();
+      return pollOpencode(feed).then(() => flush(feed));
+    },
+    async opencodeLastPoll(ref, server) {
+      try {
+        const id = opencodeSessionId(ref);
+        if (id === null) return;
+        const feed = feeds.get(refKey(ref));
+        const fetched = await fetchOpencodeMessages(server, id, opencodeFetch);
+        if (fetched === null) return;
+        // A feed in memory takes the same answer; the cache is written either way (the Chat may be closed).
+        if (feed?.opencode !== undefined && feed.opencode.digest !== fetched.digest && feedCurrent(feed)) {
+          feed.opencode.digest = fetched.digest;
+          const { update, cursor } = applyOpencodeMessages(feed.state, fetched.messages, feed.opencode.cursor);
+          feed.opencode.cursor = cursor;
+          commit(feed, update);
+          flush(feed);
+        }
+        await writeOpencodeCache(ref, fetched.messages, now());
+      } catch (error) {
+        cacheFailed(ref)(error);
+      }
+    },
+    delivered(ref, text, at) {
+      if (stopped) return;
+      const mail = mailFromInline(text, at);
+      if (mail === null) return;
+      const feed = feedOf(ref);
+      if (feed.state.items.some((item) => item.id === mail.id)) return;
+      commit(feed, { state: { ...feed.state, items: [...feed.state.items, mail] }, changes: [mail] });
+    },
 
     async progress(ref, client) {
       const parsed = sessionRef.safeParse(ref);
@@ -1559,7 +2643,7 @@ export function createFeedService(
       }
     },
 
-    async snapshot(ref, agentId, scope) {
+    snapshot: async function readSnapshot(ref, agentId, scope, client) {
       const startedAt = performance.now();
       const session = sessionOf(ref);
       if (agentId !== undefined) {
@@ -1579,28 +2663,38 @@ export function createFeedService(
       let seedMs: number | null = null;
       if (!feed.live && !feed.seeded) {
         const seedStartedAt = performance.now();
-        await seed(feed, session.provider);
+        await seed(feed, session.provider, scope === undefined);
         seedMs = Math.round(performance.now() - seedStartedAt);
+      } else if (feed.opencode !== undefined) {
+        // OpenCode has no hooks: a snapshot of a seeded feed first takes what the server has by now.
+        await pollOpencode(feed);
       }
+      // A provider takeover can replace the source while this snapshot is awaiting the previous cold read.
+      if (!stopped && !feedCurrent(feed)) return readSnapshot(ref, agentId, scope, client);
       // Накопленная пачка уходит до снимка: следующая дельта подписчику — ровно `revision + 1`.
       flush(feed);
       const snapshot: FeedSnapshot = {
-        items: scope === 'attention' ? attentionItems(feed.state.items) : [...feed.state.items],
+        items: scope === 'attention' ? attentionItems(feed.state.items) : mailFor(client, feed.state.items),
         revision: feed.revision,
         schemaVersion: FEED_SCHEMA_VERSION,
         mode: feed.state.permissionMode,
         ...(feed.decisions === null ? {} : { decisions: feed.decisions }),
       };
-      log.info('лента: снимок', {
-        sessionId: ref.sessionId,
-        workId: ref.workId,
-        items: snapshot.items.length,
-        bytes: feed.bytes,
-        scope: scope ?? null,
-        sentBytes: scope === 'attention' ? Buffer.byteLength(JSON.stringify(snapshot.items)) : feed.bytes,
-        seedMs,
-        totalMs: Math.round(performance.now() - startedAt),
-      });
+      // Лёгкий опрос острова (`scope: 'attention'`) раз в 15 с не пишется: строка нужна для разбора
+      // медленных снимков — с севом или от 250 мс она остаётся.
+      const totalMs = Math.round(performance.now() - startedAt);
+      if (scope !== 'attention' || seedMs !== null || totalMs >= 250) {
+        log.info('лента: снимок', {
+          sessionId: ref.sessionId,
+          workId: ref.workId,
+          items: snapshot.items.length,
+          bytes: feed.bytes,
+          scope: scope ?? null,
+          sentBytes: scope === 'attention' ? Buffer.byteLength(JSON.stringify(snapshot.items)) : feed.bytes,
+          seedMs,
+          totalMs,
+        });
+      }
       return snapshot;
     },
 
@@ -1613,36 +2707,28 @@ export function createFeedService(
         subscribers.set(key, clients);
       }
       clients.add(client);
-      if (!stopped && sessionOf(ref).provider === 'codex') startCodexPoll(feedOf(ref));
+      const subscribed = sessionOf(ref).provider;
+      if (!stopped && (subscribed === 'codex' || byFamily(subscribed, { claude: false, codex: false, qwen: true, opencode: true, neutral: false }))) startCodexPoll(feedOf(ref));
     },
 
     unsubscribe(ref, client) {
       const key = refKey(ref);
       const clients = subscribers.get(key);
       clients?.delete(client);
-      if (clients?.size === 0) {
-        subscribers.delete(key);
-        const feed = feeds.get(key);
-        if (feed !== undefined) stopCodexPoll(feed);
-      }
+      if (clients?.size === 0) subscribersGone(key);
     },
 
     dropClient(client) {
       progressClients.get(client)?.active?.cancel();
       progressClients.delete(client);
-      for (const [key, clients] of subscribers) {
-        clients.delete(client);
-        if (clients.size === 0) {
-          subscribers.delete(key);
-          const feed = feeds.get(key);
-          if (feed !== undefined) stopCodexPoll(feed);
-        }
-      }
+      removeSubscriptions(client);
     },
 
     peekAttention(ref) {
       const feed = feeds.get(refKey(ref));
-      if (!feed || !feedCurrent(feed) || (!feed.live && !feed.seeded) || feed.seeding) return undefined;
+      // Ленты нет в памяти — карточек нет: их держит только живой хук, а с ним лента не выгружается (`evictable`).
+      if (!feed) return [];
+      if (!feedCurrent(feed) || (!feed.live && !feed.seeded) || feed.seeding) return undefined;
       const current = sourceOf(ref);
       if (feed.observedSource === null ? current !== null : !sameSource(feed.observedSource, current)) return undefined;
       return feed.state.items.filter(isPendingCard) as FeedCard[];
@@ -1661,10 +2747,37 @@ export function createFeedService(
         throw new HostError('not_found', `no card ${cardId} in the session feed`);
       }
       const current: FeedCardState = card.state;
+      if (current !== 'pending') return { applied: false, state: current };
+      const qwen = feed.qwenWait?.prompt;
+      if (qwen?.card.id === cardId) return decideQwen(feed, qwen, decision);
+      const interaction = feed.kimiInteractions?.get(cardId);
+      if (interaction !== undefined && options.kimiRespond !== undefined) {
+        const answer = interaction.answer(decision);
+        if (answer === undefined) return { applied: false, state: current };
+        const time = at();
+        // The transport publishes its new pending set synchronously while responding.
+        // Unlink this card first so that publication does not mark a valid answer stale.
+        feed.kimiInteractions?.delete(cardId);
+        try {
+          options.kimiRespond(feed.ref, interaction.request.id, answer.response);
+        } catch (error) {
+          commit(feed, settleCards(feed.state, 'stale', time, [cardId]));
+          throw error;
+        }
+        const result = applyDecision(feed.state, cardId, answer.decision, time);
+        commit(feed, result);
+        const next = result.changes.find((item): item is FeedCard => isCard(item) && item.cardId === cardId);
+        return { applied: result.applied, state: next?.state ?? current };
+      }
       // Решение без удержанного хука ушло бы в никуда: карточка в окне сказала бы «allowed», а CLI
       // ничего не получил. Такое решение не применяется (окно повторит, когда хук дойдёт).
       const held = pending.get(feed.ref, cardId);
-      if (held === undefined || current !== 'pending') return { applied: false, state: current };
+      if (held === undefined) {
+        // Карточка по вопросу терминала Codex: хука нет, клавишу вводит хост.
+        const record = terminalPrompts.get(refKey(feed.ref));
+        if (record !== undefined && record.cardId === cardId) return decideTerminalPrompt(feed, record, decision, current);
+        return { applied: false, state: current };
+      }
       const result = applyDecision(feed.state, cardId, decision, at());
       if (!result.applied) return { applied: false, state: current };
       const next =
@@ -1697,7 +2810,8 @@ export function createFeedService(
       if (handle === undefined) throw new HostError('not_found', 'session is not running');
       deps.pty.write(ref, ESC);
       // У Codex приглашения `❯` и возвращённого в поле промпта нет: ход закроет запись `turn_aborted`.
-      if (sessionOf(ref).provider === 'codex') return;
+      // Qwen Code: no `❯` prompt check as Claude's; the next transcript record or hook settles the turn.
+      if (sessionOf(ref).provider === 'kimi' || sessionOf(ref).provider === 'codex' || byFamily(sessionOf(ref).provider, { claude: false, codex: false, qwen: true, opencode: true, neutral: false })) return;
       const feed = feeds.get(refKey(ref));
       // Хода в ленте нет — присматривать не за чем: Esc ушёл, остальное за CLI.
       if (stopped || feed === undefined || feed.state.turnStartedAt === null) return;
@@ -1720,13 +2834,20 @@ export function createFeedService(
       progressStarts.clear();
       for (const state of progressClients.values()) state.active?.cancel();
       progressClients.clear();
+      unsubscribeQwenStatus();
       unsubscribeActivity();
       unsubscribeStart();
       unsubscribeExit();
       unsubscribeWorks();
       unsubscribeLogs();
       clearInterval(imageSweep);
+      clearInterval(evictSweep);
+      // Ждущие посевы запускаются и сразу выходят (`stopped`): снимок, ждавший место, завершается пустой лентой.
+      for (const waiter of seedWaiters.splice(0)) waiter.start();
+      // До снятия таймеров лент: возврат `decisions` ставит пачку дельты.
+      for (const key of new Set([...terminalFinders.keys(), ...terminalConfirms.keys(), ...terminalPrompts.keys(), ...terminalMessages.keys(), ...terminalTyping.keys()])) dropTerminalState(key);
       for (const feed of feeds.values()) {
+        if (feed.qwenWait) clearInterval(feed.qwenWait.watch);
         if (feed.timer !== undefined) clearTimeout(feed.timer);
         feed.timer = undefined;
         clearCodexGrace(feed);

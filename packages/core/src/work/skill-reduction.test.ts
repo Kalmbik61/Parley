@@ -1,8 +1,8 @@
-import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { CLAUDE_SKILL_BUDGET_ENV, CODEX_SKILL_CATALOG_OVERRIDE, claudeSkillReduction, claudeSkillRoute, findJevPluginIds } from './skill-reduction.js';
+import { CLAUDE_SKILL_BUDGET_ENV, CODEX_SKILL_CATALOG_OVERRIDE, CODEX_SKILL_CATALOG_TTL_MS, claudeSkillReduction, claudeSkillRoute, codexSkillRoute, findJevPluginIds, resetCodexSkillCatalogCache } from './skill-reduction.js';
 
 let root = '';
 let config = '';
@@ -121,5 +121,75 @@ describe('claudeSkillReduction', () => {
     await manifest(config, 'locked', '{"name":"x"}');
     await chmod(path.join(config, 'skills', 'locked', '.claude-plugin'), 0o000);
     expect(await claudeSkillReduction({ ...base, cwd, configDir: config })).toEqual({ reduced: false });
+  });
+});
+
+describe('codexSkillRoute.catalog: кэш чтения', () => {
+  // Шов `read` — то, что в настоящем запуске запускает `codex app-server` (`readCodexNativeContext`). Ответ той формы,
+  // которую принимает `projectCodexListCatalog`: один каталог для канонического cwd и пустой список навыков.
+  const spy = (answers: Array<'ok' | 'null' | 'throw'> = ['ok']) => {
+    let calls = 0;
+    return vi.fn(async (read: { cwd: string }) => {
+      const answer = answers[Math.min(calls++, answers.length - 1)];
+      if (answer === 'throw') throw new Error('app-server failed');
+      if (answer === 'null') return null;
+      return { config: {}, requirements: { requirements: null }, skills: { data: [{ cwd: await realpath(read.cwd), skills: [], errors: [] }] } } as never;
+    });
+  };
+  const ask = (read: ReturnType<typeof spy>, extra: { cwd?: string; env?: Record<string, string> } = {}) =>
+    codexSkillRoute.catalog({ cwd, command: 'codex', configArgs: ['-c', 'a=1'], env: { HOME: '/h', CODEX_HOME: '/h/.codex' }, read, ...extra });
+
+  beforeEach(() => { resetCodexSkillCatalogCache(); vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(0); });
+  afterEach(() => { vi.useRealTimers(); resetCodexSkillCatalogCache(); });
+
+  it('пять одновременных запросов с одним ключом читают каталог один раз', async () => {
+    const read = spy();
+    const results = await Promise.all(Array.from({ length: 5 }, () => ask(read)));
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(results[0]).not.toBeNull();
+    expect(results.every(result => result === results[0])).toBe(true);
+  });
+
+  it('ответ держится 30 с и перечитывается после', async () => {
+    const read = spy();
+    await ask(read);
+    vi.setSystemTime(CODEX_SKILL_CATALOG_TTL_MS - 1);
+    await ask(read);
+    expect(read).toHaveBeenCalledTimes(1);
+    vi.setSystemTime(CODEX_SKILL_CATALOG_TTL_MS + 1);
+    await ask(read);
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  it('null и ошибка не кэшируются: следующий запуск читает заново', async () => {
+    const read = spy(['null', 'throw', 'ok']);
+    expect(await ask(read)).toBeNull();
+    expect(await ask(read)).toBeNull();
+    expect(await ask(read)).not.toBeNull();
+    expect(read).toHaveBeenCalledTimes(3);
+    await ask(read);
+    expect(read).toHaveBeenCalledTimes(3);
+  });
+
+  it('упавшее чтение в полёте не отравляет следующие запуски', async () => {
+    const read = spy(['throw', 'ok']);
+    const first = await Promise.all([ask(read), ask(read)]);
+    expect(first).toEqual([null, null]);
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(await ask(read)).not.toBeNull();
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  it('другой cwd, CODEX_HOME, HOME, команда или аргументы читают заново', async () => {
+    const read = spy();
+    await ask(read);
+    const other = path.join(root, 'other');
+    await mkdir(other, { recursive: true });
+    await ask(read, { cwd: other });
+    await ask(read, { env: { HOME: '/h', CODEX_HOME: '/elsewhere' } });
+    await ask(read, { env: { HOME: '/other', CODEX_HOME: '/h/.codex' } });
+    await codexSkillRoute.catalog({ cwd, command: 'codex2', configArgs: ['-c', 'a=1'], env: { HOME: '/h', CODEX_HOME: '/h/.codex' }, read });
+    await codexSkillRoute.catalog({ cwd, command: 'codex', configArgs: ['-c', 'a=2'], env: { HOME: '/h', CODEX_HOME: '/h/.codex' }, read });
+    expect(read).toHaveBeenCalledTimes(6);
   });
 });

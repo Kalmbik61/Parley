@@ -6,6 +6,7 @@ import type { BrowserAgentOpEvent } from './browser-agent.js';
 import type { CapabilitySnapshot } from './capability-snapshot.js';
 import type { FeedItem, SessionActivity } from '@parley/core';
 import type { FeedDecisions } from './feed.js';
+import type { SessionProcessesSnapshot } from './processes.js';
 import type {
   CapacitySnapshot,
   HostNotice,
@@ -18,6 +19,7 @@ import type {
 import type { WorksSyncInvalidated } from './works-sync.js';
 import type { CardsEvents } from './remote/cards.js';
 import type { VoiceEvents } from './remote/voice.js';
+import type { KimiConfigOption, KimiRequest } from './kimi.js';
 
 /** Однонаправленные события хоста → клиенту, без ответа. */
 export interface Events {
@@ -35,6 +37,8 @@ export interface Events {
   'activity.changed': { ref: SessionRef; activity: SessionActivity; metrics: LiveMetrics | null };
   'pty.output': { ref: SessionRef; data: string };
   'pty.resync': { ref: SessionRef };
+  /** Заменяющий снимок процессов сессии — только подписчикам `processes.subscribe`. */
+  'processes.changed': SessionProcessesSnapshot;
   'pty.exit': { ref: SessionRef; exitCode: number; signal: number | null };
   'host.notice': HostNotice;
   'wake.changed': { paused: boolean };
@@ -71,6 +75,11 @@ export interface Events {
     decisions?: FeedDecisions | null;
   };
   /**
+   * Хост снял подписки клиента на ленты (буфер записи клиента перегружен): дельты могли пропасть, ленту `ref`
+   * нужно подписать и взять снимком заново. Только клиенту с признаком `feed-resync`; телефону не уходит.
+   */
+  'feed.resync': { ref: SessionRef };
+  /**
    * Операция агента над браузером окна (спека браузера 2026-10-07, 3.7): только клиенту с возможностью
    * `browser-agent` в `hello.features`, одному. Ответ — метод `browser.agentResult` с тем же `opId`.
    */
@@ -85,6 +94,8 @@ export interface Events {
   /** Телефону: голосовая сессия закрыта (любая причина). */
   'voice.session.closed': VoiceEvents['voice.session.closed'];
   'telegram.changed': TelegramStatus;
+  'kimi.requests': { ref: SessionRef; requests: KimiRequest[] };
+  'kimi.configChanged': { ref: SessionRef; config: KimiConfigOption[] };
   /**
    * Изменились карточки согласий (спека 2026-10-21, 4.4): `upsert` — новые и изменённые, `removed` — `id` решённых
    * и снятых. Окна, остров и Telegram по нему показывают и закрывают карточку «доверять ли папке».

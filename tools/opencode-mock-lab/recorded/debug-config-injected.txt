@@ -1,0 +1,22 @@
+[
+  {
+    "type": "directory",
+    "path": "/lab/work/home/cfg/opencode"
+  },
+  {
+    "type": "document",
+    "info": {
+      "mcp": {
+        "servers": {
+          "parley": {
+            "type": "local",
+            "command": [
+              "node",
+              "x.mjs"
+            ]
+          }
+        }
+      }
+    }
+  }
+]

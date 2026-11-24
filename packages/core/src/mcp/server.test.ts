@@ -49,6 +49,19 @@ import {
 import { writeLetters, type NewLetter } from '../work/letter-store.js';
 import { workDb } from '../work/db.js';
 
+/** Подмена `finishSession`: перед сменой `result` тест видит, что уже записано в карту (порядок записей `report done`). */
+const beforeFinish = vi.hoisted(() => ({ hook: null as null | (() => Promise<void>) }));
+vi.mock('../work/metrics.js', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../work/metrics.js')>();
+  return {
+    ...original,
+    finishSession: async (...args: Parameters<typeof original.finishSession>) => {
+      await beforeFinish.hook?.();
+      return original.finishSession(...args);
+    },
+  };
+});
+
 let home = '';
 let project = '';
 let binDir = '';
@@ -296,11 +309,11 @@ describe('список инструментов', () => {
 
     expect(add?.inputSchema.required).toEqual(['room', 'session']);
     expect(Object.keys(add?.inputSchema.properties ?? {}).sort()).toEqual(['room', 'session']);
-    // Тон соседних описаний: только ведущий, одна комната на сессию, системная строка, письма нет.
+    // Тон соседних описаний: только ведущий, одна комната на сессию, системная строка, новичку — короткая записка, а не история.
     expect(add?.description).toMatch(/Lead only/);
     expect(add?.description).toMatch(/One room per session/);
     expect(add?.description).toContain('@s04 joined the room');
-    expect(add?.description).toMatch(/gets no message/);
+    expect(add?.description).toMatch(/gets a note, not the history/);
   });
 
 
@@ -1090,6 +1103,100 @@ describe('report', () => {
   });
 });
 
+describe('report: покрытие участника роя (спека «видимые дыры», 3.4)', () => {
+  /** s-01 — королева, s-02 и s-03 — трутни; s-04 — сессия вне роя. Участники пришли после `beforeEach`, где есть s-01. */
+  async function seedSwarm(): Promise<void> {
+    await updateMap(project, workId, (map) => {
+      for (const label of ['трутень', 'трутень 2', 'вне роя']) addSession(map, { provider: 'claude', label, task: 'x', createdBy: 's-01' });
+      const at = new Date().toISOString();
+      map.swarms = [{
+        id: 'sw-01', tag: 'T', creator: { kind: 'human' }, objective: 'o', queen: 's-01',
+        members: [
+          { sessionId: 's-01', role: 'queen', n: 1, addedAt: at, handedAt: null, slice: null, coverage: null },
+          { sessionId: 's-02', role: 'drone', n: 1, addedAt: at, handedAt: null, slice: 'host', coverage: null },
+          { sessionId: 's-03', role: 'verifier', n: 1, addedAt: at, handedAt: null, slice: null, coverage: null },
+        ],
+        status: 'running', createdAt: at, endedAt: null, expiredAt: null, result: null, failure: null, seenAt: null, announced: 0,
+      }];
+    });
+  }
+  const memberOf = async (id: string) => (await readMapFile()).swarms!.flatMap((swarm) => swarm.members).find((m) => m.sessionId === id)!;
+
+  it('трутень: done с coverage partial пишет partial; без поля остаётся null', async () => {
+    await seedSwarm();
+    await callOk(await connect('s-02'), 'report', { status: 'done', summary: 'часть', coverage: 'partial' });
+    expect((await memberOf('s-02')).coverage).toBe('partial');
+    await callOk(await connect('s-03'), 'report', { status: 'done', summary: 'всё' });
+    expect((await memberOf('s-03')).coverage).toBeNull();
+  });
+
+  it('повторный done без поля прежнее покрытие не стирает, с полем заменяет', async () => {
+    await seedSwarm();
+    const client = await connect('s-02');
+    await callOk(client, 'report', { status: 'done', summary: 'один', coverage: 'partial' });
+    await callOk(client, 'report', { status: 'done', summary: 'два' });
+    expect((await memberOf('s-02')).coverage).toBe('partial');
+    await callOk(client, 'report', { status: 'done', summary: 'три', coverage: 'covered' });
+    expect((await memberOf('s-02')).coverage).toBe('covered');
+  });
+
+  it('королева, сессия вне роя, progress и failed запись участника не меняют', async () => {
+    await seedSwarm();
+    await callOk(await connect('s-01'), 'report', { status: 'done', summary: 'итог', coverage: 'partial' });
+    expect((await memberOf('s-01')).coverage).toBeNull();
+    const outside = await connect('s-04');
+    await callOk(outside, 'report', { status: 'done', summary: 'вне', coverage: 'partial' });
+    expect(session(await readMapFile(), 's-04').result).toBe('done');
+    await callOk(await connect('s-02'), 'report', { status: 'progress', summary: 'идёт', coverage: 'partial' });
+    expect((await memberOf('s-02')).coverage).toBeNull();
+    await callOk(await connect('s-03'), 'report', { status: 'failed', summary: 'сорвалось', coverage: 'partial' });
+    expect((await memberOf('s-03')).coverage).toBeNull();
+    const map = await readMapFile();
+    for (const id of ['s-01', 's-02', 's-03']) expect(await memberOf(id)).toMatchObject({ coverage: null, handedAt: null });
+    expect(map.swarms![0]!.members.find((m) => m.sessionId === 's-02')!.slice).toBe('host');
+  });
+
+  it('значение вне перечисления — ошибка до записи: ни summary, ни coverage не тронуты', async () => {
+    await seedSwarm();
+    const client = await connect('s-02');
+    await callOk(client, 'report', { status: 'progress', summary: 'до' });
+    const bad = await call(client, 'report', { status: 'done', summary: 'после', coverage: 'full' });
+    expect(bad.isError).toBe(true);
+    expect(bad.text).toMatch(/coverage.*covered \| partial/);
+    expect(session(await readMapFile(), 's-02')).toMatchObject({ summary: 'до', result: null });
+    expect((await memberOf('s-02')).coverage).toBeNull();
+  });
+
+  it('закрытая сессия: отказ, summary и coverage не тронуты', async () => {
+    await seedSwarm();
+    const client = await connect('s-02');
+    await callOk(client, 'report', { status: 'done', summary: 'первое', coverage: 'covered' });
+    await updateMap(project, workId, (map) => { session(map, 's-02').lifecycle = 'closed'; });
+    const refused = await call(client, 'report', { status: 'done', summary: 'второе', coverage: 'partial' });
+    expect(refused.isError).toBe(true);
+    expect(refused.text).toContain('is closed');
+    expect(session(await readMapFile(), 's-02').summary).toBe('первое');
+    expect((await memberOf('s-02')).coverage).toBe('covered');
+  });
+
+  it('покрытие записано раньше result: между записями участник ещё не сдавший, после done покрытие на месте', async () => {
+    await seedSwarm();
+    const seen: { result: string | null; coverage: string | null | undefined }[] = [];
+    beforeFinish.hook = async () => {
+      const map = await readMapFile();
+      seen.push({ result: session(map, 's-02').result, coverage: (await memberOf('s-02')).coverage });
+    };
+    try {
+      await callOk(await connect('s-02'), 'report', { status: 'done', summary: 'часть', coverage: 'partial' });
+    } finally {
+      beforeFinish.hook = null;
+    }
+    expect(seen).toEqual([{ result: null, coverage: 'partial' }]);
+    expect(session(await readMapFile(), 's-02').result).toBe('done');
+    expect((await memberOf('s-02')).coverage).toBe('partial');
+  });
+});
+
 
 
 
@@ -1464,7 +1571,7 @@ describe('add_to_room', () => {
   /** Версия строки работы: после отказа она не сдвинулась — карту не записывали. */
   const rawMap = (): number | undefined => workVersion(project, workId);
 
-  it('ведущий вводит живую сессию: она в members, в ленте — системная строка, письма ей нет', async () => {
+  it('ведущий вводит живую сессию: она в members, в ленте — системная строка, а ящик новичка — одно письмо о вводе', async () => {
     const { lead } = await setup();
     const result = await callOk(lead, 'add_to_room', { room: 'r-01', session: 's-04' });
 
@@ -1478,9 +1585,19 @@ describe('add_to_room', () => {
       to: [HUMAN],
       text: '@s04 joined the room',
     });
-    // Письма о добавлении новому участнику не пишется: его ящик пуст.
+    // Новичок получает одно прямое письмо от system вместо истории комнаты; в комнате одно прежнее письмо — приглашение s-02.
     const added = await connect('s-04');
-    expect(await callOk(added, 'check_inbox')).toEqual({ messages: [] });
+    const inbox = (await callOk(added, 'check_inbox')) as { messages: Array<Record<string, unknown>> };
+    expect(Object.keys(inbox)).toEqual(['messages']);
+    expect(inbox.messages).toHaveLength(1);
+    expect(inbox.messages[0]).toMatchObject({
+      from: 'system',
+      kind: 'note',
+      room: null,
+      text:
+        '@s01 added you to room r-01 "комната"; its lead is @s01. Earlier messages of the room (1) are not in your inbox: ' +
+        'read_room with room "r-01" shows the newest, page.next the older ones. Messages sent from now on reach you as usual.',
+    });
   });
 
   it('одна комната на сессию: введённая уходит из другой комнаты той же работы', async () => {
@@ -1939,16 +2056,15 @@ describe('send_message и check_inbox в комнате', () => {
       expect(fromWait?.roomTask).toEqual(fromInbox?.roomTask);
     });
 
-    it('в комнате нет живых участников — roomTask нет, письмо и toEveryone остаются', async () => {
+    it('в комнате нет живых участников — закрытая сессия писем не получает', async () => {
       const { a } = await roomSetup();
       await humanSays();
       await callOk(await connect('s-02'), 'close_session', { target: 's-02' });
       await callOk(await connect('s-03'), 'close_session', { target: 's-03' });
       await callOk(await connect('s-01'), 'close_session', { target: 's-01' });
 
-      const [letter] = await inboxOf(a);
-      expect(letter).toMatchObject({ text: TASK, toEveryone: true });
-      expect(letter).not.toHaveProperty('roomTask');
+      // Закрытую сессию не возобновить, поэтому непрочитанных писем у неё нет (isClosedReader в work/letters.ts).
+      expect(await inboxOf(a)).toEqual([]);
     });
 
     it('ведущий закрыт: роль считается по живому ведущему, а не по записи комнаты', async () => {
@@ -2024,7 +2140,7 @@ describe('check_inbox и wait_for("inbox"): задания плана комна
         planId: map.rooms[0]!.proposal!.plan!.id,
         planRev: 0,
       });
-      reservePlanEffects(map, letters, DEFAULT_CONFIG.messageRate);
+      reservePlanEffects(map, letters);
       // Решение и ответ человека на него тестам не нужны: читаем их за всех, остаются только поручения.
       const at = new Date().toISOString();
       const seen = letters.query({ roomId: 'r-01', kind: 'decision', limit: 100 }).map((message) => message.id);
@@ -2181,7 +2297,7 @@ describe('check_inbox и wait_for("inbox"): задания плана комна
       plan.mode = 'autonomous';
       plan.autonomous = autonomousStore();
       plan.status = 'completing';
-      reservePlanEffects(map, letters, DEFAULT_CONFIG.messageRate);
+      reservePlanEffects(map, letters);
     });
     const effects = (await readMap(project, workId)).planEffects ?? [];
     expect(effects.some((effect) => effect.kind === 'completing' && effect.target === 's-01')).toBe(true);
@@ -3828,6 +3944,52 @@ describe('застрявшая сессия: get_map, wait_for и send_message (
     expect(sent['warning']).toBe(
       'unknown parameters ignored: reply_to (did you mean replyTo?); @s02 is stuck (waiting for approval): it reads this when it is back',
     );
+  });
+
+  const setBlocked = (id: string): Promise<unknown> =>
+    updateMap(project, workId, (map) => {
+      session(map, id).wakeBlocked = { since: '2026-11-10T10:00:00.000Z', reason: 'role-provider-mismatch' };
+    });
+
+  it('wakeBlocked у адресата: warning с причиной, письмо записано', async () => {
+    const lead = await stuckSetup();
+    await setBlocked('s-02');
+
+    const sent = await callOk(lead, 'send_message', { to: 's-02', text: 'Проснись' });
+
+    expect(sent['warning']).toBe('@s02 cannot be woken (role-provider-mismatch): it reads this when the human resumes it');
+    expect((await readMapFile()).messages.find((message) => message.id === sent['messageId'])).toMatchObject({ text: 'Проснись' });
+  });
+
+  it('застрявший и заблокированный адресат: только предупреждение о застрявшем', async () => {
+    const lead = await stuckSetup();
+    await setStuck('s-02', need());
+    await setBlocked('s-02');
+
+    const sent = await callOk(lead, 'send_message', { to: 's-02', text: 'Лично' });
+
+    expect(sent['warning']).toBe('@s02 is stuck (waiting for approval): it reads this when it is back');
+  });
+
+  it('спящий адресат без providerSessionId и без прежних агентов: warning о сессии без разговора', async () => {
+    const lead = await stuckSetup();
+    await updateMap(project, workId, (map) => {
+      session(map, 's-02').lifecycle = 'sleeping';
+    });
+
+    const sent = await callOk(lead, 'send_message', { to: 's-02', text: 'Лично' });
+
+    expect(sent['warning']).toBe('@s02 is asleep with no conversation to resume: it reads this when the human starts it');
+  });
+
+  it('спящий адресат с разговором и свободным часом: ответ прежний', async () => {
+    const lead = await stuckSetup();
+    await updateMap(project, workId, (map) => {
+      session(map, 's-02').lifecycle = 'sleeping';
+      session(map, 's-02').providerSessionId = 'conv-1';
+    });
+
+    expect(await callOk(lead, 'send_message', { to: 's-02', text: 'Лично' })).toEqual({ messageId: expect.any(String) });
   });
 });
 

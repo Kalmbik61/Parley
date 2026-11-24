@@ -8,6 +8,7 @@ const BRAND: Record<string, { bg: string; fg: string; mark: string }> = {
   minimax: { bg: '#F23F5D', fg: '#FFFFFF', mark: 'M' },
   openrouter: { bg: '#6467F2', fg: '#FFFFFF', mark: 'O' },
   qwen: { bg: '#615CED', fg: '#FFFFFF', mark: 'Q' },
+  opencode: { bg: '#0B0B0B', fg: '#FFFFFF', mark: 'O' },
 };
 
 /** Brand colours and initial of a provider id; unknown providers get a neutral avatar with their first letter. */

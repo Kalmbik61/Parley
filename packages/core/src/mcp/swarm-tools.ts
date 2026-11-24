@@ -35,6 +35,7 @@ export const SWARM_ADD_TOOL: Tool = {
       task: { type: 'string', minLength: 1 },
       provider: { type: 'string', minLength: 1 },
       label: { type: 'string', minLength: 1 },
+      slice: { type: 'string', minLength: 1, maxLength: 60, description: 'Short slice name; shown to the human and in the wave letter.' },
       agentRole: { type: 'string', description: 'Role id from list_roles; default researcher (drone) or verifier.' },
       model: { type: ['string', 'null'] },
       effort: { type: ['string', 'null'] },

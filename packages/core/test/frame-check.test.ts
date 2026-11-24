@@ -387,7 +387,7 @@ describe('рамочный тест репозитория (тест 6)', () => 
     expect(hits, report).toEqual([]);
   });
 
-  // Нынешних «близких» совпадений в исходниках шесть (без явных исключений FRAME_EXCEPTIONS), все в комментариях — сверено
+  // Нынешних «близких» совпадений в исходниках восемь (без явных исключений FRAME_EXCEPTIONS), все в комментариях — сверено
   // по факту (raw-скан без фильтра комментариев) при написании этого раунда
   // исправлений. Если список изменится, этот тест укажет ровно на новую строку,
   // не пропустив её молча в общем «all clean».
@@ -419,9 +419,13 @@ describe('рамочный тест репозитория (тест 6)', () => 
       [
         'packages/core/src/codex/discover.ts:10',
         'packages/core/src/codex/discover.ts:9',
-        'packages/core/src/providers.ts:18',
-        'packages/core/src/providers.ts:359',
-        'packages/core/src/work/mcp-config.ts:215',
+        'packages/core/src/providers.ts:19',
+        'packages/core/src/providers.ts:368',
+        'packages/core/src/work/mcp-config.ts:222',
+        // Комментарии кэша каталога ролей: правка `.codex/config.toml` (строка 21) и список проектных `.codex/config.toml`
+        // (строка 44) — слова в описании подписи входов; сама подпись собирает путь из частей и регэксп не задевает.
+        'packages/host/src/methods/role-catalog-cache.ts:21',
+        'packages/host/src/methods/role-catalog-cache.ts:44',
         // Комментарий службы входа: «Parley не читает … `.credentials.json`» (спека подписок 5.5 и анти-цели раздела 2).
         'packages/host/src/providers/auth-service.ts:4',
       ].sort(),

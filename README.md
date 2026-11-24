@@ -5,7 +5,7 @@
   </picture>
 </h1>
 
-Parley coordinates agent CLIs (Claude Code, Codex, and GLM through Claude Code) in the
+Parley coordinates agent CLIs (Claude Code, Codex, Qwen Code, OpenCode, and GLM through Claude Code) in the
 `Parley.app` window — an Electron app on top of a local `parley-host` process. The window and
 the host are connected by a unix socket with its own handshake token; nothing is reachable
 from the network. Parley works locally: it is not a server and not a web app. The one optional
@@ -38,7 +38,7 @@ official CLIs: Parley itself adds no API keys and no extra bill.
   <img src="docs/media/room-decision-light.png" width="720" alt="A room: the feed of four agents and the lead's decision card with the Accept and Return for rework buttons">
 </picture>
 
-1. **Gather a team.** Press ⌘T and add two or more agents: Claude Code, Codex or GLM, each
+1. **Gather a team.** Press ⌘T and add two or more agents: Claude Code, Codex, Qwen Code, OpenCode or GLM, each
    with its own model and, if you like, a role and its own git worktree. Star the lead and
    click "Create room". To make a room of sessions that already run, drag one onto another in
    the sidebar.
@@ -116,15 +116,18 @@ OpenAI speech API, using your own OpenAI key from Settings → Voice provider (A
 ## How it works
 
 ```
-Parley.app (window)  ◀── unix socket ──▶  parley-host  ◀── PTY + MCP ──▶  claude / codex
+Parley.app (window)  ◀── unix socket ──▶  parley-host  ◀── PTY + MCP ──▶  claude / codex / qwen / opencode
 ```
 
-- **Official CLIs, your login.** Parley starts the unmodified `claude` and `codex` from your
-  `PATH`, signed in as you. It never reads or stores their credentials and makes no requests
+- **Official CLIs, your login.** Parley starts the unmodified `claude`, `codex`, `qwen` and `opencode` from your
+  `PATH`, signed in as you (Qwen Code: inside `qwen`, with `/auth`; OpenCode: inside `opencode`). It installs or updates them only when you press Install or Update
+  in Settings → Providers. It never reads or stores their credentials and makes no requests
   to the Anthropic or OpenAI APIs for the agents (only the optional assistant voice calls OpenAI).
 - **Local only.** The host runs the agents' terminals and outlives the window. No server, no
   telemetry. Parley's own requests are a once-a-day release check on GitHub (you can turn it
-  off) and, for GLM, a quota query to Z.ai. With **Remote access** on, the separate bridge
+  off), the download of a release archive and its `SHA256SUMS.txt` from GitHub when you press Update, a daily check of the latest CLI versions (npm registry, GitHub, the Homebrew cask API),
+  the installer downloads from the vendors' URLs when you press Install, and, for GLM, a quota
+  query to Z.ai. With **Remote access** on, the separate bridge
   process also connects out to the relay you chose (and, when push works, to the push gateway);
   the window itself makes one more kind of connection, over SSH, only while you run the relay
   setup wizard. Remote access is off by default and listens on no port.
@@ -135,6 +138,43 @@ Parley.app (window)  ◀── unix socket ──▶  parley-host  ◀── PTY
   never closes a session on its own. It puts an idle agent to sleep after 60 minutes (the
   session stays, a letter wakes it with the same history; set the delay to 0 in Settings to
   turn this off). Quitting the app (⌘Q) asks first and stops the running agents.
+
+### Qwen Code
+
+Qwen Code is a built-in provider next to Claude Code and Codex. Parley starts the official `qwen` CLI
+from your `PATH` in a terminal, with Parley's tools, the Chat view and history, and resumes the same
+conversation when a sleeping session is woken. Sign in inside `qwen` with `/auth`; Parley never reads or
+stores the credentials. Settings → Providers → Qwen Code shows only a hint of what it found locally
+(a configured auth type, a Qwen account sign-in, or a key in the environment). It is a hint, not a check
+that the sign-in works. Qwen asks for approvals in the terminal; Chat shows "Waiting for approval in the
+terminal". Built-in roles run on it except the read-only ones (Planner and the other read-only roles are
+disabled in the new-session dialog).
+
+Not in this version: several Qwen accounts, keys held by Parley, usage limits, autonomous rooms, the
+one-shot assistant, starting from the phone, and read-only roles. The custom provider preset that
+routes Alibaba keys through Claude Code is now called "Qwen models in Claude Code (Alibaba key)"; its id and
+your existing providers are unchanged.
+
+### OpenCode
+
+OpenCode (the 2.x line, `@opencode/cli`) is a built-in provider. Parley starts the official `opencode` CLI
+from your `PATH` in a terminal, attached to a private `opencode serve` that Parley runs for that session on
+127.0.0.1 with a random password, and stops it with the session. Parley's tools reach OpenCode through its
+`execute` tool (`tools.parley.<name>()`); Chat shows the history, and a sleeping session resumes the same
+conversation. OpenCode 1.x is never run: Settings → Providers → OpenCode says "OpenCode 1.x found" and
+offers Install… for 2.x.
+
+Sign in inside OpenCode (Connect provider, or `opencode auth login --standalone` in a terminal); Parley holds
+no OpenCode keys. The card shows only how many providers `opencode auth list` reports as connected. It is
+a hint, not a check, and the output is never stored or logged. The model list comes from `opencode models`.
+Read-only roles run with the edit, shell, webfetch, websearch and subagent tools denied; Parley's own tools
+and the network reads of `execute` stay available. Writable sessions start OpenCode with `--auto`.
+OpenCode asks for approvals in the terminal; Chat shows "Waiting for approval in the terminal".
+
+Local exposure: while a session runs, its OpenCode server answers on 127.0.0.1 only. Every API route needs
+the session's password, but the web UI page (`/health`) and the API description (`/doc`) are served without
+it, so any local process or local web page can read them. Parley's tests check that they hold no session id, password, working directory or user name. The
+password stays in the memory of Parley and the two processes' environment, and is never written to disk or the log.
 
 ### Codex: folder trust and approvals
 
@@ -162,9 +202,10 @@ the reason when a strong model writes code; a project's `PARLEY.md` can change t
 
 **Global agent rules.** On startup, Parley creates `~/.parley/PARLEY.md` with a template if the
 file is missing. `PARLEY_HOME` selects a different home folder. Add your personal rules to the
-file. Parley reads them on every agent launch and resume, including assistant turns and background
-jobs. Project agents get global rules followed by the project's `PARLEY.md`. Each file has a 32 KiB
-limit. Custom runner templates deliver these rules through `{systemPrompt}` or
+file. Parley reads them on every agent launch and resume, including assistant turns and user
+background jobs. Project agents get global rules followed by the project's `PARLEY.md`. Kimi Code
+receives them with the first prompt after each launch or resume. Each file has a 32 KiB limit.
+Custom runner templates deliver these rules through `{systemPrompt}` or
 `{developerInstructions}`, depending on the provider.
 
 ## Install and use
@@ -205,9 +246,29 @@ Parley (the button appears after the first attempt to open the app).
 ### Updates
 
 Once a day Parley checks GitHub for a new release and shows a toast when one is out (turn it
-off in Settings → Notifications); it does not update itself. Quit Parley with ⌘Q (this also stops its agents), download the new `.dmg`, replace the
-app in Applications and run the `xattr` command again: macOS treats every unsigned build as a
-new app. Your data lives outside the app and stays.
+off in Settings → About, where **Check now** asks GitHub right away, even with the daily check off).
+Press **Update** in the toast (or in the same place in
+Settings → About): Parley downloads the release archive, checks it against the
+release's `SHA256SUMS.txt`, unpacks it next to the app and shows **Restart now**. Nothing is
+replaced before that click, and **Cancel** stops the download. Restarting is an ordinary quit:
+it asks about unsaved files and running sessions, stops the agents, and a **Cancel** in any of
+those questions keeps the old version running. After the restart the new version opens, and the
+old app stays next to it as the hidden `.Parley.app.old`; the new version removes it in the
+background on its first start once the swap result confirms it is running, and if that
+confirmation did not happen (an interrupted swap), `.Parley.app.old` stays until the next update.
+
+The toast shows **Download** instead of **Update** when Parley cannot replace itself: it runs
+from a disk image or from a place you cannot write to, or an update failed (the toast then names the reason).
+Then update by hand. Quit Parley with ⌘Q (this also stops its agents), download the new `.dmg`, replace the
+app in Applications and run the `xattr` command again. Either way macOS asks for the
+permissions again: it treats every unsigned build as a new
+app. Your data lives outside the app and stays.
+
+If an update stops half way and Parley is gone from Applications, put the old one back:
+
+```bash
+mv /Applications/.Parley.app.old /Applications/Parley.app
+```
 
 ## Remote access (mobile)
 
@@ -300,13 +361,14 @@ actions the bridge handled. Turning the switch off stops the bridge.
 - macOS 13 (Ventura) or later, on Apple Silicon or Intel. The Intel build has not been tested
   on an Intel Mac yet.
 - At least one agent CLI, installed and signed in:
-  - Claude Code (`claude`) and/or Codex (`codex`). Parley finds them on the `PATH` of your
-    login shell;
+  - Claude Code (`claude`), Codex (`codex`), Qwen Code (`qwen`, 0.27.2 or newer) and/or OpenCode (`opencode`, 2.0.0 or newer). Parley finds
+    them on the `PATH` of your login shell;
   - GLM needs Claude Code 2.1.287 or newer, an active GLM Coding Plan and a Z.ai API key that
     you paste into its provider card. The key stays on this Mac.
 - git in `PATH`; 2.38 or newer to see merge conflicts before you merge.
-- Chat view (optional) needs Claude Code 2.1.286 or newer, or Codex 0.160.0 or newer. Older
-  versions work in the terminal.
+- Chat view (optional) needs Claude Code 2.1.286 or newer, Codex 0.160.0 or newer, Qwen Code 0.27.2 or newer, or OpenCode 2.2.7 or newer. Older
+  versions work in the terminal. Messages delivered to an agent show there as mail cards (Claude Code, Codex and
+  Qwen Code) and are kept after a restart.
 - Auto-review of Codex approvals (the default) needs Codex 0.162.0 or newer; on an older Codex the
   sessions ask in the terminal.
 

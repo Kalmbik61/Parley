@@ -9,14 +9,14 @@ beforeEach(() => { vi.useFakeTimers(); resetRolesStoreForTests(); });
 afterEach(() => { vi.useRealTimers(); });
 
 describe('стор ролей', () => {
-  it('load по одному cwd — один вызов roles.list, повтор в пределах 3 с — ноль, после — новый', async () => {
+  it('load по одному cwd — один вызов roles.list, повтор в пределах TTL — ноль, после — новый', async () => {
     const bridge = createFakeBridge();
     bridge.setHandler('roles.list', async () => ({ roles: [role(false)], diagnostics: [], partial: false }));
     const load = (): void => useRolesStore.getState().load(bridge, { projectPath: '/p', cwd: '/p' });
     load(); load();
     await flush();
     expect(bridge.calls.filter(c => c.method === 'roles.list')).toHaveLength(1);
-    expect(useRolesStore.getState().byCwd['/p']?.status).toBe('ready');
+    expect(useRolesStore.getState().byKey['/p']?.status).toBe('ready');
     vi.advanceTimersByTime(ROLES_STORE_TTL_MS - 1);
     load();
     expect(bridge.calls.filter(c => c.method === 'roles.list')).toHaveLength(1);
@@ -36,9 +36,9 @@ describe('стор ролей', () => {
     await flush();
     fail = true;
     store.load(bridge, { projectPath: '/p', cwd: '/p', force: true });
-    expect(useRolesStore.getState().byCwd['/p']).toMatchObject({ status: 'reloading', roles: [expect.objectContaining({ readOnly: true })] });
+    expect(useRolesStore.getState().byKey['/p']).toMatchObject({ status: 'reloading', roles: [expect.objectContaining({ readOnly: true })] });
     await flush();
-    expect(useRolesStore.getState().byCwd['/p']).toMatchObject({ status: 'error', roles: [expect.objectContaining({ readOnly: true })] });
+    expect(useRolesStore.getState().byKey['/p']).toMatchObject({ status: 'error', roles: [expect.objectContaining({ readOnly: true })] });
     warn.mockRestore();
   });
 
@@ -50,11 +50,11 @@ describe('стор ролей', () => {
     await flush();
     vi.advanceTimersByTime(ROLES_STORE_TTL_MS);
     store.load(bridge, { projectPath: '/p', cwd: '/p' });
-    expect(useRolesStore.getState().byCwd['/p']?.status).toBe('loading');
+    expect(useRolesStore.getState().byKey['/p']?.status).toBe('loading');
     store.load(bridge, { projectPath: '/p', cwd: '/p', force: true });
-    expect(useRolesStore.getState().byCwd['/p']?.status).toBe('reloading');
+    expect(useRolesStore.getState().byKey['/p']?.status).toBe('reloading');
     await flush();
-    expect(useRolesStore.getState().byCwd['/p']?.status).toBe('ready');
+    expect(useRolesStore.getState().byKey['/p']?.status).toBe('ready');
   });
 
   it('force поверх свежей ошибки (прежние роли сохранены) даёт reloading', async () => {
@@ -69,10 +69,10 @@ describe('стор ролей', () => {
     vi.advanceTimersByTime(ROLES_STORE_TTL_MS);
     store.load(bridge, { projectPath: '/p', cwd: '/p' });
     await flush();
-    expect(useRolesStore.getState().byCwd['/p']?.status).toBe('error');
+    expect(useRolesStore.getState().byKey['/p']?.status).toBe('error');
     fail = false;
     store.load(bridge, { projectPath: '/p', cwd: '/p', force: true });
-    expect(useRolesStore.getState().byCwd['/p']?.status).toBe('reloading');
+    expect(useRolesStore.getState().byKey['/p']?.status).toBe('reloading');
     warn.mockRestore();
   });
 });

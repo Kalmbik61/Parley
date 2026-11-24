@@ -14,7 +14,7 @@ import { z } from 'zod';
 import type { FeedCardState, FeedDecision, FeedItem } from '@parley/core';
 
 /** Версия схемы ленты: растёт с каждым добавленным полем элемента или решения. */
-export const FEED_SCHEMA_VERSION = 3;
+export const FEED_SCHEMA_VERSION = 4;
 
 /** = `FEED_RESULT_LIMIT` core: символов сводки результата инструмента. */
 export const FEED_RESULT_LIMIT = 64 * 1024;
@@ -26,6 +26,8 @@ export const FEED_PATCH_LINES = 2_000;
 export const FEED_AGENT_TEXT_LIMIT = 16 * 1024;
 /** = `FEED_TEXT_LIMIT` core: символов текста ответа модели. */
 export const FEED_TEXT_LIMIT = 256 * 1024;
+/** = `FEED_MAIL_TEXT_LIMIT` core: символов текста одного письма в элементе `mail`. */
+export const FEED_MAIL_TEXT_LIMIT = 16 * 1024;
 /** = `FEED_AGENT_CHILDREN` core: вложенных вызовов у карточки субагента. */
 export const FEED_AGENT_CHILDREN = 100;
 /** = `FEED_IMAGES_PER_CALL` core: ссылок на картинки в сводке результата одного вызова. */
@@ -43,6 +45,24 @@ export const FEED_MIN_VERSION = '2.1.286';
 export const CODEX_FEED_MIN_VERSION = '0.160.0';
 /** Признак `hello.features` хоста, который строит ленту Codex из журнала. */
 export const FEED_CODEX_FEATURE = 'feed-codex';
+/** = `runner.minVersion` of the `qwen` registry entry: the lowest Qwen Code whose transcript the Chat feed parses (spec 2026-11-11, 3.5). */
+export const QWEN_FEED_MIN_VERSION = '0.27.2';
+/** `hello.features` of a host that builds the Qwen Code feed from its transcript. */
+export const FEED_QWEN_FEATURE = 'feed-qwen';
+/** The lowest OpenCode whose message list the Chat feed parses: the version of the spike and the mock lab (spec 2026-11-12, 4.11). */
+export const OPENCODE_FEED_MIN_VERSION = '2.2.7';
+/** `hello.features` of a host that builds the OpenCode feed from the messages API of the session's server. */
+export const FEED_OPENCODE_FEATURE = 'feed-opencode';
+/**
+ * Признак `hello.features` клиента: он понимает событие `feed.resync` (хост снял его подписки на ленты из-за
+ * затора и просит взять снимок заново). Клиенту без признака подписки не снимаются.
+ */
+export const FEED_RESYNC_FEATURE = 'feed-resync';
+/**
+ * Признак `hello.features` клиента: он рисует элемент ленты `mail` (доставленные письма). Хост шлёт `mail` только
+ * клиентам с признаком (снимок и дельты); без него старое окно сложило бы незнакомый вид в «Retried requests».
+ */
+export const FEED_MAIL_FEATURE = 'feed-mail';
 /** Может ли окно отвечать на одобрения сессии (`window`) или только терминал (`terminal`); спека 5.7. */
 export const feedDecisions = z.enum(['window', 'terminal']);
 export type FeedDecisions = z.infer<typeof feedDecisions>;
@@ -148,6 +168,10 @@ const cardBase = {
   settledAt: z.string().exactOptional(),
 };
 
+// Вопросы и план core берёт из уже усечённого входа карточки — тот же предел.
+const inputText = z.string().max(FEED_INPUT_LIMIT);
+const optionId = z.string().min(1).max(FEED_INPUT_LIMIT);
+
 const permission = z.strictObject({
   ...cardBase,
   kind: z.literal('permission'),
@@ -155,10 +179,16 @@ const permission = z.strictObject({
   always: z.boolean().exactOptional(),
   message: z.string().max(FEED_DECISION_MESSAGE_LIMIT).exactOptional(),
   notified: z.boolean(),
+  permissionOptions: z.array(z.strictObject({
+    optionId,
+    name: inputText,
+    kind: z.enum(['allow_once', 'allow_always', 'reject_once', 'reject_always']),
+  })).exactOptional(),
+  permissionPreview: z.array(z.discriminatedUnion('type', [
+    z.strictObject({ type: z.literal('text'), text: inputText }),
+    z.strictObject({ type: z.literal('diff'), path: inputText, oldText: inputText.nullable(), newText: inputText }),
+  ])).exactOptional(),
 });
-
-// Вопросы и план core берёт из уже усечённого входа карточки — тот же предел.
-const inputText = z.string().max(FEED_INPUT_LIMIT);
 
 const question = z.strictObject({
   ...cardBase,
@@ -167,10 +197,19 @@ const question = z.strictObject({
     z.strictObject({
       question: inputText,
       header: inputText.nullable(),
-      options: z.array(z.strictObject({ label: inputText, description: inputText.nullable() })),
+      options: z.array(z.strictObject({ label: inputText, description: inputText.nullable(), value: inputText.exactOptional() })),
       multiSelect: z.boolean(),
+      field: z.strictObject({
+        id: optionId,
+        type: z.enum(['choice', 'text', 'number', 'integer', 'boolean']),
+        required: z.boolean(),
+        description: inputText.exactOptional(),
+        min: z.number().exactOptional(),
+        max: z.number().exactOptional(),
+      }).exactOptional(),
     }),
   ),
+  formPrompt: inputText.exactOptional(),
   // Ответ из терминала (`PostToolUse`) core не усекает, поэтому пределов `feed.decide` здесь нет.
   answers: z.record(z.string(), z.string()).exactOptional(),
 });
@@ -255,6 +294,26 @@ const turn = z.strictObject({
   interrupted: z.literal(true).exactOptional(),
 });
 
+const mailLetter = z.strictObject({
+  id: z.string(),
+  from: z.string(),
+  fromLabel: z.string().nullable(),
+  kind: z.enum(['note', 'question', 'decision']),
+  room: z.strictObject({ id: z.string(), title: z.string() }).nullable(),
+  at: z.string(),
+  text: z.string().max(FEED_MAIL_TEXT_LIMIT),
+  cut: z.literal(true).exactOptional(),
+});
+
+const mail = z.strictObject({
+  ...base,
+  kind: z.literal('mail'),
+  via: z.enum(['pointer', 'check_inbox', 'wait_for']),
+  toolUseId: z.string().nullable(),
+  letters: z.array(mailLetter).min(1).max(50),
+  remaining: z.number().int().min(1).exactOptional(),
+});
+
 /** Элемент ленты (`FeedItem` core). */
 export const feedItem: z.ZodType<FeedItem> = z.discriminatedUnion('kind', [
   prompt,
@@ -267,6 +326,7 @@ export const feedItem: z.ZodType<FeedItem> = z.discriminatedUnion('kind', [
   notice,
   error,
   turn,
+  mail,
 ]);
 
 /** Решение человека из окна (`FeedDecision` core) — параметр `feed.decide`. */
@@ -276,12 +336,19 @@ export const feedDecision: z.ZodType<FeedDecision> = z.discriminatedUnion('kind'
     behavior: z.enum(['allow', 'deny']),
     always: z.literal(true).exactOptional(),
     message: z.string().max(FEED_DECISION_MESSAGE_LIMIT).exactOptional(),
+    optionId: optionId.exactOptional(),
   }),
   z.object({
     kind: z.literal('question'),
     answers: z
       .record(z.string().max(FEED_INPUT_LIMIT), z.string().max(FEED_DECISION_ANSWER_LIMIT))
       .refine((answers) => Object.keys(answers).length <= FEED_DECISION_ANSWERS),
+    values: z.record(optionId, z.union([
+      z.string().max(FEED_DECISION_ANSWER_LIMIT),
+      z.number(),
+      z.boolean(),
+      z.array(inputText).max(FEED_DECISION_ANSWERS),
+    ])).refine((values) => Object.keys(values).length <= FEED_DECISION_ANSWERS).exactOptional(),
   }),
   z.object({ kind: z.literal('plan'), choice: z.enum(['auto-accept', 'manual']) }),
 ]);

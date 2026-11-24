@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { toast } from 'sonner';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { FeedItem, ParleyConfig, WorkSession } from '@parley/core';
-import { refKey, type Capabilities, type ConsentCard, type PendingLetter, type SendResult, type SessionRef } from '@parley/protocol';
+import { refKey, type Capabilities, type ConsentCard, type KimiConfigOption, type PendingLetter, type SendResult, type SessionRef } from '@parley/protocol';
 import type { DirEntry } from '../../shared/files-types.js';
 import { S } from '../../shared/strings.js';
 import type { TerminalView } from '../../shared/layout-types.js';
@@ -66,10 +66,11 @@ let bridge: FakeBridge;
 let sendDeps: SendWithToastDeps;
 
 function body(session: WorkSession, view?: TerminalView): JSX.Element {
+  const sessionId = session.id;
   const tab = view === undefined
-    ? { kind: 'terminal' as const, id: 'terminal:s-01', sessionId: 's-01' }
-    : { kind: 'terminal' as const, id: 'terminal:s-01', sessionId: 's-01', view };
-  return <TerminalBody workKey="/tmp/p w-01" tab={tab} session={session} sessionRef={REF} active bridge={bridge} sendDeps={sendDeps} />;
+    ? { kind: 'terminal' as const, id: `terminal:${sessionId}`, sessionId }
+    : { kind: 'terminal' as const, id: `terminal:${sessionId}`, sessionId, view };
+  return <TerminalBody workKey="/tmp/p w-01" tab={tab} session={session} sessionRef={{ ...REF, sessionId }} active bridge={bridge} sendDeps={sendDeps} />;
 }
 
 function renderBody(session: WorkSession, view?: TerminalView): ReturnType<typeof render> {
@@ -116,6 +117,109 @@ afterEach(() => {
   useWorksStore.setState(useWorksStore.getInitialState(), true);
   useHostConfigStore.setState({ config: null });
   useConsentsStore.setState({ cards: [], asking: null });
+});
+
+describe('Kimi Code session configuration', () => {
+  const model = (currentValue: string): KimiConfigOption => ({
+    id: 'model', name: 'Model', category: 'model', type: 'select', currentValue,
+    options: [{ group: 'available', name: 'Available models', options: [
+      { value: 'a', name: 'Kimi A' }, { value: 'b', name: 'Kimi B' },
+    ] }],
+  });
+  const thinking: KimiConfigOption = { id: 'thinking', name: 'Thinking', type: 'boolean', currentValue: true };
+  const mode: KimiConfigOption = {
+    id: 'permission', name: 'Permissions', category: 'mode', type: 'select', currentValue: 'ask',
+    options: [{ value: 'ask', name: 'Ask first' }],
+  };
+
+  beforeEach(() => {
+    hostWith([...FEED_METHODS, 'kimi.getState', 'kimi.setConfig', 'sessions.setMode']);
+    // A native ACP session does not require a reported CLI version to display Chat.
+    useProvidersStore.setState({ providers: [{ id: 'kimi', label: 'Kimi Code', available: true, version: null, limits: null }], loaded: true });
+  });
+
+  it('shows each session’s confirmed model and uses the restored snapshot when the chat reopens', async () => {
+    const first = makeSession('s-01', 'S01', { provider: 'kimi', model: 'old-map-value' });
+    const second = makeSession('s-02', 'S02', { provider: 'kimi' });
+    const secondRef = { ...REF, sessionId: second.id };
+    bridge.setHandler('kimi.getState', ({ ref }) => ({ requests: [], config: [model(ref.sessionId === first.id ? 'a' : 'b')] }));
+    const left = renderBody(first);
+    const right = renderBody(second, 'chat');
+    await waitFor(() => {
+      expect(within(left.container).getByRole('button', { name: /Kimi A/ })).toBeDefined();
+      expect(within(right.container).getByRole('button', { name: /Kimi B/ })).toBeDefined();
+    });
+
+    act(() => bridge.emit('kimi.configChanged', { ref: secondRef, config: [model('a')] }));
+    expect(within(left.container).getByRole('button', { name: /Kimi A/ })).toBeDefined();
+    expect(within(right.container).getByRole('button', { name: /Kimi A/ })).toBeDefined();
+    act(() => bridge.emit('kimi.configChanged', { ref: REF, config: [model('b')] }));
+    expect(within(left.container).getByRole('button', { name: /Kimi B/ })).toBeDefined();
+    expect(within(right.container).getByRole('button', { name: /Kimi A/ })).toBeDefined();
+
+    left.unmount();
+    bridge.setHandler('kimi.getState', () => ({ requests: [], config: [model('b')] }));
+    const resumed = renderBody(first);
+    expect(await within(resumed.container).findByRole('button', { name: /Kimi B/ })).toBeDefined();
+  });
+
+  it('displays only supported controls and applies a choice only after the CLI confirms it', async () => {
+    const extra: KimiConfigOption = { ...mode, id: 'speed', name: 'Speed', category: 'model_config' };
+    bridge.setHandler('kimi.getState', () => ({ requests: [], config: [model('a'), thinking, mode, extra] }));
+    let confirm: (config: KimiConfigOption[]) => void = () => { throw new Error('No pending request'); };
+    bridge.setHandler('kimi.setConfig', () => new Promise((resolve) => {
+      confirm = (config) => resolve({ config });
+    }));
+    renderBody(makeSession('s-01', 'S01', { provider: 'kimi' }));
+    const trigger = await screen.findByRole('button', { name: /Kimi A/ });
+    expect(trigger.textContent).toContain('Ask first');
+    fireEvent.keyDown(trigger, { key: 'Enter' });
+    expect(screen.getByRole('menuitemcheckbox', { name: 'Thinking' }).getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByRole('menuitemradio', { name: 'Ask first' }).getAttribute('aria-checked')).toBe('true');
+    expect(screen.queryByText('Speed')).toBeNull();
+    fireEvent.click(screen.getByRole('menuitemradio', { name: 'Kimi B' }));
+    expect(bridge.calls).toContainEqual({ method: 'kimi.setConfig', params: { ref: REF, configId: 'model', value: 'b' } });
+    expect(trigger.textContent).toContain('Kimi A');
+
+    await act(async () => confirm([model('b')]));
+    expect(trigger.textContent).toContain('Kimi B');
+    fireEvent.keyDown(trigger, { key: 'Enter' });
+    expect(screen.getByRole('menuitemradio', { name: 'Kimi B' }).getAttribute('aria-checked')).toBe('true');
+    expect(screen.queryByRole('menuitemcheckbox')).toBeNull();
+    expect(screen.queryByRole('menuitemradio', { name: 'Ask first' })).toBeNull();
+  });
+
+  it('shows the CLI refusal and keeps the last confirmed value', async () => {
+    bridge.setHandler('kimi.getState', () => ({ requests: [], config: [model('a')] }));
+    bridge.setHandler('kimi.setConfig', () => { throw new Error('Model unavailable for this account'); });
+    renderBody(makeSession('s-01', 'S01', { provider: 'kimi' }));
+    const trigger = await screen.findByRole('button', { name: /Kimi A/ });
+    fireEvent.keyDown(trigger, { key: 'Enter' });
+    fireEvent.click(screen.getByRole('menuitemradio', { name: 'Kimi B' }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(expect.stringContaining('Model unavailable for this account')));
+    expect(trigger.textContent).toContain('Kimi A');
+    expect(screen.queryByTestId('chat-mode')).toBeNull();
+  });
+
+  it('uses the pushed config when a snapshot or a change reply arrives late', async () => {
+    let snapshot: (config: KimiConfigOption[]) => void = () => { throw new Error('No pending snapshot'); };
+    bridge.setHandler('kimi.getState', () => new Promise((resolve) => {
+      snapshot = (config) => resolve({ requests: [], config });
+    }));
+    let confirm: (config: KimiConfigOption[]) => void = () => { throw new Error('No pending request'); };
+    bridge.setHandler('kimi.setConfig', () => new Promise((resolve) => {
+      confirm = (config) => resolve({ config });
+    }));
+    renderBody(makeSession('s-01', 'S01', { provider: 'kimi' }));
+    act(() => bridge.emit('kimi.configChanged', { ref: REF, config: [model('a')] }));
+    await act(async () => snapshot([model('b')]));
+    const trigger = screen.getByRole('button', { name: /Kimi A/ });
+    fireEvent.keyDown(trigger, { key: 'Enter' });
+    fireEvent.click(screen.getByRole('menuitemradio', { name: 'Kimi B' }));
+    act(() => bridge.emit('kimi.configChanged', { ref: REF, config: [model('a'), mode] }));
+    await act(async () => confirm([model('b')]));
+    expect(trigger.textContent).toContain('Kimi A · Ask first');
+  });
 });
 
 describe('TerminalBody — вид вкладки', () => {
@@ -627,6 +731,56 @@ describe('ChatView — баннер ожидания в терминале (ку
     });
   };
 
+  it('a Qwen Code session blocked without a card shows "Waiting for approval in the terminal"', () => {
+    useLayoutStore.setState({
+      activeWorkKey: WORK_KEY,
+      layouts: {
+        [WORK_KEY]: {
+          root: { type: 'group', id: 'g1', tabs: [{ kind: 'terminal', id: 'terminal:s-01', sessionId: 's-01' }], activeTabId: 'terminal:s-01' },
+          activeGroupId: 'g1',
+          closedTabs: [],
+        },
+      },
+      hydrated: { [WORK_KEY]: true },
+      pending: {},
+      history: EMPTY_HISTORY,
+      mru: {},
+      navigating: false,
+    });
+    useProvidersStore.setState({ providers: [{ id: 'qwen', label: 'Qwen Code', available: true, family: 'qwen', version: '0.27.2', limits: null } as never], loaded: true });
+    useHostStore.setState({ status: { state: 'connected', hostVersion: '0.4.0', methods: FEED_METHODS, features: ['feed-qwen'] } as never });
+    activity('blocked');
+    renderBody({ ...makeSession('s-01', 'S01'), provider: 'qwen' });
+    setFeed([prompt('p1', 'hi')]);
+    settle();
+    expect(screen.getByTestId('chat-waiting-banner').textContent).toContain('Waiting for approval in the terminal');
+  });
+
+  it('an OpenCode session blocked without a card shows "Waiting for approval in the terminal"', () => {
+    useLayoutStore.setState({
+      activeWorkKey: WORK_KEY,
+      layouts: {
+        [WORK_KEY]: {
+          root: { type: 'group', id: 'g1', tabs: [{ kind: 'terminal', id: 'terminal:s-01', sessionId: 's-01' }], activeTabId: 'terminal:s-01' },
+          activeGroupId: 'g1',
+          closedTabs: [],
+        },
+      },
+      hydrated: { [WORK_KEY]: true },
+      pending: {},
+      history: EMPTY_HISTORY,
+      mru: {},
+      navigating: false,
+    });
+    useProvidersStore.setState({ providers: [{ id: 'opencode', label: 'OpenCode', available: true, family: 'opencode', version: '2.2.7', limits: null } as never], loaded: true });
+    useHostStore.setState({ status: { state: 'connected', hostVersion: '0.4.0', methods: FEED_METHODS, features: ['feed-opencode'] } as never });
+    activity('blocked');
+    renderBody({ ...makeSession('s-01', 'S01'), provider: 'opencode' });
+    setFeed([prompt('p1', 'hi')]);
+    settle();
+    expect(screen.getByTestId('chat-waiting-banner').textContent).toContain(S.chat.waitingBanner.opencodeApproval);
+  });
+
   it('blocked без pending-карточки — баннер есть через 300 мс; клик уводит вкладку в терминал', () => {
     useLayoutStore.setState({
       activeWorkKey: WORK_KEY,
@@ -694,6 +848,98 @@ describe('ChatView — баннер ожидания в терминале (ку
     renderBody(makeSession('s-01', 'S01'));
     setFeed([prompt('p1', 'hi')]);
     settle(1000);
+    expect(screen.queryByTestId('chat-waiting-banner')).toBeNull();
+  });
+});
+
+describe('ChatView — панель вопроса терминала (план 2026-11-18, задача 2)', () => {
+  const card = (): FeedItem => ({
+    id: 'card-1',
+    at: AT,
+    kind: 'permission',
+    cardId: 'card-1',
+    state: 'pending',
+    toolUseId: null,
+    toolName: 'Bash',
+    toolInput: { command: 'ls' },
+    suggestions: [],
+    notified: false,
+  });
+  const need = (kind: 'approval' | 'startup') => ({ kind, since: AT, detail: null, resetsAt: null, window: null, account: null }) as const;
+  const wait = (value: 'blocked' | 'idle', withNeed?: 'approval' | 'startup'): void =>
+    useActivityStore.setState({ byRef: activityMap([makeActivity(REF, value, withNeed === undefined ? {} : { need: need(withNeed) })]) });
+  const settle = async (ms = 300): Promise<void> => {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    bridge.setHandler('pty.screenText', () => ({ lines: ['', 'Trust this folder?', ''] }));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('хост знает pty.screenText: при ожидании — панель с текстом экрана, прежнего баннера нет', async () => {
+    hostWith([...FEED_METHODS, 'pty.screenText']);
+    wait('blocked');
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([prompt('p1', 'hi')]);
+    await settle();
+    expect(screen.getByTestId('chat-terminal-prompt')).not.toBeNull();
+    expect(screen.queryByTestId('chat-waiting-banner')).toBeNull();
+    expect(screen.getByTestId('chat-terminal-prompt-screen').textContent).toBe('Trust this folder?');
+    expect(screen.getByTestId('chat-terminal-prompt-title').textContent).toBe(S.chat.waitingBanner.text);
+  });
+
+  it('заголовок — причина ожидания из needReason, когда нужда известна', async () => {
+    hostWith([...FEED_METHODS, 'pty.screenText']);
+    wait('blocked', 'approval');
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([prompt('p1', 'hi')]);
+    await settle();
+    expect(screen.getByTestId('chat-terminal-prompt-title').textContent).toBe('Waiting for your approval in its terminal');
+  });
+
+  it('хост без pty.screenText: прежний баннер, панели нет, запросов экрана нет', async () => {
+    hostWith(FEED_METHODS);
+    wait('blocked');
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([prompt('p1', 'hi')]);
+    await settle(1000);
+    expect(screen.getByTestId('chat-waiting-banner').textContent).toContain(S.chat.waitingBanner.text);
+    expect(screen.queryByTestId('chat-terminal-prompt')).toBeNull();
+    expect(bridge.calls.filter((c) => c.method === 'pty.screenText')).toHaveLength(0);
+  });
+
+  it('ждущая карточка в ленте — нет ни панели, ни баннера', async () => {
+    hostWith([...FEED_METHODS, 'pty.screenText']);
+    wait('blocked');
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([card()]);
+    await settle(1000);
+    expect(screen.queryByTestId('chat-terminal-prompt')).toBeNull();
+    expect(screen.queryByTestId('chat-waiting-banner')).toBeNull();
+  });
+
+  it('нужда вида startup показывает панель, даже если активность не blocked', async () => {
+    hostWith([...FEED_METHODS, 'pty.screenText']);
+    wait('idle', 'startup');
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([prompt('p1', 'hi')]);
+    await settle();
+    expect(screen.getByTestId('chat-terminal-prompt-title').textContent).toBe('Waiting in its terminal since launch (sign-in, folder trust or another startup screen)');
+  });
+
+  it('нужда startup без pty.screenText баннера не добавляет', async () => {
+    hostWith(FEED_METHODS);
+    wait('idle', 'startup');
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([prompt('p1', 'hi')]);
+    await settle(1000);
+    expect(screen.queryByTestId('chat-terminal-prompt')).toBeNull();
     expect(screen.queryByTestId('chat-waiting-banner')).toBeNull();
   });
 });
@@ -2004,6 +2250,35 @@ describe('ChatView — агенты: тулбар, прокрутка к кар�
     ]);
     expect(screen.getByTestId('chat-stop')).toBeTruthy();
     expect(running()).toBeNull();
+  });
+});
+
+describe('ChatView — Qwen Code', () => {
+  it('поле ввода подписано Qwen Code, а не Claude', () => {
+    useProvidersStore.setState({ providers: [{ id: 'qwen', label: 'Qwen Code', available: true, family: 'qwen', version: '0.27.2', limits: null } as never], loaded: true });
+    useHostStore.setState({ status: { state: 'connected', hostVersion: '0.4.0', methods: FEED_METHODS, features: ['feed-qwen'] } as never });
+    renderBody({ ...makeSession('s-01', 'S01'), provider: 'qwen' });
+    setFeed([prompt('p1', 'hi')]);
+    const field = screen.getByRole('textbox', { name: S.chat.composer.qwenLabel }) as HTMLTextAreaElement;
+    expect(field.placeholder).toBe(S.chat.composer.qwenPlaceholder);
+    expect(field.placeholder).toBe('Message Qwen Code — Enter to send');
+  });
+});
+
+describe('ChatView — OpenCode', () => {
+  const OC = [{ id: 'opencode', label: 'OpenCode', available: true, family: 'opencode', version: '2.2.7', limits: null } as never];
+  const connect = (): void => {
+    useProvidersStore.setState({ providers: OC, loaded: true });
+    useHostStore.setState({ status: { state: 'connected', hostVersion: '0.4.0', methods: FEED_METHODS, features: ['feed-opencode'] } as never });
+  };
+
+  it('the field is labelled OpenCode, not Claude', () => {
+    connect();
+    renderBody({ ...makeSession('s-01', 'S01'), provider: 'opencode' });
+    setFeed([prompt('p1', 'hi')]);
+    const field = screen.getByRole('textbox', { name: S.chat.composer.opencodeLabel }) as HTMLTextAreaElement;
+    expect(field.placeholder).toBe(S.chat.composer.opencodePlaceholder);
+    expect(field.placeholder).toBe('Message OpenCode — Enter to send');
   });
 });
 

@@ -33,6 +33,16 @@ function builtInList(entry: typeof PROVIDERS.claude): Array<{ id: string; label:
 }
 
 describe('resolveModelChoice: модель из диалога запуска против списка провайдера', () => {
+  it('оставляет модель и effort Kimi Code настройкам живой ACP-сессии', async () => {
+    await expect(resolveModelChoice('kimi', '')).resolves.toEqual({});
+    for (const [model, effort] of [['kimi-a', undefined], [undefined, 'high']] as const) {
+      await expect(resolveModelChoice('kimi', model, effort)).rejects.toMatchObject({
+        code: 'bad_request',
+        data: { reason: 'kimi-config-in-chat' },
+      });
+    }
+  });
+
   it('каждое значение встроенных списков claude, codex и glm проходит и возвращается как есть', async () => {
     for (const entry of [PROVIDERS.claude, PROVIDERS.codex, PROVIDERS.glm]) {
       for (const { id } of builtInList(entry))

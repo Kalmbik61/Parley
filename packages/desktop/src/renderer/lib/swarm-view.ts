@@ -28,7 +28,7 @@ export function formatSwarmTimer(ms: number): string {
 
 /**
  * Рой виден на карточке: идущий; законченный `done`/`failed`, пока человек не видел итог; остальные законченные
- * (и просмотренные) — только при раскрытых закрытых («N more closed»).
+ * (и просмотренные) — только в блоке «Closed sessions» (`sort.ts#closedRows`).
  */
 export function isSwarmShown(swarm: WorkSwarm, showClosed: boolean): boolean {
   if (!isSwarmTerminal(swarm.status)) return true;
@@ -56,17 +56,27 @@ export function swarmMemberViews(swarm: WorkSwarm, sessions: readonly WorkSessio
     });
 }
 
-/** Точки строки роя: по одной на трутня и проверяющего; залита сдавшая, крест — упавшая. */
-export function swarmDots(views: readonly SwarmMemberView[]): Array<'handed' | 'failed' | 'open'> {
+/** Сдал с самооценкой `partial` (спека «видимые дыры», 3.8): сдача без поля покрытия и `covered` — обычная сдача. */
+const isPartial = (view: SwarmMemberView): boolean => view.state === 'handed' && view.member.coverage === 'partial';
+
+/** Точки строки роя: по одной на трутня и проверяющего; залита сдавшая, половина — сдавшая частично, крест — упавшая. */
+export function swarmDots(views: readonly SwarmMemberView[]): Array<'handed' | 'partial' | 'failed' | 'open'> {
   return views
     .filter((view) => view.member.role !== 'queen')
-    .map((view) => (view.state === 'handed' ? 'handed' : view.state === 'failed' ? 'failed' : 'open'));
+    .map((view) => (isPartial(view) ? 'partial' : view.state === 'handed' ? 'handed' : view.state === 'failed' ? 'failed' : 'open'));
 }
 
 /** Название участника: `Queen`, `Drone 2`, `Verifier`. */
 export function memberTitle(member: Pick<WorkSwarmMember, 'role' | 'n'>): string {
   return member.role === 'queen' ? S.workSwarm.role.queen : member.role === 'drone' ? S.workSwarm.role.drone(member.n) : S.workSwarm.role.verifier;
 }
+
+/** Имя среза участника; `null` — не дано (у королевы и у записей до среза всегда). */
+export const memberSlice = (member: Pick<WorkSwarmMember, 'slice'>): string | null => member.slice ?? null;
+
+/** Полное имя участника: `Drone 2 · host/sessions`, без среза — как `memberTitle`. */
+export const memberName = (member: Pick<WorkSwarmMember, 'role' | 'n' | 'slice'>): string =>
+  S.workSwarm.memberName(memberTitle(member), memberSlice(member));
 
 /**
  * Слово состояния участника. Королева: текст выводится из роя (режет задачу, ждёт сдачи, сводит, сдала), а у
@@ -84,7 +94,7 @@ export function memberWord(swarm: WorkSwarm, view: SwarmMemberView): string {
   }
   switch (view.state) {
     case 'handed':
-      return text.member.handed;
+      return isPartial(view) ? text.member.partial : text.member.handed;
     case 'failed':
       return text.member.failed;
     case 'closed':
@@ -95,6 +105,10 @@ export function memberWord(swarm: WorkSwarm, view: SwarmMemberView): string {
       return view.member.role === 'drone' ? text.member.drone : text.member.verifier;
   }
 }
+
+/** `aria-label` строки участника: `Drone 2, host/sessions: partial`; без среза — `Drone 2: reading…`. */
+export const memberAria = (swarm: WorkSwarm, view: SwarmMemberView): string =>
+  S.workSwarm.memberAria(memberTitle(view.member), memberSlice(view.member), memberWord(swarm, view));
 
 /** Значки карточки работы и группы проекта: идущие рои и законченные с непросмотренным итогом. */
 export function swarmBadge(map: Pick<WindowWorkMap, 'swarms'>): { active: number; ready: number } {

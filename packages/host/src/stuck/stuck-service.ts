@@ -14,7 +14,7 @@ import {
   backLetter,
   backLine,
   envValue,
-  isClaudeCode,
+  byFamily,
   isManagedProviderId,
   isRoomArchived,
   liveLead,
@@ -23,6 +23,7 @@ import {
   PROVIDERS,
   parleyNote,
   providerLabel,
+  reportRecipients,
   roomOfSession,
   STUCK_REPORT_MS,
   stuckLetter,
@@ -154,9 +155,13 @@ export function createStuckService(
    * Claude Code (`claude`, `glm`, свои аккаунты `custom-*`) или Codex; у незнакомого семейства — имя самого провайдера.
    */
   function familyName(id: string, provider: string): string {
-    if (isClaudeCode(id)) return providerLabel(PROVIDERS.claude);
-    if (id.toLowerCase() === PROVIDERS.codex.id) return providerLabel(PROVIDERS.codex);
-    return provider;
+    return byFamily(id.toLowerCase(), {
+      claude: providerLabel(PROVIDERS.claude),
+      codex: providerLabel(PROVIDERS.codex),
+      qwen: provider,
+      opencode: provider,
+      neutral: provider,
+    });
   }
 
   async function alternativesFor(provider: string): Promise<readonly LimitAlternative[]> {
@@ -183,20 +188,23 @@ export function createStuckService(
   }
 
   /**
-   * Получатели письма (5.2): живой ведущий комнаты и отправители непрочитанных писем к застрявшему; без самого
-   * застрявшего, человека, системы и Parley (их нет среди сессий), без закрытых и удалённых. Вне комнаты ведущего нет.
+   * Получатели письма (5.2): живой ведущий комнаты, отправители непрочитанных писем к застрявшему и те, кто ждёт его итог
+   * (`reportRecipients`: создатель, давший задание, владелец комнаты ведущего); без самого застрявшего, человека, системы
+   * и Parley (их нет среди сессий), без закрытых и удалённых. Каждый один раз, ведущий первым.
    */
   function recipientsOf(map: WorkMap, letters: LetterTx, session: WorkSession, lead: string | null): string[] {
     const to = new Set<string>();
     if (lead !== null) to.add(lead);
     for (const message of letters.unreadFor(session.id)) to.add(message.from);
+    for (const recipient of reportRecipients(map, letters, session.id)) to.add(recipient.id);
     to.delete(session.id);
     return [...to].filter((id) => map.sessions.some((candidate) => candidate.id === id && candidate.lifecycle !== 'closed'));
   }
 
   /**
    * Строка в комнату (для человека) и письма Parley (агентам). Комната сессии — по `members`; архивная не получает
-   * ничего (8.8); без комнаты строки нет, а письма уходят отправителям без комнаты (как «did not resume»).
+   * ничего (8.8); без комнаты строки нет. Участник комнаты получает `parleyNote` в комнате, остальные (без комнаты,
+   * создатель, владелец) — письмо без комнаты (как «did not resume»).
    */
   function post(map: WorkMap, letters: LetterTx, session: WorkSession, at: Date, posting: Posting): void {
     const roomId = roomOfSession(map, session.id);
@@ -207,7 +215,7 @@ export function createStuckService(
     if (room !== undefined) addSystemMessage(map, letters, room.id, posting.line(lead === session.id), stamp);
     if (posting.letter === null) return;
     for (const to of recipientsOf(map, letters, session, lead)) {
-      if (room === undefined) letters.add({ roomId: null, from: PARLEY, to: [to], text: posting.letter, kind: 'note', at: stamp });
+      if (room === undefined || !room.members.includes(to)) letters.add({ roomId: null, from: PARLEY, to: [to], text: posting.letter, kind: 'note', at: stamp });
       else parleyNote(map, letters, room.id, to, posting.letter, stamp);
     }
   }

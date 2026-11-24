@@ -164,6 +164,21 @@ describe('ConsentPrompt', () => {
       expect(screen.queryByRole('dialog')).toBeNull();
     });
 
+    it('a card with a role change: its text is its own line, Allow sends the ack, Deny does not', async () => {
+      const withRole = { ...switchCard('c-05'), roleChange: { from: 'builtin:architect', to: null, readOnlyLost: true, text: 'Architect is a read-only role and does not run on Qwen Code. The session will continue without a role, and can edit files and run commands.' } } as ConsentCard;
+      render(<ConsentPrompt />);
+      act(() => bridge.emit('consents.changed', { upsert: [withRole, { ...withRole, id: 'c-06' }], removed: [] }));
+      const dialog = await screen.findByRole('dialog');
+      expect(dialog.textContent).toContain('continues it there.\nArchitect is a read-only role');
+      fireEvent.click(screen.getByRole('button', { name: S.dialogs.agentSwitch.allow }));
+      await flush();
+      expect(decideCalls()).toEqual([{ id: 'c-05', decision: 'allow', roleChange: { from: 'builtin:architect', to: null } }]);
+      await screen.findByRole('dialog');
+      fireEvent.click(screen.getByRole('button', { name: S.dialogs.agentSwitch.deny }));
+      await flush();
+      expect(decideCalls()[1]).toEqual({ id: 'c-06', decision: 'deny' });
+    });
+
     it('Deny решает deny; Cancel не решает ничего', async () => {
       render(<ConsentPrompt />);
       act(() => bridge.emit('consents.changed', { upsert: [switchCard('c-05'), switchCard('c-06')], removed: [] }));

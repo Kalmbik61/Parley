@@ -116,6 +116,22 @@ export interface CloneWorkspace {
   sha: string;
 }
 
+/** Итог шага клона зависимостей в новую копию; хранится в карте, поэтому короткий: число и исключения, не все пути. */
+export interface WorktreeSeed {
+  /** ISO-время шага. */
+  at: string;
+  /** Сколько путей склонировано. */
+  cloned: number;
+  /** Первый склонированный путь; `null` — ничего не склонировано. */
+  first: string | null;
+  /** Не склонированные пути с причиной; не больше 5; нет ключа — отказов не было. */
+  skipped?: { path: string; reason: 'entries' | 'timeout' | 'failed' }[];
+  /** Lock-файлы копии, не совпавшие с основной копией; не больше 3; нет ключа — совпали. */
+  lockMismatch?: string[];
+  /** Склонированные зависимости pnpm старше lock-файла копии. */
+  stale?: true;
+}
+
 /**
  * Своя рабочая копия git для сессии (спецификация 8.1, 8.2): путь и ветка
  * планируются заранее (`plannedWorktree` в `work/worktree.ts`), а на диске
@@ -134,6 +150,8 @@ export interface WorktreeInfo {
    * `createdAt` при уборке не трогается: `null` в нём по-прежнему значит «ещё не создан».
    */
   removedAt?: string | null;
+  /** Итог клона зависимостей; нет поля или `null` — клона не было (старые карты читаются так же). */
+  seed?: WorktreeSeed | null;
 }
 
 /** Приватное evidence запуска Codex: не входит в agent/public works/island projections. */
@@ -163,7 +181,41 @@ export interface AgentBinding {
   usage?: FrozenUsage;
   /** Стоимость отрезка по данным лога провайдера; `null` или нет поля — лог её не сообщает. */
   costUsd?: number | null;
+  /** Роль прежнего агента; есть только если замена её сменила. Нет поля — роль не менялась. */
+  role?: SessionRole | null;
 }
+
+/** Вид тихой концовки: выход процесса, Stop, Close человеком, конец хода без `report`. */
+export type SilentEndingKind = 'exit' | 'stop' | 'close' | 'turn';
+
+/**
+ * Отметка «уже сказано»: `assignment` — id письма-задания, под которое она стоит (`null` — задание из создания);
+ * `told` — виды, о которых получатели уже знают; `nudgedAt` — когда сессию саму попросили сдать итог.
+ */
+export interface SilentEndingMark { assignment: string | null; told: SilentEndingKind[]; nudgedAt: string | null }
+
+/** Плечо опыта с пакетом состояния: «пакет» — мост после сжатия установлен, «контроль» — моста нет никогда. */
+export type TrialArm = 'packet' | 'control';
+export const TRIAL_ARMS: readonly TrialArm[] = ['packet', 'control'];
+
+/** Имя опыта: строчные латинские буквы, цифры и дефис, до 32 знаков. Один разбор для настройки и для записи сессии. */
+export const TRIAL_NAME_PATTERN = /^[a-z0-9-]{1,32}$/;
+export const isTrialName = (value: unknown): value is string => typeof value === 'string' && TRIAL_NAME_PATTERN.test(value);
+
+/** Метка назначения: 128 случайных бит строчным hex. По ней, а не по номерам, сверяются карта, след и список назначений. */
+export const TRIAL_TAG_PATTERN = /^[0-9a-f]{32}$/;
+export const isTrialTag = (value: unknown): value is string => typeof value === 'string' && TRIAL_TAG_PATTERN.test(value);
+
+/** Назначение плеча сессии: имя опыта, плечо, время назначения и метка. Пишет только хост при создании; агент его не видит. */
+export interface SessionTrial { name: string; arm: TrialArm; at: string; tag: string }
+
+/**
+ * Повреждённое назначение: запись плеча не прошла проверку при чтении. Это явное состояние, а не «плеча нет»: оно
+ * сохраняется при последующих записях карты, и такая сессия не получает ни моста, ни пакета при любых настройках.
+ */
+export interface DamagedTrial { damaged: true }
+export const isDamagedTrial = (value: SessionTrial | DamagedTrial | undefined): value is DamagedTrial =>
+  value !== undefined && 'damaged' in value;
 
 export interface WorkSession {
   id: string;
@@ -210,6 +262,8 @@ export interface WorkSession {
   /** Id сессии у провайдера: для Claude — uuid jsonl-файла. */
   providerSessionId: string | null;
   codexThreadBinding?: CodexThreadBinding;
+  /** Qwen Code only: transcript path from `SessionStart`'s `transcript_path`; trusted only after its records' `sessionId` and `cwd` match. Private, like `codexThreadBinding`. */
+  qwenTranscript?: { path: string; cwd: string };
   metrics: SessionMetrics | null;
   summary: string | null;
   summarySource: SummarySource | null;
@@ -275,6 +329,22 @@ export interface WorkSession {
    * и закрытии. Нет поля — то же, что `null`: сессия не в очереди, миграции карты не нужно.
    */
   queued?: QueuedLaunch | null;
+  /**
+   * Будильник не может поднять сессию (подряд сбои подъёма): письма ей держатся, пока человек не поднимет её сам
+   * или не сменит агента. Пишет только будильник; `transitionSession` в `active` и `closed` и замена агента
+   * снимают поле. Нет поля — то же, что `null`: старые карты читаются как есть.
+   */
+  wakeBlocked?: { since: string; reason: string } | null;
+  /**
+   * Что о тихих концовках сессии уже сказано (`silent-endings.ts`): под какое задание и какие виды. Пишет только хост
+   * под замком карты. Нет поля — то же, что `null`: ничего не сказано, миграции карты не нужно.
+   */
+  silentEnding?: SilentEndingMark | null;
+  /**
+   * Плечо опыта с пакетом состояния (план опыта 2026-11-17, 1.1): разыгрывается один раз при создании сессии Claude и не
+   * меняется. Нет поля — сессия вне опыта; `{ damaged: true }` — запись была повреждена. Закрытое поле: в `get_map` и в историю сессии не попадает.
+   */
+  trial?: SessionTrial | DamagedTrial;
 }
 
 /**
@@ -574,6 +644,8 @@ export interface Room {
    * история восстанавливается по ленте (`roomMembership`). Битый журнал `parseMap` убирает.
    */
   memberLog?: RoomMembership[];
+  /** Номер новейшего письма комнаты при входе участника; рассылки с номером не больше него ему не адресованы (`recipientsOf`). */
+  joinedSeq?: Record<string, number>;
 }
 
 /** Через кого человек отправил письмо (спека 2026-10-14, 7.4); нет поля — сам, в окне. */
@@ -693,8 +765,8 @@ export interface ResourceAttempt {
   /** Поколение владельца резерва: чужой нерешённый резерв неоднозначен и сам по сроку не снимается. */
   owner: string;
   /**
-   * Подъём будильником сессии, которую усыпил хост: окна запусков и частоту возобновлений он не тратит, слот
-   * одновременных сессий занимает как обычно. Нет поля — попытка считается в окнах.
+   * Подъём будильником сессии, которую усыпил хост: окна запусков он не тратит, слот одновременных сессий занимает
+   * как обычно, а час частоты возобновлений сессии (`resumeRate`) его считает. Нет поля — попытка считается в окнах.
    */
   windowFree?: true;
 }
@@ -758,6 +830,50 @@ export interface Work {
   messageSeq?: number;
   /** Человек разрешил агентам закрывать завершённые сессии (sg-12). Нет поля — false. Пишет только окно. */
   closeFinished?: boolean;
+  /**
+   * След опыта с пакетом состояния (план опыта 2026-11-17, Э-1б): что стирают удаление сессии и комнаты, а подсчёту
+   * нужно. Закрытое поле: в `get_map` не попадает. Нет поля — удалений сессий с назначением и комнат с их участием не было.
+   */
+  trialTrace?: TrialTrace;
+}
+
+/** Повреждённая запись следа: запись не прошла проверку при чтении; состояние явное и переживает чтение и запись карты. */
+export interface DamagedTrace { damaged: true }
+
+/** Отрезок работы сессии на одном провайдере: поля, по которым подсчёт решает о транскриптах. */
+export interface TrialSegment {
+  provider: string;
+  providerSessionId: string | null;
+  startedAt: string | null;
+  endedAt: string | null;
+}
+
+/** След удалённой сессии с назначением. Поля отрезков названы как в `WorkSession`: разбор живой записи и следа один. */
+export interface TrialSessionTrace {
+  session: string;
+  trial: SessionTrial | DamagedTrial;
+  provider: string;
+  providerSessionId: string | null;
+  startedAt: string | null;
+  endedAt: string | null;
+  closedAt: string | null;
+  /** Прежние отрезки; нет поля — сессию не переводили. */
+  previousAgents?: TrialSegment[];
+  /** Комнаты без журнала участия, где у сессии была строка входа или членство. Нет поля — таких не было. */
+  unjournaledRooms?: string[];
+  deletedAt: string;
+}
+
+/** Строка журнала участия удалённой комнаты; открытый выход закрыт временем удаления. */
+export interface TrialRoomRow { room: string; session: string; from: string; to: string }
+
+/** Отметка «участие неизвестно»: комната без журнала удалена, сессия опыта входила в неё. */
+export interface TrialUnknownParticipation { room: string; session: string }
+
+export interface TrialTrace {
+  sessions: Array<TrialSessionTrace | DamagedTrace>;
+  rooms: Array<TrialRoomRow | DamagedTrace>;
+  unknownParticipation: Array<TrialUnknownParticipation | DamagedTrace>;
 }
 
 /**

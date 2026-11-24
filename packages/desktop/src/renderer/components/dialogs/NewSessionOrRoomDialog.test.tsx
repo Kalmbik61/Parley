@@ -2534,3 +2534,101 @@ describe('NewSessionOrRoomDialog — «Put them in a room»', () => {
     expect(callsOf('rooms.create')).toHaveLength(1);
   });
 });
+
+
+describe('OpenCode in the dialog (spec 2026-11-12, 4.8)', () => {
+  const OPENCODE = { id: 'opencode', label: 'OpenCode', available: true, family: 'opencode' as const, version: '2.2.7' };
+  const roles = [
+    { id: 'builtin:planner', name: 'Planner', source: 'builtin' as const, provider: 'claude', description: 'Plan', model: null, effort: null, readOnly: true, models: { claude: null, codex: null } },
+    { id: 'builtin:executor', name: 'Executor', source: 'builtin' as const, provider: 'claude', description: 'Do', model: null, effort: null, readOnly: false, models: { claude: null, codex: null } },
+  ];
+  const roleControl = () => within(rows()[0]!).getByRole('combobox', { name: 'Role' });
+  beforeEach(() => {
+    bridge.setHandler('providers.list', async () => ({ providers: [...PROVIDERS, OPENCODE] }));
+    bridge.setHandler('roles.list', async () => ({ roles, diagnostics: [], partial: false }));
+  });
+
+  it('read-only roles stay selectable on OpenCode, and the row says what read-only means there', async () => {
+    await renderDialog();
+    fireEvent.click(providerRadio(0, 'OpenCode'));
+    fireEvent.keyDown(roleControl(), { key: 'ArrowDown' });
+    expect((await screen.findByRole('option', { name: /Planner/ })).getAttribute('aria-disabled')).not.toBe('true');
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
+    await chooseOption(roleControl(), /Planner/);
+    expect((providerRadio(0, 'OpenCode') as HTMLButtonElement).disabled).toBe(false);
+    const note = rows()[0]!.querySelector('[data-role-note]');
+    expect(note?.textContent).toBe(S.roles.opencodeReadOnlyNote);
+    expect(S.roles.opencodeReadOnlyNote).toContain('Parley tools stay allowed');
+    expect(S.roles.opencodeReadOnlyNote).toContain('execute can read the network');
+  });
+
+  it('no note for a writable role, and none on another provider', async () => {
+    await renderDialog();
+    fireEvent.click(providerRadio(0, 'OpenCode'));
+    await chooseOption(roleControl(), /Executor/);
+    expect(rows()[0]!.querySelector('[data-role-note]')).toBeNull();
+    fireEvent.click(providerRadio(0, 'Claude'));
+    await chooseOption(roleControl(), /Planner/);
+    expect(rows()[0]!.querySelector('[data-role-note]')).toBeNull();
+  });
+});
+
+describe('Kimi Code in the dialog', () => {
+  it('launches native Kimi and directs model selection to the active chat', async () => {
+    bridge.setHandler('providers.list', async () => ({ providers: [...PROVIDERS, {
+      id: 'kimi', label: 'Kimi Code', available: true, version: '2.1.1',
+      models: [{ id: 'static-model', label: 'Static model' }],
+    }] }));
+    await renderDialog();
+    fireEvent.click(providerRadio(0, 'Kimi Code'));
+    expect(screen.getByText(S.providerCard.kimi.chooseInChat)).toBeTruthy();
+    expect(within(rows()[0]!).queryByLabelText('Model')).toBeNull();
+    fireEvent.click(button('Start session'));
+    await waitFor(() => expect(callsOf('sessions.create')).toHaveLength(1));
+    expect(callsOf('sessions.create')[0]).toMatchObject({ provider: 'kimi' });
+    expect(callsOf('sessions.create')[0]).not.toHaveProperty('model');
+    expect(callsOf('sessions.create')[0]).not.toHaveProperty('effort');
+  });
+});
+
+describe('Qwen Code in the dialog', () => {
+  const QWEN = { id: 'qwen', label: 'Qwen Code', available: true, family: 'qwen' as const, version: '0.27.2' };
+  const roles = [
+    { id: 'builtin:planner', name: 'Planner', source: 'builtin' as const, provider: 'claude', description: 'Plan', model: null, effort: null, readOnly: true, models: { claude: null, codex: null } },
+    { id: 'builtin:executor', name: 'Executor', source: 'builtin' as const, provider: 'claude', description: 'Do', model: null, effort: null, readOnly: false, models: { claude: null, codex: null } },
+  ];
+  const roleControl = () => within(rows()[0]!).getByRole('combobox', { name: 'Role' });
+  beforeEach(() => {
+    bridge.setHandler('providers.list', async () => ({ providers: [...PROVIDERS, QWEN] }));
+    bridge.setHandler('roles.list', async () => ({ roles, diagnostics: [], partial: false }));
+  });
+
+  it('lists Qwen Code; on it the read-only roles are disabled with the reason, the others stay', async () => {
+    await renderDialog();
+    fireEvent.click(providerRadio(0, 'Qwen Code'));
+    fireEvent.keyDown(roleControl(), { key: 'ArrowDown' });
+    const planner = await screen.findByRole('option', { name: /Planner/ });
+    expect(planner.getAttribute('aria-disabled')).toBe('true');
+    expect(planner.getAttribute('title')).toBe(S.roles.readOnlyUnavailableOnQwen);
+    expect(screen.getByRole('option', { name: /Executor/ }).getAttribute('aria-disabled')).not.toBe('true');
+  });
+
+  it('a read-only role chosen first turns the Qwen Code pill off with the reason', async () => {
+    await renderDialog();
+    await chooseOption(roleControl(), /Planner/);
+    const pill = providerRadio(0, 'Qwen Code') as HTMLButtonElement;
+    expect(pill.disabled).toBe(true);
+    expect(pill.title).toBe(S.roles.readOnlyUnavailableOnQwen);
+  });
+
+  it('there is no model catalog: a typed model id goes to sessions.create, empty is Default', async () => {
+    await renderDialog();
+    fireEvent.click(providerRadio(0, 'Qwen Code'));
+    const field = within(rows()[0]!).getByLabelText('Model') as HTMLInputElement;
+    expect(field.placeholder).toBe(S.dialogs.newSession.modelTyped);
+    fireEvent.change(field, { target: { value: ' qwen3-coder-plus ' } });
+    fireEvent.click(button('Start session'));
+    await waitFor(() => expect(callsOf('sessions.create')).toHaveLength(1));
+    expect(callsOf('sessions.create')[0]).toMatchObject({ provider: 'qwen', model: 'qwen3-coder-plus' });
+  });
+});

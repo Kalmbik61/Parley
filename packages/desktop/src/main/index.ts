@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import os, { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -26,7 +26,7 @@ import { configPath, envValue, loadConfig, migrateHome, parleyHome, readSecret }
 import type { AssistantLanguage } from '@parley/core/assistant';
 import { systemAssistantLanguage } from '../shared/assistant-language.js';
 import { AGENT_LIMITS, type WorksSnapshot } from '@parley/protocol';
-import type { FocusTarget, HostStatus } from '../shared/bridge.js';
+import type { AboutInfo, FocusTarget, UpdateCheckResult, HostStatus, UpdateResult } from '../shared/bridge.js';
 import { BROWSER_PARTITION, type AgentActivity } from '../shared/browser-types.js';
 import { ISLAND_EVENTS, ttsAvailable, type AssistantOpenRequest, type IslandConfig } from '../shared/island.js';
 import { S } from '../shared/strings.js';
@@ -47,6 +47,7 @@ import guestDomScript from './browser/guest-dom.js?raw';
 import guestPickScript from './browser/guest-pick.js?raw';
 import { installBrowserGuard, promptDownload } from './browser/guard.js';
 import { createBasicAuth } from './browser/basic-auth.js';
+import { createCertChoiceStore, createClientCert } from './browser/client-cert.js';
 import { createInspector, forwardBatches } from './browser/inspector.js';
 import { saveDiagnostics } from './diagnostics/bundle.js';
 import { AGENT_SHOT_MAX_AGE_MS, AGENT_SHOT_PREFIX, cleanupDrops, cleanupDropsTree, DropTooLargeError, dropsDir, MAX_DROP_IMAGE_BYTES, saveImage } from './drops.js';
@@ -72,6 +73,7 @@ import { createSessionVisibility } from './island/visibility.js';
 import { createLayoutStore, desktopLayoutsPath } from './layout-store.js';
 import { createAppMenu } from './menu.js';
 import { guardAppQuit, quitQuestion } from './quit-guard.js';
+import { createQuitIntent } from './quit-intent.js';
 import { createNotesStore } from './notes-store.js';
 import {
   createLoggedNotification,
@@ -88,7 +90,19 @@ import { createRemoteLauncher, bridgeEntryVersion, bridgePaths, resolveBridgeEnt
 import { createRemoteService, registerRemoteIpc } from './remote-ipc.js';
 import { createPhoneActionNotifier } from './phone-actions.js';
 import { createAppRelaySetup, fakeSshModulePath, loadFakeSsh, registerRelaySetupIpc } from './relay-setup/ipc.js';
+import { BUILD_INFO, tildify } from './build-info.js';
+import { bundleOf } from './update-target.js';
 import { createUpdateChecker, updateCheckAllowed } from './update-check.js';
+import { spawnRun, systemClock } from './update-download.js';
+import {
+  createReplaceTarget,
+  createUpdateInstaller,
+  nodeInstallerFs,
+  replaceBundle,
+  systemReplaceEnv,
+  type SwapIntent,
+} from './update-installer.js';
+import { isProcessAlive, nodeStartupFs, runUpdateStartup } from './update-startup.js';
 import { userDataDir } from './user-data.js';
 import { assistantSettingsOf, createAssistantMirror, hostExtraEnv } from './assistant-mirror.js';
 import { isFileSync, resolveEngine } from './voice/engine.js';
@@ -210,6 +224,24 @@ if (!gotLock) {
       console.warn(`[parley] home not moved (${homeMigration.reason}${detail}): ${homeMigration.from}`);
     }
 
+    // Самообновление (спека self-update §5.6): итог замены, каталоги подготовки и загрузок — до создания окон и только
+    // там, где заменить себя можно (§5.2). Ответ `lockf` старту не нужен. Итог отдаётся окну один раз (`takeResult`).
+    const updatesDir = path.join(parleyHome(), 'desktop', 'updates');
+    const replaceEnv = systemReplaceEnv({ packaged: app.isPackaged, exePath: () => app.getPath('exe'), updatesDir });
+    let startupResult: UpdateResult | null = null;
+    const startupBundle = replaceBundle(replaceEnv);
+    if (startupBundle !== null) {
+      startupResult = runUpdateStartup({
+        bundle: startupBundle,
+        version: app.getVersion(),
+        pid: process.pid,
+        isAlive: isProcessAlive,
+        downloadsDir: updatesDir,
+        fs: nodeStartupFs,
+        log: (message, error) => console.warn(`[parley] ${message}`, error ?? ''),
+      });
+    }
+
     const paths = hostPaths();
     const connection = new HostConnection({
       paths,
@@ -274,6 +306,10 @@ if (!gotLock) {
 
     // Выход из приложения (Dock → «Завершить», ⌘Q, меню) гасит хост со всеми сессиями; закрытие окна — нет.
     // Вопрос — системный диалог без родительского окна: на `will-quit` окон уже нет. Тестовый режим — по-старому.
+    // Намерение «Restart now» (спека self-update §5.4): живёт только на повторах этого же выхода. `before-quit` без
+    // отметки «свой вызов» (⌘Q, меню, Dock) сбрасывает его; свои — клик и три повтора сторожей ниже.
+    const quitIntent = createQuitIntent<SwapIntent>();
+    app.on('before-quit', () => quitIntent.onBeforeQuit());
     const quitGuard = guardAppQuit(app, {
       liveSessions: () => connection.liveSessions(),
       ask: async (count) => {
@@ -289,16 +325,28 @@ if (!gotLock) {
         return response === 0 ? 'stop' : 'cancel';
       },
       stopHost: async () => {
+        // Идущая загрузка или распаковка обновления отменяется до конца выхода: дочерний `ditto` не должен пережить
+        // main (спека self-update §13, п. 14). Не бросает и ждёт не дольше 5 с; `try` — только на выход до того, как
+        // установщик создан ниже: он не должен оставить хост живым.
+        try {
+          await updateInstaller.stopForQuit();
+        } catch {
+          // Установщика ещё нет: отменять нечего.
+        }
         await connection.stopHost();
       },
       onCancel: focusMainWindow,
       keepHost: switches.dialogs,
       log: (line) => console.warn(`[parley] ${line}`),
+      retryQuit: (quit) => quitIntent.ownQuit(quit),
     });
     // Перезагрузка или выключение системы — без вопроса (событие есть на macOS и Linux): хост гасится сразу.
     // Типы Electron объявляют слушатель без аргумента, а само событие отменяемое: задерживаем выключение, пока гасится хост.
     powerMonitor.on('shutdown', (event?: { preventDefault(): void }) => {
       event?.preventDefault();
+      // Выключение системы посреди выхода «Restart now» не должно запустить сценарий: `app.quit()` во время идущего
+      // выхода `before-quit` не порождает, и намерение сбрасывается здесь (спека self-update §5.4).
+      quitIntent.clear();
       quitGuard.systemShutdown();
       app.quit();
     });
@@ -359,6 +407,7 @@ if (!gotLock) {
       trackLoadedWindow(window, loadedWindows);
       sessionVisibility?.track(window);
       const closeGuard = guardWindowClose(window, app, {
+        retryQuit: (quit) => quitIntent.ownQuit(quit),
         askUnresponsive: async () => {
           // E2E (`PARLEY_DIALOGS=log`): настоящий системный диалог на экране человека не встаёт.
           if (logDialogs) {
@@ -408,6 +457,15 @@ if (!gotLock) {
     forwardBatches(inspector, (id) => webContents.fromId(id) ?? null);
     // HTTP basic-auth гостей: пара из адреса — только память; запрос логина идёт окну-хозяину гостя (страж подписывает гостя).
     const basicAuth = createBasicAuth();
+    // Клиентский сертификат гостей (SSO с mTLS): выбирает человек в слое над вкладкой; с галочкой выбор лежит в файле
+    // (отпечаток по `хост:порт`), без неё его помнит сам Chromium до выхода. Страж подписывает гостя и передаёт модулю событие.
+    const certChoices = createCertChoiceStore({ file: path.join(parleyHome(), 'desktop', 'browser-client-certs.json') });
+    void certChoices.load();
+    const clientCert = createClientCert({
+      isGuest: (contents) => contents.getType() === 'webview' && contents.session === browserSession,
+      store: certChoices,
+      log: (line) => console.info('[parley] client certificate', JSON.stringify(line)),
+    });
     const typing = createTypingClock();
     const emulation = createEmulation({ inspector });
     // Окно операции агента, скачивания агента и тишина клавиатуры человека (15b): до стража, он их читает.
@@ -470,6 +528,7 @@ if (!gotLock) {
         fetchFavicon(iconUrl, pageUrl, (url, init) => browserSession.fetch(url, init)),
       inspect: (contents) => inspector.attach(contents),
       basicAuth,
+      clientCert,
     });
 
     mainWindow = openWindow();
@@ -596,8 +655,8 @@ if (!gotLock) {
           readKey: () => readSecret('voice:openai'),
           log: (line) => console.warn('[parley]', line),
         });
-    // Выход приложения: отмена речи.
-    app.on('before-quit', () => tts.stop());
+    // Выход приложения: отмена речи. На `quit`, а не `before-quit`: отменённый вопрос о выходе не должен обрывать речь.
+    app.on('quit', () => tts.stop());
     // Настройки помощника — хосту для ответов из Telegram: при каждом подключении и сохранении ui.json.
     const mirrorModels = createModelStore({ dir: voiceModelsDir(), fetch: (url, init) => net.fetch(url, init), freeBytes });
     let hostMethods: readonly string[] | null = null;
@@ -786,7 +845,9 @@ if (!gotLock) {
     };
     // Start the legacy registry eagerly only for the existing legacy path.
     if (!worksBinding?.supported) activeRoots();
-    app.on('will-quit', () => { syncRoots?.dispose(); worksBinding?.dispose(); connection.close(); });
+    // `quit`, not `will-quit`: the quit guard answers its question on `will-quit` and a cancelled question keeps the app
+    // running, so the window must still be bound to the host then. `preventDefault` there does not stop other listeners.
+    app.on('quit', () => { syncRoots?.dispose(); worksBinding?.dispose(); connection.close(); });
 
     // E2E (`PARLEY_SHELL=log`): «открыть в приложении», «показать в Finder» и внешний адрес —
     // в журнал main, а не на экран человека (настоящие открыли бы приложение, Finder и браузер);
@@ -798,24 +859,51 @@ if (!gotLock) {
     }
 
     // Проверка новой версии (V6 плана релиза 0.1.0): при старте и раз в сутки main спрашивает GitHub о последнем
-    // релизе (`main/update-check.ts`). Окно получает найденное событием `app:update-available`, а то, что найдено до
-    // его подписки (окно ещё грузилось или показывало «Connecting…»), — по запросу `app:get-update`. Сеть — стеком
+    // релизе (`main/update-check.ts`). Окно получает состояние самообновления событием `app:update-state`, а то, что
+    // найдено до его подписки (окно ещё грузилось или показывало «Connecting…»), — по запросу `app:get-update-state`. Сеть — стеком
     // Chromium (`net.fetch`: системный прокси), без токенов и куки. Идёт только у собранного окна: в разработке
     // `app.getVersion()` — версия `package.json` ветки, и `pnpm dev:desktop` ходил бы на GitHub зря. Выключена
     // `PARLEY_UPDATE_CHECK=off` (E2E: `playwright.config.ts`; значение — из окружения login-shell, как прочие
     // `PARLEY_*`; не снялось окружение оболочки — из окружения окна) или переключателем в настройках (`ui.json`);
     // оба читаются перед каждой проверкой. Включённый переключатель проверяет сразу: `onUiSaved` ниже.
+    // Установщик (`update-installer.ts`): состояние самообновления, загрузка по клику и запуск сценария замены на
+    // событии `quit`.
+    const updateInstaller = createUpdateInstaller({
+      version: app.getVersion(),
+      arch: process.arch,
+      pid: process.pid,
+      updatesDir,
+      target: createReplaceTarget(replaceEnv),
+      fetch: (url, init) => net.fetch(url, init),
+      run: spawnRun,
+      clock: systemClock,
+      fs: nodeInstallerFs,
+      intent: quitIntent,
+      quit: () => app.quit(),
+      spawn: (command, args, options) => spawn(command, args, options),
+      startupResult,
+      log: (message, error) => console.warn(`[parley] ${message}`, error ?? ''),
+    });
+    // Переключатель «Check for updates» из сохранённых настроек: до запуска проверки, чтобы запоздалый ответ не принялся.
+    if (ui.checkForUpdates) updateInstaller.checksEnabled();
+    else void updateInstaller.checksDisabled();
+    // Слушатель синхронный и срабатывает один раз: сценарий запускается, только если намерение дожило до конца выхода.
+    app.once('quit', () => updateInstaller.onQuit());
+    // Состояние — окну, чья страница загружена: до этого прелоад не подписан, и окно спросит само (`app:get-update-state`).
+    updateInstaller.onState((state) => {
+      const window = mainWindow;
+      if (window !== null && !window.isDestroyed() && loadedWindows.has(window)) {
+        window.webContents.send('app:update-state', state);
+      }
+    });
     const updates = createUpdateChecker({
       currentVersion: app.getVersion(),
       fetch: (url, init) => net.fetch(url, init),
       isEnabled: async () =>
         updateCheckAllowed(shellEnv.env, app.isPackaged) && (await uiStore.load()).checkForUpdates,
       onUpdate: (info) => {
-        const window = mainWindow;
-        // Окно ещё грузится — событие ушло бы в пустоту (прелоад не подписан): оно спросит само, `app:get-update`.
-        if (window !== null && !window.isDestroyed() && loadedWindows.has(window)) {
-          window.webContents.send('app:update-available', info);
-        }
+        // Установщик узнаёт о каждом найденном релизе; окно получает его состоянием (`onState` выше).
+        void updateInstaller.onFound(info);
       },
     });
 
@@ -825,6 +913,7 @@ if (!gotLock) {
     // снимался бы насовсем; главный кадр окна от гостей не зависит.
     const ops = createAgentOps({
       basicAuth,
+      clientCert,
       scripts: createAgentScripts({ inspector }),
       storage: createAgentStorage({ cookies: browserSession.cookies, inspector }),
       downloads: agentDownloads,
@@ -900,6 +989,9 @@ if (!gotLock) {
       void updates.settingsChanged();
       // Окна об изменениях ui.json не узнают — main перечитывает файл сам (спека 2026-10-12, 5.1).
       void uiStore.load().then((current) => {
+        // Выключенный переключатель «Check for updates»: идущая попытка отменяется, готовая удаляется.
+        if (current.checkForUpdates) updateInstaller.checksEnabled();
+        else void updateInstaller.checksDisabled();
         ops.accessChanged(current.browser.agentsAllowed);
         void pushAssistantSettings(current).catch((error: unknown) => console.warn('[parley] assistant mirror', error));
         // Сбой острова не должен ломать сохранение настроек.
@@ -1001,7 +1093,8 @@ if (!gotLock) {
     // not touch a run in progress (the server-side commands outlive the app anyway, spec 7.3).
     app.on('quit', () => relaySetup.dispose());
     void remoteService.init();
-    app.on('before-quit', () => remoteService.dispose());
+    // Same reason: disposing on `before-quit` would leave a window that survives a cancelled exit without remote updates.
+    app.on('quit', () => remoteService.dispose());
     registerIpc({
       ipcMain,
       connection,
@@ -1051,6 +1144,7 @@ if (!gotLock) {
         emulation,
         agent: ops,
         basicAuth,
+        clientCert,
       },
       saveDropImage: async () => {
         if (fakeDrops) return saveImage({ png: FAKE_DROP_PNG, dir: dropsDir() });
@@ -1104,10 +1198,37 @@ if (!gotLock) {
       },
       showNotification: (note) => notifier.notify(note),
       takeFocusTarget: () => pendingFocusTarget.take(),
-      getUpdate: () => updates.latest(),
+      getUpdateState: () => updateInstaller.state(),
+      downloadUpdate: () => updateInstaller.download(),
+      cancelUpdateDownload: () => updateInstaller.cancel(),
+      installUpdate: () => updateInstaller.install(),
+      takeUpdateResult: () => updateInstaller.takeResult(),
       // Только у собранного окна: несобранное (E2E, `pnpm dev`) отдало бы версию Electron, и любой хост
       // показался бы хостом другой сборки — с тостом поверх окна.
       appVersion,
+      checkForUpdates: async (): Promise<UpdateCheckResult> => {
+        if (!updateCheckAllowed(shellEnv.env, app.isPackaged)) return { kind: 'unavailable' };
+        updateInstaller.manualCheck();
+        return updates.checkNow();
+      },
+      aboutInfo: (): AboutInfo => {
+        const home = os.homedir();
+        const bundle = bundleOf(app.getPath('exe'));
+        return {
+          version: appVersion,
+          ...BUILD_INFO,
+          arch: process.arch,
+          electron: process.versions.electron,
+          chrome: process.versions.chrome,
+          node: process.versions.node,
+          os: `macOS ${process.getSystemVersion()}`,
+          // Не собранное окно (dev, E2E): `bundleOf` нашёл бы Electron.app — это неверные сведения.
+          appPath: !app.isPackaged || bundle === null ? null : tildify(bundle.app, home),
+          dataDir: tildify(parleyHome(), home),
+          updateChecks: updateCheckAllowed(shellEnv.env, app.isPackaged),
+          lastCheck: updates.lastCheck(),
+        };
+      },
       setBadge: (count) => {
         app.dock?.setBadge(count > 0 ? String(count) : '');
       },
@@ -1183,7 +1304,8 @@ if (!gotLock) {
   });
 
   // Идущее распознавание не должно пережить приложение: `whisper-cli` — дочерний процесс окна, не хоста.
-  app.on('before-quit', killRunningEngines);
-  // Глобальное сочетание помощника не должно пережить приложение.
-  app.on('will-quit', () => globalShortcut.unregisterAll());
+  // Глобальное сочетание помощника не должно пережить приложение. Оба — на `quit`: вопрос о выходе (`guardAppQuit`) может
+  // быть отменён, и приложение продолжит работать с живым распознаванием и рабочим сочетанием.
+  app.on('quit', killRunningEngines);
+  app.on('quit', () => globalShortcut.unregisterAll());
 }

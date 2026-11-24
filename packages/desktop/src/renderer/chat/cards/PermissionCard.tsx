@@ -82,6 +82,20 @@ function Change({ before, after }: { before: string; after: string }): JSX.Eleme
 }
 
 function Details({ item }: { item: FeedPermissionCard }): JSX.Element {
+  if (item.permissionPreview !== undefined) {
+    return (
+      <>
+        {item.permissionPreview.map((part, at) => part.type === 'text'
+          ? <pre key={at} className={BLOCK}>{part.text}</pre>
+          : (
+            <div key={at} className="flex min-w-0 flex-col gap-1">
+              <PathLine path={part.path} />
+              <Change before={part.oldText ?? ''} after={part.newText} />
+            </div>
+          ))}
+      </>
+    );
+  }
   const input = item.toolInput;
   const path = str(input, 'file_path');
   if (item.toolName === 'Bash') {
@@ -154,6 +168,34 @@ export function PermissionCard({ item }: { item: FeedPermissionCard }): JSX.Elem
   const { key, deciding, note, decide } = useCardDecision(item.cardId);
   const message = useChatUiStore((state) => (state.cardDrafts[key] ?? EMPTY_CARD_DRAFT).message);
   if (item.state !== 'pending') return <CardFrame item={item} status={settledStatus(item)} />;
+
+  if (item.permissionOptions !== undefined) {
+    return (
+      <CardFrame item={item} status={null}>
+        <Details item={item} />
+        {item.truncated === true ? <p className="m-0 text-xs text-[var(--status-warning-text)]">{S.chat.inputTruncated}</p> : null}
+        <div className="flex flex-wrap items-center gap-2">
+          {item.permissionOptions.map(({ kind, name, optionId }) => {
+            const behavior = kind.startsWith('allow_') ? 'allow' : 'deny';
+            return (
+              <Button
+                key={optionId}
+                type="button"
+                size="xs"
+                variant={kind === 'allow_once' ? 'default' : 'outline'}
+                className="h-auto min-h-6 max-w-full whitespace-normal [overflow-wrap:anywhere]"
+                disabled={deciding}
+                onClick={() => decide({ kind: 'permission', behavior, optionId })}
+              >
+                {name}
+              </Button>
+            );
+          })}
+        </div>
+        <CardNote note={note} />
+      </CardFrame>
+    );
+  }
 
   const rules = alwaysRules(item.suggestions);
   const deny = (): void => {

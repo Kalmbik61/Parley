@@ -1,10 +1,12 @@
 import type { RecipeSnapshot } from '../recipes/types.js';
+import { cleanInline } from '../text-clean.js';
 import type { LetterTx } from './letter-store.js';
 import { maxNumber } from './map.js';
 import { cancelActiveRoomPlan } from './plans.js';
 import { settleEffectText } from './stored-texts.js';
 import { sessionMention, sessionTag } from './thread.js';
-import { HUMAN, PARLEY, SYSTEM, type RoomMode, type Message, type Room, type WorkMap } from './types.js';
+import { traceDeletedRoom } from './trial-trace.js';
+import { ENGINE, HUMAN, PARLEY, SYSTEM, type RoomMode, type Message, type Room, type WorkMap } from './types.js';
 
 /**
  * Нарушено правило комнаты: не участник, не ведущий, комната закрыта, ведущий вне круга.
@@ -53,13 +55,18 @@ export interface NewRoom {
   recipe?: RecipeSnapshot | null;
 }
 
-/** Заводит комнату в карте. */
+/** Предел названия комнаты в знаках (кодовых точках); совпадает с пределом `rooms.rename` в протоколе. */
+export const ROOM_TITLE_MAX = 120;
+
+/** Заводит комнату в карте. Название чистится на входе (`cleanInline`): одна строка без управляющих знаков. */
 export function addRoom(map: WorkMap, init: NewRoom, at = new Date().toISOString()): Room {
   const lead = init.lead ?? null;
+  const title = cleanInline(init.title, ROOM_TITLE_MAX);
   if (init.mode !== undefined && !['free', 'checklist', 'verified', 'autonomous'].includes(init.mode)) throw new RoomRuleError('invalid room mode');
-  // Проверка до `nextRoomId`: отказ не должен тратить номер комнаты.
+  // Проверки до `nextRoomId`: отказ не должен тратить номер комнаты.
+  if (title === '') throw new RoomRuleError('room title is empty');
   if (lead !== null && (lead === HUMAN || !init.members.includes(lead))) {
-    throw new RoomRuleError(`lead ${lead} is not a participant of room "${init.title}"`);
+    throw new RoomRuleError(`lead ${lead} is not a participant of room "${title}"`);
   }
   const ownerId = init.ownerId ?? null;
   if (ownerId !== null && !map.sessions.some((session) => session.id === ownerId)) {
@@ -67,7 +74,7 @@ export function addRoom(map: WorkMap, init: NewRoom, at = new Date().toISOString
   }
   const room: Room = {
     id: nextRoomId(map),
-    title: init.title,
+    title,
     creator: init.creator,
     ownerId,
     members: [...init.members],
@@ -171,9 +178,20 @@ export function joinedLine(sessionId: string): string {
 }
 
 /**
- * Человек вводит сессию в комнату (`rooms.addMember`): она уходит из прочих комнат работы
- * (`leaveOtherRooms`), встаёт последней в `members`, а в ленту ложится системная строка
- * «@s04 joined the room». Возвращает эту строку. Закрытая сессия писем не получает и в
+ * Порог входа (`Room.joinedSeq`): номер новейшего письма комнаты при входе участника. Рассылки с номером не больше него
+ * участнику не адресованы (`recipientsOf`), поэтому новичок не получает всей прежней ленты. В комнате без писем порога нет.
+ */
+export function recordJoin(room: Room, letters: Pick<LetterTx, 'query'>, sessionId: string): void {
+  const [newest] = letters.query({ roomId: room.id, limit: 1, newestFirst: true });
+  if (newest === undefined) return;
+  room.joinedSeq = { ...room.joinedSeq, [sessionId]: maxNumber([newest.id], 'm-') };
+}
+
+/**
+ * Человек, ведущий или движок вводит сессию в комнату (`rooms.addMember`, `add_to_room`): она уходит из прочих комнат
+ * работы (`leaveOtherRooms`), встаёт последней в `members`, а в ленту ложится системная строка «@s04 joined the room».
+ * Возвращает эту строку. Новичку история комнаты не приходит: ставится порог входа (`recordJoin`) и уходит одно прямое
+ * письмо от `system` — кто ввёл, кто ведёт комнату и сколько в ней прежних писем. Закрытая сессия писем не получает и в
  * комнату не входит.
  *
  * Отказ «уже участник» — только если сессия состоит в этой комнате и больше нигде: окно такой
@@ -188,6 +206,7 @@ export function addMember(
   roomId: string,
   sessionId: string,
   at = new Date().toISOString(),
+  addedBy: string = HUMAN,
 ): Message {
   const room = requireOpenRoom(map, roomId);
   const session = map.sessions.find((candidate) => candidate.id === sessionId);
@@ -202,9 +221,19 @@ export function addMember(
 
   leaveOtherRooms(map, letters, sessionId, roomId, at);
   if (!inRoom) {
+    const earlier = letters.count({ roomId });
     room.members.push(sessionId);
-    // Вошедшему рассылки комнаты — непрочитанные (спека хранилища 6.2).
-    letters.joined(roomId, sessionId);
+    recordJoin(room, letters, sessionId);
+    const who = addedBy === HUMAN ? 'The human' : addedBy === ENGINE ? 'Parley' : sessionMention(addedBy);
+    const lead = liveLead(map, room);
+    const text =
+      `${who} added you to room ${room.id} "${room.title}"` +
+      `${lead === sessionId ? '; you are its lead' : lead !== null ? `; its lead is ${sessionMention(lead)}` : ''}. ` +
+      (earlier > 0
+        ? `Earlier messages of the room (${earlier}) are not in your inbox: read_room with room "${room.id}" shows the newest, page.next the older ones. `
+        : '') +
+      'Messages sent from now on reach you as usual.';
+    letters.add({ from: SYSTEM, to: [sessionId], roomId: null, kind: 'note', text, at });
   }
   // Журнал ведут только комнаты, у которых он есть: старая восстанавливается по ленте (спека расхода токенов, 4.3).
   if (room.memberLog !== undefined && !room.memberLog.some((entry) => entry.session === sessionId && entry.to === null)) {
@@ -219,7 +248,7 @@ export function addMember(
  * «@s04 joined the room», — плюс два своих: комната живая и вводит тот, кто ведёт её сейчас
  * (`liveLead`: назначенный, пока жив, иначе первый живой участник). Порядок проверок как у
  * `setProposal`: у закрытой комнаты ведущего нет вовсе, и отказ «закрыта» точнее, чем «не ведущий».
- * Письма о добавлении новому участнику `addMember` не пишет — как и при `rooms.addMember` из окна.
+ * Новичок получает короткое письмо от `system`, как и при `rooms.addMember` из окна (`addedBy` — ведущий).
  */
 export function addMemberByLead(
   map: WorkMap,
@@ -238,7 +267,7 @@ export function addMemberByLead(
       `session ${leadId} is not the lead of room ${roomId}: only the lead can bring a session into the room`,
     );
   }
-  return addMember(map, letters, roomId, sessionId, at);
+  return addMember(map, letters, roomId, sessionId, at, leadId);
 }
 
 /**
@@ -292,9 +321,9 @@ const TITLE_EDGES = /^[\s\u200B-\u200D\u2060\uFEFF]+|[\s\u200B-\u200D\u2060\uFEF
  */
 export function renameRoom(map: WorkMap, roomId: string, title: string): void {
   const room = findRoom(map, roomId);
-  const trimmed = title.replace(TITLE_EDGES, '');
-  if (trimmed === '') throw new RoomRuleError('room title is empty');
-  room.title = trimmed;
+  const cleaned = cleanInline(title, ROOM_TITLE_MAX);
+  if (cleaned === '') throw new RoomRuleError('room title is empty');
+  room.title = cleaned;
 }
 
 /**
@@ -400,6 +429,8 @@ export function deleteRoom(map: WorkMap, letters: LetterTx, roomId: string, at =
   const room = findRoom(map, roomId);
   const plans = new Set((map.plans ?? []).filter((plan) => plan.roomId === roomId).map((plan) => plan.id));
   const { work } = map;
+  // Опыт с пакетом состояния: участие сессий опыта сохраняется той же записью карты, пока комната и её лента на месте.
+  traceDeletedRoom(map, letters, room, at);
   work.roomSeq = Math.max(work.roomSeq ?? 0, maxNumber([room.id], 'r-'));
   if (room.proposal !== null) work.proposalSeq = Math.max(work.proposalSeq ?? 0, maxNumber([room.proposal.id], 'p-'));
   if (plans.size > 0) work.planSeq = Math.max(work.planSeq ?? 0, maxNumber([...plans], 'pl-'));

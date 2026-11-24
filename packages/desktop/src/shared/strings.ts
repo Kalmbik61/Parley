@@ -16,8 +16,9 @@
 import type { NeedKind } from '@parley/core';
 import { STATE_WORDS } from '@parley/core/session-state';
 import { providerLabel } from '@parley/core/stuck';
-import { CODEX_FEED_MIN_VERSION, FEED_MIN_VERSION, type FolderTrustCard, type HostNotice, type MailWait, type NoticeKind, type ProviderCheckReason } from '@parley/protocol';
+import { CODEX_FEED_MIN_VERSION, FEED_MIN_VERSION, HOST_ERROR_REASONS, type FolderTrustCard, type HostNotice, type MailWait, type NoticeKind, type ProviderCheckReason } from '@parley/protocol';
 import type { ContextKind } from './context-markdown.js';
+import type { UpdateFailure, UpdateResultFailure } from './bridge.js';
 import type { IpcErrorInfo } from './ipc-error.js';
 
 /** Что за файл-контекст — для строки в ввод CLI (`S.contextFile.terminalLine`). */
@@ -343,6 +344,7 @@ export const S = {
     numbers: (used: string, window: string, percent: string): string => `${used} of ${window} tokens · ${percent}`,
     instructionsLabel: 'Focus instructions',
     codexNoFocus: 'Codex compacts without focus',
+    qwenNoFocus: 'Qwen Code compresses without focus',
     compact: 'Compact',
     compactAll: 'Compact all',
     cancel: 'Cancel',
@@ -365,6 +367,10 @@ export const S = {
   },
   roles: {
     readOnly: 'Read only', unavailable: 'Role unavailable', providerLocked: 'Native roles use their own provider',
+    /** New-session dialog: read-only roles on Qwen Code (spec 2026-11-11, 3.6). */
+    readOnlyUnavailableOnQwen: 'Read-only roles are not available on Qwen Code yet',
+    /** New-session dialog: a read-only role on OpenCode (spec 2026-11-12, 4.8, DO4). */
+    opencodeReadOnlyNote: 'OpenCode read-only: no file edits, no shell. Parley tools stay allowed; execute can read the network.',
     option: (name: string, source: 'builtin' | 'claude' | 'codex'): string => `${name} · ${{ builtin: 'Builtin', claude: 'Claude', codex: 'Codex' }[source]}`,
     defaultEffort: (effort: string): string => `Default effort: ${effort}`,
   },
@@ -522,7 +528,10 @@ export const S = {
     /** Текст королевы выводится из роя: режет задачу, ждёт сдачи, сводит, сдала. */
     queen: { cutting: 'cutting the task…', waiting: 'waiting for hand-ins…', collecting: 'collecting…', handed: 'handed in ✓' },
     /** Состояние трутня и проверяющего. */
-    member: { drone: 'reading…', verifier: 'verifying…', waiting: 'waiting', handed: 'handed in ✓', failed: 'failed', closed: 'closed' },
+    member: { drone: 'reading…', verifier: 'verifying…', waiting: 'waiting', handed: 'handed in ✓', partial: 'partial', failed: 'failed', closed: 'closed' },
+    /** Имя участника со срезом в раскрытой строке: `Drone 2 · host/sessions`; `aria-label`: `Drone 2, host/sessions: partial`. */
+    memberName: (title: string, slice: string | null): string => (slice === null ? title : `${title} · ${slice}`),
+    memberAria: (title: string, slice: string | null, word: string): string => (slice === null ? `${title}: ${word}` : `${title}, ${slice}: ${word}`),
     /** Счётчик `3/5` (сдавшие / все трутни и проверяющие); до первого трутня — многоточие. */
     counter: (handed: number, total: number): string => (total === 0 ? '…' : `${handed}/${total}`),
     counterLabel: (handed: number, total: number): string => `${handed} of ${total} handed in`,
@@ -565,11 +574,11 @@ export const S = {
     /** `aria-label` и тултип «+» заголовка проекта: проект называется (спека окна 2026-09-29, 1.2). */
     newWorkspaceInProject: (project: string): string => `New workspace in ${project}`,
     sessionCount: (n: number): string => (n === 1 ? '1 session' : `${n} sessions`),
-    /** Строка под сессиями карточки: сколько закрытых спрятано; «Hide closed» — прячет раскрытые. */
-    moreClosed: (n: number): string => `${n} more closed`,
+    /** Заголовок-переключатель блока закрытых сессий карточки (план 2026-11-15); текст один в обоих состояниях. «Hide closed» — вторая кнопка под длинным раскрытым блоком. */
+    closedSessions: 'Closed sessions',
     hideClosed: 'Hide closed',
-    /** Ссылка под строками карточки: архивные комнаты работы спрятаны под ней; «Hide archived rooms» прячет раскрытые. */
-    archivedRooms: (n: number): string => (n === 1 ? '1 archived room' : `${n} archived rooms`),
+    /** Заголовок-переключатель блока архивных комнат карточки; «Hide archived rooms» — вторая кнопка под длинным блоком. */
+    archivedRooms: 'Archived rooms',
     hideArchivedRooms: 'Hide archived rooms',
     /** Ссылка внизу группы проекта: архивные работы проекта спрятаны под ней; «Hide archived» прячет раскрытые. */
     archivedWorks: (n: number): string => `${n} archived`,
@@ -594,7 +603,7 @@ export const S = {
     /** Тултип `#N` карточки: комнаты с непрочитанным сообщением. */
     roomsWithUnread: (n: number): string => (n === 1 ? '1 room with unread messages' : `${n} rooms with unread messages`),
     /** Тултип значка ветки в строке сессии со своим worktree; ветка — данные, идёт как есть. */
-    ownWorktree: (branch: string): string => `Own worktree · ${branch}`,
+    ownWorktree: (branch: string, base: string): string => `Own worktree · ${branch} ← ${base}`,
     trustWaitTooltip: 'Not responding since launch — may be waiting for folder trust',
     /** Тултип ⚠ строки сессии Codex, что за срок после запуска не показала статус: вход или доверие к папке — за человеком. */
     startupWaitTooltip: 'Waiting at startup — Codex may need sign-in or folder trust in its terminal',
@@ -740,6 +749,18 @@ export const S = {
     sessions: (count: number, name: string, from: string | null): string =>
       `${count} ${name} ${count === 1 ? 'session' : 'sessions'} will stay on ${from ?? 'the old version'} until restarted`,
     smokeFailed: "The new version rejected Parley's launch flags. New sessions may fail to start.",
+    /** Строка состояния CLI (спека 2026-11-11, §4.4). */
+    upToDate: 'Up to date',
+    checked: (time: string): string => `checked ${time}`,
+    lastSuccess: (time: string): string => `last successful check ${time}`,
+    checkNow: 'Check now',
+    checking: 'Checking…',
+    updateAnyway: 'Update anyway',
+    skipped: 'skipped',
+    couldNotCheck: (reason: string | null): string => (reason === null ? 'Could not check' : `Could not check (${reason})`),
+    manualUpdate: 'update with:',
+    copy: 'Copy',
+    copied: 'Copied',
   },
 
   /** Строка статуса — `shell/StatusBar.tsx`. */
@@ -809,11 +830,59 @@ export const S = {
 
   /** Общая карточка подключения: строка статуса и диалог новой сессии. */
   providerCard: {
+    /** Qwen Code card (spec 2026-11-11, 3.6): sign-in hints, never a verdict. */
+    kimi: {
+      missingCli: 'Install the Node-based Kimi Code CLI and make sure kimi is on the host’s PATH.',
+      signIn: 'Run kimi login in a terminal on the host, then refresh the provider.',
+      chooseInChat: 'Choose the model, thinking level, and mode in the active Kimi Code chat.',
+      refresh: 'Refresh connection',
+    },
+    qwen: {
+      hint: {
+        configured: (type: string): string => `Configured: ${type}`,
+        'qwen-account': 'Qwen account sign-in found',
+        'env-key': 'Key found in environment',
+        'not-detected': 'Sign-in not detected: start a Qwen session and use /auth in the terminal',
+      },
+      hintNote: 'This is a hint from local files, not a check that the sign-in works.',
+      model: (name: string | null): string => (name === null ? 'Model: Default' : `Model: Default (${name} in Qwen settings)`),
+      modelHelp: 'Pick Default, or type a model id when you start a session.',
+    },
     connected: 'Connected',
     notConnected: 'Not connected',
     copy: 'Copy',
+    copyCommand: 'Copy command',
+    /** OpenCode card (spec 2026-11-12, 4.12): the count from `opencode auth list`, a hint and never a verdict. */
+    opencode: {
+      hint: {
+        connected: (count: number): string => (count === 1 ? '1 connected provider found' : `${count} connected providers found`),
+        none: 'No connected provider found. Sign in inside OpenCode: Connect provider, or `opencode auth login --standalone` in a terminal',
+      },
+      hintNote: 'This is a hint from `opencode auth list`, not a check that the sign-in works.',
+      /** A 1.x OpenCode is found (spec 2026-11-12, 4.9, DO1): never run, the card says what to do. */
+      legacy: (version: string): string => `OpenCode 1.x found (${version}); Parley supports 2.x. Install OpenCode 2 and check again.`,
+    },
     copied: 'Copied',
     installationGuide: 'Installation guide',
+    /** Установка из Parley (спека 2026-11-11, §4.2, §4.4). */
+    notInstalled: 'Not installed',
+    latestVersion: (latest: string): string => `latest ${latest}`,
+    installAction: 'Install…',
+    installConfirm: {
+      title: (name: string): string => `Install ${name}?`,
+      command: 'Command',
+      source: 'Source',
+      trust:
+        "This downloads the vendor's installer and runs it as you. Parley logs its fingerprint but cannot verify the vendor's code or what the installer downloads.",
+      profile: 'The installer may add ~/.local/bin to your shell profile so qwen works in your own terminal.',
+      accept: 'Install',
+    },
+    installing: (name: string): string => `Installing ${name}…`,
+    installBusy: 'An install or update of this CLI is already running.',
+    installed: (name: string, version: string | null): string => `${name} installed${version === null ? '' : ` · ${version}`}`,
+    installFailed: 'Install failed',
+    installSmokeFailed: "The installed version rejected Parley's launch flags. New sessions may fail to start.",
+    installManual: 'Run it yourself:',
     signInGuide: 'Sign-in guide',
     checkAgain: 'Check again',
     /**
@@ -1035,6 +1104,8 @@ export const S = {
       modelField: 'Model',
       /** Первый пункт списка моделей: без флага `--model`, модель CLI по умолчанию (решение 5). */
       modelDefault: 'Default',
+      /** Qwen Code has no model catalog: a typed model id (empty is Default). */
+      modelTyped: 'Model id (empty: Default)',
       effortField: 'Effort',
       /** Первый пункт списка уровней: без флага `--effort` — CLI берёт уровень, сохранённый у себя (нормалайзер 2026-10-06). */
       effortDefault: 'Default',
@@ -1212,6 +1283,33 @@ export const S = {
     kindTag: { note: 'note', question: 'question', decision: 'decision' } as const,
   },
 
+  roomBoard: {
+    viewLabel: 'Room view', feed: 'Feed', board: 'Board',
+    columns: { waiting: 'Waiting', progress: 'In progress', review: 'In review', done: 'Done', verified: 'Verified' },
+    empty: 'Nothing here', engine: 'Engine',
+    ready: 'Ready',
+    waitsFor: (items: string): string => `Waits for ${items}`,
+    blocked: (note: string): string => (note === '' ? 'Blocked' : `Blocked: ${note}`),
+    returned: (note: string): string => (note === '' ? 'Returned' : `Returned: ${note}`),
+    waitingFor: (who: string): string => `Submitted · waiting for ${who}`,
+    waitingForYou: 'Submitted · waiting for you',
+    noVerifier: 'No verifier available',
+    attempt: (n: number, of: number): string => `attempt ${n} of ${of}`,
+    submission: (n: number): string => `submission ${n}`,
+    updated: (ago: string): string => `updated ${ago}`,
+    noticeDecision: 'A decision is waiting for you in the feed',
+    openFeed: 'Open feed',
+    filter: 'Show the cards of one agent',
+    filterOnly: (label: string): string => `Only ${label}`,
+    item: (id: number): string => `#${id}`,
+    moreItems: (count: number): string => `+${count}`,
+    sheet: (id: number): string => `Plan item ${id}`,
+    openSession: 'Open session', showInFeed: 'Show in feed',
+    events: 'Latest changes',
+    event: (who: string, item: number, status: string): string => `${who} · #${item} → ${status}`,
+    working: 'Working now',
+  },
+
   /** Комнаты — `rooms/*`. */
   rooms: {
     planLabel: 'Plan',
@@ -1270,6 +1368,7 @@ export const S = {
       settling: 'batched, waits for a quiet room',
       'provider-missing': 'Provider removed — continue the session on another provider',
       queued: 'queued for a free agent slot',
+      'wake-blocked': "can't be woken — resume it by hand",
     } satisfies Record<MailWait, string>,
     /** Причина, которой окно не знает (хост новее окна): вместо пустой скобки (`mailWaitText`). */
     mailWaitUnknown: 'waiting',
@@ -1349,6 +1448,7 @@ export const S = {
       providers: 'Providers',
       projects: 'Projects',
       remote: 'Remote access',
+      about: 'About',
     },
     lockedBy: (value: string): string => `(set by ${value})`,
     appearanceSystem: 'System',
@@ -1453,11 +1553,40 @@ export const S = {
     /** Electron на macOS не сообщает о запрете уведомлений — подсказка стоит всегда (спека 7.4). */
     notificationsHint: 'Not getting notifications? System Settings → Notifications → Parley',
     /**
-     * Проверка новой версии (V6 плана релиза 0.1.0, `ui.json.checkForUpdates`). Своей секции «General» в окне нет,
-     * а шестая вкладка не влезает в диалог, — переключатель стоит в «Notifications»: это тоже уведомление.
+     * Проверка новой версии (V6 плана релиза 0.1.0, `ui.json.checkForUpdates`). С 0.38 переключатель живёт в
+     * Settings → About, рядом с «Check now» и строкой самообновления.
      */
-    checkForUpdates: 'Check for updates',
+    checkForUpdates: 'Check for updates automatically',
     checkForUpdatesHint: 'Looks for a newer Parley release on GitHub at start and once a day',
+    /** Settings → About: версия, сборка, окружение, «Check now». */
+    about: {
+      title: (version: string | null): string => (version === null ? 'Parley (development build)' : `Parley ${version}`),
+      /** `Build 2b52d262 · 2026-11-17 · arm64 · modified`; отсутствующее не выводится, пусто — строки нет. */
+      build: (commit: string | null, date: string | null, arch: string, dirty: boolean): string => {
+        const parts = [commit, date, arch, dirty ? 'modified' : null].filter((part): part is string => part !== null && part !== '');
+        return parts.length === 0 ? '' : `Build ${parts.join(' · ')}`;
+      },
+      host: 'Host',
+      notConnected: 'Not connected',
+      electron: 'Electron',
+      chromium: 'Chromium',
+      node: 'Node',
+      macos: 'macOS',
+      app: 'App',
+      data: 'Data',
+      checkNow: 'Check now',
+      checking: 'Checking…',
+      releaseNotes: 'Release notes',
+      copyInfo: 'Copy info',
+      copied: 'Copied',
+      lastChecked: (time: string): string => `Last checked ${time}`,
+      current: (latest: string): string => `Parley ${latest} is the latest version`,
+      available: (latest: string): string => `Parley ${latest} is available`,
+      network: "Couldn't reach GitHub. Check your connection.",
+      rateLimited: "GitHub's rate limit was reached. Try again later.",
+      badResponse: 'GitHub sent an unexpected answer. Try again later.',
+      unavailable: 'Update checks are off in this build',
+    },
     /** Settings → Assistant → Voice provider (API): OpenAI key for paid voice. */
     voiceProvider: {
       title: 'Voice provider (API)',
@@ -1693,6 +1822,50 @@ export const S = {
     /** Открывает страницу релиза в браузере: без подписи Apple окно само не обновляется. */
     download: 'Download',
     later: 'Later',
+    /** «Update» — скачать и подготовить версию (самообновление, спека §4.1); версию закрытой не записывает. */
+    update: 'Update',
+    cancel: 'Cancel',
+    restartNow: 'Restart now',
+    restartToUpdate: 'Restart to update',
+    tryAgain: 'Try again',
+    /** Процент пропускается, если размер файла неизвестен. */
+    downloading: (version: string, percent: number | null): string =>
+      percent === null ? `Downloading Parley ${version}…` : `Downloading Parley ${version}… ${percent}%`,
+    checking: (version: string): string => `Checking Parley ${version}…`,
+    ready: (version: string): string => `Parley ${version} is ready`,
+    readyHint: 'Restarting stops running agents',
+    failed: (version: string, reason: string): string => `Couldn't update to ${version}: ${reason}`,
+    /** Тост после перезапуска (спека §4.3). */
+    updated: (version: string): string => `Parley updated to ${version}`,
+    failedAfterRestart: (version: string, reason: string): string =>
+      `Couldn't update to ${version}: ${reason}. The previous version is still installed.`,
+    /** Строка в Settings → Notifications (спека §4.2). */
+    row: {
+      available: (version: string): string => `Parley ${version} is available`,
+      downloading: (version: string, percent: number | null): string =>
+        percent === null ? `Downloading ${version}…` : `Downloading ${version} — ${percent}%`,
+      checking: (version: string): string => `Checking ${version}…`,
+      ready: (version: string): string => `${version} is ready to install`,
+      failed: (reason: string): string => `Couldn't update: ${reason}`,
+    },
+    /** Причина отказа попытки — одна строка на каждый код `UpdateFailure`. */
+    failure: {
+      network: 'GitHub did not answer, check your connection',
+      too_large: 'the download is larger than a Parley release should be',
+      checksum: 'the download does not match its checksum',
+      bad_archive: 'the download is not a valid Parley release',
+      disk: 'Parley could not write the update next to the app',
+      cannot_replace: 'Parley can no longer replace itself where it is installed',
+    } satisfies Record<UpdateFailure, string>,
+    /** Причина отказа замены после перезапуска — одна строка на каждый код `UpdateResultFailure`. */
+    resultFailure: {
+      still_running: 'the old Parley did not quit in time',
+      no_app: 'the installed app could not be found',
+      swap_failed: 'the new version could not be put in place',
+      restore_failed: 'the new version could not be put in place and the old one was not restored',
+      launch_failed: 'the new version did not start',
+      helper: 'the update helper could not be started',
+    } satisfies Record<UpdateResultFailure, string>,
   },
 
   /**
@@ -1866,6 +2039,11 @@ export const S = {
     /** Сегмент тулбара вкладки «Chat | Terminal». */
     segment: { chat: 'Chat', terminal: 'Terminal' },
     viewLabel: 'Session view',
+    /** Тултип чипа ветки в шапке вкладки сессии; у worktree — `S.sidebar.ownWorktree`. */
+    branch: {
+      projectFolder: (branch: string): string => `Project folder · ${branch}`,
+      clone: (branch: string): string => `Own clone · ${branch}`,
+    },
     /** Подсказка выключенного сегмента: Codex, `claude` ниже порога версии ленты или версия неизвестна. */
     versionUnknown: 'Chat is unavailable because the CLI version could not be verified. Refresh providers to retry.',
     hostFeedUnsupported: 'This Parley host does not support Chat for this provider. Update Parley to enable it.',
@@ -1999,6 +2177,19 @@ export const S = {
     retryDelay: (seconds: number): string => seconds > 0 ? `Retrying in ${seconds}s` : 'Retrying…',
     retryScheduled: (seconds: number): string => `Retry scheduled after ${seconds}s`,
     error: 'Request failed',
+    /** Чип «N shell» в тулбаре сессии и список процессов её PTY (план shell-processes, этап C). */
+    processes: {
+      chip: (count: number): string => `${count} shell`,
+      chipLabel: (count: number): string => (count === 1 ? '1 running process in this session' : `${count} running processes in this session`),
+      title: 'Running processes',
+      list: 'Running processes',
+      loading: 'Loading…',
+      empty: 'No running processes',
+      unavailable: 'Process list unavailable',
+      approximate: 'Approximate list: it may include Codex helper processes and miss some commands.',
+      cpu: (percent: number): string => `${percent.toFixed(1)}% CPU`,
+      memory: (rssKb: number): string => `${Math.max(1, Math.round(rssKb / 1024))} MB`,
+    },
     agent: {
       fallbackTitle: 'Agent',
       toolCalls: (count: number): string => (count === 1 ? '1 tool call' : `${count} tool calls`),
@@ -2032,6 +2223,19 @@ export const S = {
       waiting: (reason: string | null): string => (reason === null ? 'Not picked up yet' : `Not picked up yet (${reason})`),
       compacting: 'compacting context',
     },
+    /** Доставленные письма (элемент ленты `mail`, спека 2026-11-12, 3.4). */
+    mail: {
+      you: 'you',
+      parley: 'Parley',
+      kind: { note: 'note', question: 'question', decision: 'decision' },
+      /** Комната письма: `r-28 · Mail in chat`. */
+      room: (id: string, title: string): string => `${id} · ${title}`,
+      showMore: 'Show more',
+      showLess: 'Show less',
+      /** Письмо урезано доставкой или пределом ленты. */
+      cut: 'cut',
+      remaining: (count: number): string => `${count} more unread`,
+    },
     /** Строка действий под сообщением (спека 2026-10-16, 3.1). */
     actions: { copy: 'Copy', copied: 'Copied', sendAgain: 'Send again', reply: 'Reply' },
     /** Плашка цитаты над полем ввода (Reply): подпись и крестик «убрать». */
@@ -2041,6 +2245,12 @@ export const S = {
       placeholder: 'Message Claude — Enter to send',
       codexLabel: 'Message to Codex',
       codexPlaceholder: 'Message Codex — Enter to send',
+      qwenLabel: 'Message to Qwen Code',
+      qwenPlaceholder: 'Message Qwen Code — Enter to send',
+      opencodeLabel: 'Message to OpenCode',
+      opencodePlaceholder: 'Message OpenCode — Enter to send',
+      kimiLabel: 'Message to Kimi Code',
+      kimiPlaceholder: 'Message Kimi Code — Enter to send',
       send: 'Send',
       queue: 'Queue',
       attach: 'Attach a file',
@@ -2074,6 +2284,12 @@ export const S = {
       /** `sessions.setModel` вернул effort `null`: у новой модели нет уровня, выбранного раньше. */
       effortReset: (model: string, level: string): string => `${model} has no ${level} effort — effort is back to Default`,
     },
+    kimi: {
+      settings: (current: string): string => `Kimi Code settings (${current})`,
+      booleanValue: (name: string, enabled: boolean): string => `${name} ${enabled ? 'on' : 'off'}`,
+      readOnly: 'This host cannot change Kimi Code settings',
+      refused: (reason: string): string => `Could not change Kimi Code settings (${reason})`,
+    },
     /** Меню режима разрешений в тулбаре (кусок 4a, решение 9); режим вне списка показывается сырой строкой. */
     mode: {
       label: 'Permission mode',
@@ -2089,6 +2305,23 @@ export const S = {
     /** Баннер над полем ввода: агент ждёт в терминале (диалог без хука). */
     waitingBanner: {
       text: 'Claude Code is waiting in the terminal',
+      /** Qwen Code approvals are answered in the terminal in v1: the Chat view has no approval cards for it. */
+      qwenApproval: 'Waiting for approval in the terminal',
+      /** OpenCode approvals are answered in the terminal in v1: the Chat view has no approval cards for it. */
+      opencodeApproval: 'Waiting for approval in the terminal',
+      open: 'Open terminal',
+    },
+    /** Панель над полем ввода: вопрос агента с экрана терминала и ответ на него из Chat. */
+    terminalPrompt: {
+      keysHint: 'Keys go to the terminal',
+      focusHint: 'Click here to answer with the keyboard',
+      typeAnswer: 'Type an answer',
+      send: 'Send',
+      empty: 'The terminal shows nothing yet',
+      up: 'Up',
+      down: 'Down',
+      enter: 'Enter',
+      escape: 'Esc',
       open: 'Open terminal',
     },
     /** Баннер замены агента над полем ввода (спека 2026-10-30, 5.7). */
@@ -2248,6 +2481,19 @@ export const S = {
       cancel: 'Cancel',
       wrong: 'Wrong username or password. Try again.',
       sendFailed: "Couldn't send the credentials. Try again or cancel.",
+    },
+    /** Слой выбора клиентского сертификата над вкладкой (`renderer/browser/CertPrompt.tsx`, SSO с mTLS). */
+    cert: {
+      title: (host: string): string => `${host} asks for a certificate that identifies you.`,
+      requestedBy: (pageHost: string): string => `Requested by the page ${pageHost}.`,
+      issuer: (name: string): string => `Issued by ${name}`,
+      expires: (date: string): string => `Valid until ${date}`,
+      serial: (serial: string): string => `Serial ${serial}`,
+      remember: "Remember for this site. Agents working in Parley's browser will be identified by it too.",
+      keyAccess: 'macOS may then ask for access to the key. Choose "Always Allow", or agents will stop at that window.',
+      use: 'Use certificate',
+      notNow: 'Not now',
+      sendFailed: "Couldn't send the choice. Try again or cancel.",
     },
     /** ⌖ Select (спека браузера 4.6). */
     select: {
@@ -2771,6 +3017,8 @@ export const S = {
       loadProviders: 'load providers',
       refreshProviderLimits: 'refresh provider limits',
       updateProvider: 'update the provider CLI',
+      checkProviderUpdates: 'check for updates',
+      installProvider: 'install the provider CLI',
       decideProjectMcp: 'save the MCP server choice',
       skipProviderUpdate: 'skip this version',
       saveDiagnostics: 'save diagnostics',
@@ -2997,6 +3245,11 @@ export const S = {
   /** Помощник на острове (спека 2026-10-14, раздел 6): тексты вида, настроек и подтверждения. */
   assistant: {
     ask: 'Ask the assistant',
+    /** Значок автономного режима на острове и кнопка остановки плана. */
+    autoBadge: 'Auto',
+    autoBadgeHint: 'Autonomous mode: actions run without confirmation',
+    stopPlan: 'Stop',
+    stopping: 'Stopping after the current step',
     placeholder: 'Ask the assistant…',
     ready: 'Ask about your agents, or tell a room something',
     escToClose: 'Esc to close',
@@ -3130,6 +3383,12 @@ export const S = {
       glmSlow: 'GLM answers in about 13 seconds.',
       /** «Speak answers» (план 3b, B20). */
       speak: 'Speak answers',
+      autonomy: 'Autonomous mode',
+      autonomyHint:
+        'The assistant does what you ask at once, without confirmation cards. Works from the island on this Mac only; Telegram and the phone still ask.',
+      journalTitle: 'Recent actions',
+      journalEmpty: 'No actions yet',
+      journalAuto: 'auto',
     },
   },
 
@@ -3236,6 +3495,14 @@ function budgetSettingName(reason: string, scope: string): string | null {
  */
 export function startErrorText(failure: IpcErrorInfo, action: string): string {
   const data = failure.data;
+  switch (data?.['reason']) {
+    case 'kimi-missing-cli': return S.providerCard.kimi.missingCli;
+    case 'kimi-sign-in': return S.providerCard.kimi.signIn;
+    case 'kimi-config-in-chat': return S.providerCard.kimi.chooseInChat;
+    case 'kimi-protocol': return failure.message || errorText(failure.code, action);
+  }
+  // Отказ из-за роли после замены агента (спека 2026-11-12, 2.6): текст хоста сам называет выход — показываем его.
+  if (failure.code === 'conflict' && data?.['reason'] === HOST_ERROR_REASONS.roleChange && failure.message !== '') return failure.message;
   if (data?.['code'] !== 'resource-budget') return errorText(failure.code, action);
   const B = S.errors.budget;
   const reason = typeof data['reason'] === 'string' ? data['reason'] : '';
@@ -3268,7 +3535,8 @@ export function startErrorText(failure: IpcErrorInfo, action: string): string {
  * вызывающей стороны (`store/notices.ts`), а человеку — текст по виду
  * уведомления. Слова — как у хоста, гида и README: письма — «messages»,
  * строка, которую хост набирает в терминал агента, — «pointer».
- * Исключение — тело macOS-уведомления `limit-return-blocked`: причину («…could not continue: a menu is open in its
+ * Исключение — `role-missing`: `noticeText` берёт английский текст хоста (смена роли при замене агента, спека 2026-11-12, 2.5);
+ * пустой текст — фраза ниже. Исключение — тело macOS-уведомления `limit-return-blocked`: причину («…could not continue: a menu is open in its
  * terminal», спека застрявших 7.4) знает только хост, и `attention/notify.ts` берёт его английский текст; фраза ниже —
  * запасная (строка статуса, пустой текст).
  */
@@ -3308,6 +3576,8 @@ const NOTICE_DETAIL: Record<NoticeKind, string> = {
   'swarm-done': 'swarm finished',
   'swarm-failed': "swarm didn't finish",
   'machine-over-limit': 'started over the machine limit',
+  'deps-clone-unavailable': 'dependencies were not cloned into the new worktree',
+  'deps-clone-mismatch': 'cloned dependencies do not match the lock file',
 };
 
 /**
@@ -3331,6 +3601,15 @@ function unmovedWorkDetail(text: string): string {
  * без него или с тем, что есть); без ярлыка — просто фраза с большой буквы.
  */
 export function noticeText(notice: HostNotice, label?: string): string {
+  // `role-missing`: the host's own sentence names the provider and what changed (spec 2026-11-12, 2.5). A text that starts
+  // with the session (`@s02 …`, `S02 …`) is shown as is; other texts (the launch warning "The saved role is no longer
+  // available…") get the label in front. An empty text falls back to the generic phrase below.
+  // Text with Cyrillic (an old host) is not shown: the window speaks English only.
+  const own = notice.kind === 'role-missing' ? notice.text.trim() : '';
+  if (own !== '' && !/[А-Яа-яЁё]/.test(own)) {
+    const sentence = /[.!?]$/.test(own) ? own : `${own}.`;
+    return label === undefined || /^(@s|S)\d+\b/.test(own) ? sentence : `${label}: ${sentence}`;
+  }
   const detail = notice.kind === 'map-migration-failed' ? unmovedWorkDetail(notice.text) : NOTICE_DETAIL[notice.kind];
   if (label === undefined) return `${detail.charAt(0).toUpperCase()}${detail.slice(1)}.`;
   return `${label}: ${detail}.`;

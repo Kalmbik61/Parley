@@ -16,6 +16,10 @@ import {
   customProviderProjectRoots,
   claudeSource,
   codexSource,
+  qwenSource,
+  defaultQwenRoot,
+  isQwenTranscriptPath,
+  qwenBindingHolds,
   defaultRoot,
   discoverSession,
   claudeCostIn,
@@ -28,6 +32,7 @@ import {
   type ActivityLog,
   type DescendantUsage,
   type DiscoveredSubagent,
+  type IndexReuse,
   type MetricsRoots,
   type SessionChange,
   type SessionIndex,
@@ -41,7 +46,17 @@ import {
   type WorkSession,
   usageKey,
   withDescendants,
+  byFamily,
 } from '@parley/core';
+import { hostPaths } from '../paths.js';
+import { readHostVersion } from '../version.js';
+import { LOG_INDEX_CACHE_FILE, loadLogIndexCache, saveLogIndexCache, type LogIndexCacheEntry } from './log-index-cache.js';
+
+/** Итог первой сборки: сколько файлов в индексе и сколько из них разобрано заново (остальные взяты из кэша). */
+export interface LogIndexStartStats {
+  files: number;
+  parsed: number;
+}
 
 /**
  * Что изменилось в индексе: подписчику, который пересчитывает свои сессии, нет смысла трогать остальные.
@@ -56,7 +71,8 @@ export interface LogChange {
 }
 
 export interface LogIndex {
-  start(): Promise<void>;
+  /** `null` — остановлен до конца сборки. */
+  start(): Promise<LogIndexStartStats | null>;
   /** Запись индекса по `providerSessionId` сессии; `undefined` — лога нет. */
   index(session: WorkSession): SessionIndex | undefined;
   /**
@@ -91,6 +107,12 @@ export interface LogIndex {
    * не глотаем, а отдаём вызывающему: поллер ловит её сам и пробует на следующем проходе, как `onError` наблюдателя.
    */
   reindex(file: string): Promise<void>;
+  /**
+   * Перечитать файлы, чьи размер или mtime изменились с последнего перечитывания (страховка от потерянных событий
+   * fs.watch): основному наблюдателю и наблюдателям из `watchClaudeRoot`. Без изменений стоит один `stat` на файл, чтения нет.
+   * До `start()` и после `stop()` — ничего.
+   */
+  rescan(files: readonly string[]): void;
   stop(): void;
 }
 
@@ -98,7 +120,8 @@ export interface LogIndex {
  * Чьи логи читает сессия: Codex — свои, всё прочее (Claude и его надстройки вроде GLM) — Claude Code.
  * Один и тот же нативный id у двух семейств друг друга не вытесняет.
  */
-const logFamily = (provider: string): 'codex' | 'claude' => (provider === 'codex' ? 'codex' : 'claude');
+const logFamily = (provider: string): 'codex' | 'claude' | 'qwen' | 'opencode' | 'other' =>
+  byFamily(provider, { claude: 'claude' as const, codex: 'codex' as const, qwen: 'qwen' as const, opencode: 'opencode' as const, neutral: 'other' as const });
 const logKey = (provider: string, id: string): string => `${logFamily(provider)}\u0000${id}`;
 
 /**
@@ -124,6 +147,11 @@ export interface LogIndexOptions {
   timelineCacheSize?: number;
   subagentTtlMs?: number;
   now?: () => number;
+  /**
+   * Кэш индекса между запусками: файл и версия хоста. `null` — без кэша. По умолчанию кэш включён, только когда
+   * корни истории Claude и Codex не подменены (тесты и E2E уводят хост от истории человека).
+   */
+  cache?: { file: string; version: string } | null;
 }
 
 /** Корни истории: к основным добавляются корни своих провайдеров (по умолчанию — найденные на диске). */
@@ -133,6 +161,7 @@ export function createLogIndex(roots: LogIndexRoots = {}, options: LogIndexOptio
   // Свои корни по умолчанию читаются с диска, только если основной корень не подменён (тесты и E2E уводят хост от истории человека).
   const customRoots = roots.customRoots ?? (roots.claudeRoot === undefined ? () => customProviderProjectRoots() : () => []);
   const mainRoot = roots.claudeRoot ?? defaultRoot();
+  const qwenRoot = roots.qwenRoot ?? defaultQwenRoot();
   /** Корни Claude, за которыми следит или будет следить индекс; в `usageIn` по ним находится корень файла. */
   const claudeRoots = new Set<string>([mainRoot]);
   /** Наблюдатели корней, добавленных `watchClaudeRoot` после старта. */
@@ -143,7 +172,11 @@ export function createLogIndex(roots: LogIndexRoots = {}, options: LogIndexOptio
   const now = options.now ?? Date.now;
   // Один индексатор на наблюдатель и опрос Codex: живой лог дочитывается с места, а не читается целиком.
   const indexer = options.indexer ?? createSessionIndexer();
-  let sessions: SessionIndex[] = [];
+  /**
+   * Записи по файлу в порядке перечитывания (Map помнит порядок вставки): из файлов с одним id побеждает перечитанный
+   * последним — как раньше в списке `sessions`, где изменившийся файл уходил в конец.
+   */
+  const byFile = new Map<string, SessionIndex>();
   const byId = new Map<string, SessionIndex>();
   /** Порождённые треды Codex по ключу родителя: родные признаки (`parent_thread_id`), не время и cwd. */
   const byParent = new Map<string, SessionIndex[]>();
@@ -154,26 +187,61 @@ export function createLogIndex(roots: LogIndexRoots = {}, options: LogIndexOptio
   // живым и после «хост остановлен» — минутами, пока не дочитает (2026-10-06).
   const building = new AbortController();
 
-  const rebuild = (): void => {
+  const keyOf = (session: SessionIndex): string => logKey(session.provider, session.id);
+
+  const linkParent = (session: SessionIndex): void => {
+    if (session.provider !== 'codex' || session.parentId === undefined) return;
+    const key = logKey('codex', session.parentId);
+    const list = byParent.get(key);
+    if (list === undefined) byParent.set(key, [session]);
+    else list.push(session);
+  };
+
+  const unlinkParent = (session: SessionIndex): void => {
+    if (session.provider !== 'codex' || session.parentId === undefined) return;
+    const key = logKey('codex', session.parentId);
+    const rest = (byParent.get(key) ?? []).filter((child) => child !== session);
+    if (rest.length === 0) byParent.delete(key);
+    else byParent.set(key, rest);
+  };
+
+  /** Полная сборка карт по списку: порядок списка — порядок перечитывания (победитель по id — последний). */
+  const rebuild = (list: readonly SessionIndex[]): void => {
+    byFile.clear();
     byId.clear();
     byParent.clear();
-    for (const session of sessions) {
-      byId.set(logKey(session.provider, session.id), session);
-      if (session.provider === 'codex' && session.parentId !== undefined) {
-        const key = logKey('codex', session.parentId);
-        byParent.set(key, [...(byParent.get(key) ?? []), session]);
-      }
+    for (const session of list) {
+      byFile.delete(session.file);
+      byFile.set(session.file, session);
+    }
+    for (const session of byFile.values()) {
+      byId.set(keyOf(session), session);
+      linkParent(session);
     }
   };
 
-  /** Та же склейка, что и `applyChange` в `use-sessions.ts`: по файлу, свежие первыми. */
+  /**
+   * Правка карт по одному файлу: `byFile` (запись файла, изменившийся уходит в конец), `byId` (новая запись
+   * побеждает по своему id; ушла записанная победительницей — её id достаётся последнему оставшемуся файлу)
+   * и `byParent` (ребёнок Codex переезжает к новому родителю). Обход `byFile` — только когда ушёл победитель.
+   */
   const applyChange = (change: SessionChange): void => {
-    const previous = sessions.find((session) => session.file === change.file);
-    sessions =
-      change.kind === 'removed'
-        ? sessions.filter((session) => session.file !== change.file)
-        : [...sessions.filter((session) => session.file !== change.file), change.session];
-    rebuild();
+    const previous = byFile.get(change.file);
+    if (previous !== undefined) {
+      byFile.delete(change.file);
+      unlinkParent(previous);
+    }
+    if (change.kind === 'updated') {
+      byFile.set(change.file, change.session);
+      byId.set(keyOf(change.session), change.session);
+      linkParent(change.session);
+    }
+    if (previous !== undefined && byId.get(keyOf(previous)) === previous) {
+      byId.delete(keyOf(previous));
+      let last: SessionIndex | undefined;
+      for (const session of byFile.values()) if (keyOf(session) === keyOf(previous)) last = session;
+      if (last !== undefined) byId.set(keyOf(previous), last);
+    }
     // Старая запись нужна для `removed` и для смены id в том же файле; к каждой добавляются предки по `parentId`.
     const ids = new Set<string>();
     for (const start of [previous, change.kind === 'updated' ? change.session : undefined]) {
@@ -193,10 +261,16 @@ export function createLogIndex(roots: LogIndexRoots = {}, options: LogIndexOptio
     for (const listener of listeners) listener(affected);
   };
 
-  const indexOf = (session: WorkSession): SessionIndex | undefined =>
-    session.providerSessionId === null
-      ? undefined
-      : byId.get(logKey(session.provider, session.providerSessionId));
+  const indexOf = (session: WorkSession): SessionIndex | undefined => {
+    if (session.providerSessionId === null) return undefined;
+    const found = byId.get(logKey(session.provider, session.providerSessionId));
+    // A Qwen session with a binding from `SessionStart` trusts only that file, and only while its records agree
+    // (`sessionId`, `cwd`); another file with the same id is not this session's transcript (spec 3.5).
+    if (found !== undefined && session.qwenTranscript !== undefined && logFamily(session.provider) === 'qwen') {
+      return qwenBindingHolds(found, { sessionId: session.providerSessionId, binding: session.qwenTranscript }) ? found : undefined;
+    }
+    return found;
+  };
 
   /** Порождённые треды Codex под корнем (дети, внуки…); цикл в данных их не зациклит. */
   const descendantIndexes = (root: SessionIndex): SessionIndex[] => {
@@ -292,6 +366,33 @@ export function createLogIndex(roots: LogIndexRoots = {}, options: LogIndexOptio
       return (byParent.get(logKey('codex', root.id)) ?? []).map((child) => ({ threadId: child.id, file: child.file }));
     },
     async start() {
+      const hostVersion = readHostVersion();
+      // Версия не определилась (`unknown`) — кэш не включаем: он пережил бы обновление.
+      const cacheOptions =
+        options.cache !== undefined
+          ? options.cache
+          : roots.claudeRoot === undefined && roots.codexRoot === undefined && roots.qwenRoot === undefined && hostVersion !== 'unknown'
+            ? { file: path.join(hostPaths().dir, LOG_INDEX_CACHE_FILE), version: hostVersion }
+            : null;
+      const previous = cacheOptions === null ? new Map<string, LogIndexCacheEntry>() : await loadLogIndexCache(cacheOptions.file, cacheOptions.version);
+      // Новая карта кэша — ровно файлы этой сборки: исчезнувшие выпадают. Порядок записей в индексе кэш не хранит:
+      // список строит та же сборка (обход, сортировка по `endedAt`), так что победитель среди файлов с одним id тот же.
+      const next = new Map<string, LogIndexCacheEntry>();
+      let reused = 0;
+      const reuse: IndexReuse | undefined =
+        cacheOptions === null
+          ? undefined
+          : {
+              get(file, key) {
+                const entry = previous.get(file);
+                if (entry === undefined || entry.key !== key) return undefined;
+                reused += 1;
+                return entry.index;
+              },
+              put(file, key, index) {
+                next.set(file, { key, index });
+              },
+            };
       // Полный список могут читать гигабайты истории (`~/.claude/projects`) —
       // вызывающий (`ActivityService`) не ждёт эту функцию, чтобы не задерживать
       // старт хоста; `stopped` здесь ловит остановку, случившуюся, пока список
@@ -301,23 +402,22 @@ export function createLogIndex(roots: LogIndexRoots = {}, options: LogIndexOptio
       // Корни, чьи сессии уже в `built`: `watchClaudeRoot` может добавить корень, пока список строится.
       const builtRoots = new Set<string>([mainRoot]);
       try {
-        built = await buildAllSessions({ ...roots, signal: building.signal });
+        built = await buildAllSessions({ ...roots, qwenRoot, signal: building.signal, ...(reuse === undefined ? {} : { reuse }) });
         // Корни своих провайдеров — только Claude-формат; Codex в общем списке уже один раз.
         // Цикл ловит и корни, появившиеся за время самой сборки: после последней проверки `await` нет.
         for (let pending = unbuiltRoots(builtRoots); pending.length > 0; pending = unbuiltRoots(builtRoots)) {
           for (const root of pending) {
             builtRoots.add(root);
-            built = [...built, ...(await buildIndex(root, adapterV1, building.signal))];
+            built = [...built, ...(await buildIndex(root, adapterV1, building.signal, reuse))];
           }
           built.sort((a, b) => String(b.endedAt ?? '').localeCompare(String(a.endedAt ?? '')));
         }
       } catch (error) {
-        if (stopped) return;
+        if (stopped) return null;
         throw error;
       }
-      if (stopped) return;
-      sessions = built;
-      rebuild();
+      if (stopped) return null;
+      rebuild(built);
       // Наблюдатели и `started` — без `await` после последней проверки корней: `watchClaudeRoot` не теряет корень.
       watcher = watchSessions(
         applyChange,
@@ -325,6 +425,7 @@ export function createLogIndex(roots: LogIndexRoots = {}, options: LogIndexOptio
           claudeSource(roots.claudeRoot, undefined, indexer),
           ...[...claudeRoots].filter((root) => root !== mainRoot).map((root) => claudeSource(root, undefined, indexer)),
           codexSource(roots.codexRoot, indexer),
+          qwenSource(qwenRoot, indexer),
         ],
         // Сбой ре-парса одного файла не должен ронять хост — следующее событие
         // попробует снова, как и у остальных наблюдателей хоста.
@@ -337,6 +438,12 @@ export function createLogIndex(roots: LogIndexRoots = {}, options: LogIndexOptio
       // случиться (план, кусок 1.5 — автозаголовок и привязка «на изменениях
       // логов»).
       for (const listener of listeners) listener();
+      const stats: LogIndexStartStats = { files: next.size, parsed: next.size - reused };
+      if (cacheOptions !== null && !stopped && (stats.parsed > 0 || next.size !== previous.size)) {
+        // Кэш — ускорение, не данные: сбой записи не должен ронять индекс.
+        await saveLogIndexCache(cacheOptions.file, cacheOptions.version, next).catch(() => undefined);
+      }
+      return stats;
     },
     watchClaudeRoot(root) {
       if (stopped || claudeRoots.has(root)) return;
@@ -358,7 +465,7 @@ export function createLogIndex(roots: LogIndexRoots = {}, options: LogIndexOptio
     },
     async usageIn(session, windows, excludeIds) {
       const found = indexOf(session);
-      if (found === undefined) return undefined;
+      if (found === undefined || found.provider === 'qwen') return undefined;
       if (found.provider === 'codex') {
         const children = descendantIndexes(found);
         const key = `codex\u0000${JSON.stringify(windows)}\u0000${await signature([found.file, ...children.map((child) => child.file)])}`;
@@ -385,12 +492,12 @@ export function createLogIndex(roots: LogIndexRoots = {}, options: LogIndexOptio
     },
     async costIn(session, window) {
       const found = indexOf(session);
-      if (found === undefined || found.provider === 'codex') return undefined;
+      if (found === undefined || found.provider === 'codex' || found.provider === 'qwen') return undefined;
       return claudeCostIn(await timelineOf(found.file, 'claude'), window);
     },
     async idsIn(session, windows) {
       const found = indexOf(session);
-      if (found === undefined || found.provider === 'codex') return undefined;
+      if (found === undefined || found.provider === 'codex' || found.provider === 'qwen') return undefined;
       const root = [...claudeRoots].find((known) => found.file.startsWith(known + path.sep)) ?? mainRoot;
       const subagents = await subagentsOf(found.file, root);
       const parent = await timelineOf(found.file, 'claude');
@@ -407,6 +514,7 @@ export function createLogIndex(roots: LogIndexRoots = {}, options: LogIndexOptio
           {
             lastRecordAt: found.lastWorkRecordAt,
             lastUserRecordAt: found.lastUserRecordAt,
+            lastInterruptAt: found.lastInterruptAt,
             ...(found.lastApiError === undefined ? {} : { lastApiError: found.lastApiError }),
           };
     },
@@ -414,13 +522,19 @@ export function createLogIndex(roots: LogIndexRoots = {}, options: LogIndexOptio
       if (stopped) return;
       let session: SessionIndex;
       try {
-        session = await indexer.codex(file);
+        // A Qwen transcript is never read as a Codex rollout.
+        session = await (isQwenTranscriptPath(file, qwenRoot) ? indexer.qwen(file) : indexer.codex(file));
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
         if (!stopped) applyChange({ kind: 'removed', file });
         return;
       }
       if (!stopped) applyChange({ kind: 'updated', file, session });
+    },
+    rescan(files) {
+      if (stopped) return;
+      watcher?.rescan(files);
+      for (const extraWatcher of extraWatchers) extraWatcher.rescan(files);
     },
     onChange(listener) {
       listeners.add(listener);

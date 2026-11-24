@@ -51,6 +51,7 @@ function setup(initial: { phase?: LiveCallPhase; list?: AssistantRequestView[] }
   const hostListeners = new Map<string, () => void>();
   const timers: Array<{ at: number; cb: () => void; live: boolean }> = [];
   let tickCallback: (() => void) | null = null;
+  const cards: string[] = [];
 
   const call = vi.fn(async (method: string, params: unknown) => {
     calls.push({ method, params });
@@ -96,6 +97,7 @@ function setup(initial: { phase?: LiveCallPhase; list?: AssistantRequestView[] }
     },
     phrases: PHRASES,
     fallbackText: '(not transcribed)',
+    deliverCard: (text) => void cards.push(text),
   });
   const emit = (event: LiveControllerEvent): void => {
     if (event.type === 'phase') phase = event.phase;
@@ -126,7 +128,11 @@ function setup(initial: { phase?: LiveCallPhase; list?: AssistantRequestView[] }
   };
   const human = (text: string, startMs: number, endMs: number): void => emit({ type: 'inputTranscript', text, startMs, endMs });
   return {
-    delegation, appends, stops, calls, commentary: () => appends.filter((append) => append.kind === 'commentary'), statuses: () => appends.filter((append) => append.kind === 'thinking'), emit, advance, flush, open, human, submitted, hostListeners,
+    delegation, appends, stops, calls, commentary: () => appends.filter((append) => append.kind === 'commentary'), statuses: () => appends.filter((append) => append.kind === 'thinking'), emit, advance, flush, open, human, submitted, hostListeners, cards,
+    close: (): void => {
+      emit({ type: 'phase', phase: 'idle' });
+      emit({ type: 'sessionClosed', reason: 'user' });
+    },
     setList: (next: AssistantRequestView[]) => void (list = next),
     callsOf: (method: string) => calls.filter((entry) => entry.method === method),
   };
@@ -520,5 +526,127 @@ describe('createLiveDelegation: телеметрия (T6)', () => {
     await h.flush();
     const last = h.callsOf('voice.telemetry.record').map((entry) => entry.params as Record<string, unknown>).at(-1);
     expect(last).toMatchObject({ decisionsReceived: 0, decisionsRejected: 0, decisionsInputTokens: 0, decisionsFallback: true });
+  });
+});
+
+describe('createLiveDelegation: служебный итог (W4)', () => {
+  const MIN = 60_000;
+  const sys = (patch: Partial<AssistantRequestView> & { job?: Partial<AssistantRequestView['job']> } = {}): AssistantRequestView =>
+    view({ requestId: 'sys-1', jobId: 'job-s', origin: 'system', text: 'Summarise the pinned reply', link: { kind: 'independent', supersedes: [], linkedAt: 1 }, ...patch });
+  const ANSWER = 'Session Design review finished and asks nothing.';
+
+  it('toResultInput: origin служебного; у старого хоста поля нет → island', () => {
+    expect(toResultInput(sys({ job: done() }), null).origin).toBe('system');
+    expect(toResultInput(view({ job: done() }), null).origin).toBe('island');
+  });
+
+  it('RW-10: служебный Request не даёт thinking.append, не попадает в context.openRequests и в «проверяю»', async () => {
+    const h = setup({ phase: 'live', list: [sys({ job: { state: 'running' } })] });
+    await h.flush();
+    await h.advance(3000);
+    expect(h.statuses()).toEqual([]);
+    expect(h.delegation.checking()).toBe(false);
+    h.human('Check the rooms', 0, 1000);
+    h.emit({ type: 'delegationCreated', delegationId: 'd1', offsetMs: 1000 });
+    await h.flush();
+    await h.advance(3000);
+    const submit = h.callsOf('requests.submit')[0]?.params as { context?: { openRequests?: unknown[] } | null };
+    expect(JSON.stringify(submit)).not.toContain('Summarise the pinned reply');
+    expect(h.statuses().every((append) => !append.content.includes('pinned reply'))).toBe(true);
+  });
+
+  it('RW-03: Live не активен → карточка сразу, обычная озвучка один раз, отметка доставки; при старте Live итог не звучит', async () => {
+    const h = setup({ list: [sys({ job: done(ANSWER) })] });
+    await h.flush();
+    expect(h.cards).toEqual([ANSWER]);
+    expect(h.delegation.results()).toEqual([{ requestId: 'sys-1', text: ANSWER, kind: 'card' }]);
+    expect(h.callsOf('requests.ack').map((c) => c.params)).toEqual([{ requestId: 'sys-1', consumer: 'live', revision: 4 }]);
+    h.open();
+    await h.advance(5000);
+    expect(h.commentary()).toEqual([]);
+    expect(h.cards).toHaveLength(1);
+  });
+
+  it('RW-13: Live острова нет (телефон) → второй путь', async () => {
+    // Хост голосовой сессии телефона для острова невидим: фаза острова idle.
+    const h = setup({ phase: 'idle', list: [sys({ job: done(ANSWER) })] });
+    await h.flush();
+    expect(h.cards).toEqual([ANSWER]);
+  });
+
+  it('RW-19: итог от хоста проходит оба состояния Live: один раз голосом при активном, один раз карточкой при закрытом', async () => {
+    const active = setup({ phase: 'live' });
+    active.setList([sys({ job: done(ANSWER) })]);
+    active.hostListeners.get('assistant.job.changed')?.();
+    await active.advance(1500);
+    expect(active.commentary()).toHaveLength(1);
+    expect(active.cards).toEqual([]);
+    expect(active.callsOf('requests.ack')).toHaveLength(0);
+    active.emit({ type: 'modelPlaying', value: true });
+    active.emit({ type: 'outputTranscript', text: ANSWER, startMs: 0, endMs: 2000 });
+    await active.advance(2000);
+    active.emit({ type: 'modelPlaying', value: false });
+    await active.advance(1500);
+    expect(active.callsOf('requests.ack')).toHaveLength(1);
+    expect(active.cards).toEqual([]);
+
+    const closed = setup({ phase: 'idle' });
+    closed.setList([sys({ job: done(ANSWER) })]);
+    closed.hostListeners.get('assistant.job.changed')?.();
+    await closed.advance(500);
+    expect(closed.cards).toEqual([ANSWER]);
+    expect(closed.commentary()).toEqual([]);
+    expect(closed.callsOf('requests.ack')).toHaveLength(1);
+  });
+
+  it('RW-14/RW-23: Live закрылся в submitted до played → итог показан вторым путём один раз, без потери', async () => {
+    const h = setup({ phase: 'live', list: [sys({ job: done(ANSWER) })] });
+    await h.flush();
+    await h.advance(1000);
+    expect(h.commentary()).toHaveLength(1);
+    expect(h.callsOf('requests.ack')).toHaveLength(0);
+    h.close();
+    await h.flush();
+    expect(h.cards).toEqual([ANSWER]);
+    expect(h.callsOf('requests.ack')).toHaveLength(1);
+    await h.advance(10_000);
+    expect(h.cards).toHaveLength(1);
+    expect(h.callsOf('requests.ack')).toHaveLength(1);
+  });
+
+  it('RW-14: Live открылся, пока итог ждал (job ещё идёт, затем готов при открытом Live) → первый путь', async () => {
+    const h = setup({ list: [sys({ job: { state: 'running' } })] });
+    await h.flush();
+    h.open();
+    h.setList([sys({ job: done(ANSWER) })]);
+    h.hostListeners.get('assistant.job.changed')?.();
+    await h.advance(1500);
+    expect(h.commentary()).toHaveLength(1);
+    expect(h.cards).toEqual([]);
+  });
+
+  it('RW-22: служебный Request ждёт в очереди job — Live закрывается по тишине; готовый итог приходит вторым путём', async () => {
+    const h = setup({ phase: 'live', list: [sys({ job: { state: 'queued' } })] });
+    await h.advance(3 * MIN + 1000);
+    expect(h.stops).toEqual(['idle_timeout']);
+    h.close();
+    h.setList([sys({ job: done(ANSWER) })]);
+    h.hostListeners.get('assistant.job.changed')?.();
+    await h.advance(1000);
+    expect(h.cards).toEqual([ANSWER]);
+  });
+
+  it('служебный пересказ идёт (running) — занятость, Live не закрывается', async () => {
+    const h = setup({ phase: 'live', list: [sys({ job: { state: 'running' } })] });
+    await h.advance(5 * MIN);
+    expect(h.stops).toEqual([]);
+  });
+
+  it('человеческий итог при закрытом Live ведёт себя как раньше: карточки сразу нет', async () => {
+    const h = setup({ list: [view({ job: done() })] });
+    await h.flush();
+    await h.advance(1000);
+    expect(h.cards).toEqual([]);
+    expect(h.delegation.results()).toEqual([]);
   });
 });

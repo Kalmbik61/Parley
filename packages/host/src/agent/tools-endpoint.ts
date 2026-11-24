@@ -44,6 +44,8 @@ interface CallRecord {
 interface SessionTools {
   /** Снимок запуска, для которого собран исполнитель: другой снимок — другой исполнитель. */
   launchKey: string;
+  /** Сам снимок: его отдаёт `launchOf`, чтобы путь пакета комнаты собрал те же возможности запуска, что и вызовы этой сессии. */
+  launch: ToolLaunch;
   runner: Promise<ToolRunner>;
   calls: Map<string, CallRecord>;
 }
@@ -139,7 +141,22 @@ export function createToolsEndpoint(options: {
   /** Журнал хоста: сюда идут отказы маршрута с причиной. */
   log: Log;
   now?: () => number;
-}): { handle(req: IncomingMessage, res: ServerResponse): void; forget(ref: SessionRef): void } {
+  /**
+   * The process generation of the session when a request arrives (`ActivityService.processGeneration`); it goes back to
+   * `onList` with the answer, so a list asked by a replaced process does not count for its successor.
+   */
+  generationOf?(ref: SessionRef): number | null;
+  /**
+   * The session's MCP server got its tool list answered: its agent's MCP client is connected (Qwen readiness, spec 3.4).
+   * Called only after the 200 answer went out, with the generation taken when the request arrived.
+   */
+  onList?(ref: SessionRef, generation: number | null): void;
+}): {
+  handle(req: IncomingMessage, res: ServerResponse): void;
+  forget(ref: SessionRef): void;
+  /** Последний снимок запуска, который процесс MCP этой сессии прислал по своему токену; `undefined` — ещё не обращался или токен снят. */
+  launchOf(ref: SessionRef): ToolLaunch | undefined;
+} {
   const { log } = options;
   const now = options.now ?? Date.now;
   const sessions = new Map<string, SessionTools>();
@@ -151,6 +168,7 @@ export function createToolsEndpoint(options: {
     if (known !== undefined && known.launchKey === launchKey) return known;
     const created: SessionTools = {
       launchKey,
+      launch,
       runner: options.contextFor(ref, launch).then(createToolRunner),
       calls: new Map(),
     };
@@ -223,17 +241,25 @@ export function createToolsEndpoint(options: {
         }
         req.resume();
       };
-      const reply = (body: RemoteToolResponse): void => {
-        if (res.writableEnded || res.destroyed) return;
+      /** `true` — the 200 answer went out to the same session; `false` — the client left or the token was revoked. */
+      const reply = (body: RemoteToolResponse): boolean => {
+        if (res.writableEnded || res.destroyed) return false;
         // Токен могли снять, пока вызов шёл: ответ без права на него не уходит (как у соседних маршрутов).
-        if (options.authenticate(req) === undefined) return refuse(401, 'the session token was revoked while the call ran');
+        const now = options.authenticate(req);
+        if (now === undefined || ref === undefined || refKey(now) !== refKey(ref)) {
+          refuse(401, 'the session token was revoked while the call ran');
+          return false;
+        }
         const text = JSON.stringify(body);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(text);
+        return true;
       };
 
       const ref = options.authenticate(req);
       if (ref === undefined) return refuse(401, 'no valid session token');
+      // The process that sent this request: a restart while it runs makes its answer another generation's.
+      const generation = options.generationOf?.(ref) ?? null;
       if (Number(req.headers['content-length'] ?? 0) > AGENT_TOOLS_REQUEST_BYTES) return refuse(413, 'the declared Content-Length is over the limit');
 
       // Клиент закрыл соединение, не дождавшись ответа (агент прервал ход, срок запроса вышел): его вызов отменяется.
@@ -270,8 +296,20 @@ export function createToolsEndpoint(options: {
             const runner = await tools.runner;
             // Клиент ушёл, пока собирался исполнитель: начинать вызов, ответ на который некому прочесть, незачем.
             if (controller.signal.aborted) return;
-            if (request.op === 'list') return reply({ ok: true, result: { tools: await runner.list() } });
-            return reply({ ok: true, result: await callOf(tools, runner, request, controller).result });
+            if (request.op === 'list') {
+              const tools = await runner.list();
+              // The client left while the list ran: nobody got the tools, the MCP client is not connected.
+              if (controller.signal.aborted) return;
+              if (!reply({ ok: true, result: { tools } })) return;
+              try {
+                options.onList?.(ref, generation);
+              } catch (error) {
+                log.warn('tools list listener failed', { error: String(error) });
+              }
+              return;
+            }
+            reply({ ok: true, result: await callOf(tools, runner, request, controller).result });
+            return;
           } catch (error) {
             const code = error instanceof BadRequest ? 'bad_request' : 'internal';
             const message = error instanceof Error ? error.message : String(error);
@@ -284,6 +322,10 @@ export function createToolsEndpoint(options: {
     },
     forget(ref) {
       sessions.delete(refKey(ref));
+    },
+    launchOf(ref) {
+      const known = sessions.get(refKey(ref));
+      return known === undefined ? undefined : { ...known.launch };
     },
   };
 }

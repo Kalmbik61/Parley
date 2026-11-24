@@ -199,6 +199,15 @@ describe('decideConsent: project-mcp', () => {
     expect(rpc.call).toHaveBeenLastCalledWith('consents.decide', { id: 'c-8', decision: 'allow' });
   });
 
+  it('allow carries the role change ack of an agent-switch card, deny does not', async () => {
+    const { client, rpc } = setup(async () => ({ applied: true, state: 'allowed' }));
+    const roleChange = { from: 'builtin:architect', to: null };
+    await client.decideConsent('c-7', 'allow', { roleChange });
+    expect(rpc.call).toHaveBeenLastCalledWith('consents.decide', { id: 'c-7', decision: 'allow', roleChange });
+    await client.decideConsent('c-7', 'deny', { roleChange });
+    expect(rpc.call).toHaveBeenLastCalledWith('consents.decide', { id: 'c-7', decision: 'deny' });
+  });
+
   it('bad_request is returned as rejected and the cards are re-read', async () => {
     const fresh = { id: 'c-9', kind: 'project-mcp', version: 1, projectPath: '/p', repo: '/p', at: 'a', state: 'pending', servers: [{ name: 'fs', fingerprint: 'f2', command: 'x' }], requestedBy: { source: 'launch' } };
     const { client, rpc } = setup(async (method) => {
