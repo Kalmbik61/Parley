@@ -14,6 +14,7 @@ const sandbox = '/usr/bin/sandbox-exec';
 const model = 'parley-offline-fixture';
 const pluginName = 'parley-shared-pty-probe';
 const tool = `mcp__plugin-${pluginName}_fixture__handoff_probe`;
+const directTool = 'mcp__direct_fixture__handoff_probe';
 const ready = /^\s*│ >\s*│\s*$/m;
 const working = /Working for \d/;
 const modal = /▶ 1\. Approve once|^\s*\? Which synthetic marker\?|Ready to submit your answers\?/m;
@@ -88,6 +89,13 @@ test.skipIf(!optIn)('stock Kimi shares a native PTY, transcript, and local plugi
           const offered = body.tools?.find(t => t.function.name === tool)?.function;
           if (phase !== 'RAW') expect(offered?.parameters).toEqual({ type: 'object', properties: {} });
           toolDelta = call(`shared_${step}`, offered?.name ?? tool);
+        }
+      }
+      if (phase === 'DIRECT' && !calls.some(({ id }) => id === 'shared_direct')) {
+        const offered = body.tools?.find(t => t.function.name === directTool)?.function;
+        if (offered) {
+          expect(offered.parameters).toEqual({ type: 'object', properties: {} });
+          toolDelta = call('shared_direct', offered.name);
         }
       }
       if (phase === 'ASK' && !calls.some(({ id }) => id === 'shared_ask')) {
@@ -167,9 +175,9 @@ test.skipIf(!optIn)('stock Kimi shares a native PTY, transcript, and local plugi
     };
     expect(execFileSync(sandbox, [...argv, '--version'], { cwd, env, timeout: limit, encoding: 'utf8' }).trim()).toBe('2.7.3');
 
-    function startNative(args: string[] = []) {
+    function startNative(args: string[] = [], envOverride: Record<string, string> = {}) {
       const screen = createScreen(116, 30);
-      const child = pty.spawn(sandbox, [...argv, ...args], { cwd, env, name: 'xterm-256color', cols: 116, rows: 30 });
+      const child = pty.spawn(sandbox, [...argv, ...args], { cwd, env: { ...env, ...envOverride }, name: 'xterm-256color', cols: 116, rows: 30 });
       let exitCode: number | undefined;
       let frames = 0;
       let ansi = false;
@@ -384,9 +392,17 @@ test.skipIf(!optIn)('stock Kimi shares a native PTY, transcript, and local plugi
     await prepared.visible('explicit session viewport', new RegExp(c));
     await prepared.visible('fresh /new reports its MCP connection', /connected · 1 tool \(stdio\)/);
     await prepared.visible('explicit session composer', ready);
+    const beforeReload = requests.length;
+    expect(await prepared.submit('/plugins reload')).toBe(true);
+    const reloaded = await prepared.visible('completed native plugin reload', /Reload: \+0 -0/);
+    observe('plugin reload', reloaded, /Reload:/);
+    await prepared.visible('composer after plugin reload', ready);
+    expect(requests).toHaveLength(beforeReload);
     expect(await prepared.submit('SHARED_PROMPT_PREPARED')).toBe(true);
     await prepared.visible('explicit session reply', /SHARED_REPLY_PREPARED/);
-    expect(requests.find(r => r.phase === 'PREPARED')?.body.tools?.some(t => t.function.name === tool)).toBe(false);
+    const advertisedAfterPluginReload = requests.find(r => r.phase === 'PREPARED')?.body.tools?.some(t => t.function.name === tool);
+    expect(advertisedAfterPluginReload).toBe(false);
+    evidence['advertisedAfterPluginReload'] = advertisedAfterPluginReload;
     await prepared.close();
 
     stage = 'create and close a fresh ID without a model turn';
@@ -423,6 +439,54 @@ test.skipIf(!optIn)('stock Kimi shares a native PTY, transcript, and local plugi
       advertisedOnFirstResume: false };
     await emptyResumed.close();
 
+    stage = 'first turn with plain supported per-home MCP registration';
+    const directHome = join(root, 'kimi-direct');
+    const directLease = join(root, 'direct-lease');
+    mkdirSync(directHome);
+    writeFileSync(directLease, JSON.stringify({ generation: 'direct', label: 'SHARED', revoked: false, grant: true }), { mode: 0o600 });
+    writeFileSync(join(directHome, 'mcp.json'), JSON.stringify({ mcpServers: {
+      direct_fixture: { command: node, args: [join(plugin, 'mcp.cjs')], deferred: false },
+    } }));
+    const directEvents = () => readJsonl<{ event: string; allowed: boolean }>(directLease + '.events');
+    const direct = startNative([], { KIMI_CODE_HOME: directHome, PROBE_LEASE: directLease, PROBE_GENERATION: 'direct' });
+    const initial = await direct.visible('plain-MCP process startup', /Trust this folder\?|No session yet/);
+    if (initial.includes('Trust this folder?')) {
+      expect(initial).toContain(cwd);
+      expect(initial).toContain('No project integrations or instructions to activate.');
+      expect(initial).toMatch(/❯ Trust and continue/);
+      expect(readdirSync(cwd)).toEqual([]);
+      direct.key('\r');
+    }
+    await direct.visible('direct-MCP process has no selected session', /No session yet/);
+    await direct.visible('fresh direct-MCP composer', ready);
+    await until('direct fixture list before first user turn', () => directEvents().find(e => e.event === 'tools/list' && e.allowed), direct.view);
+    expect(await direct.submit('SHARED_PROMPT_DIRECT')).toBe(true);
+    const directOutcome = await direct.visible('direct tool approval', new RegExp(`Approve ${directTool}\\?`));
+    const directFirst = requests.find(r => r.phase === 'DIRECT')!;
+    const directSchema = directFirst.body.tools?.find(t => t.function.name === directTool)?.function;
+    expect(JSON.stringify(directFirst.body.messages)).not.toMatch(/SHARED_PTY_(PLUGIN|FIXTURE)_RULES/);
+    expect(directSchema?.parameters).toEqual({ type: 'object', properties: {} });
+    expect(directOutcome).toMatch(/▶ 1\. Approve once/);
+    direct.key('1');
+    await direct.visible('direct fixture result turn', /SHARED_REPLY_DIRECT/);
+    expect(JSON.stringify(requests.findLast(r => r.phase === 'DIRECT')?.body.messages.find(m => m.tool_call_id === 'shared_direct'))).toContain('RESULT_SHARED');
+    expect(directEvents().filter(e => e.event === 'tools/call')).toEqual([expect.objectContaining({ allowed: true })]);
+    evidence['directMcp'] = { schema: directSchema, requests: requests.filter(r => r.phase === 'DIRECT').length };
+    await direct.close();
+
+    stage = 'unbound fresh process with same direct registration';
+    const boundEvents = directEvents();
+    const unbound = startNative([], { KIMI_CODE_HOME: directHome, PROBE_LEASE: '', PROBE_GENERATION: '' });
+    await unbound.visible('unbound fresh process', /No session yet/);
+    await unbound.visible('unbound composer', ready);
+    expect(await unbound.submit('SHARED_PROMPT_UNBOUND')).toBe(true);
+    await unbound.visible('unbound reply', /SHARED_REPLY_UNBOUND/);
+    const unboundModel = requests.find(r => r.phase === 'UNBOUND')?.body;
+    expect(unboundModel?.tools?.some(t => t.function.name === directTool)).toBe(false);
+    expect(JSON.stringify(unboundModel?.messages)).not.toMatch(new RegExp(`${directTool}|RESULT_SHARED`));
+    expect(directEvents()).toEqual(boundEvents);
+    await unbound.close();
+
     stage = 'wire and exact-once records';
     for (const [id, phases] of [[a, ['CHAT', 'RAW', 'ASK', 'RESUME']], [b, ['NEW']], [c, ['PREPARED']], [d, ['EMPTYRESUME']]] as const) {
       expect(wirePath(id)).toContain(`/${id}/agents/main/wire.jsonl`);
@@ -437,7 +501,7 @@ test.skipIf(!optIn)('stock Kimi shares a native PTY, transcript, and local plugi
       }
       expect(JSON.stringify(records)).not.toContain('SHARED_PROMPT_BLOCKED');
     }
-    expect(requests.map(r => r.phase)).toEqual(['CHAT', 'RAW', 'RAW', 'RAW', 'ASK', 'ASK', 'COMPACT_A', 'NEW', 'NEW', 'COMPACT_B', 'RESUME', 'PREPARED', 'EMPTYRESUME']);
+    expect(requests.map(r => r.phase)).toEqual(['CHAT', 'RAW', 'RAW', 'RAW', 'ASK', 'ASK', 'COMPACT_A', 'NEW', 'NEW', 'COMPACT_B', 'RESUME', 'PREPARED', 'EMPTYRESUME', 'DIRECT', 'DIRECT', 'UNBOUND']);
     expect(mcp().filter(e => e.event === 'tools/call')).toEqual([expect.objectContaining({ allowed: true }), expect.objectContaining({ allowed: true })]);
     expect(rejected).toEqual([]);
     const compactRequests = requests.filter(r => r.phase.startsWith('COMPACT_'));
