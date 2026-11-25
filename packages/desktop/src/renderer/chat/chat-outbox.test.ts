@@ -1,6 +1,6 @@
 /**
  * Попытка очереди Chat (спека 2026-10-16, 4.3): исход `pty.send` → ушло / повторить / не ушло; тосты — только на
- * окончательных исходах; ушедшее во время хода переходит в серые «Queued».
+ * окончательных исходах; после Enter сообщение ждёт записи в ленте.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -89,20 +89,20 @@ describe('attemptChatSend', () => {
     expect(bridge.calls).toEqual([{ method: 'pty.send', params: { ref: REF, text: 'next', submit: true, requestedAt: REQUESTED_AT } }]);
   });
 
-  it('ушло без хода — sent, серых «Queued» нет, тоста нет', async () => {
+  it('ушло без хода — sent, сообщение ждёт своего промпта без тоста', async () => {
     bridge.setHandler('pty.send', () => ({ inserted: true, submitted: true, reason: null }));
     setFeed([prompt('p1', 'go'), turn('u1')]);
     expect(await attemptChatSend(KEY, item('next'))).toEqual({ kind: 'sent' });
-    expect(useChatUiStore.getState().queued[KEY] ?? []).toEqual([]);
+    expect(useChatUiStore.getState().promptEchoes[KEY]).toMatchObject([{ id: 'o1', state: 'submitted', text: 'next' }]);
     expect(toast).not.toHaveBeenCalled();
     expect(toast.error).not.toHaveBeenCalled();
   });
 
-  it('ушло во время хода — sent и серый «Queued» с тем же id и счётом промптов до отправки', async () => {
+  it('ушло во время хода — sent и серый «Queued» с тем же id', async () => {
     bridge.setHandler('pty.send', () => ({ inserted: true, submitted: true, reason: null }));
     setFeed([prompt('p0', 'next'), turn('u0'), prompt('p1', 'go')]);
     expect(await attemptChatSend(KEY, item('next'))).toEqual({ kind: 'sent' });
-    expect(useChatUiStore.getState().queued[KEY]).toEqual([{ id: 'o1', text: 'next', seen: 1 }]);
+    expect(useChatUiStore.getState().promptEchoes[KEY]).toMatchObject([{ id: 'o1', state: 'queued', text: 'next' }]);
   });
 
   it('busy — retry без тоста; wait — ровно CHAT_RETRY_MS', async () => {
@@ -207,7 +207,7 @@ describe('chatOutbox — затвор на время хода', () => {
     const id = chatOutbox.enqueue(KEY, payload('urgent', true));
     await flush();
     expect(sentTexts()).toEqual(['urgent']);
-    expect(useChatUiStore.getState().queued[KEY]).toEqual([{ id, text: 'urgent', seen: 0 }]);
+    expect(useChatUiStore.getState().promptEchoes[KEY]).toMatchObject([{ id, state: 'queued', text: 'urgent' }]);
   });
 
   it('сессия не живая: ход в ленте очередь не держит', async () => {
@@ -233,7 +233,7 @@ describe('chatOutbox — затвор на время хода', () => {
     expect(sentTexts()).toEqual(['one', 'two']);
   });
 
-  it('промпт так и не пришёл (слэш-команда): следующее уходит через CHAT_AWAIT_PROMPT_MS', async () => {
+  it('слэш-команда без записи снимается через CHAT_AWAIT_PROMPT_MS, следующее сообщение уходит', async () => {
     live();
     setFeed([]);
     chatOutbox.enqueue(KEY, payload('/clear'));
@@ -243,6 +243,27 @@ describe('chatOutbox — затвор на время хода', () => {
     expect(sentTexts()).toEqual(['/clear']);
     await vi.advanceTimersByTimeAsync(1);
     expect(sentTexts()).toEqual(['/clear', 'two']);
+    expect(useChatUiStore.getState().promptEchoes[KEY]).toMatchObject([{ state: 'submitted', text: 'two' }]);
+  });
+
+  it('промпт может прийти позже паузы затвора: обычное сообщение ещё ждёт записи', async () => {
+    live();
+    setFeed([]);
+    const id = chatOutbox.enqueue(KEY, payload('slow'));
+    await vi.advanceTimersByTimeAsync(2 * CHAT_AWAIT_PROMPT_MS);
+    expect(useChatUiStore.getState().promptEchoes[KEY]).toMatchObject([{ id, state: 'submitted', text: 'slow' }]);
+    setFeed([prompt('p1', 'slow')]);
+    expect(useChatUiStore.getState().promptEchoes[KEY]).toEqual([{ id, state: 'confirmed', promptId: 'p1' }]);
+  });
+
+  it('после отправки без открытой ленты повтор из старого снимка не считается новым промптом', async () => {
+    vi.setSystemTime(Date.parse(AT) + 60_000);
+    const id = chatOutbox.enqueue(KEY, payload('repeat'));
+    await flush();
+    setFeed([prompt('p0', 'repeat'), turn('u0')]);
+    expect(useChatUiStore.getState().promptEchoes[KEY]).toMatchObject([{ id, state: 'submitted' }]);
+    setFeed([prompt('p0', 'repeat'), turn('u0'), { ...prompt('p1', 'repeat'), at: new Date().toISOString() }]);
+    expect(useChatUiStore.getState().promptEchoes[KEY]).toEqual([{ id, state: 'confirmed', promptId: 'p1' }]);
   });
 
   it('ленты нет, активность working: сообщение не уходит; activity стала idle — уходит', async () => {
@@ -327,7 +348,7 @@ describe('chatOutbox — затвор на время хода', () => {
     chatOutbox.enqueue(KEY, payload('one'));
     await flush();
     expect(sentTexts()).toEqual(['one']);
-    expect(useChatUiStore.getState().queued[KEY] ?? []).toEqual([]);
+    expect(useChatUiStore.getState().promptEchoes[KEY]).toMatchObject([{ state: 'submitted', text: 'one' }]);
     // awaitPrompt сработал: следующее сообщение ждёт промпт первого и не уходит.
     chatOutbox.enqueue(KEY, payload('two'));
     await flush();

@@ -63,10 +63,11 @@ const ESTIMATE_PX = 56;
 /** Размер прокрутчика до первого замера (jsdom и первый кадр). */
 const INITIAL_RECT = { width: 800, height: 600 };
 
-/** Сообщение, ушедшее в очередь CLI во время хода, — серым до настоящего промпта. */
+/** Сообщение, переданное в CLI, — серым до настоящего промпта. */
 export interface QueuedPrompt {
   id: string;
   text: string;
+  state?: 'queued' | 'submitted';
 }
 
 /** Сообщение в очереди окна (`chat-outbox.ts`): ждёт отправки или не ушло; `flying` — отправка уже идёт. */
@@ -107,6 +108,8 @@ export interface FeedListProps {
   queued: readonly QueuedPrompt[];
   /** Очередь окна — после «Queued»: ждёт отправки (`waiting`) или не ушло (`failed`, с Retry и ×). */
   outbox?: readonly OutboxPrompt[];
+  /** Связь id промпта в ленте с локальной строкой, чтобы сменить её оформление без перемонтирования. */
+  localPromptIds?: ReadonlyMap<string, string>;
   onRetryOutbox?: (id: string) => void;
   onSendNowOutbox?: (id: string) => void;
   onRemoveOutbox?: (id: string) => void;
@@ -157,19 +160,16 @@ function WorkingRow({ since, retry }: { since: string | null; retry: FeedError |
 }
 
 interface ItemViewProps {
-  item: FeedItem;
+  item: Exclude<FeedItem, { kind: 'prompt' }>;
   expanded: boolean;
   /** Транскрипт карточки агента; у прочих элементов — `null`. */
   transcript: Transcript | null;
   onToggle: (id: string) => void;
   onTranscript: (id: string, update: TranscriptUpdate) => void;
-  via: boolean;
 }
 
-const ItemView = memo(function ItemView({ item, expanded, transcript, onToggle, onTranscript, via }: ItemViewProps): JSX.Element {
+const ItemView = memo(function ItemView({ item, expanded, transcript, onToggle, onTranscript }: ItemViewProps): JSX.Element {
   switch (item.kind) {
-    case 'prompt':
-      return <PromptItem text={item.text} images={item.images} {...(via ? { via } : {})} />;
     case 'text':
       return <TextItem item={item} />;
     case 'tool':
@@ -199,7 +199,7 @@ const ItemView = memo(function ItemView({ item, expanded, transcript, onToggle, 
   }
 });
 
-export function FeedList({ items, queued, outbox = NO_OUTBOX, onRetryOutbox, onSendNowOutbox, onRemoveOutbox, letters = NO_LETTERS, note, onRetry, working, reveal, onRevealed, viaIds, dividers = NO_DIVIDERS, fold = 'replies', find, children }: FeedListProps): JSX.Element {
+export function FeedList({ items, queued, outbox = NO_OUTBOX, localPromptIds, onRetryOutbox, onSendNowOutbox, onRemoveOutbox, letters = NO_LETTERS, note, onRetry, working, reveal, onRevealed, viaIds, dividers = NO_DIVIDERS, fold = 'replies', find, children }: FeedListProps): JSX.Element {
   const latest = items.at(-1);
   const activeRetry = latest?.kind === 'error' && latest.retry !== undefined && latest.retry.resolved !== true ? latest : null;
   // Прокрутчик — элементом в состоянии: виртуализатор должен увидеть его уже при монтировании.
@@ -245,7 +245,8 @@ export function FeedList({ items, queued, outbox = NO_OUTBOX, onRetryOutbox, onS
       if (row.kind === 'item') {
         flushDividers(row.item.at);
         if (row.item.kind === 'prompt') control = null;
-        out.push({ key: row.key, item: row.item });
+        const localId = localPromptIds?.get(row.item.id);
+        out.push({ key: localId === undefined ? row.key : `outbox:${localId}`, item: row.item });
       } else if (row.kind === 'control') {
         control = { key: row.key, control: { status: row.status, durationMs: row.durationMs, groupKeys: [] } };
         out.push(control);
@@ -257,10 +258,10 @@ export function FeedList({ items, queued, outbox = NO_OUTBOX, onRetryOutbox, onS
     }
     for (const divider of pending) out.push({ key: divider.id, divider });
     return out;
-  }, [foldRows, dividers]);
+  }, [foldRows, dividers, localPromptIds]);
   const allRows: Row[] = [
     ...rows,
-    ...queued.map((entry) => ({ key: `queued:${entry.id}`, queued: entry })),
+    ...queued.map((entry) => ({ key: `outbox:${entry.id}`, queued: entry })),
     ...outbox.map((entry) => ({ key: `outbox:${entry.id}`, outbox: entry })),
     ...letters.map((entry) => ({ key: `letter:${entry.id}`, letter: entry })),
   ];
@@ -448,14 +449,17 @@ export function FeedList({ items, queued, outbox = NO_OUTBOX, onRetryOutbox, onS
               >
                 <div className="mx-auto w-full max-w-[860px]">
                   {'item' in row ? (
-                    <ItemView
-                      item={row.item}
-                      expanded={expanded.has(row.item.id)}
-                      transcript={transcripts[row.item.id] ?? null}
-                      onToggle={toggle}
-                      onTranscript={updateTranscript}
-                      via={viaIds?.has(row.item.id) === true}
-                    />
+                    row.item.kind === 'prompt' ? (
+                      <PromptItem text={row.item.text} images={row.item.images} via={viaIds?.has(row.item.id) === true} />
+                    ) : (
+                      <ItemView
+                        item={row.item}
+                        expanded={expanded.has(row.item.id)}
+                        transcript={transcripts[row.item.id] ?? null}
+                        onToggle={toggle}
+                        onTranscript={updateTranscript}
+                      />
+                    )
                   ) : 'divider' in row ? (
                     <div data-testid="chat-switch-divider" className="flex items-center gap-2 text-[11px] text-muted-foreground">
                       <span className="h-px flex-1 bg-border" />
@@ -481,7 +485,7 @@ export function FeedList({ items, queued, outbox = NO_OUTBOX, onRetryOutbox, onS
                       onToggle={() => toggleGroups([row.group.key], row.group.open)}
                     />
                   ) : 'queued' in row ? (
-                    <PromptItem text={row.queued.text} state="queued" />
+                    <PromptItem text={row.queued.text} state={row.queued.state ?? 'queued'} />
                   ) : 'letter' in row ? (
                     <LetterItem from={row.letter.from} room={row.letter.room} text={row.letter.text} reason={row.letter.reason} />
                   ) : (
