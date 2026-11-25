@@ -870,6 +870,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       opencodeEvents,
       kimi,
       kimiArchive: feedService.kimiArchive,
+      kimiRemoveArchive: feedService.kimiRemoveArchive,
+      kimiPruneArchives: feedService.kimiPruneArchives,
       kimiWakePending: (ref) => wakeService.kimiPending(ref),
       // Qwen's brief is typed by the wake service once the process is ready (spec 2026-11-11, 3.4 amendment).
       deferFirst: (ref, pid, text) => wakeService.deferFirst(ref, pid, text),

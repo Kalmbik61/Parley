@@ -295,6 +295,9 @@ export function createKimiSessions(host: HostContext, hooks: KimiSessionHooks) {
     takeover(ref: SessionRef, id: string) {
       const session = requireSession(ref);
       if (session.id !== id) throw new HostError('conflict', 'The running ACP session is not the bound Kimi conversation');
+      if (!session.acp.supportsHistoryLoad()) {
+        throw new HostError('conflict', 'This Kimi Code CLI cannot reload Chat history. Chat remains in control.', { reason: 'kimi-replay-unavailable' });
+      }
       if (session.draftBytes > 0) throw new HostError('conflict', 'Send or clear the Terminal draft first.', { reason: 'kimi-draft' });
       if (session.acp.busy() || session.acp.state().requests.length > 0) {
         throw new HostError('conflict', 'Wait for Kimi to finish its turn or answer its request first.', { reason: 'kimi-busy' });

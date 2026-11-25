@@ -152,6 +152,7 @@ import type { OpencodeBridge } from '../opencode/events.js';
 import type { OpencodeSupervisor } from '../opencode/server.js';
 import { createOpencodeSession } from '../opencode/create-session.js';
 import type { KimiSessions } from '../kimi/sessions.js';
+import { kimiTerminalEnv } from '../providers/kimi-env.js';
 import type { ProviderVersions } from '../providers/versions.js';
 import type { PtyHandle, PtyManager } from '../pty/pty-manager.js';
 import type { WorksService, WorksView } from '../works/works-service.js';
@@ -295,7 +296,8 @@ export interface LaunchChoice {
 }
 
 type KimiTakeover = ReturnType<KimiSessions['takeover']>;
-type KimiHandoff = { native: KimiTakeover } | { release(): Promise<void>; restore(): Promise<void> };
+/** null means an explicit reopen using the same persisted cwd and Kimi home. */
+type KimiHandoff = { native: KimiTakeover | null } | { release(pid: number): Promise<void> };
 
 const returnKimiFirst = () => new HostError('conflict', 'Return Kimi to Chat from the Terminal tab first.', { reason: 'kimi-native' });
 const exitKimiFirst = () => new HostError('conflict', 'Use /exit in Kimi Terminal before returning to Chat.', { reason: 'kimi-native-running' });
@@ -463,6 +465,8 @@ export interface SessionsFeedOptions {
   opencodeEvents?: Pick<OpencodeBridge, 'attach' | 'detach'>;
   kimi?: KimiSessions;
   kimiArchive?(ref: SessionRef, archive: string): Promise<void>;
+  kimiRemoveArchive?(ref: SessionRef, archive: string): Promise<void>;
+  kimiPruneArchives?(ref: SessionRef, retain: string): Promise<void>;
   kimiWakePending?(ref: SessionRef): boolean;
   /**
    * Потолок машины (спека ёмкости 2026-10-30, 4.2): `CapacityService` хоста. Тип структурный, как у `hooks` и `consents`:
@@ -649,7 +653,7 @@ export function createSessionsService(
     if (switching !== undefined) return switching;
     if (session.kimiTerminal !== undefined) {
       if (pty.get(ref)?.kimiNative === true) return { owner: 'terminal' };
-      return kimiResult.get(key) ?? { owner: 'stopped', detail: 'Terminal ownership was interrupted. Return to Chat to recover the original conversation.' };
+      return kimiResult.get(key) ?? { owner: 'stopped', detail: 'Terminal ownership was interrupted. Reopen Terminal or return to the original conversation in Chat.' };
     }
     return { owner: 'chat', canTakeover: session.providerSessionId !== null && pty.get(ref)?.provider === 'kimi' };
   }
@@ -1256,7 +1260,12 @@ export function createSessionsService(
       }
 
       if (handoff !== undefined && 'native' in handoff) {
-        const native = handoff.native;
+        const marker = session.kimiTerminal!;
+        const native = handoff.native ?? {
+          command: await findRunnerBinary(entry.runner.command, process.env),
+          cwd: marker.cwd,
+          env: { ...kimiTerminalEnv(process.env), KIMI_CODE_HOME: marker.home },
+        };
         const id = session.providerSessionId!;
         const args = ['--session', id];
         validateSpawnBudget(native.command, args, native.env, await spawnLimits());
@@ -1676,13 +1685,9 @@ export function createSessionsService(
         await timer.step('startWrite', () => started);
         if (handoff !== undefined && 'release' in handoff) {
           if (nativeKimi === undefined) throw new HostError('conflict', 'Managed Kimi Chat is unavailable');
-          await handoff.release();
-          try {
-            nativeKimi.activate();
-          } catch (error) {
-            await handoff.restore();
-            throw error;
-          }
+          // Until the projection is installed, a restart must still see the Terminal marker.
+          nativeKimi.activate();
+          await handoff.release(handle.pid);
         } else nativeKimi?.activate();
         failed = false;
       } catch (error) {
@@ -2018,10 +2023,10 @@ export function createSessionsService(
       if (launching.has(key) || closing.has(key) || session.switching != null) throw busyError('Kimi is starting or switching');
       const id = session.providerSessionId;
       const marker = session.kimiTerminal;
+      const handle = pty.get(ref);
       let native: KimiTakeover | undefined;
-      if (target === 'terminal') {
-        if (marker !== undefined) return kimiState(ref, session);
-        if (hasDraft || pty.get(ref)?.hasDraft()) {
+      if (target === 'terminal' && marker === undefined) {
+        if (hasDraft || handle?.hasDraft()) {
           throw new HostError('conflict', 'Send or clear the draft before switching to Terminal.', { reason: 'kimi-draft' });
         }
         if (feed.kimiWakePending?.(ref) || unreadCount(ref.projectPath, ref.workId, ref.sessionId, { map }).total > 0) {
@@ -2030,44 +2035,57 @@ export function createSessionsService(
         native = kimi.takeover(ref, id);
       } else {
         if (marker === undefined) return kimiState(ref, session);
-        if (pty.get(ref)?.kimiNative === true || (pty.get(ref) === undefined && await hasLiveProcess(session))) throw exitKimiFirst();
-        if (pty.get(ref) !== undefined) throw busyError('The outgoing Kimi process has not exited');
+        if (handle?.kimiNative === true) {
+          if (target === 'terminal') return kimiState(ref, session);
+          throw exitKimiFirst();
+        }
+        if (handle !== undefined) throw busyError('The outgoing Kimi process has not exited');
       }
 
       const transition = { owner: 'switching', target } as const;
       kimiHandoffs.set(key, transition);
       publishKimiControl(ref, transition);
       let durable = marker !== undefined;
+      let unpublished: string | undefined;
       try {
-        if (native !== undefined) {
-          const next = { archive: randomUUID(), cwd: native.cwd, home: native.home };
+        if (marker !== undefined && await hasLiveProcess(session)) throw exitKimiFirst();
+        if (target === 'terminal') {
+          const next = marker ?? { archive: randomUUID(), cwd: native!.cwd, home: native!.home };
           checkKimiBinding(ref, next.home, id);
           kimiClaims.set(key, { home: next.home, id });
-          await feed.kimiArchive?.(ref, next.archive);
-          await updateMap(ref.projectPath, ref.workId, (map) => {
-            const current = map.sessions.find((item) => item.id === ref.sessionId);
-            if (current?.providerSessionId !== id || current.lifecycle === 'closed') throw busyError('Kimi session changed during handoff');
-            current.kimiTerminal = next;
-          });
-          durable = true;
-          await stop(ref);
-          const { outcome } = await launchDetailed(ref, 'resume', {}, { native });
+          if (marker === undefined) {
+            unpublished = next.archive;
+            await feed.kimiArchive?.(ref, next.archive);
+            await updateMap(ref.projectPath, ref.workId, (map) => {
+              const current = map.sessions.find((item) => item.id === ref.sessionId);
+              if (current?.providerSessionId !== id || current.lifecycle === 'closed' || current.kimiTerminal !== undefined) {
+                throw busyError('Kimi session changed during handoff');
+              }
+              current.kimiTerminal = next;
+            });
+            durable = true;
+            unpublished = undefined;
+            await feed.kimiPruneArchives?.(ref, next.archive).catch((error: unknown) => {
+              host.log.warn('Superseded Kimi archives could not be removed', { ref, error: String(error) });
+            });
+            await stop(ref);
+          } else {
+            await finalizing.get(key);
+          }
+          const { outcome } = await launchDetailed(ref, 'resume', {}, { native: native ?? null });
           if (outcome !== 'started' || pty.get(ref)?.kimiNative !== true) throw busyError('Kimi Terminal could not start');
+          kimiResult.delete(key);
           return publishKimiControl(ref, { owner: 'terminal' });
         }
         await finalizing.get(key);
         if (marker === undefined) throw busyError('The original Kimi binding changed');
         const { outcome } = await launchDetailed(ref, 'resume', {}, {
-          release: () => updateMap(ref.projectPath, ref.workId, (map) => {
+          release: (pid) => updateMap(ref.projectPath, ref.workId, (map) => {
             const current = map.sessions.find((item) => item.id === ref.sessionId);
-            if (current?.providerSessionId !== id || current.kimiTerminal?.archive !== marker.archive) {
+            if (current?.providerSessionId !== id || current.kimiTerminal?.archive !== marker.archive || pty.get(ref)?.pid !== pid) {
               throw busyError('Kimi binding changed during handback');
             }
             delete current.kimiTerminal;
-          }).then(() => {}),
-          restore: () => updateMap(ref.projectPath, ref.workId, (map) => {
-            const current = map.sessions.find((item) => item.id === ref.sessionId);
-            if (current?.providerSessionId === id && current.kimiTerminal === undefined) current.kimiTerminal = marker;
           }).then(() => {}),
         });
         if (outcome !== 'started') throw busyError('Kimi Chat could not start');
@@ -2075,6 +2093,21 @@ export function createSessionsService(
         kimiClaims.delete(key);
         return publishKimiControl(ref, { owner: 'chat', canTakeover: true });
       } catch (error) {
+        if (unpublished !== undefined) {
+          // A write can fail after persisting. Only unlink the exact candidate if the map
+          // proves it was not published as the active archive.
+          const actual = await readMap(ref.projectPath, ref.workId).catch(() => null);
+          if (actual?.sessions.find((item) => item.id === ref.sessionId)?.kimiTerminal?.archive === unpublished) {
+            durable = true;
+            await stop(ref).catch((stopError: unknown) => {
+              host.log.warn('Kimi Chat could not stop after marker publication', { ref, error: String(stopError) });
+            });
+          } else if (actual !== null) {
+            await feed.kimiRemoveArchive?.(ref, unpublished).catch((removeError: unknown) => {
+              host.log.warn('Unpublished Kimi archive could not be removed', { ref, error: String(removeError) });
+            });
+          }
+        }
         if (durable) {
           const control = { owner: 'stopped', detail: error instanceof HostError ? error.message : 'Kimi handoff failed. The original conversation is still bound.' } as const;
           kimiResult.set(key, publishKimiControl(ref, control));

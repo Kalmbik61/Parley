@@ -2158,6 +2158,20 @@ describe('deleteSessionFiles', () => {
     expect(await exists(path.join(limits, 's-01.json'))).toBe(false);
     expect(await exists(path.join(limits, 's-02.json'))).toBe(true);
   });
+
+  it('removes only the deleted session’s Kimi Chat archives', async () => {
+    const map = await createWork(project, { title: 'Kimi archives' });
+    const history = path.join(workPaths(project, map.work.id).dir, 'kimi-history');
+    for (const id of ['s-01', 's-02']) {
+      const dir = path.join(history, id);
+      await mkdir(dir, { recursive: true });
+      await writeFile(path.join(dir, 'archive.json'), '[]');
+    }
+    await deleteSessionFiles(project, map.work.id, 's-01');
+    expect(await exists(path.join(history, 's-01'))).toBe(false);
+    expect(await exists(path.join(history, 's-02', 'archive.json'))).toBe(true);
+  });
+
 });
 
 

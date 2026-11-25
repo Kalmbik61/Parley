@@ -119,6 +119,7 @@ export function createKimiAcp(options: KimiAcpOptions) {
   let sessionId = options.sessionId;
   let instructions = options.instructions;
   let embeddedContext = false;
+  let historyLoad = false;
   let connected = false;
   let exitInfo: ExitInfo | undefined;
   let dead: KimiAcpError | undefined;
@@ -410,6 +411,7 @@ export function createKimiAcp(options: KimiAcpOptions) {
     const result = await initialize();
     const capabilities = record(result['agentCapabilities']);
     embeddedContext = record(capabilities['promptCapabilities'])['embeddedContext'] === true;
+    historyLoad = capabilities['loadSession'] === true;
     const params = { cwd: options.cwd, mcpServers: options.mcpServers };
     let opened: JsonObject;
     if (sessionId === undefined) {
@@ -420,10 +422,10 @@ export function createKimiAcp(options: KimiAcpOptions) {
       sessionId = opened['sessionId'];
     } else {
       const resume = record(capabilities['sessionCapabilities'])['resume'] != null;
-      if (options.requireHistory === true && capabilities['loadSession'] !== true) {
+      if (options.requireHistory === true && !historyLoad) {
         throw new KimiAcpError('This Kimi Code CLI cannot replay history for handback', 'protocol');
       }
-      if (capabilities['loadSession'] === true && (options.loadHistory === true || !resume)) {
+      if (historyLoad && (options.loadHistory === true || !resume)) {
         replaying = options.loadHistory === true;
         try {
           opened = await request('session/load', { ...params, sessionId });
@@ -542,6 +544,7 @@ export function createKimiAcp(options: KimiAcpOptions) {
     get pid() { return child.pid; },
     connected: () => connected && dead === undefined && closing === undefined,
     busy: () => turn !== undefined || changingConfig,
+    supportsHistoryLoad: () => historyLoad,
     checkAuth, connect, prompt, cancel, respond, setConfig, state, close, kill,
     onExit(listener: (exit: ExitInfo) => void) {
       exitListeners.add(listener);

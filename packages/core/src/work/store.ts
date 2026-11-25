@@ -789,7 +789,11 @@ export async function deleteSessionFiles(
     limitsFile(paths.dir, sessionId),
     contextFile(paths.dir, sessionId),
   ];
-  await Promise.all(files.map((file) => rm(file, { force: true })));
+  await Promise.all([
+    ...files.map((file) => rm(file, { force: true })),
+    // Archive cleanup is recursive, so only a generated session name may become its final path component.
+    ...(/^s-\d+$/.test(sessionId) ? [rm(path.join(paths.dir, 'kimi-history', sessionId), { recursive: true, force: true })] : []),
+  ]);
 }
 
 /**

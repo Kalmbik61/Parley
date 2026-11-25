@@ -821,6 +821,29 @@ it('gates Kimi takeover on host capability and never transfers ownership when th
   expect(bridge.calls.filter(({ method }) => method === 'kimi.setControl')).toHaveLength(1);
 });
 
+it('offers explicit native reopen after a failed handback without consuming a saved Chat draft', async () => {
+  resetChatUiStoreForTests();
+  useWorksStore.setState({ entries: [makeWork(ref.workId, {
+    projectPath: ref.projectPath, sessions: [makeSession(ref.sessionId, 'Kimi', { provider: 'kimi', lifecycle: 'sleeping' })],
+  })] });
+  bridge.setHandler('kimi.getControl', () => ({ owner: 'stopped', detail: 'Replay exceeds the limit' }));
+  bridge.setHandler('kimi.setControl', () => {
+    bridge.emit('kimi.control', { ref, control: { owner: 'terminal' } });
+    return { owner: 'terminal' };
+  });
+  act(() => bridge.emitStatus({ state: 'connected', hostVersion: 'new',
+    methods: ['pty.attach', 'pty.detach', 'kimi.getControl', 'kimi.setControl'], features: ['kimi-native-terminal'] }));
+  renderSurface();
+  expect(await screen.findByText('Replay exceeds the limit')).toBeDefined();
+  act(() => useChatUiStore.getState().setDraft(refKey(ref), 'retained draft'));
+  expect(bridge.calls.some(({ method }) => method === 'kimi.setControl')).toBe(false);
+  fireEvent.click(screen.getByRole('button', { name: 'Reopen Terminal' }));
+  expect(await screen.findByText('Kimi Terminal has control')).toBeDefined();
+  expect(bridge.calls).toContainEqual({ method: 'kimi.setControl', params: { ref, target: 'terminal' } });
+  expect(useChatUiStore.getState().drafts[refKey(ref)]).toBe('retained draft');
+  resetChatUiStoreForTests();
+});
+
 // Карточка Backlog доски над терминалом (задача 8): терминал — цель броска, только если карточку можно отправить в эту
 // сессию; иначе он выключен и не отбирает бросок у других целей (`layoutCollision` отдаёт терминалу приоритет). Файл
 // на это не смотрит. Настоящий `DndContext` с порогом 4 px, как в окне; «под указателем» задаёт `collisionDetection`

@@ -24,7 +24,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { lstat, mkdir, open, readFile, stat, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, open, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import {
@@ -243,6 +243,8 @@ export function withoutMail<D extends { upsert: FeedItem[]; removed: string[] }>
 export interface FeedService {
   kimiHasHistory(ref: SessionRef): boolean;
   kimiArchive(ref: SessionRef, archive: string): Promise<void>;
+  kimiRemoveArchive(ref: SessionRef, archive: string): Promise<void>;
+  kimiPruneArchives(ref: SessionRef, retain: string): Promise<void>;
   kimiPrepareHistory(ref: SessionRef, archive: string, chunks: readonly KimiReplayChunk[]): Promise<() => void>;
   kimiOutput(ref: SessionRef, event: KimiOutput): void;
   kimiRequests(ref: SessionRef, requests: readonly KimiRequest[]): void;
@@ -2660,6 +2662,18 @@ export function createFeedService(
       await mkdir(path.dirname(file), { recursive: true });
       // The map only publishes this unique immutable archive after the complete write.
       await writeFile(file, text, { mode: 0o600, flag: 'wx' });
+    },
+    kimiRemoveArchive(ref, archive) {
+      return rm(kimiArchiveFile(ref, archive), { force: true });
+    },
+    async kimiPruneArchives(ref, retain) {
+      const file = kimiArchiveFile(ref, retain);
+      const dir = path.dirname(file);
+      for (const entry of await readdir(dir, { withFileTypes: true })) {
+        if (entry.isFile() && /^[0-9a-f-]{36}\.json$/i.test(entry.name) && entry.name !== path.basename(file)) {
+          await rm(path.join(dir, entry.name), { force: true });
+        }
+      }
     },
     async kimiPrepareHistory(ref, archive, chunks) {
       const feed = feedOf(ref, 'kimi');

@@ -262,7 +262,7 @@ const SurfaceInner = memo(function SurfaceInner({ bridge, sessionRef, tabId, vis
     setControlError(null);
     const ref = refKey(sessionRef);
     const { drafts, attachments, queued } = useChatUiStore.getState();
-    if (target === 'terminal' && (Boolean(drafts[ref]) || (attachments[ref]?.length ?? 0) > 0 ||
+    if (target === 'terminal' && kimi.control?.owner === 'chat' && (Boolean(drafts[ref]) || (attachments[ref]?.length ?? 0) > 0 ||
       (queued[ref]?.length ?? 0) > 0 || (chatOutbox.store.getState().byKey[ref]?.length ?? 0) > 0)) {
       setControlError(S.chat.kimiNative.haveDraft);
       return;

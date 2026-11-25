@@ -7,6 +7,11 @@ if (process.argv[2] === '--session') {
   const history = process.env.KIMI_FIXTURE_HISTORY;
   const inherited = Object.keys(process.env).filter((key) => /^(PARLEY|HARNAS)_/i.test(key));
   if (process.argv.length !== 4 || process.argv[3] !== 'acp-session' || inherited.length > 0) process.exit(21);
+  if (process.env.KIMI_FIXTURE_NATIVE_LAUNCH_LOG) {
+    appendFileSync(process.env.KIMI_FIXTURE_NATIVE_LAUNCH_LOG, JSON.stringify({
+      args: process.argv.slice(2), cwd: process.cwd(), home: process.env.KIMI_CODE_HOME,
+    }) + '\n');
+  }
   const stdout = process.stdout;
   stdout.on('resize', () => stdout.write(`RESIZE ${stdout.columns}x${stdout.rows}\r\n`));
   process.stdin.setRawMode(true);
@@ -119,7 +124,7 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
         protocolVersion: 1,
         ...(process.env.KIMI_FIXTURE_ADVERTISE_LOGIN ? { authMethods: [{ id: 'login', name: 'Login' }] } : {}),
         agentInfo: { name: 'Kimi Code CLI' },
-        agentCapabilities: { loadSession: true, promptCapabilities: { embeddedContext: true }, sessionCapabilities: { ...(process.env.KIMI_FIXTURE_LOAD_ONLY ? {} : { resume: {} }), list: {} } },
+        agentCapabilities: { loadSession: !process.env.KIMI_FIXTURE_NO_LOAD, promptCapabilities: { embeddedContext: true }, sessionCapabilities: { ...(process.env.KIMI_FIXTURE_LOAD_ONLY ? {} : { resume: {} }), list: {} } },
       });
     case 'authenticate':
       if (params.methodId !== 'login') process.exit(6);

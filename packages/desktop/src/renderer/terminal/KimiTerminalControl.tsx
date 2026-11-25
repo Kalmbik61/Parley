@@ -20,7 +20,10 @@ export function KimiTerminalControl({ control, error, onChange }: {
         {error === null ? null : <p role="alert" className="m-0 mt-1 text-xs text-[var(--status-warning-text)]">{error}</p>}
       </div>
       {canReturn ? (
-        <Button size="sm" onClick={() => onChange('chat')}>{copy.return}</Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button size="sm" variant="outline" onClick={() => onChange('terminal')}>{copy.reopen}</Button>
+          <Button size="sm" onClick={() => onChange('chat')}>{copy.return}</Button>
+        </div>
       ) : owner === 'chat' ? (
         <Button size="sm" disabled={!(control?.owner === 'chat' && control.canTakeover)} onClick={() => onChange('terminal')}>{copy.takeover}</Button>
       ) : null}

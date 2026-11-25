@@ -61,7 +61,7 @@ pnpm exec node --input-type=module -e '
 '
 ```
 
-Open `http://127.0.0.1:4658/e2e/fixtures/kimi-native-terminal.html`. The Terminal tab has an explicit takeover button. While native owns the fixture, the island row opens Terminal and Chat shows its retained transcript and no composer. The fixture responds to native `/help` and `/exit` input. Return to Chat restores the composer and settings. Presets for screenshots are `?view=terminal` before takeover, `?owner=terminal` for read-only Chat, `?owner=terminal&view=terminal` for the native PTY, and `?owner=exited&view=terminal` after exit.
+Open `http://127.0.0.1:4658/e2e/fixtures/kimi-native-terminal.html`. The Terminal tab has an explicit takeover button. While native owns the fixture, the island row opens Terminal and Chat shows its retained transcript and no composer. The fixture responds to native `/help` and `/exit` input. Return to Chat restores the composer and settings. After exit or failed handback, Reopen Terminal resumes the original native owner without releasing Chat. Presets for screenshots are `?view=terminal` before takeover, `?owner=terminal` for read-only Chat, `?owner=terminal&view=terminal` for the native PTY, and `?owner=exited&view=terminal` after exit.
 
 ## Impact card
 
@@ -70,7 +70,7 @@ Open `http://127.0.0.1:4658/e2e/fixtures/kimi-native-terminal.html`. The Termina
 - **Numbers** — 1,161 focused checks passed (89 host, 455 desktop, 101 protocol, 516 core). The installed 2.7.3 probe passed with 3 loopback model requests, 0 external or paid requests, and no plugin installation.
 - **Screens** — Parley browser, 1120 × 530. [Takeover](../../packages/desktop/e2e/fixtures/kimi-native-takeover.png), [read-only Chat and island](../../packages/desktop/e2e/fixtures/kimi-native-read-only.png), [native Terminal](../../packages/desktop/e2e/fixtures/kimi-native-terminal.png), [return control](../../packages/desktop/e2e/fixtures/kimi-native-return.png), [restored Chat](../../packages/desktop/e2e/fixtures/kimi-native-restored.png).
 - **For the human** — Open Terminal and select **Take control in Terminal**. Use Kimi normally, then type `/exit` and select **Return to Chat**. A native `/new` does not rebind Parley.
-- **Risk** — Handback requires ACP `session/load`. Failure or replay beyond the explicit limits leaves Chat unchanged and a recoverable stopped state. The preserved pre-handoff feed is under the work's `kimi-history/<session-id>/<archive-id>.json`. Repeated handoffs keep separate archived views.
+- **Risk** — Handback requires ACP `session/load`. Failure or replay beyond the explicit limits leaves Chat unchanged and a recoverable stopped state. The preserved pre-handoff feed is under the work's `kimi-history/<session-id>/<archive-id>.json`. A successful takeover keeps the active or latest archive and prunes older copies for that session.
 - **Cost** — Zero paid calls. Production latency and archive growth were not measured.
 - **Verdict** — The fixture and stock CLI establish exact-ID ownership transfer, provider-owned mode, no native MCP attachment, and restored Chat. The live app and user configuration were not changed.
 
@@ -94,3 +94,25 @@ pnpm --filter @parley/host build
 pnpm --filter @parley/host exec vitest run \
   src/kimi/acp.test.ts src/kimi/sessions.test.ts src/kimi/kimi-host.test.ts
 ```
+
+## R2 — lifecycle recovery and bounded archives
+
+Rework m-10277 and m-10285 covers review findings #2, #3 and #8 only. R1 stays in place. R3 ownership fencing and the integrated runtime-authority investigation are separate. Scope is the Kimi ACP capability and lifecycle, sessions service, Kimi feed archives, core session-file cleanup, the existing Terminal control, and focused fixtures/tests.
+
+- Refuse takeover before stopping the original ACP if it did not advertise history loading. Preserve the running Chat and draft. When native has exited or a handback failed, let the human explicitly reopen ordinary Kimi with the originally bound ID, cwd and Kimi home. Never kill a live native process to do this, silently reacquire ACP, rebind to another ID, or repeat the brief.
+- Keep the persisted exclusion marker until managed ACP has successfully installed the replacement Chat projection. A failure before activation or release leaves a retryable marker and does not let wake take ownership.
+- Keep the active handoff archive or most recent completed handoff archive for each session. A failed publication removes only its unpublished candidate. Prune superseded archives only after a new marker is durable. Explicit session deletion removes its own archives.
+- Reproduce the lifecycle and archive failures first. Verify the exact-ID reopen, capability refusal, activation order, archive rollback and deletion, and the desktop reopen action. Commit R2 separately before R3. No live app actions or changes to user auth/config.
+
+
+R2 verification reproduced the four host lifecycle failures and the core deletion and desktop reopen failures before implementation. The final focused suites passed 112 checks (60 host, five core session cleanup, 47 desktop TerminalSurface). Core and host builds and desktop typecheck passed. The reopen test verifies the exact ID, cwd and persisted Kimi home after restart even when the host's synthetic Kimi home changes. The marker test covers both a thrown feed installation and a rejected release write. A successful takeover prunes prior copies. Known unpublished candidates are removed on a failed write, and session deletion removes the session archive directory without touching a sibling.
+
+```sh
+pnpm run typecheck
+pnpm --filter @parley/host exec vitest run \
+  src/kimi/acp.test.ts src/kimi/sessions.test.ts src/kimi/kimi-host.test.ts
+pnpm --filter @parley/core exec vitest run src/work/store.test.ts -t deleteSessionFiles
+pnpm --filter @parley/desktop exec vitest run src/renderer/terminal/TerminalSurface.test.tsx
+```
+
+The earlier browser captures predate the Reopen Terminal button. The R2 browser panel was not loaded, so the new button was verified by component interaction tests. Stock CLI and native authority verification were not rerun or included in R2.

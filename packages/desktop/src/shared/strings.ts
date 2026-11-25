@@ -2300,6 +2300,7 @@ export const S = {
       switching: 'Switching Kimi ownership…',
       inControl: 'Kimi Terminal has control',
       exited: 'Kimi Terminal is stopped',
+      reopen: 'Reopen Terminal',
       return: 'Return to Chat',
       readOnly: 'Chat is read-only while Kimi Terminal has control.',
       takeoverHelp: 'Open the original conversation in ordinary Kimi. Parley room and plan tools stay in Chat.',

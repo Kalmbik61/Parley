@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, realpath, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import { createPendingSession, readMap, unreadLetters, updateMap, workPaths } from '@parley/core';
@@ -6,6 +6,55 @@ import { KIMI_LAUNCH_MODES_FEATURE, feedItem, type MethodName, type Params, type
 import { connectRaw, hello, removeHome, tempHome, waitConnected, type RawMessage, type TestClient } from '../../test/helpers.js';
 import { startHost, type RunningHost } from '../host.js';
 import { hostPaths } from '../paths.js';
+
+const r2Faults = vi.hoisted(() => ({
+  trace: null as string[] | null,
+  failPublish: false,
+  failActivation: false,
+  failRelease: false,
+}));
+
+vi.mock('@parley/core', async (importOriginal) => {
+  const core = await importOriginal<typeof import('@parley/core')>();
+  const updateMap: typeof core.updateMap = (projectPath, workId, mutate, options) =>
+    core.updateMap(projectPath, workId, (map, letters) => {
+      const before = r2Faults.trace !== null || r2Faults.failPublish
+        ? new Set(map.sessions.filter((session) => session.kimiTerminal !== undefined).map(({ id }) => id))
+        : undefined;
+      mutate(map, letters);
+      if (before === undefined) return;
+      for (const item of map.sessions) {
+        if (!before.has(item.id) && item.kimiTerminal !== undefined) {
+          r2Faults.trace?.push('publish');
+          if (r2Faults.failPublish) throw new Error('Fixture refused the archive marker write');
+        }
+        if (before.has(item.id) && item.kimiTerminal === undefined) {
+          r2Faults.trace?.push('release');
+          if (r2Faults.failRelease) throw new Error('Fixture refused the marker release');
+        }
+      }
+    }, options);
+  return { ...core, updateMap };
+});
+
+vi.mock('../feed/feed-service.js', async (importOriginal) => {
+  const feedModule = await importOriginal<typeof import('../feed/feed-service.js')>();
+  const createFeedService: typeof feedModule.createFeedService = (...args) => {
+    const service = feedModule.createFeedService(...args);
+    return {
+      ...service,
+      async kimiPrepareHistory(...params) {
+        const install = await service.kimiPrepareHistory(...params);
+        return () => {
+          r2Faults.trace?.push('activate');
+          if (r2Faults.failActivation) throw new Error('Fixture refused feed activation');
+          install();
+        };
+      },
+    };
+  };
+  return { ...feedModule, createFeedService };
+});
 
 let home: string | undefined;
 let running: RunningHost | undefined;
@@ -67,6 +116,10 @@ afterEach(async () => {
   running = undefined;
   home = undefined;
   events = [];
+  r2Faults.trace = null;
+  r2Faults.failPublish = false;
+  r2Faults.failActivation = false;
+  r2Faults.failRelease = false;
   vi.unstubAllEnvs();
 });
 
@@ -547,4 +600,119 @@ it('refuses unidentifiable consecutive new replay prompts without replacing Chat
   const items = (await call('feed.snapshot', { ref })).items;
   expect(items.slice(0, before.length)).toEqual(before);
   expect(items.filter((item) => item.kind === 'prompt').map((item) => item.text)).toEqual(['hello', 'first new', 'second new']);
+}, 15_000);
+
+
+it('rejects a CLI without ACP load before stopping Chat', async () => {
+  const projectPath = await setup();
+  vi.stubEnv('KIMI_FIXTURE_NO_LOAD', '1');
+  const { ref } = await call('sessions.create', input(projectPath));
+  const pid = (await session(ref))?.pid;
+  expect((await request('kimi.setControl', { ref, target: 'terminal' })).error).toMatchObject({
+    code: 'conflict', data: { reason: 'kimi-replay-unavailable' },
+  });
+  expect(await session(ref)).toMatchObject({ pid, providerSessionId: 'acp-session' });
+  expect((await session(ref))?.kimiTerminal).toBeUndefined();
+  expect(await call('pty.send', { ref, text: 'still active', submit: true })).toMatchObject({ submitted: true });
+  await expectReply(ref, 'Hello Parley');
+}, 15_000);
+
+it('reopens the exact native owner after exit and after stopped handback survives a restart', async () => {
+  const projectPath = await setup();
+  const history = path.join(home!, 'provider-history');
+  const launchLog = path.join(home!, 'native-launches');
+  const failure = path.join(home!, 'fail-replay');
+  vi.stubEnv('KIMI_FIXTURE_HISTORY', history);
+  vi.stubEnv('KIMI_FIXTURE_FAIL_LOAD', failure);
+  vi.stubEnv('KIMI_FIXTURE_NATIVE_LAUNCH_LOG', launchLog);
+  vi.stubEnv('KIMI_CODE_HOME', path.join(home!, 'provider-home'));
+  const { ref } = await call('sessions.create', { ...input(projectPath), task: 'only one brief' });
+  await expectReply(ref, 'Hello Parley');
+  await call('kimi.setControl', { ref, target: 'terminal' });
+  await exitNative(ref);
+  const marker = (await session(ref))?.kimiTerminal;
+  expect(await call('kimi.setControl', { ref, target: 'terminal' })).toMatchObject({ owner: 'terminal' });
+  await exitNative(ref);
+  await writeFile(failure, '');
+  expect((await request('kimi.setControl', { ref, target: 'chat' })).error).toBeDefined();
+  client!.close();
+  await running!.context.shutdown('test restart');
+  await running!.closed;
+  vi.stubEnv('KIMI_CODE_HOME', path.join(home!, 'different-provider-home'));
+  await connectIsolatedHost();
+  expect(await call('kimi.getControl', { ref })).toMatchObject({ owner: 'stopped' });
+  expect((await request('sessions.resume', { ref })).error).toMatchObject({ code: 'conflict' });
+  expect(await call('kimi.setControl', { ref, target: 'terminal' })).toMatchObject({ owner: 'terminal' });
+  expect((await session(ref))?.kimiTerminal).toEqual(marker);
+  const generation = await terminalReady(ref);
+  raw(ref, 'reopened native turn\r/exit\r', generation);
+  await expect.poll(() => call('kimi.getControl', { ref })).toMatchObject({ owner: 'exited' });
+  const launches = (await readFile(launchLog, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
+  const exactCwd = await realpath(marker!.cwd);
+  expect(launches).toEqual(Array.from({ length: 3 }, () => ({
+    args: ['--session', 'acp-session'], cwd: exactCwd, home: marker?.home,
+  })));
+  vi.stubEnv('KIMI_CODE_HOME', marker!.home);
+  await unlink(failure);
+  await call('kimi.setControl', { ref, target: 'chat' });
+  const prompts = (await call('feed.snapshot', { ref })).items.filter((item) => item.kind === 'prompt').map((item) => item.text);
+  expect(prompts.filter((prompt) => prompt.includes('only one brief'))).toHaveLength(1);
+  expect(prompts).toContain('reopened native turn');
+}, 20_000);
+
+it('keeps the marker through activation, including a thrown activation and its retry', async () => {
+  const projectPath = await setup();
+  const history = path.join(home!, 'provider-history');
+  vi.stubEnv('KIMI_FIXTURE_HISTORY', history);
+  const { ref } = await call('sessions.create', input(projectPath));
+  await call('kimi.setControl', { ref, target: 'terminal' });
+  await exitNative(ref);
+  const marker = (await session(ref))?.kimiTerminal;
+
+  r2Faults.trace = [];
+  r2Faults.failActivation = true;
+  expect((await request('kimi.setControl', { ref, target: 'chat' })).error).toBeDefined();
+  expect(r2Faults.trace).toEqual(['activate']);
+  expect((await session(ref))?.kimiTerminal).toEqual(marker);
+  expect((await request('sessions.resume', { ref })).error).toMatchObject({ code: 'conflict' });
+
+  r2Faults.trace = [];
+  r2Faults.failActivation = false;
+  r2Faults.failRelease = true;
+  expect((await request('kimi.setControl', { ref, target: 'chat' })).error).toBeDefined();
+  expect(r2Faults.trace).toEqual(['activate', 'release']);
+  expect((await session(ref))?.kimiTerminal).toEqual(marker);
+  expect(await call('kimi.getControl', { ref })).toMatchObject({ owner: 'stopped' });
+
+  r2Faults.trace = [];
+  r2Faults.failRelease = false;
+  expect(await call('kimi.setControl', { ref, target: 'chat' })).toMatchObject({ owner: 'chat' });
+  expect(r2Faults.trace).toEqual(['activate', 'release']);
+  expect((await session(ref))?.kimiTerminal).toBeUndefined();
+}, 15_000);
+
+it('keeps only the owned or latest archive and removes unpublished candidates and deleted-session archives', async () => {
+  const projectPath = await setup();
+  vi.stubEnv('KIMI_FIXTURE_HISTORY', path.join(home!, 'provider-history'));
+  const { ref } = await call('sessions.create', input(projectPath));
+  const dir = path.join(workPaths(ref.projectPath, ref.workId).dir, 'kimi-history', ref.sessionId);
+  await call('kimi.setControl', { ref, target: 'terminal' });
+  const first = (await session(ref))!.kimiTerminal!;
+  await exitNative(ref);
+  await call('kimi.setControl', { ref, target: 'chat' });
+  expect(await readdir(dir)).toEqual([`${first.archive}.json`]);
+
+  r2Faults.failPublish = true;
+  expect((await request('kimi.setControl', { ref, target: 'terminal' })).error).toBeDefined();
+  expect(await call('kimi.getControl', { ref })).toMatchObject({ owner: 'chat' });
+  expect(await readdir(dir)).toEqual([`${first.archive}.json`]);
+
+  r2Faults.failPublish = false;
+  await call('kimi.setControl', { ref, target: 'terminal' });
+  const latest = (await session(ref))!.kimiTerminal!;
+  expect(latest.archive).not.toBe(first.archive);
+  expect(await readdir(dir)).toEqual([`${latest.archive}.json`]);
+  await exitNative(ref);
+  await call('sessions.delete', { ref });
+  await expect(readdir(dir)).rejects.toMatchObject({ code: 'ENOENT' });
 }, 15_000);
