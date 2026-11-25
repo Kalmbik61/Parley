@@ -29,6 +29,9 @@ export interface KimiHistoryProjection {
 export interface KimiHistoryReplay {
   kind: 'handoff' | 'checkpoint';
   incomplete: boolean;
+  home: string;
+  cwd: string;
+  sessionId: string;
 }
 
 interface KimiSessionHooks {
@@ -250,7 +253,7 @@ export function createKimiSessions(host: HostContext, hooks: KimiSessionHooks) {
       }
       const restoreHistory = replay === undefined ? undefined
         : await hooks.prepareHistory?.(ref, replay.archive, overflow ? historyChunks.slice(0, completePrefix) : historyChunks,
-          { kind: replay.kind, incomplete: overflow });
+          { kind: replay.kind, incomplete: overflow, home: replay.home, cwd: replay.cwd, sessionId });
       const isCurrent = () => live.get(key) === session && acp.connected();
       if (!isCurrent()) throw new KimiAcpError('Kimi Code ACP disconnected', 'disconnected');
       function prepareActivation(): { publish(): void; writeCheckpoint?: KimiHistoryProjection['writeCheckpoint'] } {

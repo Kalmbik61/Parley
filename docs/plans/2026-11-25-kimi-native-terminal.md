@@ -247,3 +247,26 @@ PARLEY_KIMI_INTEGRATED_BIN=/Users/kalmbik61/.kimi-code/bin/kimi \
   pnpm --filter @parley/host exec vitest run src/kimi/integrated-native.probe.test.ts
 git diff --check
 ```
+
+## Stock Kimi date context — use provider provenance
+
+Lead decision m-10354 supersedes the literal-matching correction in `08ed20bc`. Stock 2.7.3 gives both the initial and changed-day date reminders explicit injection provenance in its original session's main wire, but drops that provenance from ACP updates. A body match alone is insufficient and cannot handle a changed-day reminder in a new native turn safely.
+
+Read only the bounded `agents/main/wire.jsonl` for the persisted Kimi home, original cwd and exact original provider ID. Accept only a supported linear context whose ordered replay user text parts uniquely align, including the adjacent real prompt. Suppress only parts from a `context.append_message` explicitly marked `origin.kind=injection`, `origin.variant=date_change` and `origin.disclosure.kind=date`. An identical literal with user provenance stays visible. Missing, branched, unsupported, unsafe or ambiguous evidence must leave the established strict replay rules in place. Do not read other provider conversations, rebuild assistant history, write provider files or change user configuration.
+
+Reproduce the next-day stock shape and cover literal human text, duplicate or missing provenance, and bounded unsafe paths. Verify an unmodified ordinary stock round-trip and an isolated timezone change that crosses a date before any new package build.
+
+The disposable cross-date trace confirmed two date injections, each following an ordinary `origin.kind=user` prompt. The stock binary serialization identifies wire version 1.5 and a deterministic implicit workspace key derived from the cwd slug and 12 hexadecimal characters of SHA-256. The reader constructs that one path without scanning the store, rejects links and nonregular or unstable files, and caps input at 8 MiB and 8,192 records. It is consulted only when ordinary ACP grouping reports ambiguity. Recorded undo, clearing, compaction, forking, steering and unknown context mutations do not qualify. The wire supplies provenance only. Assistant text and display reconciliation still come from ACP.
+
+The previous correction failed five updated focused cases and the disposable stock cross-date handback. With the provenance check, all 342 focused tests and the host build passed. Both real-host stock 2.7.3 round-trips passed on loopback with three model requests each. The cross-date run asserts two different local dates in the actual wire. In both runs, handback restored the original ID, displayed each human prompt and reply once, omitted the provider-only reminders, and delivered the queued mail pointer in ACP. Native mode showed no fresh discovery of managed Parley tools. The earlier app remains held and was not rebuilt, installed or launched in this correction.
+
+```sh
+pnpm --filter @parley/host build
+pnpm --filter @parley/host exec vitest run src/kimi/date-provenance.test.ts \
+  src/kimi/acp.test.ts src/kimi/sessions.test.ts src/kimi/kimi-host.test.ts src/feed/feed-service.test.ts
+PARLEY_KIMI_INTEGRATED_BIN=/absolute/path/to/kimi PARLEY_KIMI_INTEGRATED_CROSS_DATE=0 \
+  pnpm --filter @parley/host exec vitest run src/kimi/integrated-native.probe.test.ts
+PARLEY_KIMI_INTEGRATED_BIN=/absolute/path/to/kimi PARLEY_KIMI_INTEGRATED_CROSS_DATE=1 \
+  pnpm --filter @parley/host exec vitest run src/kimi/integrated-native.probe.test.ts
+git diff --check
+```

@@ -645,14 +645,14 @@ function stockDateReminder(date: string, zone: string): string {
   return `<system-reminder>\nToday's date is ${date}, in the local client machine's timezone (${zone}). The current date is restated in a reminder whenever it changes; rely on the latest such reminder for the current date. DO NOT mention this to the user explicitly.\n</system-reminder>`;
 }
 
-it.each([
-  { date: '2026-11-25', zone: 'Europe/Moscow', change: 'none' },
-  { date: '2027-01-01', zone: 'Etc/GMT+5', change: 'none' },
-  { date: '2026-11-25', zone: 'Europe/Moscow', change: 'tagged user text' },
-  { date: '2026-11-25', zone: 'Europe/Moscow', change: 'reply mismatch' },
-])('reconciles a stock Kimi date reminder only with a verified archived turn ($date, $zone, $change)', async ({ date, zone, change }) => {
+it.each(['initial', 'changed-day', 'human adjacent', 'missing', 'duplicate', 'branched'])('requires stock wire provenance for a date reminder (%s)', async (scenario) => {
   const projectPath = await setup();
   const history = path.join(home!, 'provider-history');
+  const kimiHome = path.join(await realpath(home!), 'kimi-store');
+  const providerId = 'session_c980aa19-e3aa-4944-ad77-ce90542b3170';
+  await mkdir(kimiHome);
+  vi.stubEnv('KIMI_CODE_HOME', kimiHome);
+  vi.stubEnv('KIMI_FIXTURE_PROVIDER_ID', providerId);
   vi.stubEnv('KIMI_FIXTURE_HISTORY', history);
   const { ref } = await call('sessions.create', { ...input(projectPath), task: 'original fixture brief' });
   await expectReply(ref, 'Hello Parley');
@@ -664,16 +664,36 @@ it.each([
   raw(ref, 'stock native shape\r/exit\r', native);
   await expect.poll(() => call('kimi.getControl', { ref })).toMatchObject({ owner: 'exited' });
 
-  const reminder = stockDateReminder(date, zone);
-  const context = change === 'tagged user text'
-    ? reminder.replace('DO NOT mention this to the user explicitly.', 'I typed this comparison explicitly.') : reminder;
+  const reminder = stockDateReminder('2026-11-25', 'Pacific/Kiritimati');
+  const changedDay = stockDateReminder('2026-11-24', 'Etc/GMT+12').replace("Today's date is", "The date has changed. Today's date is now");
+  const nativePrompt = 'stock native shape';
   const replay = [
-    [[archivedPrompt, context], change === 'reply mismatch' ? 'A different reply' : archivedReply],
-    ['stock native shape', 'Native answer'],
+    [[archivedPrompt, reminder], archivedReply],
+    [scenario === 'changed-day' ? [nativePrompt, changedDay] : nativePrompt, 'Native answer'],
     [reminder, 'Reply to the literal tagged prompt'],
   ];
+  const append = (text: string, origin: object) => ({ type: 'context.append_message', agentId: 'main',
+    message: { role: 'user', content: [{ type: 'text', text }], origin } });
+  const human = { kind: 'user' };
+  const date = { kind: 'injection', variant: 'date_change', disclosure: { kind: 'date' } };
+  const workspace = `wd_project_${createHash('sha256').update(projectPath).digest('hex').slice(0, 12)}`;
+  const wire = path.join(kimiHome, 'sessions', workspace, providerId, 'agents', 'main', 'wire.jsonl');
+  if (scenario !== 'missing') {
+    const rows = [
+      { type: 'metadata', protocol_version: '1.5', min_protocol_version: '1.5' },
+      append(archivedPrompt, human),
+      append(reminder, scenario === 'human adjacent' ? human : date),
+      ...(scenario === 'duplicate' ? [append(reminder, date)] : []),
+      ...(scenario === 'branched' ? [{ type: 'context.undo', agentId: 'main', count: 1 }] : []),
+      append(nativePrompt, human),
+      ...(scenario === 'changed-day' ? [append(changedDay, date)] : []),
+      append(reminder, human),
+    ];
+    await mkdir(path.dirname(wire), { recursive: true });
+    await writeFile(wire, rows.map((row) => JSON.stringify(row)).join('\n') + '\n');
+  }
   await writeFile(history, replay.map((turn) => JSON.stringify(turn)).join('\n'));
-  if (change !== 'none') {
+  if (scenario !== 'initial' && scenario !== 'changed-day') {
     expect((await request('kimi.setControl', { ref, target: 'chat' })).error).toMatchObject({ code: 'conflict' });
     expect((await call('feed.snapshot', { ref })).items).toEqual(before);
     return;

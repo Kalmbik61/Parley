@@ -14,6 +14,7 @@ import { hostPaths } from '../paths.js';
 
 const bin = '/Users/kalmbik61/.kimi-code/bin/kimi';
 const optIn = process.env['PARLEY_KIMI_INTEGRATED_BIN'];
+const crossDate = process.env['PARLEY_KIMI_INTEGRATED_CROSS_DATE'] === '1';
 const model = 'parley-offline-fixture';
 const original = 'INTEGRATED_ORIGINAL_PROMPT';
 const native = 'INTEGRATED_NATIVE_PROMPT';
@@ -116,6 +117,9 @@ test.skipIf(!optIn)('hands real host control to stock Kimi 2.7.3 and back', asyn
       KIMI_MODEL_BASE_URL: `http://127.0.0.1:${address.port}/v1`,
     };
     for (const [key, value] of Object.entries({ ...env, PARLEY_AGENT_SKILLS: 'off' })) vi.stubEnv(key, value);
+    // These offsets differ by 26 hours, so the native prompt lands on another local date
+    // without changing the machine clock or timezone.
+    if (crossDate) vi.stubEnv('TZ', 'Pacific/Kiritimati');
     expect(execFileSync(launch, ['--version'], { cwd: projectPath, env, encoding: 'utf8', timeout: 8000 }).trim()).toBe('2.7.3');
 
     stage = 'host and yolo ACP launch';
@@ -146,6 +150,7 @@ test.skipIf(!optIn)('hands real host control to stock Kimi 2.7.3 and back', asyn
     console.info('Verified yolo creation, original binding, completed initial ACP turn, and managed Parley tool discovery.');
 
     stage = 'native takeover and client write fence';
+    if (crossDate) vi.stubEnv('TZ', 'Etc/GMT+12');
     expect(await call('kimi.setControl', { ref, target: 'terminal' })).toEqual({ owner: 'terminal' });
     const terminal = await session();
     expect(terminal.providerSessionId).toBe(start.providerSessionId);
@@ -224,6 +229,15 @@ test.skipIf(!optIn)('hands real host control to stock Kimi 2.7.3 and back', asyn
     console.info('No new Parley MCP discovery appeared in the native provider trace.');
     expect(seen).toHaveLength(2);
     expect(unread()).toContain(held);
+    if (crossDate) {
+      const dates = (await readFile(join(kimi, wire!), 'utf8')).trimEnd().split('\n').map(line => JSON.parse(line))
+        .filter(row => row.type === 'context.append_message' && row.message?.origin?.kind === 'injection' &&
+          row.message.origin.variant === 'date_change' && row.message.origin.disclosure?.kind === 'date')
+        .map(row => row.message.origin.disclosure);
+      expect(dates.map(date => date.timeZone)).toEqual(['Pacific/Kiritimati', 'Etc/GMT+12']);
+      expect(new Set(dates.map(date => date.localDate)).size).toBe(2);
+      console.info('Verified two stock wire date injections on different local dates.');
+    }
     expect(await call('kimi.setControl', { ref, target: 'chat' })).toMatchObject({ owner: 'chat' });
     expect(await session()).toMatchObject({ lifecycle: 'active', providerSessionId: start.providerSessionId });
     await expect.poll(() => seen, { ...poll, timeout: 35_000 }).toHaveLength(3);
@@ -231,6 +245,7 @@ test.skipIf(!optIn)('hands real host control to stock Kimi 2.7.3 and back', asyn
     expect.soft(seen[2]?.managed, 'Managed Parley tools should be advertised after handback').toBe(true);
     const { items } = await call('feed.snapshot', { ref });
     const prompts = items.filter(item => item.kind === 'prompt').map(item => item.text);
+    expect(prompts.some(prompt => prompt.startsWith('<system-reminder>'))).toBe(false);
     const replies = items.filter(item => item.kind === 'text').map(item => item.text).join('');
     for (const marker of [original, native]) {
       expect(prompts.filter(text => text.includes(marker))).toHaveLength(1);

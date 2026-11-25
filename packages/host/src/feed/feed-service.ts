@@ -66,6 +66,7 @@ import {
   withCodexAgentMeta,
 } from '@parley/core';
 import type { KimiHistoryProjection, KimiHistoryReplay, KimiOutput, KimiReplayChunk } from '../kimi/sessions.js';
+import { withoutKimiDateContext } from '../kimi/date-provenance.js';
 import type {
   CodexAgentMeta,
   CodexCursor,
@@ -2585,7 +2586,8 @@ export function createFeedService(
 
   type KimiTextTurn = { prompt: string | null; reply: string };
   type ArchivedKimiTurn = KimiTextTurn & { replyTruncated: boolean; items: FeedItem[] };
-  const ambiguousKimiReplay = () => new HostError('conflict', 'Kimi history does not identify separate prompts. The prior Chat is unchanged.');
+  const KIMI_AMBIGUOUS_REPLAY = 'kimi-replay-ambiguous';
+  const ambiguousKimiReplay = () => new HostError('conflict', 'Kimi history does not identify separate prompts. The prior Chat is unchanged.', { reason: KIMI_AMBIGUOUS_REPLAY });
   const oversizedKimiReplay = () => new HostError('conflict', 'Kimi history exceeds the Chat handback limit. The prior Chat is unchanged.');
 
   function archiveKimiTurns(items: readonly FeedItem[]): ArchivedKimiTurn[] {
@@ -2611,15 +2613,7 @@ export function createFeedService(
     return prior.reply === reply.slice(0, FEED_TEXT_LIMIT) && prior.replyTruncated === (reply.length > FEED_TEXT_LIMIT);
   }
 
-  function stockKimiDateReminder(text: string): boolean {
-    // Stock 2.7.3 replays this generated context as a separate idless user text frame.
-    // Recognize its complete date/timezone template, not arbitrary tagged user content.
-    if (text.length > 384) return false;
-    const head = /^<system-reminder>\nToday's date is [0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01]), in the local client machine's timezone \([A-Za-z0-9_+\/-]{1,80}\)\./.exec(text)?.[0];
-    return head !== undefined && text === `${head} The current date is restated in a reminder whenever it changes; rely on the latest such reminder for the current date. DO NOT mention this to the user explicitly.\n</system-reminder>`;
-  }
-
-  function legacyKimiPrompts(chunks: readonly KimiReplayChunk[], archive: readonly ArchivedKimiTurn[], offset: number, reply: string): string[] {
+  function legacyKimiPrompts(chunks: readonly KimiReplayChunk[], archive: readonly ArchivedKimiTurn[], offset: number): string[] {
     if (chunks.length === 1) return [chunks[0]!.text];
     const prompts: string[] = [];
     let cursor = 0;
@@ -2630,22 +2624,17 @@ export function createFeedService(
       do {
         text += chunks[cursor++]!.text;
       } while (cursor < chunks.length && text !== previous.prompt && previous.prompt.startsWith(text));
-      if (text !== previous.prompt) throw ambiguousKimiReplay();
+      // Only a known prompt with no reply can be followed by another prompt in this run.
+      if (text !== previous.prompt || (cursor < chunks.length && previous.reply !== '')) throw ambiguousKimiReplay();
       prompts.push(text);
-      // A known replied turn cannot have another human prompt in this run. Allow only
-      // one canonical stock reminder between the exact archived prompt and its matching reply.
-      if (cursor < chunks.length && previous.reply !== '') {
-        if (cursor === chunks.length - 1 && matchesKimiReply(previous, reply) && stockKimiDateReminder(chunks[cursor]!.text)) return prompts;
-        throw ambiguousKimiReplay();
-      }
     }
     return prompts;
   }
 
-  function kimiReplayPrompts(user: readonly KimiReplayChunk[], archive: readonly ArchivedKimiTurn[], offset: number, seenIds: Set<string>, reply: string): (string | null)[] {
+  function kimiReplayPrompts(user: readonly KimiReplayChunk[], archive: readonly ArchivedKimiTurn[], offset: number, seenIds: Set<string>): (string | null)[] {
     if (user.length === 0) return [null];
     // ACP v1 makes messageId optional. Use archive boundaries only while the earlier turns still align.
-    if (!user.some((chunk) => chunk.messageId !== undefined)) return legacyKimiPrompts(user, archive, offset, reply);
+    if (!user.some((chunk) => chunk.messageId !== undefined)) return legacyKimiPrompts(user, archive, offset);
     const prompts: string[] = [];
     let priorId: string | undefined;
     for (const { text, messageId } of user) {
@@ -2661,18 +2650,18 @@ export function createFeedService(
     return prompts;
   }
 
-  function reconcileKimiTurns(chunks: readonly KimiReplayChunk[], archive: readonly ArchivedKimiTurn[], allowPartial: boolean): {
+  function reconcileKimiTurns(chunks: readonly KimiReplayChunk[], archive: readonly ArchivedKimiTurn[]): {
     retained: FeedItem[];
     suffix: KimiTextTurn[];
     matched: number;
-    partial: boolean;
+    failure: HostError | undefined;
   } {
     const retained: FeedItem[] = [];
     const suffix: KimiTextTurn[] = [];
     const seenIds = new Set<string>();
     let matched = 0;
     let cursor = 0;
-    let partial = false;
+    let failure: HostError | undefined;
     while (cursor < chunks.length) {
       const start = cursor;
       while (chunks[cursor]?.author === 'user') cursor++;
@@ -2681,11 +2670,11 @@ export function createFeedService(
       while (chunks[cursor]?.author === 'agent') reply += chunks[cursor++]!.text;
       let prompts: (string | null)[];
       try {
-        prompts = kimiReplayPrompts(user, archive, suffix.length === 0 ? matched : archive.length, seenIds, reply);
+        prompts = kimiReplayPrompts(user, archive, suffix.length === 0 ? matched : archive.length, seenIds);
         if (prompts.some((prompt) => prompt !== null && prompt.length > 64 * 1024)) throw oversizedKimiReplay();
       } catch (error) {
-        if (!allowPartial || !(error instanceof HostError) || error.code !== 'conflict') throw error;
-        partial = true;
+        if (!(error instanceof HostError) || error.code !== 'conflict') throw error;
+        failure = error;
         break;
       }
       for (const [index, prompt] of prompts.entries()) {
@@ -2697,7 +2686,7 @@ export function createFeedService(
         } else suffix.push(turn);
       }
     }
-    return { retained, suffix, matched, partial };
+    return { retained, suffix, matched, failure };
   }
 
   function kimiArchiveSequence(items: readonly FeedItem[]): number {
@@ -2745,12 +2734,17 @@ export function createFeedService(
       const history = preferLive && feed.live && evidence.filter((item) => item.kind !== 'mail').every(({ id }, i) => liveTurns[i]?.id === id)
         ? feed.state.items : evidence;
       const archived = archiveKimiTurns(history);
-      const reconciled = reconcileKimiTurns(chunks, archived, preferLive);
+      let reconciled = reconcileKimiTurns(chunks, archived);
+      if (reconciled.failure?.data?.['reason'] === KIMI_AMBIGUOUS_REPLAY) {
+        const aligned = await withoutKimiDateContext(replay, chunks);
+        if (aligned !== chunks) reconciled = reconcileKimiTurns(aligned, archived);
+      }
+      if (!preferLive && reconciled.failure !== undefined) throw reconciled.failure;
       // Only explicit handback may replace a divergent checkpoint. A routine resume
       // cannot append safely unless the provider's replay confirms the whole prior prefix.
       const keepPrior = preferLive && reconciled.matched !== archived.length;
       const retained = keepPrior ? history.filter((item) => item.kind !== 'mail') : reconciled.retained;
-      let partial = replay.incomplete || reconciled.partial || keepPrior;
+      let partial = replay.incomplete || reconciled.failure !== undefined || keepPrior;
       let state = { ...emptyFeedState(), seq: Math.max(feed.state.seq, kimiArchiveSequence(evidence)) };
       const time = at();
       const newRows: FeedItem[] = [];

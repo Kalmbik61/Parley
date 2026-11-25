@@ -2,11 +2,12 @@
 const readline = process.getBuiltinModule('node:readline');
 const { appendFileSync, existsSync, readFileSync, realpathSync, writeFileSync } = process.getBuiltinModule('node:fs');
 const { spawn } = process.getBuiltinModule('node:child_process');
+const fixtureId = process.env.KIMI_FIXTURE_PROVIDER_ID || 'acp-session';
 
 if (process.argv[2] === '--session') {
   const history = process.env.KIMI_FIXTURE_HISTORY;
   const inherited = Object.keys(process.env).filter((key) => /^(PARLEY|HARNAS)_/i.test(key));
-  if (process.argv.length !== 4 || process.argv[3] !== 'acp-session' || inherited.length > 0) process.exit(21);
+  if (process.argv.length !== 4 || process.argv[3] !== fixtureId || inherited.length > 0) process.exit(21);
   if (process.env.KIMI_FIXTURE_NATIVE_LAUNCH_LOG) {
     appendFileSync(process.env.KIMI_FIXTURE_NATIVE_LAUNCH_LOG, JSON.stringify({
       args: process.argv.slice(2), cwd: process.cwd(), home: process.env.KIMI_CODE_HOME,
@@ -144,7 +145,7 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
       parleyServer = server;
       const ref = server.env.find(({ name }) => name === 'PARLEY_SESSION_ID')?.value;
       boundId = params.sessionId ?? (process.env.KIMI_FIXTURE_UNIQUE_IDS ? `acp-session-${process.pid}`
-        : ref === 's-01' ? 'acp-session' : `acp-session-${ref}`);
+        : ref === 's-01' ? fixtureId : `acp-session-${ref}`);
       if (permissionModes) trace({ opened: method });
       if (method === 'session/load') {
         if (process.env.KIMI_FIXTURE_FAIL_LOAD && existsSync(process.env.KIMI_FIXTURE_FAIL_LOAD)) {
