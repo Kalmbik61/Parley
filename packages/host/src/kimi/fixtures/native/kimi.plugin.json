@@ -1,0 +1,13 @@
+{
+  "name": "parley-handoff-probe",
+  "version": "0.0.0",
+  "description": "Disposable offline handoff probe with no real authority",
+  "mcpServers": {
+    "fixture": { "command": "node", "args": ["./mcp.cjs"], "cwd": "./" }
+  },
+  "hooks": [
+    { "event": "SessionStart", "command": "node ./hook.cjs", "timeout": 3 },
+    { "event": "UserPromptSubmit", "command": "node ./hook.cjs", "timeout": 3 },
+    { "event": "PreToolUse", "matcher": "^mcp__plugin-parley-handoff-probe_fixture__handoff_probe$", "command": "node ./hook.cjs", "timeout": 3 }
+  ]
+}
