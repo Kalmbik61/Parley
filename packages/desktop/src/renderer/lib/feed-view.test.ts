@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { FEED_MIN_VERSION } from '@parley/protocol';
+import { FEED_MIN_VERSION, KIMI_SHARED_TERMINAL_FEATURE } from '@parley/protocol';
 import type { SessionRef } from '@parley/protocol';
 import type { ActivityEntry } from '../store/activity.js';
 import { makeActivity } from '../test-utils/work-fixtures.js';
@@ -50,6 +50,15 @@ describe('feedAvailable by family', () => {
 });
 
 describe('feedAvailable', () => {
+  it('opens shared Kimi Chat without ACP state while preserving the legacy and feed gates', () => {
+    const kimi = { provider: 'kimi', version: null };
+    const features = new Set([KIMI_SHARED_TERMINAL_FEATURE]);
+    expect(feedAvailable({ ...kimi, hostMethods: FEED, features })).toBe(true);
+    expect(feedAvailable({ ...kimi, hostMethods: NO_FEED, features })).toBe(false);
+    expect(feedAvailable({ ...kimi, hostMethods: FEED })).toBe(false);
+    expect(feedAvailable({ ...kimi, hostMethods: new Set([...FEED, 'kimi.getState']) })).toBe(true);
+  });
+
   it('Chat доступен доверенному семейству Claude, а версия берётся у выбранной записи', () => {
     expect(feedAvailable({ hostMethods: FEED, provider: 'glm', family: 'claude', version: '2.1.287' })).toBe(true);
     expect(feedAvailable({ hostMethods: FEED, provider: 'claude', family: null, version: '2.1.287' })).toBe(false);

@@ -253,7 +253,7 @@ const SurfaceInner = memo(function SurfaceInner({ bridge, sessionRef, tabId, vis
   const provider = useWorksStore((state) => sessionOf(sessionRef, state.entries)?.provider);
   const retained = useWorksStore((state) => sessionOf(sessionRef, state.entries)?.kimiTerminal !== undefined);
   const kimi = useKimiControl(bridge, sessionRef, provider === 'kimi', retained, lifecycle === 'active');
-  const managedTerminal = kimi.supported || (provider === 'kimi' && retained);
+  const managedTerminal = !kimi.shared && (kimi.supported || (provider === 'kimi' && retained));
   const nativeRunning = kimi.control?.owner === 'terminal';
   const [controlError, setControlError] = useState<string | null>(null);
   const [controlTarget, setControlTarget] = useState<'chat' | 'terminal'>();

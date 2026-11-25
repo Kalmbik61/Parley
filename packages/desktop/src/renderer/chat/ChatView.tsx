@@ -227,15 +227,15 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
       .find((item) => item.projectPath === sessionRef.projectPath && item.map.work.id === sessionRef.workId)
       ?.map.sessions.find((item) => item.id === sessionRef.sessionId),
   );
-  const { readOnly: kimiReadOnly } = useKimiControl(bridge, sessionRef, kimi, session?.kimiTerminal !== undefined, live);
+  const { readOnly: kimiReadOnly, shared: kimiShared } = useKimiControl(bridge, sessionRef, kimi, session?.kimiTerminal !== undefined, live);
   const kimiGenerationHost = useHostFeature(KIMI_PTY_GENERATION_FEATURE);
-  const kimiWaitsForCard = kimi && kimiGenerationHost;
+  const kimiWaitsForCard = kimi && (kimiGenerationHost || kimiShared);
   const sessionName = session === undefined ? null : sessionRowLabel(session.id, session.label);
   const waiting = blocked && !hasPendingCard(items);
   // Панель вопроса терминала: когда хост умеет читать экран; вопрос старта (доверие папке, вход) её тоже показывает.
   const canReadScreen = useHostSupports('pty.screenText');
   const need = useActivityStore((state) => activityFor(state.byRef, sessionRef)?.activity.need ?? null);
-  const startupWait = !kimiWaitsForCard && canReadScreen && need?.kind === 'startup' && !hasPendingCard(items);
+  const startupWait = (kimiShared || (!kimiWaitsForCard && canReadScreen)) && need?.kind === 'startup' && !hasPendingCard(items);
   const showBanner = useHeldFor(waiting || startupWait, BANNER_DELAY_MS);
   const canSwitch = useHostSupports('sessions.switchAgent');
   const providerMissing = useProviderMissing(provider);
@@ -552,7 +552,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
             )
           }
           model={codex && modelLabel !== null && storedEffort !== null ? `${modelLabel} · ${storedEffort}` : modelLabel}
-          sessionConfig={kimi && !kimiReadOnly && live && canReadKimiConfig ? (
+          sessionConfig={kimi && !kimiReadOnly && live && canReadKimiConfig && (!kimiShared || canSetKimiConfig) ? (
             <KimiConfigMenu key={sessionKey} bridge={bridge} sessionRef={sessionRef}
               disabledReason={kimiDisabled} />
           ) : undefined}
@@ -602,7 +602,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
         {showCard && !kimiReadOnly ? <NotRunningCard sessionRef={sessionRef} onResume={() => resumeSession(bridge, sessionRef)} /> : null}
         {switchKind !== null && session !== undefined ? <SwitchBanner session={session} kind={switchKind} sessionRef={sessionRef} label={providerLabel} /> : null}
         {!kimiReadOnly && showBanner && kimiWaitsForCard ? (
-          <WaitingBanner workKey={workKey} tabId={tab.id} text={S.chat.kimi.waitingForRequest} showTerminal={false} />
+          <WaitingBanner workKey={workKey} tabId={tab.id} text={S.chat.kimi.waitingForRequest} showTerminal={kimiShared} />
         ) : !kimiReadOnly && showBanner && canReadScreen ? (
           <TerminalPromptPanel
             workKey={workKey}
@@ -653,7 +653,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
           attachments={attachments}
           onAttachmentsChange={(next) => useChatUiStore.getState().setAttachments(sessionKey, next)}
           onSubmit={submit}
-          {...(active ? { onStop: stop } : {})}
+          {...(active && (!kimiShared || canInterrupt) ? { onStop: stop } : {})}
         />}
       </div>
     </ChatEnvContext.Provider>

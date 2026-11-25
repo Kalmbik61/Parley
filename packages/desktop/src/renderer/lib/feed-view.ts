@@ -14,7 +14,7 @@
 
 import { useMemo } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import { CODEX_FEED_MIN_VERSION, FEED_CODEX_FEATURE, FEED_MIN_VERSION, FEED_OPENCODE_FEATURE, FEED_QWEN_FEATURE, OPENCODE_FEED_MIN_VERSION, QWEN_FEED_MIN_VERSION, isCustomProviderId, refKey, type SessionRef } from '@parley/protocol';
+import { CODEX_FEED_MIN_VERSION, FEED_CODEX_FEATURE, FEED_MIN_VERSION, FEED_OPENCODE_FEATURE, FEED_QWEN_FEATURE, KIMI_SHARED_TERMINAL_FEATURE, OPENCODE_FEED_MIN_VERSION, QWEN_FEED_MIN_VERSION, isCustomProviderId, refKey, type SessionRef } from '@parley/protocol';
 import type { TabSpec, TerminalView } from '../../shared/layout-types.js';
 import { useActivityStore, type ActivityEntry } from '../store/activity.js';
 import { useHostStore } from '../store/host.js';
@@ -46,7 +46,7 @@ export type FeedUnavailableReason = 'host-unsupported' | 'provider-unsupported' 
 
 export function feedUnavailableReason({ hostMethods: methods, features, provider, family, version }: FeedAvailabilityInput): FeedUnavailableReason | null {
   if (!methods.has('feed.snapshot')) return 'host-unsupported';
-  if (provider === 'kimi') return methods.has('kimi.getState') ? null : 'host-unsupported';
+  if (provider === 'kimi') return features?.has(KIMI_SHARED_TERMINAL_FEATURE) || methods.has('kimi.getState') ? null : 'host-unsupported';
   if (provider === 'codex') {
     if (!features?.has(FEED_CODEX_FEATURE)) return 'host-unsupported';
   } else if (family === 'qwen') {

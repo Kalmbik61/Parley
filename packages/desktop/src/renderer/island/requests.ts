@@ -57,7 +57,7 @@ interface IslandRequestsState {
   bind(call: IslandBridge['call'] | null): void;
   select(index: number): void;
   /** `screenText` — хост знает `pty.screenText`: запись Codex без карточки ведёт в Chat сессии (панель вопроса терминала), а не в терминал. */
-  sync(entries: readonly WindowWorkEntry[], byRef: Readonly<Record<string, ActivityEntry>>, screenText?: boolean): void;
+  sync(entries: readonly WindowWorkEntry[], byRef: Readonly<Record<string, ActivityEntry>>, screenText?: boolean, sharedKimi?: boolean): void;
   revalidate(): void;
   decide(key: string, decision: FeedDecision): Promise<void>;
   clear(): void;
@@ -213,7 +213,7 @@ export const useIslandRequests = create<IslandRequestsState>((set, get) => {
       const item = get().items.find((candidate) => candidate.key === get().selectedKey);
       if (item !== undefined) void fetchCards(item.ref, 0, { retry: false });
     },
-    sync: (entries, byRef, screenText = false) => {
+    sync: (entries, byRef, screenText = false, sharedKimi = false) => {
       const now = Date.now();
       const before = get().waitingSince;
       const waitingSince: Record<string, number> = {};
@@ -221,7 +221,7 @@ export const useIslandRequests = create<IslandRequestsState>((set, get) => {
       for (const entry of entries) {
         if (entry.map.work.status !== 'active') continue;
         for (const session of entry.map.sessions) {
-          if (session.kimiTerminal !== undefined) continue;
+          if (session.kimiTerminal !== undefined && !(sharedKimi && session.provider === 'kimi')) continue;
           const ref = { projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id };
           const key = refKey(ref);
           if (sessionAttention(session, byRef[key]?.activity ?? null) !== 'needs-you') continue;

@@ -78,6 +78,7 @@ export function islandModel(
   withCard: ReadonlySet<string>,
   cleared: ReadonlySet<string>,
   held: ReadonlySet<string>,
+  sharedKimi = false,
 ): IslandModel {
   let working = 0;
   let waiting = 0;
@@ -103,7 +104,7 @@ export function islandModel(
       const ref = { projectPath: entry.projectPath, workId: work.id, sessionId: session.id };
       const key = refKey(ref);
       const live = byRef[key]?.activity ?? null;
-      if (session.provider === 'kimi' && session.kimiTerminal !== undefined && session.lifecycle !== 'closed') {
+      if (!sharedKimi && session.provider === 'kimi' && session.kimiTerminal !== undefined && session.lifecycle !== 'closed') {
         hasNative = true;
         providers.add('kimi');
         rows.push({ kind: 'session', key, ref, label: sessionRowLabel(session.id, session.label), provider: session.provider,
