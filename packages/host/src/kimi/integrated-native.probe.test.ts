@@ -20,8 +20,23 @@ const native = 'INTEGRATED_NATIVE_PROMPT';
 const held = 'INTEGRATED_HELD_MAIL';
 const ready = /^\s*│ >\s*│\s*$/m;
 const sandbox = '/usr/bin/sandbox-exec';
+const chatZone = 'Etc/GMT+12';
+const terminalZone = 'Etc/GMT-14';
 
-test.skipIf(!optIn)('hands real host control to stock Kimi 2.7.3 and back', async () => {
+type WireEvent = {
+  type: string;
+  agentId?: string;
+  serverName?: string;
+  tools?: unknown[];
+  message?: { role: string; content: { type: string; text?: string }[]; origin?: {
+    kind: string; variant?: string; disclosure?: { kind: string; localDate?: string; timeZone?: string };
+  } };
+};
+
+test.skipIf(!optIn).each([
+  { day: 'ordinary native day', shiftDay: false },
+  { day: 'changed native calendar day', shiftDay: true },
+])('hands real host control to stock Kimi 2.7.3 and back ($day)', async ({ shiftDay }) => {
   expect(optIn).toBe(bin);
   expect(process.platform).toBe('darwin');
   const root = await realpath(await mkdtemp('/tmp/pki-'));
@@ -116,6 +131,7 @@ test.skipIf(!optIn)('hands real host control to stock Kimi 2.7.3 and back', asyn
       KIMI_MODEL_BASE_URL: `http://127.0.0.1:${address.port}/v1`,
     };
     for (const [key, value] of Object.entries({ ...env, PARLEY_AGENT_SKILLS: 'off' })) vi.stubEnv(key, value);
+    if (shiftDay) vi.stubEnv('TZ', chatZone);
     expect(execFileSync(launch, ['--version'], { cwd: projectPath, env, encoding: 'utf8', timeout: 8000 }).trim()).toBe('2.7.3');
 
     stage = 'host and yolo ACP launch';
@@ -136,16 +152,29 @@ test.skipIf(!optIn)('hands real host control to stock Kimi 2.7.3 and back', asyn
     );
     await expect.poll(() => call('kimi.getControl', { ref }), poll).toMatchObject({ owner: 'chat', canTakeover: true });
     expect(seen).toMatchObject([{ turn: original, containsMail: false }]);
+    const archivedBrief = (await call('feed.snapshot', { ref })).items
+      .filter(item => item.kind === 'prompt').map(item => item.text).find(text => text.includes(original));
+    expect(archivedBrief).toBeDefined();
     // Kimi may discover tools without selecting them for the first model request.
     const wire = (await readdir(kimi, { recursive: true })).find(file => file.endsWith(`/${start.providerSessionId}/agents/main/wire.jsonl`));
     expect(wire).toBeDefined();
-    const managedDiscoveries = async () => (await readFile(join(kimi, wire!), 'utf8')).trimEnd().split('\n')
-      .map(line => JSON.parse(line)).filter(event => event.type === 'mcp.tools_discovered' && event.serverName === 'parley');
+    const readWire = async (): Promise<WireEvent[]> => (await readFile(join(kimi, wire!), 'utf8')).trimEnd().split('\n').map(line => JSON.parse(line));
+    const managedDiscoveries = async () => (await readWire()).filter(event => event.type === 'mcp.tools_discovered' && event.serverName === 'parley');
+    const dateReminders = async () => (await readWire()).flatMap(({ type, agentId, message }) => {
+      const origin = message?.origin;
+      if (type !== 'context.append_message' || agentId !== 'main' || message?.role !== 'user' ||
+          origin?.kind !== 'injection' || origin.variant !== 'date_change' || origin.disclosure?.kind !== 'date') return [];
+      return [{ ...origin.disclosure, text: message.content.filter(part => part.type === 'text').map(part => part.text).join('') }];
+    });
+    const chatDates = shiftDay ? await dateReminders() : [];
+    if (shiftDay) expect(chatDates).toMatchObject([{ timeZone: chatZone, localDate: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/) }]);
     const chatDiscoveries = await managedDiscoveries();
-    expect(chatDiscoveries.some(event => event.tools.length > 0)).toBe(true);
+    expect(chatDiscoveries.some(event => (event.tools?.length ?? 0) > 0)).toBe(true);
     console.info('Verified yolo creation, original binding, completed initial ACP turn, and managed Parley tool discovery.');
 
     stage = 'native takeover and client write fence';
+    // The two zones are 26 hours apart. Only the disposable Kimi command's calendar changes.
+    if (shiftDay) vi.stubEnv('TZ', terminalZone);
     expect(await call('kimi.setControl', { ref, target: 'terminal' })).toEqual({ owner: 'terminal' });
     const terminal = await session();
     expect(terminal.providerSessionId).toBe(start.providerSessionId);
@@ -224,6 +253,15 @@ test.skipIf(!optIn)('hands real host control to stock Kimi 2.7.3 and back', asyn
     console.info('No new Parley MCP discovery appeared in the native provider trace.');
     expect(seen).toHaveLength(2);
     expect(unread()).toContain(held);
+    const handoffDates = shiftDay ? await dateReminders() : [];
+    if (shiftDay) {
+      const nativeDates = handoffDates.slice(chatDates.length);
+      expect(nativeDates).toMatchObject([{ timeZone: terminalZone, localDate: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/) }]);
+      expect(nativeDates[0]?.localDate).not.toBe(chatDates[0]?.localDate);
+      expect(nativeDates[0]?.text).toContain('The date has changed.');
+      console.info('Kimi recorded a native date_change injection.', { chat: chatDates[0]?.localDate, native: nativeDates[0]?.localDate });
+      vi.stubEnv('TZ', chatZone);
+    }
     expect(await call('kimi.setControl', { ref, target: 'chat' })).toMatchObject({ owner: 'chat' });
     expect(await session()).toMatchObject({ lifecycle: 'active', providerSessionId: start.providerSessionId });
     await expect.poll(() => seen, { ...poll, timeout: 35_000 }).toHaveLength(3);
@@ -232,6 +270,11 @@ test.skipIf(!optIn)('hands real host control to stock Kimi 2.7.3 and back', asyn
     const { items } = await call('feed.snapshot', { ref });
     const prompts = items.filter(item => item.kind === 'prompt').map(item => item.text);
     const replies = items.filter(item => item.kind === 'text').map(item => item.text).join('');
+    if (shiftDay) {
+      expect(prompts).toContain(archivedBrief);
+      expect(prompts).toContain(native);
+      for (const { text } of handoffDates) expect(prompts.some(prompt => prompt.includes(text))).toBe(false);
+    }
     for (const marker of [original, native]) {
       expect(prompts.filter(text => text.includes(marker))).toHaveLength(1);
       expect(replies.split(`${marker}_REPLY`)).toHaveLength(2);
