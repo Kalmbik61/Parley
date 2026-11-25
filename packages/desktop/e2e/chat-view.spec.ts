@@ -20,7 +20,7 @@ import { makeTempHome, makeTempProject } from './tmp.js';
  *
  * Стаб — в режиме bracketed paste (`STUB_BRACKETED=1`), как настоящий Claude Code: отправка из поля
  * ввода (`pty.send`) печатает `PASTE<<текст>>` и после Enter — `echo: текст`. Хуков у стаба нет,
- * поэтому серый элемент очереди проверить нельзя (он только во время хода), — проверяется отправка.
+ * поэтому после Enter сообщение остаётся серым: можно проверить отправку до появления записи в ленте.
  *
  * Снимки — в `.omc/reviews/shots/` worktree (не коммитится): 1400×900 и 800×500, светлая и тёмная.
  */
@@ -93,6 +93,10 @@ test.describe('вид Chat вкладки сессии (план 2026-10-01, Tas
   test.beforeEach(async () => {
     home = await makeTempHome('chat');
     project = await makeTempProject('chat-view');
+    // Этот сценарий проверяет раскрытый журнал (в том числе строки вызовов).
+    const desktop = path.join(home, 'desktop');
+    await mkdir(desktop, { recursive: true });
+    await writeFile(path.join(desktop, 'ui.json'), JSON.stringify({ chatFold: 'off' }));
   });
 
   test.afterEach(async () => {
@@ -165,7 +169,7 @@ test.describe('вид Chat вкладки сессии (план 2026-10-01, Tas
     // Журнал кончается `/exit` без конца хода: хода нет — ни Stop, ни Queue, кнопка — Send.
     await expect(chat.getByRole('button', { name: 'Stop' })).toHaveCount(0);
     await expect(chat.getByRole('button', { name: 'Queue' })).toHaveCount(0);
-    await expect(chat.getByRole('button', { name: 'Send' })).toHaveCount(1);
+    await expect(chat.getByRole('button', { name: 'Send', exact: true })).toHaveCount(1);
 
     await shot(window, 'chat-1400x900-light');
     await resize(app, 800, 500);
@@ -203,8 +207,8 @@ test.describe('вид Chat вкладки сессии (план 2026-10-01, Tas
     await field.press('Enter');
     await expect(field).toHaveValue('');
     await expect(field).toBeFocused();
-    await window.waitForTimeout(500);
-    await expect(window.getByText(/^Sent to /)).toHaveCount(0);
+    await expect(chat.getByTestId('chat-queued').filter({ hasText: 'hello from chat' })).toHaveAttribute('data-state', 'submitted');
+    await expect(window.locator('[data-sonner-toast]').filter({ hasText: /^Sent to / })).toHaveCount(0);
     await window.getByRole('radio', { name: 'Terminal' }).click();
     await expect.poll(() => screenText(window)).toContain('echo: hello from chat');
     await window.getByRole('radio', { name: 'Chat' }).click();

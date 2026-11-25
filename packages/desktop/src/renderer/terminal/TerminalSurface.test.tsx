@@ -891,7 +891,19 @@ it('gates Kimi takeover on host capability and never transfers ownership when th
   fireEvent.click(takeover);
   expect((await screen.findByRole('alert')).textContent).toMatch(/clear your Chat draft/);
   expect(bridge.calls.some(({ method }) => method === 'kimi.setControl')).toBe(false);
-  act(() => useChatUiStore.getState().setDraft(refKey(ref), ''));
+  const sessionKey = refKey(ref);
+  act(() => {
+    useChatUiStore.getState().setDraft(sessionKey, '');
+    useChatUiStore.getState().updatePromptEchoes(sessionKey, () => [
+      { id: 'send', state: 'queued', text: 'queued follow-up', afterId: null, since: 0 },
+    ]);
+  });
+  fireEvent.click(takeover);
+  expect(screen.getByRole('alert').textContent).toMatch(/clear your Chat draft/);
+  expect(bridge.calls.some(({ method }) => method === 'kimi.setControl')).toBe(false);
+  act(() => useChatUiStore.getState().updatePromptEchoes(sessionKey, () => [
+    { id: 'send', state: 'confirmed', promptId: 'prompt' },
+  ]));
   fireEvent.click(takeover);
   expect(await screen.findByText('Kimi Terminal has control')).toBeDefined();
   expect(bridge.calls.filter(({ method }) => method === 'kimi.setControl')).toHaveLength(1);

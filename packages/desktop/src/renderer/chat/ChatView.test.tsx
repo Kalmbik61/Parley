@@ -503,10 +503,10 @@ describe('ChatView — поле ввода и тулбар', () => {
     fireEvent.keyDown(field(), { key: 'Enter' });
     expect(sends()).toEqual([{ ref: REF, text: 'first line', submit: true, requestedAt: expect.any(Number) }]);
     expect(field().value).toBe('');
-    // До ответа хоста — серый «Waiting»; ушло без хода — он уходит: промпт придёт хуком сам.
+    // До ответа хоста — серый «Waiting»; после Enter серый пузырь остаётся до прихода промпта.
     expect(screen.getByTestId('chat-queued').getAttribute('data-state')).toBe('waiting');
     await act(async () => {});
-    expect(screen.queryByTestId('chat-queued')).toBeNull();
+    expect(screen.getByTestId('chat-queued').getAttribute('data-state')).toBe('submitted');
     // Пустое поле Enter не отправляет.
     fireEvent.keyDown(field(), { key: 'Enter' });
     expect(sends()).toHaveLength(1);
@@ -537,27 +537,21 @@ describe('ChatView — поле ввода и тулбар', () => {
     expect(screen.getAllByTestId('chat-prompt')).toHaveLength(2);
   });
 
-  it('Queued исчезает, когда CLI принял сообщение вместе с указателями Parley', () => {
-    const key = refKey(REF);
-    useChatUiStore.getState().updateQueued(key, () => [{ id: 'q1', text: 'вот что еще нашли', seen: 0 }]);
+  it('промпт с указателями Parley подтверждает тот же серый пузырь', async () => {
+    bridge.setHandler('pty.send', () => ({ inserted: true, submitted: true, reason: null }));
     renderBody(makeSession('s-01', 'S01'));
     setFeed([prompt('p1', 'go')]);
-    expect(screen.getByTestId('chat-queued').textContent).toContain('вот что еще нашли');
+    type('вот что еще нашли');
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    const bubble = screen.getByTestId('chat-queued');
+    await act(async () => {});
+    expect(bubble.getAttribute('data-state')).toBe('queued');
     setFeed([prompt('p1', 'go'), turn('u1'), prompt('p2', 'New messages (1). Call check_inbox.\nвот что еще нашли\nNew messages (2). Call check_inbox.')], 2);
     expect(screen.queryByTestId('chat-queued')).toBeNull();
-    expect(screen.getAllByTestId('chat-prompt')).toHaveLength(2);
+    expect(screen.getAllByTestId('chat-prompt').at(-1)).toBe(bubble);
   });
 
-  it('Queued подтверждается и когда промпт пришёл раньше ответа pty.send', () => {
-    renderBody(makeSession('s-01', 'S01'));
-    setFeed([prompt('p1', 'go'), turn('u1'), prompt('p2', 'next')]);
-    act(() => {
-      useChatUiStore.getState().updateQueued(refKey(REF), () => [{ id: 'q1', text: 'next', seen: 0 }]);
-    });
-    expect(screen.queryByTestId('chat-queued')).toBeNull();
-  });
-
-  it('busy — серый «Waiting» остаётся без тоста, через секунду повтор; удачный — уходит', async () => {
+  it('busy — серый «Waiting» остаётся без тоста, через секунду повтор; после удачи ждёт промпт', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {
       let busy = true;
@@ -576,7 +570,7 @@ describe('ChatView — поле ввода и тулбар', () => {
         await vi.advanceTimersByTimeAsync(1000);
       });
       expect(sends()).toHaveLength(2);
-      expect(screen.queryByTestId('chat-queued')).toBeNull();
+      expect(screen.getByTestId('chat-queued').getAttribute('data-state')).toBe('submitted');
     } finally {
       vi.useRealTimers();
     }
@@ -670,7 +664,6 @@ describe('ChatView — поле ввода и тулбар', () => {
     fireEvent.keyDown(field(), { key: 'Enter' });
     await act(async () => {});
     view.unmount();
-    expect(useChatUiStore.getState().queued[refKey(REF)]?.map((entry) => entry.text)).toEqual(['queued one']);
     renderBody(makeSession('s-01', 'S01'));
     expect(screen.getByTestId('chat-queued').textContent).toContain('queued one');
   });
@@ -1832,9 +1825,8 @@ describe('ChatView — вложения в поле ввода (живая пр�
     expect(field().value).toBe('');
     expect(chips()).toEqual([]);
     expect(document.activeElement).toBe(field());
-    // Без хода — серый «Waiting» уходит, как только хост ответил: промпт придёт хуком сразу.
     await act(async () => {});
-    expect(screen.queryByTestId('chat-queued')).toBeNull();
+    expect(within(screen.getByTestId('chat-queued')).getAllByTestId('chat-attachment')).toHaveLength(2);
   });
 
   it('одни вложения без текста отправляются: Send доступна, уходят только упоминания, Enter в пустом поле — то же', async () => {
@@ -1914,6 +1906,109 @@ describe('ChatView — очередь отправки', () => {
     bridge.calls.filter((call) => call.method === 'pty.send').map((call) => (call.params as { text: string }).text);
   const states = (): Array<string | null> => screen.queryAllByTestId('chat-queued').map((node) => node.getAttribute('data-state'));
 
+  it('сообщение сразу в ленте и остаётся тем же пузырём от отправки до промпта', async () => {
+    let answer!: (result: SendResult) => void;
+    bridge.setHandler('pty.send', () => new Promise<SendResult>((resolve) => (answer = resolve)));
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([]);
+    type('hello');
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    const bubble = screen.getByTestId('chat-queued');
+    expect(bubble.textContent).toContain('hello');
+    expect(field().value).toBe('');
+
+    await act(async () => answer({ inserted: true, submitted: true, reason: null }));
+    expect(screen.getByTestId('chat-queued')).toBe(bubble);
+    expect(bubble.textContent).toContain(S.chat.submitted);
+    expect(screen.queryByTestId('chat-prompt')).toBeNull();
+
+    setFeed([prompt('p1', 'hello')], 2);
+    expect(screen.getByTestId('chat-prompt')).toBe(bubble);
+    expect(screen.queryByTestId('chat-queued')).toBeNull();
+  });
+
+  it('Qwen: терминал уже занят, лента ещё нет — принятый в очередь текст не пропадает', async () => {
+    const session = makeSession('s-01', 'Qwen Code', { provider: 'qwen' });
+    useProvidersStore.setState({
+      providers: [{ id: 'qwen', label: 'Qwen Code', available: true, family: 'qwen', version: '0.27.2', limits: null }],
+    });
+    useHostStore.setState({ status: { state: 'connected', hostVersion: '0.4.0', methods: FEED_METHODS, features: ['feed-qwen'] } });
+    useWorksStore.setState({ entries: [makeWork('w-01', { projectPath: '/tmp/p', sessions: [session] })] });
+    useActivityStore.setState({ byRef: activityMap([makeActivity(REF, 'working')]), loaded: true });
+    bridge.setHandler('pty.send', () => ({ inserted: true, submitted: true, reason: null }));
+    const view = renderBody(session);
+    const before = [prompt('p0', 'previous'), turn('u0')];
+    setFeed(before);
+
+    const composer = screen.getByRole('textbox', { name: S.chat.composer.qwenLabel });
+    fireEvent.change(composer, { target: { value: 'follow-up' } });
+    fireEvent.keyDown(composer, { key: 'Enter' });
+    const bubble = screen.getByTestId('chat-queued');
+    await act(async () => {});
+    expect(sentTexts()).toEqual(['follow-up']);
+    expect(screen.getByTestId('chat-queued')).toBe(bubble);
+    expect(bubble.getAttribute('data-state')).toBe('submitted');
+
+    const running: FeedItem[] = [
+      ...before,
+      prompt('p1', 'run a command'),
+      { id: 'bash', at: AT, kind: 'tool', name: 'Bash', toolUseId: 'bash', input: { command: 'git commit' }, status: 'running' },
+    ];
+    setFeed(running, 2);
+    view.rerender(body(session, 'terminal'));
+    expect(screen.queryByTestId('chat-view')).toBeNull();
+    view.rerender(body(session, 'chat'));
+    setFeed(running, 3);
+    const restored = screen.getByTestId('chat-queued');
+    expect(restored.textContent).toContain('follow-up');
+
+    setFeed([...running, turn('u1'), prompt('p2', 'follow-up')], 4);
+    expect(screen.getAllByTestId('chat-prompt').at(-1)).toBe(restored);
+    expect(screen.queryByTestId('chat-queued')).toBeNull();
+    expect(sentTexts()).toEqual(['follow-up']);
+  });
+
+  it('промпт до ответа на pty.send сменяет серое состояние без дубля', async () => {
+    let answer!: (result: SendResult) => void;
+    bridge.setHandler('pty.send', () => new Promise<SendResult>((resolve) => (answer = resolve)));
+    renderBody(makeSession('s-01', 'S01'));
+    const previous = [prompt('p0', 'repeat'), turn('u0')];
+    setFeed(previous);
+    type('repeat');
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    const bubble = screen.getByTestId('chat-queued');
+    expect(screen.getByTestId('chat-prompt')).not.toBe(bubble);
+
+    setFeed([...previous, prompt('p1', 'repeat')], 2);
+    expect(screen.queryByTestId('chat-queued')).toBeNull();
+    expect(screen.getAllByTestId('chat-prompt')[1]).toBe(bubble);
+    await act(async () => answer({ inserted: true, submitted: true, reason: null }));
+    expect(screen.getAllByTestId('chat-prompt')[1]).toBe(bubble);
+    expect(screen.queryByTestId('chat-queued')).toBeNull();
+  });
+
+  it('два одинаковых сообщения подтверждаются по одному и в порядке отправки', async () => {
+    bridge.setHandler('pty.send', () => ({ inserted: true, submitted: true, reason: null }));
+    renderBody(makeSession('s-01', 'S01'));
+    setFeed([]);
+    for (let index = 0; index < 2; index += 1) {
+      type('repeat');
+      fireEvent.keyDown(field(), { key: 'Enter' });
+      await act(async () => {});
+    }
+    const bubbles = screen.getAllByTestId('chat-queued');
+    expect(bubbles).toHaveLength(2);
+    setFeed([prompt('p1', 'repeat')], 2);
+    expect(screen.getByTestId('chat-prompt')).toBe(bubbles[0]);
+    expect(screen.getByTestId('chat-queued')).toBe(bubbles[1]);
+
+    setFeed([prompt('p1', 'repeat'), turn('u1'), prompt('p2', 'repeat')], 3);
+    const confirmed = screen.getAllByTestId('chat-prompt');
+    expect(confirmed[0]).toBe(bubbles[0]);
+    expect(confirmed[1]).toBe(bubbles[1]);
+    expect(screen.queryByTestId('chat-queued')).toBeNull();
+  });
+
   it('окончательный отказ — поле пустое, серый «Not sent» с Retry и ×; Retry шлёт снова', async () => {
     bridge.setHandler('pty.send', () => ({ inserted: false, submitted: false, reason: 'no-paste-mode' }));
     renderBody(makeSession('s-01', 'S01'));
@@ -1929,6 +2024,9 @@ describe('ChatView — очередь отправки', () => {
     fireEvent.click(within(grey).getByRole('button', { name: S.common.retry }));
     await act(async () => {});
     expect(sentTexts()).toEqual(['важное', 'важное']);
+    expect(screen.getByTestId('chat-queued')).toBe(grey);
+    setFeed([prompt('p1', 'важное')], 2);
+    expect(screen.getByTestId('chat-prompt')).toBe(grey);
     expect(screen.queryByTestId('chat-queued')).toBeNull();
   });
 
@@ -1948,7 +2046,7 @@ describe('ChatView — очередь отправки', () => {
     fireEvent.click(within(screen.getAllByTestId('chat-queued')[0]!).getByRole('button', { name: S.outbox.remove }));
     await act(async () => {});
     expect(sentTexts()).toEqual(['first', 'second']);
-    expect(states()).toEqual([]);
+    expect(states()).toEqual(['submitted']);
   });
 
   it('три сообщения подряд — pty.send строго по одному и по порядку; кнопка — Queue, пока очередь не пуста', async () => {
@@ -1983,6 +2081,8 @@ describe('ChatView — очередь отправки', () => {
     expect(sentTexts()).toEqual(['one', 'two']);
     await act(async () => answer({ inserted: true, submitted: true, reason: null }));
     renderBody(makeSession('s-01', 'S01'));
+    expect(states()).toEqual(['submitted', 'submitted']);
+    setFeed([prompt('p1', 'one'), turn('u1'), prompt('p2', 'two')], 2);
     expect(states()).toEqual([]);
   });
 
@@ -2017,7 +2117,7 @@ describe('ChatView — очередь отправки', () => {
       fireEvent.click(within(screen.getByTestId('chat-queued')).getByRole('button', { name: S.common.retry }));
       await act(async () => {});
       expect(requestedAts()).toEqual([sentAt, sentAt, sentAt, retriedAt]);
-      expect(states()).toEqual([]);
+      expect(states()).toEqual(['submitted']);
     } finally {
       vi.useRealTimers();
     }
@@ -2161,7 +2261,9 @@ describe('ChatView — очередь отправки', () => {
     expect(sentTexts()).toEqual(['second']);
     // Ушедшее стало серым «Queued» CLI — без кнопок; первое всё ещё ждёт.
     expect(states()).toEqual(['queued', 'waiting']);
+    expect(screen.getAllByTestId('chat-queued')[0]).toBe(second);
     setFeed([prompt('p1', 'go'), turn('u1'), prompt('p2', 'second'), turn('u2')], 2);
+    expect(screen.getAllByTestId('chat-prompt')[1]).toBe(second);
     await act(async () => {});
     expect(sentTexts()).toEqual(['second', 'first']);
   });
@@ -2344,8 +2446,7 @@ describe('ChatView — агенты: тулбар, прокрутка к кар�
     expect(bridge.calls.filter((call) => call.method === 'pty.send').map((call) => call.params)).toEqual([
       { ref: REF, text: 'meanwhile, a question', submit: true, requestedAt: expect.any(Number) },
     ]);
-    // Без хода — без серого элемента: промпт придёт хуком сразу.
-    expect(screen.queryByTestId('chat-queued')).toBeNull();
+    expect(screen.getByTestId('chat-queued').getAttribute('data-state')).toBe('submitted');
   });
 
   it('родитель проснулся по <task-notification> и работает сам (идущий вызов) — Stop на месте, как у любого хода', () => {

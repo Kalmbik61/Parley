@@ -110,55 +110,95 @@ describe('applyCodexRecords', () => {
 
 describe('асинхронные вопросы Codex в Chat', () => {
   const at = '2026-11-02T08:27:00.186Z';
-  const question = (payload: Record<string, unknown>): RolloutRecord => ({
-    ordinal: null,
-    at,
-    type: 'response_item',
-    payload,
-  });
-  const input = {
-    questions: [
-      { title: 'Что не устроило в проверке?', options: ['Ошибки в ответах', 'Медленная работа'] },
-      { title: 'Приведите один пример.' },
-    ],
-  };
+  const record = (payload: Record<string, unknown>, type = 'response_item'): RolloutRecord => ({ ordinal: null, at, type, payload });
+  const input = { questions: [
+    { title: 'Что не устроило в проверке?', options: ['Ошибки в ответах', 'Медленная работа'] },
+    null,
+    { title: 'Приведите один пример.' },
+  ] };
+  const id = (index: number) => JSON.stringify(['request_user_input_async', 'call-question', index]);
+  const native = (type = 'function_call') => record({ type, name: 'request_user_input_async', call_id: 'call-question',
+    [type === 'function_call' ? 'arguments' : 'input']: JSON.stringify(input) });
+  const completed = (item: Record<string, unknown>) => record({ type: 'item_completed', item }, 'event_msg');
+  const modern = () => completed({ type: 'AgentMessage', id: 'call-question', delivery: 'async', ...input });
+  const reply = (entries: unknown[]) => `<send_user_message_question_reply>\n${JSON.stringify(entries)}\n</send_user_message_question_reply>`;
+  const answer = (index: number, text: string) => ({ questionItemId: id(index), question: 'Truncated title…', answer: text });
 
-  it.each(['function_call', 'custom_tool_call'])('%s показывает текст и варианты без ожидания item_completed', (type) => {
-    const record = question({ type, name: 'request_user_input_async', call_id: 'call-question',
-      [type === 'function_call' ? 'arguments' : 'input']: JSON.stringify(input) });
-    const { update } = applyCodexRecords(emptyFeedState(), [record], emptyCodexCursor());
-    const text = ofKind(update.state.items, 'text')[0];
-    expect(text).toMatchObject({ id: 'text:codex-question:call-question', at, streaming: false, messageId: null });
-    expect(text?.text).toContain('Что не устроило в проверке?');
-    expect(text?.text).toContain('1. Ошибки в ответах');
-    expect(text?.text).toContain('2. Медленная работа');
-    expect(text?.text).toContain('Приведите один пример.');
-    expect(text?.text).toContain('Shift+Left');
-    // Нативный вопрос не имеет удержанного хука Parley: ложной формы feed.decide быть не должно.
-    expect(ofKind(update.state.items, 'question')).toEqual([]);
+  it.each(['function_call', 'custom_tool_call', 'AgentMessage'])('%s создаёт отдельные карточки с исходными индексами', (type) => {
+    const { update } = applyCodexRecords(emptyFeedState(), [type === 'AgentMessage' ? modern() : native(type)], emptyCodexCursor());
+    const cards = ofKind(update.state.items, 'question');
+    expect(cards.map((card) => card.id)).toEqual([id(0), id(2)]);
+    expect(cards[0]).toMatchObject({ cardId: id(0), at, state: 'pending', via: 'terminal', toolName: 'request_user_input_async',
+      toolUseId: 'call-question', questions: [{ question: input.questions[0]?.title, header: null, multiSelect: false,
+        options: [{ label: 'Ошибки в ответах', description: null }, { label: 'Медленная работа', description: null }] }] });
+    expect(cards[1]?.questions).toEqual([{ question: 'Приведите один пример.', header: null, multiSelect: false, options: [] }]);
+    expect(ofKind(update.state.items, 'text')).toEqual([]);
   });
 
-  it('accepted:true и повторное чтение не скрывают и не дублируют вопрос', () => {
-    const record = question({ type: 'function_call', name: 'request_user_input_async', call_id: 'call-question', arguments: JSON.stringify(input) });
-    const first = applyCodexRecords(emptyFeedState(), [record], emptyCodexCursor());
-    const again = applyCodexRecords(first.update.state, [record,
-      question({ type: 'function_call_output', call_id: 'call-question', output: '{"accepted":true}' }),
+  it.each([false, true])('оба порядка, отдельные пакеты и повторное чтение без дублей (%s)', (reverse) => {
+    const pair = reverse ? [modern(), native()] : [native(), modern()];
+    const first = applyCodexRecords(emptyFeedState(), pair.slice(0, 1), emptyCodexCursor());
+    const again = applyCodexRecords(first.update.state, [...pair.slice(1), ...pair,
+      record({ type: 'function_call_output', call_id: 'call-question', output: '{"accepted":true}' }),
     ], first.cursor);
-    expect(ofKind(again.update.state.items, 'text')).toHaveLength(1);
-    expect(ofKind(again.update.state.items, 'text')[0]?.text).toContain('Что не устроило в проверке?');
+    expect(again.update.state.items).toHaveLength(2);
+    expect(ofKind(again.update.state.items, 'question').map((card) => card.state)).toEqual(['pending', 'pending']);
+  });
+
+  it('сохраняет полный заголовок и порядок непустых вариантов', () => {
+    const title = 'Полный вопрос '.repeat(100);
+    const { update } = applyCodexRecords(emptyFeedState(), [completed({ type: 'AgentMessage', id: 'long', delivery: 'async',
+      questions: [{ title, options: [' B ', '', 42, 'A'] }] })], emptyCodexCursor());
+    expect(ofKind(update.state.items, 'question')[0]?.questions[0]).toMatchObject({ question: title,
+      options: [{ label: ' B ' }, { label: 'A' }] });
+  });
+
+  it('нативный ответ по точному ID обновляет карточки, скрывает оба конверта и не теряется при replay', () => {
+    const text = reply([answer(0, 'Медленная работа'), answer(2, 'Свой ответ')]);
+    const user = record({ type: 'message', role: 'user', content: [{ type: 'input_text', text }] });
+    const echoed = completed({ type: 'UserMessage', id: 'reply', content: text });
+    const first = applyCodexRecords(emptyFeedState(), [native(), user], emptyCodexCursor());
+    const again = applyCodexRecords(first.update.state, [echoed, modern(), native(), user], first.cursor);
+    expect(again.update.state.items).toHaveLength(2);
+    expect(ofKind(again.update.state.items, 'question').map((card) => [card.state, card.answers, card.settledAt])).toEqual([
+      ['answered', { 'Что не устроило в проверке?': 'Медленная работа' }, at],
+      ['answered', { 'Приведите один пример.': 'Свой ответ' }, at],
+    ]);
+  });
+
+  it('ответ из UserMessage, неизвестный ID и одинаковые заголовки не путают карточки', () => {
+    const same = completed({ type: 'AgentMessage', id: 'call-question', delivery: 'async', questions: [{ title: 'Same' }, { title: 'Same' }] });
+    const { update } = applyCodexRecords(emptyFeedState(), [same, completed({ type: 'UserMessage', id: 'reply', content: [
+      { type: 'text', text: reply([answer(1, 'Custom'), { ...answer(0, 'Wrong'), questionItemId: 'unknown' }]) },
+    ] })], emptyCodexCursor());
+    expect(ofKind(update.state.items, 'question').map((card) => [card.state, card.answers])).toEqual([
+      ['pending', undefined], ['answered', { Same: 'Custom' }],
+    ]);
+    expect(ofKind(update.state.items, 'prompt')).toEqual([]);
+  });
+
+  it.each(['task_complete', 'turn_aborted'])('%s снимает только оставшиеся async-вопросы даже без task_started', (type) => {
+    const first = applyCodexRecords(emptyFeedState(), [native(), record({ type: 'message', role: 'user', content: [
+      { type: 'input_text', text: reply([answer(0, 'Ответ')]) },
+    ] }), record({ type }, 'event_msg')], emptyCodexCursor());
+    const again = applyCodexRecords(first.update.state, [modern()], first.cursor);
+    expect(ofKind(again.update.state.items, 'question').map((card) => card.state)).toEqual(['answered', 'stale']);
+  });
+
+  it('обычные сообщения и повреждённые конверты сохраняются, дочерние вопросы и ответы игнорируются', () => {
+    const ordinary = completed({ type: 'UserMessage', id: 'ordinary', content: [{ type: 'text', text: 'Hello' }] });
+    const malformed = completed({ type: 'UserMessage', id: 'bad', content: [{ type: 'text', text: '<send_user_message_question_reply>oops</send_user_message_question_reply>' }] });
+    const { update } = applyCodexRecords(emptyFeedState(), [ordinary, malformed], emptyCodexCursor());
+    expect(ofKind(update.state.items, 'prompt').map((item) => item.text)).toEqual(['Hello', '<send_user_message_question_reply>oops</send_user_message_question_reply>']);
+    expect(applyCodexRecords(emptyFeedState(), [native(), modern(), ordinary], emptyCodexCursor(), 'child').update.state.items).toEqual([]);
+    expect(applyCodexRecords(emptyFeedState(), [record({ ...native().payload, name: 'other_tool' })], emptyCodexCursor()).update.state.items).toEqual([]);
   });
 
   it.each(['{broken', '{}', '{"questions":[null,{}, {"title":42}]}'])('битые вопросы не ломают ленту: %s', (args) => {
-    const { update } = applyCodexRecords(emptyFeedState(), [question({
+    const { update } = applyCodexRecords(emptyFeedState(), [record({
       type: 'function_call', name: 'request_user_input_async', call_id: 'bad', arguments: args,
     })], emptyCodexCursor());
     expect(update.state.items).toEqual([]);
-  });
-
-  it('посторонние вызовы и вопрос дочернего журнала не выдаются за вопрос основного агента', () => {
-    const record = question({ type: 'function_call', name: 'request_user_input_async', call_id: 'call-question', arguments: JSON.stringify(input) });
-    expect(applyCodexRecords(emptyFeedState(), [record], emptyCodexCursor(), 'child').update.state.items).toEqual([]);
-    expect(applyCodexRecords(emptyFeedState(), [question({ ...record.payload, name: 'other_tool' })], emptyCodexCursor()).update.state.items).toEqual([]);
   });
 });
 

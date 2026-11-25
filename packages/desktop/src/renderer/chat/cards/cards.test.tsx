@@ -305,6 +305,37 @@ describe('PermissionCard', () => {
 });
 
 describe('QuestionCard', () => {
+  it('submits an async Codex option using the original card ID and full title', async () => {
+    const cardId = JSON.stringify(['request_user_input_async', 'call-color', 0]);
+    render(<Card item={question({ id: cardId, cardId, toolName: 'request_user_input_async', via: 'terminal',
+      questions: [question().questions[0]!] })} />);
+    fireEvent.click(option('Pear'));
+    fireEvent.click(screen.getByTestId('card-submit'));
+    await waitFor(() => expect(decideCalls()).toHaveLength(1));
+    expect(decideCalls()[0]!.params).toEqual({ ref: REF, cardId,
+      decision: { kind: 'question', answers: { 'Which fruit?': 'Pear' } } });
+  });
+
+  it('shows direct input for a text-only async Codex question and sends the existing answers shape', async () => {
+    const cardId = JSON.stringify(['request_user_input_async', 'call-text', 1]);
+    const item = question({ id: cardId, cardId, toolName: 'request_user_input_async', via: 'terminal',
+      questions: [{ question: 'Give one example.', header: null, options: [], multiSelect: false }] });
+    const view = render(<Card item={item} />);
+    expect(screen.queryByTestId('card-other')).toBeNull();
+    expect(screen.getByRole('textbox', { name: 'Give one example.' })).toBeTruthy();
+    expect((screen.getByTestId('card-submit') as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(screen.getByTestId('card-other-text'), { target: { value: '   ' } });
+    expect((screen.getByTestId('card-submit') as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(screen.getByTestId('card-other-text'), { target: { value: ' My example ' } });
+    view.unmount();
+    render(<Card item={item} />);
+    expect((screen.getByTestId('card-other-text') as HTMLInputElement).value).toBe(' My example ');
+    fireEvent.click(screen.getByTestId('card-submit'));
+    await waitFor(() => expect(decideCalls()).toHaveLength(1));
+    expect(decideCalls()[0]!.params).toEqual({ ref: REF, cardId,
+      decision: { kind: 'question', answers: { 'Give one example.': 'My example' } } });
+  });
+
   it('sends structured selections and text keyed by field ID', async () => {
     render(<Card item={question({ questions: [
       {

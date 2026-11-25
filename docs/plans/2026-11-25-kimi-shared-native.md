@@ -109,3 +109,9 @@ An observed resize interrupted explicit Always Ask confirmation (`PARLEY_KIMI_SH
 - **Verdict** — An untouched cold first request omits Parley. The guarded production bootstrap resolves that on the measured fresh stock 2.7.3 path without resetting an existing conversation. The isolated working-build Electron acceptance passed the real renderer, production host and stock provider together.
 
 **Not verified** — Live-account deployment, non-English layouts, and other model profiles. Without the empty sequence, the cold first model request did not expose Parley in any of the four baseline permission setups. The room excluded REA and changes to the provider's compaction behavior.
+
+## T-KIMI-PR — integrate the accepted implementation with master
+
+Start `feat/kimi-shared-native` at the accepted implementation `18e285aa` without changing its source branch. Merge fetched `master` (`82d9eca5` at integration time). Limit edits to resolving actual integration conflicts in the shared Chat, outbox, host feed, and their consumers and tests. Keep Kimi's shared native PTY and decision behavior, Codex's asynchronous question form (#254), and optimistic Chat send continuity (#255). The legacy Kimi Terminal takeover still treats a prompt queued in the CLI as pending after #255 replaces the old queue store. REA, provider compaction, and unrelated polish are out of scope.
+
+Acceptance requires the affected Chat, outbox, feed, protocol, and core checks, builds and desktop typecheck, and the existing stock Kimi acceptance in an isolated working Electron build. Use disposable data and the loopback fixture only. Do not replace the installed app, change live host or account configuration, or make external model requests. Record the checks actually run and their results. Verify the resulting tree is clean and contains the fetched master commit, then push only the publication branch without force. The lead owns PR creation.

@@ -2225,6 +2225,7 @@ export const S = {
     hideTranscript: 'Hide transcript',
     /** Серый элемент ленты: сообщение ушло в очередь CLI во время хода. */
     queued: 'Queued — the agent reads it when the turn ends',
+    submitted: 'Sent to terminal',
     /** Серое письмо в очереди: сессия его ещё не забрала (`metrics.pendingLetters`); `room` — название комнаты, `null` — прямое. */
     letter: {
       from: (sender: string, room: string | null): string => (room === null ? `Message from ${sender}` : `Message from ${sender} in ${room}`),

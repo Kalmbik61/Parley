@@ -10,14 +10,14 @@
  * Ввод (решение 8, очередь — спека 2026-10-16, 4.3): поле и вложения очищаются сразу, а сообщение встаёт в очередь
  * окна (`chat-outbox.ts`) — серым в конце ленты — и уходит `pty.send` с Enter строго по одному. Пока идёт ход, сообщение
  * держит окно (серый «Queued» с «Send now» и ×) и уходит само, когда ход закрылся, в том числе по Stop; «Send now»
- * отдаёт его в CLI сразу — тогда это серый «Queued» CLI, пока не придёт промпт с тем же текстом, и отменить его
- * нельзя. Очередь сама повторяет `busy` и `blocked`; окончательный отказ — «Not sent» с Retry и ×, тост прежний
+ * отдаёт его в CLI сразу. После Enter тот же пузырь остаётся серым до записи промпта и уже не отменяется.
+ * Очередь сама повторяет `busy` и `blocked`; окончательный отказ — «Not sent» с Retry и ×, тост прежний
  * (`showSendToast`). Поле больше не возвращает набранное: не ушедшее видно в ленте. Очередь живёт вне вида, поэтому
  * переживает смену вида и вкладки. За очередью окна — письма этой сессии, которые она ещё не забрала
  * (`metrics.pendingLetters`): серые, без кнопок, с причиной ожидания; письмо доставит хост.
  * «Stop» — `feed.interrupt` хоста (Esc агенту и присмотр за исходом); у хоста без метода — Esc в терминал (`pty.input`).
  * Тоста «Sent to S01» в чате нет — отправленное видно в самой ленте; отказы и их тосты прежние.
- * Черновик и серые «Queued» живут в `ui-store.ts` по сессии, очередь окна — в `lib/outbox.ts`; всё переживает смену вида и вкладки.
+ * Черновик и привязки отправленных промптов живут в `ui-store.ts` по сессии, очередь окна — в `lib/outbox.ts`; всё переживает смену вида и вкладки.
  *
  * Codex (спека 2026-10-07, 5.4): лента из журнала; меню модели, effort и режима — подписи; подсказок `/` нет;
  * вложения — списком путей, как в комнате.
@@ -102,7 +102,7 @@ import { addAttachments, composePrompt } from './attachments.js';
 import { isImagePath } from '../../shared/image-path.js';
 import { useAssistantSent, viaAssistantIds } from './assistant-sent.js';
 import { ChatEnvContext, type ChatEnv } from './chat-env.js';
-import { chatOutbox, promptCount } from './chat-outbox.js';
+import { chatOutbox } from './chat-outbox.js';
 import { promptHistory } from './history.js';
 import { useOutboxFlying, useOutboxItems } from '../lib/outbox.js';
 import { ChatFindBar, type FindView } from './ChatFindBar.js';
@@ -112,7 +112,7 @@ import { focusComposer } from '../keys/type-to-focus.js';
 import { useCapabilitiesStore } from './capabilities-store.js';
 import { Composer } from './Composer.js';
 import { currentModel, hasPendingCard, runningAgents, switchDividers, turnActive, type SwitchDivider } from './feed-model.js';
-import { FeedList, type PendingLetterRow } from './FeedList.js';
+import { FeedList, type PendingLetterRow, type QueuedPrompt } from './FeedList.js';
 import { ImagePreviewHost } from './ImagePreview.js';
 import { useKimiControl } from './kimi-control.js';
 import { KimiConfigMenu } from './KimiConfigMenu.js';
@@ -121,7 +121,7 @@ import { isSlashCommand, withQuote } from './reply.js';
 import { ReplyPlate } from './ReplyPlate.js';
 import { useFeedStore, type FeedEntry } from './store.js';
 import type { SuggestionSource } from './use-suggestions.js';
-import { useChatUiStore, type Queued } from './ui-store.js';
+import { useChatUiStore, type ChatPromptEcho } from './ui-store.js';
 import { useFeed } from './use-feed.js';
 import { SwitchBanner, switchBannerKind } from './SwitchBanner.js';
 import { WaitingBanner } from './WaitingBanner.js';
@@ -168,7 +168,7 @@ function useHeldFor(condition: boolean, delayMs: number): boolean {
 
 const NO_ITEMS: readonly FeedItem[] = [];
 const NO_DIVIDERS: readonly SwitchDivider[] = [];
-const NO_QUEUED: readonly Queued[] = [];
+const NO_ECHOES: readonly ChatPromptEcho[] = [];
 const NO_PENDING: readonly PendingLetter[] = [];
 const NO_LETTERS: readonly PendingLetterRow[] = [];
 // Те же литералы, что `HUMAN` и `SYSTEM` в `core/work/types.ts`: из корня core рендерер берёт только типы.
@@ -293,13 +293,25 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
   const [dropping, setDropping] = useState(false);
   const draft = useChatUiStore((state) => state.drafts[sessionKey] ?? '');
   const attachments = useChatUiStore((state) => state.attachments[sessionKey] ?? NO_PATHS);
-  const queued = useChatUiStore((state) => state.queued[sessionKey] ?? NO_QUEUED);
+  const echoes = useChatUiStore((state) => state.promptEchoes[sessionKey] ?? NO_ECHOES);
   const outboxItems = useOutboxItems(chatOutbox, sessionKey);
   const flyingId = useOutboxFlying(chatOutbox, sessionKey);
-  const outbox = useMemo(
-    () => outboxItems.map((item) => ({ id: item.id, text: item.payload.text, failed: item.status === 'failed', flying: item.id === flyingId })),
-    [outboxItems, flyingId],
-  );
+  const { queued, localPromptIds, outbox } = useMemo(() => {
+    const queued: QueuedPrompt[] = [];
+    const localPromptIds = new Map<string, string>();
+    const sentIds = new Set<string>();
+    for (const echo of echoes) {
+      if (echo.state === 'sending') continue;
+      sentIds.add(echo.id);
+      if (echo.state === 'confirmed') localPromptIds.set(echo.promptId, echo.id);
+      else queued.push({ id: echo.id, text: echo.text, state: echo.state });
+    }
+    // Лента может подтвердить промпт раньше ответа на pty.send. Не показываем вторую строку из очереди.
+    const outbox = outboxItems.filter((item) => !sentIds.has(item.id)).map((item) => ({
+      id: item.id, text: item.payload.text, failed: item.status === 'failed', flying: item.id === flyingId,
+    }));
+    return { queued, localPromptIds, outbox };
+  }, [echoes, outboxItems, flyingId]);
   // Письма, которые сессия ещё не забрала, — серыми за очередью окна. Причина та же, что в строке доставки комнаты, а пока
   // сжатие ждёт или идёт — сжатие: будильник тогда пишет просто `busy`.
   const letters = useMemo(() => {
@@ -322,8 +334,8 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
     }));
   }, [metrics, need, entry]);
   const history = useMemo(
-    () => promptHistory(items, [...queued.map((entry) => entry.text), ...outboxItems.map((item) => item.payload.text)]),
-    [items, queued, outboxItems],
+    () => promptHistory(items, [...queued.map((entry) => entry.text), ...outbox.map((item) => item.text)]),
+    [items, queued, outbox],
   );
   // Просьба показать карточку агента — только про эту сессию (бейдж в сайдбаре и комнате, тулбар); исполняет лента.
   const reveal = useChatUiStore((state) => (state.reveal?.sessionKey === sessionKey ? state.reveal : null));
@@ -344,14 +356,6 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
     useUiStore.getState().setSessionVisible(sessionKey, visible);
   }, [sessionKey, visible]);
   useEffect(() => () => useUiStore.getState().setSessionVisible(sessionKey, false), [sessionKey]);
-
-  // Принятый промпт и ответ pty.send могут прийти в любом порядке — сверяем и при изменении очереди.
-  useEffect(() => {
-    useChatUiStore.getState().updateQueued(sessionKey, (was) => {
-      const left = was.filter((entry) => promptCount(items, entry.text) <= entry.seen);
-      return left.length === was.length ? was : left;
-    });
-  }, [items, queued, sessionKey]);
 
   // Цитата Reply (`reply.ts`) — своя у сессии вида: другая сессия во вкладке её не видит.
   const [replyTo, setReplyTo] = useState<{ sessionKey: string; quote: string } | null>(null);
@@ -583,6 +587,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
             viaIds={viaIds}
             queued={queued}
             outbox={outbox}
+            localPromptIds={localPromptIds}
             {...(kimiReadOnly ? {} : {
               onRetryOutbox: (id: string) => chatOutbox.retry(sessionKey, id, { requestedAt: Date.now() }),
               onSendNowOutbox: (id: string) => chatOutbox.prioritize(sessionKey, id, { now: true }),

@@ -3,6 +3,8 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import type { SessionRef } from '@parley/protocol';
 import { S } from '../../shared/strings.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
+import { useLayoutStore } from '../layout/store.js';
+import { emptyLayout, groups, openTab } from '../layout/tree.js';
 import { TerminalPromptPanel } from './TerminalPromptPanel.js';
 
 const REF: SessionRef = { projectPath: '/tmp/p', workId: 'w-01', sessionId: 's-01' };
@@ -268,5 +270,52 @@ describe('TerminalPromptPanel — прочее', () => {
     await advance(0);
     expect(screen.getByTestId('chat-terminal-prompt-title').textContent).toBe('Waiting for your approval');
     expect(screen.getByTestId('chat-terminal-prompt-open').textContent).toBe(S.chat.terminalPrompt.open);
+  });
+});
+
+describe('TerminalPromptPanel — Codex follow-up queue', () => {
+  const header = '• Queued follow-up inputs';
+  const collapsed = [header, '  ? 1 question · 13s', '    ⇧← to answer', '', '› Ask Codex to do anything', '  ? for shortcuts'];
+  const editor = [header, '', 'Which color?', '', '  › 1. Blue', '    2. Green', '    3. Other', '', 'enter submit   ⌃] skip   ⇧→ main prompt'];
+
+  it.each([collapsed, editor].map(queue => [queue]))('hides the queue screen and keyboard controls while awaiting the feed: %j', async (queue) => {
+    lines = queue;
+    setup();
+    await advance(0);
+    expect(screen.queryByTestId('chat-terminal-prompt-screen')).toBeNull();
+    expect(screen.queryByTestId('chat-terminal-prompt-enter')).toBeNull();
+    expect(screen.queryByTestId('chat-terminal-prompt-input')).toBeNull();
+    const banner = screen.getByTestId('chat-waiting-banner');
+    expect(banner.textContent).toContain('Waiting for your approval');
+    fireEvent.keyDown(banner, { key: 'ArrowDown' });
+    await advance(2000);
+    expect(inputs()).toEqual([]);
+    expect(screen.queryByTestId('chat-terminal-prompt-screen')).toBeNull();
+  });
+
+  it('retains a working Terminal route when the transcript remains unavailable', async () => {
+    const workKey = '/tmp/p w-01';
+    const layout = openTab(emptyLayout(), { kind: 'terminal', id: 'terminal:s-01', sessionId: 's-01', view: 'chat' });
+    useLayoutStore.getState().hydrate(workKey, layout);
+    lines = collapsed;
+    setup();
+    await advance(0);
+    fireEvent.click(screen.getByTestId('chat-waiting-open'));
+    expect(groups(useLayoutStore.getState().layouts[workKey]!).flatMap(group => group.tabs)).toContainEqual(
+      expect.objectContaining({ id: 'terminal:s-01', view: 'terminal' }),
+    );
+    useLayoutStore.getState().drop(workKey);
+  });
+
+  it('restores the raw fallback for another prompt after a queue, including stale queue scrollback', async () => {
+    lines = collapsed;
+    setup();
+    await advance(0);
+    expect(screen.queryByTestId('chat-terminal-prompt-screen')).toBeNull();
+    lines = [...collapsed, '', 'Would you like to run the following command?', '1. Yes, proceed (y)', 'Enter to confirm'];
+    await advance(400);
+    expect(screen.getByTestId('chat-terminal-prompt-screen').textContent).toContain('Would you like to run');
+    fireEvent.click(screen.getByTestId('chat-terminal-prompt-enter'));
+    expect(inputs()).toEqual([{ ref: REF, data: '\r' }]);
   });
 });

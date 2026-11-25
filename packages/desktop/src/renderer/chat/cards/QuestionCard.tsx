@@ -72,6 +72,7 @@ export function QuestionCard({ item }: { item: FeedQuestionCard }): JSX.Element 
   const group = `${key}:${step}`;
   const picked = draft.picked[step] ?? [];
   const otherOn = draft.otherOn[step] === true;
+  const directText = item.toolName === 'request_user_input_async' && field === undefined && question.options.length === 0;
   const numeric = field?.type === 'number' || field?.type === 'integer';
   const textField = field?.type === 'text' || numeric;
 
@@ -135,23 +136,24 @@ export function QuestionCard({ item }: { item: FeedQuestionCard }): JSX.Element 
             </label>
           );
         })}
-        {field === undefined ? (
+        {field === undefined && !directText ? (
           <label className="flex min-w-0 cursor-pointer items-center gap-2">
             <input type={kind} name={group} data-testid="card-other" checked={otherOn} disabled={deciding} onChange={pickOther} className="shrink-0" />
             <span className="font-medium">{S.chat.card.other}</span>
           </label>
         ) : null}
-        {otherOn || textField ? (
+        {otherOn || textField || directText ? (
           <Input
             data-testid="card-other-text"
-            aria-label={textField ? question.question : S.chat.card.otherAnswer}
-            placeholder={textField ? undefined : S.chat.card.otherAnswer}
+            aria-label={textField || directText ? question.question : S.chat.card.otherAnswer}
+            placeholder={textField || directText ? undefined : S.chat.card.otherAnswer}
             type={numeric ? 'number' : 'text'}
             step={field?.type === 'integer' ? 1 : numeric ? 'any' : undefined}
             maxLength={field?.type === 'text' ? FEED_DECISION_ANSWER_LIMIT : undefined}
             value={draft.otherText[step] ?? ''}
             disabled={deciding}
-            onChange={(event) => set({ otherText: { ...draft.otherText, [step]: event.target.value } })}
+            onChange={(event) => set({ otherText: { ...draft.otherText, [step]: event.target.value },
+              ...(directText ? { otherOn: { ...draft.otherOn, [step]: true } } : {}) })}
             className="h-6 px-2 text-xs"
           />
         ) : null}

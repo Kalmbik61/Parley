@@ -261,9 +261,9 @@ const SurfaceInner = memo(function SurfaceInner({ bridge, sessionRef, tabId, vis
     if (controlTarget !== undefined || !kimi.supported) return;
     setControlError(null);
     const ref = refKey(sessionRef);
-    const { drafts, attachments, queued } = useChatUiStore.getState();
+    const { drafts, attachments, promptEchoes } = useChatUiStore.getState();
     if (target === 'terminal' && kimi.control?.owner === 'chat' && (Boolean(drafts[ref]) || (attachments[ref]?.length ?? 0) > 0 ||
-      (queued[ref]?.length ?? 0) > 0 || (chatOutbox.store.getState().byKey[ref]?.length ?? 0) > 0)) {
+      promptEchoes[ref]?.some(({ state }) => state === 'queued') === true || (chatOutbox.store.getState().byKey[ref]?.length ?? 0) > 0)) {
       setControlError(S.chat.kimiNative.haveDraft);
       return;
     }
