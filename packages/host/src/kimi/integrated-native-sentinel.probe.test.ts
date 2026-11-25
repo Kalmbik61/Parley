@@ -44,6 +44,8 @@ test.skipIf(!optIn)('discriminates stock Kimi native sentinel advertisement from
       const history = JSON.stringify(body.messages.filter((entry: { role: string }) => entry.role === 'user'));
       const phase = [back, native, original].find(marker => history.includes(marker));
       expect(phase).toBeDefined();
+      // Advertisement is diagnostic, not an authority assertion. Try the inert sentinel
+      // once even if a provider no longer offers its historical schema in native mode.
       const offered = (body.tools ?? []).some((entry: { function: { name: string } }) => entry.function.name === tool);
       const requested = phase === native && !requests.some(entry => entry.requested);
       const result = body.messages.findLast((entry: { role: string; tool_call_id?: string }) => entry.role === 'tool' && entry.tool_call_id === callId)?.content;
