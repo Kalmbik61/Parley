@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { toast } from 'sonner';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { FeedItem, ParleyConfig, WorkSession } from '@parley/core';
-import { refKey, type Capabilities, type ConsentCard, type KimiConfigOption, type PendingLetter, type SendResult, type SessionRef } from '@parley/protocol';
+import { KIMI_NATIVE_TERMINAL_FEATURE, KIMI_PTY_GENERATION_FEATURE, refKey, type Capabilities, type ConsentCard, type KimiConfigOption, type PendingLetter, type SendResult, type SessionRef } from '@parley/protocol';
 import type { DirEntry } from '../../shared/files-types.js';
 import { S } from '../../shared/strings.js';
 import type { TerminalView } from '../../shared/layout-types.js';
@@ -881,7 +881,7 @@ describe('ChatView — баннер ожидания в терминале (ку
 });
 
 describe('ChatView — панель вопроса терминала (план 2026-11-18, задача 2)', () => {
-  const card = (): FeedItem => ({
+  const card = (): Extract<FeedItem, { kind: 'permission' }> => ({
     id: 'card-1',
     at: AT,
     kind: 'permission',
@@ -901,13 +901,70 @@ describe('ChatView — панель вопроса терминала (план 
       await vi.advanceTimersByTimeAsync(ms);
     });
   };
+  let disposeFeed: (() => void) | undefined;
 
   beforeEach(() => {
     vi.useFakeTimers();
     bridge.setHandler('pty.screenText', () => ({ lines: ['', 'Trust this folder?', ''] }));
+    bridge.setHandler('kimi.getState', () => ({ requests: [], config: [] }));
   });
   afterEach(() => {
+    disposeFeed?.();
+    disposeFeed = undefined;
     vi.useRealTimers();
+  });
+
+  it('keeps the Kimi draft and waits for a delayed ACP card without raw answer controls', async () => {
+    useHostStore.setState({ status: { state: 'connected', hostVersion: 'test',
+      methods: [...FEED_METHODS, 'pty.screenText', 'kimi.getState', 'feed.decide', 'feed.interrupt'], features: [KIMI_PTY_GENERATION_FEATURE] } });
+    useProvidersStore.setState({ providers: [{ id: 'kimi', label: 'Kimi Code', available: true, version: null, limits: null }], loaded: true });
+    const earlier = prompt('p1', 'review notes');
+    bridge.setHandler('feed.subscribe', () => ({ ok: true }));
+    bridge.setHandler('feed.unsubscribe', () => ({ ok: true }));
+    bridge.setHandler('feed.snapshot', () => ({ schemaVersion: 1, mode: null, revision: 1, items: [earlier] }));
+    bridge.setHandler('feed.decide', () => ({ applied: true, state: 'allowed' }));
+    disposeFeed = useFeedStore.getState().init(bridge);
+    useFeedStore.getState().open(REF);
+    renderBody(makeSession('s-01', 'Kimi', { provider: 'kimi' }), 'chat');
+    const field = screen.getByRole<HTMLTextAreaElement>('textbox', { name: S.chat.composer.kimiLabel });
+    fireEvent.change(field, { target: { value: 'my unsent follow-up' } });
+    act(() => wait('blocked', 'approval'));
+    await settle(1000);
+
+    expect(screen.queryByTestId('chat-terminal-prompt')).toBeNull();
+    expect(screen.getByTestId('chat-waiting-banner').textContent).toBe(S.chat.kimi.waitingForRequest);
+    expect(screen.queryByTestId('chat-waiting-open')).toBeNull();
+    expect(bridge.calls.some(({ method }) => method === 'pty.screenText')).toBe(false);
+    expect(field.value).toBe('my unsent follow-up');
+
+    act(() => bridge.emit('feed.changed', { ref: REF, mode: null, revision: 2, decisions: 'window', removed: [],
+      upsert: [{ ...card(), id: 'kimi:request', cardId: 'kimi:request', permissionOptions: [
+        { name: 'Approve Kimi request', optionId: 'once', kind: 'allow_once' },
+      ] }],
+    }));
+    await settle();
+    expect(screen.queryByTestId('chat-waiting-banner')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Approve Kimi request' }));
+    await settle(0);
+    expect(bridge.calls).toContainEqual({ method: 'feed.decide', params: {
+      ref: REF, cardId: 'kimi:request', decision: { kind: 'permission', behavior: 'allow', optionId: 'once' },
+    } });
+    expect(bridge.notified.some(({ method }) => method === 'pty.input')).toBe(false);
+    expect(field.value).toBe('my unsent follow-up');
+  });
+
+  it.each(['kimi', 'claude'] as const)('keeps the raw prompt for compatible %s hosts', async (provider) => {
+    useHostStore.setState({ status: { state: 'connected', hostVersion: 'test',
+      methods: [...FEED_METHODS, 'pty.screenText', 'kimi.getState'], features: [provider === 'kimi' ? KIMI_NATIVE_TERMINAL_FEATURE : KIMI_PTY_GENERATION_FEATURE] } });
+    if (provider === 'kimi') {
+      useProvidersStore.setState({ providers: [{ id: 'kimi', label: 'Kimi Code', available: true, version: null, limits: null }], loaded: true });
+    }
+    wait('blocked');
+    renderBody(makeSession('s-01', 'S01', { provider }), 'chat');
+    setFeed([prompt('p1', 'hi')]);
+    await settle();
+    fireEvent.click(screen.getByTestId('chat-terminal-prompt-escape'));
+    expect(bridge.notified).toContainEqual({ method: 'pty.input', params: { ref: REF, data: '\x1b' } });
   });
 
   it('хост знает pty.screenText: при ожидании — панель с текстом экрана, прежнего баннера нет', async () => {

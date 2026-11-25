@@ -2311,6 +2311,7 @@ export const S = {
     },
     kimi: {
       settings: (current: string): string => `Kimi Code settings (${current})`,
+      waitingForRequest: 'Waiting for Kimi’s request…',
       booleanValue: (name: string, enabled: boolean): string => `${name} ${enabled ? 'on' : 'off'}`,
       readOnly: 'This host cannot change Kimi Code settings',
       refused: (reason: string): string => `Could not change Kimi Code settings (${reason})`,

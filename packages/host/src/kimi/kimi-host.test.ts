@@ -3,7 +3,7 @@ import { mkdir, readFile, readdir, realpath, rename, symlink, unlink, writeFile 
 import path from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import { createPendingSession, createWork, FEED_TEXT_LIMIT, readMap, unreadLetters, updateMap, workPaths } from '@parley/core';
-import { KIMI_LAUNCH_MODES_FEATURE, feedItem, type MethodName, type Params, type Result, type SessionRef } from '@parley/protocol';
+import { KIMI_LAUNCH_MODES_FEATURE, KIMI_PTY_GENERATION_FEATURE, feedItem, type MethodName, type Params, type Result, type SessionRef } from '@parley/protocol';
 import { connectRaw, hello, removeHome, tempHome, waitConnected, type RawMessage, type TestClient } from '../../test/helpers.js';
 import { startHost, type RunningHost } from '../host.js';
 import { hostPaths } from '../paths.js';
@@ -116,7 +116,7 @@ async function connectIsolatedHost(): Promise<void> {
   await waitConnected(client.socket);
   const handshake = await hello(client, await readFile(paths.token, 'utf8'));
   expect(handshake.error).toBeUndefined();
-  expect(handshake.result).toMatchObject({ features: expect.arrayContaining([KIMI_LAUNCH_MODES_FEATURE]) });
+  expect(handshake.result).toMatchObject({ features: expect.arrayContaining([KIMI_LAUNCH_MODES_FEATURE, KIMI_PTY_GENERATION_FEATURE]) });
 }
 
 afterEach(async () => {

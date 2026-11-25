@@ -167,3 +167,20 @@ pnpm --filter @parley/host exec vitest run \
   src/kimi/acp.test.ts src/kimi/sessions.test.ts src/kimi/kimi-host.test.ts
 git diff --check
 ```
+
+## R3 follow-up — managed Chat waits for the ACP request
+
+Lead assignment m-10311 covers the remaining R3 finding #6 from m-10309. On a host that requires Kimi attachment generations, managed Kimi Chat must keep a visible waiting state while activity is blocked and the ACP card has not arrived. Do not offer a raw fallback panel whose tokenless input would be rejected and whose submit action would clear an answer. The structured card takes over when it arrives. Preserve Chat drafts, older-host fallback, other providers, the existing xterm token path and the host fence. Reproduce blocked activity with a delayed card before the UI fix. Run focused checks and commit separately from the R2 follow-up.
+
+The host advertises `kimi-pty-generation` in `hello.features`. The desktop uses it to show a status-only banner for managed Kimi without reading or writing the raw terminal. The delayed `feed.changed` card replaces the status. The regression verifies the approval travels through `feed.decide` and the unsent composer text remains intact. A Kimi host that advertises native Terminal but not the generation capability still uses the original raw fallback, as do other providers.
+
+The blocked Kimi case rendered the dead terminal-answer form before the fix. Afterward, all 258 focused desktop tests passed. The targeted host fixture confirmed the advertised capability and the existing managed–native–managed writer fence. Dependency builds, desktop typecheck and `git diff --check` passed. The delayed-card state was checked through the production desktop components with a fake bridge, without a new browser capture or stock CLI run.
+
+```sh
+pnpm run typecheck
+pnpm --filter @parley/desktop exec vitest run \
+  src/renderer/chat/ChatView.test.tsx src/renderer/chat/TerminalPromptPanel.test.tsx \
+  src/renderer/terminal/TerminalSurface.test.tsx src/renderer/terminal/use-terminal.test.ts
+pnpm --filter @parley/host exec vitest run src/kimi/kimi-host.test.ts -t 'old managed input'
+git diff --check
+```

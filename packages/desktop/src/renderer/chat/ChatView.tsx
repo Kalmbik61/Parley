@@ -67,13 +67,13 @@ import { useCallback, useEffect, useMemo, useState, type DragEvent } from 'react
 import { toast } from 'sonner';
 import type { FeedItem } from '@parley/core';
 import { needReason } from '@parley/core/stuck';
-import { HOST_ERROR_REASONS, refKey, type ModelOption, type PendingLetter, type SessionRef } from '@parley/protocol';
+import { HOST_ERROR_REASONS, KIMI_PTY_GENERATION_FEATURE, refKey, type ModelOption, type PendingLetter, type SessionRef } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import { errorText, providerName, S } from '../../shared/strings.js';
 import type { FileRoot } from '../../shared/files-types.js';
 import type { TerminalTab } from '../lib/feed-view.js';
-import { useHostSupports } from '../lib/capabilities.js';
+import { useHostFeature, useHostSupports } from '../lib/capabilities.js';
 import { useLayoutStore } from '../layout/store.js';
 import { updateTab } from '../layout/tree.js';
 import { claimCardDraft } from '../board/board-drafts.js';
@@ -228,12 +228,14 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
       ?.map.sessions.find((item) => item.id === sessionRef.sessionId),
   );
   const { readOnly: kimiReadOnly } = useKimiControl(bridge, sessionRef, kimi, session?.kimiTerminal !== undefined, live);
+  const kimiGenerationHost = useHostFeature(KIMI_PTY_GENERATION_FEATURE);
+  const kimiWaitsForCard = kimi && kimiGenerationHost;
   const sessionName = session === undefined ? null : sessionRowLabel(session.id, session.label);
   const waiting = blocked && !hasPendingCard(items);
   // Панель вопроса терминала: когда хост умеет читать экран; вопрос старта (доверие папке, вход) её тоже показывает.
   const canReadScreen = useHostSupports('pty.screenText');
   const need = useActivityStore((state) => activityFor(state.byRef, sessionRef)?.activity.need ?? null);
-  const startupWait = canReadScreen && need?.kind === 'startup' && !hasPendingCard(items);
+  const startupWait = !kimiWaitsForCard && canReadScreen && need?.kind === 'startup' && !hasPendingCard(items);
   const showBanner = useHeldFor(waiting || startupWait, BANNER_DELAY_MS);
   const canSwitch = useHostSupports('sessions.switchAgent');
   const providerMissing = useProviderMissing(provider);
@@ -599,7 +601,9 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
         </ImagePreviewHost>
         {showCard && !kimiReadOnly ? <NotRunningCard sessionRef={sessionRef} onResume={() => resumeSession(bridge, sessionRef)} /> : null}
         {switchKind !== null && session !== undefined ? <SwitchBanner session={session} kind={switchKind} sessionRef={sessionRef} label={providerLabel} /> : null}
-        {!kimiReadOnly && showBanner && canReadScreen ? (
+        {!kimiReadOnly && showBanner && kimiWaitsForCard ? (
+          <WaitingBanner workKey={workKey} tabId={tab.id} text={S.chat.kimi.waitingForRequest} showTerminal={false} />
+        ) : !kimiReadOnly && showBanner && canReadScreen ? (
           <TerminalPromptPanel
             workKey={workKey}
             tabId={tab.id}
