@@ -264,9 +264,7 @@ The previous correction failed five updated focused cases and the disposable sto
 pnpm --filter @parley/host build
 pnpm --filter @parley/host exec vitest run src/kimi/date-provenance.test.ts \
   src/kimi/acp.test.ts src/kimi/sessions.test.ts src/kimi/kimi-host.test.ts src/feed/feed-service.test.ts
-PARLEY_KIMI_INTEGRATED_BIN=/absolute/path/to/kimi PARLEY_KIMI_INTEGRATED_CROSS_DATE=0 \
-  pnpm --filter @parley/host exec vitest run src/kimi/integrated-native.probe.test.ts
-PARLEY_KIMI_INTEGRATED_BIN=/absolute/path/to/kimi PARLEY_KIMI_INTEGRATED_CROSS_DATE=1 \
+PARLEY_KIMI_INTEGRATED_BIN="$HOME/.kimi-code/bin/kimi" \
   pnpm --filter @parley/host exec vitest run src/kimi/integrated-native.probe.test.ts
 git diff --check
 ```
