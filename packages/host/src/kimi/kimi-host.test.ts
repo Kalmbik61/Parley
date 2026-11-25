@@ -1,7 +1,8 @@
+import { createHash } from 'node:crypto';
 import { mkdir, readFile, readdir, realpath, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
-import { createPendingSession, readMap, unreadLetters, updateMap, workPaths } from '@parley/core';
+import { createPendingSession, FEED_TEXT_LIMIT, readMap, unreadLetters, updateMap, workPaths } from '@parley/core';
 import { KIMI_LAUNCH_MODES_FEATURE, feedItem, type MethodName, type Params, type Result, type SessionRef } from '@parley/protocol';
 import { connectRaw, hello, removeHome, tempHome, waitConnected, type RawMessage, type TestClient } from '../../test/helpers.js';
 import { startHost, type RunningHost } from '../host.js';
@@ -715,4 +716,43 @@ it('keeps only the owned or latest archive and removes unpublished candidates an
   await exitNative(ref);
   await call('sessions.delete', { ref });
   await expect(readdir(dir)).rejects.toMatchObject({ code: 'ENOENT' });
+}, 15_000);
+
+it.each([
+  [FEED_TEXT_LIMIT, FEED_TEXT_LIMIT, true],
+  [FEED_TEXT_LIMIT + 1, FEED_TEXT_LIMIT + 1, true],
+  [FEED_TEXT_LIMIT, FEED_TEXT_LIMIT + 1, false],
+])('preserves archive rows only for an equivalent displayed reply (%i live, %i replay, retain=%s)', async (liveLength, replayLength, retain) => {
+  const projectPath = await setup();
+  const history = path.join(home!, 'provider-history');
+  vi.stubEnv('KIMI_FIXTURE_HISTORY', history);
+  vi.stubEnv('KIMI_FIXTURE_LONG_APPROVAL_REPLY', String(liveLength));
+  const { ref } = await call('sessions.create', input(projectPath));
+  await call('pty.send', { ref, text: 'approve', submit: true });
+  const card = await pendingCard(ref, 'permission');
+  await call('feed.decide', { ref, cardId: card.id, decision: { kind: 'permission', behavior: 'deny', optionId: 'deny' } });
+  await expect.poll(async () => (await call('feed.snapshot', { ref })).items.some((item) => item.kind === 'turn')).toBe(true);
+  await call('pty.send', { ref, text: 'hello', submit: true });
+  await expectReply(ref, 'Hello Parley');
+  const before = (await call('feed.snapshot', { ref })).items;
+  const prior = before.find((item) => item.kind === 'text' && item.text.length === FEED_TEXT_LIMIT);
+  expect(prior).toBeDefined();
+  expect(prior?.kind === 'text' && prior.truncated === true).toBe(liveLength > FEED_TEXT_LIMIT);
+  expect(before).toContainEqual(expect.objectContaining({ id: card.id, state: 'denied' }));
+  await writeFile(history, [['approve', 'x'.repeat(replayLength)], ['hello', 'Hello Parley']].map((turn) => JSON.stringify(turn)).join('\n'));
+
+  await call('kimi.setControl', { ref, target: 'terminal' });
+  await exitNative(ref);
+  await call('kimi.setControl', { ref, target: 'chat' });
+
+  const after = (await call('feed.snapshot', { ref })).items;
+  if (retain) {
+    const digestText = (items: typeof after) => items.map((item) => item.kind === 'text'
+      ? { ...item, text: createHash('sha256').update(item.text).digest('hex') } : item);
+    expect(digestText(after)).toEqual(digestText(before));
+  } else {
+    const replayed = after.find((item) => item.kind === 'text' && item.text.length === FEED_TEXT_LIMIT);
+    expect(replayed).toMatchObject({ truncated: true });
+    expect(replayed?.id).not.toBe(prior?.id);
+  }
 }, 15_000);

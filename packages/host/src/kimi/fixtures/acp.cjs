@@ -294,7 +294,11 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
       }
       if (id === 704 && error) return askFallback('acp-session');
       if (id === 700 && writeWhenAllowed && result.outcome.optionId === 'allow') writeFileSync('notes.md', 'after');
-      if ((id === 700 || id === 702) && result.outcome.optionId) chunk(boundId, result.outcome.optionId);
+      if ((id === 700 || id === 702) && result.outcome.optionId) {
+        const longReply = process.env.KIMI_FIXTURE_LONG_APPROVAL_REPLY;
+        if (id === 700 && longReply) chunk(boundId, 'x'.repeat(Number(longReply)));
+        else chunk(boundId, result.outcome.optionId);
+      }
       if (id === 701 && result.action === 'accept') chunk(boundId, result.content.name);
       if (id === 703 && result.action === 'accept') chunk(boundId, JSON.stringify(result.content));
       return reply(prompt, { stopReason: 'end_turn' });

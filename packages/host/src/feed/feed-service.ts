@@ -46,6 +46,7 @@ import {
   emptyCodexCursor,
   emptyFeedState,
   FEED_IMAGE_SWEEP_MS,
+  FEED_TEXT_LIMIT,
   feedFromCodexRollout,
   feedFromTranscript,
   mailFromInline,
@@ -2557,7 +2558,7 @@ export function createFeedService(
   }
 
   type KimiTextTurn = { prompt: string | null; reply: string };
-  type ArchivedKimiTurn = KimiTextTurn & { items: FeedItem[] };
+  type ArchivedKimiTurn = KimiTextTurn & { replyTruncated: boolean; items: FeedItem[] };
   const ambiguousKimiReplay = () => new HostError('conflict', 'Kimi history does not identify separate prompts. The prior Chat is unchanged.');
   const oversizedKimiReplay = () => new HostError('conflict', 'Kimi history exceeds the Chat handback limit. The prior Chat is unchanged.');
 
@@ -2567,11 +2568,14 @@ export function createFeedService(
     for (const item of items) {
       if (item.kind === 'mail') continue;
       if (turn === undefined || item.kind === 'prompt') {
-        turn = { prompt: item.kind === 'prompt' ? item.text : null, reply: '', items: [] };
+        turn = { prompt: item.kind === 'prompt' ? item.text : null, reply: '', replyTruncated: false, items: [] };
         turns.push(turn);
       }
       turn.items.push(item);
-      if (item.kind === 'text') turn.reply += item.text;
+      if (item.kind === 'text') {
+        turn.reply += item.text;
+        turn.replyTruncated ||= item.truncated === true;
+      }
     }
     return turns;
   }
@@ -2631,7 +2635,9 @@ export function createFeedService(
         if (prompt !== null && prompt.length > 64 * 1024) throw oversizedKimiReplay();
         const turn = { prompt, reply: index === prompts.length - 1 ? reply : '' };
         const prior = suffix.length === 0 ? archive[matched] : undefined;
-        if (prior !== undefined && prior.prompt === turn.prompt && prior.reply === turn.reply) {
+        // The archive holds the reducer's display projection, not the full provider reply.
+        if (prior !== undefined && prior.prompt === turn.prompt && prior.reply === turn.reply.slice(0, FEED_TEXT_LIMIT) &&
+            prior.replyTruncated === (turn.reply.length > FEED_TEXT_LIMIT)) {
           retained.push(...prior.items);
           matched++;
         } else suffix.push(turn);

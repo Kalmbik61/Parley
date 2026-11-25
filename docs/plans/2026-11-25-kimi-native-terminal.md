@@ -1,6 +1,6 @@
 # T4 — ordinary native Kimi Terminal
 
-Accepted for the combined T1/T2/probe candidate d8cbe978. Chat is read-only while Terminal owns the conversation. The island opens native prompts in Terminal. Returning ownership restores managed Chat. Native Kimi is ordinary installed Kimi without Parley room/plan MCP tools, plugin or managed rule injection. Managed tools and rules return with ACP. The [stock probe](2026-11-25-kimi-native-handoff-probe.md) proved exact-ID round-trip, actual process exits, native keys and resize. The experimental managed-plugin authority is not part of T4.
+Accepted for the combined T1/T2/probe candidate d8cbe978. Chat is read-only while Terminal owns the conversation. The island opens native prompts in Terminal. Returning ownership restores managed Chat. Native Kimi is ordinary installed Kimi. Parley room and plan tools are unavailable in Terminal, and Parley supplies no managed attachment, plugin, or rule injection. Managed tools and rules return with ACP. The [stock probe](2026-11-25-kimi-native-handoff-probe.md) proved exact-ID round-trip, actual process exits, native keys and resize. The experimental managed-plugin authority is not part of T4.
 
 ## Ownership and lifecycle
 
@@ -42,7 +42,7 @@ PARLEY_KIMI_NATIVE_BIN=/Users/kalmbik61/.kimi-code/bin/kimi \
   -t 'without any plugin installation'
 ```
 
-The stock run resumed an unseeded ACP ID in native Kimi. A second session retained **Ask When Needed** without resume flags, as verified by Kimi's native `/status`. At ACP load, Kimi still reported `default` in its initial config snapshot, as described in T2. An inert ephemeral MCP server launched in ACP, did not launch in native mode, and launched on ACP handback. The original ACP and native turns replayed once each. No turn from native `/new` entered the original replay. The test sent three model requests, all to loopback. See [Kimi's native command reference](https://www.kimi.com/code/docs/en/kimi-code-cli/reference/slash-commands.html) for the status and session commands.
+The stock run resumed an unseeded ACP ID in native Kimi. A second session retained **Ask When Needed** without resume flags, as verified by Kimi's native `/status`. At ACP load, Kimi still reported `default` in its initial config snapshot, as described in T2. In the stand-alone probe, an inert ephemeral MCP server launched in ACP, did not launch in native mode, and launched on ACP handback. The original ACP and native turns replayed once each. No turn from native `/new` entered the original replay. The test sent three model requests, all to loopback. See [Kimi's native command reference](https://www.kimi.com/code/docs/en/kimi-code-cli/reference/slash-commands.html) for the status and session commands.
 
 The [desktop fixture](../../packages/desktop/e2e/fixtures/kimi-native-terminal.html) uses production Chat, Terminal and Island components, xterm and the layout store with an inert bridge. From `packages/desktop`, start its isolated server.
 
@@ -70,9 +70,9 @@ Open `http://127.0.0.1:4658/e2e/fixtures/kimi-native-terminal.html`. The Termina
 - **Numbers** — 1,161 focused checks passed (89 host, 455 desktop, 101 protocol, 516 core). The installed 2.7.3 probe passed with 3 loopback model requests, 0 external or paid requests, and no plugin installation.
 - **Screens** — Parley browser, 1120 × 530. [Takeover](../../packages/desktop/e2e/fixtures/kimi-native-takeover.png), [read-only Chat and island](../../packages/desktop/e2e/fixtures/kimi-native-read-only.png), [native Terminal](../../packages/desktop/e2e/fixtures/kimi-native-terminal.png), [return control](../../packages/desktop/e2e/fixtures/kimi-native-return.png), [restored Chat](../../packages/desktop/e2e/fixtures/kimi-native-restored.png).
 - **For the human** — Open Terminal and select **Take control in Terminal**. Use Kimi normally, then type `/exit` and select **Return to Chat**. A native `/new` does not rebind Parley.
-- **Risk** — Handback requires ACP `session/load`. Failure or replay beyond the explicit limits leaves Chat unchanged and a recoverable stopped state. The preserved pre-handoff feed is under the work's `kimi-history/<session-id>/<archive-id>.json`. A successful takeover keeps the active or latest archive and prunes older copies for that session.
+- **Risk** — Kimi 2.7.3 can still expose descriptions of earlier managed tools to the model even though Terminal cannot call them. Handback requires ACP `session/load`. Failure or replay beyond the explicit limits leaves Chat unchanged and a recoverable stopped state. The preserved pre-handoff feed is under the work's `kimi-history/<session-id>/<archive-id>.json`. A successful takeover keeps the active or latest archive and prunes older copies for that session.
 - **Cost** — Zero paid calls. Production latency and archive growth were not measured.
-- **Verdict** — The fixture and stock CLI establish exact-ID ownership transfer, provider-owned mode, no native MCP attachment, and restored Chat. The live app and user configuration were not changed.
+- **Verdict** — The fixture and stock CLI establish exact-ID ownership transfer, provider-owned mode, unavailable managed tools in native Terminal, and restored Chat. The live app and user configuration were not changed.
 
 **Not verified** — Real accounts, non-macOS stock CLI, production throughput, or live app migration. Parley browser captured the production-component fixture presets. Automated desktop tests covered button interactions independently.
 
@@ -116,3 +116,14 @@ pnpm --filter @parley/desktop exec vitest run src/renderer/terminal/TerminalSurf
 ```
 
 The earlier browser captures predate the Reopen Terminal button. The R2 browser panel was not loaded, so the new button was verified by component interaction tests. Stock CLI and native authority verification were not rerun or included in R2.
+
+## R1 follow-up — match the archived reply display
+
+Review m-10287 and lead correction m-10290 leave only R1 finding #5 open. In the pinned reducer, a reply exactly at the display bound retains its archive metadata, but an unchanged reply one character above the bound does not. Match the same bounded display text and truncation state rather than comparing the archive text to an unbounded provider reply. Verify exact prior rows, times, duration, settled approval and following turns at both lengths before the no-op handoff. No R2 or R3 production changes.
+
+Authority wording follows m-10291 and m-10294. Ordinary Terminal must not attach or call managed Parley tools. Stock Kimi 2.7.3 may still expose their descriptions to the model from earlier managed activity. The synthetic sentinel check distinguishes descriptions from actual invocation. No production filter, plugin, or global setting change is in scope.
+
+
+The integrated nonempty sentinel result (verifier commit `2bca9720`, reviewed in m-10291) observed an earlier managed tool description in the stock 2.7.3 native model request. A controlled native invocation returned `Tool not found`, with no native managed-server startup or handler call. Returning to Chat restored ACP server startup, discovery and advertisement for the original ID. A future stock CLI that drops the stale description also satisfies the contract. This result does not imply a storage location for the description or cover user-installed integrations.
+
+R1 follow-up matches the displayed text and truncation flag. It is not a comparison of provider content beyond the Chat display limit. The unchanged 262,145-character case lost archived metadata before the fix. After the fix, both unchanged lengths retain exact rows and a changed truncation flag refreshes the reply. The host build, all 63 focused tests in the R1 command above, and `git diff --check` passed.
