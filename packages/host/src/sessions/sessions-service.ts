@@ -56,6 +56,7 @@ import {
   type WorkSession,
   type RoleCatalog,
   baseBranchOf,
+  captureWorks,
   createNewSession,
   createPendingSession,
   createWork,
@@ -152,7 +153,7 @@ import type { OpencodeBridge } from '../opencode/events.js';
 import type { OpencodeSupervisor } from '../opencode/server.js';
 import { createOpencodeSession } from '../opencode/create-session.js';
 import type { KimiSessions } from '../kimi/sessions.js';
-import { kimiTerminalEnv } from '../providers/kimi-env.js';
+import { kimiHome, kimiTerminalEnv } from '../providers/kimi-env.js';
 import type { ProviderVersions } from '../providers/versions.js';
 import type { PtyHandle, PtyManager } from '../pty/pty-manager.js';
 import type { WorksService, WorksView } from '../works/works-service.js';
@@ -639,6 +640,28 @@ export function createSessionsService(
         if (session.lifecycle === 'closed' || session.providerSessionId !== id || session.kimiTerminal?.home !== home) continue;
         if (refKey({ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id }) !== key) throw returnKimiFirst();
       }
+    }
+  }
+
+  async function checkDormantKimiAliases(ref: SessionRef, home: string, id: string): Promise<void> {
+    const key = refKey(ref);
+    // Read persisted bindings rather than depending on a debounced works notification.
+    const { values } = captureWorks(({ projectPath, map }) => map.sessions.flatMap((session) => {
+      if (session.provider !== 'kimi' || session.lifecycle === 'closed' || session.providerSessionId !== id ||
+          refKey({ projectPath, workId: map.work.id, sessionId: session.id }) === key) return [];
+      return [{ home: session.kimiTerminal?.home, cwd: session.workspace?.path ?? session.worktree?.path ?? projectPath }];
+    }));
+    const aliases = values.flat();
+    if (aliases.length === 0) return;
+    const conflict = () => new HostError('conflict', 'Another Parley session is bound to this Kimi conversation. Close the duplicate before taking over.', { reason: 'kimi-duplicate-binding' });
+    if (aliases.some((alias) => alias.home === home)) throw conflict();
+    const unresolved = aliases.filter((alias) => alias.home === undefined);
+    if (unresolved.length === 0) return;
+    // Older managed records have no store marker. Use the same cwd and user environment their ACP resume would use.
+    const entry = (await loadProviders())['kimi']!;
+    const env = providerLaunchEnv(entry, process.env, entry.runner.env ?? {}, null);
+    for (const { cwd } of unresolved) {
+      if (await kimiHome(env, cwd) === home) throw conflict();
     }
   }
 
@@ -2051,6 +2074,7 @@ export function createSessionsService(
         if (marker !== undefined && await hasLiveProcess(session)) throw exitKimiFirst();
         if (target === 'terminal') {
           const next = marker ?? { archive: randomUUID(), cwd: native!.cwd, home: native!.home };
+          await checkDormantKimiAliases(ref, next.home, id);
           checkKimiBinding(ref, next.home, id);
           kimiClaims.set(key, { home: next.home, id });
           if (marker === undefined) {

@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { mkdir, readFile, readdir, realpath, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
-import { createPendingSession, FEED_TEXT_LIMIT, readMap, unreadLetters, updateMap, workPaths } from '@parley/core';
+import { createPendingSession, createWork, FEED_TEXT_LIMIT, readMap, unreadLetters, updateMap, workPaths } from '@parley/core';
 import { KIMI_LAUNCH_MODES_FEATURE, feedItem, type MethodName, type Params, type Result, type SessionRef } from '@parley/protocol';
 import { connectRaw, hello, removeHome, tempHome, waitConnected, type RawMessage, type TestClient } from '../../test/helpers.js';
 import { startHost, type RunningHost } from '../host.js';
@@ -336,14 +336,15 @@ it('delivers a Cyrillic Chat prompt once while preserving the raw terminal draft
   const traceFile = path.join(home!, 'draft-trace');
   vi.stubEnv('KIMI_FIXTURE_TRACE', traceFile);
   const { ref } = await call('sessions.create', input(projectPath));
-  client!.send({ method: 'pty.input', params: { ref, data: 'unfinished terminal draft' } });
+  const { generation } = await call('pty.attach', { ref });
+  raw(ref, 'unfinished terminal draft', generation);
   expect(await call('pty.send', { ref, text: 'привет! тест', submit: true })).toEqual({
     inserted: true, submitted: true, reason: null,
   });
   await expectReply(ref, 'Hello Parley');
   const trace = async () => (await readFile(traceFile, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
   expect(await trace()).toEqual([{ prompt: 'привет! тест', model: 'alpha', effort: 'low' }]);
-  client!.send({ method: 'pty.input', params: { ref, data: '\r' } });
+  raw(ref, '\r', generation);
   await expect.poll(trace).toEqual([
     { prompt: 'привет! тест', model: 'alpha', effort: 'low' },
     { prompt: 'unfinished terminal draft', model: 'alpha', effort: 'low' },
@@ -408,6 +409,79 @@ function raw(ref: SessionRef, data: string, generation?: string): void {
   client!.send({ method: 'pty.input', params: { ref, data, generation } });
 }
 
+it('rejects old managed input and resize after a native round-trip', async () => {
+  const projectPath = await setup();
+  const trace = path.join(home!, 'stale-managed-input');
+  vi.stubEnv('KIMI_FIXTURE_TRACE', trace);
+  const { ref } = await call('sessions.create', input(projectPath));
+  const first = await call('pty.attach', { ref });
+  await call('kimi.setControl', { ref, target: 'terminal' });
+  const native = await terminalReady(ref);
+  raw(ref, '/exit\r', native);
+  await expect.poll(() => call('kimi.getControl', { ref })).toMatchObject({ owner: 'exited' });
+  await call('kimi.setControl', { ref, target: 'chat' });
+  const current = await call('pty.attach', { ref });
+
+  raw(ref, 'stale ACP bytes ', first.generation);
+  client!.send({ method: 'pty.resize', params: { ref, cols: 71, rows: 19, generation: first.generation } });
+  expect.soft(await call('pty.attach', { ref })).toMatchObject({ cols: current.cols, rows: current.rows });
+  raw(ref, 'unversioned ACP bytes ');
+  raw(ref, 'current ACP bytes', current.generation);
+  raw(ref, '\r', current.generation);
+  client!.send({ method: 'pty.resize', params: { ref, cols: 101, rows: 30, generation: current.generation } });
+  expect(await call('pty.attach', { ref })).toMatchObject({ cols: 101, rows: 30 });
+  expect(first.generation).toBeTypeOf('string');
+  expect(new Set([first.generation, native, current.generation]).size).toBe(3);
+  await expect.poll(() => readFile(trace, 'utf8')).toContain('current ACP bytes');
+  expect(await readFile(trace, 'utf8')).not.toMatch(/stale ACP bytes|unversioned ACP bytes/);
+}, 15_000);
+
+it('refuses takeover with a pre-existing dormant same-store alias and leaves Chat intact', async () => {
+  const projectPath = await setup();
+  const { ref } = await call('sessions.create', input(projectPath));
+  await call('pty.send', { ref, text: 'hello', submit: true });
+  await expectReply(ref, 'Hello Parley');
+  const before = await session(ref);
+  const { items } = await call('feed.snapshot', { ref });
+  const alias = await createPendingSession(ref.projectPath, ref.workId, { provider: 'kimi', label: 'Dormant alias', task: '' });
+  await updateMap(ref.projectPath, ref.workId, (map) => {
+    const record = map.sessions.find((item) => item.id === alias)!;
+    record.providerSessionId = before!.providerSessionId;
+    record.lifecycle = 'sleeping';
+  });
+
+  expect((await request('kimi.setControl', { ref, target: 'terminal' })).error).toMatchObject({
+    code: 'conflict', message: expect.stringContaining('Another Parley session'),
+  });
+  expect(await call('kimi.getControl', { ref })).toMatchObject({ owner: 'chat', canTakeover: true });
+  expect(await session(ref)).toEqual(before);
+  expect((await call('feed.snapshot', { ref })).items).toEqual(items);
+  await expect(call('pty.send', { ref, text: 'still in Chat', submit: true })).resolves.toMatchObject({ submitted: true });
+  await expect.poll(async () => (await call('feed.snapshot', { ref })).items.filter((item) => item.kind === 'turn')).toHaveLength(2);
+  await updateMap(ref.projectPath, ref.workId, (map) => {
+    map.sessions.find((item) => item.id === alias)!.lifecycle = 'closed';
+  });
+  await expect(call('kimi.setControl', { ref, target: 'terminal' })).resolves.toMatchObject({ owner: 'terminal' });
+  await exitNative(ref);
+}, 15_000);
+
+it('permits takeover when a dormant equal ID would use a different cwd-relative Kimi store', async () => {
+  const projectPath = await setup();
+  const otherProject = path.join(home!, 'other-project');
+  await mkdir(otherProject);
+  vi.stubEnv('KIMI_CODE_HOME', '.fixture-kimi');
+  const { ref } = await call('sessions.create', input(projectPath));
+  const { work } = await createWork(otherProject, { title: 'Independent store' });
+  const alias = await createPendingSession(otherProject, work.id, { provider: 'kimi', label: 'Other cwd', task: '' });
+  await updateMap(otherProject, work.id, (map) => {
+    const record = map.sessions.find((item) => item.id === alias)!;
+    record.providerSessionId = 'acp-session';
+    record.lifecycle = 'sleeping';
+  });
+  await expect(call('kimi.setControl', { ref, target: 'terminal' })).resolves.toMatchObject({ owner: 'terminal' });
+  await exitNative(ref);
+}, 15_000);
+
 it('hands the exact conversation to a raw Terminal, fences writes, and replays only the originally bound history', async () => {
   const projectPath = await setup();
   const history = path.join(home!, 'provider-history');
@@ -421,9 +495,10 @@ it('hands the exact conversation to a raw Terminal, fences writes, and replays o
   const before = (await session(ref))?.pid;
   expect(await call('kimi.getControl', { ref })).toMatchObject({ owner: 'chat' });
   expect((await request('kimi.setControl', { ref, target: 'terminal', hasDraft: true })).error).toMatchObject({ data: { reason: 'kimi-draft' } });
-  raw(ref, 'retained draft');
+  const managed = await call('pty.attach', { ref });
+  raw(ref, 'retained draft', managed.generation);
   expect((await request('kimi.setControl', { ref, target: 'terminal' })).error).toMatchObject({ data: { reason: 'kimi-draft' } });
-  raw(ref, '\x15');
+  raw(ref, '\x15', managed.generation);
   await call('pty.send', { ref, text: 'approve', submit: true });
   const card = await pendingCard(ref, 'permission');
   expect((await request('kimi.setControl', { ref, target: 'terminal' })).error).toMatchObject({ data: { reason: 'kimi-busy' } });

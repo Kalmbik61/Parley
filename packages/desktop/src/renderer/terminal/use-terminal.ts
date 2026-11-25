@@ -362,8 +362,10 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
       if (!visibleRef.current) return;
       fit.fit();
       if (resizeTimer !== null) clearTimeout(resizeTimer);
+      const scheduledGeneration = processGeneration;
       resizeTimer = setTimeout(() => {
         resizeTimer = null;
+        if (scheduledGeneration !== processGeneration) return;
         bridgeRef.current.notify('pty.resize', { ref, cols: term.cols, rows: term.rows, ...generationParam() });
       }, RESIZE_SILENCE_MS);
     });

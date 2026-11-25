@@ -75,7 +75,7 @@ function fakePtyManager() {
     },
     get: (ref) =>
       live.has(refKey(ref))
-        ? { ref, pid: 1, startedAt: 0, cols: 80, rows: 24, hasDraft: () => false, bracketedPaste: () => false }
+        ? { ref, pid: 1, startedAt: 0, cols: 80, rows: 24, provider: 'codex', hasDraft: () => false, bracketedPaste: () => false }
         : undefined,
     list: () => [],
     write: vi.fn(),
@@ -461,6 +461,7 @@ describe('createPtyHandlers', () => {
     const activity = fakeActivity();
     const handlers = createPtyHandlers({ wake: fakeWake(), pty: pty.manager, activity, works: fakeWorks() });
     const sessionRef = ref();
+    pty.markLive(sessionRef);
 
     handlers.ptyInput({ ref: sessionRef, data: 'hello\r' }, requestOf(fakeClient()));
 
@@ -472,6 +473,7 @@ describe('createPtyHandlers', () => {
     const pty = fakePtyManager();
     const handlers = createPtyHandlers({ wake: fakeWake(), pty: pty.manager, activity: fakeActivity(), works: fakeWorks() });
     const sessionRef = ref();
+    pty.markLive(sessionRef);
 
     handlers.ptyResize({ ref: sessionRef, cols: 100, rows: 30 }, requestOf(fakeClient()));
 

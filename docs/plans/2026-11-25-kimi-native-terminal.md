@@ -127,3 +127,23 @@ Authority wording follows m-10291 and m-10294. Ordinary Terminal must not attach
 The integrated nonempty sentinel result (verifier commit `2bca9720`, reviewed in m-10291) observed an earlier managed tool description in the stock 2.7.3 native model request. A controlled native invocation returned `Tool not found`, with no native managed-server startup or handler call. Returning to Chat restored ACP server startup, discovery and advertisement for the original ID. A future stock CLI that drops the stale description also satisfies the contract. This result does not imply a storage location for the description or cover user-installed integrations.
 
 R1 follow-up matches the displayed text and truncation flag. It is not a comparison of provider content beyond the Chat display limit. The unchanged 262,145-character case lost archived metadata before the fix. After the fix, both unchanged lengths retain exact rows and a changed truncation flag refreshes the reply. The host build, all 63 focused tests in the R1 command above, and `git diff --check` passed.
+
+## R3 — Kimi attachment generations and dormant aliases
+
+Lead assignment m-10301 covers findings #6 and #7 only, on `df8eea0b`. Give both managed ACP and ordinary Kimi processes distinct attachment generations. A terminal client that negotiates generation support must echo the current generation with raw input and resize. Delayed requests for old managed or native processes must never reach the successor. Preserve existing raw terminal compatibility for other providers and clients using a host without this capability.
+
+Before stopping Chat for takeover, reject a nonclosed second Parley session already bound to the same provider ID and Kimi store, even if that alias is asleep and has no process claim. A refusal leaves the existing owner, draft and Chat history unchanged. Reproduce stale managed-to-managed input and resize plus a pre-existing dormant alias before implementation. Verify the same tests, dedicated compatibility checks, focused builds and desktop typecheck. The separate R2 follow-up is not part of this change.
+
+The optional `pty.attach` reply field is the attachment negotiation. A Kimi attachment now always supplies its process generation on this host. A client must echo it for raw Kimi input and resize. Clients paired with an older host that omits it, and other providers, keep their existing tokenless path. The desktop drops a debounced resize if its attachment generation changed before the timer fired. Dormant bindings are checked from persisted Parley metadata before publishing a marker. Legacy managed bindings without a recorded home are matched by the store their ACP resume would open with current user settings and their own cwd. No unrelated Kimi history is read.
+
+Before the fix, the delayed resize changed the successor from 120×40 to 71×19, a dormant duplicate did not block takeover, and a queued desktop resize was stamped with the successor generation. Verification passed 129 focused host tests and 74 desktop tests, plus dependency builds and desktop typecheck. The host fixture also checks that stale or unversioned text cannot enter the successor prompt, a closed alias does not block takeover, and an equal ID in a distinct relative store is allowed. No UI appearance change or stock CLI retest in this slice.
+
+```sh
+pnpm run typecheck
+pnpm --filter @parley/host exec vitest run \
+  src/kimi/acp.test.ts src/kimi/sessions.test.ts src/kimi/kimi-host.test.ts \
+  src/methods/pty.test.ts src/pty/pty-manager.test.ts
+pnpm --filter @parley/desktop exec vitest run \
+  src/renderer/terminal/use-terminal.test.ts src/renderer/terminal/TerminalSurface.test.tsx
+git diff --check
+```

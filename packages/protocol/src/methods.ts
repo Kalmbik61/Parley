@@ -621,6 +621,7 @@ export interface Results extends KimiMethodResults, AssistantMethodResults, Voic
   'capabilities.mcp.remove': CapabilityActionResult;
   'capabilities.mcp.check': CapabilityActionResult;
   'sessions.resumeInterrupted': { ok: true };
+  /** Echo generation on raw input and resize when supplied. Other providers and older hosts omit it. */
   'pty.attach': { snapshot: string; cols: number; rows: number; generation?: string };
   'pty.detach': { ok: true };
   'processes.subscribe': SessionProcessesSnapshot;

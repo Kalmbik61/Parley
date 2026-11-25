@@ -247,6 +247,31 @@ describe('useTerminal — pty.resync', () => {
 });
 
 describe('useTerminal — ресайз', () => {
+  it('drops a queued resize when reattached to a different Kimi generation', async () => {
+    vi.useFakeTimers();
+    try {
+      const bridge = createFakeBridge();
+      let generation = 'd80a727e-a2f5-417d-ab51-ede75ef33549';
+      bridge.setHandler('pty.attach', () => ({ snapshot: '', cols: 80, rows: 24, generation }));
+      renderTerminal(bridge);
+      await vi.advanceTimersByTimeAsync(0);
+
+      ResizeObserverStub.instances[0]?.trigger();
+      generation = 'e839772e-5fd2-457d-86e7-35d98f71e049';
+      bridge.emit('pty.resync', { ref });
+      await vi.advanceTimersByTimeAsync(50);
+      expect(bridge.notified.filter((n) => n.method === 'pty.resize')).toEqual([]);
+
+      ResizeObserverStub.instances[0]?.trigger();
+      await vi.advanceTimersByTimeAsync(50);
+      expect(bridge.notified.filter((n) => n.method === 'pty.resize')).toEqual([
+        { method: 'pty.resize', params: { ref, cols: 80, rows: 24, generation } },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('три ресайза подряд — один pty.resize после тишины', async () => {
     vi.useFakeTimers();
     try {
