@@ -4,6 +4,21 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
+## 0.39.3
+
+This patch corrects the CI expectations for the native Kimi integration. It does not change app behavior or grant remote clients access to new methods.
+
+### Impact
+
+- **Goal** — Keep CI’s method and source inventories in sync with the native Kimi integration.
+- **Behaviour** — As in 0.39.2, Kimi Chat and Terminal share a native session without takeover. Native resume, tools, launch modes, and exact island choices are unchanged, as are Codex question forms and outgoing Chat messages.
+- **Numbers** — All 165 tests in the four affected suites passed locally. The host tests confirm that remote clients cannot call either Kimi compatibility method.
+- **Screens** — No UI change.
+- **For the human** — No new interaction or setting compared with 0.39.2.
+- **Risk** — No runtime source or remote permissions changed. Native Kimi coverage remains limited to stock Kimi Code 2.7.3 in English.
+- **Cost** — No additional live-model requests for this patch. Runtime overhead was not measured.
+- **Verdict** — The test inventories match the native host and keep the existing remote access boundary.
+
 ## 0.39.2
 
 ### Added
