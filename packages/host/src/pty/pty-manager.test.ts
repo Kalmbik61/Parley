@@ -627,3 +627,36 @@ describe('PtyManager: Qwen Code program status (OSC 7501)', () => {
     await manager.stop(sessionRef, { graceMs: 200 });
   });
 });
+
+it('fences late PTY data and exit callbacks after another generation owns the ref', async () => {
+  const manager = createPtyManager(fakeHost());
+  const sessionRef = ref();
+  function controlled(pid: number) {
+    let emit: (value: string) => void = () => {};
+    let finish: (value: ExitInfo) => void = () => {};
+    return {
+      process: { pid, write() {}, resize() {}, kill() {},
+        onData(listener: typeof emit) { emit = listener; return () => {}; },
+        onExit(listener: typeof finish) { finish = listener; return () => {}; },
+      },
+      data: (value: string) => emit(value),
+      exit: () => finish({ exitCode: 0, signal: null }),
+    };
+  }
+  const old = controlled(1);
+  const current = controlled(2);
+  let stream = '';
+  manager.on('output', (_ref, data) => { stream += data; });
+  manager.start(sessionRef, { ...launch(), process: old.process });
+  old.data('queued old');
+  const handle = manager.start(sessionRef, { ...launch(), process: current.process, kimiNative: true });
+  old.data('late old');
+  old.exit();
+  expect(manager.get(sessionRef)?.generation).toBe(handle.generation);
+  expect(busyKeys.size).toBe(1);
+  expect(broadcasts.some(({ event }) => event === 'pty.exit')).toBe(false);
+  current.data('current bytes');
+  await waitFor(() => stream === 'current bytes');
+  current.exit();
+  expect(manager.get(sessionRef)).toBeUndefined();
+});

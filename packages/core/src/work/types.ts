@@ -301,6 +301,8 @@ export interface WorkSession {
   effort?: EffortLevel | null;
   /** Historical Kimi creation preference, never reapplied to an existing provider conversation. */
   kimiPermissionMode?: KimiPermissionMode;
+  /** Durable Chat exclusion from before ACP exit until a completed handback. */
+  kimiTerminal?: { archive: string; cwd: string; home: string };
   /**
    * Облегчённый запуск (спека «меньше ходов и легче контекст», C2.2): решение принимается один раз при создании
    * сессии и одинаково применяется при `resume`. Нет поля = `false`: карты до этого куска читаются без миграции.

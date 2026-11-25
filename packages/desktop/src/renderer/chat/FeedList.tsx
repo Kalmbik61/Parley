@@ -488,9 +488,9 @@ export function FeedList({ items, queued, outbox = NO_OUTBOX, onRetryOutbox, onS
                     <PromptItem
                       text={row.outbox.text}
                       state={row.outbox.failed ? 'failed' : 'waiting'}
-                      {...(row.outbox.failed ? { onRetry: () => onRetryOutbox?.(row.outbox.id) } : {})}
+                      {...(row.outbox.failed && onRetryOutbox !== undefined ? { onRetry: () => onRetryOutbox?.(row.outbox.id) } : {})}
                       {...(row.outbox.failed || !row.outbox.flying ? { onRemove: () => onRemoveOutbox?.(row.outbox.id) } : {})}
-                      {...(!row.outbox.failed && !row.outbox.flying ? { onSendNow: () => onSendNowOutbox?.(row.outbox.id) } : {})}
+                      {...(!row.outbox.failed && !row.outbox.flying && onSendNowOutbox !== undefined ? { onSendNow: () => onSendNowOutbox?.(row.outbox.id) } : {})}
                     />
                   )}
                 </div>

@@ -120,6 +120,8 @@ export interface WakeService {
   stop(): void;
   /** Текст указателя напечатан, а Enter ещё не ушёл (таймер Enter взведён). */
   inFlight(ref: SessionRef): boolean;
+  /** Any scheduled or active delivery that must settle before Kimi can change owners. */
+  kimiPending(ref: SessionRef): boolean;
   /** Пауза перед Enter из WakeServiceOptions — одна на будильник и pty.send. */
   readonly enterDelayMs: number;
   /**
@@ -417,7 +419,7 @@ export function createWakeService(
   activity: ActivityService,
   pty: PtyManager,
   // `exclusive` — замок смены модели и effort: пока он взят, указатель не печатается.
-  sessions: Pick<SessionsService, 'launch'> & Partial<Pick<SessionsService, 'exclusive'>>,
+  sessions: Pick<SessionsService, 'launch'> & Partial<Pick<SessionsService, 'exclusive' | 'kimiBlocksChat'>>,
   options: WakeServiceOptions = {},
 ): WakeService {
   const enterDelayMs = options.enterDelayMs ?? DEFAULT_ENTER_DELAY_MS;
@@ -1539,6 +1541,10 @@ export function createWakeService(
     ensureKnown(entry);
 
     const state = stateFor(refKey(ref));
+    if (session.kimiTerminal !== undefined || (session.provider === 'kimi' && sessions.kimiBlocksChat?.(ref) === true)) {
+      publishWaiting(ref, state, hasUnread(entry, session.id) ? 'paused' : null);
+      return;
+    }
     // Идёт замена агента (спека замены агента, 6.3): ни подъёма, ни указателя, ни возврата после лимита — письма ждут
     // нового агента, а путь resume будильника мимо замка замены прошёл бы. Снимает `switched` по концу замены.
     if (session.switching !== null && session.switching !== undefined) {
@@ -1897,6 +1903,10 @@ export function createWakeService(
     enterDelayMs,
 
     inFlight: (ref) => attempts.get(refKey(ref))?.typing !== undefined,
+    kimiPending(ref) {
+      const state = attempts.get(refKey(ref));
+      return state?.inFlight === true || state?.typing !== undefined || state?.resuming === true || state?.timeoutTimer !== undefined;
+    },
     deferFirst(ref, pid, text) {
       if (text.trim() === '') return;
       stateFor(refKey(ref)).deferred = { pid, text };

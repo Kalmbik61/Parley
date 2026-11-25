@@ -161,7 +161,13 @@ export async function attemptChatSend(key: string, item: OutboxItem<ChatOutboxPa
 }
 
 const baseOutbox = createOutbox<ChatOutboxPayload>(attemptChatSend, {
-  ready: (key, item) => item.payload.now === true || !sessionBusy(key, item.payload.ref),
+  ready: (key, item) => {
+    const ref = item.payload.ref;
+    const session = useWorksStore.getState().entries.find((entry) =>
+      entry.projectPath === ref.projectPath && entry.map.work.id === ref.workId,
+    )?.map.sessions.find((candidate) => candidate.id === ref.sessionId);
+    return session?.kimiTerminal === undefined && (item.payload.now === true || !sessionBusy(key, ref));
+  },
 });
 
 /** Тестам нужна и очистка ожидания промптов. */

@@ -188,6 +188,9 @@ function startNative(launch: Launch, cwd: string, args: string[], extra = {}) {
     if (exit === undefined) child.write('\x04');
     await wait('native exit', () => exit, screen);
     expect(await exited).toBe(0);
+  }, async exitViaCommand() {
+    await submit('/exit');
+    expect(await wait('native /exit process exit', () => exit, screen)).toBe(0);
   }, async dispose() {
     if (exit === undefined) child.kill('SIGKILL');
     await exited;
@@ -473,3 +476,129 @@ test.skipIf(!optIn).each([
     rmSync(root, { recursive: true, force: true });
   }
 }, 110_000);
+
+const ordinaryBinary = process.env['PARLEY_KIMI_NATIVE_BIN'];
+test.skipIf(!ordinaryBinary)('ordinary stock Kimi round trip without any plugin installation', async () => {
+  expect(ordinaryBinary).toBe(bin);
+  expect(process.platform).toBe('darwin');
+  const root = realpathSync(mkdtempSync('/tmp/parley-kimi-native-'));
+  const cwd = join(root, 'cwd');
+  for (const dir of ['home', 'kimi', 'parley', 'tmp', 'cwd']) mkdirSync(join(root, dir));
+  const { server, seen, rejected } = modelFixture();
+  const disposals: (() => Promise<void>)[] = [];
+  try {
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('No loopback port');
+    const launch = launchEnv(root, address.port, false);
+    const { kimiTerminalEnv } = await import('../providers/kimi-env.js');
+    // Keep the test's allowlisted loopback settings but run the actual production native environment transform.
+    const nativeLaunch = { ...launch, env: kimiTerminalEnv(launch.env) } as Launch;
+    expect(nativeLaunch.env).not.toHaveProperty('PARLEY_HOME');
+    expect(execFileSync(sandbox, [...launch.argv, '--version'], { cwd, env: launch.env, encoding: 'utf8', timeout: limit }).trim()).toBe('2.7.3');
+    // An inert ephemeral ACP server proves native did not load the managed attachment. No plugin,
+    // dynamic tool selection, hook, credential, or production Parley endpoint is used.
+    const mcpTrace = join(root, 'ephemeral-mcp-starts');
+    const mcpServers = [{ name: 'parley_fixture', command: process.execPath, env: [], args: ['-e', `
+      require('node:fs').appendFileSync(${JSON.stringify(mcpTrace)}, 'ACP\\n');
+      require('node:readline').createInterface({ input: process.stdin }).on('line', (line) => {
+        const { id, method, params } = JSON.parse(line);
+        if (id === undefined) return;
+        const result = method === 'initialize' ? {
+          protocolVersion: params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: 'probe', version: '1' },
+        } : { tools: [] };
+        console.log(JSON.stringify({ jsonrpc: '2.0', id, result }));
+      });
+    `] }];
+
+    const cold = startAcp(launch, cwd);
+    disposals.push(cold.dispose);
+    await cold.rpc('initialize', initialise);
+    const { sessionId: emptyId } = await cold.rpc('session/new', { cwd, mcpServers: [] });
+    expect(typeof emptyId).toBe('string');
+    await cold.exit(emptyId as string);
+    const empty = startNative(nativeLaunch, cwd, ['--session', emptyId as string]);
+    disposals.push(empty.dispose);
+    const trust = await empty.until('fresh disposable cwd trust', /Trust this folder\?/);
+    expect(readdirSync(cwd)).toEqual([]);
+    expect(trust).toContain('No project integrations or instructions to activate.');
+    empty.key('\r');
+    await empty.until('unseeded original conversation resumed', new RegExp(emptyId as string));
+    await empty.until('unseeded composer ready', ready);
+    await empty.exitViaCommand();
+
+    const acp = startAcp(launch, cwd);
+    disposals.push(acp.dispose);
+    await acp.rpc('initialize', initialise);
+    const { sessionId } = await acp.rpc('session/new', { cwd, mcpServers });
+    expect(typeof sessionId).toBe('string');
+    const id = sessionId as string;
+    const chosen = await acp.rpc('session/set_config_option', { sessionId: id, configId: 'mode', value: 'yolo' });
+    expect(chosen.configOptions).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'mode', currentValue: 'yolo' })]));
+    await acp.rpc('session/prompt', { sessionId: id, prompt: [{ type: 'text', text: 'PROBE_PROMPT_ACP_ORDINARY' }] });
+    await wait('managed ephemeral ACP server', () => existsSync(mcpTrace) ? true : undefined);
+    const beforeNative = readFileSync(mcpTrace, 'utf8');
+    await acp.exit(id);
+
+    const native = startNative(nativeLaunch, cwd, ['--session', id]);
+    disposals.push(native.dispose);
+    const trustOrReady = await native.until('original cwd trust or resume', /Trust this folder\?|^\s*│ >\s*│\s*$/m);
+    if (trustOrReady.includes('Trust this folder?')) {
+      expect(readdirSync(cwd)).toEqual([]);
+      expect(trustOrReady).toContain('No project integrations or instructions to activate.');
+      native.key('\r');
+    }
+    await native.until('original conversation ready', ready);
+    const screen = await native.until('original conversation history visible', new RegExp(id));
+    expect(screen).toContain('PROBE_REPLY_ACP_ORDINARY');
+    await native.submit('/status');
+    const modeScreen = await native.until('provider permission status', /Permissions\s+Ask When Needed/);
+    expect(modeScreen).toMatch(/Directory\s+<temp>\/cwd/);
+    console.info('Stock native runtime retained Ask When Needed without a launch override.');
+    native.key('\x1b');
+    await native.until('status dismissed', ready);
+    await native.submit('/help');
+    await native.until('native keyboard shortcuts', /Keyboard shortcuts/);
+    native.key('\x1b');
+    await native.until('native help dismissed', ready);
+    expect(await native.resize(92, 24)).toEqual([92, 24]);
+    await native.submit('PROBE_PROMPT_NATIVE_ORDINARY');
+    await native.until('native answer', /PROBE_REPLY_NATIVE_ORDINARY/);
+    await native.until('native answer ended', ready);
+    await native.submit('/new');
+    await native.until('new conversation is distinct', /Session:\s*session_/);
+    await wait('original id no longer on screen', () => native.screen().includes(id) ? undefined : true, native.screen);
+    await native.submit('PROBE_PROMPT_OTHER_ORDINARY');
+    await native.until('new session answered', /PROBE_REPLY_OTHER_ORDINARY/);
+    await native.until('new session answer ended', ready);
+    await native.exitViaCommand();
+    expect(readFileSync(mcpTrace, 'utf8')).toBe(beforeNative);
+
+    const back = startAcp(launch, cwd);
+    disposals.push(back.dispose);
+    await back.rpc('initialize', initialise);
+    const opened = await back.rpc('session/load', { cwd, sessionId: id, mcpServers });
+    await wait('managed ephemeral server restored on ACP load', () =>
+      readFileSync(mcpTrace, 'utf8') !== beforeNative ? true : undefined);
+    // T2 documented that stock ACP can advertise default at open even when actual provider mode differs.
+    const reported = (opened.configOptions as { id: string; currentValue: string }[]).find((option) => option.id === 'mode')?.currentValue;
+    console.info('Stock ACP opening permission snapshot:', reported);
+    expect(['default', 'yolo']).toContain(reported);
+    const replay = back.updates.flatMap(({ update }) => update.content?.text ?? []);
+    for (const part of ['PROBE_PROMPT_ACP_ORDINARY', 'PROBE_REPLY_ACP_ORDINARY', 'PROBE_PROMPT_NATIVE_ORDINARY', 'PROBE_REPLY_NATIVE_ORDINARY']) {
+      expect(replay.join('').split(part)).toHaveLength(2);
+    }
+    expect(replay.join('')).not.toContain('OTHER_ORDINARY');
+    await back.exit(id);
+    expect(rejected).toEqual([]);
+    expect(seen.map((request) => request.prompt)).toEqual(['ACP_ORDINARY', 'NATIVE_ORDINARY', 'OTHER_ORDINARY']);
+    expect(seen.every((request) => request.discovery.length === 0)).toBe(true);
+    console.info('Stock 2.7.3: ACP exited → original PTY exited → ACP replay exited. 3 accepted loopback requests, no plugin or permission override.');
+  } finally {
+    await Promise.allSettled(disposals.map(dispose => dispose()));
+    server.closeAllConnections();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    rmSync(root, { recursive: true, force: true });
+  }
+}, 75_000);

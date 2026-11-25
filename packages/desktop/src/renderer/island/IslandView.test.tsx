@@ -2099,3 +2099,15 @@ describe('explicit notice presence across compact island modes', () => {
     expect(screen.getByTestId('island-content').style.paddingTop).toBe('0px');
   });
 });
+
+it('opens a native Kimi row explicitly in Terminal without claiming a pending approval', () => {
+  const props = viewProps({ listOpen: true, model: {
+    ...IDLE_MODEL, active: true, groups: [{ key: 'fixture', project: 'local', title: 'Fixture',
+      rows: [{ kind: 'session', ref: REF, key: 'native', label: 'Kimi', provider: 'kimi', state: 'native', inTerminal: true }],
+    }],
+  } });
+  render(<IslandView {...props} />);
+  fireEvent.click(screen.getByRole('button', { name: /Kimi.*Open terminal/i }));
+  expect(props.api.open).toHaveBeenCalledWith({ kind: 'session', ref: REF, view: 'terminal' });
+  expect(screen.queryByText(/1 waiting/)).toBeNull();
+});

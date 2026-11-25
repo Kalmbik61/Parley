@@ -1,5 +1,6 @@
 import { parleyHome } from '@parley/core';
 import { BROWSER_AGENT_ERROR_CODES } from '@parley/protocol';
+import { HostError } from '../errors.js';
 import type { BrowserAgentErrorCode, BrowserAgentResult, MethodName, NotificationName, Params, SendResult, SessionRef } from '@parley/protocol';
 import type { BrowserEndpoint } from '../agent/browser-endpoint.js';
 import type { AssistantService } from '../assistant/assistant-service.js';
@@ -246,6 +247,8 @@ export const WORKS_GATED_METHODS = [
   'feed.interrupt',
   'kimi.getState',
   'kimi.setConfig',
+  'kimi.getControl',
+  'kimi.setControl',
 ] as const satisfies readonly MethodName[];
 
 /** Уведомления того же рода: activity.seen сверяет сессию со снимком работ. */
@@ -368,9 +371,12 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
         }),
     'sessions.setModel': sessions.sessionsSetModel as AnyHandler,
     ...(kimi === undefined ? {} : {
+      'kimi.getControl': async ({ ref }: Params<'kimi.getControl'>) => deps.sessions.kimiControl(ref),
+      'kimi.setControl': async ({ ref, target, hasDraft }: Params<'kimi.setControl'>) => deps.sessions.setKimiControl(ref, target, hasDraft),
       'kimi.getState': async ({ ref }: Params<'kimi.getState'>) => kimi.state(ref),
-      'kimi.setConfig': async ({ ref, configId, value }: Params<'kimi.setConfig'>) => ({
-        config: await kimi.setConfig(ref, configId, value),
+      'kimi.setConfig': async ({ ref, configId, value }: Params<'kimi.setConfig'>) => deps.sessions.exclusive(ref, async () => {
+        if (deps.sessions.kimiBlocksChat(ref)) throw new HostError('conflict', 'Kimi Chat is read-only while Terminal has control');
+        return { config: await kimi.setConfig(ref, configId, value) };
       }),
     }),
     'sessions.switchOptions': sessions.sessionsSwitchOptions as AnyHandler,

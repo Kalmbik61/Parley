@@ -2896,3 +2896,17 @@ describe('ChatView — поиск ⌘F по ленте (план 2026-11-01, з�
     });
   });
 });
+
+it('makes Kimi Chat read-only until ownership returns, without acting on a tab change', async () => {
+  useHostStore.setState({ status: { state: 'connected', hostVersion: 'test',
+    methods: [...FEED_METHODS, 'kimi.getState', 'kimi.getControl', 'kimi.setControl'], features: ['kimi-native-terminal'] } });
+  useProvidersStore.setState({ providers: [{ id: 'kimi', label: 'Kimi Code', available: true, version: null, limits: null }], loaded: true });
+  bridge.setHandler('kimi.getControl', () => ({ owner: 'terminal' }));
+  bridge.setHandler('kimi.getState', () => ({ requests: [], config: [] }));
+  renderBody(makeSession('s-01', 'Kimi', { provider: 'kimi' }), 'chat');
+  await screen.findByRole('button', { name: /open terminal/i });
+  expect(screen.queryByRole('textbox')).toBeNull();
+  expect(bridge.calls.some(({ method }) => method === 'kimi.setControl')).toBe(false);
+  act(() => bridge.emit('kimi.control', { ref: REF, control: { owner: 'chat', canTakeover: true } }));
+  expect(await screen.findByRole('textbox')).toBeDefined();
+});

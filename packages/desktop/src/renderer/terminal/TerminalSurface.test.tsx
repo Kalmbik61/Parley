@@ -12,6 +12,7 @@ import { DndContext, PointerSensor, useDraggable, useSensor, useSensors, type Co
 import type { ILink } from '@xterm/xterm';
 import { refKey, type BacklogSnapshot, type ConsentCard, type SessionRef } from '@parley/protocol';
 import { toast } from 'sonner';
+import { resetChatUiStoreForTests, useChatUiStore } from '../chat/ui-store.js';
 import { useBoardStore } from '../board/board-store.js';
 import { bufferKey } from '../files/buffer.js';
 import { useFilesStore } from '../files/store.js';
@@ -790,6 +791,34 @@ describe('TerminalSurface — диктовка (спека 3.3)', () => {
     await waitFor(() => expect(sent).toEqual([{ ref, text: 'hello from voice', submit: false }]));
     dispose();
   });
+});
+
+it('gates Kimi takeover on host capability and never transfers ownership when the Terminal mounts', async () => {
+  resetChatUiStoreForTests();
+  useWorksStore.setState({ entries: [makeWork(ref.workId, {
+    projectPath: ref.projectPath, sessions: [makeSession(ref.sessionId, 'Kimi', { provider: 'kimi' })],
+  })] });
+  bridge.setHandler('kimi.getControl', () => ({ owner: 'chat', canTakeover: true }));
+  bridge.setHandler('kimi.setControl', () => {
+    bridge.emit('kimi.control', { ref, control: { owner: 'terminal' } });
+    return { owner: 'terminal' };
+  });
+  act(() => bridge.emitStatus({ state: 'connected', hostVersion: 'old', methods: ['pty.attach', 'pty.detach'] }));
+  renderSurface();
+  expect(screen.queryByRole('button', { name: 'Take control in Terminal' })).toBeNull();
+  expect(bridge.calls.some(({ method }) => method === 'kimi.getControl')).toBe(false);
+  act(() => bridge.emitStatus({ state: 'connected', hostVersion: 'new',
+    methods: ['pty.attach', 'pty.detach', 'kimi.getControl', 'kimi.setControl'], features: ['kimi-native-terminal'] }));
+  const takeover = await screen.findByRole('button', { name: 'Take control in Terminal' });
+  expect(bridge.calls.some(({ method }) => method === 'kimi.setControl')).toBe(false);
+  act(() => useChatUiStore.getState().setDraft(refKey(ref), 'retained draft'));
+  fireEvent.click(takeover);
+  expect((await screen.findByRole('alert')).textContent).toMatch(/clear your Chat draft/);
+  expect(bridge.calls.some(({ method }) => method === 'kimi.setControl')).toBe(false);
+  act(() => useChatUiStore.getState().setDraft(refKey(ref), ''));
+  fireEvent.click(takeover);
+  expect(await screen.findByText('Kimi Terminal has control')).toBeDefined();
+  expect(bridge.calls.filter(({ method }) => method === 'kimi.setControl')).toHaveLength(1);
 });
 
 // Карточка Backlog доски над терминалом (задача 8): терминал — цель броска, только если карточку можно отправить в эту

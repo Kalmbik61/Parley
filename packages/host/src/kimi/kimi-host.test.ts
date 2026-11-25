@@ -1,7 +1,7 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
-import { createPendingSession, readMap } from '@parley/core';
+import { createPendingSession, readMap, unreadLetters, updateMap, workPaths } from '@parley/core';
 import { KIMI_LAUNCH_MODES_FEATURE, feedItem, type MethodName, type Params, type Result, type SessionRef } from '@parley/protocol';
 import { connectRaw, hello, removeHome, tempHome, waitConnected, type RawMessage, type TestClient } from '../../test/helpers.js';
 import { startHost, type RunningHost } from '../host.js';
@@ -44,14 +44,18 @@ async function setup(loggedOut = false, standalone = false): Promise<string> {
   }
   vi.stubEnv('KIMI_FIXTURE_MODEL_FILE', path.join(home, 'fixture-model'));
   if (loggedOut) vi.stubEnv('KIMI_FIXTURE_LOGGED_OUT', '1');
-  running = await startHost({ home });
-  const paths = hostPaths(home);
+  await connectIsolatedHost();
+  return project;
+}
+
+async function connectIsolatedHost(): Promise<void> {
+  running = await startHost({ home: home! });
+  const paths = hostPaths(home!);
   client = connectRaw(paths.socket);
   await waitConnected(client.socket);
   const handshake = await hello(client, await readFile(paths.token, 'utf8'));
   expect(handshake.error).toBeUndefined();
   expect(handshake.result).toMatchObject({ features: expect.arrayContaining([KIMI_LAUNCH_MODES_FEATURE]) });
-  return project;
 }
 
 afterEach(async () => {
@@ -183,6 +187,7 @@ it('holds the action for an explicit permission decision and delivers each choic
 }, 15_000);
 
 it('routes a form and a fallback question in different sessions without crossing responses', async () => {
+  vi.stubEnv('KIMI_FIXTURE_UNIQUE_IDS', '1');
   const projectPath = await setup();
   const { ref } = await call('sessions.create', input(projectPath));
   const { ref: other } = await call('sessions.create', input(projectPath));
@@ -336,3 +341,135 @@ it('applies the preference when Parley resumes a record with no provider convers
     { prompt: expect.stringContaining('hello'), model: 'alpha', effort: 'low', permission: 'auto', plan: false },
   ]);
 });
+
+async function terminalReady(ref: SessionRef): Promise<string> {
+  await expect.poll(async () => (await call('pty.screenText', { ref })).lines.join('\n')).toContain('Native Kimi Ready');
+  const { generation, snapshot } = await call('pty.attach', { ref });
+  expect(snapshot).toContain('\x1b[');
+  if (generation === undefined) throw new Error('Expected a native PTY generation');
+  return generation;
+}
+
+function raw(ref: SessionRef, data: string, generation?: string): void {
+  client!.send({ method: 'pty.input', params: { ref, data, generation } });
+}
+
+it('hands the exact conversation to a raw Terminal, fences writes, and replays only the originally bound history', async () => {
+  const projectPath = await setup();
+  const history = path.join(home!, 'provider-history');
+  const nativeInput = path.join(home!, 'native-input');
+  vi.stubEnv('KIMI_FIXTURE_HISTORY', history);
+  vi.stubEnv('KIMI_FIXTURE_NATIVE_INPUT', nativeInput);
+  vi.stubEnv('PARLEY_FIXTURE_TOKEN', 'not-a-real-token');
+  vi.stubEnv('HARNAS_FIXTURE_WORKDIR', 'not-a-real-directory');
+  const { ref } = await call('sessions.create', { ...input(projectPath), task: 'fixture brief' });
+  await expectReply(ref, 'Hello Parley');
+  const before = (await session(ref))?.pid;
+  expect(await call('kimi.getControl', { ref })).toMatchObject({ owner: 'chat' });
+  expect((await request('kimi.setControl', { ref, target: 'terminal', hasDraft: true })).error).toMatchObject({ data: { reason: 'kimi-draft' } });
+  raw(ref, 'retained draft');
+  expect((await request('kimi.setControl', { ref, target: 'terminal' })).error).toMatchObject({ data: { reason: 'kimi-draft' } });
+  raw(ref, '\x15');
+  await call('pty.send', { ref, text: 'approve', submit: true });
+  const card = await pendingCard(ref, 'permission');
+  expect((await request('kimi.setControl', { ref, target: 'terminal' })).error).toMatchObject({ data: { reason: 'kimi-busy' } });
+  await call('feed.decide', { ref, cardId: card.cardId, decision: { kind: 'permission', behavior: 'deny', optionId: 'deny' } });
+  await expectReply(ref, 'deny');
+
+  expect(await call('kimi.setControl', { ref, target: 'terminal' })).toMatchObject({ owner: 'terminal' });
+  expect((await session(ref))?.pid).not.toBe(before);
+  expect(typeof before).toBe('number');
+  expect(() => process.kill(before!, 0)).toThrow(/ESRCH/);
+  expect(await call('pty.send', { ref, text: 'must not be typed', submit: true })).toMatchObject({ submitted: false });
+  expect((await request('kimi.setConfig', { ref, configId: 'mode', value: 'plan' })).error).toMatchObject({ code: 'conflict' });
+  expect((await request('feed.interrupt', { ref })).error).toMatchObject({ code: 'conflict' });
+  expect((await request('kimi.setControl', { ref, target: 'chat' })).error).toMatchObject({ data: { reason: 'kimi-native-running' } });
+  expect((await request('sessions.resume', { ref })).error).toMatchObject({ data: { reason: 'kimi-native' } });
+
+  const duplicate = await createPendingSession(ref.projectPath, ref.workId, { provider: 'kimi', label: 'Duplicate binding', task: '' });
+  await updateMap(ref.projectPath, ref.workId, (map) => {
+    map.sessions.find((item) => item.id === duplicate)!.providerSessionId = 'acp-session';
+  });
+  const duplicateRef = { ...ref, sessionId: duplicate };
+  expect((await request('sessions.resume', { ref: duplicateRef })).error).toMatchObject({ code: 'conflict' });
+  expect(await session(duplicateRef)).not.toMatchObject({ lifecycle: 'active' });
+
+  const generation = await terminalReady(ref);
+  raw(ref, 'stale input\r', 'ec2eb5da-fce9-47da-ae66-8cc1f7c71908');
+  raw(ref, 'unversioned input\r');
+  raw(ref, '/help\r', generation);
+  raw(ref, '\x1b', generation);
+  client!.send({ method: 'pty.resize', params: { ref, cols: 92, rows: 24, generation } });
+  await expect.poll(async () => (await call('pty.screenText', { ref })).lines).toEqual(expect.arrayContaining(['Native slash help', 'ESC KEY', 'RESIZE 92x24']));
+  raw(ref, 'native original\r/new\rforeign turn\r', generation);
+  await expect.poll(() => readFile(history, 'utf8')).toContain('native original');
+  await updateMap(ref.projectPath, ref.workId, (_map, letters) => {
+    letters.add({ roomId: null, kind: 'note', from: 'human', to: [ref.sessionId], text: 'held mail' });
+  });
+  expect(unreadLetters(ref.projectPath, ref.workId, ref.sessionId).map((letter) => letter.text)).toContain('held mail');
+  await expect.poll(async () => {
+    await call('kimi.getControl', { ref });
+    return events.some((entry) => entry.event === 'activity.changed' && JSON.stringify(entry.data).includes('"mailWaiting":"paused"'));
+  }).toBe(true);
+  raw(ref, '/exit\r', generation);
+  await expect.poll(() => call('kimi.getControl', { ref })).toMatchObject({ owner: 'exited' });
+
+  expect(await call('kimi.setControl', { ref, target: 'chat' })).toMatchObject({ owner: 'chat' });
+  expect(await session(ref)).toMatchObject({ lifecycle: 'active', providerSessionId: 'acp-session' });
+  const { items } = await call('feed.snapshot', { ref });
+  const prompts = items.filter((item) => item.kind === 'prompt').map((item) => item.text);
+  expect(prompts.filter((prompt) => prompt.includes('fixture brief'))).toHaveLength(1);
+  expect(prompts.filter((prompt) => prompt === 'native original')).toHaveLength(1);
+  expect(await readFile(history, 'utf8')).not.toMatch(/foreign turn|stale input|unversioned input|must not be typed/);
+  expect(await readFile(nativeInput, 'utf8')).not.toMatch(/check_inbox|stale input|unversioned input|must not be typed/);
+  raw(ref, 'stale native key\r', generation);
+  await expect.poll(() => readFile(history, 'utf8'), { timeout: 5000 }).toContain('Call check_inbox.');
+  await expect.poll(() => call('pty.send', { ref, text: 'call Parley', submit: true })).toMatchObject({ submitted: true });
+  await expectReply(ref, 'Parley session: s-01');
+}, 15_000);
+
+it('retains the archived Chat on a failed handback and refreshes deterministically after native clear', async () => {
+  const projectPath = await setup();
+  const history = path.join(home!, 'provider-history');
+  const failLoad = path.join(home!, 'fail-replay');
+  vi.stubEnv('KIMI_FIXTURE_HISTORY', history);
+  vi.stubEnv('KIMI_FIXTURE_FAIL_LOAD', failLoad);
+  const { ref } = await call('sessions.create', { ...input(projectPath), task: 'archived brief' });
+  await expectReply(ref, 'Hello Parley');
+  await call('kimi.setControl', { ref, target: 'terminal' });
+  const generation = await terminalReady(ref);
+  raw(ref, '/clear\r/crash\r', generation);
+  await expect.poll(() => call('kimi.getControl', { ref })).toMatchObject({ owner: 'stopped' });
+  expect(await readFile(history, 'utf8')).toBe('');
+  await writeFile(failLoad, '');
+  expect((await request('kimi.setControl', { ref, target: 'chat' })).error).toBeDefined();
+  expect(await call('kimi.getControl', { ref })).toMatchObject({ owner: 'stopped' });
+  expect(JSON.stringify((await call('feed.snapshot', { ref })).items)).toContain('archived brief');
+  client!.close();
+  await running!.context.shutdown('test restart');
+  await running!.closed;
+  await connectIsolatedHost();
+  expect(await call('kimi.getControl', { ref })).toMatchObject({ owner: 'stopped' });
+  expect((await request('sessions.resume', { ref })).error).toMatchObject({ data: { reason: 'kimi-native' } });
+  expect(JSON.stringify((await call('feed.snapshot', { ref })).items)).toContain('archived brief');
+  await unlink(failLoad);
+  expect(await call('kimi.setControl', { ref, target: 'chat' })).toMatchObject({ owner: 'chat' });
+  expect(JSON.stringify((await call('feed.snapshot', { ref })).items)).not.toContain('archived brief');
+  const dir = path.join(workPaths(ref.projectPath, ref.workId).dir, 'kimi-history', ref.sessionId);
+  const archives = await readdir(dir);
+  expect(archives).toHaveLength(1);
+  expect(await readFile(path.join(dir, archives[0]!), 'utf8')).toContain('archived brief');
+}, 15_000);
+
+
+it('does not take ownership away from a Chat with pending wake delivery', async () => {
+  const projectPath = await setup();
+  const { ref } = await call('sessions.create', input(projectPath));
+  await call('wake.pause', {});
+  await updateMap(ref.projectPath, ref.workId, (_map, letters) => {
+    letters.add({ roomId: null, kind: 'note', from: 'human', to: [ref.sessionId], text: 'already queued' });
+  });
+  expect((await request('kimi.setControl', { ref, target: 'terminal' })).error).toMatchObject({ data: { reason: 'kimi-wake' } });
+  expect(await call('kimi.getControl', { ref })).toMatchObject({ owner: 'chat' });
+  expect(unreadLetters(ref.projectPath, ref.workId, ref.sessionId).map((letter) => letter.text)).toContain('already queued');
+}, 15_000);

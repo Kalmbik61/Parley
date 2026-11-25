@@ -394,6 +394,7 @@ const isSessionShape =
       ? typeof value.status === 'string' && V1_STATUSES.includes(value.status)
       : typeof value.lifecycle === 'string' && Object.hasOwn(TRANSITIONS, value.lifecycle)) &&
     Array.isArray(value.history) &&
+    (value.kimiTerminal === undefined || (value.provider === 'kimi' && isKimiTerminal(value.kimiTerminal))) &&
     (value.kimiPermissionMode === undefined || (value.provider === 'kimi' && isKimiPermissionMode(value.kimiPermissionMode))) &&
     (value.agentPlan === undefined || isPublishedAgentPlan(value.agentPlan)) &&
     (value.workspace === undefined || value.workspace === null ||
@@ -871,4 +872,11 @@ function normalizeAgentFields(session: Record<string, unknown>): void {
   // стирается и не становится «плеча нет»: она заменяется явным состоянием «назначение повреждено», которое переживает
   // чтение и запись карты (план опыта, 1.1). Само состояние читается обратно как есть.
   if (session['trial'] !== undefined) session['trial'] = normalizeTrial(session['trial']);
+}
+
+function isKimiTerminal(value: unknown): boolean {
+  if (value === null || typeof value !== 'object') return false;
+  const marker = value as Record<string, unknown>;
+  return typeof marker.archive === 'string' && /^[0-9a-f-]{36}$/i.test(marker.archive) &&
+    typeof marker.cwd === 'string' && marker.cwd !== '' && typeof marker.home === 'string' && marker.home !== '';
 }

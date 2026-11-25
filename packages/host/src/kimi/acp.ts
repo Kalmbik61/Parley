@@ -36,6 +36,7 @@ interface KimiAcpOptions {
   canShowElicitation?: (request: Extract<KimiRequest, { kind: 'elicitation' }>) => boolean;
   /** Replays previous messages when the host has no conversation to show. */
   loadHistory?: boolean;
+  requireHistory?: boolean;
   onText?: (text: string, history: boolean, author: 'agent' | 'user') => void;
   onState?: (state: KimiState) => void;
   onTurnStart?: (text: string) => void;
@@ -416,6 +417,9 @@ export function createKimiAcp(options: KimiAcpOptions) {
       sessionId = opened['sessionId'];
     } else {
       const resume = record(capabilities['sessionCapabilities'])['resume'] != null;
+      if (options.requireHistory === true && capabilities['loadSession'] !== true) {
+        throw new KimiAcpError('This Kimi Code CLI cannot replay history for handback', 'protocol');
+      }
       if (capabilities['loadSession'] === true && (options.loadHistory === true || !resume)) {
         replaying = options.loadHistory === true;
         try {

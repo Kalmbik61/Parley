@@ -2294,6 +2294,20 @@ export const S = {
       /** `sessions.setModel` вернул effort `null`: у новой модели нет уровня, выбранного раньше. */
       effortReset: (model: string, level: string): string => `${model} has no ${level} effort — effort is back to Default`,
     },
+    kimiNative: {
+      title: 'Kimi Terminal',
+      takeover: 'Take control in Terminal',
+      switching: 'Switching Kimi ownership…',
+      inControl: 'Kimi Terminal has control',
+      exited: 'Kimi Terminal is stopped',
+      return: 'Return to Chat',
+      readOnly: 'Chat is read-only while Kimi Terminal has control.',
+      takeoverHelp: 'Open the original conversation in ordinary Kimi. Parley room and plan tools stay in Chat.',
+      exitFirst: 'Use /exit to return to Chat. Starting a new conversation here does not change the conversation Parley is bound to.',
+      restore: 'Return to the original conversation with Parley tools. Chat history refreshes from Kimi and Parley keeps the prior view.',
+      haveDraft: 'Send or clear your Chat draft and queued messages before taking control in Terminal.',
+      failed: 'Could not switch Kimi ownership.',
+    },
     kimi: {
       settings: (current: string): string => `Kimi Code settings (${current})`,
       booleanValue: (name: string, enabled: boolean): string => `${name} ${enabled ? 'on' : 'off'}`,
@@ -2920,10 +2934,10 @@ export const S = {
 
   /** Остров одобрений (спека 2026-10-12). */
   island: {
-    pill: (working: number, waiting: number, done: number, subagents?: number, proposals = 0): string =>
+    pill: (working: number, waiting: number, done: number, subagents?: number, proposals = 0, nativeKimi = false): string =>
       [working > 0 ? `${working} working` : null, waiting > 0 ? `${waiting} waiting` : null, done > 0 ? `✅ ${done} done` : null,
         subagents === undefined ? null : subagents > 0 ? `${subagents} subagents active` : 'Subagents active',
-        proposals > 0 ? `${proposals} ${proposals === 1 ? 'room' : 'rooms'} waiting` : null]
+        proposals > 0 ? `${proposals} ${proposals === 1 ? 'room' : 'rooms'} waiting` : null, nativeKimi ? 'Kimi Terminal' : null]
         .filter((part) => part !== null)
         .join(' · '),
     waitingInTerminal: 'waiting in terminal',

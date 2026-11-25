@@ -537,6 +537,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     // OpenCode Chat reads the messages of the session's own server (the supervisor is created further down; it is only called later).
     opencodeServer: (ref) => opencodeSupervisor.get(ref),
     kimiRespond: (ref, requestId, response) => kimi.respond(ref, requestId, response),
+    kimiBlocksChat: (ref) => sessionsService.kimiBlocksChat(ref),
   });
   // Канал агента к браузеру окна (спека браузера 2026-10-07, 3.7): путь `/agent/browser` на сервере хуков и свой
   // реестр токенов — у всех провайдеров. Операцию исполняет окно с возможностью `browser-agent`.
@@ -846,6 +847,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   const kimiAuth = createKimiAuth(() => handle.context.broadcast('providers.changed', { provider: 'kimi' }));
   const kimi = createKimiSessions(handle.context, {
     output: feedService.kimiOutput,
+    prepareHistory: feedService.kimiPrepareHistory,
+    checkBinding: (ref, home, id) => sessionsService.checkKimiBinding(ref, home, id),
     requestsChanged: feedService.kimiRequests,
     canShowElicitation: canShowKimiElicitation,
     hasHistory: feedService.kimiHasHistory,
@@ -866,6 +869,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       opencode: opencodeSupervisor,
       opencodeEvents,
       kimi,
+      kimiArchive: feedService.kimiArchive,
+      kimiWakePending: (ref) => wakeService.kimiPending(ref),
       // Qwen's brief is typed by the wake service once the process is ready (spec 2026-11-11, 3.4 amendment).
       deferFirst: (ref, pid, text) => wakeService.deferFirst(ref, pid, text),
       providerVersions,
@@ -976,6 +981,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   });
   const send: typeof sendPty = async (params, log) => {
     const { ref, text, submit } = params;
+    if (sessionsService.kimiBlocksChat(ref)) return { inserted: false, submitted: false, reason: 'blocked' };
     if (ptyManager.get(ref)?.provider !== 'kimi') return sendPty(params, log);
     if (sessionsService.exclusive.held(ref) || wakeService.inFlight(ref)) {
       return { inserted: false, submitted: false, reason: 'busy' };

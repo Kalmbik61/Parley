@@ -141,7 +141,8 @@ export function createPtyHandlers(deps: PtyMethodDeps): PtyHandlers {
 
       // «Просмотрено» здесь не ставим (спека 3.2): подключённая, но невидимая вкладка
       // и окно не в фокусе не должны гасить «не просмотрено». Его ставит activity.seen.
-      return deps.pty.snapshot(params.ref);
+      const snapshot = deps.pty.snapshot(params.ref);
+      return handle.generation === undefined ? snapshot : { ...snapshot, generation: handle.generation };
     },
 
     ptyDetach: async (params, request) => {
@@ -168,11 +169,16 @@ export function createPtyHandlers(deps: PtyMethodDeps): PtyHandlers {
     },
 
     ptyInput: (params) => {
+      const handle = deps.pty.get(params.ref);
+      if (handle === undefined || handle.generation !== params.generation ||
+          (handle.provider === 'kimi' && sessions?.exclusive.held(params.ref) === true)) return;
       deps.pty.input(params.ref, params.data);
       deps.activity.markSeen(params.ref);
     },
 
     ptyResize: (params) => {
+      const handle = deps.pty.get(params.ref);
+      if (handle === undefined || handle.generation !== params.generation) return;
       deps.pty.resize(params.ref, params.cols, params.rows);
     },
 

@@ -30,7 +30,7 @@ import type { ActivityEntry } from '../store/activity.js';
 export interface IslandTaskSummary { items: readonly LiveTask[]; total: number | null; reported: number; }
 type SessionBase = { kind: 'session'; key: string; ref: SessionRef; label: string; provider: string; tasks?: IslandTaskSummary };
 export type IslandRow =
-  | (SessionBase & { state: 'working' | 'needs-you' | 'subagents'; inTerminal: boolean })
+  | (SessionBase & { state: 'working' | 'needs-you' | 'subagents' | 'native'; inTerminal: boolean })
   | (SessionBase & { state: 'done'; inTerminal: false; doneKey: string; turnEndedAt: string | null; seen: boolean })
   | { kind: 'room'; key: string; projectPath: string; workId: string; roomId: string; title: string; busy: number; done: boolean;
       proposal?: { key: string; kind: 'decision' | 'completion'; lead: string | null; leadLabel: string | null } }
@@ -52,6 +52,7 @@ export interface IslandModel {
   providers: string[];
   groups: IslandGroup[];
   active: boolean;
+  nativeKimi?: true;
   /** Идущие рои всех работ: сколько их и сколько сдали из скольких — правый статус капсулы `🐝 3/5`. */
   swarm?: { count: number; handed: number; total: number };
   subagents?: number;
@@ -84,6 +85,7 @@ export function islandModel(
   let subagents = 0;
   let childrenActive = false;
   let proposals = 0;
+  let hasNative = false;
   const swarmTotals = { count: 0, handed: 0, total: 0 };
   const providers = new Set<string>();
   const groups: IslandGroup[] = [];
@@ -101,6 +103,13 @@ export function islandModel(
       const ref = { projectPath: entry.projectPath, workId: work.id, sessionId: session.id };
       const key = refKey(ref);
       const live = byRef[key]?.activity ?? null;
+      if (session.provider === 'kimi' && session.kimiTerminal !== undefined && session.lifecycle !== 'closed') {
+        hasNative = true;
+        providers.add('kimi');
+        rows.push({ kind: 'session', key, ref, label: sessionRowLabel(session.id, session.label), provider: session.provider,
+          state: 'native', inTerminal: true });
+        continue;
+      }
       const attention = sessionAttention(session, live);
       if (attention === 'off') continue;
       const state = attention === 'working' && live?.heldByBackground ? 'idle' : attention;
@@ -165,8 +174,8 @@ export function islandModel(
     }
     if (rows.length > 0) groups.push({ key: groupKey, title: workTitleText(work.title), project: projectName(entry.projectPath), rows });
   }
-  return { working, waiting, done, providers: [...providers].sort(), groups, active: working + waiting > 0 || childrenActive || proposals > 0 || swarmTotals.count > 0,
-    ...(childrenActive ? { subagents } : {}), ...(proposals > 0 ? { proposals } : {}), ...(swarmTotals.count > 0 ? { swarm: swarmTotals } : {}),
+  return { working, waiting, done, providers: [...providers].sort(), groups, active: working + waiting > 0 || hasNative || childrenActive || proposals > 0 || swarmTotals.count > 0,
+    ...(hasNative ? { nativeKimi: true } : {}), ...(childrenActive ? { subagents } : {}), ...(proposals > 0 ? { proposals } : {}), ...(swarmTotals.count > 0 ? { swarm: swarmTotals } : {}),
   };
 }
 

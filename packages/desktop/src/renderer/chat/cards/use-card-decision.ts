@@ -21,16 +21,17 @@ export interface CardDecision {
 }
 
 export function useCardDecision(cardId: string): CardDecision {
-  const { sessionRef } = useChatEnv();
+  const { sessionRef, readOnly } = useChatEnv();
   const key = cardKey(refKey(sessionRef), cardId);
-  const deciding = useFeedStore((state) => state.deciding[key] === true);
+  const deciding = useFeedStore((state) => state.deciding[key] === true) || readOnly === true;
   const note = useFeedStore((state) => state.notes[key] ?? null);
   const decide = useCallback(
     (decision: FeedDecision): void => {
+      if (readOnly) return;
       void useFeedStore.getState().decide(sessionRef, cardId, decision);
     },
     // `sessionRef` по значению — по его ключу.
-    [key],
+    [key, readOnly],
   );
   return { key, deciding, note, decide };
 }

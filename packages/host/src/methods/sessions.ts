@@ -155,6 +155,7 @@ export function createSessionHandlers(deps: SessionMethodDeps): SessionHandlers 
 
     // Нажатия Shift+Tab — печать хоста по явному действию человека; ответов хукам тут нет.
     sessionsSetMode: async (params) => {
+      if (deps.sessions.kimiBlocksChat?.(params.ref)) throw new HostError('conflict', 'Kimi Chat is read-only while Terminal has control');
       const result = await switchMode({ pty: deps.pty }, params.ref, params.mode);
       if (result.mode !== null) deps.feed?.noteMode(params.ref, result.mode);
       return result;

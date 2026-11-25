@@ -14,3 +14,64 @@ Accepted for the combined T1/T2/probe candidate d8cbe978. Chat is read-only whil
 ## Acceptance
 
 Write failing regressions before implementation. Verify ANSI, raw keys and resize, exact ID/cwd, resume mode, no dual owner or stale callbacks, busy/draft/permission/wake refusal, no leaked native authority, held mail, no duplicate brief/history across retries, exit/crash and old host behavior, and no rebinding after `/new`. Verify desktop read-only Chat, island Open Terminal, and restoration through the actual components. Run targeted checks and an opt-in installed-CLI loopback fixture with disposable homes, no paid or real account use. Supply a reproducible fixture and Parley browser screenshots, commit locally, and report the checked impact. Do not touch the live app or user configuration.
+
+## Reproduce
+
+After installing workspace dependencies, run the focused checks from the repository root.
+
+```sh
+pnpm run typecheck
+pnpm --filter @parley/desktop build
+pnpm --filter @parley/host exec vitest run \
+  src/kimi/kimi-host.test.ts src/kimi/acp.test.ts src/kimi/sessions.test.ts \
+  src/pty/pty-manager.test.ts src/wake/host-draft.test.ts
+pnpm --filter @parley/desktop exec vitest run \
+  src/renderer/chat/ChatView.test.tsx src/renderer/terminal/TerminalSurface.test.tsx \
+  src/renderer/terminal/use-terminal.test.ts src/renderer/island/model.test.ts \
+  src/renderer/island/IslandView.test.tsx src/renderer/island/requests.test.ts
+pnpm --filter @parley/protocol exec vitest run src/methods.test.ts
+pnpm --filter @parley/core exec vitest run \
+  src/work/map.test.ts src/work/agent-switch.test.ts src/work/launch.test.ts
+```
+
+On macOS, the installed-CLI probe needs PTY and loopback permissions. It pins stock 2.7.3, uses fresh homes and a synthetic OpenAI response server, and blocks access to real home data and non-fixture network destinations. The older plugin cases remain separately opt-in and are not run by this command.
+
+```sh
+PARLEY_KIMI_NATIVE_BIN=/Users/kalmbik61/.kimi-code/bin/kimi \
+  pnpm --filter @parley/host exec vitest run src/kimi/native-handoff.probe.test.ts \
+  -t 'without any plugin installation'
+```
+
+The stock run resumed an unseeded ACP ID in native Kimi. A second session retained **Ask When Needed** without resume flags, as verified by Kimi's native `/status`. At ACP load, Kimi still reported `default` in its initial config snapshot, as described in T2. An inert ephemeral MCP server launched in ACP, did not launch in native mode, and launched on ACP handback. The original ACP and native turns replayed once each. No turn from native `/new` entered the original replay. The test sent three model requests, all to loopback. See [Kimi's native command reference](https://www.kimi.com/code/docs/en/kimi-code-cli/reference/slash-commands.html) for the status and session commands.
+
+The [desktop fixture](../../packages/desktop/e2e/fixtures/kimi-native-terminal.html) uses production Chat, Terminal and Island components, xterm and the layout store with an inert bridge. From `packages/desktop`, start its isolated server.
+
+```sh
+pnpm exec node --input-type=module -e '
+  import { createServer } from "vite";
+  import react from "@vitejs/plugin-react";
+  import tailwindcss from "@tailwindcss/vite";
+  const server = await createServer({
+    configFile: false,
+    plugins: [react(), tailwindcss()],
+    server: { host: "127.0.0.1", port: 4658, strictPort: true },
+  });
+  await server.listen();
+  server.printUrls();
+'
+```
+
+Open `http://127.0.0.1:4658/e2e/fixtures/kimi-native-terminal.html`. The Terminal tab has an explicit takeover button. While native owns the fixture, the island row opens Terminal and Chat shows its retained transcript and no composer. The fixture responds to native `/help` and `/exit` input. Return to Chat restores the composer and settings. Presets for screenshots are `?view=terminal` before takeover, `?owner=terminal` for read-only Chat, `?owner=terminal&view=terminal` for the native PTY, and `?owner=exited&view=terminal` after exit.
+
+## Impact card
+
+- **Goal** — Make ordinary Kimi Terminal available without letting it share the conversation with managed Chat.
+- **Behaviour** — Takeover and return are explicit. Native gets the original ID and cwd with no Parley-managed authority. A live native process must exit before handback. Parley mail waits. Recovery retains the original binding, and handback refreshes Chat from a complete, bounded ACP replay.
+- **Numbers** — 1,161 focused checks passed (89 host, 455 desktop, 101 protocol, 516 core). The installed 2.7.3 probe passed with 3 loopback model requests, 0 external or paid requests, and no plugin installation.
+- **Screens** — Parley browser, 1120 × 530. [Takeover](../../packages/desktop/e2e/fixtures/kimi-native-takeover.png), [read-only Chat and island](../../packages/desktop/e2e/fixtures/kimi-native-read-only.png), [native Terminal](../../packages/desktop/e2e/fixtures/kimi-native-terminal.png), [return control](../../packages/desktop/e2e/fixtures/kimi-native-return.png), [restored Chat](../../packages/desktop/e2e/fixtures/kimi-native-restored.png).
+- **For the human** — Open Terminal and select **Take control in Terminal**. Use Kimi normally, then type `/exit` and select **Return to Chat**. A native `/new` does not rebind Parley.
+- **Risk** — Handback requires ACP `session/load`. Failure or replay beyond the explicit limits leaves Chat unchanged and a recoverable stopped state. The preserved pre-handoff feed is under the work's `kimi-history/<session-id>/<archive-id>.json`. Repeated handoffs keep separate archived views.
+- **Cost** — Zero paid calls. Production latency and archive growth were not measured.
+- **Verdict** — The fixture and stock CLI establish exact-ID ownership transfer, provider-owned mode, no native MCP attachment, and restored Chat. The live app and user configuration were not changed.
+
+**Not verified** — Real accounts, non-macOS stock CLI, production throughput, or live app migration. Parley browser captured the production-component fixture presets. Automated desktop tests covered button interactions independently.

@@ -2,6 +2,13 @@ import { z } from 'zod';
 import type { KimiPermissionMode } from '@parley/core';
 
 // Older hosts strip unknown sessions.create fields. Require this hello capability before sending one.
+export const KIMI_NATIVE_TERMINAL_FEATURE = 'kimi-native-terminal';
+
+export type KimiControl =
+  | { owner: 'chat'; canTakeover: boolean }
+  | { owner: 'switching'; target: 'terminal' | 'chat' }
+  | { owner: 'terminal' | 'exited' | 'stopped'; detail?: string };
+
 export const KIMI_LAUNCH_MODES_FEATURE = 'kimi-launch-modes';
 
 export const kimiPermissionMode = z.enum(['manual', 'yolo', 'auto'] satisfies [KimiPermissionMode, ...KimiPermissionMode[]]);
@@ -66,6 +73,8 @@ export interface KimiState {
 }
 
 export interface KimiMethodResults {
+  'kimi.getControl': KimiControl;
+  'kimi.setControl': KimiControl;
   'kimi.getState': KimiState;
   'kimi.setConfig': { config: KimiConfigOption[] };
 }

@@ -146,7 +146,7 @@ type Morph = 'grow' | 'shrink';
 export const sessionKeyOf = (item: IslandRequest): string => item.key.slice(0, item.key.lastIndexOf('\u0000'));
 
 function rowTarget(row: IslandRow): FocusTarget {
-  if (row.kind === 'session') return { kind: 'session', ref: row.ref };
+  if (row.kind === 'session') return { kind: 'session', ref: row.ref, ...(row.state === 'native' ? { view: 'terminal' } : {}) };
   if (row.kind === 'work-swarm') return { kind: 'session', ref: { projectPath: row.projectPath, workId: row.workId, sessionId: row.queenId } };
   return { kind: 'room', projectPath: row.projectPath, workId: row.workId, roomId: row.roomId };
 }
@@ -214,7 +214,7 @@ function Pill(props: IslandViewProps): JSX.Element {
           {model.providers.map((provider) => (
             <AgentIcon key={provider} provider={provider} size={14} />
           ))}
-          <span>{S.island.pill(model.working, model.waiting, model.done, model.subagents, model.proposals)}</span>
+          <span>{S.island.pill(model.working, model.waiting, model.done, model.subagents, model.proposals, model.nativeKimi)}</span>
         </div>
       ) : (
         <span data-testid="island-idle" className="text-muted-foreground">
@@ -329,13 +329,13 @@ function List(props: IslandViewProps): JSX.Element {
                       {row.state === 'done' ? <DoneLine row={row} api={api} /> : (
                         <button type="button" className="flex w-full cursor-pointer items-center gap-2 rounded px-1 py-0.5 text-left hover:bg-white/10" onClick={() => api.open(rowTarget(row))}>
                           {/* Точка — та же, что в сайдбаре: ждущая сессия «blocked», остальное (в работе) — «working». */}
-                          <AgentStateDot state={row.state === 'subagents' ? 'idle' : row.state === 'needs-you' ? 'blocked' : 'working'} size="sm" />
+                          <AgentStateDot state={row.state === 'subagents' || row.state === 'native' ? 'idle' : row.state === 'needs-you' ? 'blocked' : 'working'} size="sm" />
                           <span className="min-w-0 flex-1 truncate">{row.label}</span>
-                          {row.inTerminal ? <span className="text-[13px] text-muted-foreground">{S.island.waitingInTerminal}</span> : null}
+                          {row.inTerminal ? <span className="text-[13px] text-muted-foreground">{row.state === 'native' ? S.island.openTerminal : S.island.waitingInTerminal}</span> : null}
                         </button>
                       )}
                     </div>
-                    {progress !== undefined ? <button type="button" aria-label={S.island.progress.show} aria-expanded={selected}
+                    {row.state !== 'native' && progress !== undefined ? <button type="button" aria-label={S.island.progress.show} aria-expanded={selected}
                       className="cursor-pointer rounded px-2 py-1 text-muted-foreground hover:bg-white/10 hover:text-foreground"
                       onClick={() => selected ? progress.onClose() : progress.onSelect(row.ref)}>≡</button> : null}
                   </div>

@@ -221,6 +221,7 @@ export const useIslandRequests = create<IslandRequestsState>((set, get) => {
       for (const entry of entries) {
         if (entry.map.work.status !== 'active') continue;
         for (const session of entry.map.sessions) {
+          if (session.kimiTerminal !== undefined) continue;
           const ref = { projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id };
           const key = refKey(ref);
           if (sessionAttention(session, byRef[key]?.activity ?? null) !== 'needs-you') continue;

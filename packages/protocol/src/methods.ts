@@ -219,6 +219,8 @@ export const METHODS = {
   'sessions.rename': z.object({ ref: sessionRef, label: renameTitle }),
   'sessions.interrupted': z.object({}),
   // Режим разрешений (план 2026-10-01, решение 4): хост жмёт Shift+Tab и сверяет подвал терминала.
+  'kimi.getControl': z.object({ ref: sessionRef }),
+  'kimi.setControl': z.object({ ref: sessionRef, target: z.enum(['terminal', 'chat']), hasDraft: z.boolean().optional() }),
   'kimi.getState': z.object({ ref: sessionRef }),
   'kimi.setConfig': z.object({ ref: sessionRef, configId: z.string().min(1).max(1024), value: kimiConfigValue }),
   'sessions.setMode': z.object({ ref: sessionRef, mode: permissionModeChoice }),
@@ -411,8 +413,8 @@ export const METHODS = {
 
 // Уведомления клиента — без id и без ответа: их слишком много, чтобы ждать каждое.
 export const NOTIFICATIONS = {
-  'pty.input': z.object({ ref: sessionRef, data: z.string() }),
-  'pty.resize': z.object({ ref: sessionRef, cols: z.number().int().min(2), rows: z.number().int().min(2) }),
+  'pty.input': z.object({ ref: sessionRef, data: z.string(), generation: z.string().uuid().optional() }),
+  'pty.resize': z.object({ ref: sessionRef, cols: z.number().int().min(2), rows: z.number().int().min(2), generation: z.string().uuid().optional() }),
   // Окно видит терминал сессии — «просмотрено» ставит видимость, а не подключение (спека 7.2).
   'activity.seen': z.object({ ref: sessionRef }),
 } as const;
@@ -619,7 +621,7 @@ export interface Results extends KimiMethodResults, AssistantMethodResults, Voic
   'capabilities.mcp.remove': CapabilityActionResult;
   'capabilities.mcp.check': CapabilityActionResult;
   'sessions.resumeInterrupted': { ok: true };
-  'pty.attach': { snapshot: string; cols: number; rows: number };
+  'pty.attach': { snapshot: string; cols: number; rows: number; generation?: string };
   'pty.detach': { ok: true };
   'processes.subscribe': SessionProcessesSnapshot;
   'processes.unsubscribe': { ok: true };

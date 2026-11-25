@@ -32,6 +32,7 @@ import {
   parleyNote,
   providerLabel,
   switchBlockers,
+  unreadCount,
   unreadLetters,
   type AgentBinding,
   type LaunchClass,
@@ -104,6 +105,7 @@ import {
   planResume,
   plannedWorktree,
   processStartedAt,
+  hasLiveProcess,
   querySpawnLimits,
   validateSpawnBudget,
   SpawnBudgetError,
@@ -138,7 +140,7 @@ import {
   type UsageSummary,
 } from '@parley/core';
 import { HOST_ERROR_REASONS, refKey } from '@parley/protocol';
-import type { Result, SessionRef } from '@parley/protocol';
+import type { KimiControl, Result, SessionRef } from '@parley/protocol';
 import type { ActivityService, SessionLive } from '../activity/activity-service.js';
 import type { ConsentsService } from '../consents/consents-service.js';
 import type { ProjectMcp } from '../consents/project-mcp.js';
@@ -292,7 +294,17 @@ export interface LaunchChoice {
   effort?: EffortLevel | null;
 }
 
+type KimiTakeover = ReturnType<KimiSessions['takeover']>;
+type KimiHandoff = { native: KimiTakeover } | { release(): Promise<void>; restore(): Promise<void> };
+
+const returnKimiFirst = () => new HostError('conflict', 'Return Kimi to Chat from the Terminal tab first.', { reason: 'kimi-native' });
+const exitKimiFirst = () => new HostError('conflict', 'Use /exit in Kimi Terminal before returning to Chat.', { reason: 'kimi-native-running' });
+
 export interface SessionsService {
+  kimiControl(ref: SessionRef): Promise<KimiControl>;
+  setKimiControl(ref: SessionRef, target: 'chat' | 'terminal', hasDraft?: boolean): Promise<KimiControl>;
+  kimiBlocksChat(ref: SessionRef): boolean;
+  checkKimiBinding(ref: SessionRef, home: string, id: string): void;
   /** Проверка после удаления worktree, включая сессии без живого процесса. */
   checkWorktreeGit(ref: SessionRef): Promise<void>;
   create(input: CreateSessionInput): Promise<CreatedSession>;
@@ -450,6 +462,8 @@ export interface SessionsFeedOptions {
   /** OpenCode event bridge (spec 4.4, O6): attached once the TUI runs, detached before its server stops. */
   opencodeEvents?: Pick<OpencodeBridge, 'attach' | 'detach'>;
   kimi?: KimiSessions;
+  kimiArchive?(ref: SessionRef, archive: string): Promise<void>;
+  kimiWakePending?(ref: SessionRef): boolean;
   /**
    * Потолок машины (спека ёмкости 2026-10-30, 4.2): `CapacityService` хоста. Тип структурный, как у `hooks` и `consents`:
    * сервис ёмкости сам зовёт `launch` сессий, и сессии его не импортируют. `admit` зовётся после бюджета работы и до
@@ -596,6 +610,55 @@ export function createSessionsService(
 
   // Одна смена модели или effort на сессию за раз — общий замок `sessions.setEffort` и `sessions.setModel`.
   const exclusive = createSwitchLock();
+  const kimiHandoffs = new Map<string, Extract<KimiControl, { owner: 'switching' }>>();
+  const kimiResult = new Map<string, KimiControl>();
+  const kimiClaims = new Map<string, { home: string; id: string }>();
+
+  function kimiBlocksChat(ref: SessionRef): boolean {
+    const key = refKey(ref);
+    if (kimiHandoffs.has(key) || kimiClaims.has(key)) return true;
+    const handle = pty.get(ref);
+    // A successful explicit handback has the new ACP handle before the works cache publishes the removed marker.
+    if (handle?.provider === 'kimi' && handle.kimiNative !== true) return false;
+    return works.entry(ref.projectPath, ref.workId)?.map.sessions.some(
+      (session) => session.id === ref.sessionId && session.kimiTerminal !== undefined,
+    ) === true;
+  }
+
+  function checkKimiBinding(ref: SessionRef, home: string, id: string): void {
+    const key = refKey(ref);
+    for (const [other, claim] of kimiClaims) {
+      if (other !== key && claim.home === home && claim.id === id) throw returnKimiFirst();
+    }
+    for (const entry of works.snapshot().entries) {
+      for (const session of entry.map.sessions) {
+        if (session.lifecycle === 'closed' || session.providerSessionId !== id || session.kimiTerminal?.home !== home) continue;
+        if (refKey({ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id }) !== key) throw returnKimiFirst();
+      }
+    }
+  }
+
+  function publishKimiControl(ref: SessionRef, control: KimiControl): KimiControl {
+    host.broadcast('kimi.control', { ref, control });
+    return control;
+  }
+
+  function kimiState(ref: SessionRef, session: WorkSession): KimiControl {
+    const key = refKey(ref);
+    const switching = kimiHandoffs.get(key);
+    if (switching !== undefined) return switching;
+    if (session.kimiTerminal !== undefined) {
+      if (pty.get(ref)?.kimiNative === true) return { owner: 'terminal' };
+      return kimiResult.get(key) ?? { owner: 'stopped', detail: 'Terminal ownership was interrupted. Return to Chat to recover the original conversation.' };
+    }
+    return { owner: 'chat', canTakeover: session.providerSessionId !== null && pty.get(ref)?.provider === 'kimi' };
+  }
+
+  async function kimiControl(ref: SessionRef): Promise<KimiControl> {
+    const session = (await readMap(ref.projectPath, ref.workId)).sessions.find((item) => item.id === ref.sessionId);
+    if (session?.provider !== 'kimi' || kimi === undefined) throw new HostError('bad_request', 'Only Kimi Code has native Terminal ownership');
+    return kimiState(ref, session);
+  }
 
   // Между чтением карты и `pty.start` есть await-и (план команды, поиск
   // бинаря) — за это время может подоспеть второй вызов на ту же сессию:
@@ -737,6 +800,7 @@ export function createSessionsService(
   // Итог `done`/`failed` — другая ось, выход процесса его не трогает.
   pty.on('exit', (ref, exit) => {
     const key = refKey(ref);
+    const wasKimiTerminal = kimiClaims.has(key);
     const issuedGitGrant = gitWriteGrants.get(key);
     const cause = exitCauses.get(key);
     exitCauses.delete(key);
@@ -745,6 +809,12 @@ export function createSessionsService(
     // Токен приёмника живёт, пока жив процесс: `SessionEnd` приходит до выхода, позже хуков нет.
     hooks?.unregister(ref);
     feed.agent?.unregister(ref);
+    if (wasKimiTerminal && !kimiHandoffs.has(key)) {
+      const control: KimiControl = exit.exitCode === 0 && (exit.signal === null || exit.signal === 0)
+        ? { owner: 'exited' }
+        : { owner: 'stopped', detail: 'Kimi Terminal stopped unexpectedly. You can return to the original conversation.' };
+      kimiResult.set(key, publishKimiControl(ref, control));
+    }
     const done = (starting.get(key) ?? Promise.resolve())
       .then(async () => {
         // OpenCode: the server goes with its TUI (spec 4.2, Stop) — the last poll, then the group; never left behind.
@@ -773,7 +843,7 @@ export function createSessionsService(
         }
         // Сторож тихих концовок: письмо только о Stop человека и о выходе без причины; служебная остановка молчит.
         if (cause === 'human') await endings?.stoppedByHuman(ref);
-        else if (cause === undefined) {
+        else if (cause === undefined && !wasKimiTerminal) {
           await endings?.exited(
             ref,
             { exitCode: exit.exitCode, ...(exit.signal === null ? {} : { signal: exit.signal }) },
@@ -926,9 +996,11 @@ export function createSessionsService(
     ref: SessionRef,
     mode: LaunchMode,
     options: LaunchChoice = {},
+    handoff?: KimiHandoff,
   ): Promise<{ outcome: LaunchOutcome; heldKind?: 'folder-trust' | 'project-mcp' }> {
     const key = refKey(ref);
     await afterSweep(ref);
+    if (handoff === undefined && kimiBlocksChat(ref)) throw returnKimiFirst();
     if (launching.has(key) || closing.has(key)) return { outcome: 'started' };
     const live = pty.get(ref);
     if (live !== undefined) {
@@ -937,7 +1009,7 @@ export function createSessionsService(
     }
     launching.add(key);
     try {
-      const outcome = await launchHeld(ref, mode, options);
+      const outcome = await launchHeld(ref, mode, options, true, handoff);
       const heldKind = outcome === 'held' ? heldKinds.get(key) ?? 'folder-trust' : undefined;
       return heldKind === undefined ? { outcome } : { outcome, heldKind };
     } finally {
@@ -962,6 +1034,7 @@ export function createSessionsService(
     requested: LaunchMode,
     choice: LaunchChoice = {},
     notify = true,
+    handoff?: KimiHandoff,
   ): Promise<LaunchOutcome> {
     const key = refKey(ref);
     let mode = requested;
@@ -989,6 +1062,10 @@ export function createSessionsService(
         throw new Error(`session ${ref.sessionId} is not in the map of workspace ${ref.workId}`);
       }
       loggedProvider = session.provider;
+      if (session.kimiTerminal !== undefined && handoff === undefined) throw returnKimiFirst();
+      if (handoff !== undefined && (session.provider !== 'kimi' || session.kimiTerminal === undefined || session.providerSessionId === null)) {
+        throw new HostError('conflict', 'The original Kimi conversation is no longer bound');
+      }
       // Закрытая не поднимается ничем (спека 7.1): процесс без пути в `active`
       // жил бы без записи в карте.
       if (session.lifecycle === 'closed') {
@@ -1000,7 +1077,7 @@ export function createSessionsService(
       }
       // Первый запуск нового агента после замены (спека замены агента, 5.3): новый разговор с пакетом передачи — и у
       // самой замены, и у Resume после отказа, и после согласия на папку Codex.
-      if (options.handover === undefined && options.forkFrom === undefined && mode !== 'new') {
+      if (handoff === undefined && options.handover === undefined && options.forkFrom === undefined && mode !== 'new') {
         if (awaitingAgent(session)) {
           mode = 'launch';
           options = { ...options, handover: pendingHandovers.get(key) ?? (await recollectHandover(ref, session)) };
@@ -1133,6 +1210,9 @@ export function createSessionsService(
       if (capacity !== undefined) {
         const launchClass = options.launchClass ?? launchClassOf(options.by);
         const ticket = await timer.step('machine', () => capacity.admit({ ref, launchClass }));
+        if (ticket.kind === 'queue' && handoff !== undefined) {
+          throw new HostError('conflict', 'No process slot is available. Retry from the Terminal tab.');
+        }
         // Движок в очередь не встаёт: допуск отвечает ему `start`.
         if (ticket.kind === 'queue' && launchClass !== 'engine') {
           // Резерв работы снимается раньше записи очереди и насоса: насос может тут же продвинуть эту запись, а после его
@@ -1173,6 +1253,41 @@ export function createSessionsService(
             ? `${sessionTag(ref.sessionId)} started over the machine limit (${ticket.live + 1}/${ticket.limit})`
             : `${sessionTag(ref.sessionId)} started while memory is critical`;
         }
+      }
+
+      if (handoff !== undefined && 'native' in handoff) {
+        const native = handoff.native;
+        const id = session.providerSessionId!;
+        const args = ['--session', id];
+        validateSpawnBudget(native.command, args, native.env, await spawnLimits());
+        const handle = pty.start(ref, { command: native.command, args, env: native.env, cwd: native.cwd, provider: 'kimi', kimiNative: true });
+        processStarted = true;
+        if (machineReserved) {
+          machineReserved = false;
+          capacity?.settle(ref);
+        }
+        const started = (async () => {
+          try {
+            await startSession(ref.projectPath, ref.workId, ref.sessionId, id, {
+              pid: handle.pid, startedAtProcess: await processStartedAt(handle.pid), launchedBy: 'host',
+            });
+          } finally {
+            if (attemptId !== null) await settleLaunch(ref, attemptId, 'spent');
+          }
+        })();
+        starting.set(key, started.catch(() => {}));
+        try {
+          await started;
+          if (pty.get(ref)?.pid !== handle.pid) throw new HostError('conflict', 'Kimi Terminal exited during startup');
+        } catch (error) {
+          starting.delete(key);
+          await stop(ref);
+          throw error;
+        } finally {
+          starting.delete(key);
+        }
+        failed = false;
+        return 'started';
       }
 
       // Worktree запланирован (`plannedWorktree` в `create()` или в старой карте
@@ -1474,7 +1589,12 @@ export function createSessionsService(
             plan.args.some(arg => arg.startsWith('sandbox_workspace_write.writable_roots='))));
           if (plan.kimiAcp !== undefined) {
             if (kimi === undefined) throw new HostError('bad_request', 'Kimi Code sessions need the ACP transport');
-            nativeKimi = await kimi.start(ref, { ...plan.kimiAcp, command, args, cwd: plan.cwd, env });
+            if (handoff !== undefined && plan.kimiAcp.sessionId !== session.providerSessionId) {
+              throw new HostError('conflict', 'The launch plan did not preserve the original Kimi session ID');
+            }
+            nativeKimi = await kimi.start(ref, { ...plan.kimiAcp, command, args, cwd: plan.cwd, env,
+              ...(handoff === undefined ? {} : { reconcileAt: session.kimiTerminal! }),
+            });
           }
           const spawned = pty.start(ref, {
             ...(nativeKimi === undefined ? {} : { process: nativeKimi.process }),
@@ -1554,7 +1674,16 @@ export function createSessionsService(
       }
       try {
         await timer.step('startWrite', () => started);
-        nativeKimi?.activate();
+        if (handoff !== undefined && 'release' in handoff) {
+          if (nativeKimi === undefined) throw new HostError('conflict', 'Managed Kimi Chat is unavailable');
+          await handoff.release();
+          try {
+            nativeKimi.activate();
+          } catch (error) {
+            await handoff.restore();
+            throw error;
+          }
+        } else nativeKimi?.activate();
         failed = false;
       } catch (error) {
         // Процесс идёт, а карта о нём не знает: окно по карте показывало бы спящую рядом с живым процессом.
@@ -1877,7 +2006,93 @@ export function createSessionsService(
     }
   }
 
+  async function setKimiControl(ref: SessionRef, target: 'chat' | 'terminal', hasDraft = false): Promise<KimiControl> {
+    return exclusive(ref, async () => {
+      const key = refKey(ref);
+      await afterSweep(ref);
+      const map = await readMap(ref.projectPath, ref.workId);
+      const session = map.sessions.find((item) => item.id === ref.sessionId);
+      if (session?.provider !== 'kimi' || session.providerSessionId === null || session.lifecycle === 'closed' || kimi === undefined) {
+        throw new HostError('conflict', 'Start Kimi in Chat before using native Terminal');
+      }
+      if (launching.has(key) || closing.has(key) || session.switching != null) throw busyError('Kimi is starting or switching');
+      const id = session.providerSessionId;
+      const marker = session.kimiTerminal;
+      let native: KimiTakeover | undefined;
+      if (target === 'terminal') {
+        if (marker !== undefined) return kimiState(ref, session);
+        if (hasDraft || pty.get(ref)?.hasDraft()) {
+          throw new HostError('conflict', 'Send or clear the draft before switching to Terminal.', { reason: 'kimi-draft' });
+        }
+        if (feed.kimiWakePending?.(ref) || unreadCount(ref.projectPath, ref.workId, ref.sessionId, { map }).total > 0) {
+          throw new HostError('conflict', 'Wait for Kimi mail delivery to finish first.', { reason: 'kimi-wake' });
+        }
+        native = kimi.takeover(ref, id);
+      } else {
+        if (marker === undefined) return kimiState(ref, session);
+        if (pty.get(ref)?.kimiNative === true || (pty.get(ref) === undefined && await hasLiveProcess(session))) throw exitKimiFirst();
+        if (pty.get(ref) !== undefined) throw busyError('The outgoing Kimi process has not exited');
+      }
+
+      const transition = { owner: 'switching', target } as const;
+      kimiHandoffs.set(key, transition);
+      publishKimiControl(ref, transition);
+      let durable = marker !== undefined;
+      try {
+        if (native !== undefined) {
+          const next = { archive: randomUUID(), cwd: native.cwd, home: native.home };
+          checkKimiBinding(ref, next.home, id);
+          kimiClaims.set(key, { home: next.home, id });
+          await feed.kimiArchive?.(ref, next.archive);
+          await updateMap(ref.projectPath, ref.workId, (map) => {
+            const current = map.sessions.find((item) => item.id === ref.sessionId);
+            if (current?.providerSessionId !== id || current.lifecycle === 'closed') throw busyError('Kimi session changed during handoff');
+            current.kimiTerminal = next;
+          });
+          durable = true;
+          await stop(ref);
+          const { outcome } = await launchDetailed(ref, 'resume', {}, { native });
+          if (outcome !== 'started' || pty.get(ref)?.kimiNative !== true) throw busyError('Kimi Terminal could not start');
+          return publishKimiControl(ref, { owner: 'terminal' });
+        }
+        await finalizing.get(key);
+        if (marker === undefined) throw busyError('The original Kimi binding changed');
+        const { outcome } = await launchDetailed(ref, 'resume', {}, {
+          release: () => updateMap(ref.projectPath, ref.workId, (map) => {
+            const current = map.sessions.find((item) => item.id === ref.sessionId);
+            if (current?.providerSessionId !== id || current.kimiTerminal?.archive !== marker.archive) {
+              throw busyError('Kimi binding changed during handback');
+            }
+            delete current.kimiTerminal;
+          }).then(() => {}),
+          restore: () => updateMap(ref.projectPath, ref.workId, (map) => {
+            const current = map.sessions.find((item) => item.id === ref.sessionId);
+            if (current?.providerSessionId === id && current.kimiTerminal === undefined) current.kimiTerminal = marker;
+          }).then(() => {}),
+        });
+        if (outcome !== 'started') throw busyError('Kimi Chat could not start');
+        kimiResult.delete(key);
+        kimiClaims.delete(key);
+        return publishKimiControl(ref, { owner: 'chat', canTakeover: true });
+      } catch (error) {
+        if (durable) {
+          const control = { owner: 'stopped', detail: error instanceof HostError ? error.message : 'Kimi handoff failed. The original conversation is still bound.' } as const;
+          kimiResult.set(key, publishKimiControl(ref, control));
+        } else {
+          kimiClaims.delete(key);
+          native?.unfreeze();
+          publishKimiControl(ref, { owner: 'chat', canTakeover: pty.get(ref)?.provider === 'kimi' });
+        }
+        throw error;
+      } finally {
+        kimiHandoffs.delete(key);
+      }
+    });
+  }
+
   async function stop(ref: SessionRef, cause?: 'human'): Promise<void> {
+    if (cause === 'human' && kimiHandoffs.has(refKey(ref))) throw busyError('Kimi is switching ownership');
+    if (cause === 'human' && pty.get(ref)?.kimiNative === true) throw exitKimiFirst();
     if (pty.get(ref) !== undefined) {
       exitCauses.set(refKey(ref), cause ?? 'quiet');
       await pty.stop(ref);
@@ -1899,6 +2114,7 @@ export function createSessionsService(
       }
       // `null` — явный «Default» из меню чата: пишется как `null`, а не удаляет поле, иначе после смены
       // вернулось бы умолчание роли.
+      if (session.kimiTerminal !== undefined) throw returnKimiFirst();
       if (choice.model !== undefined) session.model = choice.model;
       if (choice.effort !== undefined) session.effort = choice.effort;
       // Смена модели закрывает отрезок расхода (5.9): тот же разговор, новая модель.
@@ -1932,6 +2148,7 @@ export function createSessionsService(
       // Шаблон запуска без `{model}` (свои `args` в providers.json): модель до CLI не доедет — менять нечего.
       if (next === undefined) throw new HostError('bad_request', `provider ${entry.id} does not accept a model`);
       // Та же модель — ни записи, ни перезапуска: меню отмечает её и так.
+      if (session.kimiTerminal !== undefined) throw returnKimiFirst();
       if (next === session.model) return { model: next, effort: session.effort ?? null, restarted: false };
       // Нет выбора effort — его нет и после смены (умолчание роли не вытесняется); выбор, которого у новой модели
       // нет, становится явным «Default» (`null`).
@@ -2245,6 +2462,7 @@ export function createSessionsService(
     if (session === undefined) {
       throw new HostError('not_found', `session ${ref.sessionId} is not in the map of workspace ${ref.workId}`);
     }
+    if (session.kimiTerminal !== undefined) throw returnKimiFirst();
     // Тот же запрос уже удержан согласием на папку Codex: ответ тот же, повторной замены нет. Тот же `requestId` к другому
     // провайдеру — другой запрос (критик A38a m3; сюда доходит, когда память ответов уже забыла запись).
     if (session.switching?.id === request.requestId) {
@@ -2632,6 +2850,8 @@ export function createSessionsService(
 
   async function close(ref: SessionRef, by?: 'human'): Promise<void> {
     const key = refKey(ref);
+    if (kimiHandoffs.has(key)) throw busyError('Kimi is switching ownership');
+    if (by === 'human' && pty.get(ref)?.kimiNative === true) throw exitKimiFirst();
     closing.add(key);
     try {
       // Сначала остановка, потом `closed`: выход процесса дописывает в карту код
@@ -2644,6 +2864,8 @@ export function createSessionsService(
         }
         if (session.lifecycle !== 'closed') transitionSession(map, ref.sessionId, 'closed');
       });
+      kimiClaims.delete(key);
+      kimiResult.delete(key);
     } finally {
       closing.delete(key);
     }
@@ -2652,6 +2874,8 @@ export function createSessionsService(
 
   async function del(ref: SessionRef, force = false): Promise<void> {
     await afterSweep(ref);
+    if (kimiHandoffs.has(refKey(ref))) throw busyError('Kimi is switching ownership');
+    if (pty.get(ref)?.kimiNative === true) throw exitKimiFirst();
     await stop(ref);
     // Worktree — рабочая копия на диске, а не только запись в карте: грязную
     // без явного согласия теряют молча (спека 8.3), поэтому проверка раньше
@@ -2672,6 +2896,8 @@ export function createSessionsService(
       }
     }
     await deleteSession(ref.projectPath, ref.workId, ref.sessionId);
+    kimiClaims.delete(refKey(ref));
+    kimiResult.delete(refKey(ref));
     if (check) await checkGit(ref);
     gitWriteGrants.delete(refKey(ref));
   }
@@ -2717,6 +2943,7 @@ export function createSessionsService(
 
   return {
     checkWorktreeGit,
+    kimiControl, setKimiControl, kimiBlocksChat, checkKimiBinding,
     create,
     launch,
     stop,

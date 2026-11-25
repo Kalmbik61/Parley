@@ -24,7 +24,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { lstat, open, stat } from 'node:fs/promises';
+import { lstat, mkdir, open, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import {
@@ -61,6 +61,7 @@ import {
   settleCards,
   turnActive,
   withCodexAgentMeta,
+  workPaths,
 } from '@parley/core';
 import type { KimiOutput } from '../kimi/sessions.js';
 import type {
@@ -79,7 +80,7 @@ import type {
   RolloutRecord,
   WorkSession,
 } from '@parley/core';
-import { FEED_MAIL_FEATURE, FEED_SCHEMA_VERSION, FEED_PROGRESS_RETRY_AFTER_MAX_MS, FEED_RESYNC_FEATURE, refKey, sessionRef } from '@parley/protocol';
+import { FEED_MAIL_FEATURE, FEED_SCHEMA_VERSION, FEED_PROGRESS_RETRY_AFTER_MAX_MS, FEED_RESYNC_FEATURE, feedItem, refKey, sessionRef } from '@parley/protocol';
 import type { FeedDecisions, KimiRequest, KimiResponse, ProgressResult, Result, SendResult, SessionRef } from '@parley/protocol';
 import { projectProgress } from './progress.js';
 import { cleanAnswer, typeOwnAnswer } from './terminal-answer.js';
@@ -191,6 +192,7 @@ export interface FeedServiceDeps {
 
 export interface FeedServiceOptions {
   kimiRespond?: (ref: SessionRef, requestId: string, response: KimiResponse) => void;
+  kimiBlocksChat?: (ref: SessionRef) => boolean;
   maxItems?: number;
   maxBytes?: number;
   batchMs?: number;
@@ -240,6 +242,8 @@ export function withoutMail<D extends { upsert: FeedItem[]; removed: string[] }>
 
 export interface FeedService {
   kimiHasHistory(ref: SessionRef): boolean;
+  kimiArchive(ref: SessionRef, archive: string): Promise<void>;
+  kimiPrepareHistory(ref: SessionRef, events: readonly KimiOutput[]): () => void;
   kimiOutput(ref: SessionRef, event: KimiOutput): void;
   kimiRequests(ref: SessionRef, requests: readonly KimiRequest[]): void;
   /**
@@ -1324,6 +1328,12 @@ export function createFeedService(
    */
   function seed(feed: SessionFeed, provider: string, foreground = false): Promise<void> {
     if (stopped) return Promise.resolve();
+    if (provider === 'kimi') {
+      const marker = sessionOf(feed.ref).kimiTerminal;
+      if (marker === undefined) return Promise.resolve();
+      feed.seeding ??= readKimiArchive(feed, marker.archive).finally(() => { feed.seeding = undefined; });
+      return feed.seeding;
+    }
     const key = refKey(feed.ref);
     if (foreground) promoteSeed(key);
     const existing = coldReads.get(key);
@@ -2511,25 +2521,85 @@ export function createFeedService(
     for (const feed of woken) void seedAside(feed.ref);
   });
 
+  function kimiArchiveFile(ref: SessionRef, archive: string): string {
+    return path.join(workPaths(ref.projectPath, ref.workId).dir, 'kimi-history', ref.sessionId, `${archive}.json`);
+  }
+
+  async function readKimiArchive(feed: SessionFeed, archive: string): Promise<void> {
+    try {
+      const file = kimiArchiveFile(feed.ref, archive);
+      if ((await stat(file)).size > maxBytes + 1024) throw new Error('Kimi archive exceeds the feed limit');
+      const saved: unknown = JSON.parse(await readFile(file, 'utf8'));
+      if (!Array.isArray(saved) || saved.length > maxItems) throw new Error('Invalid Kimi archive');
+      const items = saved.map((item) => feedItem.parse(item));
+      if (!feedCurrent(feed) || feed.live) return;
+      commit(feed, { state: { ...emptyFeedState(), items }, changes: items });
+      feed.seeded = true;
+    } catch (error) {
+      log.warn('Kimi Chat archive could not be loaded', { ref: feed.ref, error: String(error) });
+    }
+  }
+
+  function reduceKimi(state: FeedState, event: KimiOutput, time: string): FeedUpdate {
+    if (event.kind === 'end' && event.error === undefined) {
+      return closeFeedTurn(state, time, { interrupted: event.reason === 'cancelled' });
+    }
+    const body = event.kind === 'prompt' ? { hook_event_name: 'UserPromptSubmit', prompt: event.text }
+      : event.kind === 'text' ? { hook_event_name: 'MessageDisplay', message_id: event.messageId, delta: event.text }
+      : { hook_event_name: 'StopFailure', error: event.reason, last_assistant_message: event.error };
+    return applyHookEvent(state, body, time);
+  }
+
   return {
     onHook,
     kimiHasHistory(ref) {
       return feeds.get(refKey(ref))?.state.items.some((item) => item.kind === 'prompt' || item.kind === 'text') ?? false;
+    },
+    async kimiArchive(ref, archive) {
+      const file = kimiArchiveFile(ref, archive);
+      const items = feeds.get(refKey(ref))?.state.items ?? [];
+      const text = JSON.stringify(items);
+      if (Buffer.byteLength(text) > maxBytes + 1024) {
+        throw new HostError('conflict', 'The prior Kimi Chat exceeds the archive limit. Chat remains in control.');
+      }
+      await mkdir(path.dirname(file), { recursive: true });
+      // The map only publishes this unique immutable archive after the complete write.
+      await writeFile(file, text, { mode: 0o600, flag: 'wx' });
+    },
+    kimiPrepareHistory(ref, events) {
+      const feed = feedOf(ref, 'kimi');
+      let state = emptyFeedState();
+      const time = at();
+      for (const event of events) state = reduceKimi(state, event, time).state;
+      if (state.items.length > maxItems || state.items.reduce((sum, item) => sum + itemBytes(item), 0) > maxBytes) {
+        throw new HostError('conflict', 'Kimi history exceeds the Chat handback limit. The prior Chat is unchanged.');
+      }
+      return () => {
+        if (stopped || feed.provider !== 'kimi' || !feedCurrent(feed)) {
+          throw new HostError('conflict', 'The Kimi Chat source changed during handback');
+        }
+        const mail = feed.state.items.filter((item) => item.kind === 'mail');
+        state = { ...state, items: [...state.items, ...mail] };
+        feed.live = true;
+        feed.seeded = true;
+        // Replace a projection, not the immutable pre-handoff evidence. Broadcast removals first:
+        // clients upsert in place and a replay can reuse reducer IDs in a different order.
+        feed.batch.upsert.clear();
+        for (const item of feed.state.items) if (item.kind !== 'mail') feed.batch.removed.add(item.id);
+        flush(feed);
+        feed.state = emptyFeedState();
+        feed.sizes.clear();
+        feed.bytes = 0;
+        commit(feed, { state, changes: [...state.items] });
+        flush(feed);
+      };
     },
     kimiOutput(ref, event) {
       if (stopped) return;
       const feed = feedOf(ref, 'kimi');
       if (feed.provider !== 'kimi') return;
       feed.live = true;
-      const time = at();
-      if (event.kind === 'end' && event.error === undefined) {
-        commit(feed, closeFeedTurn(feed.state, time, { interrupted: event.reason === 'cancelled' }));
-        return;
-      }
-      const body = event.kind === 'prompt' ? { hook_event_name: 'UserPromptSubmit', prompt: event.text }
-        : event.kind === 'text' ? { hook_event_name: 'MessageDisplay', message_id: event.messageId, delta: event.text }
-        : { hook_event_name: 'StopFailure', error: event.reason, last_assistant_message: event.error };
-      commit(feed, applyHookEvent(feed.state, body, time));
+      commit(feed, reduceKimi(feed.state, event, at()));
     },
     kimiRequests(ref, requests) {
       if (stopped || options.kimiRespond === undefined) return;
@@ -2741,6 +2811,7 @@ export function createFeedService(
     },
 
     decide(ref, cardId, decision) {
+      if (options.kimiBlocksChat?.(ref)) throw new HostError('conflict', 'Kimi Chat is read-only while Terminal has control');
       const feed = feeds.get(refKey(ref));
       const card = feed?.state.items.find((item) => isCard(item) && item.cardId === cardId);
       if (feed === undefined || card === undefined || !isCard(card)) {
@@ -2806,6 +2877,7 @@ export function createFeedService(
     },
 
     interrupt(ref) {
+      if (options.kimiBlocksChat?.(ref)) throw new HostError('conflict', 'Use the Kimi Terminal to interrupt the native process');
       const handle = deps.pty.get(ref);
       if (handle === undefined) throw new HostError('not_found', 'session is not running');
       deps.pty.write(ref, ESC);

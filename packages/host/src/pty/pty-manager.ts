@@ -8,6 +8,7 @@
  * конкретную сессию (иначе вывод каждого PTY шёл бы всем клиентам хоста сразу).
  */
 
+import { randomUUID } from 'node:crypto';
 import { refKey } from '@parley/protocol';
 import type { SessionRef } from '@parley/protocol';
 import type { HostContext } from '../context.js';
@@ -34,6 +35,8 @@ export interface PtyHandle {
   rows: number;
   /** Провайдер из `PtyLaunch.provider`; `null` — не задан. */
   provider: string | null;
+  generation?: string;
+  kimiNative?: true;
   /** Черновик человека или черновик хоста — поверх любого будильник не печатает. */
   hasDraft(): boolean;
   /** Режим bracketed paste headless-экрана сессии. */
@@ -89,6 +92,8 @@ interface Session {
   cols: number;
   rows: number;
   provider: string | null;
+  generation?: string;
+  kimiNative?: true;
   /** Разбор потока терминала — только у codex: у остальных состояние приходит хуками. */
   terminal: CodexTerminalParser | null;
   /** OSC 7501 of Qwen Code; other providers — `null`. */
@@ -105,6 +110,8 @@ function toHandle(session: Session): PtyHandle {
     cols: session.cols,
     rows: session.rows,
     provider: session.provider,
+    ...(session.generation === undefined ? {} : { generation: session.generation }),
+    ...(session.kimiNative === true ? { kimiNative: true } : {}),
     hasDraft: () => session.draft.hasDraft || session.draft.hasHostDraft,
     bracketedPaste: () => session.screen.bracketedPaste(),
   };
@@ -152,6 +159,7 @@ export function createPtyManager(host: HostContext, windowCounters?: WindowCount
     const ptyProcess = launch.process ?? spawnPty(launch, size);
     const screen = createScreen(size.cols, size.rows);
     const batcher = new OutputBatcher((data) => {
+      if (sessions.get(key) !== session) return;
       for (const listener of outputListeners) listener(ref, data);
     }, BATCH_INTERVAL_MS);
 
@@ -165,6 +173,7 @@ export function createPtyManager(host: HostContext, windowCounters?: WindowCount
       cols: size.cols,
       rows: size.rows,
       provider: launch.provider ?? null,
+      ...(launch.kimiNative === true ? { generation: randomUUID(), kimiNative: true } : {}),
       terminal: launch.provider === 'codex' ? createCodexTerminalParser() : null,
       programStatus: launch.provider === 'qwen' ? createQwenTerminalParser() : null,
       stopWaiters: [],
@@ -174,6 +183,7 @@ export function createPtyManager(host: HostContext, windowCounters?: WindowCount
     host.busy(key, true);
 
     ptyProcess.onData((data) => {
+      if (sessions.get(key) !== session) return;
       windowCounters?.pty(Buffer.byteLength(data));
       session.screen.write(data);
       session.batcher.push(data);
@@ -197,11 +207,13 @@ export function createPtyManager(host: HostContext, windowCounters?: WindowCount
     });
 
     ptyProcess.onExit((exit) => {
-      sessions.delete(key);
-      host.busy(key, false);
+      const current = sessions.get(key) === session;
       session.batcher.dispose();
       session.screen.dispose();
       try {
+        if (!current) return;
+        sessions.delete(key);
+        host.busy(key, false);
         try {
           host.broadcast('pty.exit', { ref, exitCode: exit.exitCode, signal: exit.signal });
         } catch (error) {
@@ -311,7 +323,8 @@ export function createPtyManager(host: HostContext, windowCounters?: WindowCount
     list: () => Array.from(sessions.values()).map(toHandle),
 
     write(ref, data) {
-      requireSession(ref).process.write(data);
+      const session = requireSession(ref);
+      if (session.kimiNative !== true) session.process.write(data);
     },
 
     input(ref, data) {
