@@ -4,6 +4,12 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
+## 0.39.4
+
+### Added
+
+- **Russian and English interface.** In **Settings → Appearance → Interface language**, select **Russian**, **English**, or **System**, then restart Parley. The language choice also applies to the Island, Parley's Telegram bot, CLI help, and new plan exports. Agent messages and project content keep their original wording. ([#257](https://github.com/Kalmbik61/Parley/pull/257))
+
 ## 0.39.3
 
 This patch corrects the CI expectations for the native Kimi integration. It does not change app behavior or grant remote clients access to new methods.
