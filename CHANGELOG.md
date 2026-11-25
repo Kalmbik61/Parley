@@ -4,6 +4,28 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
+## 0.39.2
+
+### Added
+
+- **Kimi Chat and Terminal share one native session.** Switch between views without a takeover or restart. Resume the same conversation, pick Manual, YOLO, or Auto when launching, and use Parley tools from the first prompt in a fresh session. The island shows the native permission choices in their original wording and order. Unrecognized prompts open in Terminal. ([#256](https://github.com/Kalmbik61/Parley/pull/256))
+
+### Fixed
+
+- Codex asynchronous questions appear in the normal Chat form, with the original choices and free-text answers. ([#254](https://github.com/Kalmbik61/Parley/pull/254))
+- Outgoing Chat messages stay visible until the session feed confirms them. They no longer disappear in the gap or show up twice. ([#255](https://github.com/Kalmbik61/Parley/pull/255))
+
+### Impact
+
+- **Goal** — Keep Chat and Terminal on the same Kimi conversation and keep Chat usable while the provider catches up.
+- **Behaviour** — Both Kimi views use the same native process, and the island answers the current native prompt. Codex questions and outgoing Chat messages stay in Chat.
+- **Numbers** — Feature acceptance recorded 3,943 passing tests and 7 skipped across five suites. One Electron end-to-end run with the production host covered all three Kimi launch modes, four island choices, and 50 Parley tools.
+- **Screens** — No new capture for the release bump.
+- **For the human** — Open the same Kimi conversation in Chat or Terminal. For Codex follow-up questions, answer in the Chat form.
+- **Risk** — Kimi native end-to-end coverage is limited to stock Kimi Code 2.7.3 in English. Fresh tool setup creates one extra empty conversation.
+- **Cost** — The end-to-end run made 7 loopback model requests and no paid requests. Runtime overhead was not measured.
+- **Verdict** — The shared native flow passed stock Kimi acceptance within that scope.
+
 ## 0.39.1
 
 ### Added
