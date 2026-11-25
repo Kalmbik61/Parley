@@ -3,11 +3,12 @@ import type { FeedDecision, KimiPermissionMode } from '@parley/core';
 import { refKey, type KimiRequest, type SessionRef } from '@parley/protocol';
 import { HostError } from '../errors.js';
 import type { Log } from '../log.js';
+import { PASTE_END, PASTE_START } from '../pty/codex-input.js';
 import type { PtyHandle, PtyManager } from '../pty/pty-manager.js';
 import { typeAndSubmit } from '../pty/type-and-submit.js';
 import { KIMI_ENTER_DELAY_MS } from '../pty/send.js';
-import { kimiComposer, kimiModeMenu, kimiPermissionMenu, kimiQuestionMenu, kimiQuestionReview } from './native-screen.js';
-import { createKimiWire, KIMI_SESSION_ID, projectKimiWire, record, type KimiWireEvent } from './native-wire.js';
+import { kimiComposer, kimiLazyVersion, kimiModeMenu, kimiParleyCount, kimiPermissionMenu, kimiQuestionMenu, kimiQuestionReview, kimiStartedId, kimiStartupDialog } from './native-screen.js';
+import { createKimiWire, KIMI_SESSION_ID, projectKimiWire, proveKimiEmptyStartup, record, type KimiWireEvent } from './native-wire.js';
 
 export interface KimiNativeBinding {
   home: string;
@@ -15,6 +16,19 @@ export interface KimiNativeBinding {
   legacyArchive?: string;
   legacyProviderId?: string;
 }
+
+export type KimiBootstrapOwner = { nonce: string; pid: number; generation: string };
+export const KIMI_BOOTSTRAP_INTERRUPTED = 'Kimi first-turn setup was interrupted after session creation could have started. Startup input stays blocked. The conversation and queued messages were kept. Stop this session and create a new Kimi session.';
+
+type Bootstrap = {
+  nonce: string;
+  deadline?: number;
+  task?: Promise<void>;
+  rotating?: true;
+  failed?: true;
+  expects?: { previous: string | null };
+  observedId?: string;
+};
 
 type Pending = Extract<KimiWireEvent, { kind: 'request' }> & {
   acted?: true;
@@ -28,6 +42,7 @@ type Live = {
   id: string | null;
   pty?: PtyHandle;
   listed: boolean;
+  toolNames?: readonly string[];
   busy: boolean;
   fenced: boolean;
   pending: Map<string, Pending>;
@@ -38,6 +53,7 @@ type Live = {
   manualTask?: Promise<void>;
   manualConfirmed?: true;
   manualFailed?: true;
+  bootstrap?: Bootstrap;
   wasReady?: boolean;
   publishedActivity?: string;
   publishedRequests?: string;
@@ -46,17 +62,19 @@ type Live = {
 interface Options {
   pty: PtyManager;
   log: Pick<Log, 'warn'>;
-  bind(ref: SessionRef, binding: KimiNativeBinding, id: string, pid: number): Promise<void>;
+  bind(ref: SessionRef, binding: KimiNativeBinding, id: string, pid: number, bootstrap?: { owner: KimiBootstrapOwner; previous: string | null }): Promise<void>;
+  bootstrap(ref: SessionRef, binding: KimiNativeBinding, owner: KimiBootstrapOwner, id: string | null, action: 'arm' | 'verify' | 'complete'): Promise<void>;
   event(ref: SessionRef, id: string, event: KimiWireEvent, historical?: boolean): void;
   reset(ref: SessionRef, sameId: boolean): void;
   requests(ref: SessionRef, requests: KimiRequest[], unresolved: boolean): void;
   activity(ref: SessionRef, state: 'ready' | 'working' | 'blocked' | 'ended'): void;
-  startupFailed(ref: SessionRef, generation: string): void;
+  startupFailed(ref: SessionRef, generation: string, message?: string): void;
   readyChanged(ref: SessionRef): void;
   fence(ref: SessionRef): void;
 }
 
 const POLL_MS = 120;
+const STARTUP_WAIT_MS = 15_000;
 const FALLBACK = { applied: false, state: 'pending' as const };
 const SENT = { applied: true, state: 'pending' as const };
 const STALE = { applied: false, state: 'stale' as const };
@@ -76,7 +94,10 @@ export function createKimiNativeSession(options: Options) {
   const { pty } = options;
   const liveByRef = new Map<string, Live>();
   const get = (ref: SessionRef) => liveByRef.get(refKey(ref));
-  const matches = (live: Live) => get(live.ref) === live && live.pty?.pid === pty.get(live.ref)?.pid;
+  const matches = (live: Live) => {
+    const handle = pty.get(live.ref);
+    return get(live.ref) === live && handle !== undefined && handle.pid === live.pty?.pid && handle.generation === live.pty.generation;
+  };
   const view = (live: Live) => pty.screenText(live.ref) ?? [];
   const kActivity = (live: Live, state: 'ready' | 'working' | 'blocked' | 'ended') => {
     if (live.publishedActivity === state) return;
@@ -121,15 +142,149 @@ export function createKimiNativeSession(options: Options) {
   function ready(ref: SessionRef, draft = false): boolean {
     const live = get(ref);
     if (live === undefined || !matches(live) || !live.listed || live.busy || live.fenced || live.pending.size !== 0 ||
-        (live.permissionMode === 'manual' && live.manualConfirmed !== true)) return false;
+        live.bootstrap !== undefined || (live.permissionMode === 'manual' && live.manualConfirmed !== true)) return false;
     // Close the gap between Return and the provider repaint/first turn hook.
     if (Date.now() - (pty.get(ref)?.submittedAt?.() ?? 0) < 350) return false;
     const composer = kimiComposer(view(live));
     return composer !== undefined && (draft ? !composer.empty : composer.empty);
   }
 
+  function ownerOf(live: Live, boot: Bootstrap): KimiBootstrapOwner | undefined {
+    const handle = live.pty;
+    if (handle?.generation === undefined) return undefined;
+    return { nonce: boot.nonce, pid: handle.pid, generation: handle.generation };
+  }
+
+  function failBootstrap(live: Live, why: string): void {
+    const boot = live.bootstrap;
+    if (!boot || boot.failed) return;
+    boot.failed = true;
+    delete boot.expects;
+    if (!matches(live)) return;
+    kActivity(live, 'blocked');
+    if (live.pty?.generation !== undefined) options.startupFailed(live.ref, live.pty.generation, boot.rotating
+      ? KIMI_BOOTSTRAP_INTERRUPTED
+      : live.permissionMode === 'manual'
+        ? 'Kimi could not confirm its startup screen and Always Ask mode. Startup input is blocked. Stop and resume this session to retry.'
+        : 'Kimi could not confirm its startup screen or permission mode. Startup input is blocked. Stop and resume this session to retry.');
+    options.log.warn('Kimi first-turn bootstrap stopped', { ref: live.ref, reason: why });
+  }
+
+  function bootstrapFresh(live: Live): void {
+    const boot = live.bootstrap;
+    if (!boot || boot.failed || boot.task) return;
+    const screen = view(live);
+    if (kimiStartupDialog(screen) !== undefined) {
+      boot.deadline = Date.now() + STARTUP_WAIT_MS;
+      return;
+    }
+    const handle = pty.get(live.ref);
+    const owner = ownerOf(live, boot);
+    const version = kimiLazyVersion(screen);
+    if (version !== undefined && version !== '2.7.3') return failBootstrap(live, 'unsupported Kimi version');
+    if (version === undefined || !handle || !owner || handle.bracketedPaste() !== true || handle.hasDraft() || kimiComposer(screen)?.empty !== true) {
+      if (Date.now() >= (boot.deadline ??= Date.now() + STARTUP_WAIT_MS)) failBootstrap(live, 'no verified lazy composer');
+      return;
+    }
+
+    const input = handle.inputRevision?.();
+    const valid = () => matches(live) && !boot.failed && live.bootstrap === boot && !live.fenced &&
+      pty.get(live.ref)?.inputRevision?.() === input && live.pending.size === 0 && kimiStartupDialog(view(live)) === undefined;
+    const requireCurrent = () => { if (!valid()) throw new Error('The startup input or generation changed'); };
+    async function wait<T>(probe: () => T | undefined | Promise<T | undefined>, reason: string): Promise<T> {
+      const deadline = Date.now() + STARTUP_WAIT_MS;
+      while (valid() && Date.now() < deadline) {
+        const result = await probe();
+        requireCurrent();
+        if (result !== undefined) return result;
+        await delay(40);
+      }
+      throw new Error(reason);
+    }
+    const composer = () => kimiComposer(view(live));
+    const idle = () => wait(() => composer()?.empty === true ? true : undefined, 'The native editor did not become empty');
+    async function command(text: '/permission' | '/new' | '/mcp', beforeEnter?: () => void | Promise<void>) {
+      await idle();
+      requireCurrent();
+      if (pty.get(live.ref)?.bracketedPaste() !== true || pty.get(live.ref)?.hasDraft()) throw new Error('The editor is not exclusively owned by startup');
+      const pasted = () => composer()?.empty === false && view(live).some(line => /^│ >\s*(\/permission|\/new|\/mcp)\s*│$/.exec(line.trim())?.[1] === text);
+      pty.write(live.ref, `${PASTE_START}${text}${PASTE_END}`);
+      await delay(KIMI_ENTER_DELAY_MS);
+      await wait(() => pasted() ? true : undefined, `The exact ${text} startup command was not painted`);
+      await beforeEnter?.();
+      requireCurrent();
+      if (!pasted()) throw new Error('The startup command was changed before Return');
+      pty.write(live.ref, '\r');
+    }
+    const modeMenu = () => wait(() => kimiModeMenu(view(live)), 'Permission mode could not be confirmed');
+    const newIdentity = (previous: string | null) => wait(() => {
+      const id = live.id;
+      return id !== null && id !== previous && boot.observedId === id && kimiStartedId(view(live)) === id ? id : undefined;
+    }, 'The authenticated new provider identity did not match Terminal');
+    async function wireReady(id: string) {
+      const names = live.toolNames;
+      if (!names) return undefined;
+      const proof = await proveKimiEmptyStartup({ ...live.binding, sessionId: id }, names);
+      if (proof === 'unsafe') throw new Error('The full native wire did not prove an empty conversation and exact tool catalog');
+      return proof === 'ready' && live.toolNames === names ? names : undefined;
+    }
+
+    boot.task = (async () => {
+      if (live.id !== null || live.busy) throw new Error('Startup did not own an unbound conversation');
+      await command('/permission');
+      let menu = await modeMenu();
+      const intended = live.permissionMode === undefined ? menu.current : { manual: 0, yolo: 1, auto: 2 }[live.permissionMode];
+      if (menu.current !== intended && live.permissionMode === 'manual') {
+        if (menu.selected !== 0) pty.write(live.ref, '\x1b[A'.repeat(menu.selected));
+        await wait(() => kimiModeMenu(view(live))?.selected === 0 ? true : undefined, 'Always Ask could not be selected');
+        requireCurrent();
+        pty.write(live.ref, '\r');
+        await command('/permission');
+        menu = await modeMenu();
+      }
+      if (menu.current !== intended) throw new Error('The native initial permission mode does not match the requested mode');
+      requireCurrent();
+      pty.write(live.ref, '\x1b');
+      await idle();
+      if (kimiLazyVersion(view(live)) !== '2.7.3') throw new Error('The native lazy identity disappeared');
+      await command('/new', async () => {
+        requireCurrent();
+        await options.bootstrap(live.ref, live.binding, owner, null, 'arm');
+        boot.rotating = true;
+        requireCurrent();
+        boot.expects = { previous: null };
+      });
+      const first = await newIdentity(null);
+      await command('/mcp');
+      const catalog = await wait(async () => {
+        const names = await wireReady(first);
+        return names && kimiParleyCount(view(live)) === names.length ? names : undefined;
+      }, 'The complete Parley tool catalog could not be confirmed');
+      await command('/new', async () => {
+        await options.bootstrap(live.ref, live.binding, owner, first, 'verify');
+        if (live.id !== first || await wireReady(first) !== catalog || kimiParleyCount(view(live)) !== catalog.length) {
+          throw new Error('The empty bootstrap identity or discovery changed before rotation');
+        }
+        requireCurrent();
+        boot.expects = { previous: first };
+      });
+      const final = await newIdentity(first);
+      await command('/permission');
+      if ((await modeMenu()).current !== intended) throw new Error('The final native permission mode changed');
+      requireCurrent();
+      pty.write(live.ref, '\x1b');
+      await idle();
+      await wait(() => wireReady(final), 'The final conversation did not confirm the full Parley tool catalog');
+      requireCurrent();
+      await options.bootstrap(live.ref, live.binding, owner, final, 'complete');
+      requireCurrent();
+      if (live.permissionMode === 'manual') live.manualConfirmed = true;
+      delete live.bootstrap;
+    })().catch((error: unknown) => failBootstrap(live, error instanceof Error ? error.message : 'unverified startup'));
+  }
+
   function bootstrapManual(live: Live): void {
-    if (live.permissionMode !== 'manual' || live.manualConfirmed || live.manualTask || live.manualFailed || !live.listed || live.busy || live.fenced) return;
+    if (live.bootstrap || live.permissionMode !== 'manual' || live.manualConfirmed || live.manualTask || live.manualFailed || !live.listed || live.busy || live.fenced) return;
     const handle = pty.get(live.ref);
     if (handle?.bracketedPaste() !== true || handle.hasDraft() || kimiComposer(view(live))?.empty !== true) return;
     const rawRevision = handle.inputRevision?.();
@@ -209,6 +364,7 @@ export function createKimiNativeSession(options: Options) {
       live.timer = setTimeout(() => tick(live), POLL_MS);
       live.timer.unref();
       publishRequests(live);
+      bootstrapFresh(live);
       bootstrapManual(live);
       const isReady = ready(live.ref);
       if (isReady && live.publishedActivity === undefined) kActivity(live, 'ready');
@@ -223,12 +379,25 @@ export function createKimiNativeSession(options: Options) {
         typeof body.session_id !== 'string' || !KIMI_SESSION_ID.test(body.session_id)) return false;
     const id = body.session_id;
     if (body.hook_event_name === 'SessionStart') {
+      const boot = live.bootstrap;
+      let transition: { owner: KimiBootstrapOwner; previous: string | null } | undefined;
+      if (boot !== undefined) {
+        if (boot.failed || boot.observedId === id) return true;
+        const owner = ownerOf(live, boot);
+        if (!boot.expects || !owner || !matches(live) || boot.expects.previous !== live.id || id === live.id) {
+          failBootstrap(live, 'unexpected native SessionStart');
+          return true;
+        }
+        transition = { owner, previous: boot.expects.previous };
+        boot.observedId = id;
+        delete boot.expects;
+      }
       // Hold the guarded sender while source identity is changing.
       const old = live.id;
       live.busy = old !== null && old !== id;
       const task = live.queue.then(async () => {
-        if (!matches(live) || live.pty === undefined) return;
-        await options.bind(ref, live.binding, id, live.pty.pid);
+        if (!matches(live) || live.pty === undefined || boot?.failed) return;
+        await options.bind(ref, live.binding, id, live.pty.pid, transition);
         if (!matches(live)) return;
         if (live.id !== id) {
           if (live.id !== null) options.reset(ref, false);
@@ -239,10 +408,13 @@ export function createKimiNativeSession(options: Options) {
         live.busy = false;
       });
       live.queue = task.catch(() => {
+        if (boot) failBootstrap(live, 'authenticated bootstrap identity could not be bound');
         live.fenced = true;
         options.fence(ref);
         options.log.warn('Kimi native provider binding could not be verified', { ref });
       });
+    } else if (live.bootstrap && body.hook_event_name === 'UserPromptSubmit') {
+      failBootstrap(live, 'a human or model turn arrived before readiness');
     } else if (id === live.id && body.hook_event_name === 'UserPromptSubmit') {
       live.busy = true;
       kActivity(live, 'working');
@@ -320,11 +492,12 @@ export function createKimiNativeSession(options: Options) {
   });
 
   return {
-    async prepare(ref: SessionRef, binding: KimiNativeBinding, id: string | null, instructions: string, permissionMode?: KimiPermissionMode) {
+    async prepare(ref: SessionRef, binding: KimiNativeBinding, id: string | null, instructions: string, permissionMode?: KimiPermissionMode, bootstrapNonce?: string) {
       if (id !== null && !KIMI_SESSION_ID.test(id)) throw new HostError('conflict', 'The saved Kimi ID is not a stock native session ID.');
       const wire = id === null ? undefined : await createKimiWire({ ...binding, sessionId: id });
       const live: Live = { ref, binding, id, instructions, listed: false, busy: false, fenced: false,
-        pending: new Map(), queue: Promise.resolve(), ...(wire === undefined ? {} : { wire }), ...(permissionMode === undefined ? {} : { permissionMode }) };
+        pending: new Map(), queue: Promise.resolve(), ...(wire === undefined ? {} : { wire }), ...(permissionMode === undefined ? {} : { permissionMode }),
+        ...(bootstrapNonce === undefined ? {} : { bootstrap: { nonce: bootstrapNonce } }) };
       liveByRef.set(refKey(ref), live);
     },
     abort(ref: SessionRef) {
@@ -334,12 +507,25 @@ export function createKimiNativeSession(options: Options) {
     },
     has(ref: SessionRef) { return get(ref) !== undefined; },
     instructions(ref: SessionRef) { return get(ref)?.instructions; },
-    allowRaw(ref: SessionRef) {
+    interrupt(ref: SessionRef) {
       const live = get(ref);
-      if (!live || live.permissionMode !== 'manual' || live.manualConfirmed) return true;
-      return live.manualTask === undefined && view(live).some(line => /Trust this folder\?|(?:Sign in|Log in) to (?:Kimi|continue)/i.test(line));
+      if (live?.bootstrap) failBootstrap(live, 'the session was stopped');
     },
-    listed(ref: SessionRef) { const live = get(ref); if (live) live.listed = true; },
+    allowRaw(ref: SessionRef, data: string) {
+      const live = get(ref);
+      if (!live || (!live.bootstrap && (live.permissionMode !== 'manual' || live.manualConfirmed))) return true;
+      if (live.bootstrap?.task || live.bootstrap?.failed || live.manualTask || live.manualFailed) return false;
+      const dialog = kimiStartupDialog(view(live));
+      if (dialog === 'trust') return ['\r', '\n', ' ', '\x1b[A', '\x1b[B', '\x1b', '\x03'].includes(data);
+      return dialog === 'login' && (data === '\x03' || data === '\x1b');
+    },
+    listed(ref: SessionRef, names: readonly string[]) {
+      const live = get(ref);
+      if (!live) return;
+      const sorted = [...names].sort();
+      if (live.toolNames?.join('\0') !== sorted.join('\0')) live.toolNames = sorted;
+      live.listed = true;
+    },
     onHook,
     ready,
     decide,

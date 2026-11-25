@@ -307,6 +307,8 @@ export interface WorkSession {
   kimiChatCheckpoint?: { archive: string; priorArchive: string; cwd: string; home: string };
   /** Exact native data root and working directory, plus any retained evidence from the old handoff path. */
   kimiNativeBinding?: { cwd: string; home: string; legacyArchive?: string; legacyProviderId?: string };
+  /** Durable ownership fence for first-turn native startup. Never carried to another provider. */
+  kimiNativeBootstrap?: { nonce: string; phase: 'reserved' | 'rotating' };
   /**
    * Облегчённый запуск (спека «меньше ходов и легче контекст», C2.2): решение принимается один раз при создании
    * сессии и одинаково применяется при `resume`. Нет поля = `false`: карты до этого куска читаются без миграции.

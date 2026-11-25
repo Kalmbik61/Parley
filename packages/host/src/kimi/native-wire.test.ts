@@ -3,7 +3,7 @@ import { appendFile, mkdir, mkdtemp, rename, rm, writeFile } from 'node:fs/promi
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, expect, it } from 'vitest';
-import { createKimiWire, projectKimiWire } from './native-wire.js';
+import { createKimiWire, projectKimiWire, proveKimiEmptyStartup } from './native-wire.js';
 
 const cwd = '/private/tmp/fixture';
 const sessionId = 'session_00000000-0000-4000-8000-000000000001';
@@ -46,6 +46,24 @@ it('does not replay a truncated wire even if its original path still exists', as
   expect(await reader.read()).toEqual({ rows: [], limitation: 'truncated' });
   await appendFile(file, '{"type":"turn.ended","agentId":"main"}\n');
   expect(await reader.read()).toEqual({ rows: [], limitation: 'truncated' });
+});
+
+it('requires a complete empty startup wire and an exact enabled Parley catalog', async () => {
+  const prove = () => proveKimiEmptyStartup({ home, cwd, sessionId }, ['get_map', 'check_inbox']);
+  const discovery = { type: 'mcp.tools_discovered', agentId: 'main', serverName: 'parley',
+    tools: [{ name: 'get_map' }, { name: 'check_inbox' }], enabledNames: ['check_inbox', 'get_map'] };
+  const row = JSON.stringify(discovery);
+  expect(await prove()).toBe('waiting');
+  await writeFile(file, header + row);
+  expect(await prove()).toBe('waiting');
+  await appendFile(file, '\n');
+  expect(await prove()).toBe('ready');
+  await appendFile(file, '{"type":"turn.prompt"}\n');
+  expect(await prove()).toBe('unsafe');
+  await writeFile(file, header + JSON.stringify({ ...discovery, enabledNames: ['get_map'] }) + '\n');
+  expect(await prove()).toBe('unsafe');
+  await writeFile(file, header + row + '\n{"type":"unknown"}\n');
+  expect(await prove()).toBe('unsafe');
 });
 
 it('projects only positively attributed human parts, closed blocks, and turn ends', () => {

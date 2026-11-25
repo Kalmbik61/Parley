@@ -734,6 +734,7 @@ export {
   RATE_WINDOW_MS,
   createParleyServer,
   createToolRunner,
+  sessionMcpExtraToolNames,
   finishedState,
   takeInlineMail,
   sessionRoomPacket,

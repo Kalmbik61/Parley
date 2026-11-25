@@ -258,7 +258,7 @@ export interface FeedService {
   kimiOutput(ref: SessionRef, event: KimiOutput): void;
   kimiRequests(ref: SessionRef, requests: readonly KimiRequest[]): void;
   kimiNativeEvent(ref: SessionRef, source: string, event: KimiWireEvent, historical?: boolean): void;
-  kimiNativeStartupFailed(ref: SessionRef, generation: string): void;
+  kimiNativeStartupFailed(ref: SessionRef, generation: string, message?: string): void;
   kimiNativeReset(ref: SessionRef, sameId: boolean): void;
   kimiNativeRequests(ref: SessionRef, requests: KimiRequest[], unresolved: boolean): void;
   /**
@@ -2981,11 +2981,11 @@ export function createFeedService(
       feed.live = true;
       nativeKimiEvent(feed, source, event, historical);
     },
-    kimiNativeStartupFailed(ref, generation) {
+    kimiNativeStartupFailed(ref, generation, message) {
       if (stopped) return;
       const feed = feedOf(ref, 'kimi');
       const item: FeedItem = { kind: 'error', id: `kimi-startup:${generation}`, at: at(), error: 'kimi-native-startup',
-        message: 'Kimi could not confirm Always Ask. Startup input is blocked. Stop and resume this session to retry.' };
+        message: message ?? 'Kimi could not confirm Always Ask. Startup input is blocked. Stop and resume this session to retry.' };
       if (feed.provider !== 'kimi' || feed.state.items.some(row => row.id === item.id)) return;
       commit(feed, { state: { ...feed.state, items: [...feed.state.items, item] }, changes: [item] });
     },

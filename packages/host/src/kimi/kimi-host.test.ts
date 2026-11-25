@@ -27,18 +27,24 @@ async function call<M extends MethodName>(method: M, params: Params<M>): Promise
   return response.result as Result<M>;
 }
 
-async function setup() {
+async function setup(unsupported = false) {
   home = await tempHome();
   const binary = path.join(home, 'kimi');
   const projectPath = path.join(home, 'project');
   const data = path.join(home, 'kimi-data');
   const trace = path.join(home, 'native.jsonl');
+  const keys = path.join(home, 'input.txt');
   await mkdir(projectPath);
   await mkdir(data);
   await writeFile(binary, `#!/usr/bin/env node
 if (process.argv[2] === 'acp') process.exit(21);
 process.getBuiltinModule('node:fs').appendFileSync(process.env.KIMI_FIXTURE_NATIVE_LAUNCH_LOG,
   JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd(), home: process.env.KIMI_CODE_HOME }) + '\\n');
+${unsupported ? `if (process.stdout.isTTY) {
+  process.stdout.write(${JSON.stringify('\x1b[?2004h│ Version: 2.7.2 │\r\nNo session yet — one will be created on your first message.\r\n╭──────────╮\r\n│ >        │\r\n╰──────────╯\r\n')});
+  process.stdin.setRawMode(true);
+  process.stdin.on('data', (data) => process.getBuiltinModule('node:fs').appendFileSync(${JSON.stringify(keys)}, data));
+}` : ''}
 process.stdin.resume();
 `, { mode: 0o755 });
   vi.stubEnv('PARLEY_KIMI_BIN', binary);
@@ -53,7 +59,7 @@ process.stdin.resume();
   expect(greeting.result).toMatchObject({ features: expect.arrayContaining([
     KIMI_LAUNCH_MODES_FEATURE, KIMI_PTY_GENERATION_FEATURE, KIMI_SHARED_TERMINAL_FEATURE,
   ]) });
-  return { projectPath, data, trace };
+  return { projectPath, data, trace, keys };
 }
 
 afterEach(async () => {
@@ -94,6 +100,21 @@ it('rejects non-Kimi and invalid wire preferences', async () => {
   const { projectPath } = await setup();
   expect((await request('sessions.create', { ...input(projectPath), provider: 'codex', kimiPermissionMode: 'auto' })).error).toBeDefined();
   expect((await request('sessions.create', { ...input(projectPath), kimiPermissionMode: 'plan' as 'manual' })).error).toBeDefined();
+});
+
+it('keeps input blocked with an actionable error on an unsupported startup screen', async () => {
+  const { projectPath, keys } = await setup(true);
+  const { ref } = await call('sessions.create', { ...input(projectPath), kimiPermissionMode: 'manual' });
+  const { generation } = await call('pty.attach', { ref });
+  await expect.poll(async () => (await call('feed.snapshot', { ref })).items, { timeout: 4000 }).toContainEqual(expect.objectContaining({
+    kind: 'error', error: 'kimi-native-startup', message: expect.stringMatching(/stop and resume/i),
+  }));
+  expect(await call('pty.send', { ref, text: 'irrelevant', submit: true })).toMatchObject({ inserted: false, submitted: false });
+  client!.send({ method: 'pty.input', params: { ref, data: 'irrelevant\r', generation } });
+  expect((await call('pty.screenText', { ref })).lines.join('\n')).toContain('Version: 2.7.2');
+  await expect(readFile(keys, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  const session = (await readMap(ref.projectPath, ref.workId)).sessions.find(item => item.id === ref.sessionId);
+  expect(session).toMatchObject({ providerSessionId: null, kimiNativeBootstrap: { phase: 'reserved' } });
 });
 
 it('reports a foreign same-name MCP entry before launching and preserves its bytes', async () => {

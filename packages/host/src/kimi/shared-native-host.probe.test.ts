@@ -15,31 +15,27 @@ import { startHost, type RunningHost } from '../host.js';
 import { hostPaths } from '../paths.js';
 import { createScreen } from '../pty/screen.js';
 import { workspaceKey } from './date-provenance.js';
-import { kimiModeMenu, kimiPermissionMenu } from './native-screen.js';
+import { kimiPermissionMenu } from './native-screen.js';
 
 const bin = '/Users/kalmbik61/.kimi-code/bin/kimi';
 const optIn = process.env['PARLEY_KIMI_SHARED_HOST_BIN'];
 const fixtureManualDefault = process.env['PARLEY_KIMI_SHARED_HOST_MANUAL_DEFAULT'] === '1';
-const probeWorkspaceMcp = process.env['PARLEY_KIMI_SHARED_HOST_COLD_MCP'] === '1';
 const probeStartupRecovery = process.env['PARLEY_KIMI_SHARED_HOST_STARTUP_RECOVERY'] === '1';
-const probeEmptyNew = process.env['PARLEY_KIMI_SHARED_HOST_EMPTY_NEW'] === '1';
-const emptyNewMode = process.env['PARLEY_KIMI_SHARED_HOST_EMPTY_NEW_MODE'] ?? 'manual';
+const probeAutomaticBootstrap = process.env['PARLEY_KIMI_SHARED_HOST_AUTOMATIC_BOOTSTRAP'] === '1';
+const bootstrapMode = process.env['PARLEY_KIMI_SHARED_HOST_BOOTSTRAP_MODE'] ?? 'manual';
 const model = 'parley-offline-fixture';
 const original = 'INTEGRATED_ORIGINAL_PROMPT';
 const native = 'INTEGRATED_NATIVE_PROMPT';
 const multiline = 'INTEGRATED_MULTILINE_PROMPT';
 const wrapped = 'INTEGRATED_WRAPPED_PROMPT';
 const recovered = 'INTEGRATED_RECOVERED_STARTUP';
-const modeMarkers = { auto: 'INTEGRATED_COLD_AUTO', yolo: 'INTEGRATED_COLD_YOLO' } as const;
-const modeTurns = new Set<string>(Object.values(modeMarkers));
+const deferred = 'INTEGRATED_DEFERRED_STARTUP';
 const approval = 'NATIVE_HOST_PERMISSION_PROBE';
 const reject = 'NATIVE_HOST_REJECT_PROBE';
 const feedback = 'NATIVE_HOST_FEEDBACK_PROBE';
 const always = 'NATIVE_HOST_SESSION_APPROVAL';
 const ask = 'NATIVE_HOST_QUESTION_PROBE';
 const afterNew = 'NATIVE_HOST_AFTER_NEW';
-const freshCold = 'NATIVE_HOST_FRESH_COLD';
-const freshAfterNew = 'NATIVE_HOST_FRESH_AFTER_NEW';
 const emptyNewFirst = 'NATIVE_HOST_EMPTY_NEW_FIRST';
 const unbound = 'NATIVE_HOST_UNBOUND';
 const mail = 'NATIVE_HOST_QUEUED_MAIL';
@@ -68,7 +64,7 @@ test.skipIf(!optIn)('shares real production host Chat and Terminal on one stock 
       const body = JSON.parse(input);
       expect([body.model, body.stream]).toEqual([model, true]);
       const history = JSON.stringify(body.messages);
-      const turn = [original, native, multiline, wrapped, recovered, ...modeTurns, ...mapTurns, ask, afterNew, freshCold, freshAfterNew, emptyNewFirst, unbound, pointer].map(marker => ({ marker, at: history.lastIndexOf(marker) }))
+      const turn = [original, native, multiline, wrapped, recovered, deferred, ...mapTurns, ask, afterNew, emptyNewFirst, unbound, pointer].map(marker => ({ marker, at: history.lastIndexOf(marker) }))
         .filter(item => item.at >= 0).sort((x, y) => y.at - x.at)[0]?.marker;
       if (turn === undefined) throw new Error('Unexpected synthetic model request');
       const tools: string[] = (body.tools ?? []).map((entry: { function: { name: string } }) => entry.function.name);
@@ -81,7 +77,7 @@ test.skipIf(!optIn)('shares real production host Chat and Terminal on one stock 
         .findLast((content: string | undefined) => content?.includes(turn));
       seen.push({ turn, tools, userText, hasMail: history.includes(mail), ...(result === undefined ? {} : { result: JSON.stringify(result) }) });
       const invoke = (mapTurns.has(turn) || turn === ask ||
-        ((turn === freshAfterNew || turn === emptyNewFirst || (probeWorkspaceMcp && (turn === original || modeTurns.has(turn)))) && tools.includes('mcp__parley__get_map'))) && result === undefined;
+        turn === emptyNewFirst) && result === undefined;
       const tool = turn === ask ? 'AskUserQuestion' : 'mcp__parley__get_map';
       if (invoke) expect(tools).toContain(tool);
       res.writeHead(200, { 'Content-Type': 'text/event-stream' });
@@ -176,10 +172,11 @@ test.skipIf(!optIn)('shares real production host Chat and Terminal on one stock 
     const greeting = await hello(client, await readFile(paths.token, 'utf8'));
     expect(greeting.error).toBeUndefined();
     expect((greeting.result as { features: string[] }).features).toContain('kimi-shared-terminal');
-    if (emptyNewMode !== 'manual' && emptyNewMode !== 'auto' && emptyNewMode !== 'yolo') throw new Error('Invalid empty /new fixture permission mode');
+    if (bootstrapMode !== 'manual' && bootstrapMode !== 'auto' && bootstrapMode !== 'yolo' && bootstrapMode !== 'inherit') throw new Error('Invalid fixture permission mode');
     const { ref } = await call('sessions.create', {
       projectPath, workId: null, provider: 'kimi', label: 'Offline native integration', task: '', parent: null,
-      ...(probeEmptyNew ? { kimiPermissionMode: emptyNewMode } : fixtureManualDefault || probeWorkspaceMcp ? {} : { kimiPermissionMode: 'manual' as const }),
+      ...(probeAutomaticBootstrap ? bootstrapMode === 'inherit' ? {} : { kimiPermissionMode: bootstrapMode }
+        : fixtureManualDefault ? {} : { kimiPermissionMode: 'manual' as const }),
     });
     const session = async () => (await readMap(ref.projectPath, ref.workId)).sessions.find(item => item.id === ref.sessionId)!;
     const firstStart = await session();
@@ -203,18 +200,20 @@ test.skipIf(!optIn)('shares real production host Chat and Terminal on one stock 
       expect((await screen())).toContain(projectPath);
       expect((await screen())).toContain('No project integrations or instructions to activate.');
       expect(await call('pty.send', { ref, text: original, submit: true })).toMatchObject({ submitted: false });
+      raw(`\r${original}\r`);
+      expect(await screen()).toContain('Trust this folder?');
+      expect(requests).toBe(0);
       raw('\r');
     }
     stage = 'first Chat prompt after explicit Manual on a saved automatic default';
     await expect.poll(screen, poll).toMatch(ready);
-    if (probeEmptyNew) {
+    if (probeAutomaticBootstrap) {
       const noModel = () => { expect(requests).toBe(0); };
       const guarded = (text: string) => expect.poll(async () => {
         const result = await call('pty.send', { ref, text, submit: true });
         if (result.inserted && !result.submitted) throw new Error('Empty /new probe left a draft');
         return result.submitted;
       }, poll).toBe(true);
-      const currentId = async () => (await screen()).match(/Started a new session \((session_[a-f0-9-]+)\)\./)?.[1];
       const wireRows = async (providerId: string) => {
         const file = join(kimi, 'sessions', workspaceKey(projectPath), providerId, 'agents', 'main', 'wire.jsonl');
         const content = await readFile(file, 'utf8');
@@ -232,36 +231,27 @@ test.skipIf(!optIn)('shares real production host Chat and Terminal on one stock 
         expect((await session()).pid).toBe(firstStart.pid);
         expect((await call('pty.attach', { ref })).generation).toBe(generation);
       };
-      stage = 'first /new on the lazy fresh PTY';
-      expect((await session()).providerSessionId).toBeFalsy();
-      noModel();
-      await guarded('/new');
-      await expect.poll(currentId, poll).toMatch(/^session_/);
-      const abandoned = (await currentId())!;
-      await expect.poll(async () => (await session()).providerSessionId, poll).toBe(abandoned);
+      stage = 'ordinary sessions.create automatically binds two empty native IDs';
+      expect((await session()).kimiNativeBootstrap?.phase).toBeDefined();
+      const ids = async () => (await readdir(join(kimi, 'sessions', workspaceKey(projectPath))).catch(() => []))
+        .filter(file => /^session_/.test(file));
+      await expect.poll(async () => {
+        const error = (await snap()).items.find(item => item.kind === 'error' && item.error === 'kimi-native-startup');
+        return error ?? await ids();
+      }, { ...poll, timeout: 24_000 }).toHaveLength(2);
+      await expect.poll(async () => {
+        const current = await session();
+        return current.providerSessionId !== null && current.kimiNativeBootstrap === undefined && (await screen()).includes(current.providerSessionId);
+      }, poll).toBe(true);
+      const finalId = (await session()).providerSessionId!;
+      const abandoned = (await ids()).find(id => id !== finalId)!;
+      expect(abandoned).toMatch(/^session_/);
       await expect.poll(screen, poll).toMatch(ready);
-      await guarded('/mcp');
-      await expect.poll(screen, poll).toMatch(/parley\s+connected\s+stdio\s+50 tools/);
       const firstWire = await wireRows(abandoned);
       emptyWire(firstWire);
       const discovered = firstWire.find(row => row.type === 'mcp.tools_discovered' && row.serverName === 'parley')?.tools;
       expect(discovered).toHaveLength(50);
       expect(discovered?.map(({ name }) => name)).toContain('get_map');
-      noModel();
-      await checkSamePty();
-
-      stage = 'second /new with the first conversation still empty';
-      await guarded('/new');
-      await expect.poll(async () => { const id = await currentId(); return id === abandoned ? undefined : id; }, poll).toMatch(/^session_/);
-      const finalId = (await currentId())!;
-      await expect.poll(async () => (await session()).providerSessionId, poll).toBe(finalId);
-      await expect.poll(screen, poll).toMatch(ready);
-      await guarded('/permission');
-      const expectedMode = { manual: 0, yolo: 1, auto: 2 }[emptyNewMode];
-      await expect.poll(async () => kimiModeMenu((await screen()).split('\n')), poll).toMatchObject({ current: expectedMode });
-      raw('\x1b');
-      await expect.poll(screen, poll).toMatch(ready);
-      emptyWire(await wireRows(abandoned));
       emptyWire(await wireRows(finalId));
       noModel();
       await checkSamePty();
@@ -271,13 +261,13 @@ test.skipIf(!optIn)('shares real production host Chat and Terminal on one stock 
       await expect.poll(() => seen[0]?.turn, poll).toBe(emptyNewFirst);
       const { tools } = seen[0]!;
       const parleyTools = tools.filter(tool => tool.startsWith('mcp__parley__'));
-      console.info('Empty /new first advertised tools:', { mode: emptyNewMode, tools: tools.length, parleyTools: parleyTools.length });
+      console.info('Empty /new first advertised tools:', { mode: bootstrapMode, tools: tools.length, parleyTools: parleyTools.length });
       const getMapAdvertised = parleyTools.includes('mcp__parley__get_map');
       expect(parleyTools).toHaveLength(50);
       expect(getMapAdvertised).toBe(true);
       const toolResult = () => seen.findLast(row => row.turn === emptyNewFirst)?.result;
       const approval = async () => kimiPermissionMenu((await screen()).split('\n'), 'Approve mcp__parley__get_map');
-      if (emptyNewMode === 'manual') {
+      if (bootstrapMode === 'manual' || (bootstrapMode === 'inherit' && fixtureManualDefault)) {
         await expect.poll(approval, poll).toBeDefined();
         raw('\r');
       } else {
@@ -295,40 +285,12 @@ test.skipIf(!optIn)('shares real production host Chat and Terminal on one stock 
       expect((await session()).providerSessionId).toBe(finalId);
       expect(rejected).toEqual([]);
       console.info('Empty /new cold evidence:', JSON.stringify({
-        mode: emptyNewMode, abandonedWire: (await wireRows(abandoned)).map(row => row.type),
+        mode: bootstrapMode, abandonedWire: (await wireRows(abandoned)).map(row => row.type),
         abandonedDiscovery: discovered?.length,
         samePidAndGeneration: true, requestsBeforePrompt: 0, requests, tools: tools.length,
         parleyTools: parleyTools.length, getMapAdvertised, getMapCalled: seen.some(row => row.result !== undefined),
       }));
       return;
-    }
-    if (probeWorkspaceMcp) {
-      stage = 'workspace /mcp before permission selection or the first model prompt';
-      await submit('/mcp');
-      const connected = /parley\s+connected\s+stdio\s+50 tools/;
-      await expect.poll(screen, poll).toMatch(connected);
-      const connectedLine = (await screen()).split('\n').find(line => connected.test(line));
-      expect((await session()).providerSessionId).toBeFalsy();
-      expect(seen).toEqual([]);
-      await expect.poll(screen, poll).toMatch(ready);
-      await submit('/permission');
-      const mode = async () => kimiModeMenu((await screen()).split('\n'));
-      await expect.poll(mode, poll).toMatchObject({ current: fixtureManualDefault ? 0 : 2 });
-      if (!fixtureManualDefault) {
-        const actual = (await mode())!;
-        if (actual.selected !== 0) raw('\x1b[A'.repeat(actual.selected));
-        await expect.poll(mode, poll).toMatchObject({ selected: 0 });
-        raw('\r');
-        await expect.poll(screen, poll).toMatch(ready);
-        await submit('/permission');
-        await expect.poll(mode, poll).toMatchObject({ current: 0 });
-      }
-      raw('\x1b');
-      await expect.poll(screen, poll).toMatch(ready);
-      expect((await session()).pid).toBe(firstStart.pid);
-      expect(seen).toEqual([]);
-      console.info('Workspace MCP before first prompt:', connectedLine);
-      stage = 'first actual model request after workspace /mcp';
     }
     // Check the guarded sender's first action, retrying only if not a single byte was inserted.
     await expect.poll(async () => {
@@ -336,20 +298,11 @@ test.skipIf(!optIn)('shares real production host Chat and Terminal on one stock 
       if (result.inserted && !result.submitted) throw new Error('Chat text became an unsubmitted draft');
       return result.submitted;
     }, poll).toBe(true);
-    if (probeWorkspaceMcp) {
-      await expect.poll(() => seen[0]?.turn, poll).toBe(original);
-      const first = seen[0]!;
-      if (first.tools.includes('mcp__parley__get_map')) {
-        await expect.poll(screen, poll).toContain('Approve mcp__parley__get_map?');
-        raw('\r');
-        await expect.poll(() => seen.findLast(row => row.turn === original)?.result, poll).toContain(ref.sessionId);
-      }
-      console.info('Cold workspace MCP request:', { tools: first.tools.length, getMap: first.tools.includes('mcp__parley__get_map') });
-    }
     await expect.poll(async () => (await snap()).items, poll).toContainEqual(expect.objectContaining({ kind: 'text', text: `${original}_REPLY`, streaming: false }));
     const a = (await session()).providerSessionId!;
     expect(a).toMatch(/^session_/);
     const coldAdvertised = seen[0]?.tools.includes('mcp__parley__get_map');
+    expect(coldAdvertised).toBe(true);
     expect((await readFile(join(kimi, 'config.toml'), 'utf8')).split('\n')[1]).toBe(preference);
 
     stage = 'raw Terminal same PID and provider ID';
@@ -523,85 +476,21 @@ test.skipIf(!optIn)('shares real production host Chat and Terminal on one stock 
       term.dispose();
     }
 
-    stage = 'cold /new after confirmed full MCP discovery, without resume';
-    const { ref: fresh } = await call('sessions.create', {
-      projectPath, workId: null, provider: 'kimi', label: 'Offline cold /new comparison', task: '', parent: null,
-      ...(fixtureManualDefault ? {} : { kimiPermissionMode: 'manual' as const }),
-    });
-    const freshSession = async () => (await readMap(fresh.projectPath, fresh.workId)).sessions.find(item => item.id === fresh.sessionId)!;
-    const freshScreen = async () => (await call('pty.screenText', { ref: fresh })).lines.join('\n');
-    inspectScreen = freshScreen;
-    const freshGeneration = (await call('pty.attach', { ref: fresh })).generation!;
-    const freshRaw = (data: string) => client!.send({ method: 'pty.input', params: { ref: fresh, data, generation: freshGeneration } });
-    const freshSend = (marker: string) => expect.poll(async () => {
-      const result = await call('pty.send', { ref: fresh, text: marker, submit: true });
-      if (result.inserted && !result.submitted) throw new Error('Unexpected cold comparison draft');
-      return result.submitted;
-    }, poll).toBe(true);
-    const readTimeline = async (sessionId: string) => {
-      const file = join(kimi, 'sessions', workspaceKey(projectPath), sessionId, 'agents', 'main', 'wire.jsonl');
-      const content = await readFile(file, 'utf8').catch(error => {
-        if (error.code === 'ENOENT') return '';
-        throw error;
-      });
-      return content.split('\n').slice(0, -1).map(line => JSON.parse(line) as {
-        type: string; serverName?: string; tools?: { name: string }[];
-      }).filter(row => /^(mcp\.tools_discovered|tool_select\.initialized|turn\.prompt|llm\.tools_snapshot)$/.test(row.type));
-    };
-    const comparisonMetrics = async (sessionId: string, marker: string) => {
-      const timeline = await readTimeline(sessionId);
-      const snapshot = timeline.find(row => row.type === 'llm.tools_snapshot');
-      const discovered = timeline.find(row => row.type === 'mcp.tools_discovered' && row.serverName === 'parley');
-      const initialized = timeline.find(row => row.type === 'tool_select.initialized');
-      const advertised = seen.find(row => row.turn === marker)!.tools;
-      expect(snapshot?.tools?.map(({ name }) => name).sort()).toEqual([...advertised].sort());
-      return {
-        order: timeline.slice(0, timeline.indexOf(snapshot!) + 1).map(row => row.type),
-        discovered: discovered?.tools?.length, initialized: initialized?.tools?.length,
-        advertised: advertised.length, getMapAdvertised: advertised.includes('mcp__parley__get_map'),
-      };
-    };
-    await expect.poll(freshScreen, poll).toMatch(ready);
-    const freshPid = (await freshSession()).pid;
-    await freshSend(freshCold);
-    await expect.poll(freshScreen, poll).toContain(`${freshCold}_REPLY`);
-    const before = (await freshSession()).providerSessionId!;
-    await expect.poll(async () => (await readTimeline(before)).some(row =>
-      row.type === 'mcp.tools_discovered' && row.serverName === 'parley' && row.tools?.some(tool => tool.name === 'get_map')), poll).toBe(true);
-    const cold = await comparisonMetrics(before, freshCold);
-    await expect.poll(freshScreen, poll).toMatch(ready);
-    freshRaw('/new');
-    await expect.poll(freshScreen, poll).toContain('/new');
-    await delay(160);
-    freshRaw('\r');
-    await expect.poll(async () => (await freshSession()).providerSessionId, poll).not.toBe(before);
-    const nextId = (await freshSession()).providerSessionId!;
-    await expect.poll(freshScreen, poll).toContain(nextId);
-    await freshSend(freshAfterNew);
-    await expect.poll(() => seen.some(row => row.turn === freshAfterNew), poll).toBe(true);
-    const newTools = seen.find(row => row.turn === freshAfterNew)!.tools;
-    if (newTools.includes('mcp__parley__get_map')) {
-      await expect.poll(freshScreen, poll).toContain('Approve mcp__parley__get_map?');
-      freshRaw('\r');
-      await expect.poll(() => seen.findLast(row => row.turn === freshAfterNew)?.result, poll).toContain(fresh.sessionId);
-    }
-    await expect.poll(freshScreen, poll).toContain(`${freshAfterNew}_REPLY`);
-    const after = await comparisonMetrics(nextId, freshAfterNew);
-    expect((await freshSession()).pid).toBe(freshPid);
-    expect((await call('pty.attach', { ref: fresh })).generation).toBe(freshGeneration);
-    console.info('Cold /new catalog comparison:', JSON.stringify({ cold, after, getMapCalled: newTools.includes('mcp__parley__get_map') }));
-
     if (probeStartupRecovery) {
       stage = 'visible, fail-closed Always Ask bootstrap interrupted by viewport input';
       const beforeFailure = seen.length;
+      const recoveryProject = join(root, 'recovery-project');
+      await mkdir(recoveryProject);
       const { ref: failed } = await call('sessions.create', {
-        projectPath, workId: null, provider: 'kimi', label: 'Offline startup recovery', task: '', parent: null, kimiPermissionMode: 'manual',
+        projectPath: recoveryProject, workId: null, provider: 'kimi', label: 'Offline startup recovery', task: '', parent: null, kimiPermissionMode: 'manual',
       });
       const failedScreen = async () => (await call('pty.screenText', { ref: failed })).lines.join('\n');
       const failedSession = async () => (await readMap(failed.projectPath, failed.workId)).sessions.find(item => item.id === failed.sessionId)!;
       inspectScreen = failedScreen;
       const failedAttach = await call('pty.attach', { ref: failed });
       const failedPid = (await failedSession()).pid;
+      await expect.poll(failedScreen, poll).toContain('Trust this folder?');
+      client.send({ method: 'pty.input', params: { ref: failed, data: '\r', generation: failedAttach.generation } });
       await expect.poll(failedScreen, { ...poll, interval: 10 }).toMatch(/│ >\s*\/permission\s*│/);
       client.send({ method: 'pty.resize', params: { ref: failed, cols: failedAttach.cols - 1, rows: failedAttach.rows, generation: failedAttach.generation } });
       await expect.poll(async () => (await call('feed.snapshot', { ref: failed })).items, poll).toContainEqual(expect.objectContaining({
@@ -610,7 +499,7 @@ test.skipIf(!optIn)('shares real production host Chat and Terminal on one stock 
       expect(await call('pty.send', { ref: failed, text: recovered, submit: true })).toMatchObject({ inserted: false, submitted: false });
       client.send({ method: 'pty.input', params: { ref: failed, data: `${recovered}\r`, generation: failedAttach.generation } });
       expect(await failedScreen()).not.toContain(recovered);
-      expect((await failedSession()).providerSessionId).toBeFalsy();
+      expect(await failedSession()).toMatchObject({ providerSessionId: null, kimiNativeBootstrap: { phase: 'reserved' } });
       expect(seen).toHaveLength(beforeFailure);
       await call('sessions.stop', { ref: failed });
       await expect.poll(async () => (await failedSession()).lifecycle, poll).toBe('sleeping');
@@ -623,51 +512,53 @@ test.skipIf(!optIn)('shares real production host Chat and Terminal on one stock 
       }, poll).toBe(true);
       await expect.poll(failedScreen, poll).toContain(`${recovered}_REPLY`);
       expect(seen.filter(row => row.turn === recovered).map(row => row.userText)).toEqual([recovered]);
-    }
 
-    if (probeWorkspaceMcp) {
-      for (const mode of ['auto', 'yolo'] as const) {
-        stage = `workspace /mcp before the first model prompt in explicit ${mode}`;
-        const { ref: modeRef } = await call('sessions.create', {
-          projectPath, workId: null, provider: 'kimi', label: `Offline ${mode} startup`, task: '', parent: null, kimiPermissionMode: mode,
-        });
-        const modeSession = async () => (await readMap(modeRef.projectPath, modeRef.workId)).sessions.find(item => item.id === modeRef.sessionId)!;
-        const modeScreen = async () => (await call('pty.screenText', { ref: modeRef })).lines.join('\n');
-        const modeAttach = await call('pty.attach', { ref: modeRef });
-        const modeRaw = (data: string) => client!.send({ method: 'pty.input', params: { ref: modeRef, data, generation: modeAttach.generation } });
-        const modeSubmit = async (text: string) => {
-          await expect.poll(modeScreen, poll).toMatch(ready);
-          modeRaw(`\x1b[200~${text}\x1b[201~`);
-          await expect.poll(modeScreen, poll).toContain(text);
-          await delay(160);
-          modeRaw('\r');
-        };
-        inspectScreen = modeScreen;
-        const pid = (await modeSession()).pid;
-        const beforeMode = seen.length;
-        await modeSubmit('/mcp');
-        await expect.poll(modeScreen, poll).toMatch(/parley\s+connected\s+stdio\s+50 tools/);
-        await modeSubmit('/permission');
-        await expect.poll(async () => kimiModeMenu((await modeScreen()).split('\n')), poll).toMatchObject({ current: mode === 'auto' ? 2 : 1 });
-        modeRaw('\x1b');
-        expect((await modeSession()).providerSessionId).toBeFalsy();
-        expect(seen).toHaveLength(beforeMode);
-        const marker = modeMarkers[mode];
-        await modeSubmit(marker);
-        await expect.poll(modeScreen, poll).toContain(`${marker}_REPLY`);
-        expect((await modeSession()).pid).toBe(pid);
-        expect((await call('pty.attach', { ref: modeRef })).generation).toBe(modeAttach.generation);
-        const first = seen[beforeMode]!;
-        expect(first.turn).toBe(marker);
-        console.info('Cold workspace MCP mode request:', { mode, tools: first.tools.length, getMap: first.tools.includes('mcp__parley__get_map') });
-        await call('sessions.stop', { ref: modeRef });
-      }
+      stage = 'stopping after an empty ID is bound preserves it and does not replay /new';
+      const beforeStop = requests;
+      const { ref: late } = await call('sessions.create', {
+        projectPath, workId: null, provider: 'kimi', label: 'Offline rotating startup stop', task: '', parent: null, kimiPermissionMode: 'manual',
+      });
+      const lateSession = async () => (await readMap(late.projectPath, late.workId)).sessions.find(item => item.id === late.sessionId)!;
+      await expect.poll(async () => {
+        const current = await lateSession();
+        return current.kimiNativeBootstrap?.phase === 'rotating' ? current.providerSessionId : null;
+      }, { ...poll, interval: 10 }).toMatch(/^session_/);
+      const bound = (await lateSession()).providerSessionId;
+      await call('sessions.stop', { ref: late });
+      expect(await lateSession()).toMatchObject({ providerSessionId: bound, kimiNativeBootstrap: { phase: 'rotating' }, lifecycle: 'sleeping' });
+      const resumed = await request('sessions.resume', { ref: late });
+      expect(resumed.error).toMatchObject({ code: 'conflict', message: expect.stringMatching(/conversation and queued messages were kept/i) });
+      expect(requests).toBe(beforeStop);
+
+      stage = 'ordinary deferred task gets full tools on its first and only turn';
+      const { ref: queued } = await call('sessions.create', {
+        projectPath, workId: null, provider: 'kimi', label: 'Offline deferred first task', task: deferred, parent: null, kimiPermissionMode: 'manual',
+      });
+      await expect.poll(async () => (await call('feed.snapshot', { ref: queued })).items, { ...poll, timeout: 20_000 })
+        .toContainEqual(expect.objectContaining({ kind: 'text', text: `${deferred}_REPLY` }));
+      expect(seen.filter(row => row.turn === deferred)).toMatchObject([{ tools: expect.arrayContaining(['mcp__parley__get_map']) }]);
+
+      stage = 'rotating provenance survives restarting the disposable host';
+      const total = requests;
+      client.close();
+      await host.context.shutdown('test-only restart of disposable host');
+      await host.closed;
+      host = await startHost({ home: parley });
+      client = connectRaw(paths.socket);
+      await waitConnected(client.socket);
+      expect((await hello(client, await readFile(paths.token, 'utf8'))).error).toBeUndefined();
+      expect((await request('sessions.resume', { ref: late })).error).toMatchObject({ code: 'conflict', message: expect.stringMatching(/conversation and queued messages were kept/i) });
+      expect(await lateSession()).toMatchObject({ providerSessionId: bound, kimiNativeBootstrap: { phase: 'rotating' }, lifecycle: 'sleeping' });
+      expect(requests).toBe(total);
     }
 
     expect(rejected).toEqual([]);
     console.info('Production stock native host evidence:', { sameGenerationBetweenViews: true, realMap: true, coldAdvertised, requests: seen.map(row => row.turn) });
   } catch (error) {
     console.info('Production stock native host stage:', stage, { requests: seen.map(row => [row.turn, row.tools.length]), rejected });
+    const startupLog = (await readFile(hostPaths(parley).log, 'utf8').catch(() => '')).split('\n')
+      .filter(line => /Kimi first-turn bootstrap stopped|Kimi native provider binding could not be verified/.test(line));
+    if (startupLog.length) console.info(startupLog.map(line => line.replaceAll(root, '<temp>')));
     for (const file of (await readdir(kimi, { recursive: true }).catch(() => [])).filter(file => file.endsWith('/agents/main/wire.jsonl'))) {
       const rows = (await readFile(join(kimi, file), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
       console.info(rows.filter(row => /mcp.tools_discovered|tool_select.initialized|llm.tools_snapshot|turn.prompt/.test(row.type))

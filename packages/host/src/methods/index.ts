@@ -173,7 +173,7 @@ export interface MethodDeps {
   log?: Log;
   /** Общий отправитель хоста (`createSender`): окно (`pty.send`) и помощник делят «свой Enter в полёте»; без него `pty.*` заводит свой. */
   send?: (params: { ref: SessionRef; text: string; submit: boolean }) => Promise<SendResult>;
-  kimiAllowRaw?: (ref: SessionRef) => boolean;
+  kimiAllowRaw?: (ref: SessionRef, data: string) => boolean;
   /** Помощник на острове (спека 2026-10-14); без него методов `assistant.*` у хоста нет. */
   assistant?: AssistantService;
   /** Jobs помощника: `jobs.ackInline`; без них метод отвечает `not_found`. */

@@ -42,6 +42,7 @@ import {
   parseHostLock,
   processStartedAt,
   providerReadiness,
+  sessionMcpExtraToolNames,
   providerReadinessError,
   readHostLock,
   readMap,
@@ -658,9 +659,11 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     log,
     // Qwen readiness needs the agent's Parley MCP client connected (spec 2026-11-11, 3.4 amendment).
     generationOf: (ref) => activityService.processGeneration(ref),
-    onList: (ref, generation) => {
+    onList: (ref, generation, names) => {
       activityService.mcpListed(ref, generation);
-      if (generation !== null && generation === activityService.processGeneration(ref)) kimiNative.listed(ref);
+      if (generation !== null && generation === activityService.processGeneration(ref) && kimiNative.has(ref)) {
+        kimiNative.listed(ref, [...names, ...sessionMcpExtraToolNames()]);
+      }
     },
   });
   const inlineMail = createInlineMail({
@@ -870,7 +873,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   const kimiNative = createKimiNativeSession({
     pty: ptyManager,
     log,
-    bind: (ref, binding, id, pid) => sessionsService.bindKimiNative(ref, binding, id, pid),
+    bind: (ref, binding, id, pid, bootstrap) => sessionsService.bindKimiNative(ref, binding, id, pid, bootstrap),
+    bootstrap: (ref, binding, owner, id, action) => sessionsService.kimiBootstrap(ref, binding, owner, id, action),
     event: feedService.kimiNativeEvent,
     reset: feedService.kimiNativeReset,
     requests: feedService.kimiNativeRequests,
@@ -893,6 +897,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       opencode: opencodeSupervisor,
       opencodeEvents,
       kimiNative,
+      kimiHasHistory: feedService.kimiHasHistory,
       kimiSeedCheckpoint: feedService.kimiSeedCheckpoint,
       deferFirst: (ref, pid, text) => wakeService.deferFirst(ref, pid, text),
       providerVersions,

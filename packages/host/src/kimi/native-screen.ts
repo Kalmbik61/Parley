@@ -30,6 +30,26 @@ export function kimiModeMenu(view: readonly string[]): { selected: number; curre
   return selected < 0 || current < 0 ? undefined : { selected, current };
 }
 
+export function kimiStartupDialog(view: readonly string[]): 'trust' | 'login' | undefined {
+  const lines = view.map(line => line.trim());
+  if (lines.includes('Trust this folder?') && lines.includes('↑↓ navigate · Enter select · Esc exit')) return 'trust';
+  if (lines.some(line => /^(?:│\s*)?Sign in to Kimi Code(?:\s*│)?$/.test(line))) return 'login';
+}
+
+export function kimiLazyVersion(view: readonly string[]): string | undefined {
+  if (!view.some(line => line.trim() === 'No session yet — one will be created on your first message.')) return;
+  return view.map(line => line.match(/^\s*│\s*Version:\s+([\w.-]+)\s*│\s*$/)?.[1]).find(value => value !== undefined);
+}
+
+export function kimiStartedId(view: readonly string[]): string | undefined {
+  return view.map(line => line.match(/^\s*Started a new session \((session_[a-f0-9-]+)\)\.\s*$/)?.[1]).findLast(value => value !== undefined);
+}
+
+export function kimiParleyCount(view: readonly string[]): number | undefined {
+  const row = view.map(line => line.match(/^\s*│\s+parley\s+connected\s+stdio\s+(\d+) tools?\s*│\s*$/)?.[1]).findLast(value => value !== undefined);
+  return row === undefined ? undefined : Number(row);
+}
+
 type Option = Extract<KimiRequest, { kind: 'permission' }>['options'][number];
 const labels: readonly [string, Option['kind']][] = [
   ['Approve once', 'allow_once'],

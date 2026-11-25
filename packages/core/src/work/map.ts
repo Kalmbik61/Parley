@@ -398,6 +398,9 @@ const isSessionShape =
     (value.kimiTerminal === undefined || (value.provider === 'kimi' && isKimiHistoryBinding(value.kimiTerminal))) &&
     (value.kimiChatCheckpoint === undefined || (value.provider === 'kimi' && isKimiChatCheckpoint(value.kimiChatCheckpoint))) &&
     (value.kimiNativeBinding === undefined || (value.provider === 'kimi' && isKimiNativeBinding(value.kimiNativeBinding))) &&
+    (value.kimiNativeBootstrap === undefined || (value.provider === 'kimi' && isRecord(value.kimiNativeBootstrap) &&
+      typeof value.kimiNativeBootstrap.nonce === 'string' && BINDING_UUID.test(value.kimiNativeBootstrap.nonce) &&
+      (value.kimiNativeBootstrap.phase === 'reserved' || value.kimiNativeBootstrap.phase === 'rotating'))) &&
     (value.kimiPermissionMode === undefined || (value.provider === 'kimi' && isKimiPermissionMode(value.kimiPermissionMode))) &&
     (value.agentPlan === undefined || isPublishedAgentPlan(value.agentPlan)) &&
     (value.workspace === undefined || value.workspace === null ||

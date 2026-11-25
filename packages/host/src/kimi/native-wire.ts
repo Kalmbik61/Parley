@@ -1,5 +1,5 @@
 import { constants } from 'node:fs';
-import { open, realpath } from 'node:fs/promises';
+import { lstat, open, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { workspaceKey } from './date-provenance.js';
 
@@ -15,6 +15,53 @@ type Binding = { home: string; cwd: string; sessionId: string };
 
 export const record = (value: unknown): Record<string, unknown> | undefined =>
   value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+
+const emptyStartupRows = new Set(['environment.set_binding', 'permission.set_mode', 'changeNotifier.snapshot', 'profile.bind', 'mcp.tools_discovered']);
+
+/** Positive, whole-file proof for stock 2.7.3 startup only. Unknown events are never an empty conversation. */
+export async function proveKimiEmptyStartup({ home, cwd, sessionId }: Binding, expected: readonly string[]): Promise<'waiting' | 'unsafe' | 'ready'> {
+  if (!path.isAbsolute(home) || !path.isAbsolute(cwd) || !KIMI_SESSION_ID.test(sessionId)) return 'unsafe';
+  let fd;
+  try {
+    const canonical = await realpath(home);
+    const file = path.join(canonical, 'sessions', workspaceKey(cwd), sessionId, 'agents', 'main', 'wire.jsonl');
+    if (await realpath(file) !== file) return 'unsafe';
+    fd = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const before = await fd.stat();
+    if (!before.isFile() || before.nlink !== 1 || before.size > MAX_LINE_BYTES) return 'unsafe';
+    if (before.size === 0) return 'waiting';
+    const bytes = Buffer.alloc(before.size);
+    let offset = 0;
+    while (offset < bytes.length) {
+      const { bytesRead } = await fd.read(bytes, offset, bytes.length - offset, offset);
+      if (bytesRead === 0) return 'waiting';
+      offset += bytesRead;
+    }
+    const after = await fd.stat();
+    const name = await lstat(file);
+    if (!name.isFile() || name.dev !== before.dev || name.ino !== before.ino || await realpath(file) !== file) return 'unsafe';
+    if (after.size !== before.size || after.mtimeMs !== before.mtimeMs || after.ctimeMs !== before.ctimeMs || name.size !== after.size || name.mtimeMs !== after.mtimeMs) return 'waiting';
+    if (bytes.at(-1) !== 10) return 'waiting';
+    const [head, ...lines] = new TextDecoder('utf-8', { fatal: true }).decode(bytes).slice(0, -1).split('\n');
+    const header = record(JSON.parse(head!));
+    if (header?.type !== 'metadata' || header.protocol_version !== '1.5' || header.min_protocol_version !== '1.5') return 'unsafe';
+    let latest: Record<string, unknown> | undefined;
+    for (const line of lines) {
+      const row = record(JSON.parse(line));
+      if (typeof row?.type !== 'string' || !emptyStartupRows.has(row.type)) return 'unsafe';
+      if (row.type === 'mcp.tools_discovered' && row.agentId === 'main' && row.serverName === 'parley') latest = row;
+    }
+    if (!latest || !expected.includes('get_map')) return 'waiting';
+    const same = (names: unknown) => Array.isArray(names) && names.length === expected.length &&
+      new Set(names).size === expected.length && expected.every(tool => names.includes(tool));
+    const names = Array.isArray(latest.tools) ? latest.tools.map(tool => record(tool)?.name) : null;
+    return same(names) && same(latest.enabledNames) && latest.collisions === undefined ? 'ready' : 'unsafe';
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'waiting' : 'unsafe';
+  } finally {
+    await fd?.close();
+  }
+}
 
 export async function createKimiWire({ home, cwd, sessionId }: Binding) {
   if (!path.isAbsolute(home) || !path.isAbsolute(cwd) || !KIMI_SESSION_ID.test(sessionId)) throw new Error('Invalid Kimi wire binding');
