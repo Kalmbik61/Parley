@@ -20,15 +20,21 @@ export interface KimiReplayChunk {
 }
 
 export interface KimiHistoryProjection {
+  partial: boolean;
   check(): void;
   writeCheckpoint(archive: string): Promise<void>;
   publish(): void;
 }
 
+export interface KimiHistoryReplay {
+  kind: 'handoff' | 'checkpoint';
+  incomplete: boolean;
+}
+
 interface KimiSessionHooks {
   output(ref: SessionRef, event: KimiOutput): void;
   hasHistory(ref: SessionRef): boolean;
-  prepareHistory?(ref: SessionRef, archive: string, chunks: readonly KimiReplayChunk[], preferLive: boolean): Promise<KimiHistoryProjection>;
+  prepareHistory?(ref: SessionRef, archive: string, chunks: readonly KimiReplayChunk[], replay: KimiHistoryReplay): Promise<KimiHistoryProjection>;
   checkBinding?(ref: SessionRef, home: string, id: string): void;
   activity(ref: SessionRef, state: 'ready' | 'working' | 'blocked' | 'ended', detail?: string): void;
   requestsChanged?(ref: SessionRef, requests: KimiState['requests']): void;
@@ -97,8 +103,8 @@ export function createKimiSessions(host: HostContext, hooks: KimiSessionHooks) {
   }> {
     const key = refKey(ref);
     const home = await kimiHome(launch.env, launch.cwd);
-    const strictReplay = launch.reconcileAt !== undefined;
-    if (strictReplay && (home !== launch.reconcileAt?.home || launch.cwd !== launch.reconcileAt.cwd)) {
+    const replay = launch.reconcileAt;
+    if (replay !== undefined && (home !== replay.home || launch.cwd !== replay.cwd)) {
       throw new HostError('conflict', 'The original Kimi home or working directory no longer matches');
     }
     if (launch.sessionId !== undefined) checkBinding(ref, home, launch.sessionId);
@@ -107,6 +113,7 @@ export function createKimiSessions(host: HostContext, hooks: KimiSessionHooks) {
     const historyChunks: KimiReplayChunk[] = [];
     let initialChars = 0;
     let overflow = false;
+    let completePrefix = 0;
     let replayPrompt: string | undefined;
     let replayed = false;
     let turnId: string = randomUUID();
@@ -156,12 +163,15 @@ export function createKimiSessions(host: HostContext, hooks: KimiSessionHooks) {
       clientVersion: host.version,
       elicitationForm: hooks.requestsChanged !== undefined,
       ...(hooks.canShowElicitation === undefined ? {} : { canShowElicitation: hooks.canShowElicitation }),
-      loadHistory: launch.sessionId !== undefined && (strictReplay || !hooks.hasHistory(ref)),
-      requireHistory: strictReplay,
+      loadHistory: launch.sessionId !== undefined && (replay !== undefined || !hooks.hasHistory(ref)),
+      requireHistory: replay !== undefined,
       onState: (state) => { if (session.ready) publishState(state); },
       onText(text, history, author, messageId) {
         if (live.get(key) !== session || session.frozen || (history && overflow)) return;
-        if (history && strictReplay) {
+        if (history && replay !== undefined) {
+          // Seeing a user chunk after a reply confirms the preceding group is complete,
+          // even if the new chunk itself does not fit in the remaining budget.
+          if (author === 'user' && historyChunks.at(-1)?.author === 'agent') completePrefix = historyChunks.length;
           if (reserveHistory(text.length + (messageId?.length ?? 0), historyChunks.length)) {
             historyChunks.push({ author, text, ...(messageId === undefined ? {} : { messageId }) });
           }
@@ -231,15 +241,16 @@ export function createKimiSessions(host: HostContext, hooks: KimiSessionHooks) {
       hooks.authChanged?.(true);
       flushReplayPrompt();
       if (replayed) output({ kind: 'end', reason: 'end_turn' });
-      if (strictReplay && overflow) throw new KimiAcpError('Kimi history exceeds the handback replay limit. Chat remains unchanged.', 'protocol');
-      if (overflow) {
+      if (replay?.kind === 'handoff' && overflow) throw new KimiAcpError('Kimi history exceeds the handback replay limit. Chat remains unchanged.', 'protocol');
+      if (overflow && replay === undefined) {
         // Keep only closed turns in an ordinary bounded replay. A dangling prompt would make Chat
         // look busy and keep its outbox closed even though this ACP owner is idle.
         initialOutput.length = initialOutput.findLastIndex(({ kind }) => kind === 'end') + 1;
         host.log.warn('Kimi Code cold history reached its display limit', { ref });
       }
-      const restoreHistory = launch.reconcileAt === undefined ? undefined
-        : await hooks.prepareHistory?.(ref, launch.reconcileAt.archive, historyChunks, launch.reconcileAt.kind === 'checkpoint');
+      const restoreHistory = replay === undefined ? undefined
+        : await hooks.prepareHistory?.(ref, replay.archive, overflow ? historyChunks.slice(0, completePrefix) : historyChunks,
+          { kind: replay.kind, incomplete: overflow });
       const isCurrent = () => live.get(key) === session && acp.connected();
       if (!isCurrent()) throw new KimiAcpError('Kimi Code ACP disconnected', 'disconnected');
       function prepareActivation(): { publish(): void; writeCheckpoint?: KimiHistoryProjection['writeCheckpoint'] } {
@@ -252,12 +263,16 @@ export function createKimiSessions(host: HostContext, hooks: KimiSessionHooks) {
             // A child may exit just after durable release. The validated history is still usable,
             // but this process must not publish readiness or accept prompts after exit.
             if (!isCurrent()) return;
-            if (!strictReplay) for (const event of initialOutput) hooks.output(ref, event);
+            if (replay === undefined) for (const event of initialOutput) hooks.output(ref, event);
             session.ready = true;
             initialOutput.length = 0;
             publishState(acp.state());
             hooks.activity(ref, 'ready');
-            if (launch.reconcileAt?.kind !== 'handoff' && launch.prompt !== undefined) submit(ref, session, launch.prompt);
+            if (restoreHistory?.partial === true) host.broadcast('host.notice', {
+              kind: 'kimi-history-partial', ref, at: new Date().toISOString(),
+              text: 'Kimi resumed the original conversation. Chat could only restore part of its history.',
+            });
+            if (replay?.kind !== 'handoff' && launch.prompt !== undefined) submit(ref, session, launch.prompt);
           },
         };
       }

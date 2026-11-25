@@ -272,6 +272,7 @@ export type NoticeKind =
   | 'pointer-timeout'
   | 'pointer-cancelled'
   | 'resume-failed'
+  | 'kimi-history-partial'
   | 'resume-limit'
   | 'trust-wait'
   // Codex не показал ни `Ready`, ни `Working` за срок после запуска: он на экране входа или доверия к папке,

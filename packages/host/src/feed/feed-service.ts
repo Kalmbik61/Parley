@@ -65,7 +65,7 @@ import {
   turnActive,
   withCodexAgentMeta,
 } from '@parley/core';
-import type { KimiHistoryProjection, KimiOutput, KimiReplayChunk } from '../kimi/sessions.js';
+import type { KimiHistoryProjection, KimiHistoryReplay, KimiOutput, KimiReplayChunk } from '../kimi/sessions.js';
 import type {
   CodexAgentMeta,
   CodexCursor,
@@ -248,7 +248,7 @@ export interface FeedService {
   kimiRemoveArchive(ref: SessionRef, archive: string): Promise<void>;
   kimiPruneArchives(ref: SessionRef, retain: readonly string[]): Promise<void>;
   kimiSeedCheckpoint(ref: SessionRef, archive: string): Promise<void>;
-  kimiPrepareHistory(ref: SessionRef, archive: string, chunks: readonly KimiReplayChunk[], preferLive: boolean): Promise<KimiHistoryProjection>;
+  kimiPrepareHistory(ref: SessionRef, archive: string, chunks: readonly KimiReplayChunk[], replay: KimiHistoryReplay): Promise<KimiHistoryProjection>;
   kimiOutput(ref: SessionRef, event: KimiOutput): void;
   kimiRequests(ref: SessionRef, requests: readonly KimiRequest[]): void;
   /**
@@ -2624,41 +2624,53 @@ export function createFeedService(
     return prompts;
   }
 
-  function reconcileKimiTurns(chunks: readonly KimiReplayChunk[], archive: readonly ArchivedKimiTurn[]): {
+  function kimiReplayPrompts(user: readonly KimiReplayChunk[], archive: readonly ArchivedKimiTurn[], offset: number, seenIds: Set<string>): (string | null)[] {
+    if (user.length === 0) return [null];
+    // ACP v1 makes messageId optional. Use archive boundaries only while the earlier turns still align.
+    if (!user.some((chunk) => chunk.messageId !== undefined)) return legacyKimiPrompts(user, archive, offset);
+    const prompts: string[] = [];
+    let priorId: string | undefined;
+    for (const { text, messageId } of user) {
+      if (messageId === undefined) throw ambiguousKimiReplay();
+      if (messageId === priorId) prompts[prompts.length - 1] += text;
+      else {
+        if (seenIds.has(messageId)) throw ambiguousKimiReplay();
+        seenIds.add(messageId);
+        prompts.push(text);
+        priorId = messageId;
+      }
+    }
+    return prompts;
+  }
+
+  function reconcileKimiTurns(chunks: readonly KimiReplayChunk[], archive: readonly ArchivedKimiTurn[], allowPartial: boolean): {
     retained: FeedItem[];
     suffix: KimiTextTurn[];
+    matched: number;
+    partial: boolean;
   } {
     const retained: FeedItem[] = [];
     const suffix: KimiTextTurn[] = [];
     const seenIds = new Set<string>();
     let matched = 0;
     let cursor = 0;
+    let partial = false;
     while (cursor < chunks.length) {
       const start = cursor;
       while (chunks[cursor]?.author === 'user') cursor++;
       const user = chunks.slice(start, cursor);
-      const prompts: (string | null)[] = [];
-      if (user.length === 0) prompts.push(null);
-      else if (user.some((chunk) => chunk.messageId !== undefined)) {
-        let priorId: string | undefined;
-        for (const { text, messageId } of user) {
-          if (messageId === undefined) throw ambiguousKimiReplay();
-          if (messageId === priorId) prompts[prompts.length - 1] += text;
-          else {
-            if (seenIds.has(messageId)) throw ambiguousKimiReplay();
-            seenIds.add(messageId);
-            prompts.push(text);
-            priorId = messageId;
-          }
-        }
-      } else {
-        // ACP v1 makes messageId optional. Use archive boundaries only while the earlier turns still align.
-        prompts.push(...legacyKimiPrompts(user, archive, suffix.length === 0 ? matched : archive.length));
+      let prompts: (string | null)[];
+      try {
+        prompts = kimiReplayPrompts(user, archive, suffix.length === 0 ? matched : archive.length, seenIds);
+        if (prompts.some((prompt) => prompt !== null && prompt.length > 64 * 1024)) throw oversizedKimiReplay();
+      } catch (error) {
+        if (!allowPartial || !(error instanceof HostError) || error.code !== 'conflict') throw error;
+        partial = true;
+        break;
       }
       let reply = '';
       while (chunks[cursor]?.author === 'agent') reply += chunks[cursor++]!.text;
       for (const [index, prompt] of prompts.entries()) {
-        if (prompt !== null && prompt.length > 64 * 1024) throw oversizedKimiReplay();
         const turn = { prompt, reply: index === prompts.length - 1 ? reply : '' };
         const prior = suffix.length === 0 ? archive[matched] : undefined;
         // The archive holds the reducer's display projection, not the full provider reply.
@@ -2669,7 +2681,7 @@ export function createFeedService(
         } else suffix.push(turn);
       }
     }
-    return { retained, suffix };
+    return { retained, suffix, matched, partial };
   }
 
   function kimiArchiveSequence(items: readonly FeedItem[]): number {
@@ -2707,26 +2719,46 @@ export function createFeedService(
     kimiSeedCheckpoint(ref, archive) {
       return seedKimiArchive(feedOf(ref, 'kimi'), archive, true);
     },
-    async kimiPrepareHistory(ref, archive, chunks, preferLive) {
+    async kimiPrepareHistory(ref, archive, chunks, replay) {
       const feed = feedOf(ref, 'kimi');
       const evidence = await readKimiArchiveItems(ref, archive).catch(() => {
         throw new HostError('conflict', 'Kimi could not read the prior Chat archive. The prior Chat is unchanged.');
       });
+      const preferLive = replay.kind === 'checkpoint';
       const liveTurns = feed.state.items.filter((item) => item.kind !== 'mail');
       const history = preferLive && feed.live && evidence.filter((item) => item.kind !== 'mail').every(({ id }, i) => liveTurns[i]?.id === id)
         ? feed.state.items : evidence;
-      const { retained, suffix } = reconcileKimiTurns(chunks, archiveKimiTurns(history));
+      const archived = archiveKimiTurns(history);
+      const reconciled = reconcileKimiTurns(chunks, archived, preferLive);
+      // Only explicit handback may replace a divergent checkpoint. A routine resume
+      // cannot append safely unless the provider's replay confirms the whole prior prefix.
+      const keepPrior = preferLive && reconciled.matched !== archived.length;
+      const retained = keepPrior ? history.filter((item) => item.kind !== 'mail') : reconciled.retained;
+      let partial = replay.incomplete || reconciled.partial || keepPrior;
       let state = { ...emptyFeedState(), seq: Math.max(feed.state.seq, kimiArchiveSequence(evidence)) };
       const time = at();
-      for (const turn of suffix) {
-        if (turn.prompt !== null) state = reduceKimi(state, { kind: 'prompt', text: turn.prompt }, time).state;
-        if (turn.reply !== '') state = reduceKimi(state, { kind: 'text', messageId: randomUUID(), text: turn.reply }, time).state;
-        state = closeFeedTurn(state, time).state;
+      const newRows: FeedItem[] = [];
+      const mail = preferLive ? (feed.state.items.length === 0 ? evidence : feed.state.items).filter((item) => item.kind === 'mail') : [];
+      let remainingItems = maxItems - retained.length - mail.length;
+      let remainingBytes = maxBytes - [...retained, ...mail].reduce((sum, item) => sum + itemBytes(item), 0);
+      for (const turn of keepPrior ? [] : reconciled.suffix) {
+        let next = state;
+        if (turn.prompt !== null) next = reduceKimi(next, { kind: 'prompt', text: turn.prompt }, time).state;
+        if (turn.reply !== '') next = reduceKimi(next, { kind: 'text', messageId: randomUUID(), text: turn.reply }, time).state;
+        next = closeFeedTurn(next, time).state;
+        // ACP does not report timestamps or durations for the imported suffix.
+        const added = next.items.slice(state.items.length).map((item) => item.kind === 'turn' ? { ...item, durationMs: null } : item);
+        const bytes = added.reduce((sum, item) => sum + itemBytes(item), 0);
+        if (added.length > remainingItems || bytes > remainingBytes) {
+          if (!preferLive) throw oversizedKimiReplay();
+          partial = true;
+          break;
+        }
+        remainingItems -= added.length;
+        remainingBytes -= bytes;
+        newRows.push(...added);
+        state = next;
       }
-      // ACP does not report timestamps or durations for the imported suffix.
-      const newRows = state.items.map((item) => item.kind === 'turn' ? { ...item, durationMs: null } : item);
-      const projected = [...retained, ...newRows];
-      if (projected.length > maxItems || projected.reduce((sum, item) => sum + itemBytes(item), 0) > maxBytes) throw oversizedKimiReplay();
       const current = () => feed.provider === 'kimi' && feedCurrent(feed);
       function check(): void {
         if (!current()) {
@@ -2774,7 +2806,7 @@ export function createFeedService(
         });
         flush(feed);
       }
-      return { check, writeCheckpoint, publish };
+      return { partial, check, writeCheckpoint, publish };
     },
     kimiOutput(ref, event) {
       if (stopped) return;

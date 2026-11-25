@@ -56,6 +56,7 @@ vi.mock('../feed/feed-service.js', async (importOriginal) => {
       async kimiPrepareHistory(...params) {
         const projection = await service.kimiPrepareHistory(...params);
         return {
+          partial: projection.partial,
           check() {
             r2Faults.trace?.push('prepare');
             if (r2Faults.failActivation) throw new Error('Fixture refused feed preparation');
@@ -893,6 +894,84 @@ it('recovers exact Chat rows if the host dies after release commits and before p
   expect((await readFile(trace, 'utf8')).split('\n').filter((line) => line.includes('one original checkpoint brief'))).toHaveLength(1);
   expect(unreadLetters(ref.projectPath, ref.workId, ref.sessionId).map((letter) => letter.text)).toContain('wake the recovered Chat');
 }, 25_000);
+
+it.each(['overflow', 'ambiguous'] as const)('keeps ordinary checkpoint resume usable despite %s replay', async (scenario) => {
+  const projectPath = await setup();
+  const history = path.join(home!, 'provider-history');
+  const trace = path.join(home!, 'ordinary-replay-trace');
+  vi.stubEnv('KIMI_FIXTURE_HISTORY', history);
+  vi.stubEnv('KIMI_FIXTURE_TRACE', trace);
+  const brief = 'one bounded checkpoint brief';
+  const { ref } = await call('sessions.create', { ...input(projectPath), task: brief });
+  await expectReply(ref, 'Hello Parley');
+  await call('kimi.setControl', { ref, target: 'terminal' });
+  const native = await terminalReady(ref);
+  raw(ref, 'native checkpoint turn\r/exit\r', native);
+  await expect.poll(() => call('kimi.getControl', { ref })).toMatchObject({ owner: 'exited' });
+  await call('kimi.setControl', { ref, target: 'chat' });
+  const checkpoint = (await session(ref))!.kimiChatCheckpoint;
+  expect(checkpoint).toBeDefined();
+  const committed = (await call('feed.snapshot', { ref })).items;
+  const titles = Array.from({ length: scenario === 'overflow' ? 9 : 3 }, (_, index) => `managed after checkpoint ${index}`);
+  const replies = scenario === 'overflow' ? Array.from({ length: 9 }, () => 'x'.repeat(240 * 1024)) : ['complete reply', '', 'ambiguous reply'];
+  await appendFile(history, titles.map((title, index) => JSON.stringify([title, replies[index]])).join('\n') + '\n');
+
+  const check = async () => {
+    const { items } = await call('feed.snapshot', { ref });
+    expect(items.slice(0, committed.length)).toEqual(committed);
+    const prompts = items.flatMap((item) => item.kind === 'prompt' ? [item.text] : []);
+    expect(prompts.filter((text) => text.startsWith('managed after checkpoint '))).toEqual(titles.slice(0, scenario === 'overflow' ? 8 : 1));
+    expect(prompts.filter((text) => text.includes(brief))).toHaveLength(1);
+    expect(await session(ref)).toMatchObject({ lifecycle: 'active', providerSessionId: 'acp-session', kimiChatCheckpoint: checkpoint });
+    expect(events).toContainEqual(expect.objectContaining({ event: 'host.notice', data: expect.objectContaining({ ref, kind: 'kimi-history-partial' }) }));
+  };
+
+  await call('sessions.stop', { ref });
+  await closeIsolatedHost();
+  await connectIsolatedHost();
+  await call('sessions.resume', { ref });
+  await check();
+  expect(await call('pty.send', { ref, text: 'live after ordinary resume', submit: true })).toMatchObject({ submitted: true });
+  await expect.poll(async () => {
+    const { items } = await call('feed.snapshot', { ref });
+    const reply = items.at(-2);
+    return items.at(-1)?.kind === 'turn' && reply?.kind === 'text' && reply.text === 'Hello Parley';
+  }).toBe(true);
+  expect(await readFile(trace, 'utf8')).toContain('live after ordinary resume');
+
+  if (scenario === 'overflow') {
+    await call('sessions.stop', { ref });
+    await closeIsolatedHost();
+    await connectIsolatedHost();
+    events = [];
+    await updateMap(ref.projectPath, ref.workId, (_map, letters) => {
+      letters.add({ roomId: null, kind: 'note', from: 'human', to: [ref.sessionId], text: 'wake oversized checkpoint' });
+    });
+    await expect.poll(() => call('kimi.getState', { ref }), { timeout: 5000 }).toMatchObject({ config: expect.arrayContaining([expect.objectContaining({ id: 'mode' })]) });
+    await check();
+    await expect.poll(() => call('pty.send', { ref, text: 'live after queued wake', submit: true })).toMatchObject({ submitted: true });
+    await expect.poll(() => readFile(trace, 'utf8'), { timeout: 5000 }).toContain('Call check_inbox.');
+    expect(await readFile(trace, 'utf8')).toContain('live after queued wake');
+  }
+  expect((await readFile(trace, 'utf8')).split('\n').filter((line) => line.includes(brief))).toHaveLength(1);
+}, 25_000);
+
+it('leaves Terminal recovery available when an explicit handback replay overflows', async () => {
+  const projectPath = await setup();
+  const history = path.join(home!, 'provider-history');
+  vi.stubEnv('KIMI_FIXTURE_HISTORY', history);
+  const { ref } = await call('sessions.create', { ...input(projectPath), task: 'strict handback evidence' });
+  await expectReply(ref, 'Hello Parley');
+  const before = (await call('feed.snapshot', { ref })).items;
+  await call('kimi.setControl', { ref, target: 'terminal' });
+  await exitNative(ref);
+  await appendFile(history, Array.from({ length: 9 }, (_, index) => JSON.stringify([`oversized native turn ${index}`, 'x'.repeat(240 * 1024)])).join('\n'));
+  expect((await request('kimi.setControl', { ref, target: 'chat' })).error?.message).toContain('handback replay limit');
+  expect(await call('kimi.getControl', { ref })).toMatchObject({ owner: 'stopped' });
+  expect((await call('feed.snapshot', { ref })).items).toEqual(before);
+  expect(await call('kimi.setControl', { ref, target: 'terminal' })).toMatchObject({ owner: 'terminal' });
+  await exitNative(ref);
+}, 15_000);
 
 it.each(['history', 'session'])('refuses to write archives through a linked %s directory', async (linked) => {
   const projectPath = await setup();

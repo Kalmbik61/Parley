@@ -3577,6 +3577,7 @@ const NOTICE_DETAIL: Record<NoticeKind, string> = {
   'pointer-timeout': 'no response after the pointer',
   'pointer-cancelled': 'pointer cancelled by your input',
   'resume-failed': "couldn't resume this session",
+  'kimi-history-partial': 'Kimi resumed, but Chat could only restore part of its history',
   'resume-limit': 'hourly resume limit reached — messages are waiting',
   'trust-wait': 'not responding since launch — may be waiting for folder trust',
   'startup-wait': 'waiting at startup — Codex may need sign-in or folder trust in its terminal',

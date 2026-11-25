@@ -209,3 +209,22 @@ pnpm --filter @parley/core exec vitest run src/work/agent-switch.test.ts src/wor
   -t 'checkpoint|deleteSessionFiles'
 git diff --check
 ```
+
+## Final delta — keep ordinary checkpoint resume available
+
+Lead assignment m-10328 covers the availability finding from m-10326. An explicit Terminal-to-Chat handback stays strict and recoverable on oversize or ambiguous history. Ordinary managed resume from a committed checkpoint must not close the exact-ID ACP owner merely because later history is oversized or ambiguous. Keep the committed rows and import only newer complete turns with safely identified boundaries and a matching replay prefix. Do not widen replay limits, invent missing rows, or repeat the brief. Make any partial display visible without disabling Chat or queued wake.
+
+Reproduce history growth above the existing 2 Mi-character cap after a handback, then cover explicit stop/resume, a queued wake, exact checkpoint retention, no duplicate brief, and successful new live prompts. Exercise ambiguous ordinary replay separately. Verify focused fixtures and build/typecheck. Do not rerun independent stock probes or touch the live app.
+
+Ordinary cold resume retains the checkpoint if the provider replay cannot confirm its whole prefix. When the prefix matches, it imports complete, unambiguous newer turns up to the first unsafe boundary or existing size limit. It does not claim to display turns beyond that boundary. The desktop status says when history was only partially restored. The exact provider conversation stays open for new prompts and queued mail. Explicit handback still refuses an unsafe replay and keeps the native recovery controls.
+
+Both ordinary failure cases reproduced before the fix. The oversized fixture supplies nine 240 Ki-character replies. It verifies that eight complete newer turns can be shown without replacing the committed rows, ordinary Chat can answer after both an explicit restart and a queued wake, the queued pointer arrives, and the first brief is sent only once. The ambiguous fixture retains a complete newer turn before the unknown boundary. The strict handback fixture verifies that Terminal can still reopen after an oversized replay. Afterward, 343 focused host tests, 249 desktop tests, dependency builds, desktop typecheck and `git diff --check` passed. Five stock CLI cases were deliberately skipped.
+
+```sh
+pnpm run typecheck
+env -u PARLEY_KIMI_PROBE_BIN -u PARLEY_KIMI_NATIVE_BIN -u PARLEY_KIMI_INTEGRATED_BIN -u PARLEY_KIMI_SENTINEL_BIN \
+  pnpm --filter @parley/host exec vitest run src/kimi src/feed/feed-service.test.ts \
+  src/feed/feed-service-takeover.test.ts src/wake/wake-service.mail.test.ts
+pnpm --filter @parley/desktop exec vitest run src/shared/strings.test.ts src/renderer/shell/StatusBar.test.tsx
+git diff --check
+```
