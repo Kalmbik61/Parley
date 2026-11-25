@@ -15,13 +15,15 @@ import { startHost, type RunningHost } from '../host.js';
 import { hostPaths } from '../paths.js';
 import { createScreen } from '../pty/screen.js';
 import { workspaceKey } from './date-provenance.js';
-import { kimiModeMenu } from './native-screen.js';
+import { kimiModeMenu, kimiPermissionMenu } from './native-screen.js';
 
 const bin = '/Users/kalmbik61/.kimi-code/bin/kimi';
 const optIn = process.env['PARLEY_KIMI_SHARED_HOST_BIN'];
 const fixtureManualDefault = process.env['PARLEY_KIMI_SHARED_HOST_MANUAL_DEFAULT'] === '1';
 const probeWorkspaceMcp = process.env['PARLEY_KIMI_SHARED_HOST_COLD_MCP'] === '1';
 const probeStartupRecovery = process.env['PARLEY_KIMI_SHARED_HOST_STARTUP_RECOVERY'] === '1';
+const probeEmptyNew = process.env['PARLEY_KIMI_SHARED_HOST_EMPTY_NEW'] === '1';
+const emptyNewMode = process.env['PARLEY_KIMI_SHARED_HOST_EMPTY_NEW_MODE'] ?? 'manual';
 const model = 'parley-offline-fixture';
 const original = 'INTEGRATED_ORIGINAL_PROMPT';
 const native = 'INTEGRATED_NATIVE_PROMPT';
@@ -38,6 +40,7 @@ const ask = 'NATIVE_HOST_QUESTION_PROBE';
 const afterNew = 'NATIVE_HOST_AFTER_NEW';
 const freshCold = 'NATIVE_HOST_FRESH_COLD';
 const freshAfterNew = 'NATIVE_HOST_FRESH_AFTER_NEW';
+const emptyNewFirst = 'NATIVE_HOST_EMPTY_NEW_FIRST';
 const unbound = 'NATIVE_HOST_UNBOUND';
 const mail = 'NATIVE_HOST_QUEUED_MAIL';
 const pointer = 'Call check_inbox.';
@@ -52,7 +55,9 @@ test.skipIf(!optIn)('shares real production host Chat and Terminal on one stock 
   const [home, kimi, parley, tmp, projectPath] = ['home', 'kimi', 'parley', 'tmp', 'project'].map(part => join(root, part)) as [string, string, string, string, string];
   const seen: { turn: string; tools: string[]; result?: string; hasMail: boolean; userText?: string }[] = [];
   const rejected: string[] = [];
+  let requests = 0;
   const server = createServer(async (req, res) => {
+    requests++;
     try {
       expect([req.method, req.url, req.headers.authorization]).toEqual(['POST', '/v1/chat/completions', 'Bearer probe-not-a-secret']);
       let input = '';
@@ -63,7 +68,7 @@ test.skipIf(!optIn)('shares real production host Chat and Terminal on one stock 
       const body = JSON.parse(input);
       expect([body.model, body.stream]).toEqual([model, true]);
       const history = JSON.stringify(body.messages);
-      const turn = [original, native, multiline, wrapped, recovered, ...modeTurns, ...mapTurns, ask, afterNew, freshCold, freshAfterNew, unbound, pointer].map(marker => ({ marker, at: history.lastIndexOf(marker) }))
+      const turn = [original, native, multiline, wrapped, recovered, ...modeTurns, ...mapTurns, ask, afterNew, freshCold, freshAfterNew, emptyNewFirst, unbound, pointer].map(marker => ({ marker, at: history.lastIndexOf(marker) }))
         .filter(item => item.at >= 0).sort((x, y) => y.at - x.at)[0]?.marker;
       if (turn === undefined) throw new Error('Unexpected synthetic model request');
       const tools: string[] = (body.tools ?? []).map((entry: { function: { name: string } }) => entry.function.name);
@@ -76,7 +81,7 @@ test.skipIf(!optIn)('shares real production host Chat and Terminal on one stock 
         .findLast((content: string | undefined) => content?.includes(turn));
       seen.push({ turn, tools, userText, hasMail: history.includes(mail), ...(result === undefined ? {} : { result: JSON.stringify(result) }) });
       const invoke = (mapTurns.has(turn) || turn === ask ||
-        ((turn === freshAfterNew || (probeWorkspaceMcp && (turn === original || modeTurns.has(turn)))) && tools.includes('mcp__parley__get_map'))) && result === undefined;
+        ((turn === freshAfterNew || turn === emptyNewFirst || (probeWorkspaceMcp && (turn === original || modeTurns.has(turn)))) && tools.includes('mcp__parley__get_map'))) && result === undefined;
       const tool = turn === ask ? 'AskUserQuestion' : 'mcp__parley__get_map';
       if (invoke) expect(tools).toContain(tool);
       res.writeHead(200, { 'Content-Type': 'text/event-stream' });
@@ -171,9 +176,10 @@ test.skipIf(!optIn)('shares real production host Chat and Terminal on one stock 
     const greeting = await hello(client, await readFile(paths.token, 'utf8'));
     expect(greeting.error).toBeUndefined();
     expect((greeting.result as { features: string[] }).features).toContain('kimi-shared-terminal');
+    if (emptyNewMode !== 'manual' && emptyNewMode !== 'auto' && emptyNewMode !== 'yolo') throw new Error('Invalid empty /new fixture permission mode');
     const { ref } = await call('sessions.create', {
       projectPath, workId: null, provider: 'kimi', label: 'Offline native integration', task: '', parent: null,
-      ...(fixtureManualDefault || probeWorkspaceMcp ? {} : { kimiPermissionMode: 'manual' as const }),
+      ...(probeEmptyNew ? { kimiPermissionMode: emptyNewMode } : fixtureManualDefault || probeWorkspaceMcp ? {} : { kimiPermissionMode: 'manual' as const }),
     });
     const session = async () => (await readMap(ref.projectPath, ref.workId)).sessions.find(item => item.id === ref.sessionId)!;
     const firstStart = await session();
@@ -201,6 +207,101 @@ test.skipIf(!optIn)('shares real production host Chat and Terminal on one stock 
     }
     stage = 'first Chat prompt after explicit Manual on a saved automatic default';
     await expect.poll(screen, poll).toMatch(ready);
+    if (probeEmptyNew) {
+      const noModel = () => { expect(requests).toBe(0); };
+      const guarded = (text: string) => expect.poll(async () => {
+        const result = await call('pty.send', { ref, text, submit: true });
+        if (result.inserted && !result.submitted) throw new Error('Empty /new probe left a draft');
+        return result.submitted;
+      }, poll).toBe(true);
+      const currentId = async () => (await screen()).match(/Started a new session \((session_[a-f0-9-]+)\)\./)?.[1];
+      const wireRows = async (providerId: string) => {
+        const file = join(kimi, 'sessions', workspaceKey(projectPath), providerId, 'agents', 'main', 'wire.jsonl');
+        const content = await readFile(file, 'utf8');
+        return content.trim().split('\n').map(line => JSON.parse(line) as {
+          type: string; serverName?: string; tools?: { name: string }[];
+          message?: { role: string; origin?: { kind: string } };
+        });
+      };
+      const emptyWire = (rows: Awaited<ReturnType<typeof wireRows>>) => {
+        expect(rows.length).toBeGreaterThan(0);
+        expect(rows.filter(row => /^(?:turn\.|llm\.|context\.append_loop_event$)/.test(row.type) ||
+          (row.type === 'context.append_message' && (row.message?.role === 'assistant' || row.message?.origin?.kind === 'user')))).toEqual([]);
+      };
+      const checkSamePty = async () => {
+        expect((await session()).pid).toBe(firstStart.pid);
+        expect((await call('pty.attach', { ref })).generation).toBe(generation);
+      };
+      stage = 'first /new on the lazy fresh PTY';
+      expect((await session()).providerSessionId).toBeFalsy();
+      noModel();
+      await guarded('/new');
+      await expect.poll(currentId, poll).toMatch(/^session_/);
+      const abandoned = (await currentId())!;
+      await expect.poll(async () => (await session()).providerSessionId, poll).toBe(abandoned);
+      await expect.poll(screen, poll).toMatch(ready);
+      await guarded('/mcp');
+      await expect.poll(screen, poll).toMatch(/parley\s+connected\s+stdio\s+50 tools/);
+      const firstWire = await wireRows(abandoned);
+      emptyWire(firstWire);
+      const discovered = firstWire.find(row => row.type === 'mcp.tools_discovered' && row.serverName === 'parley')?.tools;
+      expect(discovered).toHaveLength(50);
+      expect(discovered?.map(({ name }) => name)).toContain('get_map');
+      noModel();
+      await checkSamePty();
+
+      stage = 'second /new with the first conversation still empty';
+      await guarded('/new');
+      await expect.poll(async () => { const id = await currentId(); return id === abandoned ? undefined : id; }, poll).toMatch(/^session_/);
+      const finalId = (await currentId())!;
+      await expect.poll(async () => (await session()).providerSessionId, poll).toBe(finalId);
+      await expect.poll(screen, poll).toMatch(ready);
+      await guarded('/permission');
+      const expectedMode = { manual: 0, yolo: 1, auto: 2 }[emptyNewMode];
+      await expect.poll(async () => kimiModeMenu((await screen()).split('\n')), poll).toMatchObject({ current: expectedMode });
+      raw('\x1b');
+      await expect.poll(screen, poll).toMatch(ready);
+      emptyWire(await wireRows(abandoned));
+      emptyWire(await wireRows(finalId));
+      noModel();
+      await checkSamePty();
+
+      stage = 'first actual model request after two empty /new commands';
+      await guarded(emptyNewFirst);
+      await expect.poll(() => seen[0]?.turn, poll).toBe(emptyNewFirst);
+      const { tools } = seen[0]!;
+      const parleyTools = tools.filter(tool => tool.startsWith('mcp__parley__'));
+      console.info('Empty /new first advertised tools:', { mode: emptyNewMode, tools: tools.length, parleyTools: parleyTools.length });
+      const getMapAdvertised = parleyTools.includes('mcp__parley__get_map');
+      expect(parleyTools).toHaveLength(50);
+      expect(getMapAdvertised).toBe(true);
+      const toolResult = () => seen.findLast(row => row.turn === emptyNewFirst)?.result;
+      const approval = async () => kimiPermissionMenu((await screen()).split('\n'), 'Approve mcp__parley__get_map');
+      if (emptyNewMode === 'manual') {
+        await expect.poll(approval, poll).toBeDefined();
+        raw('\r');
+      } else {
+        await expect.poll(async () => toolResult() !== undefined || await approval() !== undefined, poll).toBe(true);
+        if (toolResult() === undefined) raw('\r');
+      }
+      await expect.poll(toolResult, poll).toContain(ref.sessionId);
+      expect(toolResult()).toContain(ref.workId);
+      await expect.poll(screen, poll).toContain(`${emptyNewFirst}_REPLY`);
+      expect(seen[0]?.userText).toBe(emptyNewFirst);
+      const snapshotTools = (await wireRows(finalId)).find(row => row.type === 'llm.tools_snapshot')?.tools;
+      expect(snapshotTools?.map(({ name }) => name).sort()).toEqual([...tools].sort());
+      emptyWire(await wireRows(abandoned));
+      await checkSamePty();
+      expect((await session()).providerSessionId).toBe(finalId);
+      expect(rejected).toEqual([]);
+      console.info('Empty /new cold evidence:', JSON.stringify({
+        mode: emptyNewMode, abandonedWire: (await wireRows(abandoned)).map(row => row.type),
+        abandonedDiscovery: discovered?.length,
+        samePidAndGeneration: true, requestsBeforePrompt: 0, requests, tools: tools.length,
+        parleyTools: parleyTools.length, getMapAdvertised, getMapCalled: seen.some(row => row.result !== undefined),
+      }));
+      return;
+    }
     if (probeWorkspaceMcp) {
       stage = 'workspace /mcp before permission selection or the first model prompt';
       await submit('/mcp');

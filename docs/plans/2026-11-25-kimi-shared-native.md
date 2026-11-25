@@ -24,6 +24,10 @@ Room decisions m-10457 and m-10458. Keep the single stock PTY and existing evide
 
 On a proven path, gate the first prompt from Chat, queued mail and raw Terminal until native discovery and any explicit Manual confirmation complete. Never accept trust or login on behalf of the operator, start a dummy model turn, run an automatic `/new`, patch Kimi, change global flags, or replace a live process to warm discovery. Separately verify stock Chat preserves multiline and naturally wrapped text exactly once at normal widths. Keep uncertain permission mode fail-closed and make failure visible and recoverable without treating unconfirmed automatic mode as Manual. Production scope stays with core/host. Do not change the live app or account.
 
+### Final cold probe — empty native conversation only
+
+Room decision m-10468. In an entirely fresh managed and disposable Kimi launch, manually use stock `/new` to create an empty conversation. Separately verify Kimi sees the complete Parley catalog, then manually issue a second `/new` before any model prompt. Check provider identity changes without a PID or PTY-generation change. The abandoned conversation's main wire must contain no human prompt, assistant output, turn, or model request, and the loopback model counter must stay at zero. In the final conversation, the first actual synthetic model request must advertise the full Parley catalog including `get_map`. Verify a genuine call reaches the bound host route, and run the explicit auto/yolo controls only if the Manual case is positive. A negative result ends cold probing in this task. The only edits are this plan and the synthetic probe. No startup behavior, existing human conversation, account state, or provider source changes are in scope.
+
 ## Integrated verification
 
 From the repository root after building core, protocol, and host:
@@ -51,6 +55,14 @@ The stock source explains why the discovery event alone is insufficient. `agentL
 
 The T-NATIVE-COLD workspace probe (`PARLEY_KIMI_SHARED_HOST_COLD_MCP=1`) saw the real native row `parley  connected  stdio  50 tools` before any provider session ID, permission selection, or model request. An explicit native switch to Always Ask over a saved automatic default, an already-manual default, explicit `--auto` (Never Ask), and explicit `--yolo` (Ask When Needed) all sent only 24 built-ins on their first actual request. None advertised `get_map`. The histories and PIDs stayed intact. This disproves `/mcp` as a sufficient preflight for cold tool advertisement on the measured provider. No production `/mcp` gate or alternative warm-up is installed.
 
+### Empty `/new` result
+
+On stock 2.7.3, native `/new` created a bound provider ID on the lazy startup PTY. Within that empty conversation, `/mcp` painted `parley  connected  stdio  50 tools` and the exact main wire recorded `mcp.tools_discovered` with all 50, including `get_map`. A second `/new` bound a different provider ID to the same Parley ref without changing the native PID or PTY generation. The abandoned wire contained only `metadata`, `environment.set_binding`, `permission.set_mode`, `changeNotifier.snapshot`, `profile.bind`, and `mcp.tools_discovered`. Neither conversation had any human or model turn before the first prompt, and the model-port request counter was zero. The abandoned wire stayed empty of turns after the final conversation answered.
+
+Explicit Manual, explicit Auto, and explicit Yolo all passed. Each final first request advertised 74 tools, including all 50 Parley tools, and the exact `llm.tools_snapshot` matched the HTTP names. The fixture model invoked `mcp__parley__get_map` and received a result containing the bound Parley work and session. Manual used the real native approval menu. Each run used two loopback requests, one to select the tool and one to consume its result. No dummy model turn, process restart, global flag, provider patch, or real-home write was used.
+
+The test produced an extra persisted **empty** provider conversation. It does not authorize or implement automatic startup commands, replacement of a human conversation, or cleanup of that empty record. To repeat, use the existing stock probe command with `PARLEY_KIMI_SHARED_HOST_EMPTY_NEW=1` and set `PARLEY_KIMI_SHARED_HOST_EMPTY_NEW_MODE` to `manual`, `auto`, or `yolo`.
+
 ### Composer and startup recovery rework
 
 At 80×26, stock Kimi rendered an `↑ 2 more` top border and a blank first visible editor row for the nine-line draft. The guarded send left that draft unsubmitted before the fix. The host now recognizes the whole current composer frame and treats hidden or additional rows as a draft. The stock fixture verifies exact-once delivery to the model and Chat for nine lines including Unicode and a blank line, and for a naturally wrapped 930-character line (below Kimi's 1,000-character paste-folding threshold).
@@ -66,6 +78,6 @@ An observed resize interrupted explicit Always Ask confirmation (`PARLEY_KIMI_SH
 - **For the human** — No live configuration, app install, restart, account prompt, REA change, or provider-compaction patch was applied.
 - **Risk** — Kimi can omit the full catalog on a cold turn even after successful discovery. Screen controls are intentionally limited to recognized stock English layouts. The native wire exposes completed blocks, not token-by-token output. User config collisions stop setup without replacing foreign entries.
 - **Cost** — No paid model requests. Production overhead not measured.
-- **Verdict** — Stock native input, history, authentication and tested decisions work through the production host. Cold full-catalog advertisement remains a provider limitation.
+- **Verdict** — Stock native input, history, authentication and tested decisions work through the production host. An untouched cold first request still omits Parley, but the manually driven empty sequence demonstrated first-turn catalog parity in all three explicit modes. No production startup change was made by this probe.
 
-**Not verified** — Live-account deployment, non-English layouts, other model profiles, or whether `/new` restores the catalog before any turn has finished. The cold first model request did not expose Parley in any of the four tested permission setups. The room excluded REA and changes to the provider's compaction behavior.
+**Not verified** — Live-account deployment, non-English layouts, other model profiles, or production automation of the empty sequence. Without the empty sequence, the cold first model request did not expose Parley in any of the four tested permission setups. The room excluded REA and changes to the provider's compaction behavior.
