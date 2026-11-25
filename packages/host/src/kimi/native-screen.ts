@@ -1,19 +1,22 @@
 import type { KimiRequest } from '@parley/protocol';
 
 const working = /^\s*[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]?\s*(?:Working for \d|Starting a new session|Compacting (?:context|conversation))/i;
-const dialog = /Trust this folder\?|Ready to submit your answers\?|▶\s*\d+\. (?:Approve|Reject)|^\s*\?\s+\S|(?:Sign in|Log in) to (?:Kimi|continue)/i;
+const dialog = /Trust this folder\?|Ready to submit your answers\?|^Select permission mode$|▶\s*\d+\. (?:Approve|Reject)|^\s*\?\s+\S|(?:Sign in|Log in) to (?:Kimi|continue)/i;
+const top = /^╭─+(?: ↑ [1-9]\d* more ─+)?╮$/;
+const bottom = /^╰─+(?: ↓ [1-9]\d* more ─+)?╯$/;
 
 /** A stock 2.7.3 composer must be the active bottom-most framed editor, not an old prompt line. */
 export function kimiComposer(view: readonly string[]): { empty: boolean } | undefined {
   const lines = view.map(line => line.trim()).filter(Boolean);
-  const current = lines.slice(-9);
-  if (current.some(line => working.test(line) || dialog.test(line))) return undefined;
-  const at = current.findLastIndex(line => /^│ >.*│$/.test(line));
-  if (at < 1 || !/^╭─+╮$/.test(current[at - 1]!)) return undefined;
-  let end = at + 1;
-  while (/^│.*│$/.test(current[end] ?? '')) end++;
-  if (!/^╰─+╯$/.test(current[end] ?? '') || current.length - end > 3) return undefined;
-  return { empty: /^│ >\s*│$/.test(current[at]!) };
+  const end = lines.findLastIndex(line => bottom.test(line));
+  if (end < 2 || lines.length - end > 3) return undefined;
+  let start = end - 1;
+  while (/^│.*│$/.test(lines[start] ?? '')) start--;
+  if (!top.test(lines[start] ?? '') || !/^│ >.*│$/.test(lines[start + 1] ?? '')) return undefined;
+  const outside = [...lines.slice(Math.max(0, start - 4), start), ...lines.slice(end + 1)];
+  if (outside.some(line => working.test(line) || dialog.test(line))) return undefined;
+  // Stock Kimi shows `>` on the first visible row, not necessarily the first input line.
+  return { empty: end === start + 2 && !lines[start]!.includes('↑') && !lines[end]!.includes('↓') && /^│ >\s*│$/.test(lines[start + 1]!) };
 }
 
 export function kimiModeMenu(view: readonly string[]): { selected: number; current: number } | undefined {

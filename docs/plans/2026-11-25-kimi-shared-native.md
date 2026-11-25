@@ -18,6 +18,12 @@ Accepted production spec from room r-45, messages m-10429 and m-10430. Source ba
 
 Add failing regressions before implementation. Check one PID across views, both input paths on that ID and exact-once history, native `/help` and resize, old-ID resume with migration, `/new` rebind to the same Parley ref, bounded feed, every observed permission option with stale/double refusal, input/draft/wake races, and manual/auto launch preservation. A stock Kimi 2.7.3 loopback fixture must exercise the production host components, including a genuine native `get_map` on the correct disposable Parley ref and no authority for an unbound launch. Run scoped checks/build. Commit locally only. Root integrates the desktop sibling and reviews the combined branch.
 
+## T-NATIVE-COLD — accepted rework
+
+Room decisions m-10457 and m-10458. Keep the single stock PTY and existing evidence. Before any production changes, try the native `/mcp` command in the disposable production host fixture before explicit Manual selection and before any model prompt. Verify the connected Parley row and discovered tools on the native screen, no earlier model request, a stable PID, and an authenticated `get_map` from the first model request. Exercise saved Manual and explicit Manual over `auto`, and verify native `auto` and `yolo` without account configuration changes. If the command cannot warm the model catalog, record the exact result before considering another provider action.
+
+On a proven path, gate the first prompt from Chat, queued mail and raw Terminal until native discovery and any explicit Manual confirmation complete. Never accept trust or login on behalf of the operator, start a dummy model turn, run an automatic `/new`, patch Kimi, change global flags, or replace a live process to warm discovery. Separately verify stock Chat preserves multiline and naturally wrapped text exactly once at normal widths. Keep uncertain permission mode fail-closed and make failure visible and recoverable without treating unconfirmed automatic mode as Manual. Production scope stays with core/host. Do not change the live app or account.
+
 ## Integrated verification
 
 From the repository root after building core, protocol, and host:
@@ -43,15 +49,23 @@ A separate managed disposable launch compared the cold request with the first re
 
 The stock source explains why the discovery event alone is insufficient. `agentLifecycleService.ts` starts the loop after tool activation. `loopService.ts` takes `initialTools()` into the loop profile before `toolSelectService.ts` awaits MCP readiness for the request, and later request shaping can keep that earlier baseline. The wire does not record the baseline capture itself. The equal discovery and initialization counts and different request catalogs are consistent with this explanation. The probe did not exercise `/new` before the first prompt or apply it to an existing human conversation. It added no production behavior.
 
+The T-NATIVE-COLD workspace probe (`PARLEY_KIMI_SHARED_HOST_COLD_MCP=1`) saw the real native row `parley  connected  stdio  50 tools` before any provider session ID, permission selection, or model request. An explicit native switch to Always Ask over a saved automatic default, an already-manual default, explicit `--auto` (Never Ask), and explicit `--yolo` (Ask When Needed) all sent only 24 built-ins on their first actual request. None advertised `get_map`. The histories and PIDs stayed intact. This disproves `/mcp` as a sufficient preflight for cold tool advertisement on the measured provider. No production `/mcp` gate or alternative warm-up is installed.
+
+### Composer and startup recovery rework
+
+At 80×26, stock Kimi rendered an `↑ 2 more` top border and a blank first visible editor row for the nine-line draft. The guarded send left that draft unsubmitted before the fix. The host now recognizes the whole current composer frame and treats hidden or additional rows as a draft. The stock fixture verifies exact-once delivery to the model and Chat for nine lines including Unicode and a blank line, and for a naturally wrapped 930-character line (below Kimi's 1,000-character paste-folding threshold).
+
+An observed resize interrupted explicit Always Ask confirmation (`PARLEY_KIMI_SHARED_HOST_STARTUP_RECOVERY=1`). The host marked activity blocked and published one actionable Chat error for that PTY generation. Both Chat and raw submissions remained blocked, with no provider ID or request created. The operator's existing Stop and Resume actions retried from the same Parley session and the next prompt was delivered once. No unverified permission mode was allowed and no automatic restart was added.
+
 ### Impact card
 
 - **Goal** — Give Kimi one live native process for Chat and Terminal.
 - **Behaviour** — Native launch/resume, two views, scoped registration, main-wire Chat, native decisions, queued mail and same-process ID evolution. Unsupported wire/screen shapes retain earlier human evidence and use the native Terminal.
-- **Numbers** — Stock production host probe exercised 15 loopback model requests, plus three for the cold `/new` comparison. Zero paid or external model requests. Passed 510 core, 565 protocol, 302 scoped host, and 415 merged desktop checks. A final run of the stock host, screen and wire suites passed all 9 checks after the last shape refinements.
+- **Numbers** — The rework exercised 23 loopback model requests in each stock run. Both 13-test scoped runs passed, along with the host build and 252 feed checks. Earlier production checks passed 510 core, 565 protocol, 302 scoped host, and 415 merged desktop tests. Zero paid or external model requests.
 - **Screens** — Native trust, Always Ask, help, resize, permission choices, feedback editor and question review were observed in disposable PTYs. Desktop view behavior is from the independently accepted UI merge.
 - **For the human** — No live configuration, app install, restart, account prompt, REA change, or provider-compaction patch was applied.
 - **Risk** — Kimi can omit the full catalog on a cold turn even after successful discovery. Screen controls are intentionally limited to recognized stock English layouts. The native wire exposes completed blocks, not token-by-token output. User config collisions stop setup without replacing foreign entries.
 - **Cost** — No paid model requests. Production overhead not measured.
 - **Verdict** — Stock native input, history, authentication and tested decisions work through the production host. Cold full-catalog advertisement remains a provider limitation.
 
-**Not verified** — Live-account deployment, non-English layouts, other model profiles, or whether `/new` restores the catalog before any turn has finished. The comparison used explicit session Manual over a saved automatic default. The repeat under a saved Manual default timed out at the stock version check before any model request. The full catalog was absent on the cold first turn. The room excluded REA and changes to the provider's compaction behavior.
+**Not verified** — Live-account deployment, non-English layouts, other model profiles, or whether `/new` restores the catalog before any turn has finished. The cold first model request did not expose Parley in any of the four tested permission setups. The room excluded REA and changes to the provider's compaction behavior.

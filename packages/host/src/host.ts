@@ -875,6 +875,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     reset: feedService.kimiNativeReset,
     requests: feedService.kimiNativeRequests,
     activity: activityService.kimiActivity,
+    startupFailed: feedService.kimiNativeStartupFailed,
     readyChanged: (ref) => wakeService.kimiReadyChanged(ref),
     fence: (ref) => { browserEndpoint.unregister(ref); toolsEndpoint.forget(ref); },
   });

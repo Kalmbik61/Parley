@@ -15,8 +15,17 @@ it('requires the current composer, not just a matching line in an old viewport',
   expect(kimiComposer(screen.toSpliced(1, 0, ' ⠋ Working for 1s'))).toBeUndefined();
   expect(kimiComposer(screen.toSpliced(1, 0, 'Trust this folder?'))).toBeUndefined();
   expect(kimiComposer(screen.toSpliced(2, 1, ' │ > A draft          │'))).toEqual({ empty: false });
+  expect(kimiComposer(screen.toSpliced(2, 1, ' │ > Trust this folder? │'))).toEqual({ empty: false });
   expect(kimiComposer(screen.toSpliced(2, 0, 'foo'))).toBeUndefined();
   expect(kimiComposer([...screen, '   ▶ 1. Approve once'])).toBeUndefined();
+});
+
+it('recognizes the actual stock scrolled draft with a blank first visible row', () => {
+  const draft = screen.toSpliced(1, 2, ' ╭───── ↑ 2 more ─────╮', ' │ >                  │',
+    ...Array.from({ length: 6 }, () => ' │   continuation     │'));
+  expect(kimiComposer(draft)).toEqual({ empty: false });
+  expect(kimiComposer(draft.toSpliced(3, 6))).toEqual({ empty: false });
+  expect(kimiComposer([...draft, 'Select permission mode'])).toBeUndefined();
 });
 
 it('recognizes exact native labels and order only beside the requested action', () => {

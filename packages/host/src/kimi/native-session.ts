@@ -51,6 +51,7 @@ interface Options {
   reset(ref: SessionRef, sameId: boolean): void;
   requests(ref: SessionRef, requests: KimiRequest[], unresolved: boolean): void;
   activity(ref: SessionRef, state: 'ready' | 'working' | 'blocked' | 'ended'): void;
+  startupFailed(ref: SessionRef, generation: string): void;
   readyChanged(ref: SessionRef): void;
   fence(ref: SessionRef): void;
 }
@@ -164,7 +165,10 @@ export function createKimiNativeSession(options: Options) {
       await wait(() => kimiComposer(view(live))?.empty === true ? true : undefined);
       live.manualConfirmed = true;
     })().catch(() => {
+      if (!matches(live)) return;
       live.manualFailed = true;
+      kActivity(live, 'blocked');
+      if (live.pty?.generation !== undefined) options.startupFailed(live.ref, live.pty.generation);
       options.log.warn('Kimi Always Ask mode could not be verified before the first prompt', { ref: live.ref });
     }).finally(() => { delete live.manualTask; });
   }
