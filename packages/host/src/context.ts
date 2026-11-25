@@ -1,3 +1,4 @@
+import type { AppLocale } from '@parley/core/i18n';
 import type { EventData, EventName, MethodName, NotificationName, Params, Result } from '@parley/protocol';
 import type { Client } from './client.js';
 import type { Log } from './log.js';
@@ -6,6 +7,7 @@ import type { HostPaths } from './paths.js';
 /** Общее состояние хоста, видимое обработчикам методов и серверу. */
 export interface HostContext {
   version: string;
+  locale?(): AppLocale;
   startedAt: string;
   paths: HostPaths;
   log: Log;
@@ -50,6 +52,7 @@ export type AnyNotificationHandler = (params: never, request: RequestInfo) => vo
 
 export interface CreateHostContextOptions {
   version: string;
+  locale?(): AppLocale;
   paths: HostPaths;
   log: Log;
   onIdleChange: (idle: boolean) => void;
@@ -75,6 +78,7 @@ export function createHostContext(options: CreateHostContextOptions): HostContex
 
   const context: HostContext = {
     version: options.version,
+    ...(options.locale === undefined ? {} : { locale: options.locale }),
     startedAt: new Date().toISOString(),
     paths: options.paths,
     log: options.log,

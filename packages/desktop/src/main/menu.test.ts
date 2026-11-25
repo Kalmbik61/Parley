@@ -6,6 +6,7 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 import type { KeyboardEvent, MenuItem, MenuItemConstructorOptions } from 'electron';
+import { setAppLocale } from '../shared/app-locale.js';
 import type { ActionId } from '../shared/keybindings.js';
 
 vi.mock('electron', () => ({ Menu: { buildFromTemplate: vi.fn(), setApplicationMenu: vi.fn() } }));
@@ -51,6 +52,25 @@ describe('buildMenuTemplate (тест 1)', () => {
     const items = app === undefined ? [] : submenuOf(app).filter((item) => item.type !== 'separator');
     expect(items.map((item) => item.role ?? item.label)).toEqual(['about', 'Settings', 'quit']);
     expect(items.filter((item) => item.role !== undefined).map((item) => item.label)).toEqual(['About Parley', 'Quit Parley']);
+  });
+
+  it('строит русское нативное меню с теми же ролями и командами', () => {
+    setAppLocale('ru');
+    try {
+      const sent: ActionId[] = [];
+      const template = buildMenuTemplate((id) => sent.push(id));
+      expect(template.map((item) => item.label)).toEqual(['Parley', 'Правка', 'Вид', 'Работа', 'Вкладка', 'Терминал']);
+      const entries = allItems(template);
+      expect(entries.find((item) => item.role === 'about')?.label).toBe('О Parley');
+      expect(entries.find((item) => item.role === 'quit')?.label).toBe('Выйти из Parley');
+      expect(entries.find((item) => item.role === 'selectAll')?.label).toBe('Выбрать всё');
+      const next = entries.find((item) => item.label === 'Новая работа');
+      expect(next?.accelerator).toBe('CmdOrCtrl+N');
+      click(next, {});
+      expect(sent).toEqual(['work.new']);
+    } finally {
+      setAppLocale('en');
+    }
   });
 
   it('клик по Command palette с triggeredByAccelerator не шлёт, мышью — шлёт palette.open', () => {

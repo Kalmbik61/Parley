@@ -73,10 +73,15 @@ it('disk retry uses captured accepted bytes and snapshot link after later plan r
     });
     const intent = (await store.readMap(project, workId)).decisionExports![0]!;
     expect(intent.snapshot).toBe(`${workId}-r-01-pl-01-rev-0-accepted.md`);
+    expect(intent.content).toContain('## Decision\nVersion zero');
+    expect((await store.readMap(project, workId)).planExports![0]?.content).toContain('## Goal\nOriginal goal');
     expect((await flushDecisionJournal(project, workId)).failed[0]?.code).toBe('journal-unavailable');
     expect((await store.readMap(project, workId)).rooms[0]!.proposal).toBeNull();
     await flushPlanSnapshots(project, workId);
     expect((await flushDecisionJournal(project, workId, { beforeCommit: async () => { throw new Error('Synthetic disk failure'); } })).failed).toHaveLength(1);
+    const desktop = path.join(process.env.PARLEY_HOME!, 'desktop');
+    await fs.mkdir(desktop);
+    await fs.writeFile(path.join(desktop, 'ui.json'), JSON.stringify({ locale: 'ru' }));
     await store.updateMap(project, workId, (map, letters) => {
       const p = setProposal(map, 'r-01', 's-01', 'Version one', at, { plan: { id: 'pl-01', rev: 0, mode: 'checklist', goal: 'Later goal', items: [{ id: 1, title: 'Later work', owner: 's-01', scope: 'src/new' }] } });
       resolveProposal(map, letters, 'r-01', p.proposalId, 'accept', { rev: p.rev, planId: 'pl-01', planRev: 1 }, at);
@@ -88,6 +93,18 @@ it('disk retry uses captured accepted bytes and snapshot link after later plan r
     expect(settled.decisionExports!.every(row => row.content === undefined && row.status === 'written')).toBe(true);
     for (const row of settled.decisionExports!) expect(row.snapshotSha256).toBe(settled.planExports!.find(plan => plan.file === row.snapshot)!.sha256);
     const file = path.join(project, '.parley', 'decisions', intent.file);
+    const localized = settled.decisionExports!.find(row => row.file !== intent.file)!;
+    expect(localized.file).toBe(`2026-10-04-${workId}-r-01-p-02-rev-00.md`);
+    const russianDecision = await fs.readFile(path.join(project, '.parley', 'decisions', localized.file), 'utf8');
+    const russianPlan = await fs.readFile(path.join(project, '.parley', 'plans', localized.snapshot!), 'utf8');
+    expect(russianDecision).toContain('## Решение\nVersion one');
+    expect(russianDecision).toContain(`](../plans/${localized.snapshot})`);
+    expect(russianPlan).toContain('## Цель\nLater goal');
+    expect(russianPlan).toContain('Объём работ:\nsrc/new');
+    const { readDecisionJournalFiles } = await import('./decision-journal.js');
+    const listing = await readDecisionJournalFiles(project);
+    expect(listing.files.find(row => row.file === localized.file)).toMatchObject({ kind: 'decision', headerAgrees: true, acceptedAt: at });
+    expect(await fs.readFile(path.join(project, '.parley', 'plans', intent.snapshot!), 'utf8')).toContain('## Goal\nOriginal goal');
     expect(await fs.readFile(file, 'utf8')).toBe(intent.content); expect(intent.content).not.toContain('Later goal');
     expect((await flushDecisionJournal(project, workId)).written).toEqual([]);
     await fs.writeFile(file, 'Human changed immutable journal');

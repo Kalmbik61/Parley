@@ -166,6 +166,8 @@ export interface WorksSyncBridge {
 
 export interface ParleyBridge {
   worksSync: WorksSyncBridge;
+  /** Resolved interface language for this launch, available before the first render. */
+  locale(): import('@parley/core/i18n').AppLocale;
   call<M extends MethodName>(method: M, params: Params<M>): Promise<Result<M>>;
   notify<N extends NotificationName>(method: N, params: Params<N>): void;
   on<E extends EventName>(event: E, listener: (data: EventData<E>) => void): () => void;

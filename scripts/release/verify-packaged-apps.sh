@@ -41,6 +41,15 @@ check_app() {
   [ "$(plutil -extract CFBundleShortVersionString raw -o - "$plist")" = "$version" ] ||
     fail "$plist: CFBundleShortVersionString is not $version"
 
+  # Подпись системного запроса микрофона берётся из InfoPlist.strings для языка macOS.
+  for locale in en ru; do
+    local name="$locale.lproj/InfoPlist.strings"
+    cmp -s "$root/packages/desktop/build/locales/$name" "$resources/$name" ||
+      fail "$app: $name is missing or differs from the source"
+    [ -n "$(plutil -extract NSMicrophoneUsageDescription raw -o - "$resources/$name")" ] ||
+      fail "$app: $name has no microphone usage description"
+  done
+
   [ -x "$resources/node/bin/node" ] ||
     fail "$app has no embedded node (Contents/Resources/node/bin/node): fetch-node must run before electron-builder"
   [ "$(lipo -archs "$resources/node/bin/node")" = "$lipo_arch" ] ||

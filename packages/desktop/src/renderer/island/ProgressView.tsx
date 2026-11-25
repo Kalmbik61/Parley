@@ -1,3 +1,4 @@
+import { displayLocale } from '../../shared/app-locale.js';
 import type { ProgressState } from './progress.js';
 import { S } from '../../shared/strings.js';
 
@@ -20,7 +21,7 @@ export function ProgressView({ state, onOpen, onClose }: { state: ProgressState;
                       <span className="min-w-0 flex-1">{text.category[line.category]}</span>
                       {state.result.current?.id === line.id ? <span>{text.current}</span> : null}
                       <span className="text-muted-foreground">{text.status[line.status]}</span>
-                      <time className="text-muted-foreground" dateTime={line.at}>{new Date(line.endedAt ?? line.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</time>
+                      <time className="text-muted-foreground" dateTime={line.at}>{new Date(line.endedAt ?? line.at).toLocaleTimeString(displayLocale(), { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</time>
                     </li>
                   ))}
                 </ol>

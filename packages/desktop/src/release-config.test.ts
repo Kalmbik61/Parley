@@ -100,6 +100,16 @@ describe('упаковка macOS (V2)', () => {
     );
   });
 
+  it('кладёт текст разрешения микрофона в оба каталога локализаций macOS', () => {
+    expect(builder).toContain('CFBundleLocalizations: [en, ru]');
+    for (const [locale, message] of [['en', 'for voice dictation'], ['ru', 'для голосовой диктовки']]) {
+      const resource = `${locale}.lproj/InfoPlist.strings`;
+      expect(builder).toContain(`- from: build/locales/${resource}\n    to: ${resource}`);
+      expect(readFileSync(path.join(desktopRoot, 'build', 'locales', resource), 'utf8')).toContain('"NSMicrophoneUsageDescription" = "Parley');
+      expect(readFileSync(path.join(desktopRoot, 'build', 'locales', resource), 'utf8')).toContain(message);
+    }
+  });
+
   // S-del: локальный движок нейроголоса удалён — в сборке нет ни его каталога, ни его лицензии, ни шага его загрузки.
   it('сборка без движка прежнего нейроголоса: нет его каталога, лицензии и шага загрузки', () => {
     const release = readFileSync(path.join(repoRoot, '.github', 'workflows', 'release.yml'), 'utf8');

@@ -3,6 +3,7 @@
  * Состояние канала — `telegram.status` при монтировании и событие `telegram.changed`; сам токен наружу не
  * приходит, только хвост-подсказка. Раздела нет, если хост не знает `telegram.status`.
  */
+import { displayLocale } from '../../../shared/app-locale.js';
 import { useEffect, useState } from 'react';
 import type { TelegramStatus } from '@parley/protocol';
 import type { ParleyConfig } from '@parley/core';
@@ -117,7 +118,7 @@ export function TelegramSettings({ bridge, config, locked, save, hostMethods }: 
     if (s.polling === 'conflict') return text.conflict;
     if (s.polling === 'error' || s.error !== null) return text.error(s.error ?? '');
     if (s.owner === null) return text.notLinked(s.botUsername ?? '', s.hint ?? '');
-    const since = new Date(s.owner.linkedAt).toLocaleDateString('en-US', { dateStyle: 'medium' });
+    const since = new Date(s.owner.linkedAt).toLocaleDateString(displayLocale(), { dateStyle: 'medium' });
     return s.owner.username === null ? text.linkedNoName(since) : text.linked(`@${s.owner.username}`, since);
   };
 

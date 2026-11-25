@@ -1,11 +1,12 @@
 /** Карточки бота: тексты HTML и inline-клавиатуры. Чистые функции — отправку и состояние ведёт сервис. */
 
+import type { AppLocale } from '@parley/core/i18n';
 import { cardDetail } from '@parley/core/card-gist';
 import type { FeedCard, FeedDecision, FeedQuestionCard, Proposal } from '@parley/core';
 import type { ActionVerb, AssistantProposal, ConsentCard } from '@parley/protocol';
 import { CALLBACK_CODES } from './callbacks.js';
 import { clipText, escapeHtml } from './format.js';
-import { B, T } from './texts.js';
+import { telegramButtons, telegramTexts } from './texts.js';
 import type { InlineKeyboard } from './types.js';
 
 export interface CardMeta {
@@ -26,7 +27,7 @@ export const ASSISTANT_CARD_MAX = 4000;
 const STEP_TEXT_SHORT = 100;
 const STEP_LINE_MAX = 120;
 
-const pre = (text: string, max = DETAIL_MAX): string => `<pre>${escapeHtml(clipText(text, max))}</pre>`;
+const pre = (text: string, locale: AppLocale, max = DETAIL_MAX): string => `<pre>${escapeHtml(clipText(text, max, locale))}</pre>`;
 const button = (text: string, data: string): { text: string; callback_data: string } => ({ text, callback_data: data });
 const pc1 = (shortId: string, code: string): string => `pc1:${shortId}:${code}`;
 const label = (text: string): string => (text.length > BUTTON_MAX ? `${text.slice(0, BUTTON_MAX - 1)}…` : text);
@@ -38,7 +39,8 @@ function questionBlock(card: FeedQuestionCard, question: number): string | null 
   return [item.question, ...item.options.map((option) => `- ${option.label}`)].join('\n');
 }
 
-export function questionKeyboard(card: FeedQuestionCard, shortId: string, question: number): InlineKeyboard {
+export function questionKeyboard(card: FeedQuestionCard, shortId: string, question: number, locale: AppLocale = 'en'): InlineKeyboard {
+  const B = telegramButtons(locale);
   const options = card.questions[question]?.options ?? [];
   return [
     ...options.map((option, index) => [button(label(option.label), pc1(shortId, CALLBACK_CODES.option(index)))]),
@@ -46,7 +48,8 @@ export function questionKeyboard(card: FeedQuestionCard, shortId: string, questi
   ];
 }
 
-function feedKeyboard(card: FeedCard, shortId: string, question: number): InlineKeyboard {
+function feedKeyboard(card: FeedCard, shortId: string, question: number, locale: AppLocale): InlineKeyboard {
+  const B = telegramButtons(locale);
   if (card.kind === 'permission') {
     const row = [button(B.allow, pc1(shortId, CALLBACK_CODES.allow)), button(B.deny, pc1(shortId, CALLBACK_CODES.deny))];
     return card.suggestions.length > 0 ? [row, [button(B.allowAlways, pc1(shortId, CALLBACK_CODES.allowAlways))]] : [row];
@@ -54,10 +57,11 @@ function feedKeyboard(card: FeedCard, shortId: string, question: number): Inline
   if (card.kind === 'plan') {
     return [[button(B.accept, pc1(shortId, CALLBACK_CODES.planAuto))], [button(B.approveEach, pc1(shortId, CALLBACK_CODES.planManual))]];
   }
-  return questionKeyboard(card, shortId, question);
+  return questionKeyboard(card, shortId, question, locale);
 }
 
-export function feedCardMessage(card: FeedCard, meta: CardMeta, question = 0): { text: string; keyboard: InlineKeyboard | null } {
+export function feedCardMessage(card: FeedCard, meta: CardMeta, question = 0, locale: AppLocale = 'en'): { text: string; keyboard: InlineKeyboard | null } {
+  const T = telegramTexts(locale);
   let title: string;
   let detail: string | null;
   if (card.kind === 'permission') {
@@ -71,19 +75,21 @@ export function feedCardMessage(card: FeedCard, meta: CardMeta, question = 0): {
     detail = questionBlock(card, question);
   }
   const lines = [`<b>${escapeHtml(meta.sessionName)}</b> · ${escapeHtml(meta.where)}`, escapeHtml(title)];
-  if (detail !== null) lines.push(pre(detail));
+  if (detail !== null) lines.push(pre(detail, locale));
   if (!meta.buttons) {
     lines.push(escapeHtml(T.waitingAtMac(meta.sessionName)));
     return { text: lines.join('\n'), keyboard: null };
   }
   lines.push(escapeHtml(T.expiresWithTurn));
-  return { text: lines.join('\n'), keyboard: feedKeyboard(card, meta.shortId, question) };
+  return { text: lines.join('\n'), keyboard: feedKeyboard(card, meta.shortId, question, locale) };
 }
 
-export function roomCardMessage(input: { roomTitle: string; where: string; proposal: Proposal; shortId: string }): { text: string; keyboard: InlineKeyboard } {
+export function roomCardMessage(input: { roomTitle: string; where: string; proposal: Proposal; shortId: string }, locale: AppLocale = 'en'): { text: string; keyboard: InlineKeyboard } {
+  const T = telegramTexts(locale);
+  const B = telegramButtons(locale);
   const { proposal } = input;
   const title = proposal.kind === 'completion' ? T.completionTitle : T.decisionTitle;
-  const lines = [`<b>${escapeHtml(input.roomTitle)}</b> · ${escapeHtml(input.where)}`, escapeHtml(`${title} · ${proposal.from}${proposal.rev > 0 ? ` · ${T.revised}` : ''}`), pre(proposal.text)];
+  const lines = [`<b>${escapeHtml(input.roomTitle)}</b> · ${escapeHtml(input.where)}`, escapeHtml(`${title} · ${proposal.from}${proposal.rev > 0 ? ` · ${T.revised}` : ''}`), pre(proposal.text, locale)];
   return {
     text: lines.join('\n'),
     keyboard: [[button(B.acceptDecision, pc1(input.shortId, CALLBACK_CODES.accept)), button(B.returnNote, pc1(input.shortId, CALLBACK_CODES.returnNote))]],
@@ -94,7 +100,9 @@ export function roomCardMessage(input: { roomTitle: string; where: string; propo
  * Карточка согласия (спека 2026-10-21, 4.4): на папку — Trust и Deny, просьба агента продолжить сессию на другом
  * провайдере — Allow и Deny; коды те же `a` и `d`, что у разрешения в ленте.
  */
-export function consentCardMessage(input: { card: Exclude<ConsentCard, { kind: 'project-mcp' }>; projectName: string; requestedByLabel: string; shortId: string }): { text: string; keyboard: InlineKeyboard } {
+export function consentCardMessage(input: { card: Exclude<ConsentCard, { kind: 'project-mcp' }>; projectName: string; requestedByLabel: string; shortId: string }, locale: AppLocale = 'en'): { text: string; keyboard: InlineKeyboard } {
+  const T = telegramTexts(locale);
+  const B = telegramButtons(locale);
   const { card } = input;
   const lines =
     card.kind === 'agent-switch'
@@ -112,14 +120,14 @@ export function consentCardMessage(input: { card: Exclude<ConsentCard, { kind: '
   };
 }
 
-function decisionVerb(decision: FeedDecision): string {
+function decisionVerb(decision: FeedDecision, B: ReturnType<typeof telegramButtons>): string {
   if (decision.kind === 'permission') return decision.behavior === 'deny' ? B.deny : B.allow;
   if (decision.kind === 'question') return B.answer;
   return decision.choice === 'manual' ? B.approveEach : B.accept;
 }
 
 /** Подпись кнопки подтверждения — те же слова, что у карточки помощника в окне. */
-function confirmLabel(proposal: AssistantProposal): string {
+function confirmLabel(proposal: AssistantProposal, B: ReturnType<typeof telegramButtons>): string {
   switch (proposal.action) {
     case 'room':
       return B.create;
@@ -132,7 +140,7 @@ function confirmLabel(proposal: AssistantProposal): string {
       return proposal.choice === 'accept' ? B.acceptDecision : B.return;
     case 'actions': {
       const only = proposal.steps.length === 1 ? proposal.steps[0] : undefined;
-      return only === undefined ? B.doAll(proposal.steps.length) : verbLabel(only.verb);
+      return only === undefined ? B.doAll(proposal.steps.length) : verbLabel(only.verb, B);
     }
     default:
       return 'wake' in proposal && proposal.wake ? B.wakeAndSend : B.send;
@@ -140,7 +148,7 @@ function confirmLabel(proposal: AssistantProposal): string {
 }
 
 /** Кнопка карточки из одного шага — глагол шага, как на острове. */
-function verbLabel(verb: ActionVerb): string {
+function verbLabel(verb: ActionVerb, B: ReturnType<typeof telegramButtons>): string {
   switch (verb) {
     case 'create_work':
     case 'create_session':
@@ -162,19 +170,20 @@ function verbLabel(verb: ActionVerb): string {
 }
 
 /** Заголовок плана и шаги. `textMax` — до скольких знаков резать текст шага (`null` — текстов нет), `lineMax` — строки шагов (`null` — как есть). */
-function planLines(proposal: Extract<AssistantProposal, { action: 'actions' }>, textMax: number | null, lineMax: number | null): string[] {
+function planLines(proposal: Extract<AssistantProposal, { action: 'actions' }>, textMax: number | null, lineMax: number | null, locale: AppLocale): string[] {
+  const T = telegramTexts(locale);
   const out = [escapeHtml(T.assistantPlan(proposal.where))];
   proposal.steps.forEach((step, index) => {
     const line = lineMax !== null && step.line.length > lineMax ? `${step.line.slice(0, lineMax - 1)}…` : step.line;
     // Предупреждение дописывается после среза строки: оно не должно потеряться.
     out.push(`<b>${index + 1}.</b> ${escapeHtml(line)}${step.danger ? escapeHtml(` — ${T.closesForGood}`) : ''}`);
-    if (step.text !== null && textMax !== null) out.push(pre(step.text, textMax));
+    if (step.text !== null && textMax !== null) out.push(pre(step.text, locale, textMax));
   });
   return out;
 }
 
 /** План целиком; не влез в `ASSISTANT_CARD_MAX` — тексты шагов режутся, затем пропадают, затем режутся строки. */
-function actionsBody(proposal: Extract<AssistantProposal, { action: 'actions' }>): string[] {
+function actionsBody(proposal: Extract<AssistantProposal, { action: 'actions' }>, locale: AppLocale): string[] {
   const tiers: Array<[number | null, number | null]> = [
     [DETAIL_MAX, null],
     [STEP_TEXT_SHORT, null],
@@ -183,27 +192,28 @@ function actionsBody(proposal: Extract<AssistantProposal, { action: 'actions' }>
   ];
   let body: string[] = [];
   for (const [textMax, lineMax] of tiers) {
-    body = planLines(proposal, textMax, lineMax);
+    body = planLines(proposal, textMax, lineMax, locale);
     if (body.join('\n').length <= ASSISTANT_CARD_MAX) break;
   }
   return body;
 }
 
-function assistantBody(proposal: AssistantProposal): string[] {
+function assistantBody(proposal: AssistantProposal, locale: AppLocale): string[] {
+  const T = telegramTexts(locale);
   switch (proposal.action) {
     case 'room':
       return [
         escapeHtml(T.assistantNewRoom(proposal.where)),
         escapeHtml(T.assistantRoomLine(proposal.title, proposal.members.join(', '), proposal.lead)),
-        ...(proposal.task === null ? [] : [pre(proposal.task)]),
+        ...(proposal.task === null ? [] : [pre(proposal.task, locale)]),
       ];
     case 'decision': {
-      const verb = decisionVerb(proposal.decision);
+      const verb = decisionVerb(proposal.decision, telegramButtons(locale));
       const head = proposal.decision.kind === 'plan' ? T.assistantPlanTitle(verb, proposal.target) : T.assistantAskTitle(verb, proposal.target);
       return [
         escapeHtml(head),
         escapeHtml(proposal.card.summary),
-        ...(proposal.card.detail === null ? [] : [pre(proposal.card.detail)]),
+        ...(proposal.card.detail === null ? [] : [pre(proposal.card.detail, locale)]),
         ...(proposal.decision.kind === 'question'
           ? Object.entries(proposal.decision.answers).map(([question, answer]) => escapeHtml(T.assistantAnswerLine(question.split('\n')[0] ?? '', answer)))
           : []),
@@ -212,20 +222,21 @@ function assistantBody(proposal: AssistantProposal): string[] {
     case 'room-decision':
       return [
         escapeHtml(proposal.choice === 'accept' ? T.assistantAcceptDecision(proposal.target) : T.assistantReturnDecision(proposal.proposal.from)),
-        pre(proposal.proposal.text),
+        pre(proposal.proposal.text, locale),
         ...(proposal.note === null ? [] : [escapeHtml(T.assistantNote(proposal.note))]),
       ];
     case 'actions':
-      return actionsBody(proposal);
+      return actionsBody(proposal, locale);
     default:
-      return [escapeHtml(T.assistantTo(proposal.target, proposal.where)), pre(proposal.text)];
+      return [escapeHtml(T.assistantTo(proposal.target, proposal.where)), pre(proposal.text, locale)];
   }
 }
 
-export function assistantCardMessage(proposal: AssistantProposal): { text: string; keyboard: InlineKeyboard } {
+export function assistantCardMessage(proposal: AssistantProposal, locale: AppLocale = 'en'): { text: string; keyboard: InlineKeyboard } {
+  const B = telegramButtons(locale);
   return {
-    text: assistantBody(proposal).join('\n'),
-    keyboard: [[button(confirmLabel(proposal), `pa1:${proposal.id}:send`), button(B.cancel, `pa1:${proposal.id}:cancel`)]],
+    text: assistantBody(proposal, locale).join('\n'),
+    keyboard: [[button(confirmLabel(proposal, B), `pa1:${proposal.id}:send`), button(B.cancel, `pa1:${proposal.id}:cancel`)]],
   };
 }
 

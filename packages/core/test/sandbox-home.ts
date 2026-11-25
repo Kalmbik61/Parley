@@ -43,3 +43,5 @@ delete process.env['HARNAS_HOME'];
 // Запуск Claude в папке с записью в `trust.json` пишет в файл состояния профиля (`claude-trust.ts`): унаследованная
 // `CLAUDE_CONFIG_DIR` направила бы эту запись в настоящий профиль человека. Свою папку тест ставит сам.
 delete process.env['CLAUDE_CONFIG_DIR'];
+// Английские фикстуры не зависят от системного языка машины.
+process.env['PARLEY_SYSTEM_LOCALE'] = 'en-US';

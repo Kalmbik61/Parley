@@ -22,6 +22,7 @@
 
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { ChevronDown, ChevronUp, X } from 'lucide-react';
+import { appI18n } from '../../../shared/app-locale.js';
 import { errorText, S } from '../../../shared/strings.js';
 import { Button } from '../../ui/button.js';
 import { openPreviewUrl, isWebUrl } from './open-external.js';
@@ -38,10 +39,10 @@ function assetDirUrl(dir: 'cmaps' | 'standard_fonts'): string {
 
 /**
  * Локализация pdf.js без его словарей: иначе `PDFViewer` заводит `GenericL10n`, а тот тянет
- * файлы `.ftl` по сети и пишет в страницы свои подписи. Окно — только английское из `strings.ts`.
+ * файлы `.ftl` по сети и пишет в страницы свои подписи. Подписи оболочки берутся из каталога Parley.
  */
 const SILENT_L10N = {
-  getLanguage: () => 'en-us',
+  getLanguage: () => appI18n.locale === 'ru' ? 'ru' : 'en-us',
   getDirection: () => 'ltr',
   get: async (_ids: unknown, _args: unknown, fallback?: string) => fallback ?? '',
   translate: async () => undefined,

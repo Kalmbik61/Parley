@@ -1,3 +1,4 @@
+import { hostText } from '../host-text.js';
 import type { Handler } from '../context.js';
 import { HostError } from '../errors.js';
 import { accountEntry, signInEntry } from '../providers/auth-service.js';
@@ -5,7 +6,7 @@ import type { AuthService } from '../providers/auth-service.js';
 
 /** Вход этого аккаунта не идёт: ввод, размер и отмена принимать некому (`bad_request`, спека подписок 5.5). */
 function requireSignIn(auth: AuthService, provider: string): void {
-  if (!auth.signingIn(provider)) throw new HostError('bad_request', `no sign-in is running for ${provider}`);
+  if (!auth.signingIn(provider)) throw new HostError('bad_request', hostText('noSignIn', { provider }));
 }
 
 /**

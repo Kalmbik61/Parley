@@ -5,6 +5,7 @@
  * системные письма сессиям, текст слияния и строки для агента. Комментарии не проверяются: парсер не
  * отдаёт их узлами, поэтому кириллица в `//` и `/* … *\/` находкой не считается.
  *
+ * Русские пользовательские переводы разрешены во втором аргументе общего `defineCatalog`.
  * Строки журнала хоста (`log.info|warn|error|debug('…')` — первый аргумент) остаются по-русски: их читает
  * разработчик в `host.log`, а не человек в окне. Исключение для остального — `// cyrillic-ok: <почему>` на
  * той же исходной строке. Тесты не сканируются: их данные и названия по-русски. Устройство — как у
@@ -65,6 +66,16 @@ function scanFile(absPath: string, relPath: string): Violation[] {
     true,
     ts.ScriptKind.TS,
   );
+  const importsCatalog = sourceFile.statements.some(
+    (statement) => ts.isImportDeclaration(statement) &&
+      ts.isStringLiteral(statement.moduleSpecifier) &&
+      statement.moduleSpecifier.text === '@parley/core/i18n' &&
+      statement.importClause?.namedBindings !== undefined &&
+      ts.isNamedImports(statement.importClause.namedBindings) &&
+      statement.importClause.namedBindings.elements.some(
+        (item) => item.propertyName === undefined && item.name.text === 'defineCatalog',
+      ),
+  );
   const lines = sourceText.split('\n');
   const exempt = new Set<number>();
   lines.forEach((lineText, index) => {
@@ -88,10 +99,21 @@ function scanFile(absPath: string, relPath: string): Violation[] {
     return false;
   };
 
+  const isRussianCatalogTranslation = (node: ts.Node): boolean => {
+    if (!importsCatalog) return false;
+    const property = node.parent;
+    const object = property.parent;
+    const call = object.parent;
+    return ts.isPropertyAssignment(property) && property.initializer === node &&
+      ts.isObjectLiteralExpression(object) && ts.isCallExpression(call) &&
+      ts.isIdentifier(call.expression) && call.expression.text === 'defineCatalog' &&
+      call.arguments[1] === object;
+  };
+
   const violations: Violation[] = [];
   const reported = new Set<number>();
   const visit = (node: ts.Node): void => {
-    if (isText(node) && !isLogMessage(node)) {
+    if (isText(node) && !isLogMessage(node) && !isRussianCatalogTranslation(node)) {
       const start = node.getStart(sourceFile);
       const raw = sourceText.slice(start, node.getEnd());
       for (let i = 0; i < raw.length; i += 1) {
@@ -121,7 +143,7 @@ const report = (violations: Violation[]): string =>
     .join('\n');
 
 describe('english-text: страж кириллицы в текстах хоста', () => {
-  it('packages/host/src не содержит кириллицы в строковых литералах (кроме строк журнала и cyrillic-ok)', () => {
+  it('packages/host/src не содержит кириллицы в строковых литералах (кроме русских каталогов, строк журнала и cyrillic-ok)', () => {
     const violations = scanDir(hostSrc);
     expect(violations, report(violations)).toEqual([]);
   });
@@ -173,6 +195,14 @@ describe('scanDir: сам сканер (временный каталог)', () 
         "// Комментарий по-русски\n/** И JSDoc */\nexport const text = 'Hello';\n",
       );
       await writeFile(path.join(dir, 'bad.test.ts'), "export const skipped = 'Привет';\n");
+      await writeFile(
+        path.join(dir, 'catalog.ts'),
+        [
+          "import { defineCatalog } from '@parley/core/i18n';",
+          "defineCatalog({ title: 'English' }, { title: 'Русский' });",
+          "defineCatalog({ title: 'Русский' }, { title: 'Русский' });",
+        ].join('\n'),
+      );
 
       const violations = scanDir(dir);
 
@@ -180,6 +210,7 @@ describe('scanDir: сам сканер (временный каталог)', () 
         'bad.ts:1',
         'bad.ts:2',
         'bad.ts:3',
+        'catalog.ts:3',
       ]);
     } finally {
       await rm(dir, { recursive: true, force: true });

@@ -1,5 +1,7 @@
 import { execFile } from 'node:child_process';
 import { createRequire } from 'node:module';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
@@ -18,11 +20,13 @@ const FIXTURES = path.join(here, '..', 'test', 'fixtures', 'projects');
  * `pnpm exec tsx`: дом теста подменён (`test/sandbox-home.ts`), и pnpm, поставленный через corepack, при каждом
  * запуске заново скачивал бы себя (около 20 МБ) в этот временный дом.
  */
-async function cli(...args: string[]): Promise<{ stdout: string; stderr: string; code: number }> {
+async function runCli(args: string[], env = process.env): Promise<{ stdout: string; stderr: string; code: number }> {
   try {
     const { stdout, stderr } = await run(process.execPath, ['--import', tsxLoader, CLI, ...args], {
       cwd: path.join(here, '..', '..', '..'),
+      env,
       maxBuffer: 32 * 1024 * 1024,
+      timeout: 15_000,
     });
     return { stdout, stderr, code: 0 };
   } catch (error) {
@@ -31,7 +35,37 @@ async function cli(...args: string[]): Promise<{ stdout: string; stderr: string;
   }
 }
 
+const cli = (...args: string[]) => runCli(args);
+
 describe('parley-core CLI', () => {
+  it('читает локаль Parley для справки и ошибок, сохраняет команды и stdout JSON', async () => {
+    const home = await mkdtemp(path.join(tmpdir(), 'parley-cli-locale-'));
+    const env = { ...process.env, PARLEY_HOME: home };
+    try {
+      await mkdir(path.join(home, 'desktop'));
+      await writeFile(path.join(home, 'desktop', 'ui.json'), JSON.stringify({ locale: 'ru' }));
+      const help = await runCli(['--help'], env);
+      expect(help).toMatchObject({ stdout: '', code: 0 });
+      expect(help.stderr).toContain('список сессий, новые сначала');
+      expect(help.stderr).toContain('parley-core work map --work <id> [--cwd <path>]');
+      expect(help.stderr).toContain('--role <source:name> | --agent <name>');
+      const invalid = await runCli(['work', 'new'], env);
+      expect(invalid).toMatchObject({ stdout: '', code: 1 });
+      expect(invalid.stderr).toContain('Укажите --title <value>');
+
+      const args = ['index', '--root', FIXTURES];
+      const russian = await runCli(args, env);
+      const english = await cli(...args);
+      expect(russian.code).toBe(0);
+      expect(english.code).toBe(0);
+      expect(russian.stdout).toBe(english.stdout);
+      expect(JSON.parse(russian.stdout)).toHaveLength(3);
+      expect((await cli('--help')).stderr).toContain('list of sessions, newest first');
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  }, 60_000);
+
   it('index печатает в stdout только JSON', async () => {
     const { stdout, code } = await cli('index', '--root', FIXTURES);
     expect(code).toBe(0);

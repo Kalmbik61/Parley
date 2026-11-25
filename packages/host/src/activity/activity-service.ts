@@ -15,6 +15,7 @@
  * наблюдатель потерял запись без уведомления.
  */
 
+import { hostText } from '../host-text.js';
 import { latestAgentPlan } from '@parley/core/agent-plan';
 import { existsSync } from 'node:fs';
 import { appendFile } from 'node:fs/promises';
@@ -1239,7 +1240,7 @@ export function createActivityService(
     host.broadcast('host.notice', {
       kind: 'hooks-missing',
       ref,
-      text: `${isQwen(session) ? 'Qwen Code' : 'Claude Code'} hooks did not arrive for session ${ref.sessionId} — status comes from the log`,
+      text: hostText('hooksMissing', { provider: isQwen(session) ? 'Qwen Code' : 'Claude Code', sessionId: ref.sessionId }).in(host.locale?.()),
       at: new Date().toISOString(),
     });
   }
@@ -1278,7 +1279,7 @@ export function createActivityService(
         host.broadcast('host.notice', {
           kind: 'trust-wait',
           ref,
-          text: `${sessionTag(ref.sessionId)} has not responded since launch — it may be waiting for folder trust`,
+          text: hostText('claudeStartupWaiting', { session: sessionTag(ref.sessionId) }).in(host.locale?.()),
           at: new Date().toISOString(),
         });
       }, delay),
@@ -1302,7 +1303,7 @@ export function createActivityService(
     host.broadcast('host.notice', {
       kind: 'startup-wait',
       ref,
-      text: `${sessionTag(ref.sessionId)} has not shown a status since launch — it may be waiting for sign-in or folder trust in the Codex terminal`,
+      text: hostText('codexStartupWaiting', { session: sessionTag(ref.sessionId) }).in(host.locale?.()),
       at,
     });
     recompute(ref);
@@ -1414,7 +1415,7 @@ export function createActivityService(
         clearCodexCallTimer(key);
       } else if (now >= stuckAt) {
         clearCodexCallTimer(key);
-        const text = `${sessionTag(ref.sessionId)} ${pendingCell === undefined ? 'has not returned from a Codex tool call' : 'finished its turn with an unfinished tool operation'}. Check pending approvals; if already answered, stop the stuck operation and verify its effects before retrying.`;
+        const text = hostText(pendingCell === undefined ? 'codexCallWaiting' : 'codexCallUnfinished', { session: sessionTag(ref.sessionId) }).in(host.locale?.());
         // Начало эпизода — время вызова (у незавершённой ячейки — её время), а не `now`: срок сторожа в ветке ячейки
         // равен «сейчас», и `since` уезжал бы на каждом пересчёте.
         // `detail` попадает в строку комнаты и письмо ведущему: он нейтральный, без указания «проверь и остановись» —

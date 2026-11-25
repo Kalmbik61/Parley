@@ -7,7 +7,6 @@
 import path from 'node:path';
 import {
   maskTelegramTokens,
-  needReason,
   participantLabel,
   pendingCards,
   planRefOf,
@@ -18,6 +17,7 @@ import {
   telegramBotId,
   telegramTokenFingerprint,
 } from '@parley/core';
+import type { AppLocale } from '@parley/core/i18n';
 import { sessionNeed } from '@parley/core/attention';
 import type {
   FeedCard,
@@ -38,6 +38,8 @@ import type { AssistantService } from '../assistant/assistant-service.js';
 import type { Client } from '../client.js';
 import type { HostContext } from '../context.js';
 import { HostError } from '../errors.js';
+import { hostText } from '../host-text.js';
+import { hostLocaleReader } from '../locale.js';
 import type { FeedService } from '../feed/feed-service.js';
 import type { MailNotice, WorksService } from '../works/works-service.js';
 import { BotApiError, createBotApi } from './api.js';
@@ -69,7 +71,8 @@ import type { Outbox, Priority } from './outbox.js';
 import { createPoller } from './poller.js';
 import type { Poller } from './poller.js';
 import { createTelegramState } from './state.js';
-import { T } from './texts.js';
+import { telegramTexts } from './texts.js';
+import { notificationReason } from './notification-reason.js';
 import type { ReceiptKind } from './texts.js';
 import type { CardRecord, InlineKeyboard, TgUpdate } from './types.js';
 import { createVoiceTranscriber } from './voice.js';
@@ -136,7 +139,7 @@ export interface TelegramService {
 type FeedRecord = Extract<CardRecord, { kind: 'feed' }>;
 type RoomRecord = Extract<CardRecord, { kind: 'room' }>;
 type ConsentRecord = Extract<CardRecord, { kind: 'consent' }>;
-type SendOptions = { keyboard?: InlineKeyboard | null; silent?: boolean; plain?: boolean };
+type SendOptions = { keyboard?: InlineKeyboard | null; silent?: boolean; plain?: boolean; replyTo?: number };
 type FeedSnapshot = Result<'feed.snapshot'>;
 
 const WAIT_MS = 10 * 60_000;
@@ -191,12 +194,17 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
   const now = deps.now ?? Date.now;
   const log = (line: string): void => deps.log(maskTelegramTokens(line));
   const state = createTelegramState({ home: deps.home, now, log });
+  const locale = hostLocaleReader(deps.home);
+  const texts = () => telegramTexts(locale());
   const iso = (): string => new Date(now()).toISOString();
-  const clock = (): string => new Date(now()).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
-  const line = (kind: ReceiptKind): string => `${EMOJI[kind] ?? ''} ${T.receipt(kind, clock())}`.trim();
+  const line = (kind: ReceiptKind): string => {
+    const language = locale();
+    const clock = new Date(now()).toLocaleTimeString(language === 'en' ? 'en-GB' : language, { hour: '2-digit', minute: '2-digit' });
+    return `${EMOJI[kind] ?? ''} ${telegramTexts(language).receipt(kind, clock)}`.trim();
+  };
   const stateLine = (value: FeedCardState): string => {
     if (value === 'allowed' || value === 'denied' || value === 'answered') return line(value);
-    return value === 'elsewhere' ? T.answeredAtMac : T.expired;
+    return value === 'elsewhere' ? texts().answeredAtMac : texts().expired;
   };
 
   let cfg: ParleyConfig | null = null;
@@ -303,6 +311,7 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
     const base = {
       chat_id: chatId,
       ...(options.keyboard ? { reply_markup: { inline_keyboard: options.keyboard } } : {}),
+      ...(options.replyTo === undefined ? {} : { reply_parameters: { message_id: options.replyTo, allow_sending_without_reply: true } }),
       ...(options.silent === true ? { disable_notification: true } : {}),
     };
     try {
@@ -403,7 +412,7 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
 
   const cardHeader = (record: CardRecord): string => {
     if (record.kind === 'feed') return `<b>${escapeHtml(record.sessionName)}</b>`;
-    if (record.kind === 'consent') return `<b>${escapeHtml(T.consentHeader)}</b>`;
+    if (record.kind === 'consent') return `<b>${escapeHtml(texts().consentHeader)}</b>`;
     return record.kind === 'room' ? `<b>${escapeHtml(record.roomTitle)}</b>` : '';
   };
   const closedText = (shortId: string, record: CardRecord, text: string): string => {
@@ -472,8 +481,8 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
       if (inflight.has(item.cardId)) closeEarly.set(`feed:${item.cardId}`, stateLine(item.state));
     }
     for (const id of data.removed) {
-      for (const [shortId, record] of open) if (record.cardId === id) closeCard(shortId, T.expired);
-      if (inflight.has(id)) closeEarly.set(`feed:${id}`, T.expired);
+      for (const [shortId, record] of open) if (record.cardId === id) closeCard(shortId, texts().expired);
+      if (inflight.has(id)) closeEarly.set(`feed:${id}`, texts().expired);
     }
     // Новый запрос подписанной сессии (второй подряд, запоздавший хук) уходит и без повода от активности.
     if (fresh.length === 0 || cfg?.telegramNeedsYou !== true || !canSend() || !subscribed.has(key)) return;
@@ -583,7 +592,7 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
 
   function sendFeedCard(ref: SessionRef, name: string, where: string, card: FeedCard, buttons: boolean): void {
     const shortId = state.newShortId();
-    const message = feedCardMessage(card, { sessionName: name, where, projectPath: ref.projectPath, shortId, buttons }, 0);
+    const message = feedCardMessage(card, { sessionName: name, where, projectPath: ref.projectPath, shortId, buttons }, 0, locale());
     inflight.set(card.cardId, ref);
     subscribe(ref);
     send(
@@ -628,9 +637,9 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
       if (next < card.questions.length) {
         const answered = card.questions[record.question]?.question ?? '';
         const [answer = ''] = Object.values(decision.answers);
-        const message = feedCardMessage(card, { sessionName: record.sessionName, where: whereOf(record.ref), projectPath: record.ref.projectPath, shortId, buttons: true }, next);
+        const message = feedCardMessage(card, { sessionName: record.sessionName, where: whereOf(record.ref), projectPath: record.ref.projectPath, shortId, buttons: true }, next, locale());
         const base = originals.get(shortId) ?? cardHeader(record);
-        edit(record.chatId, record.messageId, receiptText(base, escapeHtml(`✅ ${T.assistantAnswerLine(answered.split('\n')[0] ?? '', answer)}`)));
+        edit(record.chatId, record.messageId, receiptText(base, escapeHtml(`✅ ${texts().assistantAnswerLine(answered.split('\n')[0] ?? '', answer)}`)));
         advancing.add(shortId);
         send(
           'card',
@@ -655,7 +664,7 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
       result = await deps.feed.decide(record.ref, record.cardId, final);
     } catch (error) {
       if (error instanceof HostError && error.code === 'not_found') {
-        closeCard(shortId, T.expired);
+        closeCard(shortId, texts().expired);
         return '';
       }
       throw error;
@@ -667,8 +676,8 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
       return '';
     }
     // Хук ещё не удержан: карточка в окне жива, пусть нажмут позже. Любое решённое состояние — ответили у Mac.
-    if (result.state === 'pending') return T.notReadyYet;
-    closeCard(shortId, T.answeredAtMac);
+    if (result.state === 'pending') return texts().notReadyYet;
+    closeCard(shortId, texts().answeredAtMac);
     return '';
   }
 
@@ -678,14 +687,14 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
     const fresh = freshFeed(shortId);
     if (fresh === null || advancing.has(shortId)) return '';
     if (card === null) {
-      closeCard(shortId, T.expired);
+      closeCard(shortId, texts().expired);
       return '';
     }
     const decision = feedDecisionFor(card, code, undefined, fresh.question);
     if (decision === null) return '';
     if (decision === 'other') {
       state.putCard(shortId, { ...fresh, wait: { kind: 'other', until: new Date(now() + WAIT_MS).toISOString() } });
-      send('notice', T.otherPrompt, { plain: true });
+      send('notice', texts().otherPrompt, { plain: true });
       return '';
     }
     return applyFeedDecision(shortId, fresh, card, decision);
@@ -699,7 +708,7 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
     if (room === undefined || proposal === null || proposal === undefined) return;
     const shortId = state.newShortId();
     const from = participantLabel(entry.map, proposal.from);
-    const message = roomCardMessage({ roomTitle: room.title, where: sessionWhere(entry), proposal: { ...proposal, from }, shortId });
+    const message = roomCardMessage({ roomTitle: room.title, where: sessionWhere(entry), proposal: { ...proposal, from }, shortId }, locale());
     const sendKey = roomKey(entry.projectPath, entry.map.work.id, room.id, proposal.id, proposal.rev);
     sending.add(sendKey);
     send('card', message.text, { keyboard: message.keyboard }, (messageId, chatId) => {
@@ -747,7 +756,7 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
       }
       if (error instanceof HostError) {
         log(`telegram: room decision failed: ${error.message}`);
-        closeCard(shortId, T.expired);
+        closeCard(shortId, texts().expired);
         return false;
       }
       throw error;
@@ -771,7 +780,7 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
     const fresh = state.get().cards[shortId];
     if (fresh === undefined || fresh.kind !== 'room') return;
     state.putCard(shortId, { ...fresh, wait: { kind: 'note', until: new Date(now() + WAIT_MS).toISOString() } });
-    send('notice', T.returnNotePrompt(record.from), { plain: true });
+    send('notice', texts().returnNotePrompt(record.from), { plain: true });
   }
 
   // ── Поводы ──────────────────────────────────────────────────────────────────────────────────────
@@ -825,14 +834,14 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
       const need = sessionNeed(session, presentedOf(deps.activity.get(ref)?.activity) ?? triggered);
       if (need === null) return '';
       const registry = await deps.providers?.().catch(() => undefined);
-      return ` — ${needReason(need, new Date(now()), providerLabel(registry?.[session.provider] ?? { id: session.provider, label: '' }))}`;
+      return ` — ${notificationReason(need, new Date(now()), providerLabel(registry?.[session.provider] ?? { id: session.provider, label: '' }), locale())}`;
     };
     const tell = async (last: FeedText | undefined): Promise<void> => {
       const why = await reason();
       // Пока читался реестр, человек мог ответить: «нужен ты» уже снят.
       if (!canSend() || memory.levels.get(key) !== 'blocked') return;
       const tail = last === undefined ? '' : `\n<pre>${escapeHtml(lastLines(last.text))}</pre>`;
-      notice(`${escapeHtml(`${T.needsYou(name, where)}${why}`)}${tail}`, false);
+      notice(`${escapeHtml(`${texts().needsYou(name, where)}${why}`)}${tail}`, false);
     };
     const fail = (error: unknown): void => log(`telegram: needs-you failed: ${(error as Error).message}`);
     if (deps.feed === undefined) {
@@ -881,7 +890,7 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
       if (trigger === 'unseen' && cfg?.telegramFinished === true) {
         const { entry, session } = found;
         publish(finishedEvent(ref, now(), deps.notifications.hostId), () => {
-          if (cfg?.telegramFinished === true) notice(escapeHtml(T.finished(session.label, sessionWhere(entry))), true);
+          if (cfg?.telegramFinished === true) notice(escapeHtml(texts().finished(session.label, sessionWhere(entry))), true);
         });
       }
     }
@@ -894,7 +903,7 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
       const open = state.cardsFor(
         (card) => card.kind === 'room' && card.projectPath === entry.projectPath && card.workId === entry.map.work.id && card.roomId === roomId && card.proposalId === previous.id && card.rev === previous.rev,
       );
-      const text = result === 'gone' ? T.expired : line(result);
+      const text = result === 'gone' ? texts().expired : line(result);
       for (const [shortId] of open) closeCard(shortId, text);
       const sendKey = roomKey(entry.projectPath, entry.map.work.id, roomId, previous.id, previous.rev);
       if (sending.has(sendKey)) closeEarly.set(sendKey, text);
@@ -933,7 +942,7 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
       const where = roomTitle === undefined || roomTitle === null ? sessionWhere(entry) : `${roomTitle} · ${sessionWhere(entry)}`;
       publish(letterEvent(entry, message, deps.notifications.hostId), () => {
         if (cfg?.telegramMail !== true) return;
-        send('card', `<b>${escapeHtml(T.letter(from, where))}</b>\n<pre>${escapeHtml(clipText(message.text))}</pre>`, {}, (messageId) => {
+        send('card', `<b>${escapeHtml(texts().letter(from, where))}</b>\n<pre>${escapeHtml(clipText(message.text, undefined, locale()))}</pre>`, {}, (messageId) => {
           state.putLetter(messageId, { projectPath: entry.projectPath, workId: entry.map.work.id, roomId: message.roomId, from: message.from, at: iso() });
         });
       });
@@ -945,7 +954,7 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
   function sendAssistantCard(proposal: AssistantProposal): void {
     if (!canSend()) return;
     const shortId = state.newShortId();
-    const message = assistantCardMessage(proposal);
+    const message = assistantCardMessage(proposal, locale());
     const sendKey = `assistant:${proposal.id}`;
     sending.add(sendKey);
     send(
@@ -966,7 +975,7 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
   }
 
   function closeAssistantCard(proposalId: string, receipt: 'sent' | 'done' | 'stopped' | 'cancelled' | 'current', extra?: string): void {
-    const head = receipt === 'current' ? T.noLongerCurrent : line(receipt);
+    const head = receipt === 'current' ? texts().noLongerCurrent : line(receipt);
     // Экранирует `closeCard` (`closedText`) — один раз на всё, в том числе на `extra`.
     const text = extra === undefined || extra === '' ? head : `${head}\n${extra}`;
     for (const [shortId] of state.cardsFor((card) => card.kind === 'assistant' && card.proposalId === proposalId)) closeCard(shortId, text);
@@ -991,7 +1000,7 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
     if (cfg?.telegramCards !== true || sending.has(sendKey)) return;
     if (state.cardsFor((record) => record.kind === 'consent' && record.consentId === card.id).length > 0) return;
     const shortId = state.newShortId();
-    const message = consentCardMessage({ card, projectName: path.basename(card.projectPath), requestedByLabel: consentLabel(card), shortId });
+    const message = consentCardMessage({ card, projectName: path.basename(card.projectPath), requestedByLabel: consentLabel(card), shortId }, locale());
     sending.add(sendKey);
     send(
       'card',
@@ -1013,9 +1022,9 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
   /** Карточка закрыта решением в другом месте (окно, остров) или убрана хостом. */
   function closeConsentCard(consentId: string): void {
     if (deciding.has(consentId)) return;
-    for (const [shortId] of state.cardsFor((card) => card.kind === 'consent' && card.consentId === consentId)) closeCard(shortId, T.answeredAtMac);
+    for (const [shortId] of state.cardsFor((card) => card.kind === 'consent' && card.consentId === consentId)) closeCard(shortId, texts().answeredAtMac);
     const sendKey = `consent:${consentId}`;
-    if (sending.has(sendKey)) closeEarly.set(sendKey, T.answeredAtMac);
+    if (sending.has(sendKey)) closeEarly.set(sendKey, texts().answeredAtMac);
   }
 
   function onConsentsChanged(change: { upsert: ConsentCard[]; removed: string[] }): void {
@@ -1035,7 +1044,7 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
 
   async function consentAction(shortId: string, record: ConsentRecord, code: string): Promise<void> {
     if (deps.consents === undefined) {
-      closeCard(shortId, T.noLongerCurrent);
+      closeCard(shortId, texts().noLongerCurrent);
       return;
     }
     if (deciding.has(record.consentId)) return;
@@ -1054,7 +1063,7 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
       deciding.delete(record.consentId);
     }
     state.audit({ kind: 'decision', shortId, result: result.applied ? decision : `not applied (${result.state})` });
-    closeCard(shortId, !result.applied ? T.answeredAtMac : decision === 'allow' ? (isSwitch ? T.switchAllowed : T.trusted) : T.denied);
+    closeCard(shortId, !result.applied ? texts().answeredAtMac : decision === 'allow' ? (isSwitch ? texts().switchAllowed : texts().trusted) : texts().denied);
   }
 
   // ── Входящие ────────────────────────────────────────────────────────────────────────────────────
@@ -1067,7 +1076,7 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
 
   async function answerWaiting(shortId: string, record: FeedRecord | RoomRecord, text: string): Promise<void> {
     if (record.kind === 'room') {
-      if (await resolveRoom(shortId, record, 'return', text)) send('notice', T.sentAsNote(record.from), { plain: true });
+      if (await resolveRoom(shortId, record, 'return', text)) send('notice', texts().sentAsNote(record.from), { plain: true });
       return;
     }
     if (advancing.has(shortId)) return;
@@ -1075,12 +1084,12 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
     const fresh = freshFeed(shortId);
     if (fresh === null) return;
     if (card === null) {
-      closeCard(shortId, T.expired);
+      closeCard(shortId, texts().expired);
       return;
     }
     const decision = feedDecisionFor(card, CALLBACK_CODES.other, text, fresh.question);
     if (decision === null || decision === 'other') return;
-    const toast = await applyFeedDecision(shortId, fresh, card, decision, () => send('notice', T.sentAsAnswer(fresh.sessionName), { plain: true }));
+    const toast = await applyFeedDecision(shortId, fresh, card, decision, () => send('notice', texts().sentAsAnswer(fresh.sessionName), { plain: true }));
     if (toast !== '') send('notice', toast, { plain: true });
   }
 
@@ -1093,7 +1102,7 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
       await requireApi().call('setMessageReaction', { chat_id: chatId, message_id: messageId, reaction: [{ type: 'emoji', emoji: '👍' }] });
     } catch {
       const entry = entryOf(letter.projectPath, letter.workId);
-      send('notice', T.sentTo(entry === undefined ? letter.from : participantLabel(entry.map, letter.from)), { plain: true });
+      send('notice', texts().sentTo(entry === undefined ? letter.from : participantLabel(entry.map, letter.from)), { plain: true });
     }
     return true;
   }
@@ -1117,18 +1126,18 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
     if (!canSend()) return;
     if ('error' in result) {
       state.audit({ kind: 'voice', result: result.error });
-      const text = result.error === 'off' ? T.voiceOff : result.error === 'too-long' ? T.voiceTooLong : T.voiceFailed;
+      const text = result.error === 'off' ? texts().voiceOff : result.error === 'too-long' ? texts().voiceTooLong : texts().voiceFailed;
       send('notice', text, { plain: true });
       return;
     }
     state.audit({ kind: 'voice', text: result.text, result: 'heard' });
-    send('notice', T.heard(result.text), { plain: true });
+    send('notice', texts().heard(result.text), { plain: true });
     await onText(result.text, messageId, null);
   }
 
   async function onCommand(name: 'status' | 'new' | 'help' | 'skip' | 'start'): Promise<void> {
     if (name === 'help' || name === 'start') {
-      send('notice', T.help, { plain: true });
+      send('notice', texts().help, { plain: true });
       return;
     }
     if (name === 'skip') {
@@ -1140,12 +1149,12 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
         return;
       }
       state.putCard(shortId, withoutWait(record));
-      send('notice', T.waitCancelled, { plain: true });
+      send('notice', texts().waitCancelled, { plain: true });
       return;
     }
     if (name === 'new') {
       // Карточка прежнего разговора больше ничего не решает.
-      for (const [shortId] of state.cardsFor((card) => card.kind === 'assistant')) closeCard(shortId, T.noLongerCurrent);
+      for (const [shortId] of state.cardsFor((card) => card.kind === 'assistant')) closeCard(shortId, texts().noLongerCurrent);
     }
     await bridge?.onCommand(name);
   }
@@ -1172,11 +1181,22 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
     rebase();
     syncHold();
     state.audit({ kind: 'link', result: 'linked' });
-    await requireApi()
-      .call('setMyCommands', { commands: T.commands })
-      .catch((error: unknown) => log(`telegram: setMyCommands failed: ${(error as Error).message}`));
-    send('notice', T.linked(deps.macName), { plain: true });
+    await registerCommands(requireApi());
+    send('notice', texts().linked(deps.macName), { plain: true });
     changed();
+  }
+
+  let commandsLocale: AppLocale | null = null;
+  async function registerCommands(bot: BotApi): Promise<void> {
+    const language = locale();
+    if (commandsLocale === language) return;
+    commandsLocale = language;
+    try {
+      await bot.call('setMyCommands', { commands: telegramTexts(language).commands });
+    } catch (error) {
+      if (api === bot && commandsLocale === language) commandsLocale = null;
+      log(`telegram: setMyCommands failed: ${(error as Error).message}`);
+    }
   }
 
   async function onCallback(inbound: { id: string; data: string; messageId: number | null }): Promise<void> {
@@ -1188,7 +1208,7 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
     const forget = (): string => {
       // Записи нет: текст сообщения мог быть честной квитанцией, поэтому снимаем только кнопки.
       if (chatId !== undefined && inbound.messageId !== null) stripKeyboard(chatId, inbound.messageId);
-      return T.noLongerCurrent;
+      return texts().noLongerCurrent;
     };
     if (parsed?.family === 'pa1') {
       const recorded = state
@@ -1213,7 +1233,7 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
 
   const detached = (task: () => Promise<void>): void => {
     voiceTail = voiceTail.then(task).catch((error: unknown) => {
-      if (error instanceof HostError && canSend()) send('notice', T.couldNot(maskTelegramTokens(error.message)), { plain: true });
+      if (error instanceof HostError && canSend()) send('notice', texts().couldNot(maskTelegramTokens(error.displayMessage(locale()))), { plain: true });
       else log(`telegram: voice failed: ${error instanceof Error ? error.message : String(error)}`);
     });
   };
@@ -1249,7 +1269,7 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
     } catch (error) {
       if (!(error instanceof HostError)) throw error;
       log(`telegram: update failed: ${error.message}`);
-      send('notice', T.couldNot(maskTelegramTokens(error.message)), { plain: true });
+      send('notice', texts().couldNot(maskTelegramTokens(error.displayMessage(locale()))), { plain: true });
     }
   }
 
@@ -1282,9 +1302,16 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
   function closeStaleCards(text: string): void {
     state.pruneCards();
     for (const [shortId, record] of state.cardsFor(() => true)) {
-      const html = closedText(shortId, record, text);
+      const original = originals.get(shortId);
       state.dropCard(shortId);
-      edit(record.chatId, record.messageId, html);
+      originals.delete(shortId);
+      if (original !== undefined) {
+        edit(record.chatId, record.messageId, receiptText(original, escapeHtml(text)));
+      } else {
+        // После перезапуска есть только ID сообщения. Снимаем кнопки, сохраняя исходную карточку.
+        stripKeyboard(record.chatId, record.messageId);
+        if (owner()?.chatId === record.chatId) send('card', text, { plain: true, replyTo: record.messageId });
+      }
     }
   }
 
@@ -1298,6 +1325,7 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
       ...(deps.apiBase === undefined ? {} : { baseUrl: deps.apiBase }),
     });
     api = bot;
+    commandsLocale = null;
     outbox = createOutbox({ log });
     voice = createVoiceTranscriber({
       api: bot,
@@ -1311,16 +1339,24 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
     if (drainTimer !== null) clearInterval(drainTimer);
     drainTimer = setInterval(drainNotifications, DRAIN_MS);
     drainTimer.unref?.();
-    if (owner() !== null) closeStaleCards(staleText);
+    if (owner() !== null) {
+      closeStaleCards(staleText);
+      enqueue('notice', async (bot) => { await registerCommands(bot); });
+    }
     poller = createPoller({
       api: bot,
+      locale,
       offset: () => state.get().offset,
       setOffset: (next) => {
         if (mine === generation) state.update({ offset: next });
       },
       seen: (updateId) => state.seen(updateId),
       onUpdate: async (update) => {
-        if (mine === generation) await onUpdate(update);
+        if (mine !== generation) return;
+        if (owner() !== null && commandsLocale !== locale()) {
+          enqueue('notice', async (bot) => { await registerCommands(bot); }, 'commands');
+        }
+        await onUpdate(update);
       },
       onStatus: (next, error) => setPolling(next, error === null ? null : maskTelegramTokens(error)),
       log,
@@ -1336,9 +1372,9 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
         const me = await bot.call<{ username?: string }>('getMe', {}, { timeoutMs: GETME_TIMEOUT_MS });
         return { username: me.username ?? '' };
       } catch (error) {
-        if (error instanceof BotApiError && (error.status === 401 || error.status === 404)) throw new HostError('bad_request', 'Telegram rejected the token');
+        if (error instanceof BotApiError && (error.status === 401 || error.status === 404)) throw new HostError('bad_request', hostText('telegramTokenRejected'));
         if (error instanceof BotApiError && error.status === 0 && attempt < GETME_ATTEMPTS) continue;
-        throw new HostError('internal', maskTelegramTokens(`Could not reach Telegram: ${error instanceof Error ? error.message : String(error)}`));
+        throw new HostError('internal', hostText('telegramUnreachable', { detail: maskTelegramTokens(error instanceof Error ? error.message : String(error)) }));
       }
     }
   }
@@ -1355,6 +1391,7 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
       }
       bridge = createAssistantBridge({
         assistant: deps.assistant,
+        locale,
         sendText: async (text) => {
           if (canSend()) send('notice', text, { plain: true });
         },
@@ -1381,7 +1418,7 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
         deps.activity.onChange((ref, live) => onActivity(ref, { activity: presentedActivity(live.activity) })),
       );
       if (deps.consents !== undefined) unsubs.push(deps.consents.onChange((change) => onConsentsChanged(change)));
-      begin(T.restarted);
+      begin(texts().restarted);
       // База для `changed()`: окно уже знает это состояние из `telegram.status`, повторять его событием незачем.
       lastBroadcast = statusKey();
     },
@@ -1398,7 +1435,7 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
 
     async setToken(raw) {
       const candidate = raw.trim();
-      if (!TELEGRAM_TOKEN_RE.test(candidate)) throw new HostError('bad_request', 'Token looks wrong');
+      if (!TELEGRAM_TOKEN_RE.test(candidate)) throw new HostError('bad_request', hostText('telegramInvalidToken'));
       const me = await getMe(
         createBotApi({
           token: candidate,
@@ -1417,7 +1454,7 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
       }
       disable();
       token = candidate;
-      begin(T.noLongerCurrent);
+      begin(texts().noLongerCurrent);
       changed();
       return { botUsername: me.username, hint: savedHint };
     },
@@ -1432,8 +1469,8 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
     },
 
     async link() {
-      if (token === null) throw new HostError('conflict', 'Set the bot token first');
-      if (owner() !== null) throw new HostError('conflict', 'Unlink first');
+      if (token === null) throw new HostError('conflict', hostText('telegramMissingToken'));
+      if (owner() !== null) throw new HostError('conflict', hostText('telegramUnlinkFirst'));
       const { code, pending } = createLinkCode(now());
       state.update({ pendingLink: pending });
       changed();
@@ -1457,7 +1494,7 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
         state.dropCard(shortId);
         edit(record.chatId, record.messageId, html);
       }
-      if (chatId !== undefined) send('notice', T.unlinked, { plain: true });
+      if (chatId !== undefined) send('notice', texts().unlinked, { plain: true });
       state.clearLetters();
       state.update({ owner: null, pendingLink: null });
       memory = emptyMemory();
@@ -1467,9 +1504,9 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
     },
 
     async takeOver() {
-      if (cfg?.telegramEnabled !== true || token === null) throw new HostError('conflict', 'Telegram is not active');
+      if (cfg?.telegramEnabled !== true || token === null) throw new HostError('conflict', hostText('telegramInactive'));
       rebase();
-      if (poller === null) begin(T.noLongerCurrent);
+      if (poller === null) begin(texts().noLongerCurrent);
       else poller.start({ skipBacklog: true });
       syncHold();
     },
@@ -1480,12 +1517,12 @@ export function createTelegramService(deps: TelegramServiceDeps): TelegramServic
       if (!started) return;
       if (!config.telegramEnabled) {
         if (was || poller !== null) disable();
-      } else if (!was || poller === null) begin(T.noLongerCurrent);
+      } else if (!was || poller === null) begin(texts().noLongerCurrent);
       changed();
     },
 
     reminderWhileOff(reminder) {
-      if (canSend()) send('notice', T.reminderOff(reminder.id, reminder.what), { plain: true });
+      if (canSend()) send('notice', texts().reminderOff(reminder.id, reminder.what), { plain: true });
     },
   };
 }

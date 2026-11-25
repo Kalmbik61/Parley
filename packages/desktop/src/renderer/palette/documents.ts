@@ -13,12 +13,12 @@
  */
 
 import type { WindowWorkEntry, WorkSession } from '@parley/core';
-import { sessionDotStateWithNeed, stateWord, type DotState } from '@parley/core/session-state';
+import { sessionDotStateWithNeed, type DotState } from '@parley/core/session-state';
 import { refKey } from '@parley/protocol';
 import { toast } from 'sonner';
 import type { ActionDef, ActionId } from '../../shared/keybindings.js';
 import type { TabSpec, WorkLayout } from '../../shared/layout-types.js';
-import { providerName, S } from '../../shared/strings.js';
+import { providerName, S, sessionStateText } from '../../shared/strings.js';
 import { sessionNeed, type WorkAttention } from '../attention/derive.js';
 import type { HistoryEntry } from '../layout/history.js';
 import { whenShown } from '../attention/focus-target.js';
@@ -210,7 +210,7 @@ export function buildDocuments(input: {
         title: sessionRowLabel(session.id, session.label),
         subtitle: S.palette.sessionSubtitle(
           workTitle,
-          stateWord(sessionState(session), session.lifecycle),
+          sessionStateText(sessionState(session), session.lifecycle),
           providerName(session.provider, provider ?? session.provider),
         ),
         fields: [

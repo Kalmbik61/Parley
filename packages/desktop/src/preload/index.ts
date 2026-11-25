@@ -271,6 +271,7 @@ function createWorksSyncBridge(ipc: Pick<IpcRenderer, 'on' | 'send'>): WorksSync
 
 const bridge = {
   worksSync: createWorksSyncBridge(ipcRenderer),
+  locale: (): unknown => ipcRenderer.sendSync('app:locale'),
   call: (method: MethodName, params: unknown) => ipcRenderer.invoke('host:call', method, params),
   notify: (method: NotificationName, params: unknown) => {
     ipcRenderer.send('host:notify', method, params);

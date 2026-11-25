@@ -5,6 +5,8 @@
  */
 
 import type { EffortOption, ModelOption } from '@parley/protocol';
+import { appI18n } from '../../shared/app-locale.js';
+import { effortLabels } from '../../shared/catalogs/workspace.js';
 import { S } from '../../shared/strings.js';
 
 /**
@@ -12,9 +14,9 @@ import { S } from '../../shared/strings.js';
  * свой список моделей без уровней и провайдер без списка.
  */
 export const LEGACY_EFFORTS: readonly EffortOption[] = [
-  { id: 'low', label: S.dialogs.newSession.effortLow },
-  { id: 'medium', label: S.dialogs.newSession.effortMedium },
-  { id: 'high', label: S.dialogs.newSession.effortHigh },
+  { id: 'low', get label() { return S.dialogs.newSession.effortLow; } },
+  { id: 'medium', get label() { return S.dialogs.newSession.effortMedium; } },
+  { id: 'high', get label() { return S.dialogs.newSession.effortHigh; } },
 ];
 
 /** Что окну нужно знать о провайдере — поля строки `providers.list`. */
@@ -25,7 +27,13 @@ export interface EffortSource {
 
 /** Уровни одной модели: поля `efforts` нет (свой список, старый хост) — прежние три; `null` — effort у модели нет. */
 function levelsOf(model: ModelOption | undefined): readonly EffortOption[] | null {
-  return model === undefined || model.efforts === undefined ? LEGACY_EFFORTS : model.efforts;
+  const efforts = model?.efforts;
+  if (efforts === undefined) return LEGACY_EFFORTS;
+  if (efforts === null || appI18n.locale === 'en') return efforts;
+  return efforts.map((option) => {
+    const labels = effortLabels.get(option.id);
+    return labels !== undefined && option.label === labels[0] ? { ...option, label: labels[1] } : option;
+  });
 }
 
 /**

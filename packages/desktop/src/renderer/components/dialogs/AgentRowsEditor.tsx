@@ -9,9 +9,11 @@
 
 import { useCallback, useId, useRef, type ComponentPropsWithoutRef } from 'react';
 import type { KimiPermissionMode } from '@parley/core';
+import { roleDisplay } from '@parley/core/builtin-display';
 import { roleModel as roleModelOf } from '@parley/core/role-choice';
 import { KIMI_LAUNCH_MODES_FEATURE } from '@parley/protocol';
 import { GitBranch, Plus, X } from 'lucide-react';
+import { appI18n } from '../../../shared/app-locale.js';
 import { providerName, S } from '../../../shared/strings.js';
 import { useHostFeature } from '../../lib/capabilities.js';
 import { cn } from '../../lib/cn.js';
@@ -157,7 +159,10 @@ export function AgentRowsEditor({
                   <SelectTrigger aria-label={text.roleField} className="min-w-[132px] max-w-[180px]"><SelectValue /></SelectTrigger>
                   <SelectContent className={LIST_HEIGHT}>
                     <SelectItem value="none">{text.noRole}</SelectItem>
-                    {env.roles.map(item => <SelectItem key={item.id} value={item.id} disabled={item.readOnly === true && chosenQwen} title={item.readOnly === true && chosenQwen ? S.roles.readOnlyUnavailableOnQwen : undefined}>{item.readOnly ? '🔒 ' : ''}{S.roles.option(item.name, item.source)}</SelectItem>)}
+                    {env.roles.map(item => {
+                      const display = roleDisplay(item, appI18n.locale);
+                      return <SelectItem key={item.id} value={item.id} disabled={item.readOnly === true && chosenQwen} title={item.readOnly === true && chosenQwen ? S.roles.readOnlyUnavailableOnQwen : display.description || undefined}>{item.readOnly ? '🔒 ' : ''}{S.roles.option(display.name, item.source)}</SelectItem>;
+                    })}
                   </SelectContent>
                 </Select>
                 {lead !== null ? (
@@ -285,7 +290,7 @@ export function AgentRowsEditor({
                     onValueChange={(value) => onUpdate(row.key, { effort: value === DEFAULT_EFFORT ? null : value, effortTouched: true })}
                   >
                     {/* Ширина постоянная: длинная подпись уровня не сдвигает модель и не выталкивает строку из окна 800×500. */}
-                    <SelectTrigger aria-label={text.effortField} className="w-32 shrink-0">
+                    <SelectTrigger aria-label={text.effortField} className="w-32 shrink-0 [&:lang(ru)]:w-40">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent className={LIST_HEIGHT}>

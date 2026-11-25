@@ -1,3 +1,5 @@
+import { hostText } from './host-text.js';
+import { hostLocaleReader } from './locale.js';
 import { AGENT_PROVIDERS_PATH, createProvidersEndpoint, providerRowsOf } from './agent/providers-endpoint.js';
 import { AGENT_SESSIONS_PATH, createSessionEndpoint } from './agent/session-endpoint.js';
 import { AGENT_SWITCH_PATH, createSwitchEndpoint } from './agent/switch-endpoint.js';
@@ -373,6 +375,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
 
   const handle = createHostContext({
     version: hostVersion,
+    locale: hostLocaleReader(resolvedHome),
     paths,
     log,
     onIdleChange: (idle) => idleWatcher.notify(idle),
@@ -405,7 +408,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       handle.context.broadcast('host.notice', {
         kind: 'plan-effect-failed',
         ref: null,
-        text: 'Plan delivery or export remains pending. Open the plan and retry after resolving the conflict.',
+        text: hostText('planEffectsPending').in(handle.context.locale?.()),
         at: new Date().toISOString(),
       });
     },
@@ -1044,7 +1047,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       const outcome = await sessionsService.launch(ref, mode, options);
       // Запуск Codex ждёт согласия человека на папку: письмо ассистента не доставлено, он скажет об этом и не отметит «sent».
       if (outcome === 'held') {
-        throw new HostError('conflict', 'The session waits for the human to trust the folder. Send the message again after it is allowed.');
+        throw new HostError('conflict', hostText('trustBeforeRetry'));
       }
       // Машине тесно: сессия стоит в очереди и стартует сама, а письмо ей пока уйти не может — так же.
       if (outcome === 'queued') {
@@ -1628,7 +1631,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     log.error('первое чтение работ не удалось', { error: worksFailure });
     await worksService.stop();
     failWorksReady(
-      new HostError('internal', `workspaces could not be read at host start: ${worksFailure}`, {
+      new HostError('internal', hostText('workspacesReadFailed', { worksFailure }), {
         reason: HOST_ERROR_REASONS.worksUnreadable,
       }),
     );

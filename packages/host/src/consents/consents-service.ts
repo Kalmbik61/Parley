@@ -1,3 +1,4 @@
+import { hostText } from '../host-text.js';
 /**
  * Согласия человека на папку (спека 2026-10-21, 4.2 и 4.4): запуск Codex в проекте без записи в `trust.json`
  * останавливается до решения, а хост хранит карточку «доверять ли папке агентам» и удержанные запуски. Карточка одна
@@ -434,7 +435,7 @@ export function createConsentsService(deps: ConsentsDeps): ConsentsService {
         card.roleChange?.readOnlyLost === true &&
         (roleChange?.from !== card.roleChange.from || roleChange?.to !== card.roleChange.to)
       ) {
-        throw new HostError('bad_request', `${card.roleChange.text} Allow it in an updated Parley window.`);
+        throw new HostError('bad_request', hostText('roleAckInUpdatedWindow', { change: card.roleChange.text }));
       }
       if (card.kind === 'project-mcp') {
         // Включается только то, что человек назвал и что есть в карточке; отказ и ответ без списка — всё выключено.
@@ -442,7 +443,7 @@ export function createConsentsService(deps: ConsentsDeps): ConsentsService {
         // Решение привязано к тому, что человек видел: имя И отпечаток должны совпасть с нынешней карточкой (список мог
         // смениться, пока он смотрел). Всё остальное в карточке записывается выключенным.
         // Ещё и номер списка: решение о карточке, которую человек видел, а не о той, что стала другой за это время.
-        if (revision !== card.revision) throw new HostError('bad_request', 'The MCP server list changed since the card was shown');
+        if (revision !== card.revision) throw new HostError('bad_request', hostText('mcpConsentChanged'));
         const pairs = decision === 'allow' ? (enabled ?? []) : [];
         const current = new Map(card.servers.map((server) => [server.name, server.fingerprint]));
         if (pairs.some((pair) => current.get(pair.name) !== pair.fingerprint)) throw new HostError('bad_request', 'Unknown or changed MCP server in the decision');

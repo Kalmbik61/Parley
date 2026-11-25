@@ -8,6 +8,7 @@
  * что на экране.
  */
 
+import type { LocalePreference } from '@parley/core/i18n';
 import { create } from 'zustand';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { applyDarkClass } from '../theme/appearance.js';
@@ -191,8 +192,7 @@ export interface UiState {
   toggleWake: (bridge: ParleyBridge) => Promise<void>;
 
   /**
-   * Единственный путь записи `ui.json` из рендерера (кроме `setAppearance`
-   * ниже): патч сразу сливается в зеркало `ui` (через `normalizeUi`, как и
+   * Обычный путь записи `ui.json` из рендерера: патч сразу сливается в зеркало `ui` (через `normalizeUi`, как и
    * `main/ui-store.ts`), а сырой патч уходит в `app.saveUi` — main сам
    * сольёт его со своей копией на диске. Массивы и вложенные объекты
    * (`leftSidebar` и т. п.) берутся из ТЕКУЩЕГО зеркала, а не из копии,
@@ -202,6 +202,7 @@ export interface UiState {
   patchUi: (patch: Partial<Omit<UiFile, 'version' | 'activeWorkKey'>>) => void;
   /** `app.setAppearance` (ui.json пишет main, кусок 1.1) и `appearance` в зеркале. */
   setAppearance: (mode: Appearance) => void;
+  setLocale: (locale: LocalePreference) => Promise<void>;
   /**
    * Сливает патч с объектом сайдбара из зеркала и отдаёт его целиком в `patchUi`. `tab` есть
    * только у правого (кусок 7.2); у левого он отбрасывается, а не уходит лишним ключом в ui.json.
@@ -375,6 +376,11 @@ export const useUiStore = create<UiState>((set, get) => {
       bridgeRef?.app.setAppearance(mode).catch(() => {
         // Main уже перекрасил бы тему сам при живой записи — здесь только не падать.
       });
+    },
+
+    setLocale: async (locale) => {
+      const saved = await bridgeRef?.app.saveUi({ locale });
+      if (saved !== undefined) set((state) => ({ ui: { ...state.ui, locale: saved.locale } }));
     },
 
     setSidebar: (side, patch) => {

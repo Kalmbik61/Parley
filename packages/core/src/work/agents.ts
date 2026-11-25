@@ -9,6 +9,8 @@ import { findRunnerBinary } from './find-binary.js';
 import { byFamily, claudeConfigDirFor, isClaudeCode, loadProviders, providerFamily, type ProviderEntry } from '../providers.js';
 import type { RoleCatalog } from '../roles/types.js';
 import type { SessionRole, WorkSession } from './types.js';
+import { createTranslator, type AppLocale } from '../i18n/index.js';
+import { roleChangeCatalog } from '../i18n/role-change-catalog.js';
 
 export function agentDirs(projectPath: string, claudeHome = path.join(homedir(), '.claude')): string[] {
   return [path.join(projectPath, '.claude', 'agents'), path.join(claudeHome, 'agents')];
@@ -259,10 +261,9 @@ export interface RoleChange { from: string; to: string | null; readOnlyLost: boo
 
 /**
  * The change of a session role when it continues on `entry` (spec 2026-11-12, 2.2): `null` when the role stays the same
- * or the session has none. `readOnlyLost` compares the catalog's resolved `readOnly` of both roles. `text` is one English
- * sentence for people, the same on every surface.
+ * or the session has none. `readOnlyLost` compares the catalog's resolved `readOnly` of both roles. `text` describes the change in the selected interface language.
  */
-export async function roleChangeOnSwitch(cwd: string, entry: ProviderEntry, targetLabel: string, role: SessionRole | null, catalog?: RoleCatalog): Promise<RoleChange | null> {
+export async function roleChangeOnSwitch(cwd: string, entry: ProviderEntry, targetLabel: string, role: SessionRole | null, catalog?: RoleCatalog, locale: AppLocale = 'en'): Promise<RoleChange | null> {
   if (role === null) return null;
   const current = catalog ?? await sessionRoleCatalog(cwd, { codex: role.source === 'codex' || entry.id === 'codex', provider: entry });
   const next = await roleForProvider(cwd, entry, role, current);
@@ -273,13 +274,15 @@ export async function roleChangeOnSwitch(cwd: string, entry: ProviderEntry, targ
   // Fail closed: a native Codex role can be read-only (`sandbox_mode = "read-only"`); when its settings could not be read
   // (role missing from the catalog or any Codex diagnostic), it counts as read-only and the switch needs the ack.
   const unverified = role.source === 'codex' && (!current.roles.some(item => item.id === from) || current.diagnostics.some(item => item.source === 'codex'));
-  const readOnlyLost = (readOnly(from) || unverified) && !readOnly(to);
+  const wasReadOnly = readOnly(from);
+  const readOnlyLost = (wasReadOnly || unverified) && !readOnly(to);
   const fromName = current.roles.find(item => item.id === from)?.name ?? from;
-  const after = next === null ? 'without a role' : `as ${next.name} (${next.source})`;
-  const kind = readOnly(from) ? 'is a read-only role' : 'may be a read-only role (its Codex settings could not be verified)';
+  const t = createTranslator(locale, roleChangeCatalog);
+  const after = next === null ? t('withoutRole') : t('withRole', { name: next.name, source: next.source });
+  const details = { name: fromName, target: targetLabel, after };
   const text = readOnlyLost
-    ? `${fromName} ${kind} and does not run on ${targetLabel}. The session will continue ${after}, and can edit files and run commands.`
-    : `Role ${fromName} does not run on ${targetLabel}. The session will continue ${after}.`;
+    ? t('readOnlyLost', { ...details, kind: t(wasReadOnly ? 'readOnly' : 'unverified') })
+    : t('changed', details);
   return { from, to, readOnlyLost, text };
 }
 

@@ -11,6 +11,7 @@
  */
 
 import { homedir } from 'node:os';
+import { hostText } from '../host-text.js';
 import { execFile } from 'node:child_process';
 import { commandBinary, findRunnerBinary, isManagedProviderId, loadProviders } from '@parley/core';
 import type { ProviderEntry } from '@parley/core';
@@ -140,7 +141,7 @@ async function findAccount(id: string): Promise<ProviderEntry | undefined> {
 /** То же для методов окна: не аккаунт — `bad_request`. */
 export async function accountEntry(id: string): Promise<ProviderEntry> {
   const entry = await findAccount(id);
-  if (entry === undefined) throw new HostError('bad_request', `${id} is not an account`);
+  if (entry === undefined) throw new HostError('bad_request', hostText('notAnAccount', { id }));
   return entry;
 }
 
@@ -157,7 +158,7 @@ export async function signInEntry(id: string): Promise<ProviderEntry> {
 /** Команда, папка и окружение аккаунта: без ключей и токена хоста, с `CLAUDE_CONFIG_DIR` его папки (спека подписок 5.3). */
 function launchOf(entry: ProviderEntry): { binary: string; cwd: string; env: NodeJS.ProcessEnv } {
   const cwd = entry.runner.configDir;
-  if (cwd === undefined) throw new HostError('internal', 'The account has no folder');
+  if (cwd === undefined) throw new HostError('internal', hostText('accountFolderMissing'));
   return { binary: commandBinary(entry.runner.command), cwd, env: providerLaunchEnv(entry, process.env, {}, null) };
 }
 
@@ -342,25 +343,25 @@ export function createAuthService(host: HostContext, options: AuthServiceOptions
     },
 
     async signIn(id, size = DEFAULT_SIZE) {
-      if (stopped) throw new HostError('conflict', 'the host is shutting down');
+      if (stopped) throw new HostError('conflict', hostText('hostShuttingDown'));
       // Замок занимается до первого await: два вызова подряд не пройдут оба.
-      if (lock !== null) throw new HostError('conflict', 'another sign-in is running');
+      if (lock !== null) throw new HostError('conflict', hostText('anotherSignIn'));
       const started: SignInRun = { id, process: null, timer: undefined, killTimer: undefined, exited: false };
       lock = started;
       let child: PtyProcess;
       try {
         const entry = await signInEntry(id);
-        if (lock !== started) throw new HostError('conflict', 'the sign-in was cancelled');
+        if (lock !== started) throw new HostError('conflict', hostText('signInCancelled'));
         const { binary, cwd, env } = id === 'kimi'
           ? { binary: await findRunnerBinary(entry.runner.command), cwd: homedir(), env: kimiLoginEnv(process.env) }
           : launchOf(entry);
-        if (lock !== started || stopped) throw new HostError('conflict', 'the sign-in was cancelled');
+        if (lock !== started || stopped) throw new HostError('conflict', hostText('signInCancelled'));
         child = spawn({ command: binary, args: id === 'kimi' ? ['login'] : authCommands(entry).login, cwd, env }, size);
       } catch (error) {
         if (lock === started) lock = null;
         if (error instanceof HostError) throw error;
         host.log.warn('вход аккаунта: процесс не запустился', { id, ...describeFailure(error) });
-        throw new HostError('internal', 'Unable to start the sign-in');
+        throw new HostError('internal', hostText('signInFailed'));
       }
       started.process = child;
       started.timer = setTimeout(() => cancel(id), timeoutMs);
@@ -390,14 +391,14 @@ export function createAuthService(host: HostContext, options: AuthServiceOptions
 
     async signOut(id) {
       const entry = await accountEntry(id);
-      if (lock !== null && lock.id === id) throw new HostError('conflict', 'a sign-in is running for this account');
+      if (lock !== null && lock.id === id) throw new HostError('conflict', hostText('accountSigningIn'));
       const commands = authCommands(entry);
       const { binary, cwd, env } = launchOf(entry);
       try {
         await exec(binary, commands.logout, env, cwd);
       } catch (error) {
         host.log.warn('вход аккаунта: logout не удался', { id, ...describeFailure(error) });
-        throw new HostError('internal', 'Unable to sign out');
+        throw new HostError('internal', hostText('signOutFailed'));
       } finally {
         // Что бы ни случилось с `logout`, правду говорит свежая проверка.
         await check(id, true);

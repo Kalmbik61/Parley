@@ -1,5 +1,6 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
+import { appI18n } from '../shared/app-locale.js';
 import { App } from './App.js';
 import { getHostClient } from './host-client.js';
 import { useUiStore } from './store/ui.js';
@@ -12,6 +13,7 @@ import './styles.css';
 // по `nativeTheme` main (раунд main-r2, п. 1): начальная синхронно, дальше — каждая
 // смена, в том числе выбор «Theme: …» в палитре и Settings.
 followAppearance(getHostClient(), (dark) => useUiStore.getState().setDark(dark));
+document.documentElement.lang = appI18n.locale;
 
 const container = document.getElementById('root');
 if (container === null) throw new Error('#root not found');

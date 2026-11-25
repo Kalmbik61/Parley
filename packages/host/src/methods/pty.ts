@@ -7,6 +7,7 @@
  * решает таблица подписок здесь (план, кусок 1.6, ревью п.3).
  */
 
+import { hostText } from '../host-text.js';
 import { refKey } from '@parley/protocol';
 import type { SendResult, SessionRef } from '@parley/protocol';
 import type { ActivityService } from '../activity/activity-service.js';
@@ -129,7 +130,7 @@ export function createPtyHandlers(deps: PtyMethodDeps): PtyHandlers {
     ptyAttach: async (params, request) => {
       const handle = deps.pty.get(params.ref);
       if (handle === undefined) {
-        throw new HostError('not_found', `no live PTY for session ${params.ref.sessionId}`);
+        throw new HostError('not_found', hostText('noLivePty', { sessionId: params.ref.sessionId }));
       }
 
       const key = refKey(params.ref);

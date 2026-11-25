@@ -50,6 +50,7 @@
  * («Reopen», «Rename», «Delete…»). Целью броска сессии она не бывает (`layout/dnd-sidebar.ts`).
  */
 
+import { displayLocale } from '../../shared/app-locale.js';
 import { useState } from 'react';
 import { ChevronDown, Hash } from 'lucide-react';
 import type { WorkSession } from '@parley/core';
@@ -121,7 +122,7 @@ function providerBadges(sessions: readonly WorkSession[], known: ReadonlyArray<{
   const counts = new Map<string, number>();
   for (const session of sessions) counts.set(session.provider, (counts.get(session.provider) ?? 0) + 1);
   return [...counts.entries()]
-    .sort(([a], [b]) => a.localeCompare(b, 'en-US'))
+    .sort(([a], [b]) => a.localeCompare(b, displayLocale()))
     .map(([id, count]) => ({
       id,
       count,

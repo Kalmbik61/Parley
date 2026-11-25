@@ -1,4 +1,6 @@
 import { Menu, type BrowserWindow, type MenuItemConstructorOptions } from 'electron';
+import { appI18n } from '../shared/app-locale.js';
+import { nativeWindowStrings } from '../shared/catalogs/system.js';
 import { ACTIONS, type ActionDef, type ActionId, type MenuName } from '../shared/keybindings.js';
 import { S } from '../shared/strings.js';
 
@@ -27,29 +29,30 @@ function itemsOf(menu: MenuName, send: (id: ActionId) => void): MenuItemConstruc
 
 /** Системное меню из реестра: порядок пунктов — порядок `ACTIONS`. */
 export function buildMenuTemplate(send: (id: ActionId) => void): MenuItemConstructorOptions[] {
+  const native = nativeWindowStrings[appI18n.locale];
   return [
     {
       label: 'Parley',
       // Подписи ролей about и quit заданы явно: свои Electron строит из `app.name`, а это `name` из package.json.
       submenu: [
-        { role: 'about', label: 'About Parley' },
+        { role: 'about', label: native.about },
         { type: 'separator' },
         ...itemsOf('app', send),
         { type: 'separator' },
-        { role: 'quit', label: 'Quit Parley' },
+        { role: 'quit', label: native.quit },
       ],
     },
     {
       label: S.menu.edit,
       // Родные роли — с зарегистрированными сочетаниями: работают в любом сфокусированном поле.
       submenu: [
-        { role: 'undo' },
-        { role: 'redo' },
+        { role: 'undo', label: native.undo },
+        { role: 'redo', label: native.redo },
         { type: 'separator' },
-        { role: 'cut' },
-        { role: 'copy' },
-        { role: 'paste' },
-        { role: 'selectAll' },
+        { role: 'cut', label: native.cut },
+        { role: 'copy', label: native.copy },
+        { role: 'paste', label: native.paste },
+        { role: 'selectAll', label: native.selectAll },
         { type: 'separator' },
         ...itemsOf('edit', send),
       ],

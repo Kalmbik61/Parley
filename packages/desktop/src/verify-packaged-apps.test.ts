@@ -70,6 +70,10 @@ function makeApp(arch: Arch, options: AppOptions = {}): string {
     path.join(app, 'Contents', 'Info.plist'),
     `CFBundleIdentifier=dev.parley.desktop\nCFBundleShortVersionString=${desktopVersion}\n`,
   );
+  for (const locale of ['en', 'ru']) {
+    const name = `${locale}.lproj/InfoPlist.strings`;
+    put(path.join(resources, name), readFileSync(path.join(repoRoot, 'packages/desktop/build/locales', name), 'utf8'));
+  }
   // Встроенный node: shell-скрипт с отметкой архитектуры; `-e` — загрузка node-pty.
   put(
     path.join(resources, 'node', 'bin', 'node'),
@@ -106,8 +110,8 @@ function makeFakeTools(): void {
   const tool = (name: string, body: string): void =>
     put(path.join(fakeBin, name), `#!/bin/sh\n${body}\n`, 0o755);
   tool('codesign', 'exit 0');
-  // plutil -extract KEY raw -o - FILE: ключи лежат в поддельном Info.plist строками KEY=значение.
-  tool('plutil', 'grep "^$2=" "$6" | cut -d= -f2-');
+  // plutil -extract KEY raw -o - FILE: поддельный Info.plist хранит KEY=значение, а InfoPlist.strings скопирован из сборки.
+  tool('plutil', 'if [ "$2" = NSMicrophoneUsageDescription ]; then\n  grep -F "$2" "$6"\nelse\n  grep "^$2=" "$6" | cut -d= -f2-\nfi');
   // lipo -archs FILE: архитектура — в строке `# ARCH:…` файла.
   tool('lipo', `sed -n 's/^# ARCH://p' "$2" | head -n 1`);
   tool('uname', 'echo "${FAKE_UNAME:-arm64}"');
@@ -195,6 +199,17 @@ describe.skipIf(process.platform === 'win32')('verify-packaged-apps.sh', () => {
 
     expect(status, out).toBe(0);
     expect(logged()).not.toContain('whisper-cli');
+  });
+
+  it('пропавший русский текст запроса микрофона в x64 — отказ', () => {
+    makeApp('arm64');
+    const resources = makeApp('x64');
+    rmSync(path.join(resources, 'ru.lproj', 'InfoPlist.strings'));
+
+    const { status, out } = run();
+
+    expect(status).toBe(1);
+    expect(out).toContain('mac/Parley.app: ru.lproj/InfoPlist.strings is missing or differs from the source');
   });
 
   it('whisper-cli родной архитектуры не запускается — отказ', () => {

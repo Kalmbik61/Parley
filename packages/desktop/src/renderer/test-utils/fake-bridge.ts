@@ -496,6 +496,7 @@ export function createFakeBridge(): FakeBridge {
         return () => remoteListeners.delete(listener);
       },
     },
+    locale: () => 'en',
     setHandler: (method, handler) => {
       handlers.set(method, handler as Handler);
     },

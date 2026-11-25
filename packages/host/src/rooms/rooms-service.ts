@@ -45,24 +45,25 @@ import {
   type WorkMap,
 } from '@parley/core';
 import type { Params, SessionRef } from '@parley/protocol';
+import { hostText, type HostText } from '../host-text.js';
 import { HostError } from '../errors.js';
 import type { SessionsService } from '../sessions/sessions-service.js';
 
-const bad = (message: string): HostError => new HostError('bad_request', message);
+const bad = (message: string | HostText): HostError => new HostError('bad_request', message);
 
 /**
  * Работы нет — отказ до `updateMap`: иначе его общий `Error` ушёл бы клиенту
  * как `internal`, хотя ошибся запрос, а не хост.
  */
 function assertWork(projectPath: string, workId: string): void {
-  if (!workExists(projectPath, workId)) throw bad(`workspace ${workId} does not exist`);
+  if (!workExists(projectPath, workId)) throw bad(hostText('workspaceDoesNotExist', { workId }));
 }
 
 /** Сессия есть в карте и не закрыта — закрытая писем не получает (спека 7.1). */
 function assertDeliverable(map: WorkMap, sessionId: string): void {
   const session = map.sessions.find((candidate) => candidate.id === sessionId);
-  if (session === undefined) throw bad(`session ${sessionId} is not in the map`);
-  if (session.lifecycle === 'closed') throw bad(`session ${sessionId} is closed`);
+  if (session === undefined) throw bad(hostText('sessionNotInMap', { sessionId }));
+  if (session.lifecycle === 'closed') throw bad(hostText('sessionClosed', { sessionId }));
 }
 
 /**
@@ -101,17 +102,17 @@ export async function createHumanRoom(input: Params<'rooms.create'>): Promise<st
   await updateMap(input.projectPath, input.workId, (map, letters) => {
     // Человек — участник всегда и в список не пишется (спека 6.1); повторы схлопнуты.
     const members = [...new Set(input.members)].filter((id) => id !== HUMAN);
-    if (members.length === 0) throw bad('a room needs at least one session');
+    if (members.length === 0) throw bad(hostText('roomNeedsSession'));
     for (const id of members) assertDeliverable(map, id);
 
     const lead = input.lead ?? (members[0] as string);
-    if (!members.includes(lead)) throw bad(`lead ${lead} is not a participant of the room`);
+    if (!members.includes(lead)) throw bad(hostText('roomLeadMustParticipate', { lead }));
     const { origin } = input;
     if (
       origin !== undefined &&
       (origin[0] === origin[1] || !origin.every((id) => members.includes(id)))
     ) {
-      throw bad('origin: two different sessions among the room participants');
+      throw bad(hostText('roomInvalidOrigin'));
     }
 
     const room = addRoom(map, {
@@ -176,7 +177,7 @@ export async function sendHumanLetter(input: Params<'rooms.send'>, options: { vi
       // Нет комнаты или она в архиве — `bad_request`: писать в архивную нельзя, пока человек не вернёт её (`rooms.reopen`).
       const room = openRoom(map, roomId);
       for (const id of to) {
-        if (!isMember(room, id)) throw bad(`session ${id} is not a participant of room ${roomId}`);
+        if (!isMember(room, id)) throw bad(hostText('roomSessionNotMember', { id, roomId }));
         assertDeliverable(map, id);
       }
       // Как у `send_message replyTo` агента: цитировать можно только сообщение этой же комнаты.
@@ -194,8 +195,8 @@ export async function sendHumanLetter(input: Params<'rooms.send'>, options: { vi
       }).id;
     }
 
-    if (replyTo !== undefined) throw bad('replyTo works only together with a room');
-    if (to.length !== 1) throw bad('without a room, exactly one addressee in to is required');
+    if (replyTo !== undefined) throw bad(hostText('replyToNeedsRoom'));
+    if (to.length !== 1) throw bad(hostText('directLetterNeedsOneRecipient'));
     const target = to[0] as string;
     assertDeliverable(map, target);
     return letters.add({

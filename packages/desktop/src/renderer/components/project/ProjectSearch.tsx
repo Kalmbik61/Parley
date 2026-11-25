@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { HISTORY_SEARCH_DEFAULT_LIMIT, historySearchResult } from '@parley/protocol';
 import type { HistoryHitView, HistorySearchView } from '@parley/protocol';
+import { displayCalendarDay } from '../../../shared/app-locale.js';
 import type { ParleyBridge } from '../../../shared/bridge.js';
 import { S } from '../../../shared/strings.js';
 import { Button } from '../../ui/button.js';
@@ -104,7 +105,7 @@ export function ProjectSearch({ bridge, projectPath, supported, connection, onOp
           </div>
           <p className="whitespace-pre-wrap break-words text-xs">{hit.excerpt}</p>
           <p className="break-all text-xs text-muted-foreground">
-            {[hit.id ?? '', hit.workId ?? '', hit.roomId ?? '', hit.sessionId ?? '', hit.date ? hit.date.slice(0, 10) : '',
+            {[hit.id ?? '', hit.workId ?? '', hit.roomId ?? '', hit.sessionId ?? '', hit.date ? displayCalendarDay(hit.date) : '',
               hit.file === undefined ? '' : `${hit.file}${hit.line === undefined ? '' : `:${hit.line}`}`,
               hit.shared ? S.projectSearch.shared : hit.alsoShared ? S.projectSearch.alsoShared : '', hit.complete ? '' : S.projectSearch.incomplete].filter(Boolean).join(' · ')}
           </p>

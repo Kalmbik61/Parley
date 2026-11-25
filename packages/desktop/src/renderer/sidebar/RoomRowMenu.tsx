@@ -74,6 +74,7 @@ export function RoomRowMenu({ workKey, projectPath, workId, row, ownerSessions =
   if (!canRename && !canDelete && !canSwitch && !canSetOwner) return <>{children}</>;
 
   const title = room.title === '' ? S.rooms.fallbackTitle : room.title;
+  const menu = S.sidebar.roomMenu;
 
   const deleteRoom = async (withSessions: boolean): Promise<void> => {
     if (withSessions) {
@@ -100,6 +101,13 @@ export function RoomRowMenu({ workKey, projectPath, workId, row, ownerSessions =
     bridge.call('rooms.archive', { projectPath, workId, roomId: room.id, stopSessions }).catch((error: unknown) => {
       console.warn('[parley] rooms.archive', error);
       toast(errorText(decodeIpcError(error).code, S.errors.actions.archiveRoom));
+    });
+  };
+
+  const setRoomOwner = (sessionId: string | null): void => {
+    bridge.call('rooms.setOwner', { projectPath, workId, roomId: room.id, sessionId }).catch((error: unknown) => {
+      console.warn('[parley] rooms.setOwner', error);
+      toast(menu.ownerChangeFailed);
     });
   };
 
@@ -132,24 +140,23 @@ export function RoomRowMenu({ workKey, projectPath, workId, row, ownerSessions =
           ) : null}
           {canSetOwner ? (
             <ContextMenuSub>
-              <ContextMenuSubTrigger data-room-action="owner">{room.ownerId ? 'Change owner' : 'Assign owner'}</ContextMenuSubTrigger>
+              <ContextMenuSubTrigger data-room-action="owner">
+                {room.ownerId ? menu.changeOwner : menu.assignOwner}
+              </ContextMenuSubTrigger>
               <ContextMenuSubContent>
-                {ownerSessions.map((session) => (
-                  <ContextMenuItem key={session.id} data-room-owner={session.id} onSelect={() => {
-                    bridge.call('rooms.setOwner', { projectPath, workId, roomId: room.id, sessionId: session.id }).catch((error: unknown) => {
-                      console.warn('[parley] rooms.setOwner', error);
-                      toast('Could not change the room owner.');
-                    });
-                  }}>
-                    {session.label || session.id}{room.ownerId === session.id ? ' · Owner' : ''}
+                {ownerSessions.map((session) => {
+                  const name = session.label || session.id;
+                  return (
+                    <ContextMenuItem key={session.id} data-room-owner={session.id} onSelect={() => setRoomOwner(session.id)}>
+                      {room.ownerId === session.id ? menu.ownerLabel(name) : name}
+                    </ContextMenuItem>
+                  );
+                })}
+                {room.ownerId ? (
+                  <ContextMenuItem data-room-owner="clear" onSelect={() => setRoomOwner(null)}>
+                    {menu.clearOwner}
                   </ContextMenuItem>
-                ))}
-                {room.ownerId ? <ContextMenuItem data-room-owner="clear" onSelect={() => {
-                  bridge.call('rooms.setOwner', { projectPath, workId, roomId: room.id, sessionId: null }).catch((error: unknown) => {
-                    console.warn('[parley] rooms.setOwner', error);
-                    toast('Could not change the room owner.');
-                  });
-                }}>Clear owner</ContextMenuItem> : null}
+                ) : null}
               </ContextMenuSubContent>
             </ContextMenuSub>
           ) : null}

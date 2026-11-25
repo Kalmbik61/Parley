@@ -13,17 +13,20 @@ import { buildSchemaReport } from './schema-report.js';
 import { buildIndex, buildSessionTree } from './session-tree.js';
 import { loadConfig } from './config.js';
 import { bothEnv } from './names.js';
+import { cliCatalog } from './i18n/cli-catalog.js';
+import { readDesktopAppLocale } from './i18n/desktop-locale.js';
+import { createTranslator } from './i18n/index.js';
 import { prepareSessionRole, roleFromId, roleId } from './work/agents.js';
 import { planLaunch } from './work/launch.js';
 import { writeBrief } from './work/brief.js';
 import {
   CHANNEL_MIN_VERSION,
-  NO_CHANNEL_WARNING,
   probeChannelSupport,
 } from './work/channel.js';
 import { addSession } from './work/map.js';
 import {
   createWork,
+  parleyHome,
   pruneWorksIndex,
   readStoredMap,
   readWorksIndex,
@@ -31,38 +34,7 @@ import {
   workPaths,
 } from './work/store.js';
 
-const USAGE = `parley-core — an index of Claude Code sessions as JSON
-
-  parley-core index [--root <path>]         list of sessions, newest first
-  parley-core session <id> [--root <path>]  a session with its subsessions
-  parley-core schema [--provider claude|codex] [--root <path>]
-                                            report on the real .jsonl schema
-
-  parley-core work new --title <t> [--goal <g>] [--cwd <path>]
-                                            a new workspace in the project
-  parley-core work list [--all]             workspaces of all projects
-  parley-core work prune                    delete from the database the workspaces
-                                            whose project or folder is gone; a JSON
-                                            copy of each goes to <home>/pruned/
-  parley-core work map --work <id> [--cwd <path>]
-                                            the workspace map
-  parley-core work session new --work <id> --provider <p> --label <l>
-      [--task <t>] [--context s-01,s-02] [--role <source:name> | --agent <name>] [--cwd <path>]
-                                            a pending record, the brief, the MCP
-                                            config, settings.json with hooks and
-                                            a ready launch command; without
-                                            --task the start is quiet: the brief
-                                            goes in as context, and the user
-                                            types the task themselves;
-                                            --role is a source-qualified role;
-                                            --agent is a legacy Claude role alias
-                                            matching exact metadata.name
-
-  --json   the default and only format, accepted for compatibility
-  --root   history root (default ~/.claude/projects, read-only)
-  --cwd    a project with \`.parley/\` (default: the current directory; for
-           commands with --work the project comes from the workspace list)
-  --all    also show archived workspaces`;
+const t = createTranslator(await readDesktopAppLocale(parleyHome()), cliCatalog);
 
 function optionValue(argv: string[], name: string): string | undefined {
   const at = argv.indexOf(name);
@@ -71,7 +43,7 @@ function optionValue(argv: string[], name: string): string | undefined {
 
 function requiredOption(argv: string[], name: string): string {
   const value = optionValue(argv, name);
-  if (value === undefined || value === '') throw new Error(`${name} <value> is required`);
+  if (value === undefined || value === '') throw new Error(t('requiredOption', { name }));
   return value;
 }
 
@@ -91,11 +63,11 @@ async function resolveProject(argv: string[], workId: string): Promise<string> {
 
   const found = (await readWorksIndex()).works.filter((work) => work.id === workId);
   if (found.length === 0) {
-    throw new Error(`workspace ${workId} is not in the workspace list — pass --cwd`);
+    throw new Error(t('unknownWork', { workId }));
   }
   if (found.length > 1) {
     const projects = found.map((work) => work.projectPath).join(', ');
-    throw new Error(`workspace ${workId} exists in several projects (${projects}) — pass --cwd`);
+    throw new Error(t('ambiguousWork', { workId, projects }));
   }
   return (found[0] as { projectPath: string }).projectPath;
 }
@@ -116,14 +88,14 @@ async function channelFor(entry: ProviderEntry): Promise<boolean> {
   // claude, а лишний `<провайдер> --version` стоил бы подпроцесса на запуск.
   if (entry.id !== 'claude') return false;
   if (entry.runner.args?.includes('{channel}') !== true) {
-    process.stderr.write(`${NO_CHANNEL_WARNING}\n`);
+    process.stderr.write(`${t('channelMissing', { token: '{channel}' })}\n`);
     return false;
   }
 
   const probe = await probeChannelSupport(entry.runner.command);
   if (!probe.supported) {
     process.stderr.write(
-      `push is off: claude ${probe.version} is older than ${CHANNEL_MIN_VERSION}\n`,
+      `${t('channelUnsupported', { version: String(probe.version), minimum: CHANNEL_MIN_VERSION })}\n`,
     );
     return false;
   }
@@ -150,7 +122,7 @@ async function newWorkSession(argv: string[]): Promise<void> {
   // Роль Claude Code необязательна: без неё сессия идёт обычным агентом.
   const agent = optionValue(argv, '--agent');
   const roleArg = optionValue(argv, '--role');
-  if (agent !== undefined && roleArg !== undefined) throw new Error('agent-and-role-conflict');
+  if (agent !== undefined && roleArg !== undefined) throw new Error(t('agentRoleConflict', { code: 'agent-and-role-conflict' }));
   const role = roleArg === undefined ? (agent === undefined ? null : { source: 'claude' as const, name: agent }) : roleFromId(roleArg);
   const projectPath = await resolveProject(argv, workId);
 
@@ -159,17 +131,17 @@ async function newWorkSession(argv: string[]): Promise<void> {
   const registry = await loadProviders();
   const entry = registry[provider];
   if (entry === undefined) {
-    throw new Error(`unknown provider ${provider}; allowed: ${Object.keys(registry).join(', ')}`);
+    throw new Error(t('providerUnavailable', { provider, allowed: Object.keys(registry).join(', ') }));
   }
   // Printed CLI commands have no host boundary for process-only secret delivery.
   // Аккаунту подписки напечатанная команда не подставит его `CLAUDE_CONFIG_DIR`: процесс вошёл бы в глобальный
   // аккаунт человека (спека подписок 5.3).
   if (isManagedEntry(entry) || entry.runner.secret !== undefined) {
-    throw new Error(`${entry.label} requires launch through the Parley host; this CLI command cannot pass its settings folder or saved key`);
+    throw new Error(t('managedProvider', { label: entry.label }));
   }
   if (!(await commandInPath(entry.runner.command))) {
     throw new Error(
-      `command ${entry.runner.command} is not in PATH — provider ${provider} is unavailable`,
+      t('commandUnavailable', { command: entry.runner.command, provider }),
     );
   }
 
@@ -184,7 +156,7 @@ async function newWorkSession(argv: string[]): Promise<void> {
   const map = await updateMap(projectPath, workId, (current) => {
     for (const id of contextFrom) {
       if (!current.sessions.some((session) => session.id === id)) {
-        throw new Error(`session ${id} is not in the map`);
+        throw new Error(t('contextSessionMissing', { id }));
       }
     }
     const session = addSession(current, {
@@ -269,7 +241,7 @@ async function workCommand(rest: string[], argv: string[]): Promise<number> {
     return 0;
   }
 
-  process.stderr.write(`Unknown command: work ${rest.join(' ')}\n${USAGE}\n`);
+  process.stderr.write(`${t('unknownCommand', { command: `work ${rest.join(' ')}` })}\n${t('usage')}\n`);
   return 1;
 }
 
@@ -278,7 +250,7 @@ async function main(argv: string[]): Promise<number> {
   const root = optionValue(argv, '--root') ?? defaultRoot();
 
   if (command === undefined || command === '--help' || command === '-h') {
-    process.stderr.write(`${USAGE}\n`);
+    process.stderr.write(`${t('usage')}\n`);
     return command === undefined ? 1 : 0;
   }
 
@@ -299,7 +271,7 @@ async function main(argv: string[]): Promise<number> {
   if (command === 'schema') {
     const provider = optionValue(argv, '--provider') ?? 'claude';
     if (provider !== 'claude' && provider !== 'codex') {
-      process.stderr.write(`Unknown provider: ${provider}\n`);
+      process.stderr.write(`${t('unknownProvider', { provider })}\n`);
       return 1;
     }
 
@@ -322,7 +294,7 @@ async function main(argv: string[]): Promise<number> {
   if (command === 'session') {
     const id = rest.find((arg) => !arg.startsWith('--'));
     if (id === undefined) {
-      process.stderr.write('A session id is required: parley-core session <id>\n');
+      process.stderr.write(`${t('sessionIdRequired')}\n`);
       return 1;
     }
 
@@ -339,7 +311,7 @@ async function main(argv: string[]): Promise<number> {
       })());
 
     if (found === undefined) {
-      process.stderr.write(`Session ${id} was not found in ${root}\n`);
+      process.stderr.write(`${t('sessionNotFound', { id, root })}\n`);
       return 1;
     }
 
@@ -347,7 +319,7 @@ async function main(argv: string[]): Promise<number> {
     return 0;
   }
 
-  process.stderr.write(`Unknown command: ${command}\n${USAGE}\n`);
+  process.stderr.write(`${t('unknownCommand', { command })}\n${t('usage')}\n`);
   return 1;
 }
 

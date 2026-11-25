@@ -2,6 +2,7 @@
  * Settings → Assistant → «Recent actions»: журнал решений помощника (`assistant.journal`). Читается при открытии
  * вкладки; хоста без метода это не касается — список не показывается.
  */
+import { displayLocale } from '../../../shared/app-locale.js';
 import { useEffect, useState } from 'react';
 import type { AssistantJournalItem } from '@parley/protocol';
 import { S } from '../../../shared/strings.js';
@@ -40,7 +41,7 @@ export function AssistantJournal(): JSX.Element | null {
           {items.map((item) => (
             <li key={item.id} className="flex min-w-0 flex-col rounded border px-2 py-1 text-xs" data-testid="assistant-journal-row">
               <span className="text-muted-foreground">
-                {item.decidedAt === null ? '' : new Date(item.decidedAt).toLocaleString()}
+                {item.decidedAt === null ? '' : new Date(item.decidedAt).toLocaleString(displayLocale())}
                 {item.via === 'auto' ? <span className="ml-1 rounded bg-muted px-1">{text.journalAuto}</span> : null}
               </span>
               {item.lines.map((line, index) => (

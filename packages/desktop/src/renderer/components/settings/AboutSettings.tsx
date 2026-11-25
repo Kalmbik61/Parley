@@ -4,6 +4,7 @@
  * раздела (`app.aboutInfo`), версия хоста — из статуса связи в сторе окна.
  */
 
+import { displayLocale } from '../../../shared/app-locale.js';
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import type { AboutInfo, ParleyBridge, UpdateCheckResult } from '../../../shared/bridge.js';
@@ -129,7 +130,7 @@ export function AboutSettings({ bridge }: { bridge: ParleyBridge }): JSX.Element
             : !info.updateChecks
               ? A.unavailable
               : last !== null
-                ? A.lastChecked(new Date(last.checkedAt).toLocaleString())
+                ? A.lastChecked(new Date(last.checkedAt).toLocaleString(displayLocale()))
                 : ''}
       </p>
       {uiLoaded ? (

@@ -1,3 +1,4 @@
+import { hostText } from '../host-text.js';
 import path from 'node:path';
 import {
   SharedStateError, boardMove, boardTake, boardTransfer, ensureBoardInbox, planBacklogIds, readBoardItems, inspectSharedIgnore, isRoomArchived, isRoomClosed, acceptBacklogSuggestion, addBacklogItem, dismissBacklogSuggestion, listBacklogSuggestions,
@@ -19,10 +20,10 @@ function safeError(error: unknown): HostError {
   const category = ['backlog-conflict', 'backlog-merge-conflict', 'backlog-lock-timeout'].includes(code) ? 'conflict' :
     ['project-unavailable', 'git-context-unverified', 'main-project-unavailable'].includes(code) ? 'not_found' : 'internal';
   // Do not include the supplied path, Markdown, parser exception, or filesystem error in messages/logs.
-  return new HostError(category, 'The backlog operation could not be completed.', { code });
+  return new HostError(category, hostText('backlogFailed'), { code });
 }
 function absolute(projectPath: string): void {
-  if (!path.isAbsolute(projectPath) || projectPath.includes('\0')) throw new HostError('bad_request', 'An absolute project path is required.');
+  if (!path.isAbsolute(projectPath) || projectPath.includes('\0')) throw new HostError('bad_request', hostText('absoluteProjectPath'));
 }
 
 async function knownMap(projectPath: string, workId: string) {
@@ -93,7 +94,7 @@ export async function readBacklogSnapshot(projectPath: string, diagnostics: Shar
         ...(authorById.has(row.id) ? { author: authorById.get(row.id)! } : {}) })),
       rule: preferences.backlogRule, diagnostics: [...new Map([...diagnostics, ...await inspectSharedIgnore(paths)].map(row => [row.code, { code: row.code }])).values()] };
     if (Buffer.byteLength(JSON.stringify(assembled), 'utf8') > BACKLOG_SNAPSHOT_MAX_BYTES)
-      throw new HostError('internal', 'The backlog snapshot is too large.', { code: 'backlog-snapshot-too-large' });
+      throw new HostError('internal', hostText('backlogSnapshotTooLarge'), { code: 'backlog-snapshot-too-large' });
     const projected = backlogSnapshot.safeParse(assembled);
     if (!projected.success) throw new SharedStateError('backlog-invalid');
     return projected.data;
@@ -104,27 +105,27 @@ export async function readBacklogSnapshot(projectPath: string, diagnostics: Shar
 async function take(params: BacklogMethodParams<'backlog.take'>): Promise<SharedDiagnostic[]> {
   absolute(params.target.projectPath);
   const [source, target] = await Promise.all([sharedProjectPaths(params.projectPath), sharedProjectPaths(params.target.projectPath)]);
-  if (source.context.projectPath !== target.context.projectPath) throw new HostError('bad_request', 'The target belongs to another project.');
+  if (source.context.projectPath !== target.context.projectPath) throw new HostError('bad_request', hostText('targetOtherProject'));
   const map = (await knownMap(params.target.projectPath, params.target.workId).catch(() => null))?.map;
-  if (!map || map.work.status !== 'active') throw new HostError('not_found', 'An active target workspace is required.');
+  if (!map || map.work.status !== 'active') throw new HostError('not_found', hostText('activeTargetWorkspace'));
   let taken: string;
   if ('roomId' in params.target) {
     const roomId = params.target.roomId;
     const room = map.rooms.find(row => row.id === roomId);
     // Архивная комната не цель для действий (архив комнат, 5.3): писать в неё нельзя, пока человек не вернёт её.
     if (!room || isRoomClosed(map, room) || isRoomArchived(room))
-      throw new HostError('not_found', 'A live target room is required.');
+      throw new HostError('not_found', hostText('liveTargetRoom'));
     taken = `${params.target.workId}/${params.target.roomId}`;
   } else {
     const sessionId = params.target.sessionId;
     const session = map.sessions.find(row => row.id === sessionId);
-    if (!session || session.lifecycle === 'closed') throw new HostError('not_found', 'A live target session is required.');
+    if (!session || session.lifecycle === 'closed') throw new HostError('not_found', hostText('liveTargetSession'));
     taken = `${params.target.workId}/${params.target.sessionId}`;
   }
   const document = await readBacklog(params.projectPath);
   if (params.index !== undefined && document.version !== params.version) throw new SharedStateError('backlog-conflict');
   const item = params.id === undefined ? document.items[params.index!] : document.items.find(row => row.id === params.id);
-  if (!item) throw new HostError('not_found', 'The backlog item no longer exists.');
+  if (!item) throw new HostError('not_found', hostText('backlogItemGone'));
   if (item.checked || (item.taken !== undefined && item.taken !== taken)) throw new SharedStateError('backlog-conflict');
   // A lost successful response may be retried for the same existing target without recreating a room.
   if (item.taken === taken) return [];
@@ -152,7 +153,7 @@ async function planIdsOf(sharedDir: string): Promise<Set<string>> {
 export function createBacklogHandlers(service?: BacklogService): BacklogHandlers {
   const validate = <M extends BacklogMethodName>(method: M, params: BacklogMethodParams<M>): BacklogMethodParams<M> => {
     const parsed = backlogMethodSchemas[method].safeParse(params);
-    if (!parsed.success) throw new HostError('bad_request', 'Invalid backlog request.');
+    if (!parsed.success) throw new HostError('bad_request', hostText('invalidBacklog'));
     absolute(parsed.data.projectPath); return parsed.data as BacklogMethodParams<M>;
   };
   const run = async <M extends Exclude<BacklogMethodName, 'backlog.unsubscribe' | 'backlog.prepareTake'>>(method: M, params: BacklogMethodParams<M>,
@@ -167,14 +168,14 @@ export function createBacklogHandlers(service?: BacklogService): BacklogHandlers
     'backlog.subscribe': async (params, request) => {
       try {
         const input = validate('backlog.subscribe', params);
-        if (!service || !request) throw new HostError('internal', 'Live backlog updates are unavailable.', { code: 'backlog-watch-unavailable' });
+        if (!service || !request) throw new HostError('internal', hostText('backlogWatchUnavailable'), { code: 'backlog-watch-unavailable' });
         return await service.subscribe(input.projectPath, request.client.id, data => request.client.send({ event: 'backlog.changed', data }));
       } catch (error) { throw safeError(error); }
     },
     'backlog.unsubscribe': async (params, request) => {
       try {
         const input = validate('backlog.unsubscribe', params);
-        if (!service || !request) throw new HostError('internal', 'Live backlog updates are unavailable.', { code: 'backlog-watch-unavailable' });
+        if (!service || !request) throw new HostError('internal', hostText('backlogWatchUnavailable'), { code: 'backlog-watch-unavailable' });
         service.unsubscribe(input.projectPath, request.client.id); return { ok: true };
       } catch (error) { throw safeError(error); }
     },

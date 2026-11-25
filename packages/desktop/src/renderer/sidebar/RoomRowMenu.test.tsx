@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { toast } from 'sonner';
 import type { Proposal, Room, WindowWorkEntry } from '@parley/core';
+import { setAppLocale } from '../../shared/app-locale.js';
 import { encodeIpcError } from '../../shared/ipc-error.js';
 import type { TabSpec } from '../../shared/layout-types.js';
 import { EMPTY_HISTORY } from '../layout/history.js';
@@ -96,6 +97,40 @@ it('clears an owner and allows archived rooms to retain and change ownership', a
     { method: 'rooms.setOwner', params: { projectPath: '/tmp/proj', workId: 'w-01', roomId: 'r-01', sessionId: null } },
   ]);
 });
+
+it.each([
+  { locale: 'en', assign: 'Assign owner', change: 'Change owner', owner: 'Owner', clear: 'Clear owner', failed: 'Could not change the room owner.' },
+  { locale: 'ru', assign: 'Назначить владельца', change: 'Сменить владельца', owner: 'Владелец', clear: 'Снять владельца', failed: 'Не удалось сменить владельца комнаты.' },
+] as const)('показывает отказ в назначении и снятии владельца ($locale)', async ({ locale, assign, change, owner, clear, failed }) => {
+  setAppLocale(locale);
+  hostWith(['rooms.setOwner']);
+  bridge.setHandler('rooms.setOwner', () => {
+    throw encodeIpcError({ code: 'conflict', message: 'technical host detail' });
+  });
+
+  const name = 'Coordinator Ира';
+  const withoutOwner = work();
+  withoutOwner.map.sessions[2]!.label = name;
+  renderMenu(withoutOwner);
+  fireEvent.keyDown(screen.getByText(assign), { key: 'ArrowRight' });
+  fireEvent.click(await screen.findByText(name));
+  await waitFor(() => expect(toast).toHaveBeenNthCalledWith(1, failed));
+
+  cleanup();
+  const withOwner = work({ ownerId: 's-03' });
+  withOwner.map.sessions[2]!.label = name;
+  renderMenu(withOwner);
+  fireEvent.keyDown(screen.getByText(change), { key: 'ArrowRight' });
+  expect(await screen.findByText(`${name} · ${owner}`)).toBeTruthy();
+  fireEvent.click(await screen.findByText(clear));
+  await waitFor(() => expect(toast).toHaveBeenNthCalledWith(2, failed));
+
+  const room = { projectPath: '/tmp/proj', workId: 'w-01', roomId: 'r-01' };
+  expect(bridge.calls).toEqual([
+    { method: 'rooms.setOwner', params: { ...room, sessionId: 's-03' } },
+    { method: 'rooms.setOwner', params: { ...room, sessionId: null } },
+  ]);
+});
 const confirmDelete = (): void => {
   fireEvent.click(screen.getByText('Delete…'));
   // Первая по DOM — кнопка подтверждения (крестик диалога — после неё).
@@ -117,6 +152,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  setAppLocale('en');
   useHostStore.setState({ status: { state: 'connecting' } });
   useLayoutStore.getState().setCloseGuard(null);
 });

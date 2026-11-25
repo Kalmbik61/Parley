@@ -12,6 +12,7 @@
  * неё порталом. Высоту карточки Monaco не знает — её мерит `ResizeObserver` и отдаёт `layoutZone`.
  */
 
+import { displayLocale } from '../../../shared/app-locale.js';
 import { useLayoutEffect, useRef } from 'react';
 import type { WindowWorkEntry } from '@parley/core';
 import type { DiffNote } from '../../../shared/notes-types.js';
@@ -34,7 +35,7 @@ export interface NoteZoneProps {
 
 /** Время `en-US` без даты: `2:05 PM`. */
 export function noteTime(iso: string): string {
-  return new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  return new Date(iso).toLocaleTimeString(displayLocale(), { hour: 'numeric', minute: '2-digit' });
 }
 
 export function NoteZone({ note, entry, defaultSessionId, caption, onEdit, onDelete, onSend }: NoteZoneProps): JSX.Element {

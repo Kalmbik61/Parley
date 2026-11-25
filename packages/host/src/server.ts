@@ -601,9 +601,10 @@ function handleMessage(raw: unknown, client: Client, options: ServerOptions): vo
       // `HostError` несёт свой код протокола (`conflict`, `bad_request`, …) —
       // остальное считаем неожиданным сбоем и заворачиваем в `internal`.
       if (error instanceof HostError) {
+        const message = error.displayMessage(client.name === 'desktop' ? options.context.locale?.() : 'en');
         const errorField = error.data === undefined
-          ? { code: error.code, message: error.message }
-          : { code: error.code, message: error.message, data: error.data };
+          ? { code: error.code, message }
+          : { code: error.code, message, data: error.data };
         client.send({ id, error: errorField });
         logIfSlow({ ok: false, code: error.code });
         return;

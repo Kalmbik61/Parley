@@ -12,6 +12,7 @@
  * считается неизвестным, ответ `mode: null`, нажатий нет, а окно видит режим из хуков ленты.
  */
 
+import { hostText } from '../host-text.js';
 import { refKey } from '@parley/protocol';
 import type { PermissionModeChoice, SessionRef } from '@parley/protocol';
 import { HostError } from '../errors.js';
@@ -70,7 +71,7 @@ export async function switchMode(
   const clearTimer = deps.clearTimer ?? clearTimeout;
   const { pty } = deps;
   if (pty.get(ref) === undefined) {
-    throw new HostError('not_found', `no live PTY for session ${ref.sessionId}`);
+    throw new HostError('not_found', hostText('noLivePty', { sessionId: ref.sessionId }));
   }
   const key = refKey(ref);
 

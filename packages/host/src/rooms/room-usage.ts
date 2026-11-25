@@ -4,6 +4,7 @@
  * склеиваются в один расчёт.
  */
 
+import { hostText } from '../host-text.js';
 import { letterCount, readLetters, roomUsage, type RoomUsage, type UsageResolver, type WorkEntry } from '@parley/core';
 import type { Handler } from '../context.js';
 import { HostError } from '../errors.js';
@@ -16,8 +17,8 @@ export function createRoomsUsage(
   const running = new Map<string, Promise<RoomUsage>>();
   return async ({ projectPath, workId, roomId }) => {
     const map = works.entry(projectPath, workId)?.map;
-    if (map === undefined) throw new HostError('not_found', `work ${workId} is not open`);
-    if (!map.rooms.some((room) => room.id === roomId)) throw new HostError('not_found', `room ${roomId} is not in the work`);
+    if (map === undefined) throw new HostError('not_found', hostText('workspaceNotOpen', { workId }));
+    if (!map.rooms.some((room) => room.id === roomId)) throw new HostError('not_found', hostText('roomNotInWorkspace', { roomId }));
     const key = `${projectPath}\u0000${workId}\u0000${roomId}`;
     const known = running.get(key);
     if (known !== undefined) return known;

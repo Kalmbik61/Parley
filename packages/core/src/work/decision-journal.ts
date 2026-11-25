@@ -1,3 +1,6 @@
+import { createTranslator, type AppLocale } from '../i18n/index.js';
+import { decisionExportCatalog } from '../i18n/export-catalog.js';
+import { exportLocale } from './export-locale.js';
 import { createHash } from 'node:crypto';
 import { lstat, readdir, realpath } from 'node:fs/promises';
 import path from 'node:path';
@@ -48,7 +51,7 @@ export function validDecisionJournalIntent(value: unknown): value is DecisionJou
     (hasDigestOnly(row) || (typeof row.content === 'string' && Buffer.byteLength(row.content) <= 1024 * 1024 && text(row.content)));
 }
 /** JSON can retain legacy lone UTF-16/control units; Markdown uses visible literal escapes with a truthful marker. */
-export function representLegacyMarkdown(value: string): string {
+export function representLegacyMarkdown(value: string, locale: AppLocale = 'en'): string {
   let escaped = false;
   const units: string[] = [];
   for (const unit of value) {
@@ -58,12 +61,12 @@ export function representLegacyMarkdown(value: string): string {
     else units.push(unit);
   }
   const content = units.join('');
-  return escaped ? `> Legacy unpaired UTF-16/control units are shown as literal \\uXXXX escapes. This is a generated representation.\n\n${content}` : content;
+  return escaped ? `${decisionExportCatalog[locale].legacyEscapes}\n\n${content}` : content;
 }
 const metadata = (value: string): string => JSON.stringify(value);
-function member(map: WorkMap, id: string): string {
+function member(map: WorkMap, id: string, t: ReturnType<typeof createTranslator<typeof decisionExportCatalog.en>>): string {
   const session = map.sessions.find(row => row.id === id);
-  return session ? `${id}: ${metadata(session.label)}${session.role ? ` — ${session.role.source}:${metadata(session.role.name)}` : ''}` : `${id} (deleted)`;
+  return session ? `${id}: ${metadata(session.label)}${session.role ? ` — ${session.role.source}:${metadata(session.role.name)}` : ''}` : t('deleted', { id });
 }
 /** Called only with the resolved proposal and its just-created decision letter, never a current mutable proposal. */
 export function captureDecisionJournal(
@@ -74,6 +77,7 @@ export function captureDecisionJournal(
   action: 'accept' | 'return',
   messageId: string,
   note?: string,
+  locale?: AppLocale,
 ): DecisionJournalIntent | null {
   if (action === 'return') return null;
   const letter = letters.byId(messageId);
@@ -91,26 +95,30 @@ export function captureDecisionJournal(
   const snapshot = captured?.file ?? null;
   const plan = planId === undefined ? undefined : map.plans?.find(row => row.id === planId && row.rev === rev && row.roomId === room.id);
   if (planId !== undefined && (!snapshot || !plan)) throw new DecisionJournalError('journal-invalid');
+  locale ??= exportLocale();
+  const t = createTranslator(locale, decisionExportCatalog);
   const lines = [
-    `# ${proposal.text.split(/\r?\n/, 1)[0] || `Decision ${proposal.id} in ${room.title}`}`, '',
+    `# ${proposal.text.split(/\r?\n/, 1)[0] || t('title', { id: proposal.id, room: room.title })}`, '',
+    // These fields are parsed by describeDecisionFile; localize the prose below them.
     `Accepted: ${letter.at}`, `Work: ${map.work.id} — ${metadata(map.work.title)}`,
     `Room: ${room.id} — ${metadata(room.title)}`, `Decision: ${proposal.id}; revision: ${proposal.rev}`,
-    `Kind: ${proposal.kind ?? 'decision'}`, `Lead: ${member(map, proposal.from)}`, '', '## Participants',
-    ...room.members.map(id => `- ${member(map, id)}`), '', '## Decision', proposal.text,
+    `Kind: ${proposal.kind ?? 'decision'}`, t('lead', { member: member(map, proposal.from, t) }),
+    '', `## ${t('participants')}`,
+    ...room.members.map(id => `- ${member(map, id, t)}`), '', `## ${t('decision')}`, proposal.text,
   ];
-  if (note !== undefined && note !== '') lines.push('', '## Human remark', note);
+  if (note !== undefined && note !== '') lines.push('', `## ${t('humanRemark')}`, note);
   if (plan) {
-    lines.push('', `Mode: ${plan.mode}`, `Plan: ${plan.id}; revision: ${plan.rev}`, '', '## Plan items',
-      ...plan.items.map(row => `- ${row.id}. ${row.title} — ${member(map, row.owner)}`),
-      '', `[Immutable ${event} plan snapshot](../plans/${snapshot})`);
-    if (plan.backlog.length) lines.push('', `Backlog: ${plan.backlog.join(', ')}`);
+    lines.push('', t('planMode', { mode: plan.mode }), t('plan', { id: plan.id, rev: plan.rev }),
+      '', `## ${t('planItems')}`, ...plan.items.map(row => `- ${row.id}. ${row.title} — ${member(map, row.owner, t)}`),
+      '', `[${t('snapshot', { event })}](../plans/${snapshot})`);
+    if (plan.backlog.length) lines.push('', t('backlog', { ids: plan.backlog.join(', ') }));
   }
   const intent: DecisionJournalIntent = {
     file: `${letter.at.slice(0, 10)}-${map.work.id}-${room.id}-${proposal.id}-rev-${String(proposal.rev).padStart(2, '0')}.md`,
     workId: map.work.id, roomId: room.id, proposalId: proposal.id, rev: proposal.rev, messageId,
     acceptedAt: letter.at, kind: proposal.kind ?? 'decision', snapshot,
     snapshotSha256: captured ? exportSha256(captured) : null,
-    content: representLegacyMarkdown(`${lines.join('\n')}\n`), status: 'pending',
+    content: representLegacyMarkdown(`${lines.join('\n')}\n`, locale), status: 'pending',
   };
   if (!validDecisionJournalIntent(intent)) throw new DecisionJournalError('journal-invalid');
   map.decisionExports ??= [];

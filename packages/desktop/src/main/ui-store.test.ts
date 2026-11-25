@@ -30,6 +30,20 @@ describe('createUiStore', () => {
     await expect(store.load()).resolves.toEqual({ ...DEFAULT_UI, appearance: 'dark' });
   });
 
+  it('сохраняет все варианты языка интерфейса и читает прежний файл с языками речи', async () => {
+    await mkdir(path.dirname(file), { recursive: true });
+    const voice = { ...DEFAULT_UI.voice, language: 'de' };
+    const assistant = { ...DEFAULT_UI.assistant, language: 'en' };
+    await writeFile(file, JSON.stringify({ version: 1, appearance: 'dark', voice, assistant }), 'utf8');
+    const store = createUiStore(file);
+    expect(await store.load()).toMatchObject({ locale: 'system', appearance: 'dark', assistant, voice });
+
+    for (const locale of ['ru', 'en', 'system'] as const) {
+      await store.save({ locale });
+      expect(await createUiStore(file).load()).toMatchObject({ locale, appearance: 'dark', assistant, voice });
+    }
+  });
+
   it('битый JSON → DEFAULT_UI, следующий save пишет валидный файл (тест 2)', async () => {
     await mkdir(path.dirname(file), { recursive: true });
     await writeFile(file, '{ этот json нарочно битый', 'utf8');

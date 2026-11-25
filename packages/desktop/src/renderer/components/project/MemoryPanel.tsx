@@ -123,7 +123,7 @@ export function MemoryPanel({ bridge, projectPath, supported, connection, onOpen
     {failure === 'undo-conflict' && <p role="alert" className="text-destructive">{S.memory.undoConflict}</p>}
     {snapshot?.diagnostics.map(row => <p key={row.code} role="status" className="text-xs text-muted-foreground">{S.memory.ignore[row.code]}</p>)}
     {snapshot && <>
-      <section aria-label="Suggested" className="space-y-2">
+      <section aria-label={S.memory.suggestedLabel} className="space-y-2">
         <h3 className="font-medium">{S.memory.suggested(snapshot.suggestions.length)}</h3>
         {snapshot.suggestions.length === 0 ? <p className="text-xs text-muted-foreground">{S.memory.emptySuggested}</p> : snapshot.suggestions.map(suggestion)}
       </section>

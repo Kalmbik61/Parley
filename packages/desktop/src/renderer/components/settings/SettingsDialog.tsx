@@ -27,7 +27,9 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { toast } from 'sonner';
 import type { ParleyConfig } from '@parley/core';
+import { isLocalePreference, LOCALE_PREFERENCES, type LocalePreference } from '@parley/core/i18n';
 import { RESOURCE_LIMIT_BOUNDS, RESOURCE_LIMIT_KEYS } from '@parley/core/resource-policy';
+import { appI18n } from '../../../shared/app-locale.js';
 import type { ParleyBridge } from '../../../shared/bridge.js';
 import { decodeIpcError } from '../../../shared/ipc-error.js';
 import { errorText, S } from '../../../shared/strings.js';
@@ -165,12 +167,15 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
   const [locked, setLocked] = useState<Record<string, string>>({});
   const [errors, setErrors] = useState<FieldErrors>({});
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [savingLocale, setSavingLocale] = useState(false);
+  const [localeSaveFailed, setLocaleSaveFailed] = useState(false);
   const [islandShortcutStatus, setIslandShortcutStatus] = useState<AssistantShortcutStatus>({ accelerator: null, ok: true });
 
   const ui = useUiStore((state) => state.ui);
   const uiLoaded = useUiStore((state) => state.uiLoaded);
   const settingsSection = useUiStore((state) => state.settingsSection);
   const setAppearance = useUiStore((state) => state.setAppearance);
+  const setLocale = useUiStore((state) => state.setLocale);
   const patchUi = useUiStore((state) => state.patchUi);
   const hostStatus = useHostStore((state) => state.status);
   const refreshIslandShortcut = (): void => {
@@ -233,6 +238,18 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
     setAppearance(mode);
   };
 
+  const changeLocale = async (locale: LocalePreference): Promise<void> => {
+    setSavingLocale(true);
+    setLocaleSaveFailed(false);
+    try {
+      await setLocale(locale);
+    } catch {
+      setLocaleSaveFailed(true);
+    } finally {
+      setSavingLocale(false);
+    }
+  };
+
   const toggleNotification = (key: keyof UiFile['notifications'], value: boolean): void => {
     patchUi({ notifications: { ...ui.notifications, [key]: value } });
   };
@@ -289,17 +306,43 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
           <div data-testid="settings-pane" className="min-h-0 flex-1 overflow-y-auto pr-1">
           <TabsContent value="appearance" className="mt-0 flex flex-col gap-4">
             {uiLoaded ? (
-              <ToggleGroup
-                type="single"
-                value={ui.appearance}
-                onValueChange={(value) => {
-                  if (value !== '') changeAppearance(value as Appearance);
-                }}
-              >
-                <ToggleGroupItem value="system">{S.settings.appearanceSystem}</ToggleGroupItem>
-                <ToggleGroupItem value="dark">{S.settings.appearanceDark}</ToggleGroupItem>
-                <ToggleGroupItem value="light">{S.settings.appearanceLight}</ToggleGroupItem>
-              </ToggleGroup>
+              <>
+                <ToggleGroup
+                  type="single"
+                  value={ui.appearance}
+                  onValueChange={(value) => {
+                    if (value !== '') changeAppearance(value as Appearance);
+                  }}
+                >
+                  <ToggleGroupItem value="system">{S.settings.appearanceSystem}</ToggleGroupItem>
+                  <ToggleGroupItem value="dark">{S.settings.appearanceDark}</ToggleGroupItem>
+                  <ToggleGroupItem value="light">{S.settings.appearanceLight}</ToggleGroupItem>
+                </ToggleGroup>
+                <div className="flex flex-col items-start gap-1 text-sm">
+                  <label htmlFor="interface-language">{appI18n.t('settings.language')}</label>
+                  <select
+                    id="interface-language"
+                    aria-describedby="interface-language-restart"
+                    className="rounded-md border border-border bg-background px-2 py-1"
+                    value={ui.locale}
+                    disabled={savingLocale}
+                    onChange={(event) => {
+                      const value = event.currentTarget.value;
+                      if (isLocalePreference(value)) void changeLocale(value);
+                    }}
+                  >
+                    {LOCALE_PREFERENCES.map((locale) => (
+                      <option key={locale} value={locale} lang={locale === 'system' ? undefined : locale}>
+                        {appI18n.t(`settings.language.${locale}`)}
+                      </option>
+                    ))}
+                  </select>
+                  <span id="interface-language-restart" className="text-xs text-muted-foreground">
+                    {appI18n.t('settings.language.restart')}
+                  </span>
+                  {localeSaveFailed ? <span role="alert" className="text-xs text-destructive">{appI18n.t('settings.language.error')}</span> : null}
+                </div>
+              </>
             ) : null}
             {uiLoaded ? (
               <div className="flex flex-col gap-1 text-sm">

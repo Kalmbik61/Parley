@@ -4,8 +4,10 @@
  * 401 (токен отклонён) останавливают цикл: повторять их бессмысленно.
  */
 
+import type { AppLocale } from '@parley/core/i18n';
 import type { TelegramPolling } from '@parley/protocol';
 import { BotApiError, type BotApi } from './api.js';
+import { hostText } from '../host-text.js';
 import type { TgUpdate } from './types.js';
 
 export interface Poller {
@@ -21,6 +23,7 @@ const BACKOFF_MAX_MS = 30_000;
 
 export function createPoller(deps: {
   api: BotApi;
+  locale?(): AppLocale;
   offset(): number | null;
   setOffset(next: number): void;
   seen(updateId: number): boolean;
@@ -74,7 +77,7 @@ export function createPoller(deps: {
         const description = error instanceof BotApiError ? error.description : error instanceof Error ? error.message : String(error);
         if (status === 409 && /webhook/i.test(description)) {
           if (controller === mine) halt();
-          deps.onStatus('error', 'This bot has a webhook — remove it with @BotFather or deleteWebhook');
+          deps.onStatus('error', hostText('telegramWebhook').in(deps.locale?.()));
           return;
         }
         if (status === 409) {
@@ -84,7 +87,7 @@ export function createPoller(deps: {
         }
         if (status === 401) {
           if (controller === mine) halt();
-          deps.onStatus('error', 'Telegram rejected the token');
+          deps.onStatus('error', hostText('telegramTokenRejected').in(deps.locale?.()));
           return;
         }
         deps.onStatus('error', description);

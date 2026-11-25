@@ -1,3 +1,4 @@
+import { hostText } from '../host-text.js';
 import {
   PageError,
   WINDOW_TEXT_MAX,
@@ -22,7 +23,7 @@ import { HostError } from '../errors.js';
  * письма, поэтому расхождение снимка окна и диска ничего не пропускает и не повторяет. Карта целиком не читается
  * (спека хранилища 6.2): комнату проверяет `viewMap` без копии, страницу и текст письма отдают запросы.
  */
-const goneWork = (workId: string): HostError => new HostError('not_found', `workspace ${workId} does not exist`);
+const goneWork = (workId: string): HostError => new HostError('not_found', hostText('workspaceDoesNotExist', { workId }));
 
 async function mapOf(projectPath: string, workId: string): Promise<WorkMap> {
   const map = await readMap(projectPath, workId).catch(() => null);
@@ -43,7 +44,7 @@ export const contextMessages: Handler<'context.messages'> = async (params) => {
     return viewMap(projectPath, workId, (map) => {
       entered = true;
       if (roomId !== null && !map.rooms.some((room) => room.id === roomId)) {
-        throw new HostError('not_found', `room ${roomId} does not exist`);
+        throw new HostError('not_found', hostText('roomDoesNotExist', { roomId }));
       }
       return messagePage(
         map,
@@ -85,14 +86,14 @@ export const contextText: Handler<'context.text'> = async (params) => {
     } catch {
       throw goneWork(params.workId);
     }
-    if (message === undefined) throw new HostError('not_found', `message ${ref.id} does not exist`);
+    if (message === undefined) throw new HostError('not_found', hostText('messageDoesNotExist', { id: ref.id }));
     text = message.text;
   } else if (ref.kind === 'goal') {
     text = (await mapOf(params.projectPath, params.workId)).work.goal;
   } else {
     const map = await mapOf(params.projectPath, params.workId);
     const session = map.sessions.find((candidate) => candidate.id === ref.sessionId);
-    if (session === undefined) throw new HostError('not_found', `session ${ref.sessionId} does not exist`);
+    if (session === undefined) throw new HostError('not_found', hostText('sessionDoesNotExist', { sessionId: ref.sessionId }));
     text = ref.field === 'task' ? session.task : (session.summary ?? '');
   }
   try {

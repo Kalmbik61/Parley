@@ -236,6 +236,26 @@ describe('методы куска 1.3', () => {
   });
 });
 
+describe('локаль ошибок RPC', () => {
+  it('переводит текст ошибки Parley для окна и сохраняет код', async () => {
+    const { home, token } = await boot();
+    await mkdir(path.join(home, 'desktop'));
+    await writeFile(path.join(home, 'desktop', 'ui.json'), JSON.stringify({ locale: 'ru' }));
+    const client = connectRaw(hostPaths(home).socket);
+    try {
+      await waitConnected(client.socket);
+      await hello(client, token, { client: 'desktop' });
+      client.send({ id: 298, method: 'memory.get', params: { projectPath: 'relative/path' } });
+      expect((await client.next()).error).toMatchObject({
+        code: 'bad_request',
+        message: 'Укажите абсолютный путь к проекту.',
+      });
+    } finally {
+      client.close();
+    }
+  });
+});
+
 describe('уведомления', () => {
   // Окно восстанавливает раскладку и шлёт `pty.resize` терминалу сессии, чей
   // PTY остался у прежнего хоста. Бросок обработчика уведомления ронял хост,

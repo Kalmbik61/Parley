@@ -210,6 +210,8 @@ Custom runner templates deliver these rules through `{systemPrompt}` or
 
 ## Install and use
 
+[Installation guide in Russian](docs/install-ru.md)
+
 ### 1. Download
 
 Download the `.dmg` for your Mac from the

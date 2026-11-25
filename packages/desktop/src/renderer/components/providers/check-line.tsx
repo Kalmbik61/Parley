@@ -1,4 +1,5 @@
 /** Строка исхода проверки ключа и её помощники: общие для ProviderCard (GLM) и формы своего провайдера (спека своих провайдеров, 4.3). */
+import { displayLocale } from '../../../shared/app-locale.js';
 import { PROVIDER_CHECK_REASONS, type ProviderCheck, type ProviderCheckReason } from '@parley/protocol';
 import { S } from '../../../shared/strings.js';
 
@@ -14,8 +15,8 @@ export function maskedHint(hint: string): string {
 export function clock(iso: string, now = new Date()): string {
   const at = new Date(iso);
   return at.toDateString() === now.toDateString()
-    ? at.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
-    : at.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+    ? at.toLocaleTimeString(displayLocale(), { hour: 'numeric', minute: '2-digit' })
+    : at.toLocaleString(displayLocale(), { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 }
 
 /** Причина, которую знает это окно: незнакомая (хост новее окна) читается как «незнакомый ответ». */

@@ -43,9 +43,12 @@ import {
   type WorkMap,
   presentedActivity,
 } from '@parley/core';
+import type { AppLocale } from '@parley/core/i18n';
 import { createMoodStripper, matchConfirm, type AssistantGender, type AssistantMood, type MoodMark, type MoodStrip } from '@parley/core/assistant';
 import { feedDecision, type ActionsReport, type AssistantCardChanged, type AssistantDetail, type AssistantJournalItem, type AssistantProposal, type AssistantOrigin, type HumanOverviewV1, type AssistantSettings, type AssistantState, type EventData, type CardDecideResult, type EventName, type Params, type SendResult, type SessionRef } from '@parley/protocol';
 import { projectPhoneCard, type PhoneCard } from '@parley/protocol/remote';
+import { hostText } from '../host-text.js';
+import { hostLocaleReader } from '../locale.js';
 import { HostError } from '../errors.js';
 import { createCardStore, type CardRow, type CardStore, type CardVia } from './cards.js';
 import { createConversationStore, type ConversationStore } from './conversation-store.js';
@@ -458,8 +461,8 @@ const withMentions = (to: readonly string[], text: string): string => {
   const missing = to.filter((id) => !new RegExp(`(?<![\\p{L}\\p{N}_@])${pattern(id)}(?![\\p{L}\\p{N}_])`, 'iu').test(text));
   return missing.length === 0 ? text : `${missing.map(sessionMention).join(' ')} ${text}`;
 };
-/** Суть карточки по-английски для карточки помощника: что агент просит или спрашивает. */
-const hostSummary = (card: FeedCard, projectPath: string): string => {
+/** Суть карточки для карточки помощника: что агент просит или спрашивает. */
+const hostSummary = (card: FeedCard, projectPath: string, locale?: AppLocale): string => {
   const gist = cardGist(card, projectPath);
   switch (gist.kind) {
     case 'run':
@@ -467,11 +470,11 @@ const hostSummary = (card: FeedCard, projectPath: string): string => {
     case 'tool':
       return gist.path === null ? gist.tool : `${gist.tool} ${gist.path}`;
     case 'fetch':
-      return `Fetch ${gist.url}`;
+      return hostText('assistantFetch', { url: gist.url }).in(locale);
     case 'question':
-      return `Question: ${gist.text}`;
+      return hostText('assistantQuestion', { text: gist.text }).in(locale);
     case 'plan':
-      return 'Plan';
+      return hostText('assistantPlan').in(locale);
   }
 };
 const stringArg = (input: Record<string, unknown>, key: string): string => (typeof input[key] === 'string' ? (input[key] as string) : '');
@@ -487,6 +490,7 @@ function detailOf(name: string, input: Record<string, unknown>, targets: readonl
 }
 
 export function createAssistantService(deps: AssistantServiceDeps): AssistantService {
+  const locale = hostLocaleReader(deps.home);
   const run = deps.run ?? runTurn;
   const now = deps.now ?? Date.now;
   const idleMs = deps.idleMs ?? ASSISTANT_IDLE_MS;
@@ -1281,7 +1285,7 @@ export function createAssistantService(deps: AssistantServiceDeps): AssistantSer
         target: session.name,
         where: session.where,
         text: `${verb} ${session.name}: ${summary}${detail === null || detail === '' ? '' : `\n${detail}`}${answerLines}`,
-        card: { cardId: card.cardId, kind: card.kind, summary, detail },
+        card: { cardId: card.cardId, kind: card.kind, summary: hostSummary(card, projectPath, locale()), detail },
         decision,
       },
       ref: session.ref,

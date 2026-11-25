@@ -47,84 +47,84 @@ type Digit = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
 const DIGITS: readonly Digit[] = [1, 2, 3, 4, 5, 6, 7, 8, 9];
 
 /** Действие для палитры: без сочетания и меню, работает в любом контексте. */
-function paletteOnly(id: ActionId, title: string, keywords: string[]): ActionDef {
-  return { id, title, keywords, keys: null, menu: null, when: 'always', inPalette: true };
+function paletteOnly(id: ActionId, message: () => string, keywords: string[]): ActionDef {
+  return { id, get title() { return message(); }, keywords, keys: null, menu: null, when: 'always', inPalette: true };
 }
 
 /** Таблица спеки 9.6 целиком. Порядок — порядок пунктов в меню (6.1b). */
 export const ACTIONS: readonly ActionDef[] = [
-  paletteOnly('project.capabilities', S.actions.capabilities, ['project', 'skills', 'mcp', 'plugins']),
-  { id: 'settings.open', title: S.actions.settings, keywords: ['preferences', 'options'], keys: 'CmdOrCtrl+,', menu: 'app', when: 'always', inPalette: true },
+  paletteOnly('project.capabilities', () => S.actions.capabilities, ['project', 'skills', 'mcp', 'plugins']),
+  { id: 'settings.open', get title() { return S.actions.settings; }, keywords: ['preferences', 'options'], keys: 'CmdOrCtrl+,', menu: 'app', when: 'always', inPalette: true },
 
-  { id: 'find', title: S.actions.find, keywords: ['search', 'terminal'], keys: 'CmdOrCtrl+F', menu: 'edit', when: 'terminal', inPalette: true },
+  { id: 'find', get title() { return S.actions.find; }, keywords: ['search', 'terminal'], keys: 'CmdOrCtrl+F', menu: 'edit', when: 'terminal', inPalette: true },
   // Поиск по ленте Chat: тот же ⌘F, но фокус в виде Chat; пункт меню «Find» один и шлёт `find`, палитровая ветка выбирает вид.
-  { id: 'chat.find', title: S.actions.findInChat, keywords: ['chat', 'search', 'find'], keys: 'CmdOrCtrl+F', menu: null, when: 'chat', inPalette: true },
+  { id: 'chat.find', get title() { return S.actions.findInChat; }, keywords: ['chat', 'search', 'find'], keys: 'CmdOrCtrl+F', menu: null, when: 'chat', inPalette: true },
   // Диктовка (спека 2026-10-06-voice-input-design.md, 3.4): поле или терминал с фокусом; идёт запись — её стоп.
-  { id: 'voice.toggle', title: S.actions.toggleDictation, keywords: ['voice', 'dictation', 'microphone', 'speech'], keys: 'CmdOrCtrl+Shift+M', menu: 'edit', when: 'always', inPalette: true },
-  { id: 'assistant.open', title: S.actions.askAssistant, keywords: ['assistant', 'jarvis', 'ask', 'voice'], keys: null, menu: null, when: 'always', inPalette: true },
+  { id: 'voice.toggle', get title() { return S.actions.toggleDictation; }, keywords: ['voice', 'dictation', 'microphone', 'speech'], keys: 'CmdOrCtrl+Shift+M', menu: 'edit', when: 'always', inPalette: true },
+  { id: 'assistant.open', get title() { return S.actions.askAssistant; }, keywords: ['assistant', 'jarvis', 'ask', 'voice'], keys: null, menu: null, when: 'always', inPalette: true },
 
-  { id: 'palette.open', title: S.actions.commandPalette, keywords: ['command', 'palette'], keys: 'CmdOrCtrl+J', menu: 'view', when: 'always', inPalette: false },
-  { id: 'files.quickOpen', title: S.actions.goToFile, keywords: ['open', 'file', 'quick'], keys: 'CmdOrCtrl+P', menu: 'view', when: 'always', inPalette: true },
-  { id: 'files.search', title: S.actions.findInFiles, keywords: ['search', 'grep', 'files'], keys: 'CmdOrCtrl+Shift+F', menu: 'view', when: 'always', inPalette: true },
-  { id: 'history.back', title: S.actions.back, keywords: ['history', 'navigate'], keys: 'CmdOrCtrl+Alt+Left', menu: 'view', when: 'always', inPalette: true },
-  { id: 'history.forward', title: S.actions.forward, keywords: ['history', 'navigate'], keys: 'CmdOrCtrl+Alt+Right', menu: 'view', when: 'always', inPalette: true },
-  { id: 'sidebar.left.toggle', title: S.actions.toggleWorkspaceSidebar, keywords: ['sidebar', 'workspaces', 'hide', 'show'], keys: 'CmdOrCtrl+B', menu: 'view', when: 'always', inPalette: true },
-  { id: 'sidebar.right.toggle', title: S.actions.toggleRightSidebar, keywords: ['sidebar', 'right', 'hide', 'show'], keys: 'CmdOrCtrl+L', menu: 'view', when: 'always', inPalette: true },
-  { id: 'sidebar.files', title: S.actions.showFiles, keywords: ['explorer', 'tree', 'files'], keys: 'CmdOrCtrl+Shift+E', menu: 'view', when: 'always', inPalette: true },
-  { id: 'sidebar.changes', title: S.actions.showChanges, keywords: ['git', 'diff', 'changes'], keys: 'CmdOrCtrl+Shift+G', menu: 'view', when: 'always', inPalette: true },
-  { id: 'sidebar.agents', title: S.actions.showAgents, keywords: ['agents', 'subagents', 'tasks'], keys: 'CmdOrCtrl+Shift+A', menu: 'view', when: 'always', inPalette: true },
+  { id: 'palette.open', get title() { return S.actions.commandPalette; }, keywords: ['command', 'palette'], keys: 'CmdOrCtrl+J', menu: 'view', when: 'always', inPalette: false },
+  { id: 'files.quickOpen', get title() { return S.actions.goToFile; }, keywords: ['open', 'file', 'quick'], keys: 'CmdOrCtrl+P', menu: 'view', when: 'always', inPalette: true },
+  { id: 'files.search', get title() { return S.actions.findInFiles; }, keywords: ['search', 'grep', 'files'], keys: 'CmdOrCtrl+Shift+F', menu: 'view', when: 'always', inPalette: true },
+  { id: 'history.back', get title() { return S.actions.back; }, keywords: ['history', 'navigate'], keys: 'CmdOrCtrl+Alt+Left', menu: 'view', when: 'always', inPalette: true },
+  { id: 'history.forward', get title() { return S.actions.forward; }, keywords: ['history', 'navigate'], keys: 'CmdOrCtrl+Alt+Right', menu: 'view', when: 'always', inPalette: true },
+  { id: 'sidebar.left.toggle', get title() { return S.actions.toggleWorkspaceSidebar; }, keywords: ['sidebar', 'workspaces', 'hide', 'show'], keys: 'CmdOrCtrl+B', menu: 'view', when: 'always', inPalette: true },
+  { id: 'sidebar.right.toggle', get title() { return S.actions.toggleRightSidebar; }, keywords: ['sidebar', 'right', 'hide', 'show'], keys: 'CmdOrCtrl+L', menu: 'view', when: 'always', inPalette: true },
+  { id: 'sidebar.files', get title() { return S.actions.showFiles; }, keywords: ['explorer', 'tree', 'files'], keys: 'CmdOrCtrl+Shift+E', menu: 'view', when: 'always', inPalette: true },
+  { id: 'sidebar.changes', get title() { return S.actions.showChanges; }, keywords: ['git', 'diff', 'changes'], keys: 'CmdOrCtrl+Shift+G', menu: 'view', when: 'always', inPalette: true },
+  { id: 'sidebar.agents', get title() { return S.actions.showAgents; }, keywords: ['agents', 'subagents', 'tasks'], keys: 'CmdOrCtrl+Shift+A', menu: 'view', when: 'always', inPalette: true },
 
-  { id: 'work.new', title: S.actions.newWorkspace, keywords: ['create', 'workspace'], keys: 'CmdOrCtrl+N', menu: 'workspace', when: 'always', inPalette: true },
-  { id: 'session.new', title: S.actions.newSession, keywords: ['create', 'agent', 'session', 'room'], keys: 'CmdOrCtrl+T', menu: 'workspace', when: 'always', inPalette: true },
+  { id: 'work.new', get title() { return S.actions.newWorkspace; }, keywords: ['create', 'workspace'], keys: 'CmdOrCtrl+N', menu: 'workspace', when: 'always', inPalette: true },
+  { id: 'session.new', get title() { return S.actions.newSession; }, keywords: ['create', 'agent', 'session', 'room'], keys: 'CmdOrCtrl+T', menu: 'workspace', when: 'always', inPalette: true },
   ...DIGITS.map(
-    (n): ActionDef => ({ id: `work.goto.${n}`, title: S.actions.workspaceNumber(n), keywords: ['workspace'], keys: `CmdOrCtrl+${n}`, menu: 'workspace', when: 'always', inPalette: false }),
+    (n): ActionDef => ({ id: `work.goto.${n}`, get title() { return S.actions.workspaceNumber(n); }, keywords: ['workspace'], keys: `CmdOrCtrl+${n}`, menu: 'workspace', when: 'always', inPalette: false }),
   ),
-  { id: 'work.prev', title: S.actions.previousWorkspace, keywords: ['workspace', 'up'], keys: 'CmdOrCtrl+Shift+Up', menu: 'workspace', when: 'always', inPalette: true, repeatable: true },
-  { id: 'work.next', title: S.actions.nextWorkspace, keywords: ['workspace', 'down'], keys: 'CmdOrCtrl+Shift+Down', menu: 'workspace', when: 'always', inPalette: true, repeatable: true },
+  { id: 'work.prev', get title() { return S.actions.previousWorkspace; }, keywords: ['workspace', 'up'], keys: 'CmdOrCtrl+Shift+Up', menu: 'workspace', when: 'always', inPalette: true, repeatable: true },
+  { id: 'work.next', get title() { return S.actions.nextWorkspace; }, keywords: ['workspace', 'down'], keys: 'CmdOrCtrl+Shift+Down', menu: 'workspace', when: 'always', inPalette: true, repeatable: true },
 
-  { id: 'group.splitRight', title: S.actions.splitRight, keywords: ['split', 'group', 'pane'], keys: 'CmdOrCtrl+D', menu: 'tab', when: 'always', inPalette: true },
-  { id: 'group.splitDown', title: S.actions.splitDown, keywords: ['split', 'group', 'pane'], keys: 'CmdOrCtrl+Shift+D', menu: 'tab', when: 'always', inPalette: true },
-  { id: 'tab.close', title: S.actions.closeTab, keywords: ['close', 'tab'], keys: 'CmdOrCtrl+W', menu: 'tab', when: 'always', inPalette: true },
-  { id: 'tab.reopen', title: S.actions.reopenClosedTab, keywords: ['reopen', 'restore', 'tab'], keys: 'CmdOrCtrl+Shift+T', menu: 'tab', when: 'always', inPalette: true },
-  { id: 'tab.prev', title: S.actions.previousTab, keywords: ['tab', 'left'], keys: 'CmdOrCtrl+Shift+[', menu: 'tab', when: 'always', inPalette: true, repeatable: true },
-  { id: 'tab.next', title: S.actions.nextTab, keywords: ['tab', 'right'], keys: 'CmdOrCtrl+Shift+]', menu: 'tab', when: 'always', inPalette: true, repeatable: true },
-  { id: 'group.prev', title: S.actions.previousGroup, keywords: ['group', 'pane'], keys: 'CmdOrCtrl+[', menu: 'tab', when: 'always', inPalette: true, repeatable: true },
-  { id: 'group.next', title: S.actions.nextGroup, keywords: ['group', 'pane'], keys: 'CmdOrCtrl+]', menu: 'tab', when: 'always', inPalette: true, repeatable: true },
-  { id: 'tab.mruNext', title: S.actions.nextRecentTab, keywords: ['recent', 'tab'], keys: 'Control+Tab', menu: null, when: 'always', inPalette: false },
-  { id: 'tab.mruPrev', title: S.actions.previousRecentTab, keywords: ['recent', 'tab'], keys: 'Control+Shift+Tab', menu: null, when: 'always', inPalette: false },
+  { id: 'group.splitRight', get title() { return S.actions.splitRight; }, keywords: ['split', 'group', 'pane'], keys: 'CmdOrCtrl+D', menu: 'tab', when: 'always', inPalette: true },
+  { id: 'group.splitDown', get title() { return S.actions.splitDown; }, keywords: ['split', 'group', 'pane'], keys: 'CmdOrCtrl+Shift+D', menu: 'tab', when: 'always', inPalette: true },
+  { id: 'tab.close', get title() { return S.actions.closeTab; }, keywords: ['close', 'tab'], keys: 'CmdOrCtrl+W', menu: 'tab', when: 'always', inPalette: true },
+  { id: 'tab.reopen', get title() { return S.actions.reopenClosedTab; }, keywords: ['reopen', 'restore', 'tab'], keys: 'CmdOrCtrl+Shift+T', menu: 'tab', when: 'always', inPalette: true },
+  { id: 'tab.prev', get title() { return S.actions.previousTab; }, keywords: ['tab', 'left'], keys: 'CmdOrCtrl+Shift+[', menu: 'tab', when: 'always', inPalette: true, repeatable: true },
+  { id: 'tab.next', get title() { return S.actions.nextTab; }, keywords: ['tab', 'right'], keys: 'CmdOrCtrl+Shift+]', menu: 'tab', when: 'always', inPalette: true, repeatable: true },
+  { id: 'group.prev', get title() { return S.actions.previousGroup; }, keywords: ['group', 'pane'], keys: 'CmdOrCtrl+[', menu: 'tab', when: 'always', inPalette: true, repeatable: true },
+  { id: 'group.next', get title() { return S.actions.nextGroup; }, keywords: ['group', 'pane'], keys: 'CmdOrCtrl+]', menu: 'tab', when: 'always', inPalette: true, repeatable: true },
+  { id: 'tab.mruNext', get title() { return S.actions.nextRecentTab; }, keywords: ['recent', 'tab'], keys: 'Control+Tab', menu: null, when: 'always', inPalette: false },
+  { id: 'tab.mruPrev', get title() { return S.actions.previousRecentTab; }, keywords: ['recent', 'tab'], keys: 'Control+Shift+Tab', menu: null, when: 'always', inPalette: false },
   ...DIGITS.map(
-    (n): ActionDef => ({ id: `tab.goto.${n}`, title: S.actions.tabNumber(n), keywords: ['tab'], keys: `Control+${n}`, menu: null, when: 'always', inPalette: false }),
+    (n): ActionDef => ({ id: `tab.goto.${n}`, get title() { return S.actions.tabNumber(n); }, keywords: ['tab'], keys: `Control+${n}`, menu: null, when: 'always', inPalette: false }),
   ),
 
-  { id: 'terminal.clear', title: S.actions.clearTerminal, keywords: ['clear', 'reset', 'terminal'], keys: 'CmdOrCtrl+K', menu: 'terminal', when: 'terminal', inPalette: true },
+  { id: 'terminal.clear', get title() { return S.actions.clearTerminal; }, keywords: ['clear', 'reset', 'terminal'], keys: 'CmdOrCtrl+K', menu: 'terminal', when: 'terminal', inPalette: true },
   // Вид вкладки сессии (план 2026-10-01, решение 6): та же команда, что сегмент тулбара; без клавиши и меню.
-  { id: 'chat.toggleView', title: S.actions.toggleChatTerminal, keywords: ['chat', 'terminal', 'view', 'switch'], keys: null, menu: null, when: 'terminal', inPalette: true },
+  { id: 'chat.toggleView', get title() { return S.actions.toggleChatTerminal; }, keywords: ['chat', 'terminal', 'view', 'switch'], keys: null, menu: null, when: 'terminal', inPalette: true },
 
-  paletteOnly('room.new', S.actions.newRoom, ['create', 'room']),
-  paletteOnly('works.showArchived', S.actions.showArchivedWorkspaces, ['archive', 'archived', 'workspaces']),
-  paletteOnly('attention.next', S.actions.nextNeedsYou, ['attention', 'blocked', 'needs you']),
-  paletteOnly('wake.toggle', S.actions.pauseAutoWake, ['auto-wake', 'pause', 'resume', 'wake']),
-  paletteOnly('host.restart', S.actions.restartHost, ['host', 'restart', 'reload']),
-  paletteOnly('host.diagnostics', S.actions.diagnostics, ['diagnostics', 'logs', 'report', 'profile']),
-  paletteOnly('appearance.system', S.actions.themeSystem, ['theme', 'appearance', 'system']),
-  paletteOnly('appearance.dark', S.actions.themeDark, ['theme', 'appearance', 'dark']),
-  paletteOnly('appearance.light', S.actions.themeLight, ['theme', 'appearance', 'light']),
-  paletteOnly('browser.newTab', S.actions.newBrowserTab, ['browser', 'web', 'url']),
+  paletteOnly('room.new', () => S.actions.newRoom, ['create', 'room']),
+  paletteOnly('works.showArchived', () => S.actions.showArchivedWorkspaces, ['archive', 'archived', 'workspaces']),
+  paletteOnly('attention.next', () => S.actions.nextNeedsYou, ['attention', 'blocked', 'needs you']),
+  paletteOnly('wake.toggle', () => S.actions.pauseAutoWake, ['auto-wake', 'pause', 'resume', 'wake']),
+  paletteOnly('host.restart', () => S.actions.restartHost, ['host', 'restart', 'reload']),
+  paletteOnly('host.diagnostics', () => S.actions.diagnostics, ['diagnostics', 'logs', 'report', 'profile']),
+  paletteOnly('appearance.system', () => S.actions.themeSystem, ['theme', 'appearance', 'system']),
+  paletteOnly('appearance.dark', () => S.actions.themeDark, ['theme', 'appearance', 'dark']),
+  paletteOnly('appearance.light', () => S.actions.themeLight, ['theme', 'appearance', 'light']),
+  paletteOnly('browser.newTab', () => S.actions.newBrowserTab, ['browser', 'web', 'url']),
 
   // Фокус в странице — клавиши у гостя: их пересылает main (`main/guest-shortcuts.ts`), рендерер не ловит.
-  { id: 'browser.find', title: S.actions.findInPage, keywords: ['browser', 'search', 'page'], keys: 'CmdOrCtrl+F', menu: null, when: 'browser', inPalette: true },
-  { id: 'browser.zoomIn', title: S.actions.zoomIn, keywords: ['browser', 'zoom', 'bigger'], keys: 'CmdOrCtrl+Plus', menu: null, when: 'browser', inPalette: true, repeatable: true },
-  { id: 'browser.zoomOut', title: S.actions.zoomOut, keywords: ['browser', 'zoom', 'smaller'], keys: 'CmdOrCtrl+-', menu: null, when: 'browser', inPalette: true, repeatable: true },
-  { id: 'browser.zoomReset', title: S.actions.actualSize, keywords: ['browser', 'zoom', 'reset'], keys: 'CmdOrCtrl+0', menu: null, when: 'browser', inPalette: true },
+  { id: 'browser.find', get title() { return S.actions.findInPage; }, keywords: ['browser', 'search', 'page'], keys: 'CmdOrCtrl+F', menu: null, when: 'browser', inPalette: true },
+  { id: 'browser.zoomIn', get title() { return S.actions.zoomIn; }, keywords: ['browser', 'zoom', 'bigger'], keys: 'CmdOrCtrl+Plus', menu: null, when: 'browser', inPalette: true, repeatable: true },
+  { id: 'browser.zoomOut', get title() { return S.actions.zoomOut; }, keywords: ['browser', 'zoom', 'smaller'], keys: 'CmdOrCtrl+-', menu: null, when: 'browser', inPalette: true, repeatable: true },
+  { id: 'browser.zoomReset', get title() { return S.actions.actualSize; }, keywords: ['browser', 'zoom', 'reset'], keys: 'CmdOrCtrl+0', menu: null, when: 'browser', inPalette: true },
   // Этап B браузера (спека 4.9): ⌖ Select; из страницы клавишу пересылает main, в окне — кнопка и палитра.
-  { id: 'browser.select', title: S.actions.selectElement, keywords: ['browser', 'element', 'pick', 'inspect'], keys: 'CmdOrCtrl+Shift+C', menu: null, when: 'browser', inPalette: true },
+  { id: 'browser.select', get title() { return S.actions.selectElement; }, keywords: ['browser', 'element', 'pick', 'inspect'], keys: 'CmdOrCtrl+Shift+C', menu: null, when: 'browser', inPalette: true },
   // ✎ Annotate (спека браузера 4.9): ⌘⌥A рядом с ⌘⌥I и ⌘⌥J панели; ⌘⇧A занят действием sidebar.agents.
-  { id: 'browser.annotate', title: S.actions.annotatePage, keywords: ['browser', 'annotate', 'comment', 'pin'], keys: 'CmdOrCtrl+Alt+A', menu: null, when: 'browser', inPalette: true },
+  { id: 'browser.annotate', get title() { return S.actions.annotatePage; }, keywords: ['browser', 'annotate', 'comment', 'pin'], keys: 'CmdOrCtrl+Alt+A', menu: null, when: 'browser', inPalette: true },
   // Панель Console | Network вкладки браузера (спека 2026-10-07-browser-devtools-agent-design.md, 4.3, 4.9). Из
   // страницы их пересылает main; с фокусом в строке и панели вкладки — её обработчик (`BrowserSurface`): рендерер окна
   // действия `browser` не ловит.
-  { id: 'browser.devtools', title: S.actions.toggleDevtools, keywords: ['browser', 'devtools', 'console', 'network', 'inspect'], keys: 'CmdOrCtrl+Alt+I', menu: null, when: 'browser', inPalette: true },
-  { id: 'browser.console', title: S.actions.showConsole, keywords: ['browser', 'devtools', 'console', 'logs'], keys: 'CmdOrCtrl+Alt+J', menu: null, when: 'browser', inPalette: true },
+  { id: 'browser.devtools', get title() { return S.actions.toggleDevtools; }, keywords: ['browser', 'devtools', 'console', 'network', 'inspect'], keys: 'CmdOrCtrl+Alt+I', menu: null, when: 'browser', inPalette: true },
+  { id: 'browser.console', get title() { return S.actions.showConsole; }, keywords: ['browser', 'devtools', 'console', 'logs'], keys: 'CmdOrCtrl+Alt+J', menu: null, when: 'browser', inPalette: true },
 ];
 
 export interface KeyLike {

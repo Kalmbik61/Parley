@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { stopHost } from './stop-host.js';
-import { assertUnderTmpdir, RUN_HOMES_ENV } from './tmp.js';
+import { assertUnderTmpdir, RUN_HOMES_ENV, seedTestLocale } from './tmp.js';
 
 /**
  * Список домов этого прогона (`makeTempHome`) и уборка по нему в конце: воркер, снятый по
@@ -27,6 +27,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   const defaultHome = path.join(dir, 'home');
   await mkdir(defaultHome);
   assertUnderTmpdir(defaultHome);
+  await seedTestLocale(defaultHome);
   for (const name of ['PARLEY_HOME', 'HARNAS_HOME']) {
     const outside = process.env[name];
     if (outside !== undefined && outside !== '') {

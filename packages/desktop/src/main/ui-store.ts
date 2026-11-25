@@ -7,14 +7,14 @@
  */
 
 import { readFile, rename } from 'node:fs/promises';
-import path from 'node:path';
 import { parleyHome } from '@parley/core';
+import { desktopUiPath as uiPathInHome } from '@parley/core/desktop-locale';
 import { DEFAULT_UI, mergeUiPatch, normalizeUi, type UiFile } from '../shared/ui-types.js';
 import { createFileQueue, writeAtomic } from './atomic-file.js';
 
 /** `~/.parley/desktop/ui.json` — рядом с `layouts.json` (`layout-store.ts`). */
 export function desktopUiPath(home: string = parleyHome()): string {
-  return path.join(home, 'desktop', 'ui.json');
+  return uiPathInHome(home);
 }
 
 /**

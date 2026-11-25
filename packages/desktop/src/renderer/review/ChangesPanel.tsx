@@ -13,6 +13,7 @@
  * помнит его в сторе ревью и показывает своё состояние, а не ошибку git (перенос 8.2b).
  */
 
+import { displayLocale } from '../../shared/app-locale.js';
 import { useRef, useState, type CSSProperties } from 'react';
 import { MoreHorizontal } from 'lucide-react';
 import { toast } from 'sonner';
@@ -99,7 +100,7 @@ function FileRow({ file, onOpen, style }: { file: DiffFile; onOpen(): void; styl
 }
 
 function CommitRow({ commit, onOpen }: { commit: BranchCommit; onOpen(): void }): JSX.Element {
-  const when = new Date(commit.at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  const when = new Date(commit.at).toLocaleString(displayLocale(), { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
   return (
     <li className="min-w-0">
       <button

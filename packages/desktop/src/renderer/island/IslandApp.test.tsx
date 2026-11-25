@@ -193,7 +193,7 @@ function setup(config: Partial<IslandConfig> = {}, entries = ENTRIES, consents: 
   fake.setHandler('consents.list', () => ({ items: consents }));
   fake.setHandler('feed.snapshot', ({ ref: target }) => ({ items: CARDS[target.sessionId] ?? [], revision: 1, mode: null, decisions: 'window' }) as never);
   const island = islandApi(config);
-  const bridge: IslandBridge = { call: fake.call, on: fake.on, onStatus: fake.onStatus, activitySnapshot: fake.activitySnapshot, island };
+  const bridge: IslandBridge = { locale: fake.locale, call: fake.call, on: fake.on, onStatus: fake.onStatus, activitySnapshot: fake.activitySnapshot, island };
   const blocked = (sessionId: string): void => {
     act(() => {
       fake.emit('activity.changed', makeActivity(ref(sessionId), 'blocked'));

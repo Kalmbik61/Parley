@@ -10,6 +10,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { KIMI_LAUNCH_MODES_FEATURE, type Result } from '@parley/protocol';
 import { toast } from 'sonner';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { setAppLocale } from '../../../shared/app-locale.js';
 import { DEFAULT_RESOURCE_LIMITS } from '@parley/core/resource-policy';
 import { S } from '../../../shared/strings.js';
 import { DEFAULT_UI } from '../../../shared/ui-types.js';
@@ -96,6 +97,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  setAppLocale('en');
   vi.mocked(toast).mockClear();
 });
 
@@ -136,6 +138,49 @@ async function addAgent(times = 1): Promise<void> {
   for (let i = 0; i < times; i += 1) fireEvent.click(button(S.dialogs.newSession.addAgent));
   await act(async () => {});
 }
+
+describe('localized builtin options', () => {
+  const roleIds = ['feature-lead', 'planner', 'architect', 'critic', 'executor', 'reviewer', 'verifier', 'debugger', 'researcher'];
+  const englishRoles = ['Feature Lead', 'Planner', 'Architect', 'Critic', 'Executor', 'Reviewer', 'Verifier', 'Debugger', 'Researcher'];
+  const recipeIds = ['plan-build', 'review', 'debug'];
+  const englishRecipes = ['Plan & build', 'Review', 'Debug'];
+  const debugDescription = 'Reproduce a failure, isolate its cause and prove a minimal repair.';
+  it.each([
+    ['en', englishRoles, englishRecipes, debugDescription],
+    ['ru', ['Руководитель разработки', 'Планировщик', 'Архитектор', 'Критик', 'Исполнитель', 'Рецензент', 'Проверяющий', 'Специалист по отладке', 'Исследователь'],
+      ['Планирование и реализация', 'Рецензирование', 'Отладка'], 'Воспроизведите сбой, изолируйте его причину и проверьте минимальное исправление.'],
+  ] as const)('renders all nine roles and three recipes in %s', async (locale, roles, recipes, description) => {
+    setAppLocale(locale);
+    bridge.setHandler('roles.list', async () => ({
+      roles: roleIds.map((id, i) => ({ id: `builtin:${id}`, source: 'builtin', name: englishRoles[i]!, description: '', provider: 'codex', model: null, effort: null, readOnly: false })),
+      partial: false,
+      diagnostics: [],
+    }));
+    bridge.setHandler('recipes.list', async () => ({
+      entries: recipeIds.map((id, i) => ({
+        status: 'valid',
+        recipe: { id: `builtin:${id}`, source: 'builtin', name: englishRecipes[i]!, description: i === 2 ? debugDescription : '', mode: 'free', agents: [], playbook: 'Original playbook' },
+        agents: [],
+      })),
+      partial: false,
+      diagnostics: [],
+    }));
+    await renderDialog({ work: { projectPath: PROJECT, workId: 'w-01' }, room: true });
+    const rolePicker = screen.getAllByRole('combobox', { name: S.dialogs.newSession.roleField })[0]!;
+    await waitFor(() => expect(rolePicker.hasAttribute('data-disabled')).toBe(false));
+    fireEvent.keyDown(rolePicker, { key: 'ArrowDown' });
+    for (const name of roles) {
+      expect(await screen.findByRole('option', { name: (option) => option.includes(name) })).toBeTruthy();
+    }
+    fireEvent.click(screen.getByRole('option', { name: (option) => option.includes(roles[4]) }));
+
+    const recipePicker = screen.getByRole('combobox', { name: S.recipes.field });
+    fireEvent.keyDown(recipePicker, { key: 'ArrowDown' });
+    for (const name of recipes) expect(await screen.findByRole('option', { name })).toBeTruthy();
+    fireEvent.click(screen.getByRole('option', { name: recipes[2] }));
+    expect(await screen.findByText(description)).toBeTruthy();
+  });
+});
 
 describe('NewSessionOrRoomDialog — вид и состав (1.5)', () => {
   it('один агент: заголовок New session, подсказка, сводка, Start session; звезды ведущего нет', async () => {

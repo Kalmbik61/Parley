@@ -188,6 +188,7 @@ describe('assistantCardMessage', () => {
       expect(text).toContain('<b>2.</b> Close S05 Vera for good — closes for good');
       expect(keyboard[0]?.[0]).toEqual({ text: 'Do all (2)', callback_data: 'pa1:p7:send' });
       expect(keyboard[0]?.[1]).toEqual({ text: 'Cancel', callback_data: 'pa1:p7:cancel' });
+      expect(assistantCardMessage(ACTIONS, 'ru').keyboard[0]?.[0]).toEqual({ text: 'Выполнить всё (2)', callback_data: 'pa1:p7:send' });
     });
     it('один шаг — глагол шага на кнопке', () => {
       expect(labelOf(oneStep('create_work'))).toBe('Create');

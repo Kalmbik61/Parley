@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { useState } from 'react';
 import type { Room, WindowWorkEntry } from '@parley/core';
+import { setAppLocale } from '../../shared/app-locale.js';
 import { S } from '../../shared/strings.js';
 import { DEFAULT_UI } from '../../shared/ui-types.js';
 import { EMPTY_HISTORY } from '../layout/history.js';
@@ -106,12 +107,31 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  setAppLocale('en');
   disposeHost();
   vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
 describe('WorkSidebar — состав (тест 5)', () => {
+  it.each([
+    ['en', ['1 session', '2 sessions', '5 sessions', '11 sessions', '21 sessions', '22 sessions']],
+    ['ru', ['1 сессия', '2 сессии', '5 сессий', '11 сессий', '21 сессия', '22 сессии']],
+  ] as const)('показывает формы счётчика для %s', (locale, expected) => {
+    setAppLocale(locale);
+    const entries = [1, 2, 5, 11, 21, 22].map((count) => makeWork(`w-${count}`, {
+      title: `Work ${count}`,
+      sessions: Array.from({ length: count }, (_, index) => makeSession(`s-${index + 1}`, `Worker ${index + 1}`)),
+    }));
+    setWorks(entries);
+    render(<Harness />);
+
+    entries.forEach((entry, index) => {
+      const card = screen.getByText(entry.map.work.title).closest('[role="treeitem"]');
+      expect(card?.textContent).toContain(expected[index]);
+    });
+  });
+
   it('Pinned наверху, свёрнутый проект без карточек, архивных нет', () => {
     const pinned = makeWork('w-pin', { projectPath: '/p/zeta', title: 'Закреплённая' });
     const open = makeWork('w-open', { projectPath: '/p/alpha', title: 'Открытая' });

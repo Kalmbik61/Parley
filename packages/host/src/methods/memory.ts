@@ -1,3 +1,4 @@
+import { hostText } from '../host-text.js';
 import { realpath } from 'node:fs/promises';
 import path from 'node:path';
 import {
@@ -19,7 +20,7 @@ function safeError(error: unknown): HostError {
   const category = ['memory-conflict', 'memory-merge-conflict', 'backlog-conflict', 'backlog-lock-timeout'].includes(code) ? 'conflict'
     : ['memory-invalid', 'memory-suggestions-invalid'].includes(code) ? 'bad_request'
       : ['project-unavailable', 'git-context-unverified', 'main-project-unavailable'].includes(code) ? 'not_found' : 'internal';
-  return new HostError(category, 'The memory operation could not be completed.', { code });
+  return new HostError(category, hostText('memoryFailed'), { code });
 }
 
 function view(item: MemoryItem): MemoryItemView {
@@ -58,7 +59,7 @@ export async function readMemorySnapshot(projectPath: string, diagnostics: Share
       undoable,
       diagnostics: [...new Map([...diagnostics, ...await inspectSharedIgnore(paths)].map(row => [row.code, { code: row.code }])).values()] };
     if (Buffer.byteLength(JSON.stringify(assembled), 'utf8') > MEMORY_SNAPSHOT_MAX_BYTES)
-      throw new HostError('internal', 'The memory snapshot is too large.', { code: 'memory-snapshot-too-large' });
+      throw new HostError('internal', hostText('memorySnapshotTooLarge'), { code: 'memory-snapshot-too-large' });
     const projected = memorySnapshot.safeParse(assembled);
     if (!projected.success) throw new SharedStateError('memory-invalid');
     return projected.data;
@@ -69,9 +70,9 @@ export async function readMemorySnapshot(projectPath: string, diagnostics: Share
 export function createMemoryHandlers(): MemoryHandlers {
   const validate = <M extends MemoryMethodName>(method: M, params: MemoryMethodParams<M>): MemoryMethodParams<M> => {
     const parsed = memoryMethodSchemas[method].safeParse(params);
-    if (!parsed.success) throw new HostError('bad_request', 'Invalid memory request.');
+    if (!parsed.success) throw new HostError('bad_request', hostText('invalidMemory'));
     const data = parsed.data as MemoryMethodParams<M>;
-    if (!path.isAbsolute(data.projectPath)) throw new HostError('bad_request', 'An absolute project path is required.');
+    if (!path.isAbsolute(data.projectPath)) throw new HostError('bad_request', hostText('absoluteProjectPath'));
     return data;
   };
   const run = async <M extends MemoryMethodName>(method: M, params: MemoryMethodParams<M>,

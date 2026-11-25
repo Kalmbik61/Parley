@@ -877,8 +877,9 @@ describe('createTelegramService: перехват, отвязка, переза�
     service = make();
     await service.start();
     await settle();
-    expect(edits()[0]?.params).toMatchObject({ chat_id: CHAT, message_id: 77, reply_markup: { inline_keyboard: [] } });
-    expect(edits()[0]?.params.text).toContain(T.restarted);
+    expect(edits()).toEqual([]);
+    expect(calls('editMessageReplyMarkup')[0]?.params).toMatchObject({ chat_id: CHAT, message_id: 77, reply_markup: { inline_keyboard: [] } });
+    expect(sent()[0]?.params).toMatchObject({ text: T.restarted, reply_parameters: { message_id: 77 } });
     expect(host.hold).toHaveBeenCalledWith('telegram', true);
   });
 
@@ -1052,6 +1053,86 @@ describe('createTelegramService: очередь, гонки, отвязка', ()
     await settle();
     expect(edits()[0]?.params.text).toContain(T.noLongerCurrent);
     expect(edits()[0]?.params.text).not.toContain(T.restarted);
+  });
+});
+
+describe('createTelegramService: локаль без открытого окна', () => {
+  function selectLocale(locale: 'en' | 'ru'): void {
+    mkdirSync(path.join(home, 'desktop'), { recursive: true });
+    writeFileSync(path.join(home, 'desktop', 'ui.json'), JSON.stringify({ locale }));
+  }
+
+  it.each([
+    ['en', 'Allow', 'Deny', 'Allowed', 'Denied', 'This request is no longer current', 'Could not do that'],
+    ['ru', 'Разрешить', 'Отказать', 'Разрешено', 'Отказано', 'Этот запрос больше не актуален', 'Не удалось выполнить действие'],
+  ] as const)('доводит разрешение, отказ, устаревшую кнопку и ошибку на %s', async (locale, allow, deny, allowed, denied, stale, failed) => {
+    selectLocale(locale);
+    await bootLinked();
+    const command = 'printf "<данные & data>"';
+    const first = { ...PERMISSION, toolInput: { command } } as FeedCard;
+    const message = await blockWith(first);
+    const firstId = lastOutId;
+    const [allowButton, denyButton] = buttons(message);
+    expect(allowButton).toEqual({ text: allow, callback_data: expect.stringMatching(/^pc1:[^:]+:a$/) });
+    expect(denyButton).toEqual({ text: deny, callback_data: expect.stringMatching(/^pc1:[^:]+:d$/) });
+    expect(message.params.text).toContain('printf &quot;&lt;данные &amp; data&gt;&quot;');
+
+    push([tap(firstId, allowButton!.callback_data)]);
+    await settle();
+    expect(feed.decide).toHaveBeenCalledWith(REF, 'c1', { kind: 'permission', behavior: 'allow' });
+    expect(edits().at(-1)?.params.text).toContain(message.params.text);
+    expect(edits().at(-1)?.params.text).toContain(allowed);
+
+    push([tap(firstId, allowButton!.callback_data)]);
+    await settle();
+    expect(calls('answerCallbackQuery').at(-1)?.params.text).toContain(stale);
+    expect(feed.decide).toHaveBeenCalledTimes(1);
+
+    setActivity('working');
+    const second = { ...first, id: 'c2', cardId: 'c2' };
+    const next = await blockWith(second);
+    feed.decide.mockReturnValueOnce({ applied: true, state: 'denied' });
+    push([tap(lastOutId, buttons(next)[1]!.callback_data)]);
+    await settle();
+    expect(feed.decide).toHaveBeenCalledWith(REF, 'c2', { kind: 'permission', behavior: 'deny' });
+    expect(edits().at(-1)?.params.text).toContain(denied);
+
+    const raw = 'external: /project/payload <данные>';
+    sendMail([letter()]);
+    await settle();
+    const noticeId = lastOutId;
+    sendLetter.mockRejectedValueOnce(new HostError('bad_request', raw));
+    push([textUpdate('my reply', { reply_to_message: { message_id: noticeId } })]);
+    await settle();
+    expect(sent().at(-1)?.params.text).toBe(`${failed}: ${raw}`);
+  });
+
+  it('сохраняет сообщение и обновляет меню на русском после отдельного перезапуска хоста', async () => {
+    selectLocale('en');
+    await bootLinked();
+    await blockWith(PERMISSION);
+    const cardMessageId = lastOutId;
+    await service.stop();
+    selectLocale('ru');
+    journal.length = 0;
+
+    service = make();
+    await service.start();
+    await settle();
+
+    expect(edits()).toEqual([]);
+    expect(calls('editMessageReplyMarkup')[0]?.params).toMatchObject({ message_id: cardMessageId, reply_markup: { inline_keyboard: [] } });
+    expect(sent()[0]?.params).toMatchObject({
+      text: 'Parley перезапустился. Открытые карточки закрыты.',
+      reply_parameters: { message_id: cardMessageId },
+    });
+    expect(calls('setMyCommands').at(-1)?.params.commands[0]).toEqual({ command: 'status', description: 'Чем заняты агенты' });
+
+    selectLocale('en');
+    push([textUpdate('/help')]);
+    await settle();
+    expect(sent().at(-1)?.params.text).toBe(T.help);
+    expect(calls('setMyCommands').at(-1)?.params.commands[0]).toEqual({ command: 'status', description: 'What the agents are doing' });
   });
 });
 
