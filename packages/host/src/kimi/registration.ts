@@ -71,7 +71,8 @@ export async function removeKimiMcp(home: string, entry: Entry): Promise<boolean
   const file = path.join(home, 'mcp.json');
   const before = await readConfig(file);
   if (!isDeepStrictEqual(before.servers.parley, entry)) return false;
-  const { parley: _managed, ...servers } = before.servers;
+  const servers = { ...before.servers };
+  delete servers.parley;
   await store(file, before, JSON.stringify({ ...before.document, mcpServers: servers }, null, 2) + '\n');
   return true;
 }

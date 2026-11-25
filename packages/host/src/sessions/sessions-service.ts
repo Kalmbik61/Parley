@@ -106,7 +106,6 @@ import {
   plannedWorktree,
   processStartedAt,
   checkSession,
-  hasLiveProcess,
   querySpawnLimits,
   validateSpawnBudget,
   SpawnBudgetError,
@@ -610,7 +609,7 @@ export function createSessionsService(
   const exclusive = createSwitchLock();
   const kimiClaims = new Map<string, { home: string; id: string }>();
 
-  function kimiBlocksChat(_ref: SessionRef): boolean { return false; }
+  function kimiBlocksChat(): boolean { return false; }
 
   async function checkDormantKimiAliases(ref: SessionRef, home: string, id: string): Promise<void> {
     const key = refKey(ref);

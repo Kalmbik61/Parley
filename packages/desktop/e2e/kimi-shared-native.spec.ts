@@ -29,6 +29,7 @@ async function sessions(window: Page, work: Pick<SessionRef, 'projectPath' | 'wo
   return entries.find(entry => entry.projectPath === work.projectPath && entry.map.work.id === work.workId)?.map.sessions ?? [];
 }
 
+// eslint-disable-next-line no-empty-pattern -- Playwright requires a destructured first parameter to pass TestInfo.
 test('stock Kimi first-turn tools, launch modes, shared renderer and native island', async ({}, info) => {
   test.skip(!runtime || process.platform !== 'darwin', 'requires a local Electron runtime and stock Kimi 2.7.3');
   test.setTimeout(110_000);

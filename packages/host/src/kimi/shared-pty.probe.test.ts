@@ -182,7 +182,7 @@ test.skipIf(!optIn)('stock Kimi shares a native PTY, transcript, and local plugi
       let frames = 0;
       let ansi = false;
       const exit = new Promise<number>(resolve => child.onExit(({ exitCode: code }) => { exitCode = code; resolve(code); }));
-      const output = child.onData(data => { ansi ||= /\x1b\[/.test(data); frames++; screen.write(data); });
+      const output = child.onData(data => { ansi ||= data.includes('\x1b['); frames++; screen.write(data); });
       const view = () => screen.text().join('\n');
       const visible = (label: string, pattern: RegExp) => until(label, () => {
         if (exitCode !== undefined) throw new Error(`Kimi exited: ${exitCode}`);

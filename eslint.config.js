@@ -38,6 +38,14 @@ export default tseslint.config(
   prettier,
   { languageOptions: { globals: nodeGlobals } },
   {
+    files: [
+      'packages/host/src/kimi/fixtures/native/{binding,hook,mcp}.cjs',
+      'packages/host/src/kimi/fixtures/shared-pty/hook.cjs',
+    ],
+    languageOptions: { sourceType: 'commonjs' },
+    rules: { '@typescript-eslint/no-require-imports': 'off' },
+  },
+  {
     files: ['packages/desktop/src/renderer/**', 'packages/desktop/src/preload/**'],
     languageOptions: { globals: browserGlobals },
   },

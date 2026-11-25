@@ -2,6 +2,7 @@
 const readline = process.getBuiltinModule('node:readline');
 const { appendFileSync, existsSync, readFileSync, realpathSync, writeFileSync } = process.getBuiltinModule('node:fs');
 const { spawn } = process.getBuiltinModule('node:child_process');
+const { clearInterval, setInterval } = process.getBuiltinModule('node:timers');
 const fixtureId = process.env.KIMI_FIXTURE_PROVIDER_ID || 'acp-session';
 
 if (process.argv[2] === '--session') {

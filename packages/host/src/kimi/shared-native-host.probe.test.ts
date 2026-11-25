@@ -143,7 +143,7 @@ test.skipIf(!optIn)('shares real production host Chat and Terminal on one stock 
       `port=${hookPort}`,
       `profile=$(/bin/cat '${profile}')`,
       "if [ -n \"$port\" ]; then profile=\"$profile",
-      '(allow network-outbound (remote ip \\"localhost:$port\\"))\"; fi',
+      '(allow network-outbound (remote ip \\"localhost:$port\\"))"; fi',
       `exec ${sandbox} -p "$profile" '${executable}' "$@"`,
       '',
     ].join('\n'), { mode: 0o700 });
