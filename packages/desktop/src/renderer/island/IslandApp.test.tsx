@@ -24,7 +24,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FeedCard, FeedPlanCard, FeedQuestionCard } from '@parley/core';
 import { encodeIpcError } from '../../shared/ipc-error.js';
-import { refKey, type ConsentCard, type ProgressResult } from '@parley/protocol';
+import { KIMI_SHARED_TERMINAL_FEATURE, refKey, type ConsentCard, type ProgressResult } from '@parley/protocol';
 import { ISLAND_TTS_PORT, type IslandApi, type IslandBridge, type IslandConfig, type IslandPresentationOutcome, type IslandSpeakRequest, type IslandTtsMessage, type TtsEngineState } from '../../shared/island.js';
 import { useActivityStore } from '../store/activity.js';
 import { useProvidersStore } from '../store/providers.js';
@@ -1774,6 +1774,40 @@ describe('единый keyboard owner T1c', () => {
     expect(vi.mocked(island.keyboard).mock.calls).toEqual([[true]]);
     await act(async () => { finish({ applied: true, state: 'allowed' }); });
   });
+});
+
+it('uses the shared Kimi capability for waiting cards and status despite a stale ownership marker', async () => {
+  const entries = [makeWork('w-1', { projectPath: PROJECT, sessions: [makeSession('s-01', 'Kimi', {
+    provider: 'kimi',
+    kimiTerminal: { archive: 'aeb8f1a3-87b2-41fc-819b-6aa010f1a2ec', cwd: PROJECT, home: '/tmp/kimi' },
+  })] })];
+  const { fake, bridge, blocked, working } = setup({}, entries);
+  fake.setHandler('feed.snapshot', () => ({ mode: null, revision: 1, decisions: 'window', items: [{
+    id: 'native-permission', cardId: 'native-permission', kind: 'permission', at: '2026-10-12T10:00:00.000Z',
+    state: 'pending', toolUseId: null, toolName: 'Read notes', toolInput: {}, suggestions: [], notified: false,
+    permissionOptions: [
+      { kind: 'allow_once', optionId: 'read-once', name: 'Read this once' },
+      { kind: 'reject_once', optionId: 'skip-notes', name: 'Skip these notes' },
+    ],
+  }] }));
+  fake.setHandler('feed.decide', () => ({ applied: true, state: 'allowed' }));
+  render(<IslandApp bridge={bridge} />);
+  await waitFor(() => expect(screen.getByTestId('island-pill').textContent).toContain('Kimi Terminal'));
+  blocked('s-01');
+  expect(fake.calls.some(({ method }) => method === 'feed.snapshot')).toBe(false);
+
+  act(() => fake.emitStatus({ state: 'connected', hostVersion: 'shared', methods: ['feed.snapshot', 'feed.decide'],
+    features: [KIMI_SHARED_TERMINAL_FEATURE] }));
+  const accept = await screen.findByRole<HTMLButtonElement>('button', { name: 'Read this once' });
+  expect(screen.getByRole('button', { name: 'Skip these notes' })).toBeDefined();
+  await waitFor(() => expect(accept.disabled).toBe(false));
+  fireEvent.click(accept);
+  await waitFor(() => expect(fake.calls).toContainEqual({ method: 'feed.decide', params: {
+    ref: ref('s-01'), cardId: 'native-permission', decision: { kind: 'permission', behavior: 'allow', optionId: 'read-once' },
+  } }));
+  working('s-01');
+  await waitFor(() => expect(screen.getByTestId('island-pill').textContent).toContain('1 working'));
+  expect(screen.getByTestId('island-pill').textContent).not.toContain('Kimi Terminal');
 });
 
 describe('перепроверка выбранного запроса T1a', () => {

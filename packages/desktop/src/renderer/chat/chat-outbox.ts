@@ -24,10 +24,12 @@
  */
 
 import type { FeedItem } from '@parley/core';
-import type { SessionRef } from '@parley/protocol';
+import { KIMI_SHARED_TERMINAL_FEATURE, type SessionRef } from '@parley/protocol';
+import { hostFeatures } from '../lib/capabilities.js';
 import { createOutbox, type AttemptResult, type OutboxItem } from '../lib/outbox.js';
 import { isCompletePointerText } from '../lib/participant.js';
 import { activityFor, useActivityStore } from '../store/activity.js';
+import { useHostStore } from '../store/host.js';
 import { useWorksStore } from '../store/works.js';
 import { sendToAgent, showSendToast, type SendWithToastDeps } from '../terminal/send.js';
 import { turnActive } from './feed-model.js';
@@ -166,7 +168,8 @@ const baseOutbox = createOutbox<ChatOutboxPayload>(attemptChatSend, {
     const session = useWorksStore.getState().entries.find((entry) =>
       entry.projectPath === ref.projectPath && entry.map.work.id === ref.workId,
     )?.map.sessions.find((candidate) => candidate.id === ref.sessionId);
-    return session?.kimiTerminal === undefined && (item.payload.now === true || !sessionBusy(key, ref));
+    const shared = session?.provider === 'kimi' && hostFeatures(useHostStore.getState().status).has(KIMI_SHARED_TERMINAL_FEATURE);
+    return (session?.kimiTerminal === undefined || shared) && (item.payload.now === true || !sessionBusy(key, ref));
   },
 });
 
@@ -186,3 +189,6 @@ function kickAll(): void {
 useFeedStore.subscribe(kickAll);
 useWorksStore.subscribe(kickAll);
 useActivityStore.subscribe(kickAll);
+useHostStore.subscribe(({ status }, previous) => {
+  if (hostFeatures(status).has(KIMI_SHARED_TERMINAL_FEATURE) !== hostFeatures(previous.status).has(KIMI_SHARED_TERMINAL_FEATURE)) kickAll();
+});

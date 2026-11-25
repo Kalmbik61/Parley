@@ -61,7 +61,7 @@
  */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { refKey, type AssistantProposal, type AssistantState, type SessionRef } from '@parley/protocol';
+import { KIMI_SHARED_TERMINAL_FEATURE, refKey, type AssistantProposal, type AssistantState, type SessionRef } from '@parley/protocol';
 import { ISLAND_TTS_PORT, markSeenBatches, parseVisibilitySnapshot, type IslandBridge, type IslandConfig, type IslandHitRect, type IslandPresentationOutcome, type IslandTtsMessage } from '../../shared/island.js';
 import { DEFAULT_VOICE } from '../../shared/tts-types.js';
 import type { IslandAnchor } from '../../shared/ui-types.js';
@@ -225,9 +225,12 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
   const [navigationEmpty, setNavigationEmpty] = useState(false);
   const navigationEmptyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [progressSelected, setProgressSelected] = useState<SessionRef | null>(null);
-  const [progressConnection, setProgressConnection] = useState<{ generation: number; methods: readonly string[] | null }>({ generation: 0, methods: null });
+  const [progressConnection, setProgressConnection] = useState<{ generation: number; methods: readonly string[] | null; sharedKimi: boolean }>(
+    { generation: 0, methods: null, sharedKimi: false },
+  );
   // Хост читает экран терминала: запись Codex без карточки ведёт в Chat сессии.
   const screenText = progressConnection.methods?.includes('pty.screenText') ?? false;
+  const { sharedKimi } = progressConnection;
   const [progressDocumentVisible, setProgressDocumentVisible] = useState(!document.hidden);
   const progressScopeRef = useRef('');
   const [progressData, setProgressData] = useState<{ scope: string; state: ProgressState }>({ scope: '', state: { kind: 'loading' } });
@@ -316,8 +319,8 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
         if (ok) setSyncWorks(worksSyncEnabled(status, window.location.search));
         setConnected(ok);
         setProgressConnection((current) => status.state === 'connected'
-          ? { generation: current.generation + 1, methods: status.methods }
-          : { ...current, methods: null });
+          ? { generation: current.generation + 1, methods: status.methods, sharedKimi: status.features?.includes(KIMI_SHARED_TERMINAL_FEATURE) ?? false }
+          : { ...current, methods: null, sharedKimi: false });
         if (!ok) {
           releaseKeyboard();
           useIslandRequests.getState().clear();
@@ -398,11 +401,11 @@ export function IslandApp({ bridge, onPresentation }: { bridge: IslandBridge; on
     [bridge],
   );
   useEffect(() => {
-    if (connected) useIslandRequests.getState().sync(entries, byRef, screenText);
-  }, [connected, entries, byRef, screenText]);
+    if (connected) useIslandRequests.getState().sync(entries, byRef, screenText, sharedKimi);
+  }, [connected, entries, byRef, screenText, sharedKimi]);
 
   const withCard = useMemo(() => new Set(items.filter((item) => item.inWindow).map((item) => refKey(item.ref))), [items]);
-  const model = useMemo(() => islandModel(entries, byRef, withCard, cleared, held), [entries, byRef, withCard, cleared, held]);
+  const model = useMemo(() => islandModel(entries, byRef, withCard, cleared, held, sharedKimi), [entries, byRef, withCard, cleared, held, sharedKimi]);
   const roomRows = useMemo(() => model.groups.flatMap((group) => group.rows)
     .filter((row): row is Extract<IslandRow, { kind: 'room' }> => row.kind === 'room'), [model]);
   const roomNavItems = useMemo(() => pendingRoomNavigation(roomRows), [roomRows]);

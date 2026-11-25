@@ -18,6 +18,7 @@ import { EMPTY_HISTORY } from '../layout/history.js';
 import { TerminalBody } from '../layout/bodies/TerminalBody.js';
 import { setVisibilityCheck } from '../keys/type-to-focus.js';
 import { useLayoutStore } from '../layout/store.js';
+import { emptyLayout, findTab, openTab } from '../layout/tree.js';
 import { REQUIRED_METHODS } from '../lib/capabilities.js';
 import { useActivityStore } from '../store/activity.js';
 import { useHostConfigStore } from '../store/config.js';
@@ -914,13 +915,17 @@ describe('ChatView — панель вопроса терминала (план 
     vi.useRealTimers();
   });
 
-  it('keeps the Kimi draft and waits for a delayed ACP card without raw answer controls', async () => {
+  it.each([false, true])('keeps the Kimi draft and uses provider options without raw answer controls (shared=%s)', async (shared) => {
     useHostStore.setState({ status: { state: 'connected', hostVersion: 'test',
-      methods: [...FEED_METHODS, 'pty.screenText', 'kimi.getState', 'feed.decide', 'feed.interrupt'], features: [KIMI_PTY_GENERATION_FEATURE] } });
+      methods: [...FEED_METHODS, 'pty.screenText', 'kimi.getState', 'feed.decide', 'feed.interrupt'],
+      features: [KIMI_PTY_GENERATION_FEATURE, ...(shared ? ['kimi-shared-terminal'] : [])] } });
     useProvidersStore.setState({ providers: [{ id: 'kimi', label: 'Kimi Code', available: true, version: null, limits: null }], loaded: true });
     const earlier = prompt('p1', 'review notes');
     bridge.setHandler('feed.subscribe', () => ({ ok: true }));
     bridge.setHandler('feed.unsubscribe', () => ({ ok: true }));
+    bridge.setHandler('kimi.getState', () => ({ requests: [], config: [{
+      id: 'model', name: 'ACP model', type: 'select', currentValue: 'a', options: [{ value: 'a', name: 'Kimi A' }],
+    }] }));
     bridge.setHandler('feed.snapshot', () => ({ schemaVersion: 1, mode: null, revision: 1, items: [earlier] }));
     bridge.setHandler('feed.decide', () => ({ applied: true, state: 'allowed' }));
     disposeFeed = useFeedStore.getState().init(bridge);
@@ -932,18 +937,37 @@ describe('ChatView — панель вопроса терминала (план 
     await settle(1000);
 
     expect(screen.queryByTestId('chat-terminal-prompt')).toBeNull();
-    expect(screen.getByTestId('chat-waiting-banner').textContent).toBe(S.chat.kimi.waitingForRequest);
-    expect(screen.queryByTestId('chat-waiting-open')).toBeNull();
+    if (shared) {
+      const key = '/tmp/p w-01';
+      const tab = { id: 'terminal:s-01', kind: 'terminal' as const, sessionId: REF.sessionId, view: 'chat' as const };
+      const originalLayout = useLayoutStore.getState();
+      try {
+        originalLayout.drop(key);
+        originalLayout.hydrate(key, openTab(emptyLayout(), tab));
+        fireEvent.click(screen.getByRole('button', { name: S.chat.waitingBanner.open }));
+        const result = findTab(useLayoutStore.getState().layouts[key]!, tab.id);
+        expect(result?.group.tabs[result.index]).toMatchObject({ view: 'terminal' });
+      } finally {
+        useLayoutStore.setState(originalLayout);
+      }
+      expect(screen.queryByRole('button', { name: /Kimi A/ })).toBeNull();
+      expect(bridge.calls.some(({ method }) => method === 'kimi.getState')).toBe(false);
+    } else {
+      expect(screen.getByTestId('chat-waiting-banner').textContent).toBe(S.chat.kimi.waitingForRequest);
+      expect(screen.queryByTestId('chat-waiting-open')).toBeNull();
+    }
     expect(bridge.calls.some(({ method }) => method === 'pty.screenText')).toBe(false);
     expect(field.value).toBe('my unsent follow-up');
 
     act(() => bridge.emit('feed.changed', { ref: REF, mode: null, revision: 2, decisions: 'window', removed: [],
       upsert: [{ ...card(), id: 'kimi:request', cardId: 'kimi:request', permissionOptions: [
         { name: 'Approve Kimi request', optionId: 'once', kind: 'allow_once' },
+        { name: 'Reject this tool', optionId: 'reject-this-tool', kind: 'reject_once' },
       ] }],
     }));
     await settle();
     expect(screen.queryByTestId('chat-waiting-banner')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Reject this tool' })).toBeDefined();
     fireEvent.click(screen.getByRole('button', { name: 'Approve Kimi request' }));
     await settle(0);
     expect(bridge.calls).toContainEqual({ method: 'feed.decide', params: {

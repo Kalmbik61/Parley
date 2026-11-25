@@ -3,6 +3,7 @@ import type { KimiPermissionMode } from '@parley/core';
 
 // Older hosts strip unknown sessions.create fields. Require this hello capability before sending one.
 export const KIMI_NATIVE_TERMINAL_FEATURE = 'kimi-native-terminal';
+export const KIMI_SHARED_TERMINAL_FEATURE = 'kimi-shared-terminal';
 
 /** This host requires the attachment generation on raw input and resize for both Kimi owners. */
 export const KIMI_PTY_GENERATION_FEATURE = 'kimi-pty-generation';
