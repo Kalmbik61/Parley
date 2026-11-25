@@ -372,6 +372,26 @@ function Actions({ item, armed, api, onDecide }: { item: IslandRequest; armed: b
   );
   if (!item.inWindow || card === null) return openButton;
   if (card.kind === 'permission') {
+    if (card.permissionOptions !== undefined) {
+      if (card.permissionOptions.length === 0) return openButton;
+      return (
+        <>
+          {card.permissionOptions.map(({ optionId, name, kind }) => (
+            <Button
+              key={optionId}
+              type="button"
+              size="default"
+              variant={kind === 'allow_once' ? 'default' : 'outline'}
+              className="h-auto min-h-9 max-w-full cursor-pointer whitespace-normal py-1.5 text-center text-sm [overflow-wrap:anywhere]"
+              disabled={disabled}
+              onClick={() => onDecide(item.key, { kind: 'permission', behavior: kind.startsWith('allow_') ? 'allow' : 'deny', optionId })}
+            >
+              {name}
+            </Button>
+          ))}
+        </>
+      );
+    }
     const rules = alwaysRules(card.suggestions);
     return (
       <>

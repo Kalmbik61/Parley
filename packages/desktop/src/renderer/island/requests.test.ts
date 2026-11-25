@@ -1,7 +1,7 @@
 /** Очередь запросов острова: снимок по переходу в «ждёт», повтор, порядок, собственное решение и «Answered elsewhere». */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { FeedCard } from '@parley/core';
+import type { FeedCard, FeedPermissionCard } from '@parley/core';
 import { needReason } from '@parley/core/stuck';
 import { projectIslandActivity } from '../../main/island/activity-projection.js';
 import { activityMap, makeActivity, makeNeed, makeSession, makeWork } from '../test-utils/work-fixtures.js';
@@ -11,7 +11,7 @@ const PROJECT = '/tmp/proj';
 const ref = (sessionId: string) => ({ projectPath: PROJECT, workId: 'w-1', sessionId });
 const entries = [makeWork('w-1', { projectPath: PROJECT, sessions: [makeSession('s-01', 'a'), makeSession('s-02', 'b'), makeSession('s-03', 'c', { provider: 'codex' })] })];
 
-function permission(cardId: string, command = 'rm -rf build'): FeedCard {
+function permission(cardId: string, command = 'rm -rf build'): FeedPermissionCard {
   return {
     id: cardId, at: '2026-10-12T10:00:00.000Z', kind: 'permission', cardId, state: 'pending', toolUseId: null,
     toolName: 'Bash', toolInput: { command }, suggestions: [], notified: false,
@@ -549,6 +549,51 @@ describe('очередь запросов острова', () => {
     late.resolve({ applied: true, state: 'allowed' });
     await deciding;
     expect(useIslandRequests.getState().items[0]?.summary).toBe('Run: new');
+  });
+
+  const once = { optionId: 'once', name: 'Allow once', kind: 'allow_once' } as const;
+  const reject = { optionId: 'reject', name: 'Reject', kind: 'reject_once' } as const;
+  const updates: Array<[string, Partial<FeedPermissionCard>]> = [
+    ['option ID', { permissionOptions: [{ ...once, optionId: 'new-id' }, reject] }],
+    ['option name', { permissionOptions: [{ ...once, name: 'Allow this request' }, reject] }],
+    ['option kind', { permissionOptions: [{ ...once, kind: 'allow_always' }, reject] }],
+    ['option order', { permissionOptions: [reject, once] }],
+    ['empty options', { permissionOptions: [] }],
+    ['preview', { permissionPreview: [{ type: 'text', text: 'Updated permission details' }] }],
+  ];
+
+  it.each(updates)('same Kimi cardId: a change to %s discards the old in-flight decision', async (_field, update) => {
+    const late = deferred<{ applied: boolean; state: string }>();
+    const first: FeedPermissionCard = {
+      ...permission('c-1'),
+      permissionOptions: [once, reject],
+      permissionPreview: [{ type: 'text', text: 'Original permission details' }],
+      truncated: true,
+    };
+    const cards = { 's-01': [first] };
+    const { call, decide } = bridge(cards, vi.fn(() => late.promise));
+    const state = useIslandRequests.getState;
+    const sync = () => state().sync(entries, activityMap([makeActivity(ref('s-01'), 'blocked')]));
+    state().bind(call as never);
+    sync();
+    await flush();
+    const item = state().items[0]!;
+    const applied = state().applied;
+    const decision = { kind: 'permission', behavior: 'allow', optionId: 'once' } as const;
+    const deciding = state().decide(item.key, decision);
+    await state().decide(item.key, { kind: 'permission', behavior: 'deny', optionId: 'reject' });
+    expect(decide.mock.calls).toEqual([[{ ref: ref('s-01'), cardId: 'c-1', decision }]]);
+
+    const updated = { ...first, ...update };
+    cards['s-01'] = [updated];
+    sync();
+    await flush();
+    expect(state().items[0]).toMatchObject({ key: item.key, deciding: false, note: null, card: updated });
+    expect(state().items[0]?.fingerprint).not.toBe(item.fingerprint);
+    late.resolve({ applied: true, state: 'allowed' });
+    await deciding;
+    expect(state().items[0]?.card).toEqual(updated);
+    expect(state().applied).toBe(applied);
   });
 
   it('bind отменяет снимок старого соединения и перечитывает ту же activity', async () => {

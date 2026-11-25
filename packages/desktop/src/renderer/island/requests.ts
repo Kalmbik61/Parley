@@ -83,7 +83,9 @@ const clampIndex = (index: number, length: number): number => (length === 0 ? 0 
 /** Только содержание решения: служебные notified/at не сбрасывают отправку. */
 const cardFingerprint = (card: FeedCard, inWindow: boolean): string => JSON.stringify([
   card.kind, card.toolUseId, card.toolName, card.toolInput, card.truncated ?? false, card.agentId ?? null, inWindow,
-  card.kind === 'permission' ? card.suggestions : card.kind === 'question' ? card.questions : [card.plan, card.planFilePath],
+  card.kind === 'permission'
+    ? [card.suggestions, card.permissionOptions?.map(({ optionId, name, kind }) => [optionId, name, kind]), card.permissionPreview]
+    : card.kind === 'question' ? card.questions : [card.plan, card.planFilePath],
 ]);
 const withItems = (state: IslandRequestsState, items: IslandRequest[]): Pick<IslandRequestsState, 'items' | 'selectedKey'> => {
   const previousIndex = state.items.findIndex((item) => item.key === state.selectedKey);
