@@ -27,6 +27,7 @@ const NOTICE_KINDS: NoticeKind[] = [
   'pointer-timeout',
   'pointer-cancelled',
   'resume-failed',
+  'kimi-history-partial',
   'resume-limit',
   'trust-wait',
   'startup-wait',
@@ -336,6 +337,9 @@ describe('startErrorText — отказ запуска называет прич
 // приходит рантаймом по сокету, страж `english-ui` его не ловит. `noticeText` —
 // английский смысл по `notice.kind`, параллельно `errorText(code)`.
 describe('noticeText', () => {
+  it('reports a partial Kimi transcript without saying that resume failed', () => {
+    expect(noticeText(hostNotice('kimi-history-partial'), 'S01 Kimi')).toBe('S01 Kimi: Kimi resumed, but Chat could only restore part of its history.');
+  });
   it.each(NOTICE_KINDS)('вид %s без ярлыка — непустой английский текст без кириллицы', (kind) => {
     const text = noticeText(hostNotice(kind));
     expect(text.length).toBeGreaterThan(0);

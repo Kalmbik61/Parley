@@ -1,31 +1,63 @@
 import { randomUUID } from 'node:crypto';
-import { stripEscapes, type LaunchPlan } from '@parley/core';
+import { stripEscapes, type KimiPermissionMode } from '@parley/core';
 import { refKey, type KimiRequest, type KimiResponse, type KimiState, type SendResult, type SessionRef } from '@parley/protocol';
 import type { HostContext } from '../context.js';
 import { HostError } from '../errors.js';
 import type { PtyProcess } from '../pty/pty-process.js';
 import { sanitizeForSend } from '../pty/send.js';
-import { createKimiAcp, KimiAcpError } from './acp.js';
+import { kimiHome, kimiTerminalEnv } from '../providers/kimi-env.js';
+import { createKimiAcp, KimiAcpError, type KimiMcpServer } from './acp.js';
 
 export type KimiOutput =
   | { kind: 'prompt'; text: string }
   | { kind: 'text'; text: string; messageId: string }
   | { kind: 'end'; reason: string; error?: string };
 
+export interface KimiReplayChunk {
+  author: 'agent' | 'user';
+  text: string;
+  messageId?: string;
+}
+
+export interface KimiHistoryProjection {
+  partial: boolean;
+  check(): void;
+  writeCheckpoint(archive: string): Promise<void>;
+  publish(): void;
+}
+
+export interface KimiHistoryReplay {
+  kind: 'handoff' | 'checkpoint';
+  incomplete: boolean;
+  home: string;
+  cwd: string;
+  sessionId: string;
+}
+
 interface KimiSessionHooks {
   output(ref: SessionRef, event: KimiOutput): void;
   hasHistory(ref: SessionRef): boolean;
+  prepareHistory?(ref: SessionRef, archive: string, chunks: readonly KimiReplayChunk[], replay: KimiHistoryReplay): Promise<KimiHistoryProjection>;
+  checkBinding?(ref: SessionRef, home: string, id: string): void;
   activity(ref: SessionRef, state: 'ready' | 'working' | 'blocked' | 'ended', detail?: string): void;
   requestsChanged?(ref: SessionRef, requests: KimiState['requests']): void;
   canShowElicitation?(request: Extract<KimiRequest, { kind: 'elicitation' }>): boolean;
   authChanged?(signedIn: boolean): void;
 }
 
-interface KimiLaunch extends NonNullable<LaunchPlan['kimiAcp']> {
+interface KimiLaunch {
+  sessionId?: string;
+  kimiPermissionMode?: KimiPermissionMode;
+  model?: string;
+  effort?: string;
+  mcpServers: KimiMcpServer[];
+  prompt?: string;
+  instructions?: string;
   command: string;
   args: string[];
   cwd: string;
   env: NodeJS.ProcessEnv;
+  reconcileAt?: { archive: string; cwd: string; home: string; kind: 'handoff' | 'checkpoint' };
 }
 
 function hostError(error: unknown): never {
@@ -38,6 +70,10 @@ export function createKimiSessions(host: HostContext, hooks: KimiSessionHooks) {
   interface Live {
     acp: ReturnType<typeof createKimiAcp>;
     ready: boolean;
+    frozen: boolean;
+    launch: KimiLaunch;
+    home: string;
+    id?: string;
     draft: string[];
     draftBytes: number;
   }
@@ -45,8 +81,18 @@ export function createKimiSessions(host: HostContext, hooks: KimiSessionHooks) {
   const live = new Map<string, Live>();
   const emptyState = (): KimiState => ({ requests: [], config: [] });
 
+  function checkBinding(ref: SessionRef, home: string, id: string): void {
+    for (const [key, candidate] of live) {
+      if (key !== refKey(ref) && candidate.home === home && candidate.id === id) {
+        throw new HostError('conflict', 'Another Parley session owns this Kimi conversation');
+      }
+    }
+    hooks.checkBinding?.(ref, home, id);
+  }
+
   function requireSession(ref: SessionRef): Live {
     const session = live.get(refKey(ref));
+    if (session?.frozen) throw new HostError('conflict', 'Kimi Chat is switching ownership');
     if (!session?.ready || !session.acp.connected()) throw new HostError('not_found', 'Kimi Code session is not running');
     return session;
   }
@@ -59,22 +105,46 @@ export function createKimiSessions(host: HostContext, hooks: KimiSessionHooks) {
     });
   }
 
-  async function start(ref: SessionRef, launch: KimiLaunch): Promise<{ process: PtyProcess; sessionId: string; activate(): void }> {
+  async function start(ref: SessionRef, launch: KimiLaunch): Promise<{
+    process: PtyProcess;
+    sessionId: string;
+    activate(): void;
+    prepareActivation(): { publish(): void; writeCheckpoint?: KimiHistoryProjection['writeCheckpoint'] };
+  }> {
     const key = refKey(ref);
+    const home = await kimiHome(launch.env, launch.cwd);
+    const replay = launch.reconcileAt;
+    if (replay !== undefined && (home !== replay.home || launch.cwd !== replay.cwd)) {
+      throw new HostError('conflict', 'The original Kimi home or working directory no longer matches');
+    }
+    if (launch.sessionId !== undefined) checkBinding(ref, home, launch.sessionId);
     if (live.has(key)) throw new HostError('conflict', 'Kimi Code session is already running');
     const initialOutput: KimiOutput[] = [];
+    const historyChunks: KimiReplayChunk[] = [];
     let initialChars = 0;
+    let overflow = false;
+    let completePrefix = 0;
     let replayPrompt: string | undefined;
     let replayed = false;
     let turnId: string = randomUUID();
     let published = emptyState();
     const dataListeners = new Set<(data: string) => void>();
 
+    function reserveHistory(chars: number, length: number): boolean {
+      if (overflow || initialChars + chars > 2 * 1024 * 1024 || length >= 4096) {
+        overflow = true;
+        return false;
+      }
+      initialChars += chars;
+      return true;
+    }
+
     function output(event: KimiOutput): void {
+      if (live.get(key) !== session || session.frozen) return;
       if (session.ready) hooks.output(ref, event);
-      else if (initialChars < 2 * 1024 * 1024 && initialOutput.length < 4096) {
-        if (event.kind !== 'end') initialChars += event.text.length;
-        initialOutput.push(event);
+      else {
+        const chars = event.kind === 'end' ? 0 : event.text.length;
+        if (reserveHistory(chars, initialOutput.length)) initialOutput.push(event);
       }
     }
 
@@ -85,7 +155,7 @@ export function createKimiSessions(host: HostContext, hooks: KimiSessionHooks) {
     }
 
     function publishState(state: KimiState): void {
-      if (live.get(key) !== session) return;
+      if (live.get(key) !== session || session.frozen) return;
       if (JSON.stringify(published.requests) !== JSON.stringify(state.requests)) {
         host.broadcast('kimi.requests', { ref, requests: state.requests });
         hooks.requestsChanged?.(ref, state.requests);
@@ -103,15 +173,30 @@ export function createKimiSessions(host: HostContext, hooks: KimiSessionHooks) {
       clientVersion: host.version,
       elicitationForm: hooks.requestsChanged !== undefined,
       ...(hooks.canShowElicitation === undefined ? {} : { canShowElicitation: hooks.canShowElicitation }),
-      loadHistory: launch.sessionId !== undefined && !hooks.hasHistory(ref),
+      loadHistory: launch.sessionId !== undefined && (replay !== undefined || !hooks.hasHistory(ref)),
+      requireHistory: replay !== undefined,
       onState: (state) => { if (session.ready) publishState(state); },
-      onText(text, history, author) {
+      onText(text, history, author, messageId) {
+        if (live.get(key) !== session || session.frozen || (history && overflow)) return;
+        if (history && replay !== undefined) {
+          // Seeing a user chunk after a reply confirms the preceding group is complete,
+          // even if the new chunk itself does not fit in the remaining budget.
+          if (author === 'user' && historyChunks.at(-1)?.author === 'agent') completePrefix = historyChunks.length;
+          if (reserveHistory(text.length + (messageId?.length ?? 0), historyChunks.length)) {
+            historyChunks.push({ author, text, ...(messageId === undefined ? {} : { messageId }) });
+          }
+          return;
+        }
         if (history && author === 'user') {
           if (replayPrompt === undefined) {
             if (replayed) output({ kind: 'end', reason: 'end_turn' });
             turnId = randomUUID();
           }
-          replayPrompt = ((replayPrompt ?? '') + text).slice(0, 64 * 1024);
+          if ((replayPrompt?.length ?? 0) + text.length > 64 * 1024) {
+            overflow = true;
+            return;
+          }
+          replayPrompt = (replayPrompt ?? '') + text;
           replayed = true;
           return;
         }
@@ -124,17 +209,19 @@ export function createKimiSessions(host: HostContext, hooks: KimiSessionHooks) {
         }
       },
       onTurnStart(text) {
+        if (live.get(key) !== session || session.frozen) return;
         turnId = randomUUID();
         output({ kind: 'prompt', text });
         hooks.activity(ref, 'working');
       },
       onTurnEnd(reason, error) {
-        if (live.get(key) !== session || !session.ready) return;
+        if (live.get(key) !== session || !session.ready || session.frozen) return;
         output({ kind: 'end', reason, ...(error === undefined ? {} : { error: error.message }) });
         hooks.activity(ref, 'ended');
       },
     });
-    const session: Live = { acp, ready: false, draft: [], draftBytes: 0 };
+    const session: Live = { acp, ready: false, frozen: false, draft: [], draftBytes: 0, home, launch,
+      ...(launch.sessionId === undefined ? {} : { id: launch.sessionId }) };
     live.set(key, session);
     acp.onExit(() => {
       if (live.get(key) === session) live.delete(key);
@@ -143,6 +230,8 @@ export function createKimiSessions(host: HostContext, hooks: KimiSessionHooks) {
 
     try {
       const sessionId = await acp.connect();
+      checkBinding(ref, home, sessionId);
+      session.id = sessionId;
       // 2.7.3 exposes model aliases and thinking levels as select config options.
       // Read options again after switching model: the supported levels may change.
       for (const [configId, value] of [['model', launch.model], ['thinking', launch.effort]] as const) {
@@ -152,17 +241,57 @@ export function createKimiSessions(host: HostContext, hooks: KimiSessionHooks) {
           throw new KimiAcpError(`Kimi Code did not apply the selected ${configId}`, 'invalid');
         }
       }
+      // Match session/new, not the Parley launch verb. In Kimi 2.7.3 this leaves Plan even if the
+      // opening ACP snapshot already says "default", so an explicit Always Ask must still send the RPC.
+      if (launch.sessionId === undefined && launch.kimiPermissionMode !== undefined) {
+        await acp.setConfig('mode', launch.kimiPermissionMode === 'manual' ? 'default' : launch.kimiPermissionMode);
+      }
       const pid = acp.pid;
       if (pid === undefined || live.get(key) !== session || !acp.connected()) throw new KimiAcpError('Kimi Code ACP disconnected', 'disconnected');
       hooks.authChanged?.(true);
       flushReplayPrompt();
       if (replayed) output({ kind: 'end', reason: 'end_turn' });
+      if (replay?.kind === 'handoff' && overflow) throw new KimiAcpError('Kimi history exceeds the handback replay limit. Chat remains unchanged.', 'protocol');
+      if (overflow && replay === undefined) {
+        // Keep only closed turns in an ordinary bounded replay. A dangling prompt would make Chat
+        // look busy and keep its outbox closed even though this ACP owner is idle.
+        initialOutput.length = initialOutput.findLastIndex(({ kind }) => kind === 'end') + 1;
+        host.log.warn('Kimi Code cold history reached its display limit', { ref });
+      }
+      const restoreHistory = replay === undefined ? undefined
+        : await hooks.prepareHistory?.(ref, replay.archive, overflow ? historyChunks.slice(0, completePrefix) : historyChunks,
+          { kind: replay.kind, incomplete: overflow, home: replay.home, cwd: replay.cwd, sessionId });
+      const isCurrent = () => live.get(key) === session && acp.connected();
+      if (!isCurrent()) throw new KimiAcpError('Kimi Code ACP disconnected', 'disconnected');
+      function prepareActivation(): { publish(): void; writeCheckpoint?: KimiHistoryProjection['writeCheckpoint'] } {
+        if (!isCurrent()) throw new HostError('not_found', 'Kimi Code session is not running');
+        restoreHistory?.check();
+        return {
+          ...(restoreHistory === undefined ? {} : { writeCheckpoint: (archive: string) => restoreHistory.writeCheckpoint(archive) }),
+          publish() {
+            restoreHistory?.publish();
+            // A child may exit just after durable release. The validated history is still usable,
+            // but this process must not publish readiness or accept prompts after exit.
+            if (!isCurrent()) return;
+            if (replay === undefined) for (const event of initialOutput) hooks.output(ref, event);
+            session.ready = true;
+            initialOutput.length = 0;
+            publishState(acp.state());
+            hooks.activity(ref, 'ready');
+            if (restoreHistory?.partial === true) host.broadcast('host.notice', {
+              kind: 'kimi-history-partial', ref, at: new Date().toISOString(),
+              text: 'Kimi resumed the original conversation. Chat could only restore part of its history.',
+            });
+            if (replay?.kind !== 'handoff' && launch.prompt !== undefined) submit(ref, session, launch.prompt);
+          },
+        };
+      }
       return {
         sessionId,
         process: {
           pid,
           write(data) {
-            if (!session.ready) return;
+            if (!session.ready || session.frozen || live.get(key) !== session) return;
             if (data === '\x1b' || data === '\x03') {
               if (data === '\x03') {
                 session.draft = [];
@@ -199,15 +328,8 @@ export function createKimiSessions(host: HostContext, hooks: KimiSessionHooks) {
             return () => dataListeners.delete(listener);
           },
         },
-        activate() {
-          if (live.get(key) !== session || !acp.connected()) throw new HostError('not_found', 'Kimi Code session is not running');
-          session.ready = true;
-          for (const event of initialOutput) hooks.output(ref, event);
-          initialOutput.length = 0;
-          publishState(acp.state());
-          hooks.activity(ref, 'ready');
-          if (launch.prompt !== undefined) submit(ref, session, launch.prompt);
-        },
+        activate: () => prepareActivation().publish(),
+        prepareActivation,
       };
     } catch (error) {
       if (error instanceof KimiAcpError && error.code === 'sign-in') hooks.authChanged?.(false);
@@ -218,6 +340,29 @@ export function createKimiSessions(host: HostContext, hooks: KimiSessionHooks) {
 
   return {
     start,
+    takeover(ref: SessionRef, id: string) {
+      const session = requireSession(ref);
+      if (session.id !== id) throw new HostError('conflict', 'The running ACP session is not the bound Kimi conversation');
+      if (!session.acp.supportsHistoryLoad()) {
+        throw new HostError('conflict', 'This Kimi Code CLI cannot reload Chat history. Chat remains in control.', { reason: 'kimi-replay-unavailable' });
+      }
+      if (session.draftBytes > 0) throw new HostError('conflict', 'Send or clear the Terminal draft first.', { reason: 'kimi-draft' });
+      if (session.acp.busy() || session.acp.state().requests.length > 0) {
+        throw new HostError('conflict', 'Wait for Kimi to finish its turn or answer its request first.', { reason: 'kimi-busy' });
+      }
+      checkBinding(ref, session.home, id);
+      session.frozen = true;
+      return {
+        command: session.launch.command,
+        cwd: session.launch.cwd,
+        home: session.home,
+        // Take only user settings from the host, not the ACP launch's Parley layer.
+        env: { ...kimiTerminalEnv(process.env),
+          ...(session.launch.env.HOME === undefined ? {} : { HOME: session.launch.env.HOME }),
+          KIMI_CODE_HOME: session.home },
+        unfreeze: () => { if (live.get(refKey(ref)) === session) session.frozen = false; },
+      };
+    },
     state: (ref: SessionRef): KimiState => {
       const session = live.get(refKey(ref));
       return session?.ready ? session.acp.state() : emptyState();

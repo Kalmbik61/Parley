@@ -6,6 +6,7 @@
  */
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
+import type { KimiPermissionMode } from '@parley/core';
 import { roleProvider } from '@parley/core/role-choice';
 import type { Result, RoleSummary } from '@parley/protocol';
 import type { ParleyBridge } from '../../../shared/bridge.js';
@@ -35,6 +36,7 @@ export interface AgentRow {
   model: string | null;
   /** Уровень из списка модели; `null` — `Default`, без флага. */
   effort: string | null;
+  kimiPermissionMode?: KimiPermissionMode | undefined;
   role: string | null;
   /** Роль из рецепта, которой на этой машине нет: строка не запускается, пока её не поправят. */
   roleMissing: string | null;

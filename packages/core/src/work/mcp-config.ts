@@ -1,6 +1,7 @@
 import { chmod, mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parse } from 'smol-toml';
 import { bothEnv, ENV_PREFIX, LEGACY_ENV_PREFIX, MCP_SERVER_NAME } from '../names.js';
 import type { McpConfigKind } from '../providers.js';
 import { ensureStateDir } from './state-dir.js';
@@ -11,6 +12,12 @@ export const MCP_SERVER_BIN = 'parley-mcp';
 
 /** Скрипт сервера по абсолютному пути — лежит рядом с этим модулем, в `mcp/`. */
 export const MCP_SERVER_ENTRY = fileURLToPath(new URL('../mcp/server.js', import.meta.url));
+
+/** Validate the complete Kimi config before appending a managed TOML block without rewriting the user's bytes. */
+export function validKimiConfigToml(text: string): boolean {
+  try { parse(text); return true; }
+  catch { return false; }
+}
 
 /**
  * Чем запускать сервер. Bin `parley-mcp` есть в PATH только под pnpm-скриптами,

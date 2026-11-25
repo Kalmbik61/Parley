@@ -47,6 +47,17 @@ const CONTEXT_NOUNS: Record<ContextKind | 'mixed', readonly [string, string]> = 
 const ACCOUNT_MIN_CLAUDE_VERSION = '2.1.304';
 
 export const S = {
+  kimiPermission: {
+    label: 'Kimi permission mode',
+    useSettings: 'Use Kimi settings',
+    launchHelp: 'An explicit choice starts a new conversation in execution mode. You can enable Plan separately in Chat.',
+    launchUnavailable: 'The connected host no longer supports this Kimi launch choice. Select Use Kimi settings to continue.',
+    modes: {
+      manual: { label: 'Always Ask', description: 'Kimi runs read-only operations automatically and asks before changes or commands.' },
+      yolo: { label: 'Automatic / Ask When Needed', description: 'Kimi approves routine actions and still asks about sensitive or dangerous actions.' },
+      auto: { label: 'Full access / Never Ask', description: 'Kimi skips tool approvals, including for sensitive actions. This does not change the sandbox or Parley authority.' },
+    },
+  },
   plans: {
     workClosed: 'Reopen this workspace to change the plan.',
     /** Вместо `workClosed` у плана архивной комнаты: панель только читается. */
@@ -2284,8 +2295,24 @@ export const S = {
       /** `sessions.setModel` вернул effort `null`: у новой модели нет уровня, выбранного раньше. */
       effortReset: (model: string, level: string): string => `${model} has no ${level} effort — effort is back to Default`,
     },
+    kimiNative: {
+      title: 'Kimi Terminal',
+      takeover: 'Take control in Terminal',
+      switching: 'Switching Kimi ownership…',
+      inControl: 'Kimi Terminal has control',
+      exited: 'Kimi Terminal is stopped',
+      reopen: 'Reopen Terminal',
+      return: 'Return to Chat',
+      readOnly: 'Chat is read-only while Kimi Terminal has control.',
+      takeoverHelp: 'Open the original conversation in ordinary Kimi. Parley room and plan tools stay in Chat.',
+      exitFirst: 'Use /exit to return to Chat. Starting a new conversation here does not change the conversation Parley is bound to.',
+      restore: 'Return to the original conversation with Parley tools. Chat history refreshes from Kimi and Parley keeps the prior view.',
+      haveDraft: 'Send or clear your Chat draft and queued messages before taking control in Terminal.',
+      failed: 'Could not switch Kimi ownership.',
+    },
     kimi: {
       settings: (current: string): string => `Kimi Code settings (${current})`,
+      waitingForRequest: 'Waiting for Kimi’s request…',
       booleanValue: (name: string, enabled: boolean): string => `${name} ${enabled ? 'on' : 'off'}`,
       readOnly: 'This host cannot change Kimi Code settings',
       refused: (reason: string): string => `Could not change Kimi Code settings (${reason})`,
@@ -2910,10 +2937,10 @@ export const S = {
 
   /** Остров одобрений (спека 2026-10-12). */
   island: {
-    pill: (working: number, waiting: number, done: number, subagents?: number, proposals = 0): string =>
+    pill: (working: number, waiting: number, done: number, subagents?: number, proposals = 0, nativeKimi = false): string =>
       [working > 0 ? `${working} working` : null, waiting > 0 ? `${waiting} waiting` : null, done > 0 ? `✅ ${done} done` : null,
         subagents === undefined ? null : subagents > 0 ? `${subagents} subagents active` : 'Subagents active',
-        proposals > 0 ? `${proposals} ${proposals === 1 ? 'room' : 'rooms'} waiting` : null]
+        proposals > 0 ? `${proposals} ${proposals === 1 ? 'room' : 'rooms'} waiting` : null, nativeKimi ? 'Kimi Terminal' : null]
         .filter((part) => part !== null)
         .join(' · '),
     waitingInTerminal: 'waiting in terminal',
@@ -3498,7 +3525,9 @@ export function startErrorText(failure: IpcErrorInfo, action: string): string {
   switch (data?.['reason']) {
     case 'kimi-missing-cli': return S.providerCard.kimi.missingCli;
     case 'kimi-sign-in': return S.providerCard.kimi.signIn;
+    case 'kimi-launch-modes-unsupported': return S.kimiPermission.launchUnavailable;
     case 'kimi-config-in-chat': return S.providerCard.kimi.chooseInChat;
+    case 'kimi-invalid':
     case 'kimi-protocol': return failure.message || errorText(failure.code, action);
   }
   // Отказ из-за роли после замены агента (спека 2026-11-12, 2.6): текст хоста сам называет выход — показываем его.
@@ -3549,6 +3578,7 @@ const NOTICE_DETAIL: Record<NoticeKind, string> = {
   'pointer-timeout': 'no response after the pointer',
   'pointer-cancelled': 'pointer cancelled by your input',
   'resume-failed': "couldn't resume this session",
+  'kimi-history-partial': 'Kimi resumed, but Chat could only restore part of its history',
   'resume-limit': 'hourly resume limit reached — messages are waiting',
   'trust-wait': 'not responding since launch — may be waiting for folder trust',
   'startup-wait': 'waiting at startup — Codex may need sign-in or folder trust in its terminal',

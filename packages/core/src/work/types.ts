@@ -104,6 +104,12 @@ export interface SessionMetrics {
  */
 export type WorkProvider = string;
 
+export type KimiPermissionMode = 'manual' | 'yolo' | 'auto';
+
+export function isKimiPermissionMode(value: unknown): value is KimiPermissionMode {
+  return value === 'manual' || value === 'yolo' || value === 'auto';
+}
+
 export interface ArtifactsWorkspace {
   kind: 'artifacts';
   path: string;
@@ -293,6 +299,16 @@ export interface WorkSession {
    */
   model?: string | null;
   effort?: EffortLevel | null;
+  /** Historical Kimi creation preference, never reapplied to an existing provider conversation. */
+  kimiPermissionMode?: KimiPermissionMode;
+  /** Durable Chat exclusion from before ACP exit until a completed handback. */
+  kimiTerminal?: { archive: string; cwd: string; home: string };
+  /** Immutable Chat projection and its original evidence, selected atomically with handback. */
+  kimiChatCheckpoint?: { archive: string; priorArchive: string; cwd: string; home: string };
+  /** Exact native data root and working directory, plus any retained evidence from the old handoff path. */
+  kimiNativeBinding?: { cwd: string; home: string; legacyArchive?: string; legacyProviderId?: string };
+  /** Durable ownership fence for first-turn native startup. Never carried to another provider. */
+  kimiNativeBootstrap?: { nonce: string; phase: 'reserved' | 'rotating' };
   /**
    * Облегчённый запуск (спека «меньше ходов и легче контекст», C2.2): решение принимается один раз при создании
    * сессии и одинаково применяется при `resume`. Нет поля = `false`: карты до этого куска читаются без миграции.

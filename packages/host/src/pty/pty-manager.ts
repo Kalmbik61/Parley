@@ -8,6 +8,7 @@
  * конкретную сессию (иначе вывод каждого PTY шёл бы всем клиентам хоста сразу).
  */
 
+import { randomUUID } from 'node:crypto';
 import { refKey } from '@parley/protocol';
 import type { SessionRef } from '@parley/protocol';
 import type { HostContext } from '../context.js';
@@ -34,6 +35,13 @@ export interface PtyHandle {
   rows: number;
   /** Провайдер из `PtyLaunch.provider`; `null` — не задан. */
   provider: string | null;
+  generation?: string;
+  kimiNative?: true;
+  /** Changes on every physical input or resize, even when the draft boolean does not change. */
+  inputRevision?(): number;
+  /** Physical input only. Startup revalidates the repainted screen after a resize without treating it as typing. */
+  rawInputRevision?(): number;
+  submittedAt?(): number;
   /** Черновик человека или черновик хоста — поверх любого будильник не печатает. */
   hasDraft(): boolean;
   /** Режим bracketed paste headless-экрана сессии. */
@@ -89,6 +97,11 @@ interface Session {
   cols: number;
   rows: number;
   provider: string | null;
+  generation?: string;
+  kimiNative?: true;
+  inputRevision: number;
+  rawInputRevision: number;
+  submittedAt: number;
   /** Разбор потока терминала — только у codex: у остальных состояние приходит хуками. */
   terminal: CodexTerminalParser | null;
   /** OSC 7501 of Qwen Code; other providers — `null`. */
@@ -105,6 +118,10 @@ function toHandle(session: Session): PtyHandle {
     cols: session.cols,
     rows: session.rows,
     provider: session.provider,
+    ...(session.generation === undefined ? {} : { generation: session.generation }),
+    ...(session.kimiNative === true ? { kimiNative: true } : {}),
+    ...(session.kimiNative === true ? { inputRevision: () => session.inputRevision, rawInputRevision: () => session.rawInputRevision } : {}),
+    ...(session.kimiNative === true ? { submittedAt: () => session.submittedAt } : {}),
     hasDraft: () => session.draft.hasDraft || session.draft.hasHostDraft,
     bracketedPaste: () => session.screen.bracketedPaste(),
   };
@@ -152,6 +169,7 @@ export function createPtyManager(host: HostContext, windowCounters?: WindowCount
     const ptyProcess = launch.process ?? spawnPty(launch, size);
     const screen = createScreen(size.cols, size.rows);
     const batcher = new OutputBatcher((data) => {
+      if (sessions.get(key) !== session) return;
       for (const listener of outputListeners) listener(ref, data);
     }, BATCH_INTERVAL_MS);
 
@@ -165,6 +183,11 @@ export function createPtyManager(host: HostContext, windowCounters?: WindowCount
       cols: size.cols,
       rows: size.rows,
       provider: launch.provider ?? null,
+      ...(launch.provider === 'kimi' ? { generation: randomUUID() } : {}),
+      ...(launch.kimiNative === true ? { kimiNative: true } : {}),
+      inputRevision: 0,
+      rawInputRevision: 0,
+      submittedAt: 0,
       terminal: launch.provider === 'codex' ? createCodexTerminalParser() : null,
       programStatus: launch.provider === 'qwen' ? createQwenTerminalParser() : null,
       stopWaiters: [],
@@ -174,6 +197,7 @@ export function createPtyManager(host: HostContext, windowCounters?: WindowCount
     host.busy(key, true);
 
     ptyProcess.onData((data) => {
+      if (sessions.get(key) !== session) return;
       windowCounters?.pty(Buffer.byteLength(data));
       session.screen.write(data);
       session.batcher.push(data);
@@ -197,11 +221,13 @@ export function createPtyManager(host: HostContext, windowCounters?: WindowCount
     });
 
     ptyProcess.onExit((exit) => {
-      sessions.delete(key);
-      host.busy(key, false);
+      const current = sessions.get(key) === session;
       session.batcher.dispose();
       session.screen.dispose();
       try {
+        if (!current) return;
+        sessions.delete(key);
+        host.busy(key, false);
         try {
           host.broadcast('pty.exit', { ref, exitCode: exit.exitCode, signal: exit.signal });
         } catch (error) {
@@ -311,11 +337,16 @@ export function createPtyManager(host: HostContext, windowCounters?: WindowCount
     list: () => Array.from(sessions.values()).map(toHandle),
 
     write(ref, data) {
-      requireSession(ref).process.write(data);
+      const session = requireSession(ref);
+      if (session.kimiNative === true && data === '\r') session.submittedAt = Date.now();
+      session.process.write(data);
     },
 
     input(ref, data) {
       const session = requireSession(ref);
+      session.inputRevision++;
+      session.rawInputRevision++;
+      if (session.kimiNative === true && data === '\r') session.submittedAt = Date.now();
       const before = session.draft.hasDraft;
       const hostBefore = session.draft.hasHostDraft;
       session.draft.input(data);
@@ -334,6 +365,7 @@ export function createPtyManager(host: HostContext, windowCounters?: WindowCount
 
     resize(ref, cols, rows) {
       const session = requireSession(ref);
+      session.inputRevision++;
       session.cols = cols;
       session.rows = rows;
       session.process.resize(cols, rows);

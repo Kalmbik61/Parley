@@ -148,7 +148,7 @@ export async function accountEntry(id: string): Promise<ProviderEntry> {
 export async function signInEntry(id: string): Promise<ProviderEntry> {
   if (id !== 'kimi') return accountEntry(id);
   const entry = (await loadProviders()).kimi;
-  if (entry === undefined || entry.custom !== undefined || entry.runner.mcpConfig !== 'kimi-acp') {
+  if (entry === undefined || entry.custom !== undefined || entry.runner.mcpConfig !== 'kimi-native') {
     throw new HostError('bad_request', 'native Kimi is unavailable');
   }
   return entry;

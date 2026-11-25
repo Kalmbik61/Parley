@@ -9,6 +9,8 @@ import { spawn } from 'node-pty';
 import type { IPty } from 'node-pty';
 
 export interface PtyLaunch {
+  /** Interactive stock Kimi shared by the host sender and native Terminal. */
+  kimiNative?: boolean;
   command: string;
   args: string[];
   cwd: string;

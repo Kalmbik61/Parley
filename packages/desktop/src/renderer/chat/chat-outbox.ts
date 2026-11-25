@@ -25,10 +25,12 @@
  */
 
 import type { FeedItem } from '@parley/core';
-import type { SessionRef } from '@parley/protocol';
+import { KIMI_SHARED_TERMINAL_FEATURE, type SessionRef } from '@parley/protocol';
+import { hostFeatures } from '../lib/capabilities.js';
 import { createOutbox, type AttemptResult, type OutboxItem } from '../lib/outbox.js';
 import { isCompletePointerText } from '../lib/participant.js';
 import { activityFor, useActivityStore } from '../store/activity.js';
+import { useHostStore } from '../store/host.js';
 import { useWorksStore } from '../store/works.js';
 import { sendToAgent, showSendToast, type SendWithToastDeps } from '../terminal/send.js';
 import { turnActive } from './feed-model.js';
@@ -211,7 +213,14 @@ export async function attemptChatSend(key: string, item: OutboxItem<ChatOutboxPa
 }
 
 const baseOutbox = createOutbox<ChatOutboxPayload>(attemptChatSend, {
-  ready: (key, item) => item.payload.now === true || !sessionBusy(key, item.payload.ref),
+  ready: (key, item) => {
+    const ref = item.payload.ref;
+    const session = useWorksStore.getState().entries.find((entry) =>
+      entry.projectPath === ref.projectPath && entry.map.work.id === ref.workId,
+    )?.map.sessions.find((candidate) => candidate.id === ref.sessionId);
+    const shared = session?.provider === 'kimi' && hostFeatures(useHostStore.getState().status).has(KIMI_SHARED_TERMINAL_FEATURE);
+    return (session?.kimiTerminal === undefined || shared) && (item.payload.now === true || !sessionBusy(key, ref));
+  },
 });
 
 /** Тестам нужна и очистка ожидания промптов. */
@@ -236,3 +245,6 @@ useFeedStore.subscribe((state, previous) => {
 });
 useWorksStore.subscribe(kickAll);
 useActivityStore.subscribe(kickAll);
+useHostStore.subscribe(({ status }, previous) => {
+  if (hostFeatures(status).has(KIMI_SHARED_TERMINAL_FEATURE) !== hostFeatures(previous.status).has(KIMI_SHARED_TERMINAL_FEATURE)) kickAll();
+});

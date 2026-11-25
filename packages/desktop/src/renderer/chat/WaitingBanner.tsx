@@ -14,9 +14,10 @@ export interface WaitingBannerProps {
   tabId: string;
   /** Another text than the default; Qwen Code asks for approval in the terminal. */
   text?: string;
+  showTerminal?: boolean;
 }
 
-export function WaitingBanner({ workKey, tabId, text }: WaitingBannerProps): JSX.Element {
+export function WaitingBanner({ workKey, tabId, text, showTerminal = true }: WaitingBannerProps): JSX.Element {
   const openTerminal = (): void => {
     useLayoutStore.getState().apply(workKey, (layout) => updateTab(layout, tabId, { view: 'terminal' }));
   };
@@ -27,9 +28,11 @@ export function WaitingBanner({ workKey, tabId, text }: WaitingBannerProps): JSX
       className="flex shrink-0 items-center gap-2 border-t border-border px-3 py-1.5 text-xs text-muted-foreground"
     >
       <span className="min-w-0 flex-1 truncate">{text ?? S.chat.waitingBanner.text}</span>
-      <Button type="button" size="xs" variant="outline" data-testid="chat-waiting-open" onClick={openTerminal} className="shrink-0">
-        {S.chat.waitingBanner.open}
-      </Button>
+      {showTerminal ? (
+        <Button type="button" size="xs" variant="outline" data-testid="chat-waiting-open" onClick={openTerminal} className="shrink-0">
+          {S.chat.waitingBanner.open}
+        </Button>
+      ) : null}
     </div>
   );
 }

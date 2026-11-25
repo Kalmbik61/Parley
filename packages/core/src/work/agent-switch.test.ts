@@ -209,3 +209,20 @@ describe('agent fields in parseMap', () => {
     expect(session.previousAgents![0]!.providerSessionId).toBe('uuid-5');
   });
 });
+
+it('does not carry an old Kimi creation preference across a provider replacement', () => {
+  const map = emptyMap();
+  const s = addSession(map, { provider: 'kimi', label: 'Kimi', task: 'Task', kimiPermissionMode: 'auto' });
+  const next = applyAgentSwitch(map, s.id, { provider: 'codex' }, { ...binding(), provider: 'kimi' }, 'rev-1');
+  expect(next.sessions[0]).not.toHaveProperty('kimiPermissionMode');
+  expect(s.kimiPermissionMode).toBe('auto');
+});
+
+it('does not bind a replacement provider to the previous Kimi Chat checkpoint', () => {
+  const map = emptyMap();
+  const s = addSession(map, { provider: 'kimi', label: 'Kimi', task: 'Task' });
+  s.kimiChatCheckpoint = { archive: '52d99180-78b4-4c18-a36f-869b6c7341d6', priorArchive: '51d250ab-c781-4f8c-8866-7ac344cd84b2', cwd: '/project', home: '/kimi' };
+  const next = applyAgentSwitch(map, s.id, { provider: 'codex' }, { ...binding(), provider: 'kimi' }, 'rev-1');
+  expect(next.sessions[0]).not.toHaveProperty('kimiChatCheckpoint');
+  expect(s.kimiChatCheckpoint).toBeDefined();
+});

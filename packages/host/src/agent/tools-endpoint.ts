@@ -150,7 +150,7 @@ export function createToolsEndpoint(options: {
    * The session's MCP server got its tool list answered: its agent's MCP client is connected (Qwen readiness, spec 3.4).
    * Called only after the 200 answer went out, with the generation taken when the request arrived.
    */
-  onList?(ref: SessionRef, generation: number | null): void;
+  onList?(ref: SessionRef, generation: number | null, names: readonly string[]): void;
 }): {
   handle(req: IncomingMessage, res: ServerResponse): void;
   forget(ref: SessionRef): void;
@@ -302,7 +302,7 @@ export function createToolsEndpoint(options: {
               if (controller.signal.aborted) return;
               if (!reply({ ok: true, result: { tools } })) return;
               try {
-                options.onList?.(ref, generation);
+                options.onList?.(ref, generation, tools.map(tool => tool.name));
               } catch (error) {
                 log.warn('tools list listener failed', { error: String(error) });
               }

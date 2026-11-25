@@ -1,55 +1,65 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { afterEach, expect, it, vi } from 'vitest';
+import { KIMI_LAUNCH_MODES_FEATURE, KIMI_PTY_GENERATION_FEATURE, KIMI_SHARED_TERMINAL_FEATURE, type MethodName, type Params, type Result } from '@parley/protocol';
 import { readMap } from '@parley/core';
-import { feedItem, type MethodName, type Params, type Result, type SessionRef } from '@parley/protocol';
-import { connectRaw, hello, removeHome, tempHome, waitConnected, type RawMessage, type TestClient } from '../../test/helpers.js';
+import { afterEach, expect, it, vi } from 'vitest';
+import { connectRaw, hello, removeHome, tempHome, waitConnected, type TestClient } from '../../test/helpers.js';
 import { startHost, type RunningHost } from '../host.js';
 import { hostPaths } from '../paths.js';
 
+let requestId = 100;
 let home: string | undefined;
 let running: RunningHost | undefined;
 let client: TestClient | undefined;
-let id = 100;
-let events: RawMessage[] = [];
 
-async function request<M extends MethodName>(method: M, params: Params<M>): Promise<RawMessage> {
-  const requestId = ++id;
-  client!.send({ id: requestId, method, params });
+async function request<M extends MethodName>(method: M, params: Params<M>) {
+  const id = ++requestId;
+  client!.send({ id, method, params });
   for (;;) {
-    const next = await client!.next();
-    if (next.id === requestId) return next;
-    if (next.event !== undefined) events.push(next);
+    const response = await client!.next();
+    if (response.id === id) return response;
   }
 }
 
 async function call<M extends MethodName>(method: M, params: Params<M>): Promise<Result<M>> {
   const response = await request(method, params);
-  if (response.error !== undefined) throw new Error(JSON.stringify(response.error));
+  expect(response.error).toBeUndefined();
   return response.result as Result<M>;
 }
 
-async function setup(loggedOut = false, standalone = false): Promise<string> {
+async function setup(unsupported = false) {
   home = await tempHome();
-  const binary = path.join(home, standalone ? '.kimi-code/bin/kimi' : 'kimi');
-  if (standalone) await mkdir(path.dirname(binary), { recursive: true });
-  const project = path.join(home, 'project');
-  await mkdir(project);
-  await writeFile(binary, await readFile(new URL('./fixtures/acp.cjs', import.meta.url)), { mode: 0o755 });
-  vi.stubEnv('PARLEY_KIMI_BIN', standalone ? undefined : binary);
-  if (standalone) {
-    vi.stubEnv('HARNAS_KIMI_BIN', undefined);
-    vi.stubEnv('HOME', home);
-    vi.stubEnv('PATH', path.dirname(process.execPath));
-  }
-  vi.stubEnv('KIMI_FIXTURE_MODEL_FILE', path.join(home, 'fixture-model'));
-  if (loggedOut) vi.stubEnv('KIMI_FIXTURE_LOGGED_OUT', '1');
+  const binary = path.join(home, 'kimi');
+  const projectPath = path.join(home, 'project');
+  const data = path.join(home, 'kimi-data');
+  const trace = path.join(home, 'native.jsonl');
+  const keys = path.join(home, 'input.txt');
+  await mkdir(projectPath);
+  await mkdir(data);
+  await writeFile(binary, `#!/usr/bin/env node
+if (process.argv[2] === 'acp') process.exit(21);
+process.getBuiltinModule('node:fs').appendFileSync(process.env.KIMI_FIXTURE_NATIVE_LAUNCH_LOG,
+  JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd(), home: process.env.KIMI_CODE_HOME }) + '\\n');
+${unsupported ? `if (process.stdout.isTTY) {
+  process.stdout.write(${JSON.stringify('\x1b[?2004h│ Version: 2.7.2 │\r\nNo session yet — one will be created on your first message.\r\n╭──────────╮\r\n│ >        │\r\n╰──────────╯\r\n')});
+  process.stdin.setRawMode(true);
+  process.stdin.on('data', (data) => process.getBuiltinModule('node:fs').appendFileSync(${JSON.stringify(keys)}, data));
+}` : ''}
+process.stdin.resume();
+`, { mode: 0o755 });
+  vi.stubEnv('PARLEY_KIMI_BIN', binary);
+  vi.stubEnv('KIMI_CODE_HOME', data);
+  vi.stubEnv('KIMI_FIXTURE_NATIVE_LAUNCH_LOG', trace);
   running = await startHost({ home });
   const paths = hostPaths(home);
   client = connectRaw(paths.socket);
   await waitConnected(client.socket);
-  expect((await hello(client, await readFile(paths.token, 'utf8'))).error).toBeUndefined();
-  return project;
+  const greeting = await hello(client, await readFile(paths.token, 'utf8'));
+  expect(greeting.error).toBeUndefined();
+  expect(greeting.result).toMatchObject({ features: expect.arrayContaining([
+    KIMI_LAUNCH_MODES_FEATURE, KIMI_PTY_GENERATION_FEATURE, KIMI_SHARED_TERMINAL_FEATURE,
+  ]) });
+  return { projectPath, data, trace, keys };
 }
 
 afterEach(async () => {
@@ -60,231 +70,60 @@ afterEach(async () => {
   client = undefined;
   running = undefined;
   home = undefined;
-  events = [];
   vi.unstubAllEnvs();
 });
 
 const input = (projectPath: string) => ({ projectPath, workId: null, provider: 'kimi', label: '', task: '', parent: null });
 
-async function session(ref: SessionRef) {
-  return (await readMap(ref.projectPath, ref.workId)).sessions.find((entry) => entry.id === ref.sessionId);
-}
+it('starts native and keeps one PTY across compatibility view calls', async () => {
+  const { projectPath, data, trace } = await setup();
+  const { ref } = await call('sessions.create', { ...input(projectPath), kimiPermissionMode: 'auto' });
+  const launch = () => readFile(trace, 'utf8').then(text => text.trim().split('\n').map(line => JSON.parse(line)));
+  await expect.poll(launch, { timeout: 5000 }).toMatchObject([{ args: ['--auto'], cwd: await realpath(projectPath), home: await realpath(data) }]);
+  const generation = (await call('pty.attach', { ref })).generation;
+  expect(generation).toBeDefined();
+  const session = async () => (await readMap(ref.projectPath, ref.workId)).sessions.find(item => item.id === ref.sessionId);
+  const pid = (await session())?.pid;
+  expect(pid).toBeTypeOf('number');
+  await call('kimi.setControl', { ref, target: 'terminal' });
+  await call('kimi.setControl', { ref, target: 'chat' });
+  expect((await call('pty.attach', { ref })).generation).toBe(generation);
+  expect((await session())?.pid).toBe(pid);
+  expect(await launch()).toHaveLength(1);
+  expect((await request('kimi.setConfig', { ref, configId: 'mode', value: 'plan' })).error).toBeDefined();
+  const json = await readFile(path.join(data, 'mcp.json'), 'utf8');
+  expect(JSON.parse(json)).toMatchObject({ mcpServers: { parley: { args: expect.arrayContaining(['--kimi-native']) } } });
+  expect(json).not.toMatch(/TOKEN|CAPABILITY|WORK_DIR|SESSION_ID/);
+}, 15_000);
 
-it('uses ordinary session and Chat RPC, calls the real Parley MCP, then cancels and resumes the bound ACP session', async () => {
-  const projectPath = await setup();
-  const providers = await call('providers.list', {});
-  expect(providers.providers.find(({ id }) => id === 'kimi')).toMatchObject({ label: 'Kimi Code', available: true });
-  const { ref } = await call('sessions.create', input(projectPath));
-  expect(await session(ref)).toMatchObject({ lifecycle: 'active', provider: 'kimi', providerSessionId: 'acp-session' });
-  expect((await call('kimi.getState', { ref })).config).toMatchObject([
-    { id: 'mode', currentValue: 'default' }, { id: 'model', currentValue: 'alpha' },
-  ]);
-  expect(await call('kimi.setConfig', { ref, configId: 'mode', value: 'plan' })).toMatchObject({
-    config: [{ id: 'mode', currentValue: 'plan' }, { id: 'model', currentValue: 'alpha' }],
-  });
-  expect(await call('kimi.setConfig', { ref, configId: 'model', value: 'beta' })).toMatchObject({
-    config: [{ id: 'mode', currentValue: 'plan' }, { id: 'model', currentValue: 'beta' }],
-  });
-  expect(events).toContainEqual(expect.objectContaining({
-    event: 'kimi.configChanged', data: { ref, config: expect.arrayContaining([expect.objectContaining({ id: 'model', currentValue: 'beta' })]) },
+it('rejects non-Kimi and invalid wire preferences', async () => {
+  const { projectPath } = await setup();
+  expect((await request('sessions.create', { ...input(projectPath), provider: 'codex', kimiPermissionMode: 'auto' })).error).toBeDefined();
+  expect((await request('sessions.create', { ...input(projectPath), kimiPermissionMode: 'plan' as 'manual' })).error).toBeDefined();
+});
+
+it('keeps input blocked with an actionable error on an unsupported startup screen', async () => {
+  const { projectPath, keys } = await setup(true);
+  const { ref } = await call('sessions.create', { ...input(projectPath), kimiPermissionMode: 'manual' });
+  const { generation } = await call('pty.attach', { ref });
+  await expect.poll(async () => (await call('feed.snapshot', { ref })).items, { timeout: 4000 }).toContainEqual(expect.objectContaining({
+    kind: 'error', error: 'kimi-native-startup', message: expect.stringMatching(/stop and resume/i),
   }));
-  expect(await call('pty.send', { ref, text: 'call Parley', submit: true })).toMatchObject({ submitted: true });
-  await expect.poll(() => call('feed.snapshot', { ref })).toMatchObject({
-    items: expect.arrayContaining([expect.objectContaining({ kind: 'text', text: 'Parley session: s-01', streaming: false })]),
-  });
-  expect(await call('pty.send', { ref, text: 'wait', submit: true })).toMatchObject({ submitted: true });
-  await call('feed.interrupt', { ref });
-  await expect.poll(() => call('feed.snapshot', { ref })).toMatchObject({
-    items: expect.arrayContaining([expect.objectContaining({ kind: 'turn', interrupted: true })]),
-  });
-  expect(await call('pty.send', { ref, text: 'disconnect', submit: true })).toMatchObject({ submitted: true });
-  await expect.poll(() => session(ref)).toMatchObject({ lifecycle: 'sleeping', providerSessionId: 'acp-session' });
-  await call('sessions.resume', { ref });
-  expect(await session(ref)).toMatchObject({ lifecycle: 'active', providerSessionId: 'acp-session' });
-  expect((await call('kimi.getState', { ref })).config).toContainEqual(expect.objectContaining({ id: 'model', currentValue: 'beta' }));
-  expect(await call('pty.send', { ref, text: 'hello', submit: true })).toMatchObject({ submitted: true });
-  await expect.poll(() => call('feed.snapshot', { ref })).toMatchObject({
-    items: expect.arrayContaining([expect.objectContaining({ kind: 'text', text: 'Hello Parley', streaming: false })]),
-  });
-}, 15_000);
+  expect(await call('pty.send', { ref, text: 'irrelevant', submit: true })).toMatchObject({ inserted: false, submitted: false });
+  client!.send({ method: 'pty.input', params: { ref, data: 'irrelevant\r', generation } });
+  expect((await call('pty.screenText', { ref })).lines.join('\n')).toContain('Version: 2.7.2');
+  await expect(readFile(keys, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  const session = (await readMap(ref.projectPath, ref.workId)).sessions.find(item => item.id === ref.sessionId);
+  expect(session).toMatchObject({ providerSessionId: null, kimiNativeBootstrap: { phase: 'reserved' } });
+});
 
-it('applies catalog choices before its first prompt and restores subsequent chat changes on resume', async () => {
-  vi.stubEnv('KIMI_FIXTURE_CREATION_CONFIG', '1');
-  const projectPath = await setup();
-  const traceFile = path.join(home!, 'startup-trace');
-  vi.stubEnv('KIMI_FIXTURE_TRACE', traceFile);
-  await writeFile(path.join(home!, 'providers.json'), JSON.stringify({ kimi: { models: [
-    { id: 'alpha', label: 'Alpha', efforts: ['low', 'high'] },
-    { id: 'beta', label: 'Beta', efforts: ['low', 'high', 'max'] },
-  ] } }));
-  const { ref } = await call('sessions.create', { ...input(projectPath), task: 'hello', model: 'beta', effort: 'max' });
-  await expect.poll(() => readFile(traceFile, 'utf8')).toContain('"prompt"');
-  const trace = (await readFile(traceFile, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
-  expect(trace.slice(0, 2)).toEqual([{ configId: 'model', value: 'beta' }, { configId: 'thinking', value: 'max' }]);
-  expect(trace[2]).toMatchObject({ prompt: expect.stringContaining('hello'), model: 'beta', effort: 'max' });
-  expect(await session(ref)).toMatchObject({ model: 'beta', effort: 'max' });
-  await expectReply(ref, 'Hello Parley');
-  expect(await call('kimi.setConfig', { ref, configId: 'model', value: 'alpha' })).toMatchObject({
-    config: expect.arrayContaining([expect.objectContaining({ id: 'model', currentValue: 'alpha' })]),
-  });
-  await call('pty.send', { ref, text: 'disconnect', submit: true });
-  await expect.poll(() => session(ref)).toMatchObject({ lifecycle: 'sleeping' });
-  await call('sessions.resume', { ref });
-  expect((await call('kimi.getState', { ref })).config).toContainEqual(expect.objectContaining({ id: 'model', currentValue: 'alpha' }));
-}, 15_000);
-
-it('distinguishes sign-in required and a missing CLI on ordinary create', async () => {
-  const projectPath = await setup(true, true);
-  expect((await request('sessions.create', input(projectPath))).error).toMatchObject({ data: { reason: 'kimi-sign-in' } });
-  expect((await call('providers.list', {})).providers.find(({ id }) => id === 'kimi')).toMatchObject({ available: false, needs: 'sign-in' });
-  vi.stubEnv('PARLEY_KIMI_BIN', '/no/such/kimi');
-  expect((await request('sessions.create', input(projectPath))).error).toMatchObject({ data: { reason: 'kimi-missing-cli' } });
-  expect((await call('providers.list', {})).providers.find(({ id }) => id === 'kimi')).toMatchObject({ available: false, needs: 'cli' });
-}, 15_000);
-
-async function pendingCard(ref: SessionRef, kind: 'permission' | 'question') {
-  const find = async () => (await call('feed.snapshot', { ref })).items.find(
-    (item) => item.kind === kind && item.state === 'pending',
-  );
-  await expect.poll(find).toBeDefined();
-  const card = await find();
-  if (card?.kind !== 'permission' && card?.kind !== 'question') throw new Error('Missing pending card');
-  expect(feedItem.parse(card)).toEqual(card);
-  return card;
-}
-
-async function expectReply(ref: SessionRef, text: string) {
-  await expect.poll(() => call('feed.snapshot', { ref })).toMatchObject({
-    items: expect.arrayContaining([expect.objectContaining({ kind: 'text', text, streaming: false })]),
-  });
-}
-
-it('holds the action for an explicit permission decision and delivers each choice once', async () => {
-  const projectPath = await setup();
-  const file = path.join(projectPath, 'notes.md');
-  const { ref } = await call('sessions.create', input(projectPath));
-  await call('pty.send', { ref, text: 'approve and write', submit: true });
-  const denied = await pendingCard(ref, 'permission');
-  await expect(readFile(file)).rejects.toMatchObject({ code: 'ENOENT' });
-  expect(await call('feed.decide', { ref, cardId: denied.id, decision: { kind: 'permission', behavior: 'allow', optionId: 'deny' } })).toEqual({ applied: false, state: 'pending' });
-  expect(await call('feed.decide', { ref, cardId: denied.id, decision: { kind: 'permission', behavior: 'deny', optionId: 'deny' } })).toEqual({ applied: true, state: 'denied' });
-  await expectReply(ref, 'deny');
-  await expect(readFile(file)).rejects.toMatchObject({ code: 'ENOENT' });
-  expect(await call('feed.decide', { ref, cardId: denied.id, decision: { kind: 'permission', behavior: 'allow', optionId: 'allow' } })).toEqual({ applied: false, state: 'denied' });
-
-  await call('pty.send', { ref, text: 'approve and write', submit: true });
-  const allowed = await pendingCard(ref, 'permission');
-  expect(allowed.id).not.toBe(denied.id);
-  expect(await call('feed.decide', { ref, cardId: allowed.id, decision: { kind: 'permission', behavior: 'allow', optionId: 'allow' } })).toEqual({ applied: true, state: 'allowed' });
-  await expectReply(ref, 'allow');
-  expect(await readFile(file, 'utf8')).toBe('after');
-}, 15_000);
-
-it('routes a form and a fallback question in different sessions without crossing responses', async () => {
-  const projectPath = await setup();
-  const { ref } = await call('sessions.create', input(projectPath));
-  const { ref: other } = await call('sessions.create', input(projectPath));
-  await call('pty.send', { ref, text: 'mixed form', submit: true });
-  await call('pty.send', { ref: other, text: 'fallback question', submit: true });
-  const form = await pendingCard(ref, 'question');
-  const fallback = await pendingCard(other, 'question');
-  expect(fallback).toMatchObject({ questions: [{ question: 'Which release?' }] });
-  expect((await request('feed.decide', { ref, cardId: fallback.id, decision: { kind: 'question', answers: {}, values: { answer: 'option:stable' } } })).error).toBeDefined();
-  expect(await call('feed.decide', { ref: other, cardId: fallback.id, decision: { kind: 'permission', behavior: 'allow' } })).toEqual({ applied: false, state: 'pending' });
-  expect(await call('feed.decide', { ref: other, cardId: fallback.id, decision: { kind: 'question', answers: {}, values: { answer: 'option:stable' } } })).toEqual({ applied: true, state: 'answered' });
-  await expectReply(other, 'option:stable');
-  expect(await call('feed.decide', { ref, cardId: form.id, decision: { kind: 'question', answers: {}, values: { channels: ['unlisted'], note: 'Free text' } } })).toEqual({ applied: false, state: 'pending' });
-  expect(await call('feed.decide', { ref, cardId: form.id, decision: { kind: 'question', answers: {}, values: { channels: ['stable', 'beta'], note: 'Free text' } } })).toEqual({ applied: true, state: 'answered' });
-  await expectReply(ref, '{"channels":["stable","beta"],"note":"Free text"}');
-}, 15_000);
-
-it('removes a cancelled request from attention and rejects a stale click', async () => {
-  const projectPath = await setup();
-  const { ref } = await call('sessions.create', input(projectPath));
-  await call('pty.send', { ref, text: 'approve and write', submit: true });
-  const card = await pendingCard(ref, 'permission');
-  await call('feed.interrupt', { ref });
-  await expect.poll(async () => (await call('feed.snapshot', { ref })).items.find((item) => item.id === card.id)).toMatchObject({ state: 'stale' });
-  expect((await call('feed.snapshot', { ref, scope: 'attention' })).items).toEqual([]);
-  expect(await call('feed.decide', { ref, cardId: card.id, decision: { kind: 'permission', behavior: 'allow', optionId: 'allow' } })).toEqual({ applied: false, state: 'stale' });
-  await expect(readFile(path.join(projectPath, 'notes.md'))).rejects.toMatchObject({ code: 'ENOENT' });
-}, 15_000);
-
-it('lets Kimi fall back when the requested form cannot be rendered', async () => {
-  const projectPath = await setup();
-  const { ref } = await call('sessions.create', input(projectPath));
-  await call('pty.send', { ref, text: 'unsupported form', submit: true });
-  const card = await pendingCard(ref, 'question');
-  expect(card).toMatchObject({ questions: [{ question: 'Which release?', options: [
-    { label: 'Stable', value: 'option:stable' }, { label: 'Skip', value: 'q0_skip' },
-  ] }] });
-  expect(await call('feed.decide', { ref, cardId: card.id, decision: { kind: 'question', answers: {}, values: { answer: 'q0_skip' } } })).toEqual({ applied: true, state: 'answered' });
-  await expectReply(ref, 'q0_skip');
-}, 15_000);
-
-it('answers the correct request when two live cards use the same form key', async () => {
-  const projectPath = await setup();
-  const { ref } = await call('sessions.create', input(projectPath));
-  await call('pty.send', { ref, text: 'parallel questions', submit: true });
-  const questions = async () => (await call('feed.snapshot', { ref, scope: 'attention' })).items
-    .filter((item) => item.kind === 'question');
-  await expect.poll(questions).toHaveLength(2);
-  const [first, second] = await questions();
-  expect(first?.formPrompt).toBe('First question');
-  expect(second?.formPrompt).toBe('Second question');
-  const decide = (cardId: string, answer: string) => call('feed.decide', {
-    ref, cardId, decision: { kind: 'question', answers: {}, values: { answer } },
-  });
-  expect(await decide(second!.id, 'Second answer')).toEqual({ applied: true, state: 'answered' });
-  expect(await decide(second!.id, 'Duplicate')).toEqual({ applied: false, state: 'answered' });
-  expect((await questions()).map((item) => item.id)).toEqual([first!.id]);
-  expect(await decide(first!.id, 'First answer')).toEqual({ applied: true, state: 'answered' });
-  await expectReply(ref, 'First answer / Second answer');
-}, 15_000);
-
-
-it('recovers from idle child exit before the first send without replaying the unsent message', async () => {
-  const projectPath = await setup();
-  const traceFile = path.join(home!, 'recovery-trace');
-  await writeFile(traceFile, '');
-  vi.stubEnv('KIMI_FIXTURE_TRACE', traceFile);
-  const prompts = async () => (await readFile(traceFile, 'utf8')).split('\n')
-    .filter(Boolean).map((line) => JSON.parse(line)).filter((entry) => 'prompt' in entry);
-  const { ref } = await call('sessions.create', input(projectPath));
-  const created = await session(ref);
-  expect(created?.pid).toBeTypeOf('number');
-  process.kill(created!.pid!, 'SIGKILL');
-  await expect.poll(() => session(ref)).toMatchObject({ lifecycle: 'sleeping' });
-  expect((await request('pty.send', { ref, text: 'проверка', submit: true })).error).toMatchObject({ code: 'not_found' });
-  // A sleeping session need not be present in the works cache used by feed.snapshot.
-  expect(await prompts()).toEqual([]);
-  await call('sessions.resume', { ref });
-  expect(await session(ref)).toMatchObject({ lifecycle: 'active', providerSessionId: 'acp-session' });
-  await expectReply(ref, 'Old answer');
-  expect((await call('feed.snapshot', { ref })).items).toContainEqual(expect.objectContaining({ kind: 'prompt', text: 'Old question' }));
-  expect(await prompts()).toEqual([]);
-  expect(await call('pty.send', { ref, text: 'проверка', submit: true })).toMatchObject({ submitted: true });
-  await expectReply(ref, 'Hello Parley');
-  expect(await prompts()).toEqual([{ prompt: 'проверка', model: 'alpha', effort: 'low' }]);
-  expect((await call('feed.snapshot', { ref })).items.filter((item) => item.kind === 'prompt' && item.text === 'проверка')).toHaveLength(1);
-}, 15_000);
-
-
-it('delivers a Cyrillic Chat prompt once while preserving the raw terminal draft', async () => {
-  const projectPath = await setup();
-  const traceFile = path.join(home!, 'draft-trace');
-  vi.stubEnv('KIMI_FIXTURE_TRACE', traceFile);
-  const { ref } = await call('sessions.create', input(projectPath));
-  client!.send({ method: 'pty.input', params: { ref, data: 'unfinished terminal draft' } });
-  expect(await call('pty.send', { ref, text: 'привет! тест', submit: true })).toEqual({
-    inserted: true, submitted: true, reason: null,
-  });
-  await expectReply(ref, 'Hello Parley');
-  const trace = async () => (await readFile(traceFile, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
-  expect(await trace()).toEqual([{ prompt: 'привет! тест', model: 'alpha', effort: 'low' }]);
-  client!.send({ method: 'pty.input', params: { ref, data: '\r' } });
-  await expect.poll(trace).toEqual([
-    { prompt: 'привет! тест', model: 'alpha', effort: 'low' },
-    { prompt: 'unfinished terminal draft', model: 'alpha', effort: 'low' },
-  ]);
-}, 15_000);
+it('reports a foreign same-name MCP entry before launching and preserves its bytes', async () => {
+  const { projectPath, data, trace } = await setup();
+  const raw = '{ "mcpServers": { "parley": { "command": "foreign" }, "mine": { "command": "keep" } } }';
+  const config = path.join(data, 'mcp.json');
+  await writeFile(config, raw);
+  const response = await request('sessions.create', input(projectPath));
+  expect(response.error).toMatchObject({ code: 'conflict' });
+  expect(await readFile(config, 'utf8')).toBe(raw);
+  await expect(readFile(trace, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+});

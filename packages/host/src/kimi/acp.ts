@@ -36,7 +36,8 @@ interface KimiAcpOptions {
   canShowElicitation?: (request: Extract<KimiRequest, { kind: 'elicitation' }>) => boolean;
   /** Replays previous messages when the host has no conversation to show. */
   loadHistory?: boolean;
-  onText?: (text: string, history: boolean, author: 'agent' | 'user') => void;
+  requireHistory?: boolean;
+  onText?: (text: string, history: boolean, author: 'agent' | 'user', messageId?: string) => void;
   onState?: (state: KimiState) => void;
   onTurnStart?: (text: string) => void;
   onTurnEnd?: (reason: string, error?: KimiAcpError) => void;
@@ -118,6 +119,7 @@ export function createKimiAcp(options: KimiAcpOptions) {
   let sessionId = options.sessionId;
   let instructions = options.instructions;
   let embeddedContext = false;
+  let historyLoad = false;
   let connected = false;
   let exitInfo: ExitInfo | undefined;
   let dead: KimiAcpError | undefined;
@@ -223,12 +225,17 @@ export function createKimiAcp(options: KimiAcpOptions) {
     });
   }
 
-  function setOptions(raw: unknown): boolean {
-    if (!Array.isArray(raw)) return false;
-    config = raw.flatMap((value: unknown) => {
+  function parseOptions(raw: unknown): KimiConfigOption[] | undefined {
+    return Array.isArray(raw) ? raw.flatMap((value: unknown) => {
       const parsed = kimiConfigOption.safeParse(value);
       return parsed.success ? [parsed.data] : [];
-    });
+    }) : undefined;
+  }
+
+  function setOptions(raw: unknown): boolean {
+    const options = parseOptions(raw);
+    if (options === undefined) return false;
+    config = options;
     configRevision += 1;
     publish();
     return true;
@@ -268,7 +275,10 @@ export function createKimiAcp(options: KimiAcpOptions) {
       if (kind === 'config_option_update') setOptions(update['configOptions']);
       const content = record(update['content']);
       if ((kind === 'agent_message_chunk' || kind === 'user_message_chunk') && content['type'] === 'text' && typeof content['text'] === 'string') {
-        if (replaying || (turn !== undefined && !turn.cancelled && kind === 'agent_message_chunk')) options.onText?.(content['text'], replaying, kind === 'user_message_chunk' ? 'user' : 'agent');
+        const author = kind === 'user_message_chunk' ? 'user' : 'agent';
+        const messageId = update['messageId'];
+        if (replaying && typeof messageId === 'string' && messageId !== '') options.onText?.(content['text'], true, author, messageId);
+        else if (replaying || (turn !== undefined && !turn.cancelled && author === 'agent')) options.onText?.(content['text'], replaying, author);
       }
       return;
     }
@@ -401,6 +411,7 @@ export function createKimiAcp(options: KimiAcpOptions) {
     const result = await initialize();
     const capabilities = record(result['agentCapabilities']);
     embeddedContext = record(capabilities['promptCapabilities'])['embeddedContext'] === true;
+    historyLoad = capabilities['loadSession'] === true;
     const params = { cwd: options.cwd, mcpServers: options.mcpServers };
     let opened: JsonObject;
     if (sessionId === undefined) {
@@ -411,7 +422,10 @@ export function createKimiAcp(options: KimiAcpOptions) {
       sessionId = opened['sessionId'];
     } else {
       const resume = record(capabilities['sessionCapabilities'])['resume'] != null;
-      if (capabilities['loadSession'] === true && (options.loadHistory === true || !resume)) {
+      if (options.requireHistory === true && !historyLoad) {
+        throw new KimiAcpError('This Kimi Code CLI cannot replay history for handback', 'protocol');
+      }
+      if (historyLoad && (options.loadHistory === true || !resume)) {
         replaying = options.loadHistory === true;
         try {
           opened = await request('session/load', { ...params, sessionId });
@@ -475,7 +489,9 @@ export function createKimiAcp(options: KimiAcpOptions) {
     const choice = config.find((option) => option.id === configId);
     const valid = choice?.type === 'boolean' ? typeof value === 'boolean' : choice?.options.some((option) =>
       'group' in option ? option.options.some((item) => item.value === value) : option.value === value);
-    if (!valid) throw new KimiAcpError('Unknown Kimi Code configuration option or value', 'invalid');
+    if (!valid) throw new KimiAcpError(configId === 'mode'
+      ? 'This Kimi Code CLI does not offer the selected permission mode'
+      : 'Unknown Kimi Code configuration option or value', 'invalid');
     const revision = configRevision;
     changingConfig = true;
     try {
@@ -483,6 +499,15 @@ export function createKimiAcp(options: KimiAcpOptions) {
         sessionId, configId, value,
         ...(typeof value === 'boolean' ? { type: 'boolean' } : {}),
       });
+      if (configId === 'mode') {
+        // A notification or the opening snapshot alone cannot acknowledge this write. Also do not
+        // treat a stale reply as current when a newer configuration notification says otherwise.
+        const matches = (options: KimiConfigOption[] | undefined) =>
+          options?.find((option) => option.id === configId)?.currentValue === value;
+        if (!matches(parseOptions(result['configOptions'])) || (revision !== configRevision && !matches(config))) {
+          throw new KimiAcpError('Kimi Code did not confirm the selected permission mode', 'protocol');
+        }
+      }
       if (revision === configRevision && !setOptions(result['configOptions'])) {
         throw new KimiAcpError('Kimi Code did not confirm the configuration', 'protocol');
       }
@@ -519,6 +544,7 @@ export function createKimiAcp(options: KimiAcpOptions) {
     get pid() { return child.pid; },
     connected: () => connected && dead === undefined && closing === undefined,
     busy: () => turn !== undefined || changingConfig,
+    supportsHistoryLoad: () => historyLoad,
     checkAuth, connect, prompt, cancel, respond, setConfig, state, close, kill,
     onExit(listener: (exit: ExitInfo) => void) {
       exitListeners.add(listener);

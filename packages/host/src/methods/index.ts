@@ -37,7 +37,6 @@ import type { CliUpdateRunner } from '../providers/update-run.js';
 import type { CliInstaller } from '../providers/install-run.js';
 import type { PtyManager } from '../pty/pty-manager.js';
 import type { SessionsService } from '../sessions/sessions-service.js';
-import type { KimiSessions } from '../kimi/sessions.js';
 import type { KimiAuth } from '../providers/kimi-auth.js';
 import type { SwarmsService } from '../swarms/swarms-service.js';
 import type { WakeService } from '../wake/wake-service.js';
@@ -108,7 +107,6 @@ export interface MethodDeps {
   activity: ActivityService;
   pty: PtyManager;
   sessions: SessionsService;
-  kimi?: Pick<KimiSessions, 'state' | 'setConfig'>;
   kimiAuth?: KimiAuth;
   /** Жизненный цикл роя: `sessions.close` сообщает ему о закрытии королевы человеком; без него закрытая королева — упавший рой. */
   swarms?: Pick<SwarmsService, 'humanClosed'>;
@@ -175,6 +173,7 @@ export interface MethodDeps {
   log?: Log;
   /** Общий отправитель хоста (`createSender`): окно (`pty.send`) и помощник делят «свой Enter в полёте»; без него `pty.*` заводит свой. */
   send?: (params: { ref: SessionRef; text: string; submit: boolean }) => Promise<SendResult>;
+  kimiAllowRaw?: (ref: SessionRef, data: string) => boolean;
   /** Помощник на острове (спека 2026-10-14); без него методов `assistant.*` у хоста нет. */
   assistant?: AssistantService;
   /** Jobs помощника: `jobs.ackInline`; без них метод отвечает `not_found`. */
@@ -246,6 +245,8 @@ export const WORKS_GATED_METHODS = [
   'feed.interrupt',
   'kimi.getState',
   'kimi.setConfig',
+  'kimi.getControl',
+  'kimi.setControl',
 ] as const satisfies readonly MethodName[];
 
 /** Уведомления того же рода: activity.seen сверяет сессию со снимком работ. */
@@ -275,7 +276,6 @@ export interface HostHandlers {
 export function createHostHandlers(deps: MethodDeps): HostHandlers {
   const pty = createPtyHandlers(deps);
   const sessions = createSessionHandlers(deps);
-  const { kimi } = deps;
   const wake = createWakeHandlers(deps);
   const worktrees = createWorktreesHandlers(deps);
   const changes = createChangesHandlers(deps);
@@ -367,12 +367,8 @@ export function createHostHandlers(deps: MethodDeps): HostHandlers {
           'sessions.cancelCompact': compaction.cancel as AnyHandler,
         }),
     'sessions.setModel': sessions.sessionsSetModel as AnyHandler,
-    ...(kimi === undefined ? {} : {
-      'kimi.getState': async ({ ref }: Params<'kimi.getState'>) => kimi.state(ref),
-      'kimi.setConfig': async ({ ref, configId, value }: Params<'kimi.setConfig'>) => ({
-        config: await kimi.setConfig(ref, configId, value),
-      }),
-    }),
+    'kimi.getControl': async ({ ref }: Params<'kimi.getControl'>) => deps.sessions.kimiControl(ref),
+    'kimi.setControl': async ({ ref, target, hasDraft }: Params<'kimi.setControl'>) => deps.sessions.setKimiControl(ref, target, hasDraft),
     'sessions.switchOptions': sessions.sessionsSwitchOptions as AnyHandler,
     'sessions.switchAgent': sessions.sessionsSwitchAgent as AnyHandler,
     'sessions.resumeInterrupted': sessions.sessionsResumeInterrupted as AnyHandler,

@@ -48,18 +48,22 @@ import { dndId, type DropTargetData } from '../layout/dnd.js';
 import { useTerminalDropPreview } from '../layout/DropIndicator.js';
 import { useLayoutStore } from '../layout/store.js';
 import { tabMeta } from '../layout/tab-meta.js';
-import { focusTab } from '../layout/tree.js';
+import { focusTab, updateTab } from '../layout/tree.js';
 import { usePaletteStore } from '../palette/store.js';
 import { ErrorBoundary } from '../shell/ErrorBoundary.js';
 import { useCardBlocksTerminal } from '../sidebar/use-drop-target.js';
 import { useUiStore } from '../store/ui.js';
 import { useDictationStore } from '../voice/dictation-store.js';
+import { useKimiControl } from '../chat/kimi-control.js';
+import { chatOutbox } from '../chat/chat-outbox.js';
+import { useChatUiStore } from '../chat/ui-store.js';
 import { WaitingForTrust } from '../components/WaitingForTrust.js';
 import { trustCardFor, useConsentsStore } from '../store/consents.js';
 import { useWorksStore } from '../store/works.js';
 import { openInBrowserTab } from '../browser/store.js';
 import { activatePathLink, LinkMenu, type LinkMenuState } from './LinkMenu.js';
 import { sessionCwd, type TerminalLink } from './links.js';
+import { KimiTerminalControl } from './KimiTerminalControl.js';
 import { NotRunningCard } from './NotRunningCard.js';
 import { SearchBar } from './SearchBar.js';
 import { terminalSurfaces, type TerminalSurfaceHandle } from './surface-registry.js';
@@ -247,6 +251,34 @@ const SurfaceInner = memo(function SurfaceInner({ bridge, sessionRef, tabId, vis
   // «Waiting for folder trust» с кнопкой, как в Chat. Селекторы отдают строки — перерисовка только при их смене.
   const lifecycle = useWorksStore((state) => sessionOf(sessionRef, state.entries)?.lifecycle);
   const provider = useWorksStore((state) => sessionOf(sessionRef, state.entries)?.provider);
+  const retained = useWorksStore((state) => sessionOf(sessionRef, state.entries)?.kimiTerminal !== undefined);
+  const kimi = useKimiControl(bridge, sessionRef, provider === 'kimi', retained, lifecycle === 'active');
+  const managedTerminal = !kimi.shared && (kimi.supported || (provider === 'kimi' && retained));
+  const nativeRunning = kimi.control?.owner === 'terminal';
+  const [controlError, setControlError] = useState<string | null>(null);
+  const [controlTarget, setControlTarget] = useState<'chat' | 'terminal'>();
+  const changeControl = async (target: 'chat' | 'terminal'): Promise<void> => {
+    if (controlTarget !== undefined || !kimi.supported) return;
+    setControlError(null);
+    const ref = refKey(sessionRef);
+    const { drafts, attachments, promptEchoes } = useChatUiStore.getState();
+    if (target === 'terminal' && kimi.control?.owner === 'chat' && (Boolean(drafts[ref]) || (attachments[ref]?.length ?? 0) > 0 ||
+      promptEchoes[ref]?.some(({ state }) => state === 'queued') === true || (chatOutbox.store.getState().byKey[ref]?.length ?? 0) > 0)) {
+      setControlError(S.chat.kimiNative.haveDraft);
+      return;
+    }
+    setControlTarget(target);
+    try {
+      const control = await bridge.call('kimi.setControl', { ref: sessionRef, target });
+      if (target === 'chat' && control.owner === 'chat') {
+        useLayoutStore.getState().apply(key, (layout) => updateTab(layout, tabId, { view: 'chat' }));
+      }
+    } catch (error) {
+      setControlError(decodeIpcError(error).message || S.chat.kimiNative.failed);
+    } finally {
+      setControlTarget(undefined);
+    }
+  };
   const trustCardId = useConsentsStore((state) =>
     provider === undefined ? undefined : trustCardFor(state.cards, sessionRef.projectPath, lifecycle, provider)?.id,
   );
@@ -299,7 +331,8 @@ const SurfaceInner = memo(function SurfaceInner({ bridge, sessionRef, tabId, vis
     cwd,
     onLink,
     onInput,
-    running: !notRunning,
+    running: managedTerminal ? nativeRunning : !notRunning,
+    acceptsInput: !managedTerminal || nativeRunning,
   });
   const dark = useUiStore((state) => state.dark);
 
@@ -352,7 +385,7 @@ const SurfaceInner = memo(function SurfaceInner({ bridge, sessionRef, tabId, vis
   // Отправка агенту — только явным действием человека: бросок файла или вставка скриншота
   // (кусок 5.4, спека 8.5). Без `pty.send` у хоста (спека 3.2, 13) ни то ни другое не
   // перехватывается: вставка идёт в xterm как прежде, бросок не принимается.
-  const canSend = useHostSupports('pty.send');
+  const canSend = useHostSupports('pty.send') && !managedTerminal;
   const sendDeps = useMemo<SendWithToastDeps>(() => ({ bridge, session: sessionOf, openSession: openSessionTab }), [bridge]);
   const [dropping, setDropping] = useState(false);
 
@@ -428,6 +461,8 @@ const SurfaceInner = memo(function SurfaceInner({ bridge, sessionRef, tabId, vis
   }, [sessionKey, handle]);
 
   // Диктовка в терминал (спека 3.3): текст уходит вставкой без Enter — отправляет человек.
+  const nativeSurfaceRef = useRef(managedTerminal);
+  nativeSurfaceRef.current = managedTerminal;
   const sendDepsRef = useRef(sendDeps);
   sendDepsRef.current = sendDeps;
   const sessionRefRef = useRef(sessionRef);
@@ -437,7 +472,10 @@ const SurfaceInner = memo(function SurfaceInner({ bridge, sessionRef, tabId, vis
       useDictationStore.getState().register({
         id: `terminal:${sessionKey}`,
         element: () => wrapperRef.current,
-        insert: (text) => void sendWithToast(sendDepsRef.current, sessionRefRef.current, text, false),
+        insert: (text) => {
+          if (nativeSurfaceRef.current) liveRef.current.terminal?.paste(text);
+          else void sendWithToast(sendDepsRef.current, sessionRefRef.current, text, false);
+        },
       }),
     [sessionKey],
   );
@@ -454,7 +492,10 @@ const SurfaceInner = memo(function SurfaceInner({ bridge, sessionRef, tabId, vis
       {/* Без связи вкладка говорит одно — «Disconnected — reconnecting…» (слой ниже): снимок
           работ в это время прежний, а Resume звать некому. Карточка вернётся со связью, если
           сессия и по свежему снимку неживая (после «Restart host» — так и будет). */}
-      {showCard && !offline ? <NotRunningCard sessionRef={sessionRef} onResume={() => resumeSession(bridge, sessionRef)} /> : null}
+      {managedTerminal && !offline ? <KimiTerminalControl
+        control={controlTarget === undefined ? kimi.control : { owner: 'switching', target: controlTarget }}
+        error={controlError} onChange={(target) => void changeControl(target)} /> : null}
+      {showCard && !offline && (!managedTerminal || (kimi.control?.owner === 'chat' && !kimi.control.canTakeover)) ? <NotRunningCard sessionRef={sessionRef} onResume={() => resumeSession(bridge, sessionRef)} /> : null}
       {trustCardId === undefined ? null : (
         <WaitingForTrust cardId={trustCardId} testId="terminal-waiting-for-trust" className="mx-6 mt-3 max-w-[520px] shrink-0" />
       )}
@@ -479,7 +520,7 @@ const SurfaceInner = memo(function SurfaceInner({ bridge, sessionRef, tabId, vis
         onFind={openSearch}
         onSplit={beginSplit}
       >
-        <div data-testid="terminal-surface-pad" className="min-h-0 flex-1 pb-4 pl-6 pr-6 pt-[22px]" style={{ backgroundColor: xtermTheme(dark).background }}>
+        <div data-testid="terminal-surface-pad" hidden={managedTerminal && !nativeRunning && !kimi.readOnly} className="min-h-0 flex-1 pb-4 pl-6 pr-6 pt-[22px]" style={{ backgroundColor: xtermTheme(dark).background }}>
           <div ref={setContainer} className="h-full w-full" />
         </div>
       </TerminalContextMenu>

@@ -42,6 +42,7 @@ import {
   parseHostLock,
   processStartedAt,
   providerReadiness,
+  sessionMcpExtraToolNames,
   providerReadinessError,
   readHostLock,
   readMap,
@@ -112,12 +113,11 @@ import { createCliInstaller } from './providers/install-run.js';
 import { createCliRun } from './providers/cli-run.js';
 import type { VersionProbe } from './providers/versions.js';
 import { createPtyManager } from './pty/pty-manager.js';
-import { createKimiSessions } from './kimi/sessions.js';
+import { createKimiNativeSession } from './kimi/native-session.js';
 import { createKimiAuth } from './providers/kimi-auth.js';
 import { createProcessMonitor } from './pty/process-monitor.js';
 import { createSender } from './pty/send.js';
 import { createFeedService } from './feed/feed-service.js';
-import { canShowKimiElicitation } from './feed/kimi-interactions.js';
 import { ensureCodexHookLauncher } from './feed/codex-hook-launcher.js';
 import { createBacklogService } from './backlog/backlog-service.js';
 import { createPlanEffectsService } from './rooms/plan-effects.js';
@@ -536,7 +536,8 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     ...(options.codexHookGraceMs === undefined ? {} : { codexHookGraceMs: options.codexHookGraceMs }),
     // OpenCode Chat reads the messages of the session's own server (the supervisor is created further down; it is only called later).
     opencodeServer: (ref) => opencodeSupervisor.get(ref),
-    kimiRespond: (ref, requestId, response) => kimi.respond(ref, requestId, response),
+    kimiNativeDecide: (ref, requestId, decision) => kimiNative.decide(ref, requestId, decision),
+    kimiBlocksChat: (ref) => sessionsService.kimiBlocksChat(ref),
   });
   // Канал агента к браузеру окна (спека браузера 2026-10-07, 3.7): путь `/agent/browser` на сервере хуков и свой
   // реестр токенов — у всех провайдеров. Операцию исполняет окно с возможностью `browser-agent`.
@@ -658,7 +659,12 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     log,
     // Qwen readiness needs the agent's Parley MCP client connected (spec 2026-11-11, 3.4 amendment).
     generationOf: (ref) => activityService.processGeneration(ref),
-    onList: (ref, generation) => activityService.mcpListed(ref, generation),
+    onList: (ref, generation, names) => {
+      activityService.mcpListed(ref, generation);
+      if (generation !== null && generation === activityService.processGeneration(ref) && kimiNative.has(ref)) {
+        kimiNative.listed(ref, [...names, ...sessionMcpExtraToolNames()]);
+      }
+    },
   });
   const inlineMail = createInlineMail({
     log,
@@ -680,6 +686,26 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   });
   // One hook handler chain: the HTTP hook receiver and the OpenCode event bridge (spec 2026-11-12, 4.4) both feed it.
   const dispatchHook = (request: HookRequest): void => {
+      if (request.body.client_type === 'kimi_code_cli') {
+        if (!kimiNative.onHook(request.ref, request.body)) { request.respond({}); return; }
+        if (request.body.hook_event_name !== 'UserPromptSubmit') { request.respond({}); return; }
+        const parts = request.body.prompt;
+        const prompt = Array.isArray(parts) ? parts.flatMap(part =>
+          part?.type === 'text' && typeof part.text === 'string' ? [part.text] : [],
+        ).join('\n') : '';
+        const rules = kimiNative.instructions(request.ref) ?? '';
+        const adapted: HookRequest = {
+          ...request,
+          body: { ...request.body, prompt },
+          respond(reply) {
+            const inline = (reply.hookSpecificOutput as { additionalContext?: string } | undefined)?.additionalContext;
+            const extra = [rules, inline].filter(Boolean).join('\n\n');
+            request.respond(extra ? { hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: extra } } : {});
+          },
+        };
+        if (!inlineMail.handle(adapted)) adapted.respond({});
+        return;
+      }
       void qwenBinding.onHook(request);
       readyJournal.onHook(request.ref);
       try {
@@ -844,13 +870,18 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   });
   handle.context.onShutdown(async () => opencodeEvents.stopAll());
   const kimiAuth = createKimiAuth(() => handle.context.broadcast('providers.changed', { provider: 'kimi' }));
-  const kimi = createKimiSessions(handle.context, {
-    output: feedService.kimiOutput,
-    requestsChanged: feedService.kimiRequests,
-    canShowElicitation: canShowKimiElicitation,
-    hasHistory: feedService.kimiHasHistory,
+  const kimiNative = createKimiNativeSession({
+    pty: ptyManager,
+    log,
+    bind: (ref, binding, id, pid, bootstrap) => sessionsService.bindKimiNative(ref, binding, id, pid, bootstrap),
+    bootstrap: (ref, binding, owner, id, action) => sessionsService.kimiBootstrap(ref, binding, owner, id, action),
+    event: feedService.kimiNativeEvent,
+    reset: feedService.kimiNativeReset,
+    requests: feedService.kimiNativeRequests,
     activity: activityService.kimiActivity,
-    authChanged: kimiAuth.observe,
+    startupFailed: feedService.kimiNativeStartupFailed,
+    readyChanged: (ref) => wakeService.kimiReadyChanged(ref),
+    fence: (ref) => { browserEndpoint.unregister(ref); toolsEndpoint.forget(ref); },
   });
   sessionsService = createSessionsService(
     handle.context,
@@ -865,8 +896,9 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
       hooks: hookServer,
       opencode: opencodeSupervisor,
       opencodeEvents,
-      kimi,
-      // Qwen's brief is typed by the wake service once the process is ready (spec 2026-11-11, 3.4 amendment).
+      kimiNative,
+      kimiHasHistory: feedService.kimiHasHistory,
+      kimiSeedCheckpoint: feedService.kimiSeedCheckpoint,
       deferFirst: (ref, pid, text) => wakeService.deferFirst(ref, pid, text),
       providerVersions,
       signedIn: accountSignedIn,
@@ -900,7 +932,6 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   handle.context.onShutdown(async () => autoSleepService.stop());
   handle.context.onShutdown(() => sessionsService.stopAll());
   handle.context.onShutdown(async () => {
-    await kimi.stopAll();
     await kimiAuth.stop();
   });
   // Sessions stop their servers on exit; this catches any left (a TUI that did not exit in time). The lifelines also
@@ -934,6 +965,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     {
       compacting: (ref) => compactionService?.holds(ref) === true,
       windowCounters,
+      kimiReady: kimiNative.ready,
       // Возврат после сброса лимита (спека застрявших 6.3): окно провайдера из службы лимитов, сроки — рычаги E2E.
       limits: limitsService,
       limitReturn: limitReturnFromEnv(process.env),
@@ -968,20 +1000,13 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
   handle.context.onShutdown(async () => compactionService?.stop());
 
   // Один отправитель на хост: окно (`pty.send`) и помощник делят «свой Enter в полёте» по сессии.
-  const sendPty = createSender({
+  const send = createSender({
     pty: ptyManager,
     activity: activityService,
     wake: wakeService,
     switching: (ref: SessionRef) => sessionsService.exclusive.held(ref),
+    kimiReady: kimiNative.ready,
   });
-  const send: typeof sendPty = async (params, log) => {
-    const { ref, text, submit } = params;
-    if (ptyManager.get(ref)?.provider !== 'kimi') return sendPty(params, log);
-    if (sessionsService.exclusive.held(ref) || wakeService.inFlight(ref)) {
-      return { inserted: false, submitted: false, reason: 'busy' };
-    }
-    return kimi.send(ref, text, submit);
-  };
   const secretOf = (entry: ProviderEntry): Promise<string | null> =>
     entry.runner.secret === undefined ? Promise.resolve(null) : readSecret(entry.runner.secret);
   // Готовность провайдера к запуску агента: ключ, версия CLI для окна, вход аккаунта подписки. Версия для помощника — в `ready`.
@@ -1374,7 +1399,6 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     activity: activityService,
     pty: ptyManager,
     sessions: sessionsService,
-    kimi,
     kimiAuth,
     swarms: swarmsService,
     wake: wakeService,
@@ -1388,6 +1412,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     processMonitor,
     browserAgent: browserEndpoint,
     send,
+    kimiAllowRaw: kimiNative.allowRaw,
     assistant: assistantService,
     assistantRequests,
     voiceTelemetry,

@@ -783,6 +783,11 @@ function agentChannelTools(browser: readonly Tool[], sessionAgent: boolean): Too
   return [...browser, ...(sessionAgent ? [CREATE_SESSION_TOOL, REQUEST_AGENT_SWITCH_TOOL, CREATE_SWARM_TOOL, SWARM_ADD_TOOL] : [])];
 }
 
+/** Extras appended by createParleyServer after its authenticated remote runner's list. */
+export function sessionMcpExtraToolNames(): string[] {
+  return agentChannelTools(BROWSER_TOOLS, true).map(tool => tool.name);
+}
+
 /** Имена инструментов, которые сервер объявляет этой сессии: каталог, профиль, навигатор навыков и канал агента — как у `ListTools`. */
 function declaredToolNames(context: McpContext): string[] {
   const names = TOOLS.filter((tool) => toolDeclaredInProfile(context, tool)).map((tool) => tool.name);

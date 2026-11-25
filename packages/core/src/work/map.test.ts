@@ -1839,3 +1839,12 @@ describe('плечо опыта с пакетом состояния (Э-1)', ()
     expect(roundTrip(trial).trial).toEqual(trial);
   });
 });
+
+it('rejects invalid Kimi launch preferences instead of falling back to provider settings', () => {
+  const map = emptyMap();
+  const session = addSession(map, { provider: 'kimi', label: 'Kimi', task: 'Task' });
+  const invalid = { ...map, sessions: [{ ...session, kimiPermissionMode: 'plan' }] };
+  const wrongProvider = { ...map, sessions: [{ ...session, provider: 'codex', kimiPermissionMode: 'auto' }] };
+  expect(() => parseMap(JSON.stringify(invalid), 'map.json')).toThrow();
+  expect(() => parseMap(JSON.stringify(wrongProvider), 'map.json')).toThrow();
+});

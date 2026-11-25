@@ -69,7 +69,7 @@ export function createSessionHandlers(deps: SessionMethodDeps): SessionHandlers 
       // `exactOptionalPropertyTypes`: zod даёт `worktree?: boolean | undefined`,
       // а `CreateSessionInput.worktree?: boolean` явного `undefined` ключом не
       // принимает — той же дорогой, что `LaunchOptions.prompt` в `launch.ts`.
-      const { worktree, model, effort, role, agent, lean, ...rest } = params;
+      const { worktree, model, effort, role, agent, lean, kimiPermissionMode, ...rest } = params;
       const created = await deps.sessions.create({
         ...rest,
         ...(role === undefined ? {} : { role }),
@@ -78,6 +78,7 @@ export function createSessionHandlers(deps: SessionMethodDeps): SessionHandlers 
         ...(model === undefined ? {} : { model }),
         ...(effort === undefined ? {} : { effort }),
         ...(lean === undefined ? {} : { lean }),
+        ...(kimiPermissionMode === undefined ? {} : { kimiPermissionMode }),
       });
       // `held` (запуск Codex ждёт согласия на папку) в ответ окна не идёт: `ref` остаётся чистым указателем.
       return { ref: { projectPath: created.projectPath, workId: created.workId, sessionId: created.sessionId } };
@@ -154,6 +155,7 @@ export function createSessionHandlers(deps: SessionMethodDeps): SessionHandlers 
 
     // Нажатия Shift+Tab — печать хоста по явному действию человека; ответов хукам тут нет.
     sessionsSetMode: async (params) => {
+      if (deps.sessions.kimiBlocksChat?.(params.ref)) throw new HostError('conflict', 'Kimi Chat is read-only while Terminal has control');
       const result = await switchMode({ pty: deps.pty }, params.ref, params.mode);
       if (result.mode !== null) deps.feed?.noteMode(params.ref, result.mode);
       return result;

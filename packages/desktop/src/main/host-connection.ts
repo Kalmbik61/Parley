@@ -9,6 +9,7 @@ import {
   BROWSER_AGENT_OP_FEATURE,
   BROWSER_AGENT_OPS,
   COMPACT_WORKS_FEATURE,
+  KIMI_LAUNCH_MODES_FEATURE,
   encodeLine,
   LineDecoder,
   LineTooLongError,
@@ -617,6 +618,12 @@ export class HostConnection {
       // Отказ без сокета тоже виден в архиве диагностики: иначе «окно молчит» не отличить от «окно не звало».
       this.rpcRing.push({ t: startedAt, method, ms: 0, ok: false, error: 'no-connection', ...(ref === undefined ? {} : { ref }) });
       throw new Error('no connection to host');
+    }
+    // Check the live socket's hello, not the renderer's possibly stale snapshot after a reconnect.
+    if (method === 'sessions.create' && typeof params === 'object' && params !== null &&
+        'kimiPermissionMode' in params && params.kimiPermissionMode !== undefined &&
+        (this.status.state !== 'connected' || !this.status.features?.includes(KIMI_LAUNCH_MODES_FEATURE))) {
+      throw new HostError('bad_request', S.kimiPermission.launchUnavailable, { reason: 'kimi-launch-modes-unsupported' });
     }
     const id = this.nextId++;
     const startedMs = performance.now();

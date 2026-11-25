@@ -401,6 +401,7 @@ export {
   worksIndexPath,
 } from './work/store.js';
 export type { MapWrittenEvent, NewWork, UpdateMapOptions, WorkPaths, WriteOptions } from './work/store.js';
+export { kimiArchiveDirectory } from './work/kimi-archive.js';
 export { ensureStateDir, isDirectorySync, stateDir } from './work/state-dir.js';
 export { isStaleHostLock, parseHostLock, readHostLock, socketIsAlive } from './host-lock.js';
 export type { HostLock } from './host-lock.js';
@@ -695,6 +696,8 @@ export {
   AGENT_TOKEN_ENV,
   AGENT_URL_ENV,
   MCP_SERVER_BIN,
+  MCP_SERVER_ENTRY,
+  validKimiConfigToml,
   codexMcpOverride,
   mcpConfig,
   mcpConfigJson,
@@ -731,6 +734,7 @@ export {
   RATE_WINDOW_MS,
   createParleyServer,
   createToolRunner,
+  sessionMcpExtraToolNames,
   finishedState,
   takeInlineMail,
   sessionRoomPacket,
@@ -787,7 +791,8 @@ export { readCodexRoleContext, projectCodexRoleContext, readCodexNativeContext }
 export type { CodexRoleContext, CodexContextOptions, CodexNativeContext } from './roles/context.js';
 export { sessionRole, roleId, roleFromId, sessionRoleCatalog, prepareSessionRole, roleForProvider, roleChangeOnSwitch, assertRoleDelivery, roleSummaries, roleProvider, roleModel } from './work/agents.js';
 export type { SessionRoleCatalogOptions, RoleChange, RoleSummary, RoleList } from './work/agents.js';
-export type { SessionRole } from './work/types.js';
+export { isKimiPermissionMode } from './work/types.js';
+export type { KimiPermissionMode, SessionRole } from './work/types.js';
 
 // Shared project domain. Runtime workPaths continue to use their original local project path.
 export { resolveMainCheckout, resolveSharedProjectContext } from './work/project-context.js';

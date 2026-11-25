@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { toast } from 'sonner';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { FeedItem, ParleyConfig, WorkSession } from '@parley/core';
-import { refKey, type Capabilities, type ConsentCard, type KimiConfigOption, type PendingLetter, type SendResult, type SessionRef } from '@parley/protocol';
+import { KIMI_NATIVE_TERMINAL_FEATURE, KIMI_PTY_GENERATION_FEATURE, refKey, type Capabilities, type ConsentCard, type KimiConfigOption, type PendingLetter, type SendResult, type SessionRef } from '@parley/protocol';
 import type { DirEntry } from '../../shared/files-types.js';
 import { S } from '../../shared/strings.js';
 import type { TerminalView } from '../../shared/layout-types.js';
@@ -18,6 +18,7 @@ import { EMPTY_HISTORY } from '../layout/history.js';
 import { TerminalBody } from '../layout/bodies/TerminalBody.js';
 import { setVisibilityCheck } from '../keys/type-to-focus.js';
 import { useLayoutStore } from '../layout/store.js';
+import { emptyLayout, findTab, openTab } from '../layout/tree.js';
 import { REQUIRED_METHODS } from '../lib/capabilities.js';
 import { useActivityStore } from '../store/activity.js';
 import { useHostConfigStore } from '../store/config.js';
@@ -172,10 +173,10 @@ describe('Kimi Code session configuration', () => {
     }));
     renderBody(makeSession('s-01', 'S01', { provider: 'kimi' }));
     const trigger = await screen.findByRole('button', { name: /Kimi A/ });
-    expect(trigger.textContent).toContain('Ask first');
+    expect(trigger.textContent).not.toContain('Ask first');
     fireEvent.keyDown(trigger, { key: 'Enter' });
     expect(screen.getByRole('menuitemcheckbox', { name: 'Thinking' }).getAttribute('aria-checked')).toBe('true');
-    expect(screen.getByRole('menuitemradio', { name: 'Ask first' }).getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByRole('menuitem', { name: 'Ask first' }).getAttribute('aria-checked')).toBeNull();
     expect(screen.queryByText('Speed')).toBeNull();
     fireEvent.click(screen.getByRole('menuitemradio', { name: 'Kimi B' }));
     expect(bridge.calls).toContainEqual({ method: 'kimi.setConfig', params: { ref: REF, configId: 'model', value: 'b' } });
@@ -186,7 +187,34 @@ describe('Kimi Code session configuration', () => {
     fireEvent.keyDown(trigger, { key: 'Enter' });
     expect(screen.getByRole('menuitemradio', { name: 'Kimi B' }).getAttribute('aria-checked')).toBe('true');
     expect(screen.queryByRole('menuitemcheckbox')).toBeNull();
-    expect(screen.queryByRole('menuitemradio', { name: 'Ask first' })).toBeNull();
+    expect(screen.queryByRole('menuitem', { name: 'Ask first' })).toBeNull();
+  });
+
+  it('uses the verified permission labels, keeps Plan, and sends Always Ask even when the snapshot says default', async () => {
+    const reported: KimiConfigOption = {
+      id: 'mode', name: 'Mode', category: 'mode', type: 'select', currentValue: 'default',
+      options: [
+        { value: 'default', name: 'Default' }, { value: 'plan', name: 'Plan' },
+        { group: 'permissions', name: 'Permissions', options: [
+          { value: 'yolo', name: 'YOLO' }, { value: 'auto', name: 'Auto' },
+        ] },
+      ],
+    };
+    bridge.setHandler('kimi.getState', () => ({ requests: [], config: [reported] }));
+    bridge.setHandler('kimi.setConfig', () => ({ config: [reported] }));
+    renderBody(makeSession('s-01', 'S01', { provider: 'kimi' }));
+    const trigger = await screen.findByRole('button', { name: /Kimi Code settings/ });
+    expect(trigger.textContent).not.toMatch(/Default|Always Ask/);
+    fireEvent.keyDown(trigger, { key: 'Enter' });
+    expect(screen.getByRole('menuitem', { name: 'Plan' })).toBeDefined();
+    expect(screen.getByRole('menuitem', { name: 'Automatic / Ask When Needed' }).title).toMatch(/sensitive/);
+    expect(screen.getByRole('menuitem', { name: 'Full access / Never Ask' }).title).toMatch(/sandbox/);
+    const manual = screen.getByRole('menuitem', { name: 'Always Ask' });
+    expect(manual.getAttribute('aria-checked')).toBeNull();
+    fireEvent.click(manual);
+    await waitFor(() => expect(bridge.calls).toContainEqual({
+      method: 'kimi.setConfig', params: { ref: REF, configId: 'mode', value: 'default' },
+    }));
   });
 
   it('shows the CLI refusal and keeps the last confirmed value', async () => {
@@ -218,7 +246,8 @@ describe('Kimi Code session configuration', () => {
     fireEvent.click(screen.getByRole('menuitemradio', { name: 'Kimi B' }));
     act(() => bridge.emit('kimi.configChanged', { ref: REF, config: [model('a'), mode] }));
     await act(async () => confirm([model('b')]));
-    expect(trigger.textContent).toContain('Kimi A · Ask first');
+    expect(trigger.textContent).toContain('Kimi A');
+    expect(trigger.textContent).not.toContain('Ask first');
   });
 });
 
@@ -846,7 +875,7 @@ describe('ChatView — баннер ожидания в терминале (ку
 });
 
 describe('ChatView — панель вопроса терминала (план 2026-11-18, задача 2)', () => {
-  const card = (): FeedItem => ({
+  const card = (): Extract<FeedItem, { kind: 'permission' }> => ({
     id: 'card-1',
     at: AT,
     kind: 'permission',
@@ -866,13 +895,93 @@ describe('ChatView — панель вопроса терминала (план 
       await vi.advanceTimersByTimeAsync(ms);
     });
   };
+  let disposeFeed: (() => void) | undefined;
 
   beforeEach(() => {
     vi.useFakeTimers();
     bridge.setHandler('pty.screenText', () => ({ lines: ['', 'Trust this folder?', ''] }));
+    bridge.setHandler('kimi.getState', () => ({ requests: [], config: [] }));
   });
   afterEach(() => {
+    disposeFeed?.();
+    disposeFeed = undefined;
     vi.useRealTimers();
+  });
+
+  it.each([false, true])('keeps the Kimi draft and uses provider options without raw answer controls (shared=%s)', async (shared) => {
+    useHostStore.setState({ status: { state: 'connected', hostVersion: 'test',
+      methods: [...FEED_METHODS, 'pty.screenText', 'kimi.getState', 'feed.decide', 'feed.interrupt'],
+      features: [KIMI_PTY_GENERATION_FEATURE, ...(shared ? ['kimi-shared-terminal'] : [])] } });
+    useProvidersStore.setState({ providers: [{ id: 'kimi', label: 'Kimi Code', available: true, version: null, limits: null }], loaded: true });
+    const earlier = prompt('p1', 'review notes');
+    bridge.setHandler('feed.subscribe', () => ({ ok: true }));
+    bridge.setHandler('feed.unsubscribe', () => ({ ok: true }));
+    bridge.setHandler('kimi.getState', () => ({ requests: [], config: [{
+      id: 'model', name: 'ACP model', type: 'select', currentValue: 'a', options: [{ value: 'a', name: 'Kimi A' }],
+    }] }));
+    bridge.setHandler('feed.snapshot', () => ({ schemaVersion: 1, mode: null, revision: 1, items: [earlier] }));
+    bridge.setHandler('feed.decide', () => ({ applied: true, state: 'allowed' }));
+    disposeFeed = useFeedStore.getState().init(bridge);
+    useFeedStore.getState().open(REF);
+    renderBody(makeSession('s-01', 'Kimi', { provider: 'kimi' }), 'chat');
+    const field = screen.getByRole<HTMLTextAreaElement>('textbox', { name: S.chat.composer.kimiLabel });
+    fireEvent.change(field, { target: { value: 'my unsent follow-up' } });
+    act(() => wait('blocked', 'approval'));
+    await settle(1000);
+
+    expect(screen.queryByTestId('chat-terminal-prompt')).toBeNull();
+    if (shared) {
+      const key = '/tmp/p w-01';
+      const tab = { id: 'terminal:s-01', kind: 'terminal' as const, sessionId: REF.sessionId, view: 'chat' as const };
+      const originalLayout = useLayoutStore.getState();
+      try {
+        originalLayout.drop(key);
+        originalLayout.hydrate(key, openTab(emptyLayout(), tab));
+        fireEvent.click(screen.getByRole('button', { name: S.chat.waitingBanner.open }));
+        const result = findTab(useLayoutStore.getState().layouts[key]!, tab.id);
+        expect(result?.group.tabs[result.index]).toMatchObject({ view: 'terminal' });
+      } finally {
+        useLayoutStore.setState(originalLayout);
+      }
+      expect(screen.queryByRole('button', { name: /Kimi A/ })).toBeNull();
+      expect(bridge.calls.some(({ method }) => method === 'kimi.getState')).toBe(false);
+    } else {
+      expect(screen.getByTestId('chat-waiting-banner').textContent).toBe(S.chat.kimi.waitingForRequest);
+      expect(screen.queryByTestId('chat-waiting-open')).toBeNull();
+    }
+    expect(bridge.calls.some(({ method }) => method === 'pty.screenText')).toBe(false);
+    expect(field.value).toBe('my unsent follow-up');
+
+    act(() => bridge.emit('feed.changed', { ref: REF, mode: null, revision: 2, decisions: 'window', removed: [],
+      upsert: [{ ...card(), id: 'kimi:request', cardId: 'kimi:request', permissionOptions: [
+        { name: 'Approve Kimi request', optionId: 'once', kind: 'allow_once' },
+        { name: 'Reject this tool', optionId: 'reject-this-tool', kind: 'reject_once' },
+      ] }],
+    }));
+    await settle();
+    expect(screen.queryByTestId('chat-waiting-banner')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Reject this tool' })).toBeDefined();
+    fireEvent.click(screen.getByRole('button', { name: 'Approve Kimi request' }));
+    await settle(0);
+    expect(bridge.calls).toContainEqual({ method: 'feed.decide', params: {
+      ref: REF, cardId: 'kimi:request', decision: { kind: 'permission', behavior: 'allow', optionId: 'once' },
+    } });
+    expect(bridge.notified.some(({ method }) => method === 'pty.input')).toBe(false);
+    expect(field.value).toBe('my unsent follow-up');
+  });
+
+  it.each(['kimi', 'claude'] as const)('keeps the raw prompt for compatible %s hosts', async (provider) => {
+    useHostStore.setState({ status: { state: 'connected', hostVersion: 'test',
+      methods: [...FEED_METHODS, 'pty.screenText', 'kimi.getState'], features: [provider === 'kimi' ? KIMI_NATIVE_TERMINAL_FEATURE : KIMI_PTY_GENERATION_FEATURE] } });
+    if (provider === 'kimi') {
+      useProvidersStore.setState({ providers: [{ id: 'kimi', label: 'Kimi Code', available: true, version: null, limits: null }], loaded: true });
+    }
+    wait('blocked');
+    renderBody(makeSession('s-01', 'S01', { provider }), 'chat');
+    setFeed([prompt('p1', 'hi')]);
+    await settle();
+    fireEvent.click(screen.getByTestId('chat-terminal-prompt-escape'));
+    expect(bridge.notified).toContainEqual({ method: 'pty.input', params: { ref: REF, data: '\x1b' } });
   });
 
   it('хост знает pty.screenText: при ожидании — панель с текстом экрана, прежнего баннера нет', async () => {
@@ -2968,4 +3077,18 @@ describe('ChatView — поиск ⌘F по ленте (план 2026-11-01, з�
       expect(registry.has('chat-find')).toBe(true);
     });
   });
+});
+
+it('makes Kimi Chat read-only until ownership returns, without acting on a tab change', async () => {
+  useHostStore.setState({ status: { state: 'connected', hostVersion: 'test',
+    methods: [...FEED_METHODS, 'kimi.getState', 'kimi.getControl', 'kimi.setControl'], features: ['kimi-native-terminal'] } });
+  useProvidersStore.setState({ providers: [{ id: 'kimi', label: 'Kimi Code', available: true, version: null, limits: null }], loaded: true });
+  bridge.setHandler('kimi.getControl', () => ({ owner: 'terminal' }));
+  bridge.setHandler('kimi.getState', () => ({ requests: [], config: [] }));
+  renderBody(makeSession('s-01', 'Kimi', { provider: 'kimi' }), 'chat');
+  await screen.findByRole('button', { name: /open terminal/i });
+  expect(screen.queryByRole('textbox')).toBeNull();
+  expect(bridge.calls.some(({ method }) => method === 'kimi.setControl')).toBe(false);
+  act(() => bridge.emit('kimi.control', { ref: REF, control: { owner: 'chat', canTakeover: true } }));
+  expect(await screen.findByRole('textbox')).toBeDefined();
 });

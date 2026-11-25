@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Kimi island permission options fixture</title>
+  <div id="root" class="flex justify-center"></div>
+  <script type="module">
+    import { createElement } from 'react';
+    import { createRoot } from 'react-dom/client';
+    import { refKey } from '@parley/protocol';
+    import { IslandView } from '../../src/renderer/island/IslandView.tsx';
+    import '../../src/renderer/styles.css';
+    import '../../src/renderer/island/island.css';
+
+    // Render the real view without IslandApp, preload, IPC or a provider session.
+    const ref = { projectPath: '/tmp/kimi-fixture', workId: 'w-fixture', sessionId: 's-fixture' };
+    const cardId = 'fixture-permission';
+    const noop = () => {};
+    createRoot(document.getElementById('root')).render(createElement(IslandView, {
+      model: { working: 0, waiting: 1, done: 0, providers: ['kimi'], active: true, groups: [] },
+      items: [{
+        key: refKey(ref) + '\u0000' + cardId,
+        ref,
+        card: {
+          id: cardId, cardId, at: '', kind: 'permission', state: 'pending',
+          toolUseId: null, toolName: 'Shell', toolInput: {}, suggestions: [], notified: false,
+          permissionOptions: [
+            { optionId: 'once', kind: 'allow_once', name: 'Allow this action once and ask me before running it again in this workspace' },
+            { optionId: 'session', kind: 'allow_always', name: 'Allow this action for the rest of the current Kimi session in this workspace' },
+            { optionId: 'reject', kind: 'reject_once', name: 'Reject this request and continue without running the requested action in this workspace' },
+          ],
+        },
+        summary: 'Run: git status --short',
+        inWindow: true, since: 1, deciding: false, note: null,
+      }],
+      index: 0,
+      config: { anchor: 'center', topInset: 28, motion: 'reduce' },
+      listOpen: false, retracted: false, doneCount: 0, hovered: false, showId: 1,
+      labels: new Map([[refKey(ref), { session: 'Kimi', work: 'Permission fixture', project: 'kimi-fixture' }]]),
+      api: { open: noop, dragStart: noop, dragMove: noop, dragEnd: noop },
+      shapeRef: null, requestKeyboard: false, onTakeRequestKeyboard: noop,
+      onDragStart: noop, onDragEnd: noop, onToggleList: noop, onHide: noop,
+      onClearDone: noop, onSelect: noop, onDecide: noop,
+      assistant: null, consent: null,
+    }));
+  </script>
+</html>

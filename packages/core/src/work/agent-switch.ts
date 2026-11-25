@@ -82,6 +82,11 @@ export function applyAgentSwitch(map: WorkMap, sessionId: string, target: AgentT
   };
   delete next.codexThreadBinding;
   delete next.qwenTranscript;
+  delete next.kimiPermissionMode;
+  delete next.kimiTerminal;
+  delete next.kimiChatCheckpoint;
+  delete next.kimiNativeBinding;
+  delete next.kimiNativeBootstrap;
   delete next.wakeBlocked;
   if (target.role !== undefined) {
     next.role = target.role;

@@ -5,9 +5,12 @@
  * диалог, отправить промпт — решает диалог.
  */
 
+import { KIMI_LAUNCH_MODES_FEATURE } from '@parley/protocol';
 import type { ParleyBridge } from '../../../shared/bridge.js';
 import { decodeIpcError } from '../../../shared/ipc-error.js';
 import { errorText, S, startErrorText } from '../../../shared/strings.js';
+import { hostFeatures } from '../../lib/capabilities.js';
+import { useHostStore } from '../../store/host.js';
 import { effortChoices } from '../../lib/effort-choices.js';
 import {
   chosenEffort,
@@ -70,6 +73,10 @@ export async function startAgents(options: StartAgentsOptions): Promise<StartOut
     if (providerId === null) return { kind: 'stopped', error: S.dialogs.newWork.agentRequired };
     // Пока предыдущая сессия стартовала, ключ могли убрать в другой карточке или окне.
     if (!options.providersReady.current || info?.available !== true) return { kind: 'stopped' };
+    if (row.kimiPermissionMode !== undefined &&
+        (info.id !== 'kimi' || !hostFeatures(useHostStore.getState().status).has(KIMI_LAUNCH_MODES_FEATURE))) {
+      return { kind: 'stopped', error: S.kimiPermission.launchUnavailable };
+    }
     // «По умолчанию» становится явным выбором: `lastProvider` сменится, когда запустятся все, и строка не должна
     // за ним перескочить — под итогом «запущена» стояла бы пилюля не того провайдера.
     if (row.provider === null) options.pinProvider(row.key, providerId);
@@ -89,6 +96,7 @@ export async function startAgents(options: StartAgentsOptions): Promise<StartOut
         ...(row.modelTouched && ((info?.models?.length ?? 0) > 0 || info?.family === 'qwen') ? { model: chosenModel(row, info) } : {}),
         ...(row.effortTouched && effortChoices(info, chosenModel(row, info)) !== null ? { effort: chosenEffort(row, info) } : {}),
         ...(options.lean === null ? {} : { lean: options.lean }),
+        ...(row.kimiPermissionMode === undefined ? {} : { kimiPermissionMode: row.kimiPermissionMode }),
       });
       done[row.key] = { status: 'started', sessionId: ref.sessionId };
     } catch (err) {

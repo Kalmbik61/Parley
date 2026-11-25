@@ -7,7 +7,7 @@
  */
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import type { Result } from '@parley/protocol';
+import { KIMI_LAUNCH_MODES_FEATURE, type Result } from '@parley/protocol';
 import { toast } from 'sonner';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_RESOURCE_LIMITS } from '@parley/core/resource-policy';
@@ -2582,8 +2582,79 @@ describe('Kimi Code in the dialog', () => {
     ],
   };
 
+  function setLaunchSupport(supported: boolean) {
+    useHostStore.setState({ status: {
+      state: 'connected', hostVersion: '0.4.0', methods: [...REQUIRED_METHODS],
+      features: supported ? [KIMI_LAUNCH_MODES_FEATURE] : [],
+    } });
+  }
+
   beforeEach(() => {
+    setLaunchSupport(true);
     bridge.setHandler('providers.list', async () => ({ providers: [...PROVIDERS, nativeKimi] }));
+  });
+
+  const modeSelect = () => within(rows()[0]!).getByRole('combobox', { name: 'Kimi permission mode' });
+
+  it.each([
+    ['Always Ask', 'manual'], ['Automatic / Ask When Needed', 'yolo'], ['Full access / Never Ask', 'auto'],
+  ])('submits %s as %s', async (label, kimiPermissionMode) => {
+    await renderDialog();
+    fireEvent.click(providerRadio(0, 'Kimi Code'));
+    await chooseOption(modeSelect(), label);
+    expect(screen.getByText(/new conversation in execution mode/i)).toBeDefined();
+    if (kimiPermissionMode === 'auto') expect(screen.getByText(/not change the sandbox or Parley authority/i)).toBeDefined();
+    fireEvent.click(button('Start session'));
+    await waitFor(() => expect(callsOf('sessions.create')).toHaveLength(1));
+    expect(callsOf('sessions.create')[0]).toMatchObject({ provider: 'kimi', kimiPermissionMode });
+  });
+
+  it('shows Use Kimi settings by default and sends no mode field', async () => {
+    await renderDialog();
+    fireEvent.click(providerRadio(0, 'Kimi Code'));
+    expect(modeSelect().textContent).toContain('Use Kimi settings');
+    fireEvent.click(button('Start session'));
+    await waitFor(() => expect(callsOf('sessions.create')).toHaveLength(1));
+    expect(callsOf('sessions.create')[0]).not.toHaveProperty('kimiPermissionMode');
+  });
+
+  it('does not offer the picker on an older host', async () => {
+    setLaunchSupport(false);
+    await renderDialog();
+    fireEvent.click(providerRadio(0, 'Kimi Code'));
+    expect(within(rows()[0]!).queryByRole('combobox', { name: 'Kimi permission mode' })).toBeNull();
+    fireEvent.click(button('Start session'));
+    await waitFor(() => expect(callsOf('sessions.create')).toHaveLength(1));
+    expect(callsOf('sessions.create')[0]).not.toHaveProperty('kimiPermissionMode');
+  });
+
+  it('blocks launch if the refreshed host no longer supports the selected mode', async () => {
+    await renderDialog();
+    fireEvent.click(providerRadio(0, 'Kimi Code'));
+    await chooseOption(modeSelect(), 'Full access / Never Ask');
+    act(() => setLaunchSupport(false));
+    fireEvent.click(button('Start session'));
+    expect(await screen.findByText(/no longer supports this Kimi launch choice/)).toBeDefined();
+    expect(callsOf('sessions.create')).toHaveLength(0);
+    await chooseOption(modeSelect(), 'Use Kimi settings');
+    fireEvent.click(button('Start session'));
+    await waitFor(() => expect(callsOf('sessions.create')).toHaveLength(1));
+    expect(callsOf('sessions.create')[0]).not.toHaveProperty('kimiPermissionMode');
+  });
+
+  it('clears a Kimi permission choice when switching to Codex', async () => {
+    await renderDialog();
+    fireEvent.click(providerRadio(0, 'Kimi Code'));
+    await chooseOption(modeSelect(), 'Always Ask');
+    fireEvent.click(providerRadio(0, 'Codex'));
+    expect(within(rows()[0]!).queryByRole('combobox', { name: 'Kimi permission mode' })).toBeNull();
+    fireEvent.click(providerRadio(0, 'Kimi Code'));
+    expect(modeSelect().textContent).toContain('Use Kimi settings');
+    fireEvent.click(providerRadio(0, 'Codex'));
+    fireEvent.click(button('Start session'));
+    await waitFor(() => expect(callsOf('sessions.create')).toHaveLength(1));
+    expect(callsOf('sessions.create')[0]).toMatchObject({ provider: 'codex' });
+    expect(callsOf('sessions.create')[0]).not.toHaveProperty('kimiPermissionMode');
   });
 
   it('submits catalog model and effort choices to ordinary session creation', async () => {

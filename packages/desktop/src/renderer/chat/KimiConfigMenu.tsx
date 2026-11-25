@@ -10,6 +10,7 @@ import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
+  DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
@@ -20,6 +21,17 @@ import {
 function supported(option: KimiConfigOption): boolean {
   const kind = option.category ?? option.id;
   return kind === 'model' || kind === 'thought_level' || kind === 'thinking' || kind === 'mode';
+}
+
+function isMode(option: KimiConfigOption): boolean {
+  return option.id === 'mode' || option.category === 'mode';
+}
+
+function permissionText(value: string) {
+  const { modes } = S.kimiPermission;
+  if (value === 'default') return modes.manual;
+  if (value === 'yolo' || value === 'auto') return modes[value];
+  return undefined;
 }
 
 function currentLabel(option: KimiConfigOption): string {
@@ -62,7 +74,7 @@ export function KimiConfigMenu({ bridge, sessionRef, disabledReason }: {
 
   const change = async (option: KimiConfigOption, value: string | boolean): Promise<void> => {
     const current = connection.current;
-    if (current === null || current.changing || disabledReason !== null || value === option.currentValue) return;
+    if (current === null || current.changing || disabledReason !== null || (!isMode(option) && value === option.currentValue)) return;
     current.changing = true;
     setBusy(true);
     const revision = current.revision;
@@ -81,7 +93,9 @@ export function KimiConfigMenu({ bridge, sessionRef, disabledReason }: {
 
   const options = config.filter(supported);
   if (options.length === 0) return null;
-  const label = options.map(currentLabel).join(' · ');
+  // Kimi can report "default" after connect even with inherited Plan or another permission mode.
+  // Show mode actions without asserting which one is active from the ACP snapshot.
+  const label = options.filter((option) => !isMode(option)).map(currentLabel).join(' · ') || S.kimiPermission.label;
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild disabled={busy}>
@@ -101,6 +115,25 @@ export function KimiConfigMenu({ bridge, sessionRef, disabledReason }: {
                 title={option.description ?? undefined} onCheckedChange={(checked) => void change(option, checked)}>
                 {option.name}
               </DropdownMenuCheckboxItem>
+            ) : isMode(option) ? (
+              <>
+                <DropdownMenuLabel title={option.description ?? undefined}>{option.name}</DropdownMenuLabel>
+                {option.options.map((item) => {
+                  const actions = ('group' in item ? item.options : [item]).map((choice) => {
+                    const known = permissionText(choice.value);
+                    return (
+                      <DropdownMenuItem key={choice.value} disabled={disabledReason !== null}
+                        title={known?.description ?? choice.description ?? undefined}
+                        onSelect={() => void change(option, choice.value)}>
+                        {known?.label ?? (choice.name || choice.value)}
+                      </DropdownMenuItem>
+                    );
+                  });
+                  return 'group' in item ? (
+                    <Fragment key={item.group}><DropdownMenuLabel inset>{item.name}</DropdownMenuLabel>{actions}</Fragment>
+                  ) : actions;
+                })}
+              </>
             ) : (
               <>
                 <DropdownMenuLabel title={option.description ?? undefined}>{option.name}</DropdownMenuLabel>

@@ -58,6 +58,8 @@ export interface UseTerminalOptions {
   onLink(link: TerminalLink, event: MouseEvent): void;
   /** Ввод человека, ушедший в `pty.input` (раунд main-r2): неживой сессии поверхность отвечает тостом. */
   onInput?(data: string): void;
+  /** For a Kimi surface that is only displaying history or ownership controls. */
+  acceptsInput?: boolean;
   /**
    * Процесс агента жив (lifecycle не sleeping/closed). По умолчанию `true`. Неживой сессии
    * подключаться не к чему — экран держит последний вывод; ожила (Resume после «Restart host»,
@@ -131,6 +133,9 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
   linkContextRef.current = { workKey: options.workKey, cwd: options.cwd, onLink: options.onLink };
   const onInputRef = useRef(options.onInput);
   onInputRef.current = options.onInput;
+  const acceptsInput = options.acceptsInput !== false;
+  const acceptsInputRef = useRef(acceptsInput);
+  acceptsInputRef.current = acceptsInput;
 
   // Мост между эффектом создания xterm (ниже) и эффектом видимости (в конце
   // функции): подключение к хосту должно переживать переключение вкладок без
@@ -148,7 +153,7 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
       minimumContrastRatio: minimumContrastRatio(useUiStore.getState().dark),
       fontFamily,
       fontSize,
-      disableStdin: offlineRef.current,
+      disableStdin: offlineRef.current || !acceptsInputRef.current,
       // screenReaderMode не включаем: в нём xterm игнорирует события
       // insertText, а через них приходят выбор эмодзи, диктовка и буквы с
       // диакритикой по долгому нажатию в macOS — ввод терялся бы.
@@ -278,6 +283,8 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
     // возврат связи), и ответ прежнего, пришедший позже, дописал бы свой снимок поверх
     // свежего без сброса — экран удвоился бы (fix-tests2). Пишет только последний.
     let attachSeq = 0;
+    let processGeneration: string | undefined;
+    const generationParam = () => processGeneration === undefined ? {} : { generation: processGeneration };
 
     const attach = async (): Promise<void> => {
       const seq = ++attachSeq;
@@ -287,8 +294,9 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
       snapshotWritten = false;
       pendingOutput = [];
       try {
-        const { snapshot, cols, rows } = await bridgeRef.current.call('pty.attach', { ref });
+        const { snapshot, cols, rows, generation } = await bridgeRef.current.call('pty.attach', { ref });
         if (disposed || !connected || seq !== attachSeq) return;
+        processGeneration = generation;
         if (resetBeforeSnapshot) term.reset();
         term.resize(cols, rows);
         term.write(snapshot);
@@ -306,7 +314,7 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
         // сразу после attach, а не серия ресайзов контейнера.
         fit.fit();
         if (term.cols !== cols || term.rows !== rows) {
-          bridgeRef.current.notify('pty.resize', { ref, cols: term.cols, rows: term.rows });
+          bridgeRef.current.notify('pty.resize', { ref, cols: term.cols, rows: term.rows, ...generationParam() });
         }
       } catch {
         // Хост ещё не завёл `pty.attach` (куски 1.6/1.7) или живого PTY у сессии нет —
@@ -327,8 +335,8 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
 
     const dataDisposable = term.onData((data) => {
       // `disableStdin` не держит вставку и программные `paste` — проверка и здесь.
-      if (offlineRef.current) return;
-      bridgeRef.current.notify('pty.input', { ref, data });
+      if (offlineRef.current || !acceptsInputRef.current) return;
+      bridgeRef.current.notify('pty.input', { ref, data, ...generationParam() });
       onInputRef.current?.(data);
     });
 
@@ -342,7 +350,7 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
     });
 
     const unsubscribeResync = bridgeRef.current.on('pty.resync', (event) => {
-      if (!sameRef(event.ref, ref)) return;
+      if (!sameRef(event.ref, ref) || !runningRef.current || !visibleRef.current) return;
       void attach();
     });
 
@@ -354,9 +362,11 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
       if (!visibleRef.current) return;
       fit.fit();
       if (resizeTimer !== null) clearTimeout(resizeTimer);
+      const scheduledGeneration = processGeneration;
       resizeTimer = setTimeout(() => {
         resizeTimer = null;
-        bridgeRef.current.notify('pty.resize', { ref, cols: term.cols, rows: term.rows });
+        if (scheduledGeneration !== processGeneration) return;
+        bridgeRef.current.notify('pty.resize', { ref, cols: term.cols, rows: term.rows, ...generationParam() });
       }, RESIZE_SILENCE_MS);
     });
     resizeObserver.observe(container);
@@ -432,11 +442,11 @@ export function useTerminal(options: UseTerminalOptions): UseTerminalResult {
   const wasOffline = useRef(offline);
   useEffect(() => {
     const term = termRef.current;
-    if (term !== null) term.options.disableStdin = offline;
+    if (term !== null) term.options.disableStdin = offline || !acceptsInput;
     const reconnected = wasOffline.current && !offline;
     wasOffline.current = offline;
     if (reconnected && visibleRef.current && runningRef.current) void attachRef.current?.();
-  }, [offline]);
+  }, [offline, acceptsInput]);
 
   // Видимость — политике WebGL (спека 8.1). Эффект после эффекта создания: подписка уже
   // есть, и после пересоздания xterm (там `forget`) видимость сообщается заново.

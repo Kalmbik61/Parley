@@ -19,7 +19,7 @@ import type {
 import type { WorksSyncInvalidated } from './works-sync.js';
 import type { CardsEvents } from './remote/cards.js';
 import type { VoiceEvents } from './remote/voice.js';
-import type { KimiConfigOption, KimiRequest } from './kimi.js';
+import type { KimiConfigOption, KimiControl, KimiRequest } from './kimi.js';
 
 /** Однонаправленные события хоста → клиенту, без ответа. */
 export interface Events {
@@ -94,6 +94,7 @@ export interface Events {
   /** Телефону: голосовая сессия закрыта (любая причина). */
   'voice.session.closed': VoiceEvents['voice.session.closed'];
   'telegram.changed': TelegramStatus;
+  'kimi.control': { ref: SessionRef; control: KimiControl };
   'kimi.requests': { ref: SessionRef; requests: KimiRequest[] };
   'kimi.configChanged': { ref: SessionRef; config: KimiConfigOption[] };
   /**

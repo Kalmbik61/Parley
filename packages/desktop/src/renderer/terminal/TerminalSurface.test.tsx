@@ -12,22 +12,28 @@ import { DndContext, PointerSensor, useDraggable, useSensor, useSensors, type Co
 import type { ILink } from '@xterm/xterm';
 import { refKey, type BacklogSnapshot, type ConsentCard, type SessionRef } from '@parley/protocol';
 import { toast } from 'sonner';
+import { chatOutbox } from '../chat/chat-outbox.js';
+import { useFeedStore } from '../chat/store.js';
+import { resetChatUiStoreForTests, useChatUiStore } from '../chat/ui-store.js';
 import { useBoardStore } from '../board/board-store.js';
 import { bufferKey } from '../files/buffer.js';
 import { useFilesStore } from '../files/store.js';
 import { dndId, dragItemOf, type DragItem, type DragSourceData } from '../layout/dnd.js';
 import { useDragStore } from '../layout/drag-store.js';
 import { useLayoutStore } from '../layout/store.js';
+import { TerminalBody } from '../layout/bodies/TerminalBody.js';
+import { emptyLayout, findTab, openTab } from '../layout/tree.js';
 import { REQUIRED_METHODS } from '../lib/capabilities.js';
 import { workKey } from '../lib/tree-order.js';
 import { useConsentsStore } from '../store/consents.js';
+import { useActivityStore } from '../store/activity.js';
 import { useHostStore } from '../store/host.js';
 import { useUiStore } from '../store/ui.js';
 import { useProvidersStore } from '../store/providers.js';
 import { useWorksStore } from '../store/works.js';
 import { fakeDictationDeps } from '../test-utils/dictation.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
-import { makeSession, makeWork } from '../test-utils/work-fixtures.js';
+import { activityMap, makeActivity, makeSession, makeWork } from '../test-utils/work-fixtures.js';
 import { lineFromText, xtermMock } from '../test-utils/xterm-mock.js';
 import { TerminalSurface } from './TerminalSurface.js';
 import { useDictationStore } from '../voice/dictation-store.js';
@@ -790,6 +796,140 @@ describe('TerminalSurface — диктовка (спека 3.3)', () => {
     await waitFor(() => expect(sent).toEqual([{ ref, text: 'hello from voice', submit: false }]));
     dispose();
   });
+});
+
+it('keeps one shared Kimi session usable in Chat and Terminal despite an old ownership marker', async () => {
+  const session = makeSession(ref.sessionId, 'Kimi', { provider: 'kimi', kimiTerminal: {
+    archive: 'aeb8f1a3-87b2-41fc-819b-6aa010f1a2ec', cwd: ref.projectPath, home: '/tmp/kimi',
+  } });
+  const generation = 'd80a727e-a2f5-417d-ab51-ede75ef33549';
+  const key = workKey(ref.projectPath, ref.workId);
+  const tab = { id: 'terminal:s-01', kind: 'terminal' as const, sessionId: ref.sessionId, view: 'chat' as const };
+  const sendDeps = { bridge, session: () => session, openSession: () => {} };
+  function Views() {
+    const current = useLayoutStore((state) => {
+      const layout = state.layouts[key];
+      const match = layout === undefined ? null : findTab(layout, tab.id);
+      return match?.group.tabs[match.index];
+    });
+    if (current?.kind !== 'terminal') throw new Error('Expected the session tab');
+    return <>
+      <TerminalBody workKey={key} tab={current} session={session} sessionRef={ref} active bridge={bridge} sendDeps={sendDeps} />
+      {current.view === 'terminal' ? <TerminalSurface bridge={bridge} sessionRef={ref} tabId={tab.id}
+        groupId="g-1" visible fontFamily="Menlo" fontSize={13} /> : null}
+    </>;
+  }
+  const previousActivity = useActivityStore.getState();
+  const previousProviders = useProvidersStore.getState();
+  const previousLayout = useLayoutStore.getState();
+  try {
+    useWorksStore.setState({ entries: [makeWork(ref.workId, { projectPath: ref.projectPath, sessions: [session] })] });
+    useLayoutStore.getState().drop(key);
+    useLayoutStore.getState().hydrate(key, openTab(emptyLayout(), tab));
+    useActivityStore.setState({ byRef: activityMap([makeActivity(ref, 'working')]), loaded: true });
+    useProvidersStore.setState({ providers: [{ id: 'kimi', label: 'Kimi Code', available: true, version: null, limits: null }], loaded: true });
+    // A migrating host may list the legacy methods too. Shared mode must take precedence.
+    bridge.emitStatus({ state: 'connected', hostVersion: 'shared', methods: [...REQUIRED_METHODS, 'feed.snapshot', 'feed.subscribe',
+      'feed.unsubscribe', 'kimi.getControl', 'kimi.setControl'], features: ['kimi-native-terminal', 'kimi-shared-terminal', 'kimi-pty-generation'] });
+    bridge.setHandler('kimi.getControl', () => ({ owner: 'terminal' }));
+    bridge.setHandler('pty.attach', () => ({ snapshot: 'Native screen', cols: 80, rows: 24, generation }));
+    bridge.setHandler('pty.send', () => ({ inserted: true, submitted: true, reason: null }));
+
+    render(<Views />);
+    const field = screen.getByRole<HTMLTextAreaElement>('textbox', { name: S.chat.composer.kimiLabel });
+    fireEvent.change(field, { target: { value: 'queued follow-up' } });
+    fireEvent.keyDown(field, { key: 'Enter' });
+    expect(bridge.calls.filter(({ method }) => method === 'pty.send')).toEqual([]);
+    fireEvent.change(field, { target: { value: 'unsent draft' } });
+    fireEvent.click(screen.getByRole('radio', { name: 'Terminal' }));
+
+    expect(screen.getByTestId('terminal-surface-pad').hidden).toBe(false);
+    expect(screen.queryByText('Kimi Terminal has control')).toBeNull();
+    expect(screen.queryByRole('button', { name: /take control|return to chat/i })).toBeNull();
+    await waitFor(() => expect(xtermMock.terminals[0]?.writes).toContain('Native screen'));
+    act(() => xtermMock.terminals[0]?.onDataHandler?.('x'));
+    expect(bridge.notified).toContainEqual({ method: 'pty.input', params: { ref, data: 'x', generation } });
+
+    // Complete the turn while Terminal is on screen. The Chat outbox still drains through pty.send.
+    act(() => useActivityStore.setState({ byRef: activityMap([makeActivity(ref, 'idle')]) }));
+    await waitFor(() => expect(bridge.calls.filter(({ method }) => method === 'pty.send')).toEqual([
+      { method: 'pty.send', params: { ref, text: 'queued follow-up', submit: true, requestedAt: expect.any(Number) } },
+    ]));
+    fireEvent.click(screen.getByRole('radio', { name: 'Chat' }));
+    expect(screen.getByRole<HTMLTextAreaElement>('textbox', { name: S.chat.composer.kimiLabel }).value).toBe('unsent draft');
+    expect(bridge.calls.filter(({ method }) => method === 'kimi.getControl' || method === 'kimi.setControl')).toEqual([]);
+  } finally {
+    cleanup();
+    chatOutbox.resetForTests();
+    resetChatUiStoreForTests();
+    useFeedStore.setState({ feeds: {} });
+    useActivityStore.setState(previousActivity);
+    useProvidersStore.setState(previousProviders);
+    useLayoutStore.setState(previousLayout);
+  }
+});
+
+it('gates Kimi takeover on host capability and never transfers ownership when the Terminal mounts', async () => {
+  resetChatUiStoreForTests();
+  useWorksStore.setState({ entries: [makeWork(ref.workId, {
+    projectPath: ref.projectPath, sessions: [makeSession(ref.sessionId, 'Kimi', { provider: 'kimi' })],
+  })] });
+  bridge.setHandler('kimi.getControl', () => ({ owner: 'chat', canTakeover: true }));
+  bridge.setHandler('kimi.setControl', () => {
+    bridge.emit('kimi.control', { ref, control: { owner: 'terminal' } });
+    return { owner: 'terminal' };
+  });
+  act(() => bridge.emitStatus({ state: 'connected', hostVersion: 'old', methods: ['pty.attach', 'pty.detach'] }));
+  renderSurface();
+  expect(screen.queryByRole('button', { name: 'Take control in Terminal' })).toBeNull();
+  expect(bridge.calls.some(({ method }) => method === 'kimi.getControl')).toBe(false);
+  act(() => bridge.emitStatus({ state: 'connected', hostVersion: 'new',
+    methods: ['pty.attach', 'pty.detach', 'kimi.getControl', 'kimi.setControl'], features: ['kimi-native-terminal'] }));
+  const takeover = await screen.findByRole('button', { name: 'Take control in Terminal' });
+  expect(bridge.calls.some(({ method }) => method === 'kimi.setControl')).toBe(false);
+  act(() => useChatUiStore.getState().setDraft(refKey(ref), 'retained draft'));
+  fireEvent.click(takeover);
+  expect((await screen.findByRole('alert')).textContent).toMatch(/clear your Chat draft/);
+  expect(bridge.calls.some(({ method }) => method === 'kimi.setControl')).toBe(false);
+  const sessionKey = refKey(ref);
+  act(() => {
+    useChatUiStore.getState().setDraft(sessionKey, '');
+    useChatUiStore.getState().updatePromptEchoes(sessionKey, () => [
+      { id: 'send', state: 'queued', text: 'queued follow-up', afterId: null, since: 0 },
+    ]);
+  });
+  fireEvent.click(takeover);
+  expect(screen.getByRole('alert').textContent).toMatch(/clear your Chat draft/);
+  expect(bridge.calls.some(({ method }) => method === 'kimi.setControl')).toBe(false);
+  act(() => useChatUiStore.getState().updatePromptEchoes(sessionKey, () => [
+    { id: 'send', state: 'confirmed', promptId: 'prompt' },
+  ]));
+  fireEvent.click(takeover);
+  expect(await screen.findByText('Kimi Terminal has control')).toBeDefined();
+  expect(bridge.calls.filter(({ method }) => method === 'kimi.setControl')).toHaveLength(1);
+});
+
+it('offers explicit native reopen after a failed handback without consuming a saved Chat draft', async () => {
+  resetChatUiStoreForTests();
+  useWorksStore.setState({ entries: [makeWork(ref.workId, {
+    projectPath: ref.projectPath, sessions: [makeSession(ref.sessionId, 'Kimi', { provider: 'kimi', lifecycle: 'sleeping' })],
+  })] });
+  bridge.setHandler('kimi.getControl', () => ({ owner: 'stopped', detail: 'Replay exceeds the limit' }));
+  bridge.setHandler('kimi.setControl', () => {
+    bridge.emit('kimi.control', { ref, control: { owner: 'terminal' } });
+    return { owner: 'terminal' };
+  });
+  act(() => bridge.emitStatus({ state: 'connected', hostVersion: 'new',
+    methods: ['pty.attach', 'pty.detach', 'kimi.getControl', 'kimi.setControl'], features: ['kimi-native-terminal'] }));
+  renderSurface();
+  expect(await screen.findByText('Replay exceeds the limit')).toBeDefined();
+  act(() => useChatUiStore.getState().setDraft(refKey(ref), 'retained draft'));
+  expect(bridge.calls.some(({ method }) => method === 'kimi.setControl')).toBe(false);
+  fireEvent.click(screen.getByRole('button', { name: 'Reopen Terminal' }));
+  expect(await screen.findByText('Kimi Terminal has control')).toBeDefined();
+  expect(bridge.calls).toContainEqual({ method: 'kimi.setControl', params: { ref, target: 'terminal' } });
+  expect(useChatUiStore.getState().drafts[refKey(ref)]).toBe('retained draft');
+  resetChatUiStoreForTests();
 });
 
 // Карточка Backlog доски над терминалом (задача 8): терминал — цель броска, только если карточку можно отправить в эту

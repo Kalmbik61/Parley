@@ -21,10 +21,10 @@ import type { WorkProvider } from './work/types.js';
  * `work/qwen-settings-file.ts`): подстановки `{mcpConfig}` у Qwen Code нет, сервер доходит через окружение.
  * `opencode-server` — OpenCode 2.x: сервер `parley` лежит в `OPENCODE_CONFIG_CONTENT` процесса `opencode serve`, которым
  * владеет хост (`work/opencode-config.ts`, спека 2026-11-12, 4.2–4.3); TUI получает только адрес сервера и пароль.
- * `kimi-acp` — stdio-сервер передаётся в `session/new` и `session/load`.
+ * `kimi-native` — постоянная запись stdio, полномочия выдаются только окружению конкретного запуска.
  * `undefined` — провайдер MCP не принимает, координация ему недоступна.
  */
-export type McpConfigKind = 'json-file' | 'codex-override' | 'qwen-system-settings' | 'opencode-server' | 'kimi-acp';
+export type McpConfigKind = 'json-file' | 'codex-override' | 'qwen-system-settings' | 'opencode-server' | 'kimi-native';
 
 /**
  * Чем запись карты связывается с сессией в логах провайдера: id задан снаружи
@@ -540,7 +540,7 @@ export const PROVIDERS: Readonly<Record<BuiltinProvider, ProviderInfo>> = {
     mark: 'Ki',
     hasHistory: false,
     linkBy: 'cwd+time',
-    runner: { command: 'kimi', args: ['acp'], resumeArgs: ['acp'], mcpConfig: 'kimi-acp' },
+    runner: { command: 'kimi', args: [], resumeArgs: ['--session', '{providerSessionId}'], mcpConfig: 'kimi-native' },
   },
 };
 
@@ -810,7 +810,7 @@ export function assistantCommand(
 export const supportsModel = (entry: ProviderEntry): boolean =>
   // OpenCode's TUI has no model flag: the model goes into the server config document (`opencode-config.ts`, spec 2026-11-12, 4.3),
   // Kimi also applies choices through ACP config rather than CLI flags. These routes accept a model.
-  entry.runner.mcpConfig === 'kimi-acp' || entry.runner.mcpConfig === 'opencode-server' || (entry.runner.args ?? []).some((item) => item === '{model}');
+  entry.runner.mcpConfig === 'kimi-native' || entry.runner.mcpConfig === 'opencode-server' || (entry.runner.args ?? []).some((item) => item === '{model}');
 
 /**
  * Принимает ли провайдер усилие при запуске — по тому же правилу, что и модель, но `{effort}`
@@ -818,7 +818,7 @@ export const supportsModel = (entry: ProviderEntry): boolean =>
  * любой элемент с ним.
  */
 export const supportsEffort = (entry: ProviderEntry): boolean =>
-  (entry.runner.mcpConfig === 'kimi-acp' && (entry.models ?? []).some((model) => (model.efforts?.length ?? 0) > 0)) ||
+  (entry.runner.mcpConfig === 'kimi-native' && (entry.models ?? []).some((model) => (model.efforts?.length ?? 0) > 0)) ||
   (entry.runner.args ?? []).some((item) => item.includes('{effort}'));
 
 /**
@@ -830,7 +830,7 @@ export const supportsEffort = (entry: ProviderEntry): boolean =>
  */
 export function selectableModels(entry: ProviderEntry): ModelOption[] | null {
   const list = entry.models;
-  if (!supportsModel(entry) || list === undefined || list === null || (list.length === 0 && entry.runner.mcpConfig !== 'kimi-acp')) {
+  if (!supportsModel(entry) || list === undefined || list === null || (list.length === 0 && entry.runner.mcpConfig !== 'kimi-native')) {
     return null;
   }
   return list.map((model) =>
@@ -1182,7 +1182,7 @@ export function resolveModelEffort(
   if (!EFFORT_TOKEN.test(effort)) {
     return { error: `effort ${JSON.stringify(effort)} is not a level name${allowed}` };
   }
-  if (!supportsEffort(entry) && entry.runner.mcpConfig !== 'kimi-acp') return { choice: resolved };
+  if (!supportsEffort(entry) && entry.runner.mcpConfig !== 'kimi-native') return { choice: resolved };
   const subject = kept ?? 'the default model';
   if (levels === null) return { error: `${subject} has no effort levels; omit effort` };
   if (!levels.some((level) => level.id === effort)) {

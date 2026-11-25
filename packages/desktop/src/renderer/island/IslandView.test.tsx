@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { createRef } from 'react';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { FeedCard } from '@parley/core';
+import type { FeedCard, FeedPermissionOption } from '@parley/core';
 import type { ConsentCard } from '@parley/protocol';
 import type { IslandApi } from '../../shared/island.js';
 import * as QuestionFormModule from './QuestionForm.js';
@@ -57,6 +57,18 @@ function api(): IslandApi {
 function permissionItem(patch: Partial<IslandRequest> = {}, suggestions: unknown[] = []): IslandRequest {
   const card = { id: 'c-1', at: '', kind: 'permission', cardId: 'c-1', state: 'pending', toolUseId: null, toolName: 'Bash', toolInput: { command: 'rm -rf build' }, suggestions, notified: false } as unknown as FeedCard;
   return { key: 'k\u0000c-1', ref: REF, card, summary: 'Run: rm -rf build', inWindow: true, since: 1, deciding: false, note: null, ...patch };
+}
+
+const KIMI_OPTIONS: FeedPermissionOption[] = [
+  { optionId: 'once', name: 'Allow this action once and ask me before running it again', kind: 'allow_once' },
+  { optionId: 'session', name: 'Allow this action for the rest of the current Kimi session', kind: 'allow_always' },
+  { optionId: 'reject', name: 'Reject this request and continue without running the action', kind: 'reject_once' },
+];
+
+function kimiPermissionItem(permissionOptions: FeedPermissionOption[], patch: Partial<IslandRequest> = {}): IslandRequest {
+  const item = permissionItem(patch, [{ type: 'addRules', rules: [{ toolName: 'Bash', ruleContent: 'ls' }] }]);
+  if (item.card?.kind !== 'permission') throw new Error('Expected a permission card');
+  return { ...item, card: { ...item.card, permissionOptions } };
 }
 
 function questionItem(options: string[]): IslandRequest {
@@ -310,6 +322,53 @@ describe('вид острова', () => {
     expect(props.onDecide).toHaveBeenCalledWith('k\u0000c-1', { kind: 'permission', behavior: 'allow' });
     fireEvent.click(screen.getByTestId('island-deny'));
     expect(props.onDecide).toHaveBeenCalledWith('k\u0000c-1', { kind: 'permission', behavior: 'deny' });
+  });
+
+  it('Kimi permission buttons preserve exact labels, order and decision payloads', () => {
+    const item = kimiPermissionItem(KIMI_OPTIONS);
+    const props = view({ items: [item] });
+    const card = within(screen.getByTestId('island-card'));
+    const buttons = card.getAllByRole('button');
+    expect(buttons.map((button) => button.textContent)).toEqual(KIMI_OPTIONS.map(({ name }) => name));
+    buttons.forEach((button) => fireEvent.click(button));
+    expect(vi.mocked(props.onDecide).mock.calls).toEqual([
+      [item.key, { kind: 'permission', behavior: 'allow', optionId: 'once' }],
+      [item.key, { kind: 'permission', behavior: 'allow', optionId: 'session' }],
+      [item.key, { kind: 'permission', behavior: 'deny', optionId: 'reject' }],
+    ]);
+  });
+
+  it('an explicitly empty option list does not fall back to generic permission actions', () => {
+    const props = view({ items: [kimiPermissionItem([])] });
+    const card = within(screen.getByTestId('island-card'));
+    for (const action of ['island-allow', 'island-always', 'island-deny']) {
+      expect(card.queryByTestId(action)).toBeNull();
+    }
+    expect(props.onDecide).not.toHaveBeenCalled();
+  });
+
+  it('Kimi option refresh re-arms the same card and respects deciding', () => {
+    const first = kimiPermissionItem(KIMI_OPTIONS, { fingerprint: 'first' });
+    const props = viewProps({ items: [first] });
+    const { rerender } = render(<IslandView {...props} />);
+    const click = (name: string): void => { fireEvent.click(screen.getByRole('button', { name })); };
+    click(KIMI_OPTIONS[0]!.name);
+    expect(props.onDecide).not.toHaveBeenCalled();
+    arm();
+    const replacement = { ...KIMI_OPTIONS[0]!, optionId: 'updated', name: 'New approval choice' };
+    const next = kimiPermissionItem([replacement, ...KIMI_OPTIONS.slice(1)], { fingerprint: 'second' });
+    rerender(<IslandView {...props} items={[next]} />);
+    expect(screen.queryByRole('button', { name: KIMI_OPTIONS[0]!.name })).toBeNull();
+    click(replacement.name);
+    expect(props.onDecide).not.toHaveBeenCalled();
+    arm();
+    click(replacement.name);
+    rerender(<IslandView {...props} items={[{ ...next, deciding: true }]} />);
+    click(replacement.name);
+    click(KIMI_OPTIONS[2]!.name);
+    expect(vi.mocked(props.onDecide).mock.calls).toEqual([
+      [next.key, { kind: 'permission', behavior: 'allow', optionId: 'updated' }],
+    ]);
   });
 
   it('правила есть — Always с подсказкой правил', () => {
@@ -2039,4 +2098,16 @@ describe('explicit notice presence across compact island modes', () => {
     expect(screen.getByTestId(model.active ? 'island-capsule' : 'island-notch')).toBeTruthy();
     expect(screen.getByTestId('island-content').style.paddingTop).toBe('0px');
   });
+});
+
+it('opens a native Kimi row explicitly in Terminal without claiming a pending approval', () => {
+  const props = viewProps({ listOpen: true, model: {
+    ...IDLE_MODEL, active: true, groups: [{ key: 'fixture', project: 'local', title: 'Fixture',
+      rows: [{ kind: 'session', ref: REF, key: 'native', label: 'Kimi', provider: 'kimi', state: 'native', inTerminal: true }],
+    }],
+  } });
+  render(<IslandView {...props} />);
+  fireEvent.click(screen.getByRole('button', { name: /Kimi.*Open terminal/i }));
+  expect(props.api.open).toHaveBeenCalledWith({ kind: 'session', ref: REF, view: 'terminal' });
+  expect(screen.queryByText(/1 waiting/)).toBeNull();
 });

@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { isPublishedAgentPlan } from '../agent-plan.js';
 import { validateDecisionJournalStorage } from './decision-journal.js';
 import { validatePlanStorage } from './plans.js';
@@ -8,8 +9,10 @@ import { SWARM_COVERAGES, SWARM_ROLES, SWARM_STATUSES, isSwarmSlice, isSwarmTag,
 import { EFFORT_TOKEN, type EffortLevel } from '../providers.js';
 import type { LetterTx } from './letter-store.js';
 import { defaultSessionName, NEW_LABEL } from './names.js';
+import { isKimiPermissionMode } from './types.js';
 import type {
   CodexThreadBinding,
+  KimiPermissionMode,
   HistoryEntry,
   Message,
   MessageKind,
@@ -116,6 +119,7 @@ export interface NewSession {
   /** Модель и усилие запуска (`spawn_session`); без них — по умолчанию, поля в записи не будет. */
   model?: string | null;
   effort?: EffortLevel | null;
+  kimiPermissionMode?: KimiPermissionMode;
   /** Облегчённый запуск (C2.2): решение при создании; без поля — запись как до этого куска. */
   lean?: boolean;
   workspace?: WorkSession['workspace'];
@@ -134,6 +138,9 @@ export function addSession(
 ): WorkSession {
   if (init.parent != null) throw new Error('Parley sessions cannot have a parent');
   if (init.agent !== undefined && init.role !== undefined) throw new Error('agent-and-role-conflict');
+  if (init.kimiPermissionMode !== undefined && (init.provider !== 'kimi' || !isKimiPermissionMode(init.kimiPermissionMode))) {
+    throw new Error('Invalid Kimi permission mode for session creation');
+  }
   const id = nextSessionId(map);
   const session: WorkSession = {
     id,
@@ -163,6 +170,7 @@ export function addSession(
     ...(init.createdBy === undefined ? {} : { createdBy: init.createdBy }),
     ...(init.model === undefined ? {} : { model: init.model }),
     ...(init.effort === undefined ? {} : { effort: init.effort }),
+    ...(init.kimiPermissionMode === undefined ? {} : { kimiPermissionMode: init.kimiPermissionMode }),
     ...(init.lean === undefined ? {} : { lean: init.lean }),
     ...(init.trial === undefined ? {} : { trial: init.trial }),
   };
@@ -387,6 +395,13 @@ const isSessionShape =
       ? typeof value.status === 'string' && V1_STATUSES.includes(value.status)
       : typeof value.lifecycle === 'string' && Object.hasOwn(TRANSITIONS, value.lifecycle)) &&
     Array.isArray(value.history) &&
+    (value.kimiTerminal === undefined || (value.provider === 'kimi' && isKimiHistoryBinding(value.kimiTerminal))) &&
+    (value.kimiChatCheckpoint === undefined || (value.provider === 'kimi' && isKimiChatCheckpoint(value.kimiChatCheckpoint))) &&
+    (value.kimiNativeBinding === undefined || (value.provider === 'kimi' && isKimiNativeBinding(value.kimiNativeBinding))) &&
+    (value.kimiNativeBootstrap === undefined || (value.provider === 'kimi' && isRecord(value.kimiNativeBootstrap) &&
+      typeof value.kimiNativeBootstrap.nonce === 'string' && BINDING_UUID.test(value.kimiNativeBootstrap.nonce) &&
+      (value.kimiNativeBootstrap.phase === 'reserved' || value.kimiNativeBootstrap.phase === 'rotating'))) &&
+    (value.kimiPermissionMode === undefined || (value.provider === 'kimi' && isKimiPermissionMode(value.kimiPermissionMode))) &&
     (value.agentPlan === undefined || isPublishedAgentPlan(value.agentPlan)) &&
     (value.workspace === undefined || value.workspace === null ||
       (isRecord(value.workspace) && isNonemptyString(value.workspace.path) &&
@@ -863,4 +878,25 @@ function normalizeAgentFields(session: Record<string, unknown>): void {
   // стирается и не становится «плеча нет»: она заменяется явным состоянием «назначение повреждено», которое переживает
   // чтение и запись карты (план опыта, 1.1). Само состояние читается обратно как есть.
   if (session['trial'] !== undefined) session['trial'] = normalizeTrial(session['trial']);
+}
+
+const KIMI_ARCHIVE_ID = /^[0-9a-f-]{36}$/i;
+
+function isKimiNativeBinding(value: unknown): boolean {
+  return isRecord(value) && typeof value.home === 'string' && path.isAbsolute(value.home) &&
+    typeof value.cwd === 'string' && path.isAbsolute(value.cwd) &&
+    (value.legacyArchive === undefined || (typeof value.legacyArchive === 'string' && KIMI_ARCHIVE_ID.test(value.legacyArchive))) &&
+    (value.legacyProviderId === undefined || (typeof value.legacyProviderId === 'string' && value.legacyProviderId.length <= 128));
+}
+
+function isKimiHistoryBinding(value: unknown): value is Record<string, unknown> & { archive: string; cwd: string; home: string } {
+  if (value === null || typeof value !== 'object') return false;
+  const marker = value as Record<string, unknown>;
+  return typeof marker.archive === 'string' && KIMI_ARCHIVE_ID.test(marker.archive) &&
+    typeof marker.cwd === 'string' && marker.cwd !== '' && typeof marker.home === 'string' && marker.home !== '';
+}
+
+function isKimiChatCheckpoint(value: unknown): boolean {
+  return isKimiHistoryBinding(value) && typeof value.priorArchive === 'string' &&
+    KIMI_ARCHIVE_ID.test(value.priorArchive) && value.archive !== value.priorArchive;
 }

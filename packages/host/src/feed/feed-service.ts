@@ -24,7 +24,8 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { lstat, open, stat } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { lstat, open, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import {
@@ -45,13 +46,18 @@ import {
   emptyCodexAgentMeta,
   emptyCodexCursor,
   emptyFeedState,
+  finishTool,
+  newText,
+  newTool,
   FEED_IMAGE_SWEEP_MS,
+  FEED_TEXT_LIMIT,
   feedFromCodexRollout,
   feedFromTranscript,
   mailFromInline,
   forEachJsonlRecord,
   interruptedAt,
   isCodexThreadBinding,
+  kimiArchiveDirectory,
   byFamily,
   isClaudeCode,
   loadConfig,
@@ -62,7 +68,9 @@ import {
   turnActive,
   withCodexAgentMeta,
 } from '@parley/core';
-import type { KimiOutput } from '../kimi/sessions.js';
+import type { KimiHistoryProjection, KimiHistoryReplay, KimiOutput, KimiReplayChunk } from '../kimi/sessions.js';
+import { withoutKimiDateContext } from '../kimi/date-provenance.js';
+import { createKimiWire, KIMI_SESSION_ID, projectKimiWire, record as kimiRecord, type KimiWireEvent } from '../kimi/native-wire.js';
 import type {
   CodexAgentMeta,
   CodexCursor,
@@ -80,7 +88,7 @@ import type {
   RolloutRecord,
   WorkSession,
 } from '@parley/core';
-import { FEED_MAIL_FEATURE, FEED_SCHEMA_VERSION, FEED_PROGRESS_RETRY_AFTER_MAX_MS, FEED_RESYNC_FEATURE, refKey, sessionRef } from '@parley/protocol';
+import { FEED_MAIL_FEATURE, FEED_SCHEMA_VERSION, FEED_PROGRESS_RETRY_AFTER_MAX_MS, FEED_RESYNC_FEATURE, feedItem, refKey, sessionRef } from '@parley/protocol';
 import type { FeedDecisions, KimiRequest, KimiResponse, ProgressResult, Result, SendResult, SessionRef } from '@parley/protocol';
 import { projectProgress } from './progress.js';
 import { submitCodexFollowUp } from './codex-follow-up.js';
@@ -193,6 +201,8 @@ export interface FeedServiceDeps {
 
 export interface FeedServiceOptions {
   kimiRespond?: (ref: SessionRef, requestId: string, response: KimiResponse) => void;
+  kimiBlocksChat?: (ref: SessionRef) => boolean;
+  kimiNativeDecide?: (ref: SessionRef, requestId: string, decision: FeedDecision) => Promise<Result<'feed.decide'>>;
   maxItems?: number;
   maxBytes?: number;
   batchMs?: number;
@@ -242,8 +252,17 @@ export function withoutMail<D extends { upsert: FeedItem[]; removed: string[] }>
 
 export interface FeedService {
   kimiHasHistory(ref: SessionRef): boolean;
+  kimiArchive(ref: SessionRef, archive: string): Promise<void>;
+  kimiRemoveArchive(ref: SessionRef, archive: string): Promise<void>;
+  kimiPruneArchives(ref: SessionRef, retain: readonly string[]): Promise<void>;
+  kimiSeedCheckpoint(ref: SessionRef, archive: string): Promise<void>;
+  kimiPrepareHistory(ref: SessionRef, archive: string, chunks: readonly KimiReplayChunk[], replay: KimiHistoryReplay): Promise<KimiHistoryProjection>;
   kimiOutput(ref: SessionRef, event: KimiOutput): void;
   kimiRequests(ref: SessionRef, requests: readonly KimiRequest[]): void;
+  kimiNativeEvent(ref: SessionRef, source: string, event: KimiWireEvent, historical?: boolean): void;
+  kimiNativeStartupFailed(ref: SessionRef, generation: string, message?: string): void;
+  kimiNativeReset(ref: SessionRef, sameId: boolean): void;
+  kimiNativeRequests(ref: SessionRef, requests: KimiRequest[], unresolved: boolean): void;
   /**
    * OpenCode: poll the session's messages now (called on its SSE events); joins the poll in flight. A session without a
    * feed in memory, a server or a seeded feed does nothing.
@@ -430,6 +449,7 @@ interface SessionFeed {
   opencode?: OpencodeFeed;
   /** Only the live ACP process may resolve these cards. */
   kimiInteractions?: Map<string, KimiInteraction>;
+  kimiNative?: { id: string; seen: Set<string>; legacy?: { rows: { kind: 'prompt' | 'text'; text: string }[]; at: number; failed: boolean } };
   /**
    * Qwen Code: when its last turn ended (Stop hook or the journal going idle). The transcript has no end-of-turn record, so
    * this closes the turn it leaves open; it survives reseeding and a reconnect.
@@ -1373,6 +1393,15 @@ export function createFeedService(
    */
   function seed(feed: SessionFeed, provider: string, foreground = false): Promise<void> {
     if (stopped) return Promise.resolve();
+    if (provider === 'kimi') {
+      const { kimiTerminal, kimiChatCheckpoint, kimiNativeBinding, providerSessionId } = sessionOf(feed.ref);
+      if (kimiNativeBinding !== undefined && providerSessionId !== null && KIMI_SESSION_ID.test(providerSessionId)) {
+        feed.seeding ??= seedKimiNative(feed, providerSessionId, kimiNativeBinding).finally(() => { feed.seeding = undefined; });
+        return feed.seeding;
+      }
+      const archive = kimiTerminal?.archive ?? kimiChatCheckpoint?.archive;
+      return archive === undefined ? Promise.resolve() : seedKimiArchive(feed, archive, kimiTerminal === undefined);
+    }
     const key = refKey(feed.ref);
     if (foreground) promoteSeed(key);
     const existing = coldReads.get(key);
@@ -2564,25 +2593,409 @@ export function createFeedService(
     for (const feed of woken) void seedAside(feed.ref);
   });
 
+  async function kimiArchiveFile(ref: SessionRef, archive: string, create = false): Promise<string | undefined> {
+    if (!/^[0-9a-f-]{36}$/i.test(archive)) return undefined;
+    const dir = await kimiArchiveDirectory(ref.projectPath, ref.workId, ref.sessionId, create);
+    return dir === undefined ? undefined : path.join(dir, `${archive}.json`);
+  }
+
+  async function readKimiArchiveItems(ref: SessionRef, archive: string): Promise<FeedItem[]> {
+    const file = await kimiArchiveFile(ref, archive);
+    if (file === undefined) throw new Error('Kimi archive directory is missing or unsafe');
+    const handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    try {
+      const info = await handle.stat();
+      if (!info.isFile() || info.size > maxBytes + 1024) throw new Error('Invalid Kimi archive file');
+      const saved: unknown = JSON.parse(await handle.readFile('utf8'));
+      if (!Array.isArray(saved) || saved.length > maxItems) throw new Error('Invalid Kimi archive');
+      return saved.map((item) => feedItem.parse(item));
+    } finally {
+      await handle.close();
+    }
+  }
+
+  async function writeKimiArchiveItems(ref: SessionRef, archive: string, items: readonly FeedItem[]): Promise<void> {
+    const text = JSON.stringify(items);
+    if (items.length > maxItems || Buffer.byteLength(text) > maxBytes + 1024) throw oversizedKimiReplay();
+    const file = await kimiArchiveFile(ref, archive, true);
+    if (file === undefined) throw new HostError('conflict', 'Kimi Chat archive directory is missing or unsafe. The prior Chat is unchanged.');
+    // The map can select this immutable file only after the write and flush succeed.
+    await writeFile(file, text, { mode: 0o600, flag: 'wx', flush: true });
+  }
+
+  function seedKimiArchive(feed: SessionFeed, archive: string, mandatory: boolean): Promise<void> {
+    if (feed.live || feed.seeded) return Promise.resolve();
+    feed.seeding ??= readKimiArchive(feed, archive, mandatory).finally(() => { feed.seeding = undefined; });
+    return feed.seeding;
+  }
+
+  async function readKimiArchive(feed: SessionFeed, archive: string, mandatory: boolean): Promise<void> {
+    try {
+      const items = await readKimiArchiveItems(feed.ref, archive);
+      if (!feedCurrent(feed) || feed.live) return;
+      commit(feed, { state: { ...emptyFeedState(), items, seq: kimiArchiveSequence(items) }, changes: items });
+      feed.seeded = true;
+    } catch (error) {
+      log.warn('Kimi Chat archive could not be loaded', { ref: feed.ref, error: String(error) });
+      if (mandatory) throw new HostError('conflict', 'Kimi could not read the committed Chat checkpoint.');
+    }
+  }
+
+  function reduceKimi(state: FeedState, event: KimiOutput, time: string): FeedUpdate {
+    if (event.kind === 'end' && event.error === undefined) {
+      return closeFeedTurn(state, time, { interrupted: event.reason === 'cancelled' });
+    }
+    const body = event.kind === 'prompt' ? { hook_event_name: 'UserPromptSubmit', prompt: event.text }
+      : event.kind === 'text' ? { hook_event_name: 'MessageDisplay', message_id: event.messageId, delta: event.text }
+      : { hook_event_name: 'StopFailure', error: event.reason, last_assistant_message: event.error };
+    return applyHookEvent(state, body, time);
+  }
+
+  type NativeBinding = NonNullable<WorkSession['kimiNativeBinding']>;
+
+  async function seedKimiNative(feed: SessionFeed, id: string, binding: NativeBinding): Promise<void> {
+    if (feed.live || feed.seeded) return;
+    try {
+      if (binding.legacyArchive !== undefined && binding.legacyProviderId === id) await readKimiArchive(feed, binding.legacyArchive, false);
+      const wire = await createKimiWire({ ...binding, sessionId: id });
+      for (let chunk = 0; chunk < 32; chunk++) {
+        const result = await wire.read();
+        if (!feedCurrent(feed) || feed.live) return;
+        if (result.limitation !== undefined) nativeKimiEvent(feed, id, { kind: 'unsupported', at: now() }, true);
+        for (const row of result.rows) {
+          const event = projectKimiWire(row);
+          if (event !== undefined) nativeKimiEvent(feed, id, event, true);
+        }
+        if (!result.more) break;
+        if (chunk === 31) nativeKimiEvent(feed, id, { kind: 'unsupported', at: now() }, true);
+      }
+      if (!feed.live) commit(feed, closeFeedTurn(feed.state, at(), { interrupted: true }));
+    } catch {
+      nativeKimiEvent(feed, id, { kind: 'unsupported', at: now() }, true);
+    } finally {
+      feed.seeded = true;
+    }
+  }
+
+  function nativeKimiEvent(feed: SessionFeed, source: string, event: KimiWireEvent, historical: boolean): void {
+    const time = event.at > 0 ? new Date(event.at).toISOString() : at();
+    let native = feed.kimiNative;
+    if (native?.id !== source) {
+      const legacy = native === undefined && feed.state.items.some(item => item.kind === 'prompt' || item.kind === 'text')
+        ? { rows: archiveKimiTurns(feed.state.items).flatMap(({ prompt, reply }) => [
+          ...(prompt === null ? [] : [{ kind: 'prompt' as const, text: prompt }]),
+          ...(reply === '' ? [] : [{ kind: 'text' as const, text: reply }]),
+        ]), at: 0, failed: false }
+        : undefined;
+      native = { id: source, seen: new Set(), ...(legacy === undefined ? {} : { legacy }) };
+      feed.kimiNative = native;
+    }
+    const id = (suffix: string) => `kimi-native:${source}:${suffix}`;
+    const marker = event.kind === 'unsupported' ? 'limitation' : event.kind + ':' +
+      ('id' in event ? event.id : event.at);
+    if (native.seen.has(marker)) return;
+    if (native.seen.size >= 32768) native.seen.delete(native.seen.values().next().value!);
+    native.seen.add(marker);
+
+    // An old archive is kept intact. Suppress only a positively matched wire prefix.
+    // If it cannot be aligned, omit the ambiguous historical suffix and show the limitation.
+    const legacy = native.legacy;
+    if (legacy !== undefined) {
+      if (historical && (legacy.failed || legacy.rows.length > 0)) {
+        if (legacy.failed || (event.kind !== 'prompt' && event.kind !== 'text')) return;
+        const row = legacy.rows[0];
+        if (row?.kind === event.kind && (event.kind === 'prompt' ? row.text === event.text
+            : row.text.startsWith(event.text, legacy.at))) {
+          legacy.at += event.text.length;
+          if (legacy.at >= row.text.length) { legacy.rows.shift(); legacy.at = 0; }
+          return;
+        }
+        legacy.failed = true;
+        nativeKimiEvent(feed, source, { kind: 'unsupported', at: event.at }, false);
+        return;
+      }
+      if (!historical) {
+        delete native.legacy;
+        if (legacy.failed || legacy.rows.length > 0) nativeKimiEvent(feed, source, { kind: 'unsupported', at: event.at }, false);
+      }
+    }
+    const put = (item: FeedItem): void => {
+      const items = feed.state.items;
+      const old = items.findIndex(candidate => candidate.id === item.id);
+      commit(feed, { state: { ...feed.state, items: old < 0 ? [...items, item] : items.toSpliced(old, 1, item) }, changes: [item] });
+    };
+    if (event.kind === 'prompt') {
+      const began = settleCards(feed.state, 'stale', time);
+      commit(feed, { ...began, state: { ...began.state, turnStartedAt: time } });
+      put({ kind: 'prompt', id: id('prompt:' + event.id), at: time, text: event.text, images: 0 });
+    } else if (event.kind === 'text') {
+      put(newText(id('text:' + event.id), time, id(event.id), event.text, false));
+    } else if (event.kind === 'tool') {
+      put(newTool(id(event.id), event.name, kimiRecord(event.input) ?? {}, time, null));
+    } else if (event.kind === 'result') {
+      const tool = feed.state.items.find(item => item.kind === 'tool' && item.toolUseId === id(event.id));
+      if (tool?.kind === 'tool') put(finishTool(tool, event.isError ? 'failed' : 'done', event.output, time));
+    } else if (event.kind === 'end') {
+      commit(feed, closeFeedTurn(feed.state, time, { interrupted: event.reason !== 'completed' }));
+    } else if (event.kind === 'resolved') {
+      const cardId = `kimi:${event.id}`;
+      const answer = kimiRecord(event.response);
+      const value = answer?.decision;
+      const answers = kimiRecord(answer?.answers);
+      if (typeof value === 'string' && /^(approved|rejected)/.test(value)) {
+        commit(feed, applyDecision(feed.state, cardId, { kind: 'permission', behavior: value.startsWith('approved') ? 'allow' : 'deny' }, time));
+      } else if (answers !== undefined && Object.values(answers).every(value => typeof value === 'string')) {
+        commit(feed, applyDecision(feed.state, cardId, { kind: 'question', answers: answers as Record<string, string> }, time));
+      } else commit(feed, settleCards(feed.state, 'elsewhere', time, [cardId]));
+    } else if (event.kind === 'compact-start' || event.kind === 'compact') {
+      put({ kind: 'notice', id: id(marker), at: time, notice: { type: 'compact', phase: event.kind === 'compact' ? 'post' : 'pre', trigger: null } });
+    } else if (event.kind === 'undo' || event.kind === 'clear' || event.kind === 'unsupported') {
+      const message = event.kind === 'unsupported' ? 'Kimi history could not be fully projected. Prior Chat is preserved. See Terminal for the native history.'
+        : `Kimi changed its context (${event.kind}). Prior Chat messages are kept as history.`;
+      put({ kind: 'error', id: id(marker), at: time, error: 'kimi-native-history', message });
+    }
+  }
+
+  type KimiTextTurn = { prompt: string | null; reply: string };
+  type ArchivedKimiTurn = KimiTextTurn & { replyTruncated: boolean; items: FeedItem[] };
+  const KIMI_AMBIGUOUS_REPLAY = 'kimi-replay-ambiguous';
+  const ambiguousKimiReplay = () => new HostError('conflict', 'Kimi history does not identify separate prompts. The prior Chat is unchanged.', { reason: KIMI_AMBIGUOUS_REPLAY });
+  const oversizedKimiReplay = () => new HostError('conflict', 'Kimi history exceeds the Chat handback limit. The prior Chat is unchanged.');
+
+  function archiveKimiTurns(items: readonly FeedItem[]): ArchivedKimiTurn[] {
+    const turns: ArchivedKimiTurn[] = [];
+    let turn: ArchivedKimiTurn | undefined;
+    for (const item of items) {
+      if (item.kind === 'mail') continue;
+      if (turn === undefined || item.kind === 'prompt') {
+        turn = { prompt: item.kind === 'prompt' ? item.text : null, reply: '', replyTruncated: false, items: [] };
+        turns.push(turn);
+      }
+      turn.items.push(item);
+      if (item.kind === 'text') {
+        turn.reply += item.text;
+        turn.replyTruncated ||= item.truncated === true;
+      }
+    }
+    return turns;
+  }
+
+  function matchesKimiReply(prior: ArchivedKimiTurn, reply: string): boolean {
+    // The archive holds the reducer's display projection, not the full provider reply.
+    return prior.reply === reply.slice(0, FEED_TEXT_LIMIT) && prior.replyTruncated === (reply.length > FEED_TEXT_LIMIT);
+  }
+
+  function legacyKimiPrompts(chunks: readonly KimiReplayChunk[], archive: readonly ArchivedKimiTurn[], offset: number): string[] {
+    if (chunks.length === 1) return [chunks[0]!.text];
+    const prompts: string[] = [];
+    let cursor = 0;
+    while (cursor < chunks.length) {
+      const previous = archive[offset + prompts.length];
+      if (previous?.prompt == null) throw ambiguousKimiReplay();
+      let text = '';
+      do {
+        text += chunks[cursor++]!.text;
+      } while (cursor < chunks.length && text !== previous.prompt && previous.prompt.startsWith(text));
+      // Only a known prompt with no reply can be followed by another prompt in this run.
+      if (text !== previous.prompt || (cursor < chunks.length && previous.reply !== '')) throw ambiguousKimiReplay();
+      prompts.push(text);
+    }
+    return prompts;
+  }
+
+  function kimiReplayPrompts(user: readonly KimiReplayChunk[], archive: readonly ArchivedKimiTurn[], offset: number, seenIds: Set<string>): (string | null)[] {
+    if (user.length === 0) return [null];
+    // ACP v1 makes messageId optional. Use archive boundaries only while the earlier turns still align.
+    if (!user.some((chunk) => chunk.messageId !== undefined)) return legacyKimiPrompts(user, archive, offset);
+    const prompts: string[] = [];
+    let priorId: string | undefined;
+    for (const { text, messageId } of user) {
+      if (messageId === undefined) throw ambiguousKimiReplay();
+      if (messageId === priorId) prompts[prompts.length - 1] += text;
+      else {
+        if (seenIds.has(messageId)) throw ambiguousKimiReplay();
+        seenIds.add(messageId);
+        prompts.push(text);
+        priorId = messageId;
+      }
+    }
+    return prompts;
+  }
+
+  function reconcileKimiTurns(chunks: readonly KimiReplayChunk[], archive: readonly ArchivedKimiTurn[]): {
+    retained: FeedItem[];
+    suffix: KimiTextTurn[];
+    matched: number;
+    failure: HostError | undefined;
+  } {
+    const retained: FeedItem[] = [];
+    const suffix: KimiTextTurn[] = [];
+    const seenIds = new Set<string>();
+    let matched = 0;
+    let cursor = 0;
+    let failure: HostError | undefined;
+    while (cursor < chunks.length) {
+      const start = cursor;
+      while (chunks[cursor]?.author === 'user') cursor++;
+      const user = chunks.slice(start, cursor);
+      let reply = '';
+      while (chunks[cursor]?.author === 'agent') reply += chunks[cursor++]!.text;
+      let prompts: (string | null)[];
+      try {
+        prompts = kimiReplayPrompts(user, archive, suffix.length === 0 ? matched : archive.length, seenIds);
+        if (prompts.some((prompt) => prompt !== null && prompt.length > 64 * 1024)) throw oversizedKimiReplay();
+      } catch (error) {
+        if (!(error instanceof HostError) || error.code !== 'conflict') throw error;
+        failure = error;
+        break;
+      }
+      for (const [index, prompt] of prompts.entries()) {
+        const turn = { prompt, reply: index === prompts.length - 1 ? reply : '' };
+        const prior = suffix.length === 0 ? archive[matched] : undefined;
+        if (prior !== undefined && prior.prompt === turn.prompt && matchesKimiReply(prior, turn.reply)) {
+          retained.push(...prior.items);
+          matched++;
+        } else suffix.push(turn);
+      }
+    }
+    return { retained, suffix, matched, failure };
+  }
+
+  function kimiArchiveSequence(items: readonly FeedItem[]): number {
+    return items.reduce((max, { id }) => {
+      const value = Number(/:#(\d+)$/.exec(id)?.[1]);
+      return Number.isSafeInteger(value) ? Math.max(max, value) : max;
+    }, 0);
+  }
+
   return {
     onHook,
     kimiHasHistory(ref) {
       return feeds.get(refKey(ref))?.state.items.some((item) => item.kind === 'prompt' || item.kind === 'text') ?? false;
+    },
+    kimiArchive(ref, archive) {
+      const items = feeds.get(refKey(ref))?.state.items ?? [];
+      return writeKimiArchiveItems(ref, archive, items);
+    },
+    async kimiRemoveArchive(ref, archive) {
+      const file = await kimiArchiveFile(ref, archive);
+      if (file !== undefined) await rm(file, { force: true });
+    },
+    async kimiPruneArchives(ref, retain) {
+      const directory = () => kimiArchiveDirectory(ref.projectPath, ref.workId, ref.sessionId);
+      const dir = await directory();
+      if (dir === undefined || retain.length === 0) return;
+      const keep = new Set(retain.map((id) => `${id}.json`));
+      for (const entry of await readdir(dir, { withFileTypes: true })) {
+        if (entry.isFile() && /^[0-9a-f-]{36}\.json$/i.test(entry.name) && !keep.has(entry.name)) {
+          if (await directory() !== dir) return;
+          await rm(path.join(dir, entry.name), { force: true });
+        }
+      }
+    },
+    kimiSeedCheckpoint(ref, archive) {
+      return seedKimiArchive(feedOf(ref, 'kimi'), archive, true);
+    },
+    async kimiPrepareHistory(ref, archive, chunks, replay) {
+      const feed = feedOf(ref, 'kimi');
+      const evidence = await readKimiArchiveItems(ref, archive).catch(() => {
+        throw new HostError('conflict', 'Kimi could not read the prior Chat archive. The prior Chat is unchanged.');
+      });
+      const preferLive = replay.kind === 'checkpoint';
+      const liveTurns = feed.state.items.filter((item) => item.kind !== 'mail');
+      const history = preferLive && feed.live && evidence.filter((item) => item.kind !== 'mail').every(({ id }, i) => liveTurns[i]?.id === id)
+        ? feed.state.items : evidence;
+      const archived = archiveKimiTurns(history);
+      let reconciled = reconcileKimiTurns(chunks, archived);
+      if (reconciled.failure?.data?.['reason'] === KIMI_AMBIGUOUS_REPLAY) {
+        const aligned = await withoutKimiDateContext(replay, chunks);
+        if (aligned !== chunks) reconciled = reconcileKimiTurns(aligned, archived);
+      }
+      if (!preferLive && reconciled.failure !== undefined) throw reconciled.failure;
+      // Only explicit handback may replace a divergent checkpoint. A routine resume
+      // cannot append safely unless the provider's replay confirms the whole prior prefix.
+      const keepPrior = preferLive && reconciled.matched !== archived.length;
+      const retained = keepPrior ? history.filter((item) => item.kind !== 'mail') : reconciled.retained;
+      let partial = replay.incomplete || reconciled.failure !== undefined || keepPrior;
+      let state = { ...emptyFeedState(), seq: Math.max(feed.state.seq, kimiArchiveSequence(evidence)) };
+      const time = at();
+      const newRows: FeedItem[] = [];
+      const mail = preferLive ? (feed.state.items.length === 0 ? evidence : feed.state.items).filter((item) => item.kind === 'mail') : [];
+      let remainingItems = maxItems - retained.length - mail.length;
+      let remainingBytes = maxBytes - [...retained, ...mail].reduce((sum, item) => sum + itemBytes(item), 0);
+      for (const turn of keepPrior ? [] : reconciled.suffix) {
+        let next = state;
+        if (turn.prompt !== null) next = reduceKimi(next, { kind: 'prompt', text: turn.prompt }, time).state;
+        if (turn.reply !== '') next = reduceKimi(next, { kind: 'text', messageId: randomUUID(), text: turn.reply }, time).state;
+        next = closeFeedTurn(next, time).state;
+        // ACP does not report timestamps or durations for the imported suffix.
+        const added = next.items.slice(state.items.length).map((item) => item.kind === 'turn' ? { ...item, durationMs: null } : item);
+        const bytes = added.reduce((sum, item) => sum + itemBytes(item), 0);
+        if (added.length > remainingItems || bytes > remainingBytes) {
+          if (!preferLive) throw oversizedKimiReplay();
+          partial = true;
+          break;
+        }
+        remainingItems -= added.length;
+        remainingBytes -= bytes;
+        newRows.push(...added);
+        state = next;
+      }
+      const current = () => feed.provider === 'kimi' && feedCurrent(feed);
+      function check(): void {
+        if (!current()) {
+          throw new HostError('conflict', 'The Kimi Chat source changed during handback');
+        }
+      }
+      function projectItems(before: readonly FeedItem[]): FeedItem[] {
+        const basis = before.length === 0 ? evidence : before;
+        const priorTurns = basis.filter((item) => item.kind !== 'mail');
+        const keptIds = new Set(retained.map(({ id }) => id));
+        return retained.every(({ id }, i) => priorTurns[i]?.id === id)
+          ? [...basis.filter((item) => item.kind === 'mail' || keptIds.has(item.id)), ...newRows]
+          : [...retained, ...basis.filter((item) => item.kind === 'mail'), ...newRows];
+      }
+      let staged: FeedItem[] | undefined;
+      async function writeCheckpoint(id: string): Promise<void> {
+        check();
+        const rows = projectItems(feed.state.items);
+        if (rows.length > maxItems || rows.reduce((sum, item) => sum + itemBytes(item), 0) > maxBytes) throw oversizedKimiReplay();
+        await writeKimiArchiveItems(ref, id, rows);
+        staged = rows;
+      }
+      function publish(): void {
+        if (!current()) return;
+        const before = feed.state.items;
+        const items = staged ?? projectItems(before);
+        let unchanged = 0;
+        while (unchanged < before.length && unchanged < items.length && before[unchanged] === items[unchanged]) unchanged++;
+        feed.live = true;
+        feed.seeded = true;
+        if (unchanged < before.length) {
+          // Clients upsert in place, then remove. Publish the changed suffix in two deltas so
+          // surviving rows that move keep their IDs and order. Pending changes still go first.
+          flush(feed);
+          for (const { id } of before.slice(unchanged)) {
+            feed.batch.removed.add(id);
+            feed.bytes -= feed.sizes.get(id) ?? 0;
+            feed.sizes.delete(id);
+          }
+          flush(feed);
+        }
+        commit(feed, {
+          state: { ...state, items, permissionMode: feed.state.permissionMode },
+          changes: items.slice(unchanged),
+        });
+        flush(feed);
+      }
+      return { partial, check, writeCheckpoint, publish };
     },
     kimiOutput(ref, event) {
       if (stopped) return;
       const feed = feedOf(ref, 'kimi');
       if (feed.provider !== 'kimi') return;
       feed.live = true;
-      const time = at();
-      if (event.kind === 'end' && event.error === undefined) {
-        commit(feed, closeFeedTurn(feed.state, time, { interrupted: event.reason === 'cancelled' }));
-        return;
-      }
-      const body = event.kind === 'prompt' ? { hook_event_name: 'UserPromptSubmit', prompt: event.text }
-        : event.kind === 'text' ? { hook_event_name: 'MessageDisplay', message_id: event.messageId, delta: event.text }
-        : { hook_event_name: 'StopFailure', error: event.reason, last_assistant_message: event.error };
-      commit(feed, applyHookEvent(feed.state, body, time));
+      commit(feed, reduceKimi(feed.state, event, at()));
     },
     kimiRequests(ref, requests) {
       if (stopped || options.kimiRespond === undefined) return;
@@ -2612,6 +3025,47 @@ export function createFeedService(
       commit(feed, {
         state: { ...settled.state, items: [...settled.state.items, ...added] },
         changes: [...settled.changes, ...added],
+      });
+    },
+    kimiNativeEvent(ref, source, event, historical = false) {
+      if (stopped) return;
+      const feed = feedOf(ref, 'kimi');
+      if (feed.provider !== 'kimi') return;
+      feed.live = true;
+      nativeKimiEvent(feed, source, event, historical);
+    },
+    kimiNativeStartupFailed(ref, generation, message) {
+      if (stopped) return;
+      const feed = feedOf(ref, 'kimi');
+      const item: FeedItem = { kind: 'error', id: `kimi-startup:${generation}`, at: at(), error: 'kimi-native-startup',
+        message: message ?? 'Kimi could not confirm Always Ask. Startup input is blocked. Stop and resume this session to retry.' };
+      if (feed.provider !== 'kimi' || feed.state.items.some(row => row.id === item.id)) return;
+      commit(feed, { state: { ...feed.state, items: [...feed.state.items, item] }, changes: [item] });
+    },
+    kimiNativeReset(ref, sameId) {
+      const feed = feeds.get(refKey(ref));
+      if (feed === undefined || feed.provider !== 'kimi') return;
+      commit(feed, settleCards(feed.state, 'stale', at()));
+      if (!sameId) commit(feed, closeFeedTurn(feed.state, at(), { interrupted: true }));
+      setDecisions(feed, 'terminal');
+    },
+    kimiNativeRequests(ref, requests, unresolved) {
+      if (stopped) return;
+      const feed = unresolved || requests.length ? feedOf(ref, 'kimi') : feeds.get(refKey(ref));
+      if (feed?.provider !== 'kimi') return;
+      setDecisions(feed, requests.length > 0 ? 'window' : 'terminal');
+      const ids = new Set(requests.map(request => `kimi:${request.id}`));
+      // A native screen can change before the wire commits its resolution. Keep the card
+      // pending (Terminal-only while unrecognized) rather than losing the authoritative outcome.
+      const gone = unresolved ? [] : feed.state.items.filter(item => isPendingCard(item) && item.id.startsWith('kimi:') && !ids.has(item.id)).map(item => item.id);
+      const settled = settleCards(feed.state, 'stale', at(), gone);
+      const added = requests.flatMap(request => {
+        if (settled.state.items.some(item => item.id === `kimi:${request.id}`)) return [];
+        const interaction = kimiInteraction(request, at());
+        return interaction === undefined ? [] : [interaction.card];
+      });
+      if (added.length || settled.changes.length) commit(feed, {
+        state: { ...settled.state, items: [...settled.state.items, ...added] }, changes: [...settled.changes, ...added],
       });
     },
     opencodePoll(ref) {
@@ -2795,6 +3249,7 @@ export function createFeedService(
     },
 
     decide(ref, cardId, decision) {
+      if (options.kimiBlocksChat?.(ref)) throw new HostError('conflict', 'Kimi Chat is read-only while Terminal has control');
       const feed = feeds.get(refKey(ref));
       const card = feed?.state.items.find((item) => isCard(item) && item.cardId === cardId);
       if (feed === undefined || card === undefined || !isCard(card)) {
@@ -2802,6 +3257,9 @@ export function createFeedService(
       }
       const current: FeedCardState = card.state;
       if (current !== 'pending') return { applied: false, state: current };
+      if (options.kimiNativeDecide !== undefined && feed.provider === 'kimi' && cardId.startsWith('kimi:')) {
+        return options.kimiNativeDecide(ref, cardId.slice(5), decision);
+      }
       if (isCodexFollowUp(card)) return decideCodexFollowUp(feed, card, decision);
       const qwen = feed.qwenWait?.prompt;
       if (qwen?.card.id === cardId) return decideQwen(feed, qwen, decision);
@@ -2861,6 +3319,7 @@ export function createFeedService(
     },
 
     interrupt(ref) {
+      if (options.kimiBlocksChat?.(ref)) throw new HostError('conflict', 'Use the Kimi Terminal to interrupt the native process');
       const handle = deps.pty.get(ref);
       if (handle === undefined) throw new HostError('not_found', 'session is not running');
       deps.pty.write(ref, ESC);
