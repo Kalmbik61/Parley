@@ -14,6 +14,7 @@ import { connectRaw, hello, waitConnected, type RawMessage, type TestClient } fr
 import { startHost, type RunningHost } from '../host.js';
 import { hostPaths } from '../paths.js';
 import { createScreen } from '../pty/screen.js';
+import { workspaceKey } from './date-provenance.js';
 
 const bin = '/Users/kalmbik61/.kimi-code/bin/kimi';
 const optIn = process.env['PARLEY_KIMI_SHARED_HOST_BIN'];
@@ -27,6 +28,8 @@ const feedback = 'NATIVE_HOST_FEEDBACK_PROBE';
 const always = 'NATIVE_HOST_SESSION_APPROVAL';
 const ask = 'NATIVE_HOST_QUESTION_PROBE';
 const afterNew = 'NATIVE_HOST_AFTER_NEW';
+const freshCold = 'NATIVE_HOST_FRESH_COLD';
+const freshAfterNew = 'NATIVE_HOST_FRESH_AFTER_NEW';
 const unbound = 'NATIVE_HOST_UNBOUND';
 const mail = 'NATIVE_HOST_QUEUED_MAIL';
 const pointer = 'Call check_inbox.';
@@ -52,7 +55,7 @@ test.skipIf(!optIn)('shares real production host Chat and Terminal on one stock 
       const body = JSON.parse(input);
       expect([body.model, body.stream]).toEqual([model, true]);
       const history = JSON.stringify(body.messages);
-      const turn = [original, native, ...mapTurns, ask, afterNew, unbound, pointer].map(marker => ({ marker, at: history.lastIndexOf(marker) }))
+      const turn = [original, native, ...mapTurns, ask, afterNew, freshCold, freshAfterNew, unbound, pointer].map(marker => ({ marker, at: history.lastIndexOf(marker) }))
         .filter(item => item.at >= 0).sort((x, y) => y.at - x.at)[0]?.marker;
       if (turn === undefined) throw new Error('Unexpected synthetic model request');
       const tools: string[] = (body.tools ?? []).map((entry: { function: { name: string } }) => entry.function.name);
@@ -60,7 +63,7 @@ test.skipIf(!optIn)('shares real production host Chat and Terminal on one stock 
       const result = body.messages.find((message: { role: string; tool_call_id?: string }) =>
         message.role === 'tool' && message.tool_call_id === callId)?.content;
       seen.push({ turn, tools, hasMail: history.includes(mail), ...(result === undefined ? {} : { result: JSON.stringify(result) }) });
-      const invoke = (mapTurns.has(turn) || turn === ask) && result === undefined;
+      const invoke = (mapTurns.has(turn) || turn === ask || (turn === freshAfterNew && tools.includes('mcp__parley__get_map'))) && result === undefined;
       const tool = turn === ask ? 'AskUserQuestion' : 'mcp__parley__get_map';
       if (invoke) expect(tools).toContain(tool);
       res.writeHead(200, { 'Content-Type': 'text/event-stream' });
@@ -347,6 +350,75 @@ test.skipIf(!optIn)('shares real production host Chat and Terminal on one stock 
       output.dispose();
       term.dispose();
     }
+
+    stage = 'cold /new after confirmed full MCP discovery, without resume';
+    const { ref: fresh } = await call('sessions.create', {
+      projectPath, workId: null, provider: 'kimi', label: 'Offline cold /new comparison', task: '', parent: null,
+      ...(fixtureManualDefault ? {} : { kimiPermissionMode: 'manual' as const }),
+    });
+    const freshSession = async () => (await readMap(fresh.projectPath, fresh.workId)).sessions.find(item => item.id === fresh.sessionId)!;
+    const freshScreen = async () => (await call('pty.screenText', { ref: fresh })).lines.join('\n');
+    inspectScreen = freshScreen;
+    const freshGeneration = (await call('pty.attach', { ref: fresh })).generation!;
+    const freshRaw = (data: string) => client!.send({ method: 'pty.input', params: { ref: fresh, data, generation: freshGeneration } });
+    const freshSend = (marker: string) => expect.poll(async () => {
+      const result = await call('pty.send', { ref: fresh, text: marker, submit: true });
+      if (result.inserted && !result.submitted) throw new Error('Unexpected cold comparison draft');
+      return result.submitted;
+    }, poll).toBe(true);
+    const readTimeline = async (sessionId: string) => {
+      const file = join(kimi, 'sessions', workspaceKey(projectPath), sessionId, 'agents', 'main', 'wire.jsonl');
+      const content = await readFile(file, 'utf8').catch(error => {
+        if (error.code === 'ENOENT') return '';
+        throw error;
+      });
+      return content.split('\n').slice(0, -1).map(line => JSON.parse(line) as {
+        type: string; serverName?: string; tools?: { name: string }[];
+      }).filter(row => /^(mcp\.tools_discovered|tool_select\.initialized|turn\.prompt|llm\.tools_snapshot)$/.test(row.type));
+    };
+    const comparisonMetrics = async (sessionId: string, marker: string) => {
+      const timeline = await readTimeline(sessionId);
+      const snapshot = timeline.find(row => row.type === 'llm.tools_snapshot');
+      const discovered = timeline.find(row => row.type === 'mcp.tools_discovered' && row.serverName === 'parley');
+      const initialized = timeline.find(row => row.type === 'tool_select.initialized');
+      const advertised = seen.find(row => row.turn === marker)!.tools;
+      expect(snapshot?.tools?.map(({ name }) => name).sort()).toEqual([...advertised].sort());
+      return {
+        order: timeline.slice(0, timeline.indexOf(snapshot!) + 1).map(row => row.type),
+        discovered: discovered?.tools?.length, initialized: initialized?.tools?.length,
+        advertised: advertised.length, getMapAdvertised: advertised.includes('mcp__parley__get_map'),
+      };
+    };
+    await expect.poll(freshScreen, poll).toMatch(ready);
+    const freshPid = (await freshSession()).pid;
+    await freshSend(freshCold);
+    await expect.poll(freshScreen, poll).toContain(`${freshCold}_REPLY`);
+    const before = (await freshSession()).providerSessionId!;
+    await expect.poll(async () => (await readTimeline(before)).some(row =>
+      row.type === 'mcp.tools_discovered' && row.serverName === 'parley' && row.tools?.some(tool => tool.name === 'get_map')), poll).toBe(true);
+    const cold = await comparisonMetrics(before, freshCold);
+    await expect.poll(freshScreen, poll).toMatch(ready);
+    freshRaw('/new');
+    await expect.poll(freshScreen, poll).toContain('/new');
+    await delay(160);
+    freshRaw('\r');
+    await expect.poll(async () => (await freshSession()).providerSessionId, poll).not.toBe(before);
+    const nextId = (await freshSession()).providerSessionId!;
+    await expect.poll(freshScreen, poll).toContain(nextId);
+    await freshSend(freshAfterNew);
+    await expect.poll(() => seen.some(row => row.turn === freshAfterNew), poll).toBe(true);
+    const newTools = seen.find(row => row.turn === freshAfterNew)!.tools;
+    if (newTools.includes('mcp__parley__get_map')) {
+      await expect.poll(freshScreen, poll).toContain('Approve mcp__parley__get_map?');
+      freshRaw('\r');
+      await expect.poll(() => seen.findLast(row => row.turn === freshAfterNew)?.result, poll).toContain(fresh.sessionId);
+    }
+    await expect.poll(freshScreen, poll).toContain(`${freshAfterNew}_REPLY`);
+    const after = await comparisonMetrics(nextId, freshAfterNew);
+    expect((await freshSession()).pid).toBe(freshPid);
+    expect((await call('pty.attach', { ref: fresh })).generation).toBe(freshGeneration);
+    console.info('Cold /new catalog comparison:', JSON.stringify({ cold, after, getMapCalled: newTools.includes('mcp__parley__get_map') }));
+
     expect(rejected).toEqual([]);
     console.info('Production stock native host evidence:', { sameGenerationBetweenViews: true, realMap: true, coldAdvertised, requests: seen.map(row => row.turn) });
   } catch (error) {
