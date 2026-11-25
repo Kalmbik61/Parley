@@ -653,6 +653,12 @@ it('fences late PTY data and exit callbacks after another generation owns the re
   old.data('late old');
   old.exit();
   expect(manager.get(sessionRef)?.generation).toBe(handle.generation);
+  manager.resize(sessionRef, 105, 35);
+  expect(handle.inputRevision?.()).toBe(1);
+  expect(handle.rawInputRevision?.()).toBe(0);
+  manager.input(sessionRef, 'x');
+  expect(handle.inputRevision?.()).toBe(2);
+  expect(handle.rawInputRevision?.()).toBe(1);
   expect(busyKeys.size).toBe(1);
   expect(broadcasts.some(({ event }) => event === 'pty.exit')).toBe(false);
   current.data('current bytes');

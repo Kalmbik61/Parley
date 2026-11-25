@@ -477,7 +477,7 @@ test.skipIf(!optIn)('shares real production host Chat and Terminal on one stock 
     }
 
     if (probeStartupRecovery) {
-      stage = 'visible, fail-closed Always Ask bootstrap interrupted by viewport input';
+      stage = 'visible fail-closed Always Ask bootstrap interrupted by Stop';
       const beforeFailure = seen.length;
       const recoveryProject = join(root, 'recovery-project');
       await mkdir(recoveryProject);
@@ -492,16 +492,15 @@ test.skipIf(!optIn)('shares real production host Chat and Terminal on one stock 
       await expect.poll(failedScreen, poll).toContain('Trust this folder?');
       client.send({ method: 'pty.input', params: { ref: failed, data: '\r', generation: failedAttach.generation } });
       await expect.poll(failedScreen, { ...poll, interval: 10 }).toMatch(/│ >\s*\/permission\s*│/);
-      client.send({ method: 'pty.resize', params: { ref: failed, cols: failedAttach.cols - 1, rows: failedAttach.rows, generation: failedAttach.generation } });
-      await expect.poll(async () => (await call('feed.snapshot', { ref: failed })).items, poll).toContainEqual(expect.objectContaining({
-        kind: 'error', error: 'kimi-native-startup', message: expect.stringMatching(/Always Ask.*stop.*resume/i),
-      }));
       expect(await call('pty.send', { ref: failed, text: recovered, submit: true })).toMatchObject({ inserted: false, submitted: false });
       client.send({ method: 'pty.input', params: { ref: failed, data: `${recovered}\r`, generation: failedAttach.generation } });
       expect(await failedScreen()).not.toContain(recovered);
+      await call('sessions.stop', { ref: failed });
+      await expect.poll(async () => (await call('feed.snapshot', { ref: failed })).items, poll).toContainEqual(expect.objectContaining({
+        kind: 'error', error: 'kimi-native-startup', message: expect.stringMatching(/Always Ask.*stop.*resume/i),
+      }));
       expect(await failedSession()).toMatchObject({ providerSessionId: null, kimiNativeBootstrap: { phase: 'reserved' } });
       expect(seen).toHaveLength(beforeFailure);
-      await call('sessions.stop', { ref: failed });
       await expect.poll(async () => (await failedSession()).lifecycle, poll).toBe('sleeping');
       await call('sessions.resume', { ref: failed });
       expect((await failedSession()).pid).not.toBe(failedPid);

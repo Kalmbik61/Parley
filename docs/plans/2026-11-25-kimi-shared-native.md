@@ -80,6 +80,17 @@ The probe in `620fa52d` produced an extra persisted **empty** provider conversat
 
 The ordinary host fixture drove no startup keys except the disposable folder's trust confirmation. Explicit Manual, Auto and Yolo, and inherited saved Manual and Auto, each showed 74 tools including all 50 Parley tools on the first HTTP request. All five ran a genuine authenticated `get_map`, with zero earlier model requests and the original PID/generation. The full stock regression covered one shared prompt path across views, exact legacy resume and user `/new`, native decisions, raw generation fencing, nine-line and wrapped Chat, draft/mail, the deferred task, early interruption with retry and durable post-ID interruption refusal after restarting only the disposable host. Reproduce the five first-turn cases with the stock probe command and `PARLEY_KIMI_SHARED_HOST_AUTOMATIC_BOOTSTRAP=1`, `PARLEY_KIMI_SHARED_HOST_BOOTSTRAP_MODE=manual|auto|yolo|inherit`, and optional `PARLEY_KIMI_SHARED_HOST_MANUAL_DEFAULT=1` for inherited Manual. `PARLEY_KIMI_SHARED_HOST_STARTUP_RECOVERY=1` adds the interruption and queued-task checks to the default full regression.
 
+### Isolated working-build Electron acceptance
+
+The real built renderer launched its own built production host and stock Kimi 2.7.3 with temporary app, host and provider data. The renderer's own new-session dialog launched Manual, Auto and Yolo. Each first Chat request carried 74 tools including all 50 Parley tools, and the genuine tool result identified the exact work and session. Manual showed the four native permission choices on the island. Clicking **Approve once** completed the same native request. A second turn typed into the actual Terminal reappeared in Chat once on the unchanged PID, provider ID and generation. The run made seven loopback model requests and no earlier setup requests. The test records the island screenshot in its local Playwright artifacts.
+
+The real renderer can resize a PTY while startup is painting a slash command. Startup now fences the physical-input revision independently from the viewport revision and still rechecks the full current screen before Return. Native decision cards retain their stricter existing viewport fence. The final stock host/PTY regression passed 50 tests after this change. Use the existing local Electron executable, not the installed Parley application, to repeat:
+
+```sh
+pnpm --filter @parley/desktop build
+PARLEY_KIMI_ELECTRON_RUNTIME=/path/to/existing/Electron pnpm --filter @parley/desktop exec playwright test e2e/kimi-shared-native.spec.ts --workers=1
+```
+
 ### Composer and startup recovery rework
 
 At 80×26, stock Kimi rendered an `↑ 2 more` top border and a blank first visible editor row for the nine-line draft. The guarded send left that draft unsubmitted before the fix. The host now recognizes the whole current composer frame and treats hidden or additional rows as a draft. The stock fixture verifies exact-once delivery to the model and Chat for nine lines including Unicode and a blank line, and for a naturally wrapped 930-character line (below Kimi's 1,000-character paste-folding threshold).
@@ -95,6 +106,6 @@ An observed resize interrupted explicit Always Ask confirmation (`PARLEY_KIMI_SH
 - **For the human** — No live configuration, app install, restart, account prompt, REA change, or provider-compaction patch was applied.
 - **Risk** — Kimi can omit the full catalog on a cold turn even after successful discovery. Screen controls are intentionally limited to recognized stock English layouts. The native wire exposes completed blocks, not token-by-token output. User config collisions stop setup without replacing foreign entries.
 - **Cost** — No paid model requests. Production overhead not measured.
-- **Verdict** — An untouched cold first request omits Parley. The guarded production bootstrap resolves that on the measured fresh stock 2.7.3 path without resetting an existing conversation. Full Electron acceptance remains separate from the host verification.
+- **Verdict** — An untouched cold first request omits Parley. The guarded production bootstrap resolves that on the measured fresh stock 2.7.3 path without resetting an existing conversation. The isolated working-build Electron acceptance passed the real renderer, production host and stock provider together.
 
 **Not verified** — Live-account deployment, non-English layouts, and other model profiles. Without the empty sequence, the cold first model request did not expose Parley in any of the four baseline permission setups. The room excluded REA and changes to the provider's compaction behavior.

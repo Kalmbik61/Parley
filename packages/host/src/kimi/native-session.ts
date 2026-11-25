@@ -187,9 +187,9 @@ export function createKimiNativeSession(options: Options) {
       return;
     }
 
-    const input = handle.inputRevision?.();
-    const valid = () => matches(live) && !boot.failed && live.bootstrap === boot && !live.fenced &&
-      pty.get(live.ref)?.inputRevision?.() === input && live.pending.size === 0 && kimiStartupDialog(view(live)) === undefined;
+    const input = handle.rawInputRevision?.();
+    const valid = () => input !== undefined && matches(live) && !boot.failed && live.bootstrap === boot && !live.fenced &&
+      pty.get(live.ref)?.rawInputRevision?.() === input && live.pending.size === 0 && kimiStartupDialog(view(live)) === undefined;
     const requireCurrent = () => { if (!valid()) throw new Error('The startup input or generation changed'); };
     async function wait<T>(probe: () => T | undefined | Promise<T | undefined>, reason: string): Promise<T> {
       const deadline = Date.now() + STARTUP_WAIT_MS;
@@ -199,6 +199,7 @@ export function createKimiNativeSession(options: Options) {
         if (result !== undefined) return result;
         await delay(40);
       }
+      requireCurrent();
       throw new Error(reason);
     }
     const composer = () => kimiComposer(view(live));

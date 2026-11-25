@@ -39,6 +39,8 @@ export interface PtyHandle {
   kimiNative?: true;
   /** Changes on every physical input or resize, even when the draft boolean does not change. */
   inputRevision?(): number;
+  /** Physical input only. Startup revalidates the repainted screen after a resize without treating it as typing. */
+  rawInputRevision?(): number;
   submittedAt?(): number;
   /** Черновик человека или черновик хоста — поверх любого будильник не печатает. */
   hasDraft(): boolean;
@@ -98,6 +100,7 @@ interface Session {
   generation?: string;
   kimiNative?: true;
   inputRevision: number;
+  rawInputRevision: number;
   submittedAt: number;
   /** Разбор потока терминала — только у codex: у остальных состояние приходит хуками. */
   terminal: CodexTerminalParser | null;
@@ -117,7 +120,7 @@ function toHandle(session: Session): PtyHandle {
     provider: session.provider,
     ...(session.generation === undefined ? {} : { generation: session.generation }),
     ...(session.kimiNative === true ? { kimiNative: true } : {}),
-    ...(session.kimiNative === true ? { inputRevision: () => session.inputRevision } : {}),
+    ...(session.kimiNative === true ? { inputRevision: () => session.inputRevision, rawInputRevision: () => session.rawInputRevision } : {}),
     ...(session.kimiNative === true ? { submittedAt: () => session.submittedAt } : {}),
     hasDraft: () => session.draft.hasDraft || session.draft.hasHostDraft,
     bracketedPaste: () => session.screen.bracketedPaste(),
@@ -183,6 +186,7 @@ export function createPtyManager(host: HostContext, windowCounters?: WindowCount
       ...(launch.provider === 'kimi' ? { generation: randomUUID() } : {}),
       ...(launch.kimiNative === true ? { kimiNative: true } : {}),
       inputRevision: 0,
+      rawInputRevision: 0,
       submittedAt: 0,
       terminal: launch.provider === 'codex' ? createCodexTerminalParser() : null,
       programStatus: launch.provider === 'qwen' ? createQwenTerminalParser() : null,
@@ -341,6 +345,7 @@ export function createPtyManager(host: HostContext, windowCounters?: WindowCount
     input(ref, data) {
       const session = requireSession(ref);
       session.inputRevision++;
+      session.rawInputRevision++;
       if (session.kimiNative === true && data === '\r') session.submittedAt = Date.now();
       const before = session.draft.hasDraft;
       const hostBefore = session.draft.hasHostDraft;
