@@ -7,10 +7,13 @@
  * Звезда ведущего видна, когда задан `lead` (режим комнаты); значок worktree строки — когда агентов два и больше.
  */
 
-import { useCallback, useRef, type ComponentPropsWithoutRef } from 'react';
+import { useCallback, useId, useRef, type ComponentPropsWithoutRef } from 'react';
+import type { KimiPermissionMode } from '@parley/core';
 import { roleModel as roleModelOf } from '@parley/core/role-choice';
+import { KIMI_LAUNCH_MODES_FEATURE } from '@parley/protocol';
 import { GitBranch, Plus, X } from 'lucide-react';
 import { providerName, S } from '../../../shared/strings.js';
+import { useHostFeature } from '../../lib/capabilities.js';
 import { cn } from '../../lib/cn.js';
 import { effortChoices } from '../../lib/effort-choices.js';
 import { sessionTag } from '../../lib/participant.js';
@@ -117,6 +120,9 @@ export function AgentRowsEditor({
   onProviderCard, reloadProviders, onLead, onUpdate, onRemove, onAdd, onClearError,
 }: AgentRowsEditorProps): JSX.Element {
   const text = S.dialogs.newSession;
+  const { kimiPermission } = S;
+  const modeHelpId = useId();
+  const supportsKimiMode = useHostFeature(KIMI_LAUNCH_MODES_FEATURE);
   return (
     <div className="flex min-w-0 flex-col gap-1">
       <FieldCaption text={text.agentsField} hint={text.hints.agents} />
@@ -134,6 +140,8 @@ export function AgentRowsEditor({
           const roleEffortListed = roleEffort !== null && efforts?.some((level) => level.id === roleEffort) === true;
           const displayedEffort = row.effortTouched ? chosenEffort(row, info) : roleEffortListed ? roleEffort : null;
           const chosenQwen = info?.family === 'qwen';
+          const offersKimiMode = info?.id === 'kimi' && supportsKimiMode;
+          const rowModeHelpId = `${modeHelpId}-${row.key}`;
           const result = results[row.key];
           const rowLocked = busy || result?.status === 'started';
           const isLead = row.key === lead;
@@ -142,8 +150,9 @@ export function AgentRowsEditor({
               <div className="flex min-w-0 flex-wrap items-center gap-2">
                 <Select value={row.role ?? 'none'} disabled={rowLocked || env.roles.length === 0} onValueChange={value => {
                   const selectedRole = env.roles.find(item => item.id === value);
-                  onUpdate(row.key, { role: value === 'none' ? null : value, roleMissing: null,
-                    ...(selectedRole && (selectedRole.source !== 'builtin' || !row.providerTouched) ? { provider: selectedRole.provider } : {}) });
+                  const patch = { role: value === 'none' ? null : value, roleMissing: null,
+                    ...(selectedRole && (selectedRole.source !== 'builtin' || !row.providerTouched) ? { provider: selectedRole.provider } : {}) };
+                  onUpdate(row.key, { ...patch, ...(providerIdOf(env, { ...row, ...patch }) === chosenId ? {} : { kimiPermissionMode: undefined }) });
                 }}>
                   <SelectTrigger aria-label={text.roleField} className="min-w-[132px] max-w-[180px]"><SelectValue /></SelectTrigger>
                   <SelectContent className={LIST_HEIGHT}>
@@ -191,7 +200,7 @@ export function AgentRowsEditor({
                             disabled={rowLocked || (role !== undefined && role.source !== 'builtin') || readOnlyOnQwen}
                             onClick={() => {
                               if (provider.available && !on) {
-                                onUpdate(row.key, { provider: provider.id, providerTouched: true, model: null, modelTouched: false, effort: null, effortTouched: false });
+                                onUpdate(row.key, { provider: provider.id, providerTouched: true, model: null, modelTouched: false, effort: null, effortTouched: false, kimiPermissionMode: undefined });
                                 onClearError();
                               }
                             }}
@@ -319,6 +328,29 @@ export function AgentRowsEditor({
                 </button>
                 </div>
               </div>
+              {(offersKimiMode || row.kimiPermissionMode !== undefined) ? (
+                <div className="flex min-w-0 flex-col items-start gap-1">
+                  <Select value={row.kimiPermissionMode ?? 'settings'} disabled={rowLocked}
+                    onValueChange={(value) => {
+                      onUpdate(row.key, { kimiPermissionMode: value === 'settings' ? undefined : value as KimiPermissionMode });
+                      onClearError();
+                    }}>
+                    <SelectTrigger aria-label={kimiPermission.label} aria-describedby={rowModeHelpId} className="w-auto max-w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="settings">{kimiPermission.useSettings}</SelectItem>
+                      {Object.entries(kimiPermission.modes).map(([value, choice]) => (
+                        <SelectItem key={value} value={value} disabled={!offersKimiMode} description={choice.description}>{choice.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p id={rowModeHelpId} className="text-xs text-muted-foreground">{kimiPermission.launchHelp}</p>
+                  {row.kimiPermissionMode === undefined ? null : (
+                    <p className="text-xs text-muted-foreground">{kimiPermission.modes[row.kimiPermissionMode].description}</p>
+                  )}
+                </div>
+              ) : null}
               {info?.family === 'opencode' && role?.readOnly === true ? (
                 <p data-role-note className="min-w-0 break-words text-xs text-muted-foreground">{S.roles.opencodeReadOnlyNote}</p>
               ) : null}

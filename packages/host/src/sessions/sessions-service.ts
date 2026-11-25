@@ -24,6 +24,7 @@ import {
   collectHandover,
   freezeUsage,
   isRoomArchived,
+  isKimiPermissionMode,
   launchClassOf,
   liveLead,
   mergeQueued,
@@ -40,6 +41,7 @@ import {
   type MachineTicket,
   type ProviderLimits,
   type QueueReason,
+  type KimiPermissionMode,
   type WorkMap,
   limitsFromConfig,
   prepareSessionRole,
@@ -193,6 +195,7 @@ export interface CreateSessionInput {
    */
   model?: string | null;
   effort?: string | null;
+  kimiPermissionMode?: KimiPermissionMode;
   /**
    * Облегчённый запуск (спека «меньше ходов и легче контекст», C2.2): явный выбор окна. Ложится в запись сессии на
    * всех путях ниже; `resume` и подъём письмом берут его оттуда. Без поля запись не меняется.
@@ -1646,6 +1649,7 @@ export function createSessionsService(
     role: SessionRole | null,
     choice: LaunchChoice,
     lean: boolean | undefined,
+    kimiPermissionMode: KimiPermissionMode | undefined,
   ): Promise<void> {
     const trimmed = label.trim();
     await updateMap(ref.projectPath, ref.workId, (map) => {
@@ -1657,6 +1661,7 @@ export function createSessionsService(
       if (choice.model !== undefined) session.model = choice.model;
       if (choice.effort !== undefined) session.effort = choice.effort;
       if (lean !== undefined) session.lean = lean;
+      if (kimiPermissionMode !== undefined) session.kimiPermissionMode = kimiPermissionMode;
     });
   }
 
@@ -1712,7 +1717,7 @@ export function createSessionsService(
     timer: ReturnType<typeof createStepTimer>,
     logged: { sessionId?: string },
   ): Promise<CreatedSession> {
-    const { projectPath, provider, label, task, parent, worktree, lean } = input;
+    const { projectPath, provider, label, task, parent, worktree, lean, kimiPermissionMode } = input;
     let { workId } = input;
     if (input.workspace !== undefined && (input.requestedBy !== ENGINE || worktree === true || !input.workspace || !['clone', 'artifacts'].includes(input.workspace.kind) || !path.isAbsolute(input.workspace.path) || input.workspace.kind === 'clone' && (!input.workspace.branch || !input.workspace.sha))) throw new HostError('bad_request', 'Only the engine may assign an autonomous workspace.');
     if (input.deferLaunch && input.requestedBy !== ENGINE) throw new HostError('bad_request', 'Only the engine may defer a session launch.');
@@ -1738,6 +1743,9 @@ export function createSessionsService(
     // Own-key: «constructor» и «toString» с провода не должны находить прототипные свойства реестра.
     const entry = Object.hasOwn(registry, provider) ? registry[provider] : undefined;
     if (!entry) throw new HostError('bad_request', `unknown provider ${provider}; see get_map {field: "providers"}`);
+    if (kimiPermissionMode !== undefined && (provider !== 'kimi' || entry.runner.mcpConfig !== 'kimi-acp' || !isKimiPermissionMode(kimiPermissionMode) || input.requestedBy !== undefined)) {
+      throw new HostError('bad_request', 'Invalid launch permission mode for this provider');
+    }
     // Опыт с пакетом состояния: плечо разыгрывается здесь, одним местом для окна, агента, роя и движка, и пишется в запись
     // сессии при её создании ниже. Пары в записи нет, если опыт не идёт или провайдер не `claude`.
     const trial = await drawTrial(provider);
@@ -1767,7 +1775,7 @@ export function createSessionsService(
       const created = await timer.step('record', () => createNewSession(projectPath, null, trial, trialProtocol));
       const ref = { projectPath, workId: created.workId, sessionId: created.session.id };
       logged.sessionId = ref.sessionId;
-      await timer.step('choice', () => applyChoice(ref, label, provider, role, choice, lean));
+      await timer.step('choice', () => applyChoice(ref, label, provider, role, choice, lean, kimiPermissionMode));
       if (worktree === true) await timer.step('worktreePlan', () => attachWorktreePlan(ref, false));
       return timer.step('launch', () => createInteractive(ref, 'new', choice));
     }
@@ -1776,7 +1784,7 @@ export function createSessionsService(
       const created = await timer.step('record', () => createNewSession(projectPath, workId, trial, trialProtocol));
       const ref = { projectPath, workId, sessionId: created.session.id };
       logged.sessionId = ref.sessionId;
-      await timer.step('choice', () => applyChoice(ref, label, provider, role, choice, lean));
+      await timer.step('choice', () => applyChoice(ref, label, provider, role, choice, lean, kimiPermissionMode));
       if (worktree === true) await timer.step('worktreePlan', () => attachWorktreePlan(ref, false));
       return timer.step('launch', () => createInteractive(ref, 'new', choice));
     }
@@ -1799,6 +1807,7 @@ export function createSessionsService(
         role,
         ...choice,
         ...(lean === undefined ? {} : { lean }),
+        ...(kimiPermissionMode === undefined ? {} : { kimiPermissionMode }),
         ...(trial === undefined ? {} : { trial }),
       }, agentConfig === undefined ? undefined : (map, sessionId) => {
         const limits = limitsFromConfig(agentConfig);

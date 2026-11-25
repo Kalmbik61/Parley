@@ -209,3 +209,11 @@ describe('agent fields in parseMap', () => {
     expect(session.previousAgents![0]!.providerSessionId).toBe('uuid-5');
   });
 });
+
+it('does not carry an old Kimi creation preference across a provider replacement', () => {
+  const map = emptyMap();
+  const s = addSession(map, { provider: 'kimi', label: 'Kimi', task: 'Task', kimiPermissionMode: 'auto' });
+  const next = applyAgentSwitch(map, s.id, { provider: 'codex' }, { ...binding(), provider: 'kimi' }, 'rev-1');
+  expect(next.sessions[0]).not.toHaveProperty('kimiPermissionMode');
+  expect(s.kimiPermissionMode).toBe('auto');
+});

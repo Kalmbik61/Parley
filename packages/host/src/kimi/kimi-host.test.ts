@@ -1,8 +1,8 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
-import { readMap } from '@parley/core';
-import { feedItem, type MethodName, type Params, type Result, type SessionRef } from '@parley/protocol';
+import { createPendingSession, readMap } from '@parley/core';
+import { KIMI_LAUNCH_MODES_FEATURE, feedItem, type MethodName, type Params, type Result, type SessionRef } from '@parley/protocol';
 import { connectRaw, hello, removeHome, tempHome, waitConnected, type RawMessage, type TestClient } from '../../test/helpers.js';
 import { startHost, type RunningHost } from '../host.js';
 import { hostPaths } from '../paths.js';
@@ -48,7 +48,9 @@ async function setup(loggedOut = false, standalone = false): Promise<string> {
   const paths = hostPaths(home);
   client = connectRaw(paths.socket);
   await waitConnected(client.socket);
-  expect((await hello(client, await readFile(paths.token, 'utf8'))).error).toBeUndefined();
+  const handshake = await hello(client, await readFile(paths.token, 'utf8'));
+  expect(handshake.error).toBeUndefined();
+  expect(handshake.result).toMatchObject({ features: expect.arrayContaining([KIMI_LAUNCH_MODES_FEATURE]) });
   return project;
 }
 
@@ -288,3 +290,49 @@ it('delivers a Cyrillic Chat prompt once while preserving the raw terminal draft
     { prompt: 'unfinished terminal draft', model: 'alpha', effort: 'low' },
   ]);
 }, 15_000);
+
+it.each([['manual', 'default'], ['yolo', 'yolo'], ['auto', 'auto']] as const)(
+  'passes %s through sessions.create to ACP and keeps it historical after Chat changes', async (kimiPermissionMode, value) => {
+    const projectPath = await setup();
+    const trace = path.join(projectPath, 'mode-trace');
+    vi.stubEnv('KIMI_FIXTURE_TRACE', trace);
+    vi.stubEnv('KIMI_FIXTURE_PERMISSION_MODES', '1');
+    const { ref } = await call('sessions.create', { ...input(projectPath), task: 'hello', kimiPermissionMode });
+    expect(await session(ref)).toMatchObject({ kimiPermissionMode, lifecycle: 'active' });
+    await expect.poll(async () => (await readFile(trace, 'utf8')).trim().split('\n').map((line) => JSON.parse(line))).toEqual([
+      { opened: 'session/new' }, { configId: 'mode', value },
+      { prompt: expect.stringContaining('hello'), model: 'alpha', effort: 'low', permission: value, plan: false },
+    ]);
+    await expectReply(ref, 'Hello Parley');
+    await call('kimi.setConfig', { ref, configId: 'mode', value: 'plan' });
+    expect((await session(ref))?.kimiPermissionMode).toBe(kimiPermissionMode);
+  },
+);
+
+it('rejects non-Kimi and invalid wire preferences', async () => {
+  const projectPath = await setup();
+  expect((await request('sessions.create', { ...input(projectPath), provider: 'codex', kimiPermissionMode: 'auto' })).error).toBeDefined();
+  expect((await request('sessions.create', { ...input(projectPath), kimiPermissionMode: 'plan' as 'manual' })).error).toBeDefined();
+});
+
+
+it('applies the preference when Parley resumes a record with no provider conversation yet', async () => {
+  const projectPath = await setup();
+  const trace = path.join(projectPath, 'resume-trace');
+  vi.stubEnv('KIMI_FIXTURE_TRACE', trace);
+  vi.stubEnv('KIMI_FIXTURE_PERMISSION_MODES', '1');
+  const { workId } = await call('works.create', { projectPath, title: 'Kimi', goal: '' });
+  const sessionId = await createPendingSession(projectPath, workId, {
+    provider: 'kimi', label: '', task: 'hello', kimiPermissionMode: 'auto',
+  });
+  const ref = { projectPath, workId, sessionId };
+  expect((await session(ref))?.providerSessionId).toBeNull();
+  await call('sessions.resume', { ref });
+  await expectReply(ref, 'Hello Parley');
+  expect(await session(ref)).toMatchObject({ providerSessionId: 'acp-session', kimiPermissionMode: 'auto' });
+  const entries = (await readFile(trace, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
+  expect(entries).toEqual([
+    { opened: 'session/new' }, { configId: 'mode', value: 'auto' },
+    { prompt: expect.stringContaining('hello'), model: 'alpha', effort: 'low', permission: 'auto', plan: false },
+  ]);
+});

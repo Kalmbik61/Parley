@@ -172,10 +172,10 @@ describe('Kimi Code session configuration', () => {
     }));
     renderBody(makeSession('s-01', 'S01', { provider: 'kimi' }));
     const trigger = await screen.findByRole('button', { name: /Kimi A/ });
-    expect(trigger.textContent).toContain('Ask first');
+    expect(trigger.textContent).not.toContain('Ask first');
     fireEvent.keyDown(trigger, { key: 'Enter' });
     expect(screen.getByRole('menuitemcheckbox', { name: 'Thinking' }).getAttribute('aria-checked')).toBe('true');
-    expect(screen.getByRole('menuitemradio', { name: 'Ask first' }).getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByRole('menuitem', { name: 'Ask first' }).getAttribute('aria-checked')).toBeNull();
     expect(screen.queryByText('Speed')).toBeNull();
     fireEvent.click(screen.getByRole('menuitemradio', { name: 'Kimi B' }));
     expect(bridge.calls).toContainEqual({ method: 'kimi.setConfig', params: { ref: REF, configId: 'model', value: 'b' } });
@@ -186,7 +186,34 @@ describe('Kimi Code session configuration', () => {
     fireEvent.keyDown(trigger, { key: 'Enter' });
     expect(screen.getByRole('menuitemradio', { name: 'Kimi B' }).getAttribute('aria-checked')).toBe('true');
     expect(screen.queryByRole('menuitemcheckbox')).toBeNull();
-    expect(screen.queryByRole('menuitemradio', { name: 'Ask first' })).toBeNull();
+    expect(screen.queryByRole('menuitem', { name: 'Ask first' })).toBeNull();
+  });
+
+  it('uses the verified permission labels, keeps Plan, and sends Always Ask even when the snapshot says default', async () => {
+    const reported: KimiConfigOption = {
+      id: 'mode', name: 'Mode', category: 'mode', type: 'select', currentValue: 'default',
+      options: [
+        { value: 'default', name: 'Default' }, { value: 'plan', name: 'Plan' },
+        { group: 'permissions', name: 'Permissions', options: [
+          { value: 'yolo', name: 'YOLO' }, { value: 'auto', name: 'Auto' },
+        ] },
+      ],
+    };
+    bridge.setHandler('kimi.getState', () => ({ requests: [], config: [reported] }));
+    bridge.setHandler('kimi.setConfig', () => ({ config: [reported] }));
+    renderBody(makeSession('s-01', 'S01', { provider: 'kimi' }));
+    const trigger = await screen.findByRole('button', { name: /Kimi Code settings/ });
+    expect(trigger.textContent).not.toMatch(/Default|Always Ask/);
+    fireEvent.keyDown(trigger, { key: 'Enter' });
+    expect(screen.getByRole('menuitem', { name: 'Plan' })).toBeDefined();
+    expect(screen.getByRole('menuitem', { name: 'Automatic / Ask When Needed' }).title).toMatch(/sensitive/);
+    expect(screen.getByRole('menuitem', { name: 'Full access / Never Ask' }).title).toMatch(/sandbox/);
+    const manual = screen.getByRole('menuitem', { name: 'Always Ask' });
+    expect(manual.getAttribute('aria-checked')).toBeNull();
+    fireEvent.click(manual);
+    await waitFor(() => expect(bridge.calls).toContainEqual({
+      method: 'kimi.setConfig', params: { ref: REF, configId: 'mode', value: 'default' },
+    }));
   });
 
   it('shows the CLI refusal and keeps the last confirmed value', async () => {
@@ -218,7 +245,8 @@ describe('Kimi Code session configuration', () => {
     fireEvent.click(screen.getByRole('menuitemradio', { name: 'Kimi B' }));
     act(() => bridge.emit('kimi.configChanged', { ref: REF, config: [model('a'), mode] }));
     await act(async () => confirm([model('b')]));
-    expect(trigger.textContent).toContain('Kimi A · Ask first');
+    expect(trigger.textContent).toContain('Kimi A');
+    expect(trigger.textContent).not.toContain('Ask first');
   });
 });
 
