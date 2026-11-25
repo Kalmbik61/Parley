@@ -81,7 +81,8 @@ export async function withoutKimiDateContext(binding: Binding, chunks: readonly 
         if (type !== 'metadata' || row['protocol_version'] !== '1.5' || row['min_protocol_version'] !== '1.5') return chunks;
         continue;
       }
-      if (type === 'metadata' || type.startsWith('session.fork') || type === 'turn.steer') return chunks;
+      if (type === 'metadata' || type === 'forked' || type === 'agent.switched' ||
+          type.startsWith('session.fork') || type === 'turn.steer') return chunks;
       if (!type.startsWith('context.')) continue;
       if (type === 'context.append_loop_event') {
         if (row['agentId'] !== 'main') return chunks;

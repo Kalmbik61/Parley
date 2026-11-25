@@ -36,6 +36,14 @@ it('uses ordered provenance to preserve a human message identical to an injectio
   expect(await withoutKimiDateContext({ home, cwd, sessionId }, chunks)).toEqual([chunks[0], ...chunks.slice(2)]);
 });
 
+it.each([
+  { type: 'forked', agentId: 'main', time: 1 },
+  { type: 'agent.switched', branch: 'next', base: { branch: 'main', line: 2 } },
+])('declines wire evidence with the stock $type marker', async (marker) => {
+  await writeFile(wire, ndjson([...rows.slice(0, 3), marker, ...rows.slice(3)]));
+  expect(await withoutKimiDateContext({ home, cwd, sessionId }, chunks)).toBe(chunks);
+});
+
 it.each(['linked leaf', 'linked ancestor', 'hard link', 'oversized', 'too many records', 'unsupported', 'reordered', 'wrong cwd', 'unsafe ID'])('declines %s wire evidence', async (scenario) => {
   const external = path.join(scratch, 'external');
   const binding = { home, cwd, sessionId };
