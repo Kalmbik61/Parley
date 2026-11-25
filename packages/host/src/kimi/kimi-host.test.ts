@@ -473,3 +473,78 @@ it('does not take ownership away from a Chat with pending wake delivery', async 
   expect(await call('kimi.getControl', { ref })).toMatchObject({ owner: 'chat' });
   expect(unreadLetters(ref.projectPath, ref.workId, ref.sessionId).map((letter) => letter.text)).toContain('already queued');
 }, 15_000);
+
+
+async function exitNative(ref: SessionRef): Promise<void> {
+  const generation = await terminalReady(ref);
+  raw(ref, '/exit\r', generation);
+  await expect.poll(() => call('kimi.getControl', { ref })).toMatchObject({ owner: 'exited' });
+}
+
+it('retains complete archived rows across adjacent replayed prompts and an appended native turn', async () => {
+  const projectPath = await setup();
+  const history = path.join(home!, 'provider-history');
+  vi.stubEnv('KIMI_FIXTURE_HISTORY', history);
+  const { ref } = await call('sessions.create', input(projectPath));
+  await call('pty.send', { ref, text: 'wait', submit: true });
+  await call('feed.interrupt', { ref });
+  await expect.poll(async () => (await call('feed.snapshot', { ref })).items.some(
+    (item) => item.kind === 'turn' && item.interrupted === true,
+  )).toBe(true);
+  await call('pty.send', { ref, text: 'approve', submit: true });
+  const card = await pendingCard(ref, 'permission');
+  await call('feed.decide', { ref, cardId: card.cardId, decision: { kind: 'permission', behavior: 'deny', optionId: 'deny' } });
+  await expectReply(ref, 'deny');
+  const before = (await call('feed.snapshot', { ref })).items;
+  expect(before).toContainEqual(expect.objectContaining({ id: card.id, state: 'denied' }));
+  await writeFile(history, [['wait', ''], [['ap', 'prove'], 'deny']].map((turn) => JSON.stringify(turn)).join('\n') + '\n');
+
+  await call('kimi.setControl', { ref, target: 'terminal' });
+  await exitNative(ref);
+  await call('kimi.setControl', { ref, target: 'chat' });
+  expect((await call('feed.snapshot', { ref })).items).toEqual(before);
+
+  await call('kimi.setControl', { ref, target: 'terminal' });
+  const generation = await terminalReady(ref);
+  raw(ref, 'native appended\r/exit\r', generation);
+  await expect.poll(() => call('kimi.getControl', { ref })).toMatchObject({ owner: 'exited' });
+  // Handback after restart does not depend on the desktop requesting the archive first.
+  client!.close();
+  await running!.context.shutdown('test restart');
+  await running!.closed;
+  await connectIsolatedHost();
+  await call('kimi.setControl', { ref, target: 'chat' });
+  const after = (await call('feed.snapshot', { ref })).items;
+  expect(after.slice(0, before.length)).toEqual(before);
+  expect(after.slice(before.length)).toMatchObject([
+    { kind: 'prompt', text: 'native appended' }, { kind: 'text', text: 'Native answer' }, { kind: 'turn' },
+  ]);
+  expect(await call('pty.send', { ref, text: 'live after replay', submit: true })).toMatchObject({ submitted: true });
+  await expectReply(ref, 'Hello Parley');
+  const live = (await call('feed.snapshot', { ref })).items;
+  expect(live.slice(0, after.length)).toEqual(after);
+  expect(new Set(live.map(({ id }) => id)).size).toBe(live.length);
+}, 15_000);
+
+it('refuses unidentifiable consecutive new replay prompts without replacing Chat', async () => {
+  const projectPath = await setup();
+  const history = path.join(home!, 'provider-history');
+  vi.stubEnv('KIMI_FIXTURE_HISTORY', history);
+  const { ref } = await call('sessions.create', input(projectPath));
+  await call('pty.send', { ref, text: 'hello', submit: true });
+  await expectReply(ref, 'Hello Parley');
+  const before = (await call('feed.snapshot', { ref })).items;
+  await call('kimi.setControl', { ref, target: 'terminal' });
+  await exitNative(ref);
+  const turns = [['hello', 'Hello Parley'], ['first new', ''], ['second new', 'native answer']];
+  await writeFile(history, turns.map((turn) => JSON.stringify(turn)).join('\n'));
+  expect((await request('kimi.setControl', { ref, target: 'chat' })).error).toMatchObject({ code: 'conflict' });
+  expect((await call('feed.snapshot', { ref })).items).toEqual(before);
+
+  // Optional ACP message IDs establish boundaries without guessing from chunks.
+  await writeFile(history, turns.map((turn, i) => JSON.stringify([...turn, `user-${i}`])).join('\n'));
+  await call('kimi.setControl', { ref, target: 'chat' });
+  const items = (await call('feed.snapshot', { ref })).items;
+  expect(items.slice(0, before.length)).toEqual(before);
+  expect(items.filter((item) => item.kind === 'prompt').map((item) => item.text)).toEqual(['hello', 'first new', 'second new']);
+}, 15_000);

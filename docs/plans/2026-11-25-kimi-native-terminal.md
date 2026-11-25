@@ -75,3 +75,22 @@ Open `http://127.0.0.1:4658/e2e/fixtures/kimi-native-terminal.html`. The Termina
 - **Verdict** — The fixture and stock CLI establish exact-ID ownership transfer, provider-owned mode, no native MCP attachment, and restored Chat. The live app and user configuration were not changed.
 
 **Not verified** — Real accounts, non-macOS stock CLI, production throughput, or live app migration. Parley browser captured the production-component fixture presets. Automated desktop tests covered button interactions independently.
+
+## R1 — replay integrity after source review
+
+Source review m-10274 and m-10275 reaffirm the accepted native handoff and split changes into R1 replay integrity, R2 lifecycle recovery, and R3 ownership fencing. This turn owns R1 only in `packages/host/src/kimi/{sessions,acp}.ts`, `packages/host/src/feed/feed-service.ts`, and focused regression fixtures/tests. Runtime authority discrimination remains with the integrated verifier.
+
+- A historical replay exceeding a Cold Chat display bound can limit that replay, but must never discard a subsequent live assistant reply.
+- A handback replay must preserve distinct historical prompts even when an old turn has no assistant text. Use explicit provider boundaries when supported or reconcile against the known Chat history. If a replay does not uniquely identify the turns, report a recoverable failure and preserve the prior projection.
+- Match unchanged provider turns against Chat before applying the replay. Preserve exact row IDs, timestamps, durations, resolved request cards, and order for matched rows. Reconcile native additions or divergence without blindly appending the whole replay.
+- Reproduce the three findings before changing implementation. Verify targeted host and fixture checks, then commit and hand in R1 separately before touching R2 or R3.
+
+R1 preserves the archive-matched prefix without emitting fresh rows for it. An ACP message ID confirms a user-message boundary when one is available. With legacy chunks, a run of consecutive prompts must match the archived sequence, including any turns with no assistant text. If it cannot, handback leaves the prior Chat alone. New replayed durations are unknown because ACP does not carry them. [ACP v1 session loading](https://github.com/agentclientprotocol/agent-client-protocol/blob/main/docs/protocol/v1/session-setup.mdx)
+
+R1 verification reproduced five failing cases before the fix. The final focused run passed 56 tests and the host build. The fixture held the original row IDs, timestamps, cancellation marker and resolved permission card across a no-op handoff and a native append followed by isolated host restart. It also verified that the first later live prompt receives fresh row IDs. This does not close R2, R3, or the separately investigated native authority finding.
+
+```sh
+pnpm --filter @parley/host build
+pnpm --filter @parley/host exec vitest run \
+  src/kimi/acp.test.ts src/kimi/sessions.test.ts src/kimi/kimi-host.test.ts
+```

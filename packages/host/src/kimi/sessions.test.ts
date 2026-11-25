@@ -16,10 +16,14 @@ const output = vi.fn();
 beforeEach(async () => {
   home = await mkdtemp(path.join(tmpdir(), 'kimi-startup-'));
   output.mockClear();
-  service = createKimiSessions({ version: 'test', broadcast: vi.fn(), log: { warn: vi.fn() } } as unknown as HostContext, {
-    output, hasHistory: () => true, activity: vi.fn(),
-  });
+  service = sessionsWithHistory(true);
 });
+
+function sessionsWithHistory(hasHistory: boolean) {
+  return createKimiSessions({ version: 'test', broadcast: vi.fn(), log: { warn: vi.fn() } } as unknown as HostContext, {
+    output, hasHistory: () => hasHistory, activity: vi.fn(),
+  });
+}
 afterEach(async () => {
   await service.stopAll();
   await rm(home, { recursive: true, force: true });
@@ -169,4 +173,21 @@ it.each([
   await expect(launch({ kimiPermissionMode: 'auto' }, { ...permissionModes, [failure]: '1' })).rejects.toMatchObject({ code: 'bad_request' });
   expect(await trace()).toEqual([{ opened: 'session/new' }, ...(wroteMode ? [{ configId: 'mode', value: 'auto' }] : [])]);
   expect(output).not.toHaveBeenCalled();
+});
+
+
+it.each([
+  ['a long prompt', [['p'.repeat(65537), 'old']]],
+  ['many replay updates', Array.from({ length: 1400 }, (_, n) => [`old ${n}`, 'reply'])],
+  ['a large replay', Array.from({ length: 34 }, () => ['p'.repeat(65536), 'reply'])],
+])('still delivers a live reply after a cold resume with %s', async (_title, turns) => {
+  service = sessionsWithHistory(false);
+  const history = path.join(home, 'history');
+  await writeFile(history, turns.map((turn) => JSON.stringify(turn)).join('\n'));
+  const started = await launch({ sessionId: 'acp-session', prompt: undefined }, { KIMI_FIXTURE_HISTORY: history });
+  started.activate();
+  if (output.mock.calls.length > 0) expect(output.mock.calls.at(-1)?.[1]).toMatchObject({ kind: 'end' });
+  output.mockClear();
+  expect(service.send(ref, 'live question', true)).toMatchObject({ submitted: true });
+  await expect.poll(() => output.mock.calls.filter(([, event]) => event.kind === 'text').map(([, event]) => event.text).join('')).toBe('Hello Parley');
 });

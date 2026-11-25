@@ -13,10 +13,16 @@ export type KimiOutput =
   | { kind: 'text'; text: string; messageId: string }
   | { kind: 'end'; reason: string; error?: string };
 
+export interface KimiReplayChunk {
+  author: 'agent' | 'user';
+  text: string;
+  messageId?: string;
+}
+
 interface KimiSessionHooks {
   output(ref: SessionRef, event: KimiOutput): void;
   hasHistory(ref: SessionRef): boolean;
-  prepareHistory?(ref: SessionRef, events: readonly KimiOutput[]): () => void;
+  prepareHistory?(ref: SessionRef, archive: string, chunks: readonly KimiReplayChunk[]): Promise<() => void>;
   checkBinding?(ref: SessionRef, home: string, id: string): void;
   activity(ref: SessionRef, state: 'ready' | 'working' | 'blocked' | 'ended', detail?: string): void;
   requestsChanged?(ref: SessionRef, requests: KimiState['requests']): void;
@@ -29,7 +35,7 @@ interface KimiLaunch extends NonNullable<LaunchPlan['kimiAcp']> {
   args: string[];
   cwd: string;
   env: NodeJS.ProcessEnv;
-  reconcileAt?: { cwd: string; home: string };
+  reconcileAt?: { archive: string; cwd: string; home: string };
 }
 
 function hostError(error: unknown): never {
@@ -87,6 +93,7 @@ export function createKimiSessions(host: HostContext, hooks: KimiSessionHooks) {
     if (launch.sessionId !== undefined) checkBinding(ref, home, launch.sessionId);
     if (live.has(key)) throw new HostError('conflict', 'Kimi Code session is already running');
     const initialOutput: KimiOutput[] = [];
+    const historyChunks: KimiReplayChunk[] = [];
     let initialChars = 0;
     let overflow = false;
     let replayPrompt: string | undefined;
@@ -95,17 +102,21 @@ export function createKimiSessions(host: HostContext, hooks: KimiSessionHooks) {
     let published = emptyState();
     const dataListeners = new Set<(data: string) => void>();
 
+    function reserveHistory(chars: number, length: number): boolean {
+      if (overflow || initialChars + chars > 2 * 1024 * 1024 || length >= 4096) {
+        overflow = true;
+        return false;
+      }
+      initialChars += chars;
+      return true;
+    }
+
     function output(event: KimiOutput): void {
       if (live.get(key) !== session || session.frozen) return;
       if (session.ready) hooks.output(ref, event);
       else {
         const chars = event.kind === 'end' ? 0 : event.text.length;
-        if (initialChars + chars > 2 * 1024 * 1024 || initialOutput.length >= 4096) {
-          overflow = true;
-          return;
-        }
-        initialChars += chars;
-        initialOutput.push(event);
+        if (reserveHistory(chars, initialOutput.length)) initialOutput.push(event);
       }
     }
 
@@ -137,8 +148,14 @@ export function createKimiSessions(host: HostContext, hooks: KimiSessionHooks) {
       loadHistory: launch.sessionId !== undefined && (strictReplay || !hooks.hasHistory(ref)),
       requireHistory: strictReplay,
       onState: (state) => { if (session.ready) publishState(state); },
-      onText(text, history, author) {
-        if (live.get(key) !== session || session.frozen || overflow) return;
+      onText(text, history, author, messageId) {
+        if (live.get(key) !== session || session.frozen || (history && overflow)) return;
+        if (history && strictReplay) {
+          if (reserveHistory(text.length + (messageId?.length ?? 0), historyChunks.length)) {
+            historyChunks.push({ author, text, ...(messageId === undefined ? {} : { messageId }) });
+          }
+          return;
+        }
         if (history && author === 'user') {
           if (replayPrompt === undefined) {
             if (replayed) output({ kind: 'end', reason: 'end_turn' });
@@ -204,7 +221,15 @@ export function createKimiSessions(host: HostContext, hooks: KimiSessionHooks) {
       flushReplayPrompt();
       if (replayed) output({ kind: 'end', reason: 'end_turn' });
       if (strictReplay && overflow) throw new KimiAcpError('Kimi history exceeds the handback replay limit. Chat remains unchanged.', 'protocol');
-      const restoreHistory = strictReplay ? hooks.prepareHistory?.(ref, initialOutput) : undefined;
+      if (overflow) {
+        // Keep only closed turns in an ordinary bounded replay. A dangling prompt would make Chat
+        // look busy and keep its outbox closed even though this ACP owner is idle.
+        initialOutput.length = initialOutput.findLastIndex(({ kind }) => kind === 'end') + 1;
+        host.log.warn('Kimi Code cold history reached its display limit', { ref });
+      }
+      const restoreHistory = launch.reconcileAt === undefined ? undefined
+        : await hooks.prepareHistory?.(ref, launch.reconcileAt.archive, historyChunks);
+      if (!acp.connected() || live.get(key) !== session) throw new KimiAcpError('Kimi Code ACP disconnected', 'disconnected');
       return {
         sessionId,
         process: {

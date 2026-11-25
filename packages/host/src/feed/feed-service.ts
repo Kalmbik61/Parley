@@ -63,7 +63,7 @@ import {
   withCodexAgentMeta,
   workPaths,
 } from '@parley/core';
-import type { KimiOutput } from '../kimi/sessions.js';
+import type { KimiOutput, KimiReplayChunk } from '../kimi/sessions.js';
 import type {
   CodexAgentMeta,
   CodexCursor,
@@ -243,7 +243,7 @@ export function withoutMail<D extends { upsert: FeedItem[]; removed: string[] }>
 export interface FeedService {
   kimiHasHistory(ref: SessionRef): boolean;
   kimiArchive(ref: SessionRef, archive: string): Promise<void>;
-  kimiPrepareHistory(ref: SessionRef, events: readonly KimiOutput[]): () => void;
+  kimiPrepareHistory(ref: SessionRef, archive: string, chunks: readonly KimiReplayChunk[]): Promise<() => void>;
   kimiOutput(ref: SessionRef, event: KimiOutput): void;
   kimiRequests(ref: SessionRef, requests: readonly KimiRequest[]): void;
   /**
@@ -2525,13 +2525,17 @@ export function createFeedService(
     return path.join(workPaths(ref.projectPath, ref.workId).dir, 'kimi-history', ref.sessionId, `${archive}.json`);
   }
 
+  async function readKimiArchiveItems(ref: SessionRef, archive: string): Promise<FeedItem[]> {
+    const file = kimiArchiveFile(ref, archive);
+    if ((await stat(file)).size > maxBytes + 1024) throw new Error('Kimi archive exceeds the feed limit');
+    const saved: unknown = JSON.parse(await readFile(file, 'utf8'));
+    if (!Array.isArray(saved) || saved.length > maxItems) throw new Error('Invalid Kimi archive');
+    return saved.map((item) => feedItem.parse(item));
+  }
+
   async function readKimiArchive(feed: SessionFeed, archive: string): Promise<void> {
     try {
-      const file = kimiArchiveFile(feed.ref, archive);
-      if ((await stat(file)).size > maxBytes + 1024) throw new Error('Kimi archive exceeds the feed limit');
-      const saved: unknown = JSON.parse(await readFile(file, 'utf8'));
-      if (!Array.isArray(saved) || saved.length > maxItems) throw new Error('Invalid Kimi archive');
-      const items = saved.map((item) => feedItem.parse(item));
+      const items = await readKimiArchiveItems(feed.ref, archive);
       if (!feedCurrent(feed) || feed.live) return;
       commit(feed, { state: { ...emptyFeedState(), items }, changes: items });
       feed.seeded = true;
@@ -2550,6 +2554,97 @@ export function createFeedService(
     return applyHookEvent(state, body, time);
   }
 
+  type KimiTextTurn = { prompt: string | null; reply: string };
+  type ArchivedKimiTurn = KimiTextTurn & { items: FeedItem[] };
+  const ambiguousKimiReplay = () => new HostError('conflict', 'Kimi history does not identify separate prompts. The prior Chat is unchanged.');
+  const oversizedKimiReplay = () => new HostError('conflict', 'Kimi history exceeds the Chat handback limit. The prior Chat is unchanged.');
+
+  function archiveKimiTurns(items: readonly FeedItem[]): ArchivedKimiTurn[] {
+    const turns: ArchivedKimiTurn[] = [];
+    let turn: ArchivedKimiTurn | undefined;
+    for (const item of items) {
+      if (item.kind === 'mail') continue;
+      if (turn === undefined || item.kind === 'prompt') {
+        turn = { prompt: item.kind === 'prompt' ? item.text : null, reply: '', items: [] };
+        turns.push(turn);
+      }
+      turn.items.push(item);
+      if (item.kind === 'text') turn.reply += item.text;
+    }
+    return turns;
+  }
+
+  function legacyKimiPrompts(chunks: readonly KimiReplayChunk[], archive: readonly ArchivedKimiTurn[], offset: number): string[] {
+    if (chunks.length === 1) return [chunks[0]!.text];
+    const prompts: string[] = [];
+    let cursor = 0;
+    while (cursor < chunks.length) {
+      const previous = archive[offset + prompts.length];
+      if (previous?.prompt == null) throw ambiguousKimiReplay();
+      let text = '';
+      do {
+        text += chunks[cursor++]!.text;
+      } while (cursor < chunks.length && text !== previous.prompt && previous.prompt.startsWith(text));
+      // Only a known prompt with no assistant reply can be followed by another prompt in this run.
+      if (text !== previous.prompt || (cursor < chunks.length && previous.reply !== '')) throw ambiguousKimiReplay();
+      prompts.push(text);
+    }
+    return prompts;
+  }
+
+  function reconcileKimiTurns(chunks: readonly KimiReplayChunk[], archive: readonly ArchivedKimiTurn[]): {
+    retained: FeedItem[];
+    suffix: KimiTextTurn[];
+  } {
+    const retained: FeedItem[] = [];
+    const suffix: KimiTextTurn[] = [];
+    const seenIds = new Set<string>();
+    let matched = 0;
+    let cursor = 0;
+    while (cursor < chunks.length) {
+      const start = cursor;
+      while (chunks[cursor]?.author === 'user') cursor++;
+      const user = chunks.slice(start, cursor);
+      const prompts: (string | null)[] = [];
+      if (user.length === 0) prompts.push(null);
+      else if (user.some((chunk) => chunk.messageId !== undefined)) {
+        let priorId: string | undefined;
+        for (const { text, messageId } of user) {
+          if (messageId === undefined) throw ambiguousKimiReplay();
+          if (messageId === priorId) prompts[prompts.length - 1] += text;
+          else {
+            if (seenIds.has(messageId)) throw ambiguousKimiReplay();
+            seenIds.add(messageId);
+            prompts.push(text);
+            priorId = messageId;
+          }
+        }
+      } else {
+        // ACP v1 makes messageId optional. Use archive boundaries only while the earlier turns still align.
+        prompts.push(...legacyKimiPrompts(user, archive, suffix.length === 0 ? matched : archive.length));
+      }
+      let reply = '';
+      while (chunks[cursor]?.author === 'agent') reply += chunks[cursor++]!.text;
+      for (const [index, prompt] of prompts.entries()) {
+        if (prompt !== null && prompt.length > 64 * 1024) throw oversizedKimiReplay();
+        const turn = { prompt, reply: index === prompts.length - 1 ? reply : '' };
+        const prior = suffix.length === 0 ? archive[matched] : undefined;
+        if (prior !== undefined && prior.prompt === turn.prompt && prior.reply === turn.reply) {
+          retained.push(...prior.items);
+          matched++;
+        } else suffix.push(turn);
+      }
+    }
+    return { retained, suffix };
+  }
+
+  function kimiArchiveSequence(items: readonly FeedItem[]): number {
+    return items.reduce((max, { id }) => {
+      const value = Number(/:#(\d+)$/.exec(id)?.[1]);
+      return Number.isSafeInteger(value) ? Math.max(max, value) : max;
+    }, 0);
+  }
+
   return {
     onHook,
     kimiHasHistory(ref) {
@@ -2566,31 +2661,52 @@ export function createFeedService(
       // The map only publishes this unique immutable archive after the complete write.
       await writeFile(file, text, { mode: 0o600, flag: 'wx' });
     },
-    kimiPrepareHistory(ref, events) {
+    async kimiPrepareHistory(ref, archive, chunks) {
       const feed = feedOf(ref, 'kimi');
-      let state = emptyFeedState();
+      const evidence = await readKimiArchiveItems(ref, archive).catch(() => {
+        throw new HostError('conflict', 'Kimi could not read the prior Chat archive. The prior Chat is unchanged.');
+      });
+      const { retained, suffix } = reconcileKimiTurns(chunks, archiveKimiTurns(evidence));
+      let state = { ...emptyFeedState(), seq: Math.max(feed.state.seq, kimiArchiveSequence(evidence)) };
       const time = at();
-      for (const event of events) state = reduceKimi(state, event, time).state;
-      if (state.items.length > maxItems || state.items.reduce((sum, item) => sum + itemBytes(item), 0) > maxBytes) {
-        throw new HostError('conflict', 'Kimi history exceeds the Chat handback limit. The prior Chat is unchanged.');
+      for (const turn of suffix) {
+        if (turn.prompt !== null) state = reduceKimi(state, { kind: 'prompt', text: turn.prompt }, time).state;
+        if (turn.reply !== '') state = reduceKimi(state, { kind: 'text', messageId: randomUUID(), text: turn.reply }, time).state;
+        state = closeFeedTurn(state, time).state;
       }
+      // ACP does not report timestamps or durations for the imported suffix.
+      const newRows = state.items.map((item) => item.kind === 'turn' ? { ...item, durationMs: null } : item);
+      const projected = [...retained, ...newRows];
+      if (projected.length > maxItems || projected.reduce((sum, item) => sum + itemBytes(item), 0) > maxBytes) throw oversizedKimiReplay();
       return () => {
         if (stopped || feed.provider !== 'kimi' || !feedCurrent(feed)) {
           throw new HostError('conflict', 'The Kimi Chat source changed during handback');
         }
-        const mail = feed.state.items.filter((item) => item.kind === 'mail');
-        state = { ...state, items: [...state.items, ...mail] };
+        const before = feed.state.items;
+        const priorTurns = before.filter((item) => item.kind !== 'mail');
+        const keptIds = new Set(retained.map(({ id }) => id));
+        const items = retained.every(({ id }, i) => priorTurns[i]?.id === id)
+          ? [...before.filter((item) => item.kind === 'mail' || keptIds.has(item.id)), ...newRows]
+          : [...retained, ...before.filter((item) => item.kind === 'mail'), ...newRows];
+        let unchanged = 0;
+        while (unchanged < before.length && unchanged < items.length && before[unchanged] === items[unchanged]) unchanged++;
         feed.live = true;
         feed.seeded = true;
-        // Replace a projection, not the immutable pre-handoff evidence. Broadcast removals first:
-        // clients upsert in place and a replay can reuse reducer IDs in a different order.
-        feed.batch.upsert.clear();
-        for (const item of feed.state.items) if (item.kind !== 'mail') feed.batch.removed.add(item.id);
-        flush(feed);
-        feed.state = emptyFeedState();
-        feed.sizes.clear();
-        feed.bytes = 0;
-        commit(feed, { state, changes: [...state.items] });
+        if (unchanged < before.length) {
+          // Clients upsert in place, then remove. Publish the changed suffix in two deltas so
+          // surviving rows that move keep their IDs and order. Pending changes still go first.
+          flush(feed);
+          for (const { id } of before.slice(unchanged)) {
+            feed.batch.removed.add(id);
+            feed.bytes -= feed.sizes.get(id) ?? 0;
+            feed.sizes.delete(id);
+          }
+          flush(feed);
+        }
+        commit(feed, {
+          state: { ...state, items, permissionMode: feed.state.permissionMode },
+          changes: items.slice(unchanged),
+        });
         flush(feed);
       };
     },

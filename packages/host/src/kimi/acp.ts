@@ -37,7 +37,7 @@ interface KimiAcpOptions {
   /** Replays previous messages when the host has no conversation to show. */
   loadHistory?: boolean;
   requireHistory?: boolean;
-  onText?: (text: string, history: boolean, author: 'agent' | 'user') => void;
+  onText?: (text: string, history: boolean, author: 'agent' | 'user', messageId?: string) => void;
   onState?: (state: KimiState) => void;
   onTurnStart?: (text: string) => void;
   onTurnEnd?: (reason: string, error?: KimiAcpError) => void;
@@ -274,7 +274,10 @@ export function createKimiAcp(options: KimiAcpOptions) {
       if (kind === 'config_option_update') setOptions(update['configOptions']);
       const content = record(update['content']);
       if ((kind === 'agent_message_chunk' || kind === 'user_message_chunk') && content['type'] === 'text' && typeof content['text'] === 'string') {
-        if (replaying || (turn !== undefined && !turn.cancelled && kind === 'agent_message_chunk')) options.onText?.(content['text'], replaying, kind === 'user_message_chunk' ? 'user' : 'agent');
+        const author = kind === 'user_message_chunk' ? 'user' : 'agent';
+        const messageId = update['messageId'];
+        if (replaying && typeof messageId === 'string' && messageId !== '') options.onText?.(content['text'], true, author, messageId);
+        else if (replaying || (turn !== undefined && !turn.cancelled && author === 'agent')) options.onText?.(content['text'], replaying, author);
       }
       return;
     }

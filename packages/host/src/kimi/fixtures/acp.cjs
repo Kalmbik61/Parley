@@ -148,9 +148,11 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
         const turns = handoffHistory
           ? (existsSync(handoffHistory) ? readFileSync(handoffHistory, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse) : [])
           : [['Old question', 'Old answer']];
-        for (const [question, answer] of turns) {
-          update(params.sessionId, { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: question } });
-          chunk(params.sessionId, answer);
+        for (const [question, answer, messageId] of turns) {
+          for (const text of Array.isArray(question) ? question : [question]) {
+            update(params.sessionId, { sessionUpdate: 'user_message_chunk', messageId, content: { type: 'text', text } });
+          }
+          if (answer !== '') chunk(params.sessionId, answer);
         }
       }
       return reply(id, { sessionId: boundId, configOptions: config(mode) });
