@@ -30,7 +30,7 @@ import type { VoiceMethodResults } from './remote/voice.js';
 import { customProviderMethodSchemas } from './custom-providers.js';
 import type { CustomProviderInfo, CustomProviderMethodResults } from './custom-providers.js';
 import type { QwenAuthHints } from './qwen-auth.js';
-import { kimiConfigValue, type KimiMethodResults } from './kimi.js';
+import { kimiConfigValue, kimiPermissionMode, type KimiMethodResults } from './kimi.js';
 import type { AssistantMethodResults } from './assistant.js';
 import { telegramMethodSchemas } from './telegram.js';
 import { voiceProviderMethodSchemas } from './voice-provider.js';
@@ -190,6 +190,9 @@ export const METHODS = {
     // Явный выбор облегчённого запуска из диалога (C2.2). Без поля решает хост по настройке `leanAgents` и источнику
     // сессии; старое окно поля не шлёт, старый хост его отбрасывает.
     lean: z.boolean().optional(),
+    kimiPermissionMode: kimiPermissionMode.optional(),
+  }).refine((input) => input.kimiPermissionMode === undefined || input.provider === 'kimi', {
+    path: ['kimiPermissionMode'], message: 'Only Kimi Code supports a launch permission mode',
   }),
   'sessions.resume': z.object({ ref: sessionRef }),
   'sessions.stop': z.object({ ref: sessionRef }),

@@ -40,6 +40,7 @@ it('keeps default choices omitted', async () => {
   const plan = await planLaunch(project, created.workId, created.session, { model: null, effort: null });
   expect(plan.kimiAcp).not.toHaveProperty('model');
   expect(plan.kimiAcp).not.toHaveProperty('effort');
+  expect(plan.kimiAcp).not.toHaveProperty('kimiPermissionMode');
 });
 
 it('lets resumed ACP restore chat choices even if creation choices left the catalog', async () => {
@@ -48,4 +49,17 @@ it('lets resumed ACP restore chat choices even if creation choices left the cata
   expect(plan.kimiAcp).toMatchObject({ sessionId: 'kimi-restored' });
   expect(plan.kimiAcp).not.toHaveProperty('model');
   expect(plan.kimiAcp).not.toHaveProperty('effort');
+});
+
+
+it.each(['manual', 'yolo', 'auto'])('persists %s as a creation preference, including a Parley resume without a provider ID', async (kimiPermissionMode) => {
+  const created = await session({ kimiPermissionMode });
+  expect(created.session.kimiPermissionMode).toBe(kimiPermissionMode);
+  for (const makePlan of [planLaunch, planResume]) {
+    const plan = await makePlan(project, created.workId, created.session);
+    expect(plan.kimiAcp).toMatchObject({ kimiPermissionMode });
+    expect(plan.kimiAcp).not.toHaveProperty('sessionId');
+  }
+  const restored = await planResume(project, created.workId, { ...created.session, providerSessionId: 'kimi-restored' });
+  expect(restored.kimiAcp).not.toHaveProperty('kimiPermissionMode');
 });

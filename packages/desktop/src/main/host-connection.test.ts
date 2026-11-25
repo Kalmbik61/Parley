@@ -14,6 +14,7 @@ interface FakeServerOptions {
   liveSessions?: number;
   /** Список методов в ответе `hello`; не задан — поля нет, как у хоста до этапа 3. */
   methods?: string[];
+  features?: string[];
   /** События сразу после ответа `hello` — как повтор активности настоящего хоста. */
   afterHello?: unknown[];
   /** Всё, что клиент прислал: `hello`, вызовы методов (этап B2: что окно шлёт хосту). */
@@ -75,6 +76,7 @@ function startFakeServer(paths: HostPaths, options: FakeServerOptions = {}): Pro
                   protocol: PROTOCOL_VERSION,
                   pid: options.pid ?? process.pid,
                   ...(options.methods === undefined ? {} : { methods: options.methods }),
+                  ...(options.features === undefined ? {} : { features: options.features }),
                 },
               }),
             );
@@ -103,6 +105,9 @@ function startFakeServer(paths: HostPaths, options: FakeServerOptions = {}): Pro
                 },
               }),
             );
+          }
+          if (message.method === 'sessions.create' && typeof message.id === 'number') {
+            socket.write(encodeLine({ id: message.id, result: { ref: { projectPath: '/p', workId: 'w-1', sessionId: 's-01' } } }));
           }
           if (message.method === 'browser.agentResult' && typeof message.id === 'number') {
             socket.write(encodeLine({ id: message.id, result: { ok: true } }));
@@ -237,6 +242,29 @@ describe('HostConnection', () => {
     });
     second.close();
     fresh.close();
+  });
+
+  it.each([false, true])('guards a Kimi mode on the socket before writing it (host support: %s)', async (supported) => {
+    await writeToken(paths);
+    const received: unknown[] = [];
+    const server = await startFakeServer(paths, { received, features: supported ? ['kimi-launch-modes'] : [] });
+    const connection = new HostConnection({ paths, env: process.env, spawn: vi.fn(), connectTimeoutMs: 1000 });
+    try {
+      await connection.connect();
+      const params = { projectPath: '/p', workId: 'w-1', provider: 'kimi', label: '', task: '', parent: null };
+      const launch = connection.call('sessions.create', { ...params, kimiPermissionMode: 'manual' });
+      if (supported) {
+        await expect(launch).resolves.toHaveProperty('ref');
+        expect(received).toContainEqual(expect.objectContaining({ method: 'sessions.create', params: { ...params, kimiPermissionMode: 'manual' } }));
+      } else {
+        await expect(launch).rejects.toMatchObject({ data: { reason: 'kimi-launch-modes-unsupported' } });
+        expect(received).not.toContainEqual(expect.objectContaining({ method: 'sessions.create' }));
+      }
+      await expect(connection.call('sessions.create', params)).resolves.toHaveProperty('ref');
+    } finally {
+      connection.close();
+      server.close();
+    }
   });
 
   it('activity.changed до подписки окна копится по сессии; новое подключение начинает снимок заново', async () => {

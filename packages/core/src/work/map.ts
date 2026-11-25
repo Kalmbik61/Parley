@@ -8,8 +8,10 @@ import { SWARM_COVERAGES, SWARM_ROLES, SWARM_STATUSES, isSwarmSlice, isSwarmTag,
 import { EFFORT_TOKEN, type EffortLevel } from '../providers.js';
 import type { LetterTx } from './letter-store.js';
 import { defaultSessionName, NEW_LABEL } from './names.js';
+import { isKimiPermissionMode } from './types.js';
 import type {
   CodexThreadBinding,
+  KimiPermissionMode,
   HistoryEntry,
   Message,
   MessageKind,
@@ -116,6 +118,7 @@ export interface NewSession {
   /** Модель и усилие запуска (`spawn_session`); без них — по умолчанию, поля в записи не будет. */
   model?: string | null;
   effort?: EffortLevel | null;
+  kimiPermissionMode?: KimiPermissionMode;
   /** Облегчённый запуск (C2.2): решение при создании; без поля — запись как до этого куска. */
   lean?: boolean;
   workspace?: WorkSession['workspace'];
@@ -134,6 +137,9 @@ export function addSession(
 ): WorkSession {
   if (init.parent != null) throw new Error('Parley sessions cannot have a parent');
   if (init.agent !== undefined && init.role !== undefined) throw new Error('agent-and-role-conflict');
+  if (init.kimiPermissionMode !== undefined && (init.provider !== 'kimi' || !isKimiPermissionMode(init.kimiPermissionMode))) {
+    throw new Error('Invalid Kimi permission mode for session creation');
+  }
   const id = nextSessionId(map);
   const session: WorkSession = {
     id,
@@ -163,6 +169,7 @@ export function addSession(
     ...(init.createdBy === undefined ? {} : { createdBy: init.createdBy }),
     ...(init.model === undefined ? {} : { model: init.model }),
     ...(init.effort === undefined ? {} : { effort: init.effort }),
+    ...(init.kimiPermissionMode === undefined ? {} : { kimiPermissionMode: init.kimiPermissionMode }),
     ...(init.lean === undefined ? {} : { lean: init.lean }),
     ...(init.trial === undefined ? {} : { trial: init.trial }),
   };
@@ -387,6 +394,7 @@ const isSessionShape =
       ? typeof value.status === 'string' && V1_STATUSES.includes(value.status)
       : typeof value.lifecycle === 'string' && Object.hasOwn(TRANSITIONS, value.lifecycle)) &&
     Array.isArray(value.history) &&
+    (value.kimiPermissionMode === undefined || (value.provider === 'kimi' && isKimiPermissionMode(value.kimiPermissionMode))) &&
     (value.agentPlan === undefined || isPublishedAgentPlan(value.agentPlan)) &&
     (value.workspace === undefined || value.workspace === null ||
       (isRecord(value.workspace) && isNonemptyString(value.workspace.path) &&

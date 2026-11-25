@@ -152,6 +152,11 @@ export function createKimiSessions(host: HostContext, hooks: KimiSessionHooks) {
           throw new KimiAcpError(`Kimi Code did not apply the selected ${configId}`, 'invalid');
         }
       }
+      // Match session/new, not the Parley launch verb. In Kimi 2.7.3 this leaves Plan even if the
+      // opening ACP snapshot already says "default", so an explicit Always Ask must still send the RPC.
+      if (launch.sessionId === undefined && launch.kimiPermissionMode !== undefined) {
+        await acp.setConfig('mode', launch.kimiPermissionMode === 'manual' ? 'default' : launch.kimiPermissionMode);
+      }
       const pid = acp.pid;
       if (pid === undefined || live.get(key) !== session || !acp.connected()) throw new KimiAcpError('Kimi Code ACP disconnected', 'disconnected');
       hooks.authChanged?.(true);

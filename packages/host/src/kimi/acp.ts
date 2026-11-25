@@ -223,12 +223,17 @@ export function createKimiAcp(options: KimiAcpOptions) {
     });
   }
 
-  function setOptions(raw: unknown): boolean {
-    if (!Array.isArray(raw)) return false;
-    config = raw.flatMap((value: unknown) => {
+  function parseOptions(raw: unknown): KimiConfigOption[] | undefined {
+    return Array.isArray(raw) ? raw.flatMap((value: unknown) => {
       const parsed = kimiConfigOption.safeParse(value);
       return parsed.success ? [parsed.data] : [];
-    });
+    }) : undefined;
+  }
+
+  function setOptions(raw: unknown): boolean {
+    const options = parseOptions(raw);
+    if (options === undefined) return false;
+    config = options;
     configRevision += 1;
     publish();
     return true;
@@ -475,7 +480,9 @@ export function createKimiAcp(options: KimiAcpOptions) {
     const choice = config.find((option) => option.id === configId);
     const valid = choice?.type === 'boolean' ? typeof value === 'boolean' : choice?.options.some((option) =>
       'group' in option ? option.options.some((item) => item.value === value) : option.value === value);
-    if (!valid) throw new KimiAcpError('Unknown Kimi Code configuration option or value', 'invalid');
+    if (!valid) throw new KimiAcpError(configId === 'mode'
+      ? 'This Kimi Code CLI does not offer the selected permission mode'
+      : 'Unknown Kimi Code configuration option or value', 'invalid');
     const revision = configRevision;
     changingConfig = true;
     try {
@@ -483,6 +490,15 @@ export function createKimiAcp(options: KimiAcpOptions) {
         sessionId, configId, value,
         ...(typeof value === 'boolean' ? { type: 'boolean' } : {}),
       });
+      if (configId === 'mode') {
+        // A notification or the opening snapshot alone cannot acknowledge this write. Also do not
+        // treat a stale reply as current when a newer configuration notification says otherwise.
+        const matches = (options: KimiConfigOption[] | undefined) =>
+          options?.find((option) => option.id === configId)?.currentValue === value;
+        if (!matches(parseOptions(result['configOptions'])) || (revision !== configRevision && !matches(config))) {
+          throw new KimiAcpError('Kimi Code did not confirm the selected permission mode', 'protocol');
+        }
+      }
       if (revision === configRevision && !setOptions(result['configOptions'])) {
         throw new KimiAcpError('Kimi Code did not confirm the configuration', 'protocol');
       }

@@ -1,4 +1,10 @@
 import { z } from 'zod';
+import type { KimiPermissionMode } from '@parley/core';
+
+// Older hosts strip unknown sessions.create fields. Require this hello capability before sending one.
+export const KIMI_LAUNCH_MODES_FEATURE = 'kimi-launch-modes';
+
+export const kimiPermissionMode = z.enum(['manual', 'yolo', 'auto'] satisfies [KimiPermissionMode, ...KimiPermissionMode[]]);
 
 const id = z.string().min(1).max(1024);
 export const kimiConfigValue = z.union([id, z.boolean()]);

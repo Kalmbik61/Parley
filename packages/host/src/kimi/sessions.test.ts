@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -111,4 +111,62 @@ it('refuses busy sends without recording or replaying a second prompt', async ()
   started.process.write('\x1b');
   await expect.poll(() => output.mock.calls.some(([, event]) => event.kind === 'end')).toBe(true);
   expect(await trace()).toEqual([{ prompt: 'wait', model: 'alpha', effort: 'low' }]);
+});
+
+
+const permissionModes = { KIMI_FIXTURE_PERMISSION_MODES: '1', KIMI_FIXTURE_INHERITED_PLAN: '1', KIMI_FIXTURE_INHERITED_PERMISSION: 'yolo' };
+
+it.each([['manual', 'default'], ['yolo', 'yolo'], ['auto', 'auto']])('sets %s to ACP %s before activation, leaving inherited Plan', async (kimiPermissionMode, value) => {
+  const started = await launch({ kimiPermissionMode }, permissionModes);
+  const beforePrompt = [{ opened: 'session/new' }, { configId: 'mode', value }];
+  expect(await trace()).toEqual(beforePrompt);
+  started.activate();
+  await expect.poll(trace).toEqual([...beforePrompt, { prompt: 'hello', model: 'alpha', effort: 'low', permission: value, plan: false }]);
+});
+
+it('leaves inherited permission and Plan untouched when no preference was selected', async () => {
+  const started = await launch({}, permissionModes);
+  started.activate();
+  await expect.poll(trace).toEqual([
+    { opened: 'session/new' }, { prompt: 'hello', model: 'alpha', effort: 'low', permission: 'yolo', plan: true },
+  ]);
+});
+
+it.each(['session/resume', 'session/load'])('sends no creation preference on provider %s', async (opened) => {
+  const started = await launch({ sessionId: 'acp-session', kimiPermissionMode: 'auto' }, {
+    ...permissionModes, ...(opened === 'session/load' ? { KIMI_FIXTURE_LOAD_ONLY: '1' } : {}),
+  });
+  started.activate();
+  await expect.poll(trace).toEqual([
+    { opened }, { prompt: 'hello', model: 'alpha', effort: 'low', permission: 'yolo', plan: true },
+  ]);
+});
+
+it('does not activate or accept a first prompt until the mode RPC acknowledges the choice', async () => {
+  const gate = path.join(home, 'ack');
+  const beforePrompt = [{ opened: 'session/new' }, { configId: 'mode', value: 'auto' }];
+  let returned = false;
+  const started = launch({ kimiPermissionMode: 'auto' }, { ...permissionModes, KIMI_FIXTURE_MODE_GATE: gate })
+    .then((result) => { returned = true; return result; });
+  try {
+    await expect.poll(trace).toEqual(beforePrompt);
+    expect(returned).toBe(false);
+    expect(() => service.send(ref, 'too soon', true)).toThrow('not running');
+    expect(output).not.toHaveBeenCalled();
+  } finally {
+    await writeFile(gate, '');
+    (await started).activate();
+  }
+  await expect.poll(trace).toEqual([...beforePrompt, { prompt: 'hello', model: 'alpha', effort: 'low', permission: 'auto', plan: false }]);
+});
+
+it.each([
+  ['KIMI_FIXTURE_WRONG_ACK', true],
+  ['KIMI_FIXTURE_MISSING_ACK', true],
+  ['KIMI_FIXTURE_LEGACY_MODE', false],
+  ['KIMI_FIXTURE_REJECT_CONFIG', false],
+])('fails without a prompt for %s', async (failure, wroteMode) => {
+  await expect(launch({ kimiPermissionMode: 'auto' }, { ...permissionModes, [failure]: '1' })).rejects.toMatchObject({ code: 'bad_request' });
+  expect(await trace()).toEqual([{ opened: 'session/new' }, ...(wroteMode ? [{ configId: 'mode', value: 'auto' }] : [])]);
+  expect(output).not.toHaveBeenCalled();
 });

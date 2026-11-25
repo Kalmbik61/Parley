@@ -39,11 +39,15 @@ const modelFile = process.env.KIMI_FIXTURE_MODEL_FILE;
 let model = modelFile && existsSync(modelFile) ? readFileSync(modelFile, 'utf8') : 'alpha';
 let thinking = false;
 let effort = 'low';
+const permissionModes = process.env.KIMI_FIXTURE_PERMISSION_MODES === '1';
 const creationConfig = process.env.KIMI_FIXTURE_CREATION_CONFIG === '1';
 const trace = (event) => { if (process.env.KIMI_FIXTURE_TRACE) appendFileSync(process.env.KIMI_FIXTURE_TRACE, JSON.stringify(event) + '\n'); };
 const config = (currentValue = 'default') => [{
   id: 'mode', name: 'Mode', category: 'mode', type: 'select', currentValue,
-  options: [{ value: 'default', name: 'Default' }, { value: 'plan', name: 'Plan' }],
+  options: [{ value: 'default', name: 'Default' }, { value: 'plan', name: 'Plan' },
+    ...(permissionModes && !process.env.KIMI_FIXTURE_LEGACY_MODE
+      ? [{ group: 'execution', name: 'Execution', options: [{ value: 'yolo', name: 'Yolo' }, { value: 'auto', name: 'Auto' }] }]
+      : [])],
 }, ...(booleanConfig ? [{ id: 'thinking', name: 'Thinking', type: 'boolean', currentValue: thinking }] : []),
 ...(creationConfig && !booleanConfig ? [{
   id: 'thinking', name: 'Thinking', category: 'thought_level', type: 'select', currentValue: effort,
@@ -68,6 +72,8 @@ const askFallback = (sessionId) => write({ id: 702, method: 'session/request_per
 } });
 let prompt;
 let mode = 'default';
+let permission = process.env.KIMI_FIXTURE_INHERITED_PERMISSION ?? 'default';
+let plan = process.env.KIMI_FIXTURE_INHERITED_PLAN === '1';
 let parleyServer;
 let writeWhenAllowed = false;
 let forms = false;
@@ -83,7 +89,7 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
         protocolVersion: 1,
         ...(process.env.KIMI_FIXTURE_ADVERTISE_LOGIN ? { authMethods: [{ id: 'login', name: 'Login' }] } : {}),
         agentInfo: { name: 'Kimi Code CLI' },
-        agentCapabilities: { loadSession: true, promptCapabilities: { embeddedContext: true }, sessionCapabilities: { resume: {}, list: {} } },
+        agentCapabilities: { loadSession: true, promptCapabilities: { embeddedContext: true }, sessionCapabilities: { ...(process.env.KIMI_FIXTURE_LOAD_ONLY ? {} : { resume: {} }), list: {} } },
       });
     case 'authenticate':
       if (params.methodId !== 'login') process.exit(6);
@@ -101,6 +107,7 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
       const server = params.mcpServers[0];
       if (realpathSync(params.cwd) !== process.cwd() || server.name !== 'parley' || !/^s-0[12]$/.test(server.env.find(({ name }) => name === 'PARLEY_SESSION_ID')?.value ?? '')) process.exit(4);
       parleyServer = server;
+      if (permissionModes) trace({ opened: method });
       if (method === 'session/load') {
         update(params.sessionId, { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'Old question' } });
         chunk(params.sessionId, 'Old answer');
@@ -114,7 +121,30 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
       }
       trace({ configId: params.configId, value: params.value });
       if (process.env.KIMI_FIXTURE_IGNORE_CONFIG) return reply(id, { configOptions: config(mode) });
-      if (params.configId === 'mode') mode = params.value;
+      if (params.configId === 'mode') {
+        const previous = mode;
+        mode = params.value;
+        plan = mode === 'plan';
+        if (!plan) permission = mode;
+        if (permissionModes) {
+          const confirm = () => {
+            const configOptions = config(mode);
+            update(params.sessionId, { sessionUpdate: 'config_option_update', configOptions });
+            if (process.env.KIMI_FIXTURE_WRONG_ACK) return reply(id, { configOptions: config(previous) });
+            if (process.env.KIMI_FIXTURE_MISSING_ACK) return reply(id, {});
+            return reply(id, { configOptions });
+          };
+          if (process.env.KIMI_FIXTURE_MODE_GATE) {
+            const untilReleased = setInterval(() => {
+              if (!existsSync(process.env.KIMI_FIXTURE_MODE_GATE)) return;
+              clearInterval(untilReleased);
+              confirm();
+            }, 10);
+            return;
+          }
+          return confirm();
+        }
+      }
       else if (booleanConfig && params.configId === 'thinking' && params.type === 'boolean') thinking = params.value;
       else if ((modelFile || creationConfig) && params.configId === 'model' && ['alpha', 'beta'].includes(params.value)) {
         model = params.value;
@@ -125,7 +155,7 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
       update(params.sessionId, { sessionUpdate: 'config_option_update', configOptions: config(mode) });
       return reply(id, { configOptions: config(mode) });
     case 'session/prompt':
-      trace({ prompt: params.prompt[0].text, model, effort });
+      trace({ prompt: params.prompt[0].text, model, effort, ...(permissionModes ? { permission, plan } : {}) });
       if (params.sessionId !== 'acp-session') process.exit(6);
       prompt = id;
       if (params.prompt[0].text === 'disconnect') process.exit(7);

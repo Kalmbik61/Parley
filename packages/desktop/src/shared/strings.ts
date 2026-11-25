@@ -47,6 +47,17 @@ const CONTEXT_NOUNS: Record<ContextKind | 'mixed', readonly [string, string]> = 
 const ACCOUNT_MIN_CLAUDE_VERSION = '2.1.304';
 
 export const S = {
+  kimiPermission: {
+    label: 'Kimi permission mode',
+    useSettings: 'Use Kimi settings',
+    launchHelp: 'An explicit choice starts a new conversation in execution mode. You can enable Plan separately in Chat.',
+    launchUnavailable: 'The connected host no longer supports this Kimi launch choice. Select Use Kimi settings to continue.',
+    modes: {
+      manual: { label: 'Always Ask', description: 'Kimi runs read-only operations automatically and asks before changes or commands.' },
+      yolo: { label: 'Automatic / Ask When Needed', description: 'Kimi approves routine actions and still asks about sensitive or dangerous actions.' },
+      auto: { label: 'Full access / Never Ask', description: 'Kimi skips tool approvals, including for sensitive actions. This does not change the sandbox or Parley authority.' },
+    },
+  },
   plans: {
     workClosed: 'Reopen this workspace to change the plan.',
     /** Вместо `workClosed` у плана архивной комнаты: панель только читается. */
@@ -3497,7 +3508,9 @@ export function startErrorText(failure: IpcErrorInfo, action: string): string {
   switch (data?.['reason']) {
     case 'kimi-missing-cli': return S.providerCard.kimi.missingCli;
     case 'kimi-sign-in': return S.providerCard.kimi.signIn;
+    case 'kimi-launch-modes-unsupported': return S.kimiPermission.launchUnavailable;
     case 'kimi-config-in-chat': return S.providerCard.kimi.chooseInChat;
+    case 'kimi-invalid':
     case 'kimi-protocol': return failure.message || errorText(failure.code, action);
   }
   // Отказ из-за роли после замены агента (спека 2026-11-12, 2.6): текст хоста сам называет выход — показываем его.

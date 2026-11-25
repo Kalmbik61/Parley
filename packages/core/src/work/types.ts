@@ -104,6 +104,12 @@ export interface SessionMetrics {
  */
 export type WorkProvider = string;
 
+export type KimiPermissionMode = 'manual' | 'yolo' | 'auto';
+
+export function isKimiPermissionMode(value: unknown): value is KimiPermissionMode {
+  return value === 'manual' || value === 'yolo' || value === 'auto';
+}
+
 export interface ArtifactsWorkspace {
   kind: 'artifacts';
   path: string;
@@ -293,6 +299,8 @@ export interface WorkSession {
    */
   model?: string | null;
   effort?: EffortLevel | null;
+  /** Historical Kimi creation preference, never reapplied to an existing provider conversation. */
+  kimiPermissionMode?: KimiPermissionMode;
   /**
    * Облегчённый запуск (спека «меньше ходов и легче контекст», C2.2): решение принимается один раз при создании
    * сессии и одинаково применяется при `resume`. Нет поля = `false`: карты до этого куска читаются без миграции.

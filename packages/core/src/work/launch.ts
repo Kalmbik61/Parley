@@ -66,7 +66,7 @@ import { CLAUDE_SKILL_BUDGET_ENV, CODEX_SKILL_CATALOG_OVERRIDE, claudeSkillReduc
 import { isPointerText } from './delivery.js';
 import { createWork, deleteSessionFiles, parleyHome, readMap, SharedStateError, updateMap, workPaths } from './store.js';
 import { withTrialAssignment, type TrialProtocolOptions } from './trial-ledger.js';
-import type { LaunchedBy, WorkMap, WorkSession } from './types.js';
+import type { KimiPermissionMode, LaunchedBy, WorkMap, WorkSession } from './types.js';
 
 /** Чего хочет запуск сверх самой сессии. */
 export interface LaunchOptions {
@@ -180,6 +180,7 @@ export interface LaunchPlan {
   /** Kimi Code owns the session id and receives the Parley MCP server over ACP. */
   kimiAcp?: {
     sessionId?: string;
+    kimiPermissionMode?: KimiPermissionMode;
     model?: string;
     effort?: string;
     mcpServers: Array<{ type: 'stdio'; name: string; command: string; args: string[]; env: Array<{ name: string; value: string }> }>;
@@ -740,6 +741,8 @@ async function plan(
   const kimiInstructions = kimi ? buildSessionLayer({ guidance: '', ...fileRules }).text : '';
   const kimiAcp: LaunchPlan['kimiAcp'] = kimi ? {
     ...(resuming && subs.providerSessionId !== undefined ? { sessionId: subs.providerSessionId } : {}),
+    // A Parley resume without a provider ID creates a new ACP conversation.
+    ...(!resuming && session.kimiPermissionMode !== undefined ? { kimiPermissionMode: session.kimiPermissionMode } : {}),
     // ACP restores chat choices on resume; creation defaults must not overwrite them.
     ...(!resuming && subs.model !== undefined ? { model: subs.model } : {}),
     ...(!resuming && subs.effort !== undefined ? { effort: subs.effort } : {}),
