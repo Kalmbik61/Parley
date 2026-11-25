@@ -30,6 +30,7 @@ export interface PtyMethodDeps {
   log?: Log;   // журнал хоста: отброшенный медленный клиент потока (`pty.clientDropped`)
   feed?: Pick<FeedService, 'markSent'>;   // pty.send: метка отправки для журнала задержек (`feed.firstDelta`)
   send?: (params: { ref: SessionRef; text: string; submit: boolean }) => Promise<SendResult>;   // общий отправитель хоста; без него — свой
+  kimiAllowRaw?: (ref: SessionRef) => boolean;
 }
 
 export interface PtyHandlers {
@@ -171,7 +172,7 @@ export function createPtyHandlers(deps: PtyMethodDeps): PtyHandlers {
     ptyInput: (params) => {
       const handle = deps.pty.get(params.ref);
       if (handle === undefined || handle.generation !== params.generation ||
-          (handle.provider === 'kimi' && sessions?.exclusive.held(params.ref) === true)) return;
+          (handle.provider === 'kimi' && (sessions?.exclusive.held(params.ref) === true || deps.kimiAllowRaw?.(params.ref) === false))) return;
       deps.pty.input(params.ref, params.data);
       deps.activity.markSeen(params.ref);
     },

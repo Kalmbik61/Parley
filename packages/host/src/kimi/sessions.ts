@@ -1,12 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import { stripEscapes, type LaunchPlan } from '@parley/core';
+import { stripEscapes, type KimiPermissionMode } from '@parley/core';
 import { refKey, type KimiRequest, type KimiResponse, type KimiState, type SendResult, type SessionRef } from '@parley/protocol';
 import type { HostContext } from '../context.js';
 import { HostError } from '../errors.js';
 import type { PtyProcess } from '../pty/pty-process.js';
 import { sanitizeForSend } from '../pty/send.js';
 import { kimiHome, kimiTerminalEnv } from '../providers/kimi-env.js';
-import { createKimiAcp, KimiAcpError } from './acp.js';
+import { createKimiAcp, KimiAcpError, type KimiMcpServer } from './acp.js';
 
 export type KimiOutput =
   | { kind: 'prompt'; text: string }
@@ -45,7 +45,14 @@ interface KimiSessionHooks {
   authChanged?(signedIn: boolean): void;
 }
 
-interface KimiLaunch extends NonNullable<LaunchPlan['kimiAcp']> {
+interface KimiLaunch {
+  sessionId?: string;
+  kimiPermissionMode?: KimiPermissionMode;
+  model?: string;
+  effort?: string;
+  mcpServers: KimiMcpServer[];
+  prompt?: string;
+  instructions?: string;
   command: string;
   args: string[];
   cwd: string;

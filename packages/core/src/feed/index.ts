@@ -56,6 +56,9 @@ export {
   applyHookEvent,
   closeFeedTurn,
   emptyFeedState,
+  finishTool,
+  newText,
+  newTool,
   settleCards,
 } from './reduce.js';
 export { mailFromInline, mailFromTool } from './mail.js';

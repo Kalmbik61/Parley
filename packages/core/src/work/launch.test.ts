@@ -1716,13 +1716,26 @@ describe('common session layer delivery', () => {
     await writeFile(file, 'Original global rule.');
     await writeFile(path.join(project, 'PARLEY.md'), 'Project rule.');
     const fresh = await planNew(project, workId, session);
-    expect(fresh.kimiAcp).toMatchObject({
+    expect(fresh.args).toEqual([]);
+    expect(fresh.kimiNative).toMatchObject({
       instructions: 'Global user rules (PARLEY.md):\nOriginal global rule.\n\nTeam rules of this project (PARLEY.md):\nProject rule.',
     });
-    expect(fresh.kimiAcp?.prompt).toBeUndefined();
+    expect(fresh.deferredPrompt).toBeUndefined();
     await writeFile(file, 'Updated global rule.');
     const resumed = await planResume(project, workId, { ...session, providerSessionId: 'kimi-session' });
-    expect(resumed.kimiAcp).toMatchObject({ sessionId: 'kimi-session', instructions: expect.stringContaining('Updated global rule.') });
+    expect(resumed.args).toEqual(['--session', 'kimi-session']);
+    expect(resumed.providerSessionId).toBe('kimi-session');
+    expect(resumed.kimiNative).toMatchObject({ instructions: expect.stringContaining('Updated global rule.') });
+  });
+
+  it.each([['manual', []], ['yolo', ['--yolo']], ['auto', ['--auto']]] as const)('launches Kimi %s as a native PTY and defers its first prompt', async (kimiPermissionMode, flags) => {
+    const { workId, sessionId } = await pending('kimi');
+    const session = await sessionOf(workId, sessionId);
+    const plan = await planLaunch(project, workId, { ...session, kimiPermissionMode }, { handover: 'HANDOVER' });
+    expect(plan.args).toEqual(flags);
+    expect(plan.providerSessionId).toBeNull();
+    expect(plan.kimiNative?.permissionMode).toBe(kimiPermissionMode);
+    expect(plan.deferredPrompt).toContain('HANDOVER');
   });
 
   it('reports global rule read failures without dropping project rules', async () => {

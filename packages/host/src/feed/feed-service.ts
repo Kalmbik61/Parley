@@ -46,6 +46,9 @@ import {
   emptyCodexAgentMeta,
   emptyCodexCursor,
   emptyFeedState,
+  finishTool,
+  newText,
+  newTool,
   FEED_IMAGE_SWEEP_MS,
   FEED_TEXT_LIMIT,
   feedFromCodexRollout,
@@ -67,6 +70,7 @@ import {
 } from '@parley/core';
 import type { KimiHistoryProjection, KimiHistoryReplay, KimiOutput, KimiReplayChunk } from '../kimi/sessions.js';
 import { withoutKimiDateContext } from '../kimi/date-provenance.js';
+import { createKimiWire, KIMI_SESSION_ID, projectKimiWire, record as kimiRecord, type KimiWireEvent } from '../kimi/native-wire.js';
 import type {
   CodexAgentMeta,
   CodexCursor,
@@ -196,6 +200,7 @@ export interface FeedServiceDeps {
 export interface FeedServiceOptions {
   kimiRespond?: (ref: SessionRef, requestId: string, response: KimiResponse) => void;
   kimiBlocksChat?: (ref: SessionRef) => boolean;
+  kimiNativeDecide?: (ref: SessionRef, requestId: string, decision: FeedDecision) => Promise<Result<'feed.decide'>>;
   maxItems?: number;
   maxBytes?: number;
   batchMs?: number;
@@ -252,6 +257,9 @@ export interface FeedService {
   kimiPrepareHistory(ref: SessionRef, archive: string, chunks: readonly KimiReplayChunk[], replay: KimiHistoryReplay): Promise<KimiHistoryProjection>;
   kimiOutput(ref: SessionRef, event: KimiOutput): void;
   kimiRequests(ref: SessionRef, requests: readonly KimiRequest[]): void;
+  kimiNativeEvent(ref: SessionRef, source: string, event: KimiWireEvent, historical?: boolean): void;
+  kimiNativeReset(ref: SessionRef, sameId: boolean): void;
+  kimiNativeRequests(ref: SessionRef, requests: KimiRequest[], unresolved: boolean): void;
   /**
    * OpenCode: poll the session's messages now (called on its SSE events); joins the poll in flight. A session without a
    * feed in memory, a server or a seeded feed does nothing.
@@ -437,6 +445,7 @@ interface SessionFeed {
   opencode?: OpencodeFeed;
   /** Only the live ACP process may resolve these cards. */
   kimiInteractions?: Map<string, KimiInteraction>;
+  kimiNative?: { id: string; seen: Set<string>; legacy?: { rows: { kind: 'prompt' | 'text'; text: string }[]; at: number; failed: boolean } };
   /**
    * Qwen Code: when its last turn ended (Stop hook or the journal going idle). The transcript has no end-of-turn record, so
    * this closes the turn it leaves open; it survives reseeding and a reconnect.
@@ -1335,7 +1344,11 @@ export function createFeedService(
   function seed(feed: SessionFeed, provider: string, foreground = false): Promise<void> {
     if (stopped) return Promise.resolve();
     if (provider === 'kimi') {
-      const { kimiTerminal, kimiChatCheckpoint } = sessionOf(feed.ref);
+      const { kimiTerminal, kimiChatCheckpoint, kimiNativeBinding, providerSessionId } = sessionOf(feed.ref);
+      if (kimiNativeBinding !== undefined && providerSessionId !== null && KIMI_SESSION_ID.test(providerSessionId)) {
+        feed.seeding ??= seedKimiNative(feed, providerSessionId, kimiNativeBinding).finally(() => { feed.seeding = undefined; });
+        return feed.seeding;
+      }
       const archive = kimiTerminal?.archive ?? kimiChatCheckpoint?.archive;
       return archive === undefined ? Promise.resolve() : seedKimiArchive(feed, archive, kimiTerminal === undefined);
     }
@@ -2584,6 +2597,111 @@ export function createFeedService(
     return applyHookEvent(state, body, time);
   }
 
+  type NativeBinding = NonNullable<WorkSession['kimiNativeBinding']>;
+
+  async function seedKimiNative(feed: SessionFeed, id: string, binding: NativeBinding): Promise<void> {
+    if (feed.live || feed.seeded) return;
+    try {
+      if (binding.legacyArchive !== undefined && binding.legacyProviderId === id) await readKimiArchive(feed, binding.legacyArchive, false);
+      const wire = await createKimiWire({ ...binding, sessionId: id });
+      for (let chunk = 0; chunk < 32; chunk++) {
+        const result = await wire.read();
+        if (!feedCurrent(feed) || feed.live) return;
+        if (result.limitation !== undefined) nativeKimiEvent(feed, id, { kind: 'unsupported', at: now() }, true);
+        for (const row of result.rows) {
+          const event = projectKimiWire(row);
+          if (event !== undefined) nativeKimiEvent(feed, id, event, true);
+        }
+        if (!result.more) break;
+        if (chunk === 31) nativeKimiEvent(feed, id, { kind: 'unsupported', at: now() }, true);
+      }
+      if (!feed.live) commit(feed, closeFeedTurn(feed.state, at(), { interrupted: true }));
+    } catch {
+      nativeKimiEvent(feed, id, { kind: 'unsupported', at: now() }, true);
+    } finally {
+      feed.seeded = true;
+    }
+  }
+
+  function nativeKimiEvent(feed: SessionFeed, source: string, event: KimiWireEvent, historical: boolean): void {
+    const time = event.at > 0 ? new Date(event.at).toISOString() : at();
+    let native = feed.kimiNative;
+    if (native?.id !== source) {
+      const legacy = native === undefined && feed.state.items.some(item => item.kind === 'prompt' || item.kind === 'text')
+        ? { rows: archiveKimiTurns(feed.state.items).flatMap(({ prompt, reply }) => [
+          ...(prompt === null ? [] : [{ kind: 'prompt' as const, text: prompt }]),
+          ...(reply === '' ? [] : [{ kind: 'text' as const, text: reply }]),
+        ]), at: 0, failed: false }
+        : undefined;
+      native = { id: source, seen: new Set(), ...(legacy === undefined ? {} : { legacy }) };
+      feed.kimiNative = native;
+    }
+    const id = (suffix: string) => `kimi-native:${source}:${suffix}`;
+    const marker = event.kind === 'unsupported' ? 'limitation' : event.kind + ':' +
+      ('id' in event ? event.id : event.at);
+    if (native.seen.has(marker)) return;
+    if (native.seen.size >= 32768) native.seen.delete(native.seen.values().next().value!);
+    native.seen.add(marker);
+
+    // An old archive is kept intact. Suppress only a positively matched wire prefix.
+    // If it cannot be aligned, omit the ambiguous historical suffix and show the limitation.
+    const legacy = native.legacy;
+    if (legacy !== undefined) {
+      if (historical && (legacy.failed || legacy.rows.length > 0)) {
+        if (legacy.failed || (event.kind !== 'prompt' && event.kind !== 'text')) return;
+        const row = legacy.rows[0];
+        if (row?.kind === event.kind && (event.kind === 'prompt' ? row.text === event.text
+            : row.text.startsWith(event.text, legacy.at))) {
+          legacy.at += event.text.length;
+          if (legacy.at >= row.text.length) { legacy.rows.shift(); legacy.at = 0; }
+          return;
+        }
+        legacy.failed = true;
+        nativeKimiEvent(feed, source, { kind: 'unsupported', at: event.at }, false);
+        return;
+      }
+      if (!historical) {
+        delete native.legacy;
+        if (legacy.failed || legacy.rows.length > 0) nativeKimiEvent(feed, source, { kind: 'unsupported', at: event.at }, false);
+      }
+    }
+    const put = (item: FeedItem): void => {
+      const items = feed.state.items;
+      const old = items.findIndex(candidate => candidate.id === item.id);
+      commit(feed, { state: { ...feed.state, items: old < 0 ? [...items, item] : items.toSpliced(old, 1, item) }, changes: [item] });
+    };
+    if (event.kind === 'prompt') {
+      const began = settleCards(feed.state, 'stale', time);
+      commit(feed, { ...began, state: { ...began.state, turnStartedAt: time } });
+      put({ kind: 'prompt', id: id('prompt:' + event.id), at: time, text: event.text, images: 0 });
+    } else if (event.kind === 'text') {
+      put(newText(id('text:' + event.id), time, id(event.id), event.text, false));
+    } else if (event.kind === 'tool') {
+      put(newTool(id(event.id), event.name, kimiRecord(event.input) ?? {}, time, null));
+    } else if (event.kind === 'result') {
+      const tool = feed.state.items.find(item => item.kind === 'tool' && item.toolUseId === id(event.id));
+      if (tool?.kind === 'tool') put(finishTool(tool, event.isError ? 'failed' : 'done', event.output, time));
+    } else if (event.kind === 'end') {
+      commit(feed, closeFeedTurn(feed.state, time, { interrupted: event.reason !== 'completed' }));
+    } else if (event.kind === 'resolved') {
+      const cardId = `kimi:${event.id}`;
+      const answer = kimiRecord(event.response);
+      const value = answer?.decision;
+      const answers = kimiRecord(answer?.answers);
+      if (typeof value === 'string' && /^(approved|rejected)/.test(value)) {
+        commit(feed, applyDecision(feed.state, cardId, { kind: 'permission', behavior: value.startsWith('approved') ? 'allow' : 'deny' }, time));
+      } else if (answers !== undefined && Object.values(answers).every(value => typeof value === 'string')) {
+        commit(feed, applyDecision(feed.state, cardId, { kind: 'question', answers: answers as Record<string, string> }, time));
+      } else commit(feed, settleCards(feed.state, 'elsewhere', time, [cardId]));
+    } else if (event.kind === 'compact-start' || event.kind === 'compact') {
+      put({ kind: 'notice', id: id(marker), at: time, notice: { type: 'compact', phase: event.kind === 'compact' ? 'post' : 'pre', trigger: null } });
+    } else if (event.kind === 'undo' || event.kind === 'clear' || event.kind === 'unsupported') {
+      const message = event.kind === 'unsupported' ? 'Kimi history could not be fully projected. Prior Chat is preserved. See Terminal for the native history.'
+        : `Kimi changed its context (${event.kind}). Prior Chat messages are kept as history.`;
+      put({ kind: 'error', id: id(marker), at: time, error: 'kimi-native-history', message });
+    }
+  }
+
   type KimiTextTurn = { prompt: string | null; reply: string };
   type ArchivedKimiTurn = KimiTextTurn & { replyTruncated: boolean; items: FeedItem[] };
   const KIMI_AMBIGUOUS_REPLAY = 'kimi-replay-ambiguous';
@@ -2855,6 +2973,39 @@ export function createFeedService(
         changes: [...settled.changes, ...added],
       });
     },
+    kimiNativeEvent(ref, source, event, historical = false) {
+      if (stopped) return;
+      const feed = feedOf(ref, 'kimi');
+      if (feed.provider !== 'kimi') return;
+      feed.live = true;
+      nativeKimiEvent(feed, source, event, historical);
+    },
+    kimiNativeReset(ref, sameId) {
+      const feed = feeds.get(refKey(ref));
+      if (feed === undefined || feed.provider !== 'kimi') return;
+      commit(feed, settleCards(feed.state, 'stale', at()));
+      if (!sameId) commit(feed, closeFeedTurn(feed.state, at(), { interrupted: true }));
+      setDecisions(feed, 'terminal');
+    },
+    kimiNativeRequests(ref, requests, unresolved) {
+      if (stopped) return;
+      const feed = unresolved || requests.length ? feedOf(ref, 'kimi') : feeds.get(refKey(ref));
+      if (feed?.provider !== 'kimi') return;
+      setDecisions(feed, requests.length > 0 ? 'window' : 'terminal');
+      const ids = new Set(requests.map(request => `kimi:${request.id}`));
+      // A native screen can change before the wire commits its resolution. Keep the card
+      // pending (Terminal-only while unrecognized) rather than losing the authoritative outcome.
+      const gone = unresolved ? [] : feed.state.items.filter(item => isPendingCard(item) && item.id.startsWith('kimi:') && !ids.has(item.id)).map(item => item.id);
+      const settled = settleCards(feed.state, 'stale', at(), gone);
+      const added = requests.flatMap(request => {
+        if (settled.state.items.some(item => item.id === `kimi:${request.id}`)) return [];
+        const interaction = kimiInteraction(request, at());
+        return interaction === undefined ? [] : [interaction.card];
+      });
+      if (added.length || settled.changes.length) commit(feed, {
+        state: { ...settled.state, items: [...settled.state.items, ...added] }, changes: [...settled.changes, ...added],
+      });
+    },
     opencodePoll(ref) {
       const feed = feeds.get(refKey(ref));
       if (stopped || feed === undefined || feed.opencode === undefined) return Promise.resolve();
@@ -3043,6 +3194,9 @@ export function createFeedService(
       }
       const current: FeedCardState = card.state;
       if (current !== 'pending') return { applied: false, state: current };
+      if (options.kimiNativeDecide !== undefined && feed.provider === 'kimi' && cardId.startsWith('kimi:')) {
+        return options.kimiNativeDecide(ref, cardId.slice(5), decision);
+      }
       const qwen = feed.qwenWait?.prompt;
       if (qwen?.card.id === cardId) return decideQwen(feed, qwen, decision);
       const interaction = feed.kimiInteractions?.get(cardId);

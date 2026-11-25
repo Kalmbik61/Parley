@@ -123,6 +123,30 @@ describe('createSender', () => {
     expect(pty.writes).toEqual(['hi']);
   });
 
+  it('Kimi uses its native gate before the first provider hook and rechecks before sending Return', async () => {
+    const get = pty.manager.get;
+    pty.manager.get = (target) => {
+      const handle = get(target);
+      return handle === undefined ? undefined : { ...handle, kimiNative: true, generation: 'g' };
+    };
+    pty.paste = true;
+    let ready = false;
+    const send = createSender({
+      pty: pty.manager,
+      activity: { get: () => undefined, qwenBlocked: () => false } as unknown as ActivityService,
+      wake: { inFlight: () => false, enterDelayMs: 500 },
+      kimiReady: () => ready,
+    });
+    expect(await send({ ref, text: 'hello', submit: true })).toMatchObject({ inserted: false });
+    ready = true;
+    const pending = send({ ref, text: 'hello', submit: true });
+    ready = false;
+    await vi.advanceTimersByTimeAsync(150);
+    expect(await pending).toMatchObject({ inserted: true, submitted: false, reason: 'blocked-before-enter' });
+    expect(pty.writes).toEqual(['\x1b[200~hello\x1b[201~']);
+    expect(pty.hostDraft).toBe(true);
+  });
+
   it('blocked — ни одной записи, текст не вставлен', async () => {
     activityState = 'blocked';
     await expect(sender()({ ref, text: 'hi', submit: true })).resolves.toEqual({

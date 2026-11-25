@@ -24,7 +24,7 @@ import { writeNativeContext, writeNativeSkillCatalog, stampNativeContext, type N
 import { CLAUDE_PROJECTS_DIR_KEY, claudeProjectRoots } from '../discover.js';
 import { defaultQwenRoot, discoverQwenSessions } from '../qwen/discover.js';
 import { isServiceText, type SessionIndex } from '../session-index.js';
-import { bothEnv, envValue } from '../names.js';
+import { bothEnv, envValue, MCP_SERVER_NAME } from '../names.js';
 import { userClaudeConfigDir, wantLinks } from '../custom-provider-dir.js';
 import {
   EFFORT_TOKEN,
@@ -167,8 +167,7 @@ export interface LaunchPlan {
   diagnostics?: Array<SessionLayerWarning | { code: 'role-missing'; message: string }>;
   /**
    * The first message of a new conversation that the runner cannot take as an argument: the host types it once the
-   * session is ready. Qwen Code only (spec 2026-11-11, 3.4 amendment): its `-i` turn would go out before its MCP
-   * discovery ends. Absent — nothing to type.
+   * session is ready. A model turn must not start before MCP discovery. Absent — nothing to type.
    */
   deferredPrompt?: string;
   /**
@@ -177,14 +176,10 @@ export interface LaunchPlan {
    * host puts the server's address; the password is the host's own and never in the plan.
    */
   opencodeServer?: { env: Record<string, string> };
-  /** Kimi Code owns the session id and receives the Parley MCP server over ACP. */
-  kimiAcp?: {
-    sessionId?: string;
-    kimiPermissionMode?: KimiPermissionMode;
-    model?: string;
-    effort?: string;
-    mcpServers: Array<{ type: 'stdio'; name: string; command: string; args: string[]; env: Array<{ name: string; value: string }> }>;
-    prompt?: string;
+  /** Session-scoped values for the native Kimi PTY and its inherited MCP environment. */
+  kimiNative?: {
+    permissionMode?: KimiPermissionMode;
+    mcpEnv: Record<string, string>;
     instructions?: string;
   };
 }
@@ -381,7 +376,7 @@ async function plan(
   // Сервер `parley`, а с ним `find_skill`, доходит до агента по виду маршрута: файл конфига и `-c` Codex — шаблоном с
   // `{mcpConfig}`, системный файл настроек Qwen Code — окружением процесса, без подстановки.
   const opencode = entry.runner.mcpConfig === 'opencode-server';
-  const kimi = entry.runner.mcpConfig === 'kimi-acp';
+  const kimi = entry.runner.mcpConfig === 'kimi-native';
   const mcpRoute = entry.runner.mcpConfig === 'qwen-system-settings' || opencode || kimi
     || (entry.runner.mcpConfig !== undefined && template.includes('{mcpConfig}'));
 
@@ -739,22 +734,22 @@ async function plan(
   }
 
   const kimiInstructions = kimi ? buildSessionLayer({ guidance: '', ...fileRules }).text : '';
-  const kimiAcp: LaunchPlan['kimiAcp'] = kimi ? {
-    ...(resuming && subs.providerSessionId !== undefined ? { sessionId: subs.providerSessionId } : {}),
-    // A Parley resume without a provider ID creates a new ACP conversation.
-    ...(!resuming && session.kimiPermissionMode !== undefined ? { kimiPermissionMode: session.kimiPermissionMode } : {}),
-    // ACP restores chat choices on resume; creation defaults must not overwrite them.
-    ...(!resuming && subs.model !== undefined ? { model: subs.model } : {}),
-    ...(!resuming && subs.effort !== undefined ? { effort: subs.effort } : {}),
-    mcpServers: Object.entries(mcpConfig(params).mcpServers).map(([name, server]) => ({
-      ...server, name, env: Object.entries(server.env).map(([name, value]) => ({ name, value })),
-    })),
-    ...(subs.prompt === undefined ? {} : { prompt: subs.prompt }),
+  const kimiNative: LaunchPlan['kimiNative'] = kimi ? {
+    ...(!resuming && session.kimiPermissionMode !== undefined ? { permissionMode: session.kimiPermissionMode } : {}),
+    mcpEnv: mcpConfig(params).mcpServers[MCP_SERVER_NAME]?.env ?? {},
     ...(kimiInstructions === '' ? {} : { instructions: kimiInstructions }),
   } : undefined;
 
   const { command, args } = resuming ? resumeCommand(entry, subs) : startCommand(entry, subs);
-  const deferredPrompt = (entry.runner.mcpConfig === 'qwen-system-settings' || opencode) && !resuming && subs.prompt !== undefined && !template.includes('{prompt}')
+  if (kimi) {
+    if (resuming) providerSessionId = subs.providerSessionId ?? null;
+    else {
+      if (kimiNative?.permissionMode === 'yolo') args.push('--yolo');
+      if (kimiNative?.permissionMode === 'auto') args.push('--auto');
+      if (subs.model !== undefined) args.push('--model', subs.model);
+    }
+  }
+  const deferredPrompt = kimi || ((entry.runner.mcpConfig === 'qwen-system-settings' || opencode) && !resuming && !template.includes('{prompt}'))
     ? subs.prompt : undefined;
   if (forkFrom !== undefined) {
     // Форк, а не продолжение копии (5.4.1, п. 1): у нового агента свой id, и один разговор не живёт в двух корнях.
@@ -790,13 +785,14 @@ async function plan(
         ? { CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS: String(CLAUDE_MCP_AUTO_BACKGROUND_MS) } : {}),
       ...(workspace ? { TMPDIR: path.join(workspace.path, '.parley-tmp') } : {}),
       ...(qwenSettingsFile === undefined ? {} : { [QWEN_SYSTEM_SETTINGS_ENV]: qwenSettingsFile }),
+      ...(kimi && !resuming && subs.effort !== undefined ? { KIMI_MODEL_THINKING_EFFORT: subs.effort } : {}),
     },
     providerSessionId,
     warnings,
     diagnostics,
     ...(deferredPrompt === undefined ? {} : { deferredPrompt }),
     ...(opencodeServer === undefined ? {} : { opencodeServer }),
-    ...(kimiAcp === undefined ? {} : { kimiAcp }),
+    ...(kimiNative === undefined ? {} : { kimiNative }),
   };
 }
 

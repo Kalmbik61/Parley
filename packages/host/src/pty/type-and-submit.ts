@@ -58,7 +58,10 @@ export function typeAndSubmit(
   const setTimer = deps.setTimer ?? setTimeout;
   const clearTimer = deps.clearTimer ?? clearTimeout;
   const hostDraft = options.hostDraft === true;
-  const pid = deps.pty.get(ref)?.pid;
+  const handle = deps.pty.get(ref);
+  const pid = handle?.pid;
+  const generation = handle?.generation;
+  const inputRevision = handle?.inputRevision?.();
 
   // Очистка — прямо перед записью: управляющие знаки и ESC[201~ не выходят из вставки и не жмут клавиш агента.
   // Однострочная очистка срезает хвостовой пробел, а он нужен: закрывает меню автодополнения (`/compact @x `).
@@ -95,8 +98,13 @@ export function typeAndSubmit(
     // Enter — тому же процессу, которому печатали текст: за время задержки сессию
     // могли перезапустить, и посторонний Enter в чужой процесс не идёт. У нового
     // процесса черновика хоста нет — снимать нечего.
-    if (deps.pty.get(ref)?.pid !== pid) {
+    const current = deps.pty.get(ref);
+    if (current?.pid !== pid || current?.generation !== generation) {
       settle('restarted');
+      return;
+    }
+    if (inputRevision !== undefined && current?.inputRevision?.() !== inputRevision) {
+      settle('input');
       return;
     }
     // Проверка вызывающего прямо перед Enter: `blocked` приходит хуком позже вставки

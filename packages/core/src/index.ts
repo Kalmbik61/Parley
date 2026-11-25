@@ -696,6 +696,8 @@ export {
   AGENT_TOKEN_ENV,
   AGENT_URL_ENV,
   MCP_SERVER_BIN,
+  MCP_SERVER_ENTRY,
+  validKimiConfigToml,
   codexMcpOverride,
   mcpConfig,
   mcpConfigJson,

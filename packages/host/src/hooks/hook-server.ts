@@ -19,6 +19,8 @@ import { refKey } from '@parley/protocol';
 import type { SessionRef } from '@parley/protocol';
 import type { Log } from '../log.js';
 import { EMPTY_HOOK_RESPONSE, type HookResponse } from './decisions.js';
+import { KIMI_HOOK_EVENTS } from '../kimi/registration.js';
+import { KIMI_SESSION_ID } from '../kimi/native-wire.js';
 
 /** Предел тела хука (решение 12). */
 export const HOOK_BODY_LIMIT = 16 * 1024 * 1024;
@@ -36,6 +38,7 @@ const FEED_EVENTS: ReadonlySet<string> = new Set(FEED_HOOK_EVENTS);
 const CODEX_EVENTS: ReadonlySet<string> = new Set(CODEX_HOOK_EVENTS);
 /** Qwen Code: the events its per-session system settings file sends (spec 2026-11-11, 3.3). */
 const QWEN_EVENTS: ReadonlySet<string> = new Set(QWEN_HOOK_EVENTS);
+const KIMI_EVENTS: ReadonlySet<string> = new Set(KIMI_HOOK_EVENTS);
 /** Neutral family: no hook event is accepted. */
 const NO_EVENTS: ReadonlySet<string> = new Set();
 
@@ -354,6 +357,10 @@ export function createHookServer(options: HookServerOptions): HookServer {
       return;
     }
     const sessionId = typeof body['session_id'] === 'string' ? body['session_id'] : null;
+    if (registration.provider === 'kimi' && (body.client_type !== 'kimi_code_cli' || sessionId === null || !KIMI_SESSION_ID.test(sessionId))) {
+      reject(req, res, 400, 'kimi-binding');
+      return;
+    }
     if (
       sessionId !== null &&
       registration.providerSessionId !== null &&
@@ -421,7 +428,7 @@ export function createHookServer(options: HookServerOptions): HookServer {
         token,
         providerSessionId,
         provider,
-        events: byFamily(provider, { claude: FEED_EVENTS, codex: CODEX_EVENTS, qwen: QWEN_EVENTS, opencode: NO_EVENTS, neutral: NO_EVENTS }),
+        events: provider === 'kimi' ? KIMI_EVENTS : byFamily(provider, { claude: FEED_EVENTS, codex: CODEX_EVENTS, qwen: QWEN_EVENTS, opencode: NO_EVENTS, neutral: NO_EVENTS }),
         ...(agentRevision === undefined ? {} : { agentRevision }),
       });
       tokenOfSession.set(key, token);

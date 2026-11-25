@@ -87,6 +87,21 @@ describe('typeAndSubmit', () => {
     expect(pty.writes).toEqual(['текст']);
   });
 
+  it('keeps a native Kimi draft when a raw key or resize changes its input revision without changing the draft flag', async () => {
+    let revision = 4;
+    const get = pty.manager.get;
+    pty.manager.get = (target) => {
+      const handle = get(target);
+      return handle === undefined ? undefined : { ...handle, kimiNative: true, generation: 'g', inputRevision: () => revision };
+    };
+    const attempt = typeAndSubmit(deps(), ref, 'keep draft', true, { hostDraft: true });
+    revision++;
+    await vi.advanceTimersByTimeAsync(500);
+    await expect(attempt.done).resolves.toBe('input');
+    expect(pty.writes).toEqual(['keep draft']);
+    expect(pty.hostDraft).toBe(true);
+  });
+
   it('cancel() до Enter — cancelled, \\r нет и позже', async () => {
     const attempt = typeAndSubmit(deps(), ref, 'текст', true);
     attempt.cancel();

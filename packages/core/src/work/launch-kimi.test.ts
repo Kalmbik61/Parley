@@ -27,28 +27,28 @@ async function session(choices = {}) {
   return { workId: work.id, session: (await readMap(project, work.id)).sessions.find((item) => item.id === id)! };
 }
 
-it('carries explicit choices through ACP metadata rather than CLI arguments', async () => {
+it('carries explicit model and effort choices into the native launch', async () => {
   const created = await session({ model: 'beta', effort: 'max' });
   const plan = await planLaunch(project, created.workId, created.session);
-  expect(plan.kimiAcp).toMatchObject({ model: 'beta', effort: 'max', prompt: expect.stringContaining('hello') });
-  expect(plan.args).not.toContain('beta');
+  expect(plan.deferredPrompt).toContain('hello');
+  expect(plan.args).toEqual(['--model', 'beta']);
+  expect(plan.env.KIMI_MODEL_THINKING_EFFORT).toBe('max');
   expect(plan.args).not.toContain('max');
 });
 
 it('keeps default choices omitted', async () => {
   const created = await session();
   const plan = await planLaunch(project, created.workId, created.session, { model: null, effort: null });
-  expect(plan.kimiAcp).not.toHaveProperty('model');
-  expect(plan.kimiAcp).not.toHaveProperty('effort');
-  expect(plan.kimiAcp).not.toHaveProperty('kimiPermissionMode');
+  expect(plan.args).toEqual([]);
+  expect(plan.env).not.toHaveProperty('KIMI_MODEL_THINKING_EFFORT');
+  expect(plan.kimiNative).not.toHaveProperty('permissionMode');
 });
 
-it('lets resumed ACP restore chat choices even if creation choices left the catalog', async () => {
+it('lets native exact resume restore choices even if the creation model left the catalog', async () => {
   const created = await session({ model: 'removed', effort: 'max' });
   const plan = await planResume(project, created.workId, { ...created.session, providerSessionId: 'kimi-restored' });
-  expect(plan.kimiAcp).toMatchObject({ sessionId: 'kimi-restored' });
-  expect(plan.kimiAcp).not.toHaveProperty('model');
-  expect(plan.kimiAcp).not.toHaveProperty('effort');
+  expect(plan.args).toEqual(['--session', 'kimi-restored']);
+  expect(plan.env).not.toHaveProperty('KIMI_MODEL_THINKING_EFFORT');
 });
 
 
@@ -57,9 +57,9 @@ it.each(['manual', 'yolo', 'auto'])('persists %s as a creation preference, inclu
   expect(created.session.kimiPermissionMode).toBe(kimiPermissionMode);
   for (const makePlan of [planLaunch, planResume]) {
     const plan = await makePlan(project, created.workId, created.session);
-    expect(plan.kimiAcp).toMatchObject({ kimiPermissionMode });
-    expect(plan.kimiAcp).not.toHaveProperty('sessionId');
+    expect(plan.kimiNative).toMatchObject({ permissionMode: kimiPermissionMode });
+    expect(plan.providerSessionId).toBeNull();
   }
   const restored = await planResume(project, created.workId, { ...created.session, providerSessionId: 'kimi-restored' });
-  expect(restored.kimiAcp).not.toHaveProperty('kimiPermissionMode');
+  expect(restored.kimiNative).not.toHaveProperty('permissionMode');
 });

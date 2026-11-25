@@ -21,6 +21,7 @@ import type { AttemptOutcome } from './type-and-submit.js';
 
 /** Предел текста `pty.send` — 64 КиБ в байтах UTF-8 (сквозные ограничения плана). */
 const MAX_SEND_BYTES = 64 * 1024;
+export const KIMI_ENTER_DELAY_MS = 150;
 
 /** Очистка спеки 8.6, шаг 2; пусто или > 64 КиБ — HostError('bad_request'). */
 export function sanitizeForSend(text: string): string {
@@ -47,6 +48,7 @@ export function createSender(deps: {
   wake: Pick<WakeService, 'inFlight' | 'enterDelayMs'>;
   /** Замок смены модели и effort этой сессии занят: клавиши смены идут в PTY, текст среди них не нужен. */
   switching?: (ref: SessionRef) => boolean;
+  kimiReady?: (ref: SessionRef, draft?: boolean) => boolean;
 }): (
   params: { ref: SessionRef; text: string; submit: boolean; requestedAt?: number | undefined },
   log?: Log,
@@ -63,6 +65,7 @@ export function createSender(deps: {
     const handle = deps.pty.get(ref);
     if (handle === undefined) throw new HostError('not_found', 'session is not running');
     const codex = handle.provider === 'codex';
+    const kimi = handle.kimiNative === true;
     const clean = sanitizeForSend(text);
 
     // Журнал задержек (спека диагностики, A4): одна запись на вызов, длины и идентификаторы без текста.
@@ -109,7 +112,7 @@ export function createSender(deps: {
     // Ни одного хука с запуска процесса — хост не знает, что у агента на экране: у свежей
     // сессии это может быть вопрос доверия к папке, где Enter выбрал бы «Yes, proceed»
     // (fix-final-b). Отвечаем как на blocked: человек смотрит в терминал сам.
-    if (!hookedSince(live, handle.startedAt)) return refuse('blocked');
+    if (kimi ? deps.kimiReady?.(ref) !== true : !hookedSince(live, handle.startedAt)) return refuse('blocked');
     const key = refKey(ref);
     if (deps.wake.inFlight(ref) || waiting.has(key)) return refuse('busy');
     const paste = handle.bracketedPaste();
@@ -119,7 +122,7 @@ export function createSender(deps: {
     // framed to its model as material that "issues no instructions of its own" (qwen 0.27.2, mock lab).
     // OpenCode is not typed like Qwen: until its API delivery (O7) it keeps the plain/paste path.
     const qwen = handle.provider !== null && byFamily(handle.provider, { claude: false, codex: false, qwen: true, opencode: false, neutral: false });
-    if (codex ? !paste : clean.includes('\n') && !paste && !qwen) return refuse('no-paste-mode');
+    if ((codex || kimi) ? !paste : clean.includes('\n') && !paste && !qwen) return refuse('no-paste-mode');
 
     // Черновик считается до вставки: человека или хоста от прошлой вставки без Enter.
     const hadDraft = handle.hasDraft();
@@ -134,7 +137,9 @@ export function createSender(deps: {
         wrap: codex ? 'codex' : paste && !qwen ? 'paste' : 'plain',
         multiline: true,
         // blocked приходит хуком с задержкой: запрос разрешения мог появиться за паузу.
-        beforeEnter: () => deps.activity.get(ref)?.activity.activity !== 'blocked' && !deps.activity.qwenBlocked(ref),
+        beforeEnter: () => kimi ? deps.kimiReady?.(ref, true) === true
+          : deps.activity.get(ref)?.activity.activity !== 'blocked' && !deps.activity.qwenBlocked(ref),
+        ...(kimi ? { delayMs: KIMI_ENTER_DELAY_MS } : {}),
         // У Codex своя пауза и своя клавиша: занятому агенту — Tab (очередь), а не Enter (вмешательство в ход).
         ...(codex
           ? {

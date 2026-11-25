@@ -7,6 +7,7 @@ import { loadConfig } from '../config.js';
 import { envValue } from '../names.js';
 import { createAssistantServer } from './assistant.js';
 import { contextFromEnv } from './context.js';
+import { createKimiNativeMcp, KIMI_MCP_SERVER_FLAG } from './kimi-native.js';
 import { createRemoteToolRunner, launchOf } from './remote-tools.js';
 import { createParleyServer, createToolRunner } from './tools.js';
 
@@ -14,7 +15,9 @@ async function main(): Promise<number> {
   let server;
   try {
     const assistantUrl = envValue(process.env, 'ASSISTANT_URL');
-    if (assistantUrl !== undefined) {
+    if (process.argv[2] === KIMI_MCP_SERVER_FLAG) {
+      server = createKimiNativeMcp(process.env);
+    } else if (assistantUrl !== undefined) {
       // Режим помощника (спека 2026-10-14, 7.1): своя пара инструментов, карта работ не нужна.
       server = createAssistantServer({ url: assistantUrl, token: envValue(process.env, 'ASSISTANT_TOKEN') ?? '', ...(envValue(process.env, 'ASSISTANT_MODE') === 'auto' ? { mode: 'auto' as const } : {}) });
     } else {

@@ -9,7 +9,7 @@ import { spawn } from 'node-pty';
 import type { IPty } from 'node-pty';
 
 export interface PtyLaunch {
-  /** Interactive native owner: host writers cannot use this process. */
+  /** Interactive stock Kimi shared by the host sender and native Terminal. */
   kimiNative?: boolean;
   command: string;
   args: string[];

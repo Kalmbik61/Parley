@@ -59,6 +59,7 @@ import type { WindowCounters } from '../health/window-counters.js';
 import { HostError } from '../errors.js';
 import { mailSessions } from '../mail-sessions.js';
 import { CODEX_SUBMIT_DELAY_MS } from '../pty/codex-input.js';
+import { KIMI_ENTER_DELAY_MS } from '../pty/send.js';
 import { choiceInProgress } from '../pty/effort-switch.js';
 import type { PtyHandle, PtyManager } from '../pty/pty-manager.js';
 import { typeAndSubmit } from '../pty/type-and-submit.js';
@@ -73,6 +74,7 @@ import { limitReturnDue, limitWindowFree, returnBlock, returnBlockReason } from 
 import { ResumeLimiter } from './resume-limiter.js';
 
 export interface WakeServiceOptions {
+  kimiReady?: (ref: SessionRef, draft?: boolean) => boolean;
   /** Счётчики окна строки состояния: каждый `recompute` сессии — одна запись. */
   windowCounters?: WindowCounters;
   /** Пауза перед Enter — если человек уже не печатает, указатель уходит как ход (спека 7.3). */
@@ -122,6 +124,7 @@ export interface WakeService {
   inFlight(ref: SessionRef): boolean;
   /** Any scheduled or active delivery that must settle before Kimi can change owners. */
   kimiPending(ref: SessionRef): boolean;
+  kimiReadyChanged(ref: SessionRef): void;
   /** Пауза перед Enter из WakeServiceOptions — одна на будильник и pty.send. */
   readonly enterDelayMs: number;
   /**
@@ -149,7 +152,7 @@ export interface WakeService {
  * paste: qwen 0.27.2 wraps a large paste in `<clipboard-paste>` and tells the model it "issues no instructions of its
  * own", while typed text arrives as is — LF is a newline in its field and only `\r` submits (observed, mock lab).
  */
-type InputMode = 'plain' | 'codex' | 'qwen' | 'opencode';
+type InputMode = 'plain' | 'codex' | 'qwen' | 'opencode' | 'kimi';
 
 const inputModeOf = (provider: string | null): InputMode =>
   provider === 'codex'
@@ -934,13 +937,13 @@ export function createWakeService(
     letters: boolean,
   ): void {
     const wait = (reason: MailWait): void => publishWaiting(ref, state, letters ? reason : null);
-    if (!hookedSince(live, handle.startedAt)) return wait('no-hooks');
+    if (mode === 'kimi' ? options.kimiReady?.(ref) !== true : !hookedSince(live, handle.startedAt)) return wait('no-hooks');
     if (live === undefined || live.need != null || live.activity === 'blocked') return wait('stuck');
     if (mode === 'qwen' && activity.qwenBlocked(ref)) return wait('busy');
     if (live.activity !== 'idle' && live.activity !== 'unseen') return wait('busy');
     if (handle.hasDraft() || state.leftover !== null) return wait('draft');
     if (state.inFlight || state.typing !== undefined) return wait('in-flight');
-    if (mode === 'codex' && !handle.bracketedPaste()) {
+    if ((mode === 'codex' || mode === 'kimi') && !handle.bracketedPaste()) {
       retryLater(ref, state, 'paste');
       return wait('busy');
     }
@@ -1030,10 +1033,12 @@ export function createWakeService(
       true,
       {
         // Qwen: typed text, then `\r` after the pause (observed on qwen 0.27.2); a brief keeps its paragraphs.
-        wrap: codex ? 'codex' : 'plain',
+        wrap: codex ? 'codex' : mode === 'kimi' ? 'paste' : 'plain',
+        ...(mode === 'kimi' ? { delayMs: KIMI_ENTER_DELAY_MS, hostDraft: true } : {}),
         ...(action.multiline === true ? { multiline: true } : {}),
         // Смена модели или ползунок могли открыться за паузу: Enter в ползунке сохранил бы уровень умолчанием.
         beforeEnter: () => {
+          if (mode === 'kimi') return !choiceNow(ref) && options.kimiReady?.(ref, true) === true;
           const live = activity.get(ref)?.activity;
           if (live?.activity === 'blocked' || choiceNow(ref)) return false;
           // Qwen's terminal reports a dialog (OSC 7501 `blocked`) before any hook: Enter would answer it.
@@ -1541,7 +1546,7 @@ export function createWakeService(
     ensureKnown(entry);
 
     const state = stateFor(refKey(ref));
-    if (session.kimiTerminal !== undefined || (session.provider === 'kimi' && sessions.kimiBlocksChat?.(ref) === true)) {
+    if (session.provider === 'kimi' && sessions.kimiBlocksChat?.(ref) === true) {
       publishWaiting(ref, state, hasUnread(entry, session.id) ? 'paused' : null);
       return;
     }
@@ -1710,7 +1715,7 @@ export function createWakeService(
       state.pointerAfter = null;
     }
 
-    const mode = inputModeOf(handle.provider);
+    const mode = handle.kimiNative === true ? 'kimi' : inputModeOf(handle.provider);
     // The deferred first message of this process goes before any pointer, exactly once; another process forgets it.
     if (state.deferred !== undefined && state.deferred.pid !== handle.pid) state.deferred = undefined;
     if (state.deferred !== undefined) {
@@ -1730,7 +1735,7 @@ export function createWakeService(
       pointed: state.pointed,
       inFlight: state.inFlight,
       resumeAllowed: false,
-      hooked: hookedSince(live?.activity, handle.startedAt),
+      hooked: mode === 'kimi' ? options.kimiReady?.(ref) === true : hookedSince(live?.activity, handle.startedAt),
       now: Date.now(),
       ...settle,
     });
@@ -1748,7 +1753,7 @@ export function createWakeService(
       publishWaiting(ref, state, 'busy');
       return;
     }
-    if (mode === 'codex') {
+    if (mode === 'codex' || mode === 'kimi') {
       // Codex — только вставкой, как в `pty.send`: без режима вставки на экране TUI ещё не поднялся (или его
       // сменил), и маркеры ушли бы в поле ввода знаками. Отказа, как у `pty.send`, тут вернуть некому — пересчёт
       // повторяется сам.
@@ -1903,6 +1908,7 @@ export function createWakeService(
     enterDelayMs,
 
     inFlight: (ref) => attempts.get(refKey(ref))?.typing !== undefined,
+    kimiReadyChanged: recompute,
     kimiPending(ref) {
       const state = attempts.get(refKey(ref));
       return state?.inFlight === true || state?.typing !== undefined || state?.resuming === true || state?.timeoutTimer !== undefined;

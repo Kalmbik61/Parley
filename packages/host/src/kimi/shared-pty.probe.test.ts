@@ -275,6 +275,11 @@ test.skipIf(!optIn)('stock Kimi shares a native PTY, transcript, and local plugi
     observe('help 116x30', await cli.visible('native help', /Keyboard shortcuts|Slash commands/i), /help|shortcuts|slash commands/i);
     cli.key('\x1b');
     await cli.visible('Escape exits help', ready);
+    expect(await cli.submit('/permission')).toBe(true);
+    const permissionPicker = await cli.visible('native mode picker', /Always Ask|Ask When Needed|Never Ask/i);
+    observe('permission modes', permissionPicker, /permission|ask|manual/i);
+    cli.key('\x1b');
+    await cli.visible('Escape exits native mode picker', ready);
     await cli.resize(102, 26);
     observe('resize 102x26', await cli.visible('resized composer', ready), /Session:|│ >/);
     await until('fixture MCP listed before first input', () => mcp().filter(e => e.event === 'tools/list').length > listOffset ? true : undefined);

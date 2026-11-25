@@ -13,7 +13,7 @@ interface Binding {
   sessionId: string;
 }
 
-function workspaceKey(cwd: string): string {
+export function workspaceKey(cwd: string): string {
   // Stock 2.7.3's implicit workspace key. Never search other session directories.
   const normalized = path.resolve(cwd).replaceAll('\\', '/').replace(/\/+$/, '');
   const part = normalized.split('/').at(-1) ?? '';

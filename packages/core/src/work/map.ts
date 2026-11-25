@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { isPublishedAgentPlan } from '../agent-plan.js';
 import { validateDecisionJournalStorage } from './decision-journal.js';
 import { validatePlanStorage } from './plans.js';
@@ -396,6 +397,7 @@ const isSessionShape =
     Array.isArray(value.history) &&
     (value.kimiTerminal === undefined || (value.provider === 'kimi' && isKimiHistoryBinding(value.kimiTerminal))) &&
     (value.kimiChatCheckpoint === undefined || (value.provider === 'kimi' && isKimiChatCheckpoint(value.kimiChatCheckpoint))) &&
+    (value.kimiNativeBinding === undefined || (value.provider === 'kimi' && isKimiNativeBinding(value.kimiNativeBinding))) &&
     (value.kimiPermissionMode === undefined || (value.provider === 'kimi' && isKimiPermissionMode(value.kimiPermissionMode))) &&
     (value.agentPlan === undefined || isPublishedAgentPlan(value.agentPlan)) &&
     (value.workspace === undefined || value.workspace === null ||
@@ -876,6 +878,13 @@ function normalizeAgentFields(session: Record<string, unknown>): void {
 }
 
 const KIMI_ARCHIVE_ID = /^[0-9a-f-]{36}$/i;
+
+function isKimiNativeBinding(value: unknown): boolean {
+  return isRecord(value) && typeof value.home === 'string' && path.isAbsolute(value.home) &&
+    typeof value.cwd === 'string' && path.isAbsolute(value.cwd) &&
+    (value.legacyArchive === undefined || (typeof value.legacyArchive === 'string' && KIMI_ARCHIVE_ID.test(value.legacyArchive))) &&
+    (value.legacyProviderId === undefined || (typeof value.legacyProviderId === 'string' && value.legacyProviderId.length <= 128));
+}
 
 function isKimiHistoryBinding(value: unknown): value is Record<string, unknown> & { archive: string; cwd: string; home: string } {
   if (value === null || typeof value !== 'object') return false;
