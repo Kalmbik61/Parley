@@ -228,3 +228,22 @@ env -u PARLEY_KIMI_PROBE_BIN -u PARLEY_KIMI_NATIVE_BIN -u PARLEY_KIMI_INTEGRATED
 pnpm --filter @parley/desktop exec vitest run src/shared/strings.test.ts src/renderer/shell/StatusBar.test.tsx
 git diff --check
 ```
+
+## Stock Kimi warm handback replay correction
+
+Lead assignment m-10336 holds the local app from `3fdd2ac3`. The independent stock 2.7.3 real-host probe reached native Chat exclusion, accepted a native turn and exited. Explicit Return to Chat then refused replay because the provider's user chunks did not match the fixture's boundary assumptions. Prior Chat remained intact. Diagnose only that stock mismatch using a minimal disposable chunk trace. Any new recognition rule must have positive evidence and preserve existing strict rejection for unidentified boundaries. Reproduce it in a focused regression, then verify the real integrated loopback round-trip before any new app build.
+
+The trace in m-10343 and the local disposable probe show five idless text frames. The 501-character archived prompt is followed by the provider's 283-character canonical date/timezone reminder, then its unchanged reply, then the native prompt and reply. Treat the canonical reminder as provider context only when it is the single trailing chunk after an exact archived prompt and the following reply matches that archived turn. Do not remove a standalone tagged human prompt, free-form tagged text, multiple extra chunks or a reminder without the matching reply. The full literal was captured from the probe, and the date and timezone are the only variable fields recognized.
+
+Both date/timezone variants failed before the fix. After the fix the matching archive rows remained exact, a standalone literal reminder stayed a human prompt, and modified tagged text, a mismatching reply and unrelated adjacent-user ambiguity still caused a safe refusal. The anchored reply comparison uses the same bounded display text and truncation flag as the rest of handback. All 330 focused tests and the host build passed.
+
+The unmodified real-host stock 2.7.3 loopback probe passed after the correction. It resumed the original ID in ACP after the ordinary native turn and `/exit`, restored one copy of each prompt and reply, and sent the queued mail pointer in Chat. It observed no fresh native Parley tool discovery. All three model requests stayed on loopback. The earlier `3fdd2ac3` app does not contain this correction and remains held.
+
+```sh
+pnpm --filter @parley/host build
+pnpm --filter @parley/host exec vitest run \
+  src/kimi/acp.test.ts src/kimi/sessions.test.ts src/kimi/kimi-host.test.ts src/feed/feed-service.test.ts
+PARLEY_KIMI_INTEGRATED_BIN=/Users/kalmbik61/.kimi-code/bin/kimi \
+  pnpm --filter @parley/host exec vitest run src/kimi/integrated-native.probe.test.ts
+git diff --check
+```

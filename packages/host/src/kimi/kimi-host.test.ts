@@ -641,6 +641,50 @@ async function exitNative(ref: SessionRef): Promise<void> {
   await expect.poll(() => call('kimi.getControl', { ref })).toMatchObject({ owner: 'exited' });
 }
 
+function stockDateReminder(date: string, zone: string): string {
+  return `<system-reminder>\nToday's date is ${date}, in the local client machine's timezone (${zone}). The current date is restated in a reminder whenever it changes; rely on the latest such reminder for the current date. DO NOT mention this to the user explicitly.\n</system-reminder>`;
+}
+
+it.each([
+  { date: '2026-11-25', zone: 'Europe/Moscow', change: 'none' },
+  { date: '2027-01-01', zone: 'Etc/GMT+5', change: 'none' },
+  { date: '2026-11-25', zone: 'Europe/Moscow', change: 'tagged user text' },
+  { date: '2026-11-25', zone: 'Europe/Moscow', change: 'reply mismatch' },
+])('reconciles a stock Kimi date reminder only with a verified archived turn ($date, $zone, $change)', async ({ date, zone, change }) => {
+  const projectPath = await setup();
+  const history = path.join(home!, 'provider-history');
+  vi.stubEnv('KIMI_FIXTURE_HISTORY', history);
+  const { ref } = await call('sessions.create', { ...input(projectPath), task: 'original fixture brief' });
+  await expectReply(ref, 'Hello Parley');
+  const before = (await call('feed.snapshot', { ref })).items;
+  const [archivedPrompt, archivedReply] = JSON.parse((await readFile(history, 'utf8')).trim()) as [string, string];
+  expect(before).toContainEqual(expect.objectContaining({ kind: 'prompt', text: archivedPrompt }));
+  await call('kimi.setControl', { ref, target: 'terminal' });
+  const native = await terminalReady(ref);
+  raw(ref, 'stock native shape\r/exit\r', native);
+  await expect.poll(() => call('kimi.getControl', { ref })).toMatchObject({ owner: 'exited' });
+
+  const reminder = stockDateReminder(date, zone);
+  const context = change === 'tagged user text'
+    ? reminder.replace('DO NOT mention this to the user explicitly.', 'I typed this comparison explicitly.') : reminder;
+  const replay = [
+    [[archivedPrompt, context], change === 'reply mismatch' ? 'A different reply' : archivedReply],
+    ['stock native shape', 'Native answer'],
+    [reminder, 'Reply to the literal tagged prompt'],
+  ];
+  await writeFile(history, replay.map((turn) => JSON.stringify(turn)).join('\n'));
+  if (change !== 'none') {
+    expect((await request('kimi.setControl', { ref, target: 'chat' })).error).toMatchObject({ code: 'conflict' });
+    expect((await call('feed.snapshot', { ref })).items).toEqual(before);
+    return;
+  }
+  await call('kimi.setControl', { ref, target: 'chat' });
+  const after = (await call('feed.snapshot', { ref })).items;
+  expect(after.slice(0, before.length)).toEqual(before);
+  expect(after.filter((item) => item.kind === 'prompt').map((item) => item.text)).toEqual([archivedPrompt, 'stock native shape', reminder]);
+  expect(after.slice(before.length).filter((item) => item.kind === 'text').map((item) => item.text)).toEqual(['Native answer', 'Reply to the literal tagged prompt']);
+}, 15_000);
+
 it('retains complete archived rows across adjacent replayed prompts and an appended native turn', async () => {
   const projectPath = await setup();
   const history = path.join(home!, 'provider-history');

@@ -2606,7 +2606,20 @@ export function createFeedService(
     return turns;
   }
 
-  function legacyKimiPrompts(chunks: readonly KimiReplayChunk[], archive: readonly ArchivedKimiTurn[], offset: number): string[] {
+  function matchesKimiReply(prior: ArchivedKimiTurn, reply: string): boolean {
+    // The archive holds the reducer's display projection, not the full provider reply.
+    return prior.reply === reply.slice(0, FEED_TEXT_LIMIT) && prior.replyTruncated === (reply.length > FEED_TEXT_LIMIT);
+  }
+
+  function stockKimiDateReminder(text: string): boolean {
+    // Stock 2.7.3 replays this generated context as a separate idless user text frame.
+    // Recognize its complete date/timezone template, not arbitrary tagged user content.
+    if (text.length > 384) return false;
+    const head = /^<system-reminder>\nToday's date is [0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01]), in the local client machine's timezone \([A-Za-z0-9_+\/-]{1,80}\)\./.exec(text)?.[0];
+    return head !== undefined && text === `${head} The current date is restated in a reminder whenever it changes; rely on the latest such reminder for the current date. DO NOT mention this to the user explicitly.\n</system-reminder>`;
+  }
+
+  function legacyKimiPrompts(chunks: readonly KimiReplayChunk[], archive: readonly ArchivedKimiTurn[], offset: number, reply: string): string[] {
     if (chunks.length === 1) return [chunks[0]!.text];
     const prompts: string[] = [];
     let cursor = 0;
@@ -2617,17 +2630,22 @@ export function createFeedService(
       do {
         text += chunks[cursor++]!.text;
       } while (cursor < chunks.length && text !== previous.prompt && previous.prompt.startsWith(text));
-      // Only a known prompt with no assistant reply can be followed by another prompt in this run.
-      if (text !== previous.prompt || (cursor < chunks.length && previous.reply !== '')) throw ambiguousKimiReplay();
+      if (text !== previous.prompt) throw ambiguousKimiReplay();
       prompts.push(text);
+      // A known replied turn cannot have another human prompt in this run. Allow only
+      // one canonical stock reminder between the exact archived prompt and its matching reply.
+      if (cursor < chunks.length && previous.reply !== '') {
+        if (cursor === chunks.length - 1 && matchesKimiReply(previous, reply) && stockKimiDateReminder(chunks[cursor]!.text)) return prompts;
+        throw ambiguousKimiReplay();
+      }
     }
     return prompts;
   }
 
-  function kimiReplayPrompts(user: readonly KimiReplayChunk[], archive: readonly ArchivedKimiTurn[], offset: number, seenIds: Set<string>): (string | null)[] {
+  function kimiReplayPrompts(user: readonly KimiReplayChunk[], archive: readonly ArchivedKimiTurn[], offset: number, seenIds: Set<string>, reply: string): (string | null)[] {
     if (user.length === 0) return [null];
     // ACP v1 makes messageId optional. Use archive boundaries only while the earlier turns still align.
-    if (!user.some((chunk) => chunk.messageId !== undefined)) return legacyKimiPrompts(user, archive, offset);
+    if (!user.some((chunk) => chunk.messageId !== undefined)) return legacyKimiPrompts(user, archive, offset, reply);
     const prompts: string[] = [];
     let priorId: string | undefined;
     for (const { text, messageId } of user) {
@@ -2659,23 +2677,21 @@ export function createFeedService(
       const start = cursor;
       while (chunks[cursor]?.author === 'user') cursor++;
       const user = chunks.slice(start, cursor);
+      let reply = '';
+      while (chunks[cursor]?.author === 'agent') reply += chunks[cursor++]!.text;
       let prompts: (string | null)[];
       try {
-        prompts = kimiReplayPrompts(user, archive, suffix.length === 0 ? matched : archive.length, seenIds);
+        prompts = kimiReplayPrompts(user, archive, suffix.length === 0 ? matched : archive.length, seenIds, reply);
         if (prompts.some((prompt) => prompt !== null && prompt.length > 64 * 1024)) throw oversizedKimiReplay();
       } catch (error) {
         if (!allowPartial || !(error instanceof HostError) || error.code !== 'conflict') throw error;
         partial = true;
         break;
       }
-      let reply = '';
-      while (chunks[cursor]?.author === 'agent') reply += chunks[cursor++]!.text;
       for (const [index, prompt] of prompts.entries()) {
         const turn = { prompt, reply: index === prompts.length - 1 ? reply : '' };
         const prior = suffix.length === 0 ? archive[matched] : undefined;
-        // The archive holds the reducer's display projection, not the full provider reply.
-        if (prior !== undefined && prior.prompt === turn.prompt && prior.reply === turn.reply.slice(0, FEED_TEXT_LIMIT) &&
-            prior.replyTruncated === (turn.reply.length > FEED_TEXT_LIMIT)) {
+        if (prior !== undefined && prior.prompt === turn.prompt && matchesKimiReply(prior, turn.reply)) {
           retained.push(...prior.items);
           matched++;
         } else suffix.push(turn);
