@@ -69,6 +69,8 @@ describe('белый список против запретного списка
     'processes.subscribe', 'processes.unsubscribe',
     // Состояние и настройки сессии Kimi Code доступны только в окне.
     'kimi.getState', 'kimi.setConfig',
+    // Методы совместимости окна с нативным Kimi не открыты ни на одном удалённом этапе.
+    'kimi.getControl', 'kimi.setControl',
   ];
   /** Рукопожатие: хост принимает `hello` у любого клиента, это не метод белого списка. */
   const HANDSHAKE = new Set(['hello']);

@@ -275,6 +275,8 @@ describe('методы на старте хоста ждут первого чт
         'feed.interrupt',
         'kimi.getState',
         'kimi.setConfig',
+        'kimi.getControl',
+        'kimi.setControl',
       ].sort(),
     );
     expect([...WORKS_GATED_NOTIFICATIONS]).toEqual(['activity.seen']);

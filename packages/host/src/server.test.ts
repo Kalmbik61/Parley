@@ -259,8 +259,10 @@ describe('уведомления', () => {
   });
 });
 
-/** Все методы и уведомления протокола — то, что понимает хост этой сборки. */
-const protocolMethods = (): string[] => [...Object.keys(METHODS), ...Object.keys(NOTIFICATIONS)].sort();
+/** Хост с нативным Kimi больше не объявляет методы ACP для настроек сессии. */
+const protocolMethods = (): string[] => [...Object.keys(METHODS), ...Object.keys(NOTIFICATIONS)]
+  .filter((name) => name !== 'kimi.getState' && name !== 'kimi.setConfig')
+  .sort();
 
 describe('список методов в hello', () => {
   it('advertises a registered feed.progress handler and validates its strict params', async () => {
@@ -618,6 +620,21 @@ describe('роль remote: белый список этапа A (спека мо
     const listed = (await collectUntil(client, 11)).at(-1);
     expect(listed?.error).toBeUndefined();
     expect(listed?.result).toBeDefined();
+    client.close();
+  });
+
+  it('методы совместимости Kimi не объявляются и недоступны удалённому клиенту', async () => {
+    const { home, token } = await boot();
+    const { client, answer } = await connectAs(home, token, 'remote');
+    const ref = { projectPath: '/kimi', workId: 'w-01', sessionId: 's-01' };
+    for (const [method, params] of [
+      ['kimi.getControl', { ref }],
+      ['kimi.setControl', { ref, target: 'terminal' }],
+    ] as const) {
+      expect(answer.methods).not.toContain(method);
+      client.send({ id: 15, method, params });
+      expect(await client.next()).toMatchObject({ id: 15, error: { code: 'unknown_method' } });
+    }
     client.close();
   });
 
