@@ -1,7 +1,7 @@
 /**
  * Промпт человека в ленте (план 2026-10-01, решение 3): справа, на подложке. Число картинок — из
- * журнала (хуки картинок не отдают). Серый вариант (`queued`) — сообщение, отправленное во время хода:
- * оно ждёт в очереди CLI, пока не придёт настоящий промпт с тем же текстом (решение 8).
+ * журнала (хуки картинок не отдают). Серый вариант (`queued` / `submitted`) — сообщение передано в CLI,
+ * но ещё не подтверждено лентой.
  *
  * Хвостовые упоминания `@"путь"` — вложения, которые окно дописало при отправке (`attachments.ts`): в
  * пузыре они над текстом чипами (картинка — миниатюрой, клик открывает её: `open-attachment.ts`), самих путей в
@@ -9,7 +9,7 @@
  * так же. Снимок файла-контекста браузера с тем же именем, что у его `.md`, отдельным чипом не показывается: его
  * миниатюра — в чипе `.md`. Цитата Reply (`> …` в начале, `chat/reply.ts`) — над текстом, свёрнутая до трёх строк.
  *
- * Очередь окна (спека 2026-10-16, 4.3): серый элемент бывает трёх видов — `queued` (уже в очереди CLI во время хода),
+ * Очередь окна (спека 2026-10-16, 4.3): серый элемент — `queued` (в очереди CLI), `submitted` (передан в CLI),
  * `waiting` (ждёт отправки окном: пока не ушло, у него «Send now» и ×; в полёте — «Sending…») и `failed` («Not sent» с Retry и ×). У всех `data-testid="chat-queued"` и `data-state`.
  *
  * Под настоящим промптом — Copy и Send again (`MessageActions`, спека 2026-10-16, 3.1): Copy кладёт текст как
@@ -34,8 +34,8 @@ import { MessageActions } from './MessageActions.js';
 export interface PromptItemProps {
   text: string;
   images?: number;
-  /** Серый элемент: `queued` — в очереди CLI, `waiting` — ждёт отправки окном, `failed` — не ушло. Нет — настоящий промпт. */
-  state?: 'queued' | 'waiting' | 'failed';
+  /** Серый элемент: `queued` / `submitted` — передан в CLI, `waiting` — ждёт отправки окном, `failed` — не ушло. */
+  state?: 'queued' | 'submitted' | 'waiting' | 'failed';
   /** `failed`: Retry. */
   onRetry?: () => void;
   /** `waiting`: «Send now» — отдать в CLI, не дожидаясь конца хода. */
@@ -108,6 +108,7 @@ export function PromptItem({ text, images = 0, state, onRetry, onSendNow, onRemo
           </span>
         ) : null}
         {state === 'queued' ? <span className="text-xs">{S.chat.queued}</span> : null}
+        {state === 'submitted' ? <span className="text-xs">{S.chat.submitted}</span> : null}
         {state === 'waiting' && onSendNow === undefined && onRemove === undefined ? <span className="text-xs">{S.outbox.sending}</span> : null}
         {state === 'waiting' && (onSendNow !== undefined || onRemove !== undefined) ? (
           <span className="flex items-center gap-2 text-xs">

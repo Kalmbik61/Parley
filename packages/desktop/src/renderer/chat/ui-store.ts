@@ -2,7 +2,7 @@
  * Состояние вида «Chat», которое переживает размонтирование `ChatView` (ревью куска 3): черновик поля
  * ввода, вложения над ним и серые элементы очереди по `refKey` сессии. Тело вкладки рисуется только у
  * активной вкладки группы и только в виде «Chat», поэтому переход Chat → Terminal → Chat или на соседнюю
- * вкладку размонтирует вид — а набранный текст, добавленные файлы и сообщение, уже ушедшее в очередь CLI,
+ * вкладку размонтирует вид — а набранный текст, добавленные файлы и отправленное сообщение, которое ещё ждёт записи в ленте,
  * пропадать не должны. Здесь же — просьба показать карточку агента (`reveal`, кусок 4b): её ставят места
  * вне ленты (сайдбар, комната, тулбар), а лента сессии исполняет, когда смонтируется и найдёт карточку.
  */
@@ -11,7 +11,6 @@ import { create } from 'zustand';
 import { useLayoutStore, type LayoutState } from '../layout/store.js';
 import { groups } from '../layout/tree.js';
 import type { AgentPick } from '../agents/agents-model.js';
-import type { QueuedPrompt } from './FeedList.js';
 
 /** Ключ карточки: `cardId` у разных сессий может совпасть, поэтому с ключом сессии. */
 export function cardKey(sessionKey: string, cardId: string): string {
@@ -37,10 +36,10 @@ export interface CardDraft {
 
 export const EMPTY_CARD_DRAFT: CardDraft = { message: '', step: 0, picked: {}, otherOn: {}, otherText: {} };
 
-/** Ждущее сообщение и сколько промптов с тем же текстом было в ленте, когда оно ушло. */
-export interface Queued extends QueuedPrompt {
-  seen: number;
-}
+/** Отправка из окна: до промпта — текст и граница истории, после — только связь локального id с id в ленте. */
+export type ChatPromptEcho =
+  | { id: string; state: 'sending' | 'submitted' | 'queued'; text: string; afterId: string | null; since: number }
+  | { id: string; state: 'confirmed'; promptId: string };
 
 /**
  * Просьба «показать» в ленте (план 2026-10-01, кусок 4b): её ставят бейдж агентов, поповер, тулбар и клик по
@@ -63,7 +62,7 @@ export interface ChatUiState {
   drafts: Record<string /* refKey */, string>;
   /** Вложения поля ввода: пути файлов, которые уйдут упоминаниями вместе с текстом (`attachments.ts`). */
   attachments: Record<string /* refKey */, readonly string[]>;
-  queued: Record<string /* refKey */, readonly Queued[]>;
+  promptEchoes: Record<string /* refKey */, readonly ChatPromptEcho[]>;
   /** Экран агента в панели Agents по сессии (`refKey`); `null` — список (спека 2026-10-07, 5.1). */
   agentPanel: Record<string, AgentPick | null>;
   agentsPin: Record<string, string | null>;
@@ -100,17 +99,17 @@ export interface ChatUiState {
   setCardDraft(key: string, patch: Partial<CardDraft>): void;
   /** Забыть черновики карточек сессии (лента закрыта); `only` — только этих `cardId` (карточка перестала быть `pending`). */
   clearCardDrafts(sessionKey: string, only?: readonly string[]): void;
-  /** Обновить очередь сессии; тот же массив — стор не трогается. */
-  updateQueued(key: string, update: (was: readonly Queued[]) => readonly Queued[]): void;
+  /** Обновить привязки отправленных промптов; тот же массив — стор не трогается. */
+  updatePromptEchoes(key: string, update: (was: readonly ChatPromptEcho[]) => readonly ChatPromptEcho[]): void;
 }
 
-const NONE: readonly Queued[] = [];
+const NO_ECHOES: readonly ChatPromptEcho[] = [];
 const NO_PATHS: readonly string[] = [];
 
 export const useChatUiStore = create<ChatUiState>((set, get) => ({
   drafts: {},
   attachments: {},
-  queued: {},
+  promptEchoes: {},
   reveal: null,
   find: {},
   openFind: (sessionKey) =>
@@ -163,17 +162,17 @@ export const useChatUiStore = create<ChatUiState>((set, get) => ({
   setDraft: (key, text) => set((state) => ({ drafts: { ...state.drafts, [key]: text } })),
   setAttachments: (key, paths) =>
     set((state) => ((state.attachments[key] ?? NO_PATHS) === paths ? state : { attachments: { ...state.attachments, [key]: paths } })),
-  updateQueued: (key, update) =>
+  updatePromptEchoes: (key, update) =>
     set((state) => {
-      const was = state.queued[key] ?? NONE;
+      const was = state.promptEchoes[key] ?? NO_ECHOES;
       const next = update(was);
-      return next === was ? state : { queued: { ...state.queued, [key]: next } };
+      return next === was ? state : { promptEchoes: { ...state.promptEchoes, [key]: next } };
     }),
 }));
 
 /** Только для тестов. */
 export function resetChatUiStoreForTests(): void {
-  useChatUiStore.setState({ drafts: {}, attachments: {}, queued: {}, reveal: null, find: {}, cardDrafts: {}, agentPanel: {}, agentsPin: {}, finishedOpen: {}, hooksHintDismissed: {} });
+  useChatUiStore.setState({ drafts: {}, attachments: {}, promptEchoes: {}, reveal: null, find: {}, cardDrafts: {}, agentPanel: {}, agentsPin: {}, finishedOpen: {}, hooksHintDismissed: {} });
 }
 
 /** Pin resets follow actual tab activation, including while the Agents panel is unmounted. */

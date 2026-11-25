@@ -5,8 +5,9 @@
  * Пока у живой сессии идёт ход, сообщение держит окно (затвор `ready`), а не очередь CLI: из очереди CLI его не
  * забрать (нет ×), а после Stop (Esc) Claude Code не отправляет её, а перекладывает в поле ввода — промпт не приходит,
  * серый «Queued» висел бы вечно. Окно отдаёт сообщение, когда ход закрылся (сам или по Stop). «Send now»
- * (`payload.now`) отдаёт сразу, как раньше: агент может подобрать его посреди хода, элемент становится серым «Queued»
- * CLI (`ui-store.ts`, тот же `id`), и отменить его уже нельзя. Лента приходит хуком позже отправки, поэтому сразу
+ * (`payload.now`) отдаёт сразу, как раньше: агент может подобрать его посреди хода, и отменить его уже нельзя.
+ * При любой успешной отправке серый элемент остаётся в ленте до настоящего промпта (`ui-store.ts`, тот же `id`).
+ * Лента приходит хуком, независимо от ответа на отправку, поэтому сразу
  * после отправки без хода затвор ждёт промпт отправленного (не дольше `CHAT_AWAIT_PROMPT_MS`) — иначе следующее
  * сообщение прыгнуло бы в очередь CLI: слэш-команда, у которой промпта не будет, задерживает следующее не более чем
  * на эту паузу. Пока ленты нет или она ещё не готова (вкладку Chat закрыли, снимок грузится), о ходе судим по
@@ -32,7 +33,7 @@ import { useWorksStore } from '../store/works.js';
 import { sendToAgent, showSendToast, type SendWithToastDeps } from '../terminal/send.js';
 import { turnActive } from './feed-model.js';
 import { useFeedStore } from './store.js';
-import { useChatUiStore } from './ui-store.js';
+import { useChatUiStore, type ChatPromptEcho } from './ui-store.js';
 
 export interface ChatOutboxPayload {
   ref: SessionRef;
@@ -51,22 +52,23 @@ export const CHAT_RETRY_MS = 1000;
 /** Сколько после отправки без хода затвор ждёт промпт отправленного, прежде чем пустить следующее сообщение. */
 export const CHAT_AWAIT_PROMPT_MS = 5000;
 
-/** Сколько промптов с этим текстом уже в ленте — по нему серый «Queued» узнаёт свой настоящий промпт. */
+function promptMatches(receivedText: string, wanted: string): boolean {
+  const received = receivedText.trim();
+  if (received === wanted) return true;
+  // Codex склеивает очередь Tab в один промпт. Убираем только служебные строки по краям:
+  // совпадения с цитатой или частью другого сообщения недостаточно для подтверждения.
+  const lines = received.split(/\r?\n/);
+  let start = 0;
+  let end = lines.length;
+  while (start < end && (lines[start]!.trim() === '' || isCompletePointerText(lines[start]!))) start += 1;
+  while (end > start && (lines[end - 1]!.trim() === '' || isCompletePointerText(lines[end - 1]!))) end -= 1;
+  return wanted !== '' && lines.slice(start, end).join('\n').trim() === wanted;
+}
+
+/** Сколько промптов с этим текстом уже в ленте — по нему затвор узнаёт новый промпт. */
 export function promptCount(items: readonly FeedItem[], text: string): number {
   const wanted = text.trim();
-  return items.filter((item) => {
-    if (item.kind !== 'prompt') return false;
-    const received = item.text.trim();
-    if (received === wanted) return true;
-    // Codex склеивает очередь Tab в один промпт. Убираем только служебные строки по краям:
-    // совпадения с цитатой или частью другого сообщения недостаточно для подтверждения.
-    const lines = received.split(/\r?\n/);
-    let start = 0;
-    let end = lines.length;
-    while (start < end && (lines[start]!.trim() === '' || isCompletePointerText(lines[start]!))) start += 1;
-    while (end > start && (lines[end - 1]!.trim() === '' || isCompletePointerText(lines[end - 1]!))) end -= 1;
-    return wanted !== '' && lines.slice(start, end).join('\n').trim() === wanted;
-  }).length;
+  return items.filter((item) => item.kind === 'prompt' && promptMatches(item.text, wanted)).length;
 }
 
 const NO_ITEMS: readonly FeedItem[] = [];
@@ -125,6 +127,41 @@ function sessionBusy(key: string, ref: SessionRef): boolean {
   return true;
 }
 
+/** Привязать каждую новую запись только к одной попытке, начиная со старейшей. */
+function confirmPrompts(key: string, items: readonly FeedItem[]): void {
+  useChatUiStore.getState().updatePromptEchoes(key, (was) => {
+    if (was.length === 0) return was;
+    const indices = new Map(items.map((item, index) => [item.id, index]));
+    const used = new Set(was.flatMap((entry) => entry.state === 'confirmed' ? [entry.promptId] : []));
+    let changed = false;
+    const next = was.flatMap<ChatPromptEcho>((entry) => {
+      if (entry.state === 'confirmed') {
+        if (indices.has(entry.promptId)) return [entry];
+        changed = true;
+        return [];
+      }
+      const after = entry.afterId === null ? undefined : indices.get(entry.afterId);
+      const text = entry.text.trim();
+      const prompt = items.find((item, index) =>
+        item.kind === 'prompt' && !used.has(item.id) && promptMatches(item.text, text) &&
+        (after === undefined ? Date.parse(item.at) >= entry.since : index > after),
+      );
+      if (prompt === undefined) return [entry];
+      used.add(prompt.id);
+      changed = true;
+      return [{ id: entry.id, state: 'confirmed', promptId: prompt.id }];
+    });
+    return changed ? next : was;
+  });
+}
+
+function forgetEcho(key: string, id: string, onlyUnconfirmed = false): void {
+  useChatUiStore.getState().updatePromptEchoes(key, (was) => {
+    const next = was.filter((entry) => entry.id !== id || (onlyUnconfirmed && entry.state === 'confirmed'));
+    return next.length === was.length ? was : next;
+  });
+}
+
 export async function attemptChatSend(key: string, item: OutboxItem<ChatOutboxPayload>): Promise<AttemptResult> {
   const { ref, text, deps, requestedAt } = item.payload;
   const feed = useFeedStore.getState().feeds[key];
@@ -132,8 +169,26 @@ export async function attemptChatSend(key: string, item: OutboxItem<ChatOutboxPa
   // Ход идёт — по тому же правилу, что в sessionBusy: замороженные элементы нечитаемой ленты не в счёт.
   const active = feed?.status === 'ready' ? turnActive(before) : workingNow(ref);
   const seen = promptCount(before, text);
+  const last = before.at(-1);
+  // Пока есть якорь, важен порядок строк. При переснимке без якоря сверяем время, не забирая старый промпт.
+  const since = last !== undefined ? Date.parse(last.at) : feed?.status === 'ready' ? -Infinity : Date.now() - CHAT_AWAIT_PROMPT_MS;
+  useChatUiStore.getState().updatePromptEchoes(key, (was) => [
+    ...was, { id: item.id, state: 'sending', text, afterId: last?.id ?? null, since },
+  ]);
   const outcome = await sendToAgent(deps.bridge, ref, text, true, requestedAt);
   deps.onOutcome?.(outcome);
+  if (!('error' in outcome) && outcome.submitted) {
+    if (!active && item.payload.now !== true) awaitPrompt(key, text, seen);
+    useChatUiStore.getState().updatePromptEchoes(key, (was) =>
+      was.map((entry) => entry.id === item.id && entry.state === 'sending' ? { ...entry, state: active ? 'queued' : 'submitted' } : entry),
+    );
+    // Локальные команды (например /clear) могут не оставить промпт вообще.
+    if (/^\/[a-z][\w:-]*(?:\s|$)/i.test(text.trimStart())) {
+      setTimeout(() => forgetEcho(key, item.id, true), CHAT_AWAIT_PROMPT_MS);
+    }
+    return { kind: 'sent' };
+  }
+  forgetEcho(key, item.id);
   if (!('error' in outcome)) {
     if (outcome.reason === 'busy') return { kind: 'retry', wait: () => delay(CHAT_RETRY_MS) };
     if (outcome.reason === 'blocked') {
@@ -144,11 +199,6 @@ export async function attemptChatSend(key: string, item: OutboxItem<ChatOutboxPa
           await untilNotBlocked(ref);
         },
       };
-    }
-    if (outcome.submitted) {
-      if (!active && item.payload.now !== true) awaitPrompt(key, text, seen);
-      if (active) useChatUiStore.getState().updateQueued(key, (was) => [...was, { id: item.id, text, seen }]);
-      return { kind: 'sent' };
     }
     // Вставлено без Enter (`draft`, `input`, `restarted`, `blocked-before-enter`): текст уже в поле терминала.
     if (outcome.inserted) {
@@ -177,6 +227,12 @@ export const chatOutbox = {
 function kickAll(): void {
   for (const key of Object.keys(baseOutbox.store.getState().byKey)) baseOutbox.kick(key);
 }
-useFeedStore.subscribe(kickAll);
+useFeedStore.subscribe((state, previous) => {
+  if (state.feeds === previous.feeds) return;
+  for (const [key, feed] of Object.entries(state.feeds)) {
+    if (feed.status === 'ready' && feed !== previous.feeds[key]) confirmPrompts(key, feed.items);
+  }
+  kickAll();
+});
 useWorksStore.subscribe(kickAll);
 useActivityStore.subscribe(kickAll);
