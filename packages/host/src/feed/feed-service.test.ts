@@ -4571,3 +4571,63 @@ describe('свой ответ и отказ с текстом по вопрос�
     expect(sendMock).not.toHaveBeenCalled();
   });
 });
+
+describe('Codex asynchronous question in the session feed', () => {
+  const question = 'Which color?';
+  const itemId = JSON.stringify(['request_user_input_async', 'call-color', 0]);
+  const at = '2026-11-25T06:42:18.407Z';
+  const request = JSON.stringify({ timestamp: at, type: 'response_item', payload: {
+    type: 'function_call', call_id: 'call-color', name: 'request_user_input_async',
+    arguments: JSON.stringify({ questions: [{ title: question, options: ['Blue', 'Green'] }] }),
+  } }) + '\n';
+  const reply = (answer: string) => JSON.stringify({ timestamp: at, type: 'response_item', payload: {
+    type: 'message', role: 'user', content: [{ type: 'input_text', text: '<send_user_message_question_reply>\n' +
+      JSON.stringify([{ question, questionItemId: itemId, answer }]) + '\n</send_user_message_question_reply>' }],
+  } }) + '\n';
+  const decision = { kind: 'question', answers: { [question]: 'Green' } } as const;
+
+  async function open() {
+    const dir = await tempRoot();
+    const file = path.join(dir, 'rollout.jsonl');
+    await writeFile(file, request);
+    fakes.setSessions([{ ref: REF, provider: 'codex' }]);
+    fakes.setLogFile(file);
+    fakes.setProcess({ pid: 123 });
+    start();
+    const { items } = await service.snapshot(REF);
+    expect(items).toContainEqual(expect.objectContaining({ id: itemId, kind: 'question', state: 'pending' }));
+    return file;
+  }
+
+  it('routes a single answer through the native queue and confirms its exact transcript reply', async () => {
+    const file = await open();
+    fakes.setScreen(['• Queued follow-up inputs', '? 1 question · 13s', '⇧← to answer', '› Ask Codex to do anything']);
+    const writes = vi.spyOn(fakes.deps.pty, 'write').mockImplementation((_ref, key) => {
+      if (key === '\x1b[1;2D') fakes.setScreen(['• Queued follow-up inputs', '', question, '', '› 1. Blue', '2. Green', '3. Other', '', 'enter submit   ⌃] skip   ⇧→ main prompt']);
+      if (key === '2') { fakes.setScreen(['› Ask Codex to do anything']); writeFileSync(file, reply('Green'), { flag: 'a' }); }
+    });
+    const submitted = service.decide(REF, itemId, decision);
+    expect(await service.decide(REF, itemId, decision)).toMatchObject({ applied: false });
+    expect(await submitted).toEqual({ applied: true, state: 'answered' });
+    expect(writes.mock.calls.map(([, key]) => key)).toEqual(['\x1b[1;2D', '2']);
+    expect((await service.snapshot(REF)).items.filter(item => item.kind === 'question')).toMatchObject([{ answers: decision.answers }]);
+  });
+
+  it('expires replayed follow-ups when their process is gone, even without a turn-start record', async () => {
+    const file = path.join(await tempRoot(), 'rollout.jsonl');
+    await writeFile(file, request);
+    fakes.setSessions([{ ref: REF, provider: 'codex' }]);
+    fakes.setLogFile(file);
+    fakes.setProcess(null);
+    start();
+    expect((await service.snapshot(REF)).items).toContainEqual(expect.objectContaining({ id: itemId, state: 'stale' }));
+  });
+
+  it('never sends to a main composer after a question closed in Terminal', async () => {
+    const file = await open();
+    writeFileSync(file, reply('Blue'), { flag: 'a' });
+    fakes.setScreen(['› Ask Codex to do anything']);
+    expect(await service.decide(REF, itemId, decision)).toEqual({ applied: false, state: 'answered' });
+    expect(fakes.writes).toEqual([]);
+  });
+});

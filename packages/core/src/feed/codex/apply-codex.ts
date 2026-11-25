@@ -10,8 +10,8 @@
  *
  * `Reasoning` пропускается (thinking у Claude тоже не показывается); `ContextCompaction` — заметка `compact`; запись
  * `compacted` её не дублирует. Незнакомый тип элемента — пропуск и счётчик `skipped` для `host.log`.
- * Нативный `request_user_input_async` не даёт `item_completed`: его `response_item` показывается текстом с вариантами.
- * Ответ остаётся в диалоге Codex: у такого вопроса нет удержанного хука для `feed.decide`.
+ * Нативные async-вопросы из `response_item` и `item_completed` объединяются по questionItemId.
+ * Ответы из диалога Codex снимают карточки по тому же id; оставшиеся вопросы истекают с концом хода.
  *
  * Картинки (план 2026-10-09): записи приходят после обхода картинок хоста (`stash.ts`), поэтому картинка `McpToolCall`
  * в `result.content` — блок со ссылкой, а не base64; сводку вызова собирает `toolResponseOf`. `ImageView` хост снабжает
@@ -35,6 +35,7 @@ import {
   withChild,
 } from '../reduce.js';
 import {
+  FEED_INPUT_LIMIT,
   FEED_TEXT_LIMIT,
   type FeedAgent,
   type FeedError,
@@ -42,6 +43,7 @@ import {
   type FeedNotice,
   type FeedNoticeData,
   type FeedPrompt,
+  type FeedQuestionCard,
   type FeedState,
   type FeedTool,
   type FeedToolStatus,
@@ -74,6 +76,7 @@ const msAt = (value: unknown, fallback: string): string =>
   typeof value === 'number' && Number.isFinite(value) ? new Date(value).toISOString() : fallback;
 
 function contentText(content: unknown): string {
+  if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return '';
   return content
     .filter(isRecord)
@@ -180,13 +183,19 @@ function onItem(draft: FeedDraft, record: RolloutRecord, cursor: CodexCursor, ag
       return;
     case 'UserMessage': {
       if (agentId !== null) return;
-      const { text } = limitText(contentText(item['content']), FEED_TEXT_LIMIT);
+      const message = contentText(item['content']);
+      if (onAsyncReply(draft, message, endAt)) return;
+      const { text } = limitText(message, FEED_TEXT_LIMIT);
       const prompt: FeedPrompt = { id: `prompt:${id}`, at: startAt, kind: 'prompt', text, images: imageCount(item['content']) };
       draft.put(prompt);
       return;
     }
     case 'AgentMessage': {
       if (agentId !== null) return;
+      if (item['delivery'] === 'async' && Array.isArray(item['questions'])) {
+        putAsyncQuestions(draft, id, item['questions'], endAt);
+        return;
+      }
       const text = contentText(item['content']);
       if (text !== '') draft.put(newText(`text:${id}`, endAt, id, text, false));
       return;
@@ -304,10 +313,37 @@ function onItem(draft: FeedDraft, record: RolloutRecord, cursor: CodexCursor, ag
   cursor.skipped += 1;
 }
 
+const ASYNC_QUESTION_TOOL = 'request_user_input_async';
+
+function putAsyncQuestions(draft: FeedDraft, callId: string, questions: unknown[], at: string): void {
+  questions.forEach((raw, index) => {
+    if (!isRecord(raw)) return;
+    const title = str(raw, 'title');
+    if (title === null || title.trim() === '') return;
+    const id = JSON.stringify([ASYNC_QUESTION_TOOL, callId, index]);
+    // Оба формата журнала и replay описывают ту же карточку, включая уже снятую.
+    if (draft.has(id)) return;
+    const options = Array.isArray(raw['options'])
+      ? raw['options'].filter((option): option is string => typeof option === 'string' && option.trim() !== '')
+      : [];
+    const question = title.slice(0, FEED_INPUT_LIMIT);
+    const labels = options.map(label => label.slice(0, FEED_INPUT_LIMIT));
+    const truncated = title.length > FEED_INPUT_LIMIT || options.some(label => label.length > FEED_INPUT_LIMIT);
+    const card: FeedQuestionCard = {
+      id, cardId: id, at, kind: 'question', state: 'pending', via: 'terminal',
+      toolUseId: callId, toolName: ASYNC_QUESTION_TOOL,
+      toolInput: { questions: [{ title: question, options: labels }] },
+      questions: [{ question, header: null, options: labels.map(label => ({ label, description: null })), multiSelect: false }],
+      ...(truncated ? { truncated: true } : {}),
+    };
+    draft.put(card);
+  });
+}
+
 function onAsyncQuestion(draft: FeedDraft, record: RolloutRecord): void {
   const payload = record.payload;
   const type = str(payload, 'type');
-  if ((type !== 'function_call' && type !== 'custom_tool_call') || str(payload, 'name') !== 'request_user_input_async') return;
+  if ((type !== 'function_call' && type !== 'custom_tool_call') || str(payload, 'name') !== ASYNC_QUESTION_TOOL) return;
   const callId = str(payload, 'call_id');
   const args = str(payload, type === 'function_call' ? 'arguments' : 'input');
   if (callId === null || args === null) return;
@@ -317,21 +353,37 @@ function onAsyncQuestion(draft: FeedDraft, record: RolloutRecord): void {
   } catch {
     return;
   }
-  if (!isRecord(input) || !Array.isArray(input['questions'])) return;
-  const questions: string[] = [];
-  for (const raw of input['questions']) {
-    if (!isRecord(raw)) continue;
-    const title = str(raw, 'title');
-    if (title === null || title.trim() === '') continue;
-    const options = Array.isArray(raw['options'])
-      ? raw['options'].filter((option): option is string => typeof option === 'string' && option.trim() !== '')
-      : [];
-    questions.push([title, ...options.map((option, index) => `${index + 1}. ${option}`)].join('\n\n'));
+  if (isRecord(input) && Array.isArray(input['questions'])) putAsyncQuestions(draft, callId, input['questions'], record.at);
+}
+
+/** Заголовок в ответе TUI может быть обрезан: связываем только по полному questionItemId. */
+function onAsyncReply(draft: FeedDraft, text: string, at: string): boolean {
+  const match = /^\s*<send_user_message_question_reply>\s*([\s\S]*?)\s*<\/send_user_message_question_reply>\s*$/.exec(text);
+  if (match === null) return false;
+  let replies: unknown;
+  try {
+    replies = JSON.parse(match[1] as string);
+  } catch {
+    return false;
   }
-  if (questions.length === 0) return;
-  const text = `**Question from Codex**\n\n${questions.join('\n\n---\n\n')}\n\nTo answer, open Terminal and press Shift+Left (←) to open the question dialog.`;
-  // accepted:true означает только постановку вопроса в очередь, а не ответ человека. Текст остаётся в истории.
-  draft.put(newText(`text:codex-question:${callId}`, record.at, null, text, false));
+  if (!Array.isArray(replies) || !replies.every((reply) => isRecord(reply)
+    && typeof reply['questionItemId'] === 'string' && typeof reply['answer'] === 'string')) return false;
+  for (const reply of replies as Array<{ questionItemId: string; answer: string }>) {
+    const card = draft.get(reply.questionItemId);
+    if (card?.kind !== 'question' || card.toolName !== ASYNC_QUESTION_TOOL || card.state !== 'pending') continue;
+    const question = card.questions[0];
+    if (question !== undefined) draft.put({ ...card, state: 'answered', answers: { [question.question]: reply.answer }, settledAt: at });
+  }
+  // Конверт повторяется в response_item и UserMessage; сырой текст в ленте не нужен.
+  return true;
+}
+
+function expireAsyncQuestions(draft: FeedDraft, at: string): void {
+  for (const item of draft.items) {
+    if (item.kind === 'question' && item.toolName === ASYNC_QUESTION_TOOL && item.state === 'pending') {
+      draft.put({ ...item, state: 'stale', settledAt: at });
+    }
+  }
 }
 
 function applyRecord(draft: FeedDraft, record: RolloutRecord, cursor: CodexCursor, agentId: string | null, mail: boolean): void {
@@ -340,7 +392,12 @@ function applyRecord(draft: FeedDraft, record: RolloutRecord, cursor: CodexCurso
     return;
   }
   if (record.type === 'response_item') {
-    if (agentId === null) onAsyncQuestion(draft, record);
+    if (agentId === null) {
+      onAsyncQuestion(draft, record);
+      if (record.payload['type'] === 'message' && record.payload['role'] === 'user') {
+        onAsyncReply(draft, contentText(record.payload['content']), record.at);
+      }
+    }
     return;
   }
   if (record.type !== 'event_msg') return;
@@ -353,10 +410,12 @@ function applyRecord(draft: FeedDraft, record: RolloutRecord, cursor: CodexCurso
   if (agentId !== null) return;
   if (kind === 'task_started') draft.turnStartedAt = record.at;
   // Ход мог уже закрыть хук `Stop`: повторное закрытие по журналу не даёт второй черты.
-  // Ждущие карточки не снимаем: запрос одобрения Codex идёт из ячейки code mode, которая переживает ход; пустой
+  // Карточки одобрения не снимаем: запрос Codex идёт из ячейки code mode, которая переживает ход; пустой
   // ответ хуку уводит Codex в окно TUI, где `exec` ждёт без срока (разбор 2026-10-16).
-  else if (kind === 'task_complete' && draft.turnStartedAt !== null) closeTurn(draft, record.at, false, true);
-  else if (kind === 'turn_aborted' && draft.turnStartedAt !== null) closeTurn(draft, record.at, true, true);
+  else if (kind === 'task_complete' || kind === 'turn_aborted') {
+    expireAsyncQuestions(draft, record.at);
+    if (draft.turnStartedAt !== null) closeTurn(draft, record.at, kind === 'turn_aborted', true);
+  }
 }
 
 export function applyCodexRecords(

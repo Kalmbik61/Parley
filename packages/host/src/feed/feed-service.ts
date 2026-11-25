@@ -73,6 +73,7 @@ import type {
   FeedCardState,
   FeedDecision,
   FeedItem,
+  FeedQuestionCard,
   FeedState,
   FeedUpdate,
   RawRecord,
@@ -82,7 +83,8 @@ import type {
 import { FEED_MAIL_FEATURE, FEED_SCHEMA_VERSION, FEED_PROGRESS_RETRY_AFTER_MAX_MS, FEED_RESYNC_FEATURE, refKey, sessionRef } from '@parley/protocol';
 import type { FeedDecisions, KimiRequest, KimiResponse, ProgressResult, Result, SendResult, SessionRef } from '@parley/protocol';
 import { projectProgress } from './progress.js';
-import { cleanAnswer, typeOwnAnswer } from './terminal-answer.js';
+import { submitCodexFollowUp } from './codex-follow-up.js';
+import { ANSWER_POLL_MS, ANSWER_STEP_MAX_MS, cleanAnswer, typeOwnAnswer } from './terminal-answer.js';
 import type { ActivityService } from '../activity/activity-service.js';
 import type { LogChange } from '../activity/log-index.js';
 import type { MailJournalEntry } from '@parley/core';
@@ -329,6 +331,7 @@ interface OpencodeFeed {
 }
 
 interface CodexFeed {
+  answeringFollowUp?: boolean;
   tail: ReturnType<typeof createRolloutTail>;
   cursor: CodexCursor;
   agents: Map<string, CodexAgentTrack>;
@@ -440,6 +443,14 @@ interface SessionFeed {
   decisionsReset?: true;
   /** Таймер ожидания первого хука Codex после старта процесса. */
   codexGrace?: NodeJS.Timeout | undefined;
+}
+
+const isCodexFollowUp = (item: FeedItem): item is FeedQuestionCard =>
+  item.kind === 'question' && item.via === 'terminal' && item.toolName === 'request_user_input_async';
+
+function presentedDecisions(feed: SessionFeed): FeedDecisions | null {
+  return feed.decisions === 'terminal' && feed.state.items.some(item => isCodexFollowUp(item) && item.state === 'pending')
+    ? 'window' : feed.decisions;
 }
 
 const isCard = (item: FeedItem): item is FeedCard =>
@@ -823,13 +834,14 @@ export function createFeedService(
     }
     const clients = subscribers.get(key);
     if (clients === undefined || clients.size === 0) return;
+    const decisions = presentedDecisions(feed);
     const data = {
       ref: feed.ref,
       revision: feed.revision,
       upsert: Array.from(upsert.values()),
       removed: Array.from(removed),
       mode: feed.state.permissionMode,
-      ...(feed.decisions === null ? (decisionsReset ? { decisions: null } : {}) : { decisions: feed.decisions }),
+      ...(decisions === null ? (decisionsReset ? { decisions: null } : {}) : { decisions }),
     };
     // Клиенту без `feed-mail` — то же событие без `mail` в `upsert` и `mail:` в `removed`; `revision` тот же, пустая пачка идёт.
     const plain = withoutMail(data);
@@ -1000,7 +1012,7 @@ export function createFeedService(
   /** Заводит карточку по узнанному вопросу и берёт её под присмотр: экран сверяется раз в `terminalWatchMs`. */
   function openTerminalPrompt(feed: SessionFeed, prompt: CodexPrompt): void {
     const key = refKey(feed.ref);
-    if (!terminalEligible.has(key) || terminalBusy.has(key) || terminalPrompts.has(key) || feed.state.items.some(isPendingCard)) return;
+    if (!terminalEligible.has(key) || terminalBusy.has(key) || terminalPrompts.has(key) || feed.state.items.some(item => isPendingCard(item) && !isCodexFollowUp(item))) return;
     const update = applyCodexTerminalPrompt(feed.state, prompt, at());
     const card = update.changes.find((item): item is FeedCard => isPendingCard(item));
     if (card === undefined) return;
@@ -1035,7 +1047,7 @@ export function createFeedService(
     const key = refKey(ref);
     if (stopped || !terminalEligible.has(key) || terminalBusy.has(key) || terminalPrompts.has(key) || terminalFinders.has(key)) return;
     const feed = feedOf(ref);
-    if (feed.state.items.some(isPendingCard)) return;
+    if (feed.state.items.some(item => isPendingCard(item) && !isCodexFollowUp(item))) return;
     const startedAt = now();
     const finish = (): void => clearTerminalTimer(terminalFinders, key, 'interval');
     const step = (): void => {
@@ -1199,6 +1211,43 @@ export function createFeedService(
       sendDenialMessage(feed.ref, decision.message.trim());
     }
     return { applied: true, state: next?.state ?? current };
+  }
+
+  async function decideCodexFollowUp(feed: SessionFeed, card: FeedQuestionCard, decision: FeedDecision): Promise<Result<'feed.decide'>> {
+    const codex = feed.codex;
+    const process = deps.pty.get(feed.ref);
+    const question = card.questions[0];
+    const answer = question && decision.kind === 'question' ? decision.answers[question.question] : undefined;
+    if (!codex || codex.answeringFollowUp || !process || !question || !answer) return { applied: false, state: card.state };
+    const currentCard = () => feed.state.items.find((item): item is FeedQuestionCard => item.id === card.id && isCodexFollowUp(item));
+    const sameSession = () => {
+      const running = deps.pty.get(feed.ref);
+      return !stopped && feedCurrent(feed) && feed.codex === codex && running?.pid === process.pid &&
+        running.startedAt === process.startedAt && !codexRebound(feed, codex.seedBinding);
+    };
+    const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+    codex.answeringFollowUp = true;
+    try {
+      // Terminal may have answered since the last feed poll.
+      await pollCodex(feed);
+      const sent = await submitCodexFollowUp({
+        read: () => sameSession() && currentCard()?.state === 'pending' ? deps.pty.screenText(feed.ref) : undefined,
+        write: key => deps.pty.write(feed.ref, key),
+        sleep,
+      }, question, answer, feed.state.items.filter(isCodexFollowUp).filter(item => item.state === 'pending').flatMap(item => item.questions));
+      // A repaint or a changed prompt is not a receipt. The native response identifies the exact question.
+      if (sent) {
+        for (let elapsed = 0; elapsed <= ANSWER_STEP_MAX_MS && sameSession(); elapsed += ANSWER_POLL_MS) {
+          await pollCodex(feed);
+          if (currentCard()?.state !== 'pending') break;
+          if (elapsed < ANSWER_STEP_MAX_MS) await sleep(ANSWER_POLL_MS);
+        }
+      }
+      const result = sameSession() ? currentCard() : undefined;
+      return { applied: sent && result?.state === 'answered' && result.answers?.[question.question] === answer, state: result?.state ?? 'stale' };
+    } finally {
+      delete codex.answeringFollowUp;
+    }
   }
 
   function clearCodexGrace(feed: SessionFeed): void {
@@ -1440,10 +1489,14 @@ export function createFeedService(
         const seeded = feedFromCodexRollout(stashCodex(records), { limit: maxItems });
         // Ход, оборванный в журнале, закрывается только без живого процесса: у живого он ещё идёт
         // (рестарт хоста — процесс умер с ним).
-        const replayed =
-          deps.pty.get(feed.ref) === undefined ? closeBrokenTurn(seeded.state) : seeded.state;
+        let replayed = seeded.state;
+        if (deps.pty.get(feed.ref) === undefined) {
+          const followUps = replayed.items.filter(isCodexFollowUp).filter(card => card.state === 'pending');
+          if (followUps.length) replayed = settleCards(replayed, 'stale', at(), followUps.map(card => card.cardId)).state;
+          replayed = closeBrokenTurn(replayed);
+        }
         // Журнал не содержит карточек по экрану: сохраняем их вместе с id, уже показанными в Chat.
-        const terminalCards = feed.state.items.filter((item) => isCard(item) && 'via' in item && item.via === 'terminal');
+        const terminalCards = feed.state.items.filter((item) => isCard(item) && 'via' in item && item.via === 'terminal' && !isCodexFollowUp(item));
         const state = terminalCards.length === 0 ? replayed : {
           ...replayed,
           items: [...replayed.items, ...terminalCards],
@@ -2673,12 +2726,13 @@ export function createFeedService(
       if (!stopped && !feedCurrent(feed)) return readSnapshot(ref, agentId, scope, client);
       // Накопленная пачка уходит до снимка: следующая дельта подписчику — ровно `revision + 1`.
       flush(feed);
+      const decisions = presentedDecisions(feed);
       const snapshot: FeedSnapshot = {
         items: scope === 'attention' ? attentionItems(feed.state.items) : mailFor(client, feed.state.items),
         revision: feed.revision,
         schemaVersion: FEED_SCHEMA_VERSION,
         mode: feed.state.permissionMode,
-        ...(feed.decisions === null ? {} : { decisions: feed.decisions }),
+        ...(decisions === null ? {} : { decisions }),
       };
       // Лёгкий опрос острова (`scope: 'attention'`) раз в 15 с не пишется: строка нужна для разбора
       // медленных снимков — с севом или от 250 мс она остаётся.
@@ -2748,6 +2802,7 @@ export function createFeedService(
       }
       const current: FeedCardState = card.state;
       if (current !== 'pending') return { applied: false, state: current };
+      if (isCodexFollowUp(card)) return decideCodexFollowUp(feed, card, decision);
       const qwen = feed.qwenWait?.prompt;
       if (qwen?.card.id === cardId) return decideQwen(feed, qwen, decision);
       const interaction = feed.kimiInteractions?.get(cardId);

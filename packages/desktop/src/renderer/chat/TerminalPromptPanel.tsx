@@ -6,12 +6,14 @@
  */
 
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { readCodexFollowUpScreen } from '@parley/core/codex-follow-up-screen';
 import type { SessionRef } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { S } from '../../shared/strings.js';
 import { useLayoutStore } from '../layout/store.js';
 import { updateTab } from '../layout/tree.js';
 import { Button } from '../ui/button.js';
+import { WaitingBanner } from './WaitingBanner.js';
 import { PROMPT_AFTER_KEY_MS, PROMPT_POLL_MS, keyData, promptLines } from './terminal-prompt.js';
 
 export interface TerminalPromptPanelProps {
@@ -119,6 +121,8 @@ export function TerminalPromptPanel({ workKey, tabId, sessionRef, bridge, title,
   const openTerminal = (): void => {
     useLayoutStore.getState().apply(workKey, (layout) => updateTab(layout, tabId, { view: 'terminal' }));
   };
+
+  if (readCodexFollowUpScreen(lines) !== null) return <WaitingBanner workKey={workKey} tabId={tabId} text={title} />;
 
   const P = S.chat.terminalPrompt;
   return (

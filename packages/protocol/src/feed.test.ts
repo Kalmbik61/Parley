@@ -116,6 +116,17 @@ const failures = (items: readonly FeedItem[]): unknown[] =>
   });
 
 describe('feedItem на том, что собирает core', () => {
+  it('accepts a terminal-backed Codex follow-up, including provider text exceeding the wire limit', () => {
+    const { update } = core.applyCodexRecords(core.emptyFeedState(), [{
+      ordinal: null, at: '2026-11-25T06:42:18Z', type: 'event_msg', payload: {
+        type: 'item_completed', item: { id: 'call-1', type: 'AgentMessage', delivery: 'async',
+          questions: [{ title: 'Q'.repeat(core.FEED_INPUT_LIMIT + 1), options: ['A'.repeat(core.FEED_INPUT_LIMIT + 1)] }] },
+      },
+    }], core.emptyCodexCursor());
+    expect(update.state.items).toHaveLength(1);
+    expect(failures(update.state.items)).toEqual([]);
+  });
+
   const hookFiles = fixtures('.events.jsonl');
   const transcriptFiles = fixtures('.jsonl', 'transcript-');
 

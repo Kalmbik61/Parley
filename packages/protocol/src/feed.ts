@@ -159,6 +159,7 @@ const tool = z.strictObject({
 const cardBase = {
   ...base,
   cardId: z.string(),
+  via: z.literal('terminal').exactOptional(),
   state: feedCardState,
   toolUseId: z.string().nullable(),
   toolName: z.string(),
