@@ -303,6 +303,8 @@ export interface WorkSession {
   kimiPermissionMode?: KimiPermissionMode;
   /** Durable Chat exclusion from before ACP exit until a completed handback. */
   kimiTerminal?: { archive: string; cwd: string; home: string };
+  /** Immutable Chat projection and its original evidence, selected atomically with handback. */
+  kimiChatCheckpoint?: { archive: string; priorArchive: string; cwd: string; home: string };
   /**
    * Облегчённый запуск (спека «меньше ходов и легче контекст», C2.2): решение принимается один раз при создании
    * сессии и одинаково применяется при `resume`. Нет поля = `false`: карты до этого куска читаются без миграции.

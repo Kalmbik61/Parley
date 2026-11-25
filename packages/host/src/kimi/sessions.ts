@@ -21,13 +21,14 @@ export interface KimiReplayChunk {
 
 export interface KimiHistoryProjection {
   check(): void;
+  writeCheckpoint(archive: string): Promise<void>;
   publish(): void;
 }
 
 interface KimiSessionHooks {
   output(ref: SessionRef, event: KimiOutput): void;
   hasHistory(ref: SessionRef): boolean;
-  prepareHistory?(ref: SessionRef, archive: string, chunks: readonly KimiReplayChunk[]): Promise<KimiHistoryProjection>;
+  prepareHistory?(ref: SessionRef, archive: string, chunks: readonly KimiReplayChunk[], preferLive: boolean): Promise<KimiHistoryProjection>;
   checkBinding?(ref: SessionRef, home: string, id: string): void;
   activity(ref: SessionRef, state: 'ready' | 'working' | 'blocked' | 'ended', detail?: string): void;
   requestsChanged?(ref: SessionRef, requests: KimiState['requests']): void;
@@ -40,7 +41,7 @@ interface KimiLaunch extends NonNullable<LaunchPlan['kimiAcp']> {
   args: string[];
   cwd: string;
   env: NodeJS.ProcessEnv;
-  reconcileAt?: { archive: string; cwd: string; home: string };
+  reconcileAt?: { archive: string; cwd: string; home: string; kind: 'handoff' | 'checkpoint' };
 }
 
 function hostError(error: unknown): never {
@@ -92,7 +93,7 @@ export function createKimiSessions(host: HostContext, hooks: KimiSessionHooks) {
     process: PtyProcess;
     sessionId: string;
     activate(): void;
-    prepareActivation(): () => void;
+    prepareActivation(): { publish(): void; writeCheckpoint?: KimiHistoryProjection['writeCheckpoint'] };
   }> {
     const key = refKey(ref);
     const home = await kimiHome(launch.env, launch.cwd);
@@ -238,23 +239,26 @@ export function createKimiSessions(host: HostContext, hooks: KimiSessionHooks) {
         host.log.warn('Kimi Code cold history reached its display limit', { ref });
       }
       const restoreHistory = launch.reconcileAt === undefined ? undefined
-        : await hooks.prepareHistory?.(ref, launch.reconcileAt.archive, historyChunks);
+        : await hooks.prepareHistory?.(ref, launch.reconcileAt.archive, historyChunks, launch.reconcileAt.kind === 'checkpoint');
       const isCurrent = () => live.get(key) === session && acp.connected();
       if (!isCurrent()) throw new KimiAcpError('Kimi Code ACP disconnected', 'disconnected');
-      function prepareActivation(): () => void {
+      function prepareActivation(): { publish(): void; writeCheckpoint?: KimiHistoryProjection['writeCheckpoint'] } {
         if (!isCurrent()) throw new HostError('not_found', 'Kimi Code session is not running');
         restoreHistory?.check();
-        return () => {
-          restoreHistory?.publish();
-          // A child may exit just after durable release. The validated history is still usable,
-          // but this process must not publish readiness or accept prompts after exit.
-          if (!isCurrent()) return;
-          if (!strictReplay) for (const event of initialOutput) hooks.output(ref, event);
-          session.ready = true;
-          initialOutput.length = 0;
-          publishState(acp.state());
-          hooks.activity(ref, 'ready');
-          if (!strictReplay && launch.prompt !== undefined) submit(ref, session, launch.prompt);
+        return {
+          ...(restoreHistory === undefined ? {} : { writeCheckpoint: (archive: string) => restoreHistory.writeCheckpoint(archive) }),
+          publish() {
+            restoreHistory?.publish();
+            // A child may exit just after durable release. The validated history is still usable,
+            // but this process must not publish readiness or accept prompts after exit.
+            if (!isCurrent()) return;
+            if (!strictReplay) for (const event of initialOutput) hooks.output(ref, event);
+            session.ready = true;
+            initialOutput.length = 0;
+            publishState(acp.state());
+            hooks.activity(ref, 'ready');
+            if (launch.reconcileAt?.kind !== 'handoff' && launch.prompt !== undefined) submit(ref, session, launch.prompt);
+          },
         };
       }
       return {
@@ -299,7 +303,7 @@ export function createKimiSessions(host: HostContext, hooks: KimiSessionHooks) {
             return () => dataListeners.delete(listener);
           },
         },
-        activate: () => prepareActivation()(),
+        activate: () => prepareActivation().publish(),
         prepareActivation,
       };
     } catch (error) {

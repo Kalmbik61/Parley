@@ -394,7 +394,8 @@ const isSessionShape =
       ? typeof value.status === 'string' && V1_STATUSES.includes(value.status)
       : typeof value.lifecycle === 'string' && Object.hasOwn(TRANSITIONS, value.lifecycle)) &&
     Array.isArray(value.history) &&
-    (value.kimiTerminal === undefined || (value.provider === 'kimi' && isKimiTerminal(value.kimiTerminal))) &&
+    (value.kimiTerminal === undefined || (value.provider === 'kimi' && isKimiHistoryBinding(value.kimiTerminal))) &&
+    (value.kimiChatCheckpoint === undefined || (value.provider === 'kimi' && isKimiChatCheckpoint(value.kimiChatCheckpoint))) &&
     (value.kimiPermissionMode === undefined || (value.provider === 'kimi' && isKimiPermissionMode(value.kimiPermissionMode))) &&
     (value.agentPlan === undefined || isPublishedAgentPlan(value.agentPlan)) &&
     (value.workspace === undefined || value.workspace === null ||
@@ -874,9 +875,16 @@ function normalizeAgentFields(session: Record<string, unknown>): void {
   if (session['trial'] !== undefined) session['trial'] = normalizeTrial(session['trial']);
 }
 
-function isKimiTerminal(value: unknown): boolean {
+const KIMI_ARCHIVE_ID = /^[0-9a-f-]{36}$/i;
+
+function isKimiHistoryBinding(value: unknown): value is Record<string, unknown> & { archive: string; cwd: string; home: string } {
   if (value === null || typeof value !== 'object') return false;
   const marker = value as Record<string, unknown>;
-  return typeof marker.archive === 'string' && /^[0-9a-f-]{36}$/i.test(marker.archive) &&
+  return typeof marker.archive === 'string' && KIMI_ARCHIVE_ID.test(marker.archive) &&
     typeof marker.cwd === 'string' && marker.cwd !== '' && typeof marker.home === 'string' && marker.home !== '';
+}
+
+function isKimiChatCheckpoint(value: unknown): boolean {
+  return isKimiHistoryBinding(value) && typeof value.priorArchive === 'string' &&
+    KIMI_ARCHIVE_ID.test(value.priorArchive) && value.archive !== value.priorArchive;
 }

@@ -246,8 +246,9 @@ export interface FeedService {
   kimiHasHistory(ref: SessionRef): boolean;
   kimiArchive(ref: SessionRef, archive: string): Promise<void>;
   kimiRemoveArchive(ref: SessionRef, archive: string): Promise<void>;
-  kimiPruneArchives(ref: SessionRef, retain: string): Promise<void>;
-  kimiPrepareHistory(ref: SessionRef, archive: string, chunks: readonly KimiReplayChunk[]): Promise<KimiHistoryProjection>;
+  kimiPruneArchives(ref: SessionRef, retain: readonly string[]): Promise<void>;
+  kimiSeedCheckpoint(ref: SessionRef, archive: string): Promise<void>;
+  kimiPrepareHistory(ref: SessionRef, archive: string, chunks: readonly KimiReplayChunk[], preferLive: boolean): Promise<KimiHistoryProjection>;
   kimiOutput(ref: SessionRef, event: KimiOutput): void;
   kimiRequests(ref: SessionRef, requests: readonly KimiRequest[]): void;
   /**
@@ -1333,10 +1334,9 @@ export function createFeedService(
   function seed(feed: SessionFeed, provider: string, foreground = false): Promise<void> {
     if (stopped) return Promise.resolve();
     if (provider === 'kimi') {
-      const marker = sessionOf(feed.ref).kimiTerminal;
-      if (marker === undefined) return Promise.resolve();
-      feed.seeding ??= readKimiArchive(feed, marker.archive).finally(() => { feed.seeding = undefined; });
-      return feed.seeding;
+      const { kimiTerminal, kimiChatCheckpoint } = sessionOf(feed.ref);
+      const archive = kimiTerminal?.archive ?? kimiChatCheckpoint?.archive;
+      return archive === undefined ? Promise.resolve() : seedKimiArchive(feed, archive, kimiTerminal === undefined);
     }
     const key = refKey(feed.ref);
     if (foreground) promoteSeed(key);
@@ -2546,14 +2546,30 @@ export function createFeedService(
     }
   }
 
-  async function readKimiArchive(feed: SessionFeed, archive: string): Promise<void> {
+  async function writeKimiArchiveItems(ref: SessionRef, archive: string, items: readonly FeedItem[]): Promise<void> {
+    const text = JSON.stringify(items);
+    if (items.length > maxItems || Buffer.byteLength(text) > maxBytes + 1024) throw oversizedKimiReplay();
+    const file = await kimiArchiveFile(ref, archive, true);
+    if (file === undefined) throw new HostError('conflict', 'Kimi Chat archive directory is missing or unsafe. The prior Chat is unchanged.');
+    // The map can select this immutable file only after the write and flush succeed.
+    await writeFile(file, text, { mode: 0o600, flag: 'wx', flush: true });
+  }
+
+  function seedKimiArchive(feed: SessionFeed, archive: string, mandatory: boolean): Promise<void> {
+    if (feed.live || feed.seeded) return Promise.resolve();
+    feed.seeding ??= readKimiArchive(feed, archive, mandatory).finally(() => { feed.seeding = undefined; });
+    return feed.seeding;
+  }
+
+  async function readKimiArchive(feed: SessionFeed, archive: string, mandatory: boolean): Promise<void> {
     try {
       const items = await readKimiArchiveItems(feed.ref, archive);
       if (!feedCurrent(feed) || feed.live) return;
-      commit(feed, { state: { ...emptyFeedState(), items }, changes: items });
+      commit(feed, { state: { ...emptyFeedState(), items, seq: kimiArchiveSequence(items) }, changes: items });
       feed.seeded = true;
     } catch (error) {
       log.warn('Kimi Chat archive could not be loaded', { ref: feed.ref, error: String(error) });
+      if (mandatory) throw new HostError('conflict', 'Kimi could not read the committed Chat checkpoint.');
     }
   }
 
@@ -2668,38 +2684,38 @@ export function createFeedService(
     kimiHasHistory(ref) {
       return feeds.get(refKey(ref))?.state.items.some((item) => item.kind === 'prompt' || item.kind === 'text') ?? false;
     },
-    async kimiArchive(ref, archive) {
+    kimiArchive(ref, archive) {
       const items = feeds.get(refKey(ref))?.state.items ?? [];
-      const text = JSON.stringify(items);
-      if (Buffer.byteLength(text) > maxBytes + 1024) {
-        throw new HostError('conflict', 'The prior Kimi Chat exceeds the archive limit. Chat remains in control.');
-      }
-      const file = await kimiArchiveFile(ref, archive, true);
-      if (file === undefined) throw new HostError('conflict', 'Kimi Chat archive directory is missing or unsafe. Chat remains in control.');
-      // The map only publishes this unique immutable archive after the complete write.
-      await writeFile(file, text, { mode: 0o600, flag: 'wx' });
+      return writeKimiArchiveItems(ref, archive, items);
     },
     async kimiRemoveArchive(ref, archive) {
       const file = await kimiArchiveFile(ref, archive);
       if (file !== undefined) await rm(file, { force: true });
     },
     async kimiPruneArchives(ref, retain) {
-      const file = await kimiArchiveFile(ref, retain);
-      if (file === undefined) return;
-      const dir = path.dirname(file);
+      const directory = () => kimiArchiveDirectory(ref.projectPath, ref.workId, ref.sessionId);
+      const dir = await directory();
+      if (dir === undefined || retain.length === 0) return;
+      const keep = new Set(retain.map((id) => `${id}.json`));
       for (const entry of await readdir(dir, { withFileTypes: true })) {
-        if (entry.isFile() && /^[0-9a-f-]{36}\.json$/i.test(entry.name) && entry.name !== path.basename(file)) {
-          if (await kimiArchiveFile(ref, retain) !== file) return;
+        if (entry.isFile() && /^[0-9a-f-]{36}\.json$/i.test(entry.name) && !keep.has(entry.name)) {
+          if (await directory() !== dir) return;
           await rm(path.join(dir, entry.name), { force: true });
         }
       }
     },
-    async kimiPrepareHistory(ref, archive, chunks) {
+    kimiSeedCheckpoint(ref, archive) {
+      return seedKimiArchive(feedOf(ref, 'kimi'), archive, true);
+    },
+    async kimiPrepareHistory(ref, archive, chunks, preferLive) {
       const feed = feedOf(ref, 'kimi');
       const evidence = await readKimiArchiveItems(ref, archive).catch(() => {
         throw new HostError('conflict', 'Kimi could not read the prior Chat archive. The prior Chat is unchanged.');
       });
-      const { retained, suffix } = reconcileKimiTurns(chunks, archiveKimiTurns(evidence));
+      const liveTurns = feed.state.items.filter((item) => item.kind !== 'mail');
+      const history = preferLive && feed.live && evidence.filter((item) => item.kind !== 'mail').every(({ id }, i) => liveTurns[i]?.id === id)
+        ? feed.state.items : evidence;
+      const { retained, suffix } = reconcileKimiTurns(chunks, archiveKimiTurns(history));
       let state = { ...emptyFeedState(), seq: Math.max(feed.state.seq, kimiArchiveSequence(evidence)) };
       const time = at();
       for (const turn of suffix) {
@@ -2717,14 +2733,26 @@ export function createFeedService(
           throw new HostError('conflict', 'The Kimi Chat source changed during handback');
         }
       }
+      function projectItems(before: readonly FeedItem[]): FeedItem[] {
+        const basis = before.length === 0 ? evidence : before;
+        const priorTurns = basis.filter((item) => item.kind !== 'mail');
+        const keptIds = new Set(retained.map(({ id }) => id));
+        return retained.every(({ id }, i) => priorTurns[i]?.id === id)
+          ? [...basis.filter((item) => item.kind === 'mail' || keptIds.has(item.id)), ...newRows]
+          : [...retained, ...basis.filter((item) => item.kind === 'mail'), ...newRows];
+      }
+      let staged: FeedItem[] | undefined;
+      async function writeCheckpoint(id: string): Promise<void> {
+        check();
+        const rows = projectItems(feed.state.items);
+        if (rows.length > maxItems || rows.reduce((sum, item) => sum + itemBytes(item), 0) > maxBytes) throw oversizedKimiReplay();
+        await writeKimiArchiveItems(ref, id, rows);
+        staged = rows;
+      }
       function publish(): void {
         if (!current()) return;
         const before = feed.state.items;
-        const priorTurns = before.filter((item) => item.kind !== 'mail');
-        const keptIds = new Set(retained.map(({ id }) => id));
-        const items = retained.every(({ id }, i) => priorTurns[i]?.id === id)
-          ? [...before.filter((item) => item.kind === 'mail' || keptIds.has(item.id)), ...newRows]
-          : [...retained, ...before.filter((item) => item.kind === 'mail'), ...newRows];
+        const items = staged ?? projectItems(before);
         let unchanged = 0;
         while (unchanged < before.length && unchanged < items.length && before[unchanged] === items[unchanged]) unchanged++;
         feed.live = true;
@@ -2746,7 +2774,7 @@ export function createFeedService(
         });
         flush(feed);
       }
-      return { check, publish };
+      return { check, writeCheckpoint, publish };
     },
     kimiOutput(ref, event) {
       if (stopped) return;

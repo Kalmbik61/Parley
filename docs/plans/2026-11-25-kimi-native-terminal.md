@@ -8,7 +8,7 @@ Accepted for the combined T1/T2/probe candidate d8cbe978. Chat is read-only whil
 - Explicit takeover holds the existing session lifecycle lock and resource accounting. Require known idle ACP, with no turn, approval, elicitation, delivery, scheduled wake, or unsent Chat/Terminal draft. Preserve content on refusal. Reject another ref bound to the same provider ID and Kimi home.
 - Block Chat sends, config, choices and wake/delivery during transitions and native ownership. Preserve queued mail without sending it to the PTY. Raw terminal keys and resize use existing PTY transport. Fence callbacks and requests by process generation.
 - Await outgoing process exit before starting a successor. Start installed Kimi with only the exact original `--session` ID, original cwd/home and sanitized ordinary environment. Honor provider locks and durable mode, with no resume override, ID discovery, config copy, global plugin or Parley grant.
-- Require human `/exit` before returning from a running native process. Reopen managed ACP with the originally bound ID, even after native `/new` or another ID in the same terminal. Explain this at the controls. A crash or interrupted handoff leaves a durable recoverable state and never wakes ACP automatically.
+- Require human `/exit` before returning from a running native process. Reopen managed ACP with the originally bound ID, even after native `/new` or another ID in the same terminal. Explain this at the controls. A crash before the handback commits leaves Terminal ownership recoverable and excludes ACP wake. A committed handback instead leaves a durable Chat checkpoint.
 - Reconcile a bounded provider replay at handback or handback recovery against a stable snapshot boundary. Do not blindly append a replay or remove the original persisted feed. Divergence must produce a deterministic refreshed snapshot or a recoverable state.
 
 ## Acceptance
@@ -70,7 +70,7 @@ Open `http://127.0.0.1:4658/e2e/fixtures/kimi-native-terminal.html`. The Termina
 - **Numbers** — 1,161 focused checks passed (89 host, 455 desktop, 101 protocol, 516 core). The installed 2.7.3 probe passed with 3 loopback model requests, 0 external or paid requests, and no plugin installation.
 - **Screens** — Parley browser, 1120 × 530. [Takeover](../../packages/desktop/e2e/fixtures/kimi-native-takeover.png), [read-only Chat and island](../../packages/desktop/e2e/fixtures/kimi-native-read-only.png), [native Terminal](../../packages/desktop/e2e/fixtures/kimi-native-terminal.png), [return control](../../packages/desktop/e2e/fixtures/kimi-native-return.png), [restored Chat](../../packages/desktop/e2e/fixtures/kimi-native-restored.png).
 - **For the human** — Open Terminal and select **Take control in Terminal**. Use Kimi normally, then type `/exit` and select **Return to Chat**. A native `/new` does not rebind Parley.
-- **Risk** — Kimi 2.7.3 can still expose descriptions of earlier managed tools to the model even though Terminal cannot call them. Handback requires ACP `session/load`. Failure or replay beyond the explicit limits leaves Chat unchanged and a recoverable stopped state. The preserved pre-handoff feed is under the work's `kimi-history/<session-id>/<archive-id>.json`. A successful takeover keeps the active or latest archive and prunes older copies for that session.
+- **Risk** — Kimi 2.7.3 can still expose descriptions of earlier managed tools to the model even though Terminal cannot call them. Handback requires ACP `session/load`. Failure or replay beyond the explicit limits leaves Chat unchanged and a recoverable stopped state. The work's `kimi-history/<session-id>/` keeps the latest committed Chat checkpoint and its original evidence, plus any active Terminal archive. Superseded files are pruned after a durable selection.
 - **Cost** — Zero paid calls. Production latency and archive growth were not measured.
 - **Verdict** — The fixture and stock CLI establish exact-ID ownership transfer, provider-owned mode, unavailable managed tools in native Terminal, and restored Chat. The live app and user configuration were not changed.
 
@@ -182,5 +182,30 @@ pnpm --filter @parley/desktop exec vitest run \
   src/renderer/chat/ChatView.test.tsx src/renderer/chat/TerminalPromptPanel.test.tsx \
   src/renderer/terminal/TerminalSurface.test.tsx src/renderer/terminal/use-terminal.test.ts
 pnpm --filter @parley/host exec vitest run src/kimi/kimi-host.test.ts -t 'old managed input'
+git diff --check
+```
+
+## R2 final follow-up — durable Chat checkpoint
+
+Lead decision m-10317 covers the final durability finding #3 from m-10315. The previous R2 correction still protects subscribers when the release transaction fails. It does not protect a restarted host if that transaction succeeds and the process dies before publishing the new feed.
+
+- Before release, stage a bounded immutable checkpoint of the reconciled Chat. Preserve matched archived rows verbatim and add each native turn once. Atomically remove the Terminal ownership marker and select the completed checkpoint in the same map transaction. Failure leaves the old marker and archive selected, and never publishes replacement deltas. No added brief or prompt runs during recovery.
+- A restarted Chat seeds the selected checkpoint before handing the feed to the window or executing a managed wake. On later ordinary ACP resume, reconcile provider turns after the checkpoint, even if Chat already has rows. Retain the checkpoint evidence on failure. Do not silently replace it with raw replay or append an entire provider snapshot.
+- Keep the active checkpoint and any in-flight/active Terminal archive through takeover and cleanup. A failed unpublished checkpoint must not replace the selected history. Once a new selection is durable, prune superseded files without dropping active pointers. Session deletion and provider replacement must not leave dangling checkpoint references. Do not change other providers or native authority.
+- Reproduce committed release without feed publication under a disposable host, then restart and check exact archived approval IDs, times and one native suffix before ordinary wake. Cover release rejection, successful retry, and a later managed turn surviving another resume. Run focused builds and checks and commit separately from the prior R2 and R3 changes.
+
+The projection file is written and flushed before the map points to it. The map transaction selects it and its original evidence while clearing the Terminal marker. If release is rejected, the old map and UI remain in place. A retry removes any unselected file left by a crash before commit. Cold Chat reads the committed rows before a snapshot or managed launch. Later resumes still request bounded ACP history, using the checkpoint and any matching in-memory rows to retain Chat evidence while reconciling the suffix. This is a handback checkpoint, not a separate journal of every later managed turn. Provider-only rows recovered after a restart still lack original Parley metadata that was never checkpointed.
+
+The `crash-on-handback.mjs` fixture starts a separate disposable host and sends SIGKILL to itself from the synchronous map-written callback, after SQLite commit and before publish. Before the fix the restarted Chat was empty. After the fix it retains the exact old rows, including the settled approval, times and IDs, and one copy of the native turn. A later wake with an already seeded checkpoint resumes a newer managed turn without repeating the brief or losing the queued note. A failed release leaves the old marker, files and subscribed rows intact. A successful retry replaces the checkpoint, prunes superseded files and leaves one original evidence file. Session deletion removes both and provider replacement clears the pointer.
+
+Verification passed 71 host tests, eight focused core tests, dependency and host builds, desktop typecheck and `git diff --check`. No new browser capture, stock CLI retest or power-loss simulation in this slice.
+
+```sh
+pnpm run typecheck
+pnpm --filter @parley/host build
+pnpm --filter @parley/host exec vitest run \
+  src/kimi/acp.test.ts src/kimi/sessions.test.ts src/kimi/kimi-host.test.ts
+pnpm --filter @parley/core exec vitest run src/work/agent-switch.test.ts src/work/store.test.ts \
+  -t 'checkpoint|deleteSessionFiles'
 git diff --check
 ```

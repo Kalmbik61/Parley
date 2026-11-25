@@ -1,6 +1,10 @@
+import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, readdir, realpath, rename, symlink, unlink, writeFile } from 'node:fs/promises';
+import { once } from 'node:events';
+import { appendFile, mkdir, readFile, readdir, realpath, rename, symlink, unlink, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, expect, it, vi } from 'vitest';
 import { createPendingSession, createWork, FEED_TEXT_LIMIT, readMap, unreadLetters, updateMap, workPaths } from '@parley/core';
 import { KIMI_LAUNCH_MODES_FEATURE, KIMI_PTY_GENERATION_FEATURE, feedItem, type MethodName, type Params, type Result, type SessionRef } from '@parley/protocol';
@@ -61,6 +65,7 @@ vi.mock('../feed/feed-service.js', async (importOriginal) => {
             r2Faults.trace?.push('project');
             projection.publish();
           },
+          writeCheckpoint: projection.writeCheckpoint,
         };
       },
     };
@@ -111,12 +116,23 @@ async function setup(loggedOut = false, standalone = false): Promise<string> {
 
 async function connectIsolatedHost(): Promise<void> {
   running = await startHost({ home: home! });
+  await connectIsolatedClient();
+}
+
+async function connectIsolatedClient(): Promise<void> {
   const paths = hostPaths(home!);
   client = connectRaw(paths.socket);
   await waitConnected(client.socket);
   const handshake = await hello(client, await readFile(paths.token, 'utf8'));
   expect(handshake.error).toBeUndefined();
   expect(handshake.result).toMatchObject({ features: expect.arrayContaining([KIMI_LAUNCH_MODES_FEATURE, KIMI_PTY_GENERATION_FEATURE]) });
+}
+
+async function closeIsolatedHost(): Promise<void> {
+  client?.close();
+  await running!.context.shutdown('test restart');
+  await running!.closed;
+  running = undefined;
 }
 
 afterEach(async () => {
@@ -595,11 +611,13 @@ it('retains the archived Chat on a failed handback and refreshes deterministical
   expect(JSON.stringify((await call('feed.snapshot', { ref })).items)).toContain('archived brief');
   await unlink(failLoad);
   expect(await call('kimi.setControl', { ref, target: 'chat' })).toMatchObject({ owner: 'chat' });
-  expect(JSON.stringify((await call('feed.snapshot', { ref })).items)).not.toContain('archived brief');
+  const after = (await call('feed.snapshot', { ref })).items;
+  expect(JSON.stringify(after)).not.toContain('archived brief');
   const dir = path.join(workPaths(ref.projectPath, ref.workId).dir, 'kimi-history', ref.sessionId);
-  const archives = await readdir(dir);
-  expect(archives).toHaveLength(1);
-  expect(await readFile(path.join(dir, archives[0]!), 'utf8')).toContain('archived brief');
+  const checkpoint = (await session(ref))!.kimiChatCheckpoint!;
+  expect(new Set(await readdir(dir))).toEqual(new Set([`${checkpoint.archive}.json`, `${checkpoint.priorArchive}.json`]));
+  expect(JSON.parse(await readFile(path.join(dir, `${checkpoint.archive}.json`), 'utf8'))).toEqual(after);
+  expect(await readFile(path.join(dir, `${checkpoint.priorArchive}.json`), 'utf8')).toContain('archived brief');
 }, 15_000);
 
 
@@ -795,10 +813,86 @@ it('retains the marker and subscribed Chat across a failed divergent handback an
   expect(await call('kimi.setControl', { ref, target: 'chat' })).toMatchObject({ owner: 'chat' });
   expect(r2Faults.trace).toEqual(['prepare', 'release', 'project']);
   expect((await session(ref))?.kimiTerminal).toBeUndefined();
+  expect((await session(ref))?.kimiChatCheckpoint).toMatchObject({ priorArchive: marker?.archive });
   const after = (await call('feed.snapshot', { ref })).items;
   expect(after).toMatchObject([{ kind: 'prompt', text: 'replacement native prompt' }, { kind: 'text', text: 'Native answer' }, { kind: 'turn' }]);
   expect(events).toContainEqual(expect.objectContaining({ event: 'feed.changed', data: expect.objectContaining({ ref, upsert: after }) }));
 }, 15_000);
+
+it('recovers exact Chat rows if the host dies after release commits and before publication', async () => {
+  const projectPath = await setup();
+  const readyPrompts = (items: Result<'feed.snapshot'>['items']): string[] =>
+    items.flatMap((item) => item.kind === 'prompt' ? [item.text] : []);
+  const history = path.join(home!, 'provider-history');
+  const trace = path.join(home!, 'checkpoint-trace');
+  vi.stubEnv('KIMI_FIXTURE_HISTORY', history);
+  vi.stubEnv('KIMI_FIXTURE_TRACE', trace);
+  vi.stubEnv('KIMI_FIXTURE_PERMISSION_MODES', '1');
+  const { ref } = await call('sessions.create', { ...input(projectPath), task: 'one original checkpoint brief' });
+  await expectReply(ref, 'Hello Parley');
+  await call('pty.send', { ref, text: 'approve', submit: true });
+  const approval = await pendingCard(ref, 'permission');
+  await call('feed.decide', { ref, cardId: approval.id, decision: { kind: 'permission', behavior: 'deny', optionId: 'deny' } });
+  await expectReply(ref, 'deny');
+  // The fake permission reply emits ACP output but does not persist it itself.
+  await appendFile(history, `${JSON.stringify(['approve', 'deny'])}\n`);
+  const before = (await call('feed.snapshot', { ref })).items;
+  expect(before).toContainEqual(expect.objectContaining({ id: approval.id, state: 'denied' }));
+  await call('kimi.setControl', { ref, target: 'terminal' });
+  const native = await terminalReady(ref);
+  raw(ref, 'native before commit\r/exit\r', native);
+  await expect.poll(() => call('kimi.getControl', { ref })).toMatchObject({ owner: 'exited' });
+  await closeIsolatedHost();
+
+  const tsxLoader = pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href;
+  const crashScript = fileURLToPath(new URL('./fixtures/crash-on-handback.mjs', import.meta.url));
+  const child = spawn(process.execPath, ['--import', tsxLoader, crashScript, home!, JSON.stringify(ref)], {
+    stdio: ['ignore', 'ignore', 'inherit', 'ipc'],
+    env: { ...process.env, PARLEY_HOME: home!, HARNAS_HOME: home! },
+  });
+  const crashed = once(child, 'exit', { signal: AbortSignal.timeout(12_000) });
+  try {
+    expect((await Promise.race([once(child, 'message'), crashed]))[0]).toBe('ready');
+    await connectIsolatedClient();
+    client!.send({ id: ++id, method: 'kimi.setControl', params: { ref, target: 'chat' } });
+    await expect(crashed).resolves.toEqual([null, 'SIGKILL']);
+  } finally {
+    client?.close();
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+  }
+
+  await connectIsolatedHost();
+  expect(await call('kimi.getControl', { ref })).toMatchObject({ owner: 'chat' });
+  expect((await session(ref))?.kimiChatCheckpoint).toBeDefined();
+  const openedBeforeSnapshot = await readFile(trace, 'utf8');
+  await call('feed.subscribe', { ref });
+  const committed = (await call('feed.snapshot', { ref })).items;
+  expect(readyPrompts(committed)).toContain('native before commit');
+  expect(committed.slice(0, before.length)).toEqual(before);
+  expect(readyPrompts(committed).filter((text) => text === 'native before commit')).toHaveLength(1);
+  expect(await readFile(trace, 'utf8')).toBe(openedBeforeSnapshot);
+  await expect.poll(() => session(ref), { timeout: 5000 }).toMatchObject({ lifecycle: 'sleeping' });
+  await call('sessions.resume', { ref });
+  expect((await call('feed.snapshot', { ref })).items).toEqual(committed);
+
+  await call('pty.send', { ref, text: 'later managed turn', submit: true });
+  await expect.poll(async () => (await call('feed.snapshot', { ref })).items.length).toBe(committed.length + 3);
+  await call('sessions.stop', { ref });
+  await closeIsolatedHost();
+  await connectIsolatedHost();
+  // Seeding a nonempty checkpoint cannot be mistaken for a complete provider replay.
+  expect((await call('feed.snapshot', { ref })).items).toEqual(committed);
+  await updateMap(ref.projectPath, ref.workId, (_map, letters) => {
+    letters.add({ roomId: null, kind: 'note', from: 'human', to: [ref.sessionId], text: 'wake the recovered Chat' });
+  });
+  await expect.poll(async () => readyPrompts((await call('feed.snapshot', { ref })).items), { timeout: 5000 }).toContain('later managed turn');
+  const recovered = (await call('feed.snapshot', { ref })).items;
+  expect(recovered.slice(0, committed.length)).toEqual(committed);
+  expect(readyPrompts(recovered).filter((text) => text === 'later managed turn')).toHaveLength(1);
+  expect(readyPrompts(recovered).filter((text) => text.includes('one original checkpoint brief'))).toHaveLength(1);
+  expect((await readFile(trace, 'utf8')).split('\n').filter((line) => line.includes('one original checkpoint brief'))).toHaveLength(1);
+  expect(unreadLetters(ref.projectPath, ref.workId, ref.sessionId).map((letter) => letter.text)).toContain('wake the recovered Chat');
+}, 25_000);
 
 it.each(['history', 'session'])('refuses to write archives through a linked %s directory', async (linked) => {
   const projectPath = await setup();
@@ -839,7 +933,7 @@ it.each(['history', 'session'])('does not prune archives through a linked %s dir
   await exitNative(ref);
 }, 15_000);
 
-it('keeps only the owned or latest archive and removes unpublished candidates and deleted-session archives', async () => {
+it('prunes only superseded Kimi evidence and checkpoints, including retries and session deletion', async () => {
   const projectPath = await setup();
   vi.stubEnv('KIMI_FIXTURE_HISTORY', path.join(home!, 'provider-history'));
   const { ref } = await call('sessions.create', input(projectPath));
@@ -848,19 +942,35 @@ it('keeps only the owned or latest archive and removes unpublished candidates an
   const first = (await session(ref))!.kimiTerminal!;
   await exitNative(ref);
   await call('kimi.setControl', { ref, target: 'chat' });
-  expect(await readdir(dir)).toEqual([`${first.archive}.json`]);
+  const original = (await session(ref))!.kimiChatCheckpoint!;
+  expect(original.priorArchive).toBe(first.archive);
+  const files = async () => new Set((await readdir(dir)).map((name) => name.replace(/\.json$/, '')));
+  expect(await files()).toEqual(new Set([first.archive, original.archive]));
 
   r2Faults.failPublish = true;
   expect((await request('kimi.setControl', { ref, target: 'terminal' })).error).toBeDefined();
   expect(await call('kimi.getControl', { ref })).toMatchObject({ owner: 'chat' });
-  expect(await readdir(dir)).toEqual([`${first.archive}.json`]);
+  expect(await files()).toEqual(new Set([first.archive, original.archive]));
 
   r2Faults.failPublish = false;
   await call('kimi.setControl', { ref, target: 'terminal' });
   const latest = (await session(ref))!.kimiTerminal!;
   expect(latest.archive).not.toBe(first.archive);
-  expect(await readdir(dir)).toEqual([`${latest.archive}.json`]);
+  const whileNative = new Set([first.archive, original.archive, latest.archive]);
+  expect(await files()).toEqual(whileNative);
   await exitNative(ref);
+
+  r2Faults.trace = [];
+  r2Faults.failRelease = true;
+  expect((await request('kimi.setControl', { ref, target: 'chat' })).error).toBeDefined();
+  expect(await session(ref)).toMatchObject({ kimiTerminal: latest, kimiChatCheckpoint: original });
+  expect(await files()).toEqual(whileNative);
+
+  r2Faults.failRelease = false;
+  await call('kimi.setControl', { ref, target: 'chat' });
+  const final = (await session(ref))!.kimiChatCheckpoint!;
+  expect(final.priorArchive).toBe(latest.archive);
+  expect(await files()).toEqual(new Set([latest.archive, final.archive]));
   await call('sessions.delete', { ref });
   await expect(readdir(dir)).rejects.toMatchObject({ code: 'ENOENT' });
 }, 15_000);

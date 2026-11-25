@@ -298,7 +298,7 @@ export interface LaunchChoice {
 
 type KimiTakeover = ReturnType<KimiSessions['takeover']>;
 /** null means an explicit reopen using the same persisted cwd and Kimi home. */
-type KimiHandoff = { native: KimiTakeover | null } | { release(pid: number): Promise<void> };
+type KimiHandoff = { native: KimiTakeover | null } | { release(pid: number, checkpoint: string): Promise<void> };
 
 const returnKimiFirst = () => new HostError('conflict', 'Return Kimi to Chat from the Terminal tab first.', { reason: 'kimi-native' });
 const exitKimiFirst = () => new HostError('conflict', 'Use /exit in Kimi Terminal before returning to Chat.', { reason: 'kimi-native-running' });
@@ -467,7 +467,8 @@ export interface SessionsFeedOptions {
   kimi?: KimiSessions;
   kimiArchive?(ref: SessionRef, archive: string): Promise<void>;
   kimiRemoveArchive?(ref: SessionRef, archive: string): Promise<void>;
-  kimiPruneArchives?(ref: SessionRef, retain: string): Promise<void>;
+  kimiPruneArchives?(ref: SessionRef, retain: readonly string[]): Promise<void>;
+  kimiSeedCheckpoint?(ref: SessionRef, archive: string): Promise<void>;
   kimiWakePending?(ref: SessionRef): boolean;
   /**
    * Потолок машины (спека ёмкости 2026-10-30, 4.2): `CapacityService` хоста. Тип структурный, как у `hooks` и `consents`:
@@ -619,6 +620,20 @@ export function createSessionsService(
   const kimiResult = new Map<string, KimiControl>();
   const kimiClaims = new Map<string, { home: string; id: string }>();
 
+  function selectedKimiArchives(session: WorkSession | undefined): string[] {
+    return [session?.kimiTerminal?.archive, session?.kimiChatCheckpoint?.archive, session?.kimiChatCheckpoint?.priorArchive]
+      .filter((archive) => archive !== undefined);
+  }
+
+  async function pruneKimiArchives(ref: SessionRef): Promise<void> {
+    try {
+      const current = (await readMap(ref.projectPath, ref.workId)).sessions.find((session) => session.id === ref.sessionId);
+      await feed.kimiPruneArchives?.(ref, selectedKimiArchives(current));
+    } catch (error) {
+      host.log.warn('Superseded Kimi archives could not be removed', { ref, error: String(error) });
+    }
+  }
+
   function kimiBlocksChat(ref: SessionRef): boolean {
     const key = refKey(ref);
     if (kimiHandoffs.has(key) || kimiClaims.has(key)) return true;
@@ -649,7 +664,8 @@ export function createSessionsService(
     const { values } = captureWorks(({ projectPath, map }) => map.sessions.flatMap((session) => {
       if (session.provider !== 'kimi' || session.lifecycle === 'closed' || session.providerSessionId !== id ||
           refKey({ projectPath, workId: map.work.id, sessionId: session.id }) === key) return [];
-      return [{ home: session.kimiTerminal?.home, cwd: session.workspace?.path ?? session.worktree?.path ?? projectPath }];
+      return [{ home: session.kimiTerminal?.home ?? session.kimiChatCheckpoint?.home,
+        cwd: session.workspace?.path ?? session.worktree?.path ?? projectPath }];
     }));
     const aliases = values.flat();
     if (aliases.length === 0) return;
@@ -1621,11 +1637,16 @@ export function createSessionsService(
             plan.args.some(arg => arg.startsWith('sandbox_workspace_write.writable_roots='))));
           if (plan.kimiAcp !== undefined) {
             if (kimi === undefined) throw new HostError('bad_request', 'Kimi Code sessions need the ACP transport');
-            if (handoff !== undefined && plan.kimiAcp.sessionId !== session.providerSessionId) {
+            const checkpoint = handoff === undefined ? session.kimiChatCheckpoint : undefined;
+            const reconcileAt = checkpoint === undefined
+              ? session.kimiTerminal && { ...session.kimiTerminal, kind: 'handoff' as const }
+              : { ...checkpoint, kind: 'checkpoint' as const };
+            if (reconcileAt !== undefined && plan.kimiAcp.sessionId !== session.providerSessionId) {
               throw new HostError('conflict', 'The launch plan did not preserve the original Kimi session ID');
             }
+            if (checkpoint !== undefined) await feed.kimiSeedCheckpoint?.(ref, checkpoint.archive);
             nativeKimi = await kimi.start(ref, { ...plan.kimiAcp, command, args, cwd: plan.cwd, env,
-              ...(handoff === undefined ? {} : { reconcileAt: session.kimiTerminal! }),
+              ...(reconcileAt === undefined ? {} : { reconcileAt }),
             });
           }
           const spawned = pty.start(ref, {
@@ -1708,10 +1729,23 @@ export function createSessionsService(
         await timer.step('startWrite', () => started);
         if (handoff !== undefined && 'release' in handoff) {
           if (nativeKimi === undefined) throw new HostError('conflict', 'Managed Kimi Chat is unavailable');
-          // Hold the marker until replay is validated, and keep the old Chat visible until release commits.
-          const publish = nativeKimi.prepareActivation();
-          await handoff.release(handle.pid);
-          publish();
+          // Do not release Terminal or publish Chat until the recovered rows are durable.
+          const prepared = nativeKimi.prepareActivation();
+          if (prepared.writeCheckpoint === undefined) throw new HostError('conflict', 'Managed Kimi Chat cannot create a checkpoint');
+          const checkpoint = randomUUID();
+          try {
+            await prepared.writeCheckpoint(checkpoint);
+            await handoff.release(handle.pid, checkpoint);
+          } catch (error) {
+            const actual = await readMap(ref.projectPath, ref.workId).catch(() => null);
+            if (actual !== null && !selectedKimiArchives(actual.sessions.find((item) => item.id === ref.sessionId)).includes(checkpoint)) {
+              await feed.kimiRemoveArchive?.(ref, checkpoint).catch((removeError: unknown) => {
+                host.log.warn('Unpublished Kimi checkpoint could not be removed', { ref, error: String(removeError) });
+              });
+            }
+            throw error;
+          }
+          prepared.publish();
         } else nativeKimi?.activate();
         failed = false;
       } catch (error) {
@@ -2090,9 +2124,7 @@ export function createSessionsService(
             });
             durable = true;
             unpublished = undefined;
-            await feed.kimiPruneArchives?.(ref, next.archive).catch((error: unknown) => {
-              host.log.warn('Superseded Kimi archives could not be removed', { ref, error: String(error) });
-            });
+            await pruneKimiArchives(ref);
             await stop(ref);
           } else {
             await finalizing.get(key);
@@ -2104,16 +2136,20 @@ export function createSessionsService(
         }
         await finalizing.get(key);
         if (marker === undefined) throw busyError('The original Kimi binding changed');
+        // A host that died before release may have left an unselected checkpoint file.
+        await pruneKimiArchives(ref);
         const { outcome } = await launchDetailed(ref, 'resume', {}, {
-          release: (pid) => updateMap(ref.projectPath, ref.workId, (map) => {
+          release: (pid, checkpoint) => updateMap(ref.projectPath, ref.workId, (map) => {
             const current = map.sessions.find((item) => item.id === ref.sessionId);
             if (current?.providerSessionId !== id || current.kimiTerminal?.archive !== marker.archive || pty.get(ref)?.pid !== pid) {
               throw busyError('Kimi binding changed during handback');
             }
+            current.kimiChatCheckpoint = { archive: checkpoint, priorArchive: marker.archive, cwd: marker.cwd, home: marker.home };
             delete current.kimiTerminal;
           }).then(() => {}),
         });
         if (outcome !== 'started') throw busyError('Kimi Chat could not start');
+        await pruneKimiArchives(ref);
         kimiResult.delete(key);
         kimiClaims.delete(key);
         return publishKimiControl(ref, { owner: 'chat', canTakeover: pty.get(ref)?.provider === 'kimi' });
