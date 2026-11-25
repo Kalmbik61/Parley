@@ -116,7 +116,7 @@ test.skipIf(!optIn)('stock Kimi shares a native PTY, transcript, and local plugi
   });
 
   function safe(text: string) {
-    for (const [index, id] of ids.entries()) text = text.replaceAll(id, `session_${'ABC'[index]}`);
+    for (const [index, id] of ids.entries()) text = text.replaceAll(id, `session_${'ABCD'[index]}`);
     return text.replaceAll(root, '<temp>').replaceAll(root.replace('/private', ''), '<temp>')
       .replace(/(approval|question)_[a-f\d-]+/g, '$1_<id>');
   }
@@ -389,8 +389,42 @@ test.skipIf(!optIn)('stock Kimi shares a native PTY, transcript, and local plugi
     expect(requests.find(r => r.phase === 'PREPARED')?.body.tools?.some(t => t.function.name === tool)).toBe(false);
     await prepared.close();
 
+    stage = 'create and close a fresh ID without a model turn';
+    const requestOffset = requests.length;
+    const listingCount = () => mcp().filter(e => e.event === 'tools/list' && e.allowed).length;
+    const initialListings = listingCount();
+    const empty = startNative();
+    await empty.visible('fresh composer before no-turn creation', ready);
+    expect(empty.view()).toContain('No session yet');
+    expect(await empty.submit('/new')).toBe(true);
+    const d = await until('new empty provider ID', () => sessionHook().find(h => !ids.includes(h.session_id))?.session_id, empty.view);
+    ids.push(d);
+    await empty.visible('empty session MCP connected', /connected · 1 tool \(stdio\)/);
+    expect(listingCount()).toBeGreaterThan(initialListings);
+    const discovery = await until('persisted MCP discovery before any prompt', () => wire(d).find(r => r.type === 'mcp.tools_discovered' && JSON.stringify(r).includes('TOOL_SHARED')), empty.view);
+    await empty.close();
+    expect(requests).toHaveLength(requestOffset);
+    expect(wire(d).some(r => r.type === 'turn.prompt')).toBe(false);
+    expect(hooks().some(h => h.session_id === d && h.hook_event_name === 'UserPromptSubmit')).toBe(false);
+
+    stage = 'first model turn after exact native resume of empty ID';
+    const emptyResumed = startNative(['--session', d]);
+    await until('resume empty ID', () => sessionHook(d).find(h => h.source === 'resume'), emptyResumed.view);
+    await emptyResumed.visible('resumed empty session composer', ready);
+    expect(emptyResumed.pid).not.toBe(empty.pid);
+    expect(await emptyResumed.submit('SHARED_PROMPT_EMPTYRESUME')).toBe(true);
+    await emptyResumed.visible('first reply on resumed empty ID', /SHARED_REPLY_EMPTYRESUME/);
+    expect(requests).toHaveLength(requestOffset + 1);
+    const firstOnEmpty = requests[requestOffset];
+    expect(firstOnEmpty?.phase).toBe('EMPTYRESUME');
+    expect(JSON.stringify(firstOnEmpty?.body.messages)).toContain('SHARED_PTY_PLUGIN_RULES');
+    expect(firstOnEmpty?.body.tools?.some(t => t.function.name === tool)).toBe(false);
+    evidence['emptyResume'] = { discovery, setupModelRequests: 0,
+      advertisedOnFirstResume: false };
+    await emptyResumed.close();
+
     stage = 'wire and exact-once records';
-    for (const [id, phases] of [[a, ['CHAT', 'RAW', 'ASK', 'RESUME']], [b, ['NEW']], [c, ['PREPARED']]] as const) {
+    for (const [id, phases] of [[a, ['CHAT', 'RAW', 'ASK', 'RESUME']], [b, ['NEW']], [c, ['PREPARED']], [d, ['EMPTYRESUME']]] as const) {
       expect(wirePath(id)).toContain(`/${id}/agents/main/wire.jsonl`);
       const records = wire(id);
       expect(records[0]).toEqual(expect.objectContaining({ type: 'metadata', protocol_version: '1.5' }));
@@ -403,7 +437,7 @@ test.skipIf(!optIn)('stock Kimi shares a native PTY, transcript, and local plugi
       }
       expect(JSON.stringify(records)).not.toContain('SHARED_PROMPT_BLOCKED');
     }
-    expect(requests.map(r => r.phase)).toEqual(['CHAT', 'RAW', 'RAW', 'RAW', 'ASK', 'ASK', 'COMPACT_A', 'NEW', 'NEW', 'COMPACT_B', 'RESUME', 'PREPARED']);
+    expect(requests.map(r => r.phase)).toEqual(['CHAT', 'RAW', 'RAW', 'RAW', 'ASK', 'ASK', 'COMPACT_A', 'NEW', 'NEW', 'COMPACT_B', 'RESUME', 'PREPARED', 'EMPTYRESUME']);
     expect(mcp().filter(e => e.event === 'tools/call')).toEqual([expect.objectContaining({ allowed: true }), expect.objectContaining({ allowed: true })]);
     expect(rejected).toEqual([]);
     const compactRequests = requests.filter(r => r.phase.startsWith('COMPACT_'));
