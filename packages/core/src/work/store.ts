@@ -23,6 +23,7 @@ import { bumpWorkId, nextWorkId, normalizeMap } from './map.js';
 import type { LetterJournal, LetterTx } from './letter-store.js';
 import { createTableLetterTx, dropReaderCandidates, loadAllLetters, replaceLetters } from './letter-tables.js';
 import { isAlive } from './pid-alive.js';
+import { kimiArchiveDirectory } from './kimi-archive.js';
 import { sql } from './sql-statements.js';
 import { PRE_JOURNAL_STATE_IGNORE, PRE_MEMORY_STATE_IGNORE, PRE_RECIPES_STATE_IGNORE, ensureStateDir, stateDir, SHARED_STATE_IGNORE } from './state-dir.js';
 import { resolveSharedProjectContext, sharedPathIgnored } from './project-context.js';
@@ -789,11 +790,9 @@ export async function deleteSessionFiles(
     limitsFile(paths.dir, sessionId),
     contextFile(paths.dir, sessionId),
   ];
-  await Promise.all([
-    ...files.map((file) => rm(file, { force: true })),
-    // Archive cleanup is recursive, so only a generated session name may become its final path component.
-    ...(/^s-\d+$/.test(sessionId) ? [rm(path.join(paths.dir, 'kimi-history', sessionId), { recursive: true, force: true })] : []),
-  ]);
+  await Promise.all(files.map((file) => rm(file, { force: true })));
+  const archive = await kimiArchiveDirectory(projectPath, workId, sessionId);
+  if (archive !== undefined) await rm(archive, { recursive: true, force: true });
 }
 
 /**

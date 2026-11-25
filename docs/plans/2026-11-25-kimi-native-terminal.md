@@ -147,3 +147,23 @@ pnpm --filter @parley/desktop exec vitest run \
   src/renderer/terminal/use-terminal.test.ts src/renderer/terminal/TerminalSurface.test.tsx
 git diff --check
 ```
+
+## R2 follow-up — archive containment and feed rollback
+
+Lead assignment m-10303 covers the two deferred R2 findings from m-10299 only. Refuse linked archive ancestors and verify that archive operations stay within the canonical work state directory before writing, pruning or deleting. Regression fixtures use disposable outside sentinels and exercise both a linked archive parent and linked per-session directory. Preserve the existing archive policy for ordinary directories.
+
+An explicit Return to Chat may prepare a divergent provider snapshot, but must not publish that projection to Chat subscribers before durable release. An injected release write failure must keep the old snapshot and old subscribed rows in the current host and after restart. A later successful retry may publish the authoritative provider projection. Keep the native marker and automatic-wake fence through preparation and durable release. Verify the original failures first, then run focused builds/checks and commit separately from R3.
+
+R2 handback now validates the archive and prepares the projection while ownership is still fenced. It updates the visible feed only after durable release. A refused transaction publishes no replacement deltas, so subscribers need no corrective resync. The regression clears the provider conversation in the native fixture, adds a replacement turn, injects the release failure, compares the current and restarted snapshots to the original rows, then verifies the successful retry publishes the replacement.
+
+Archive operations validate each directory component below the canonical project, including the state directory and the work directory. Unsafe writes fail before takeover. Cleanup skips unsafe paths and leaves unrelated files and links alone. The archive reader also rejects linked leaf files. As with portable settings-file operations, the path checks are not an atomic defence against a directory being swapped in the final filesystem check/use interval.
+
+Seven cases reproduced the review findings before the fix. Afterward, all 70 focused Kimi host tests and seven session-cleanup tests passed. The dependency builds, desktop typecheck and `git diff --check` also passed. No new screenshots or stock CLI run in this slice.
+
+```sh
+pnpm run typecheck
+pnpm --filter @parley/core exec vitest run src/work/store.test.ts -t deleteSessionFiles
+pnpm --filter @parley/host exec vitest run \
+  src/kimi/acp.test.ts src/kimi/sessions.test.ts src/kimi/kimi-host.test.ts
+git diff --check
+```

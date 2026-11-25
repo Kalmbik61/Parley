@@ -19,10 +19,15 @@ export interface KimiReplayChunk {
   messageId?: string;
 }
 
+export interface KimiHistoryProjection {
+  check(): void;
+  publish(): void;
+}
+
 interface KimiSessionHooks {
   output(ref: SessionRef, event: KimiOutput): void;
   hasHistory(ref: SessionRef): boolean;
-  prepareHistory?(ref: SessionRef, archive: string, chunks: readonly KimiReplayChunk[]): Promise<() => void>;
+  prepareHistory?(ref: SessionRef, archive: string, chunks: readonly KimiReplayChunk[]): Promise<KimiHistoryProjection>;
   checkBinding?(ref: SessionRef, home: string, id: string): void;
   activity(ref: SessionRef, state: 'ready' | 'working' | 'blocked' | 'ended', detail?: string): void;
   requestsChanged?(ref: SessionRef, requests: KimiState['requests']): void;
@@ -83,7 +88,12 @@ export function createKimiSessions(host: HostContext, hooks: KimiSessionHooks) {
     });
   }
 
-  async function start(ref: SessionRef, launch: KimiLaunch): Promise<{ process: PtyProcess; sessionId: string; activate(): void }> {
+  async function start(ref: SessionRef, launch: KimiLaunch): Promise<{
+    process: PtyProcess;
+    sessionId: string;
+    activate(): void;
+    prepareActivation(): () => void;
+  }> {
     const key = refKey(ref);
     const home = await kimiHome(launch.env, launch.cwd);
     const strictReplay = launch.reconcileAt !== undefined;
@@ -229,7 +239,24 @@ export function createKimiSessions(host: HostContext, hooks: KimiSessionHooks) {
       }
       const restoreHistory = launch.reconcileAt === undefined ? undefined
         : await hooks.prepareHistory?.(ref, launch.reconcileAt.archive, historyChunks);
-      if (!acp.connected() || live.get(key) !== session) throw new KimiAcpError('Kimi Code ACP disconnected', 'disconnected');
+      const isCurrent = () => live.get(key) === session && acp.connected();
+      if (!isCurrent()) throw new KimiAcpError('Kimi Code ACP disconnected', 'disconnected');
+      function prepareActivation(): () => void {
+        if (!isCurrent()) throw new HostError('not_found', 'Kimi Code session is not running');
+        restoreHistory?.check();
+        return () => {
+          restoreHistory?.publish();
+          // A child may exit just after durable release. The validated history is still usable,
+          // but this process must not publish readiness or accept prompts after exit.
+          if (!isCurrent()) return;
+          if (!strictReplay) for (const event of initialOutput) hooks.output(ref, event);
+          session.ready = true;
+          initialOutput.length = 0;
+          publishState(acp.state());
+          hooks.activity(ref, 'ready');
+          if (!strictReplay && launch.prompt !== undefined) submit(ref, session, launch.prompt);
+        };
+      }
       return {
         sessionId,
         process: {
@@ -272,16 +299,8 @@ export function createKimiSessions(host: HostContext, hooks: KimiSessionHooks) {
             return () => dataListeners.delete(listener);
           },
         },
-        activate() {
-          if (live.get(key) !== session || !acp.connected()) throw new HostError('not_found', 'Kimi Code session is not running');
-          if (strictReplay) restoreHistory?.();
-          else for (const event of initialOutput) hooks.output(ref, event);
-          session.ready = true;
-          initialOutput.length = 0;
-          publishState(acp.state());
-          hooks.activity(ref, 'ready');
-          if (!strictReplay && launch.prompt !== undefined) submit(ref, session, launch.prompt);
-        },
+        activate: () => prepareActivation()(),
+        prepareActivation,
       };
     } catch (error) {
       if (error instanceof KimiAcpError && error.code === 'sign-in') hooks.authChanged?.(false);

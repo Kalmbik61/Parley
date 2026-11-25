@@ -1,7 +1,7 @@
 import { execFile, spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { chmod, mkdir, mkdtemp, readdir, readFile, rename, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir, userInfo } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -2170,6 +2170,24 @@ describe('deleteSessionFiles', () => {
     await deleteSessionFiles(project, map.work.id, 's-01');
     expect(await exists(path.join(history, 's-01'))).toBe(false);
     expect(await exists(path.join(history, 's-02', 'archive.json'))).toBe(true);
+  });
+
+  it.each(['history', 'session'])('does not clean a linked Kimi archive %s during session deletion', async (linked) => {
+    const workId = await withFiles();
+    const history = path.join(workPaths(project, workId).dir, 'kimi-history');
+    const link = linked === 'history' ? history : path.join(history, 's-01');
+    const outside = linked === 'history' ? path.join(other, 's-01') : other;
+    await mkdir(outside, { recursive: true });
+    await mkdir(path.dirname(link), { recursive: true });
+    const sentinel = path.join(outside, 'outside.json');
+    await writeFile(sentinel, 'external evidence');
+    await symlink(other, link, 'dir');
+
+    await deleteSessionFiles(project, workId, 's-01');
+
+    expect(await readFile(sentinel, 'utf8')).toBe('external evidence');
+    expect((await lstat(link)).isSymbolicLink()).toBe(true);
+    expect(await exists(path.join(workPaths(project, workId).briefs, 's-01.md'))).toBe(false);
   });
 
 });

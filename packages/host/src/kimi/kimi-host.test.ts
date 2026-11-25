@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, readdir, realpath, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, realpath, rename, symlink, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import { createPendingSession, createWork, FEED_TEXT_LIMIT, readMap, unreadLetters, updateMap, workPaths } from '@parley/core';
@@ -13,6 +13,7 @@ const r2Faults = vi.hoisted(() => ({
   failPublish: false,
   failActivation: false,
   failRelease: false,
+  beforePrune: null as (() => Promise<void>) | null,
 }));
 
 vi.mock('@parley/core', async (importOriginal) => {
@@ -44,12 +45,22 @@ vi.mock('../feed/feed-service.js', async (importOriginal) => {
     const service = feedModule.createFeedService(...args);
     return {
       ...service,
+      async kimiPruneArchives(...params) {
+        await r2Faults.beforePrune?.();
+        await service.kimiPruneArchives(...params);
+      },
       async kimiPrepareHistory(...params) {
-        const install = await service.kimiPrepareHistory(...params);
-        return () => {
-          r2Faults.trace?.push('activate');
-          if (r2Faults.failActivation) throw new Error('Fixture refused feed activation');
-          install();
+        const projection = await service.kimiPrepareHistory(...params);
+        return {
+          check() {
+            r2Faults.trace?.push('prepare');
+            if (r2Faults.failActivation) throw new Error('Fixture refused feed preparation');
+            projection.check();
+          },
+          publish() {
+            r2Faults.trace?.push('project');
+            projection.publish();
+          },
         };
       },
     };
@@ -121,6 +132,7 @@ afterEach(async () => {
   r2Faults.failPublish = false;
   r2Faults.failActivation = false;
   r2Faults.failRelease = false;
+  r2Faults.beforePrune = null;
   vi.unstubAllEnvs();
 });
 
@@ -736,35 +748,95 @@ it('reopens the exact native owner after exit and after stopped handback survive
   expect(prompts).toContain('reopened native turn');
 }, 20_000);
 
-it('keeps the marker through activation, including a thrown activation and its retry', async () => {
+it('retains the marker and subscribed Chat across a failed divergent handback and restart', async () => {
   const projectPath = await setup();
   const history = path.join(home!, 'provider-history');
   vi.stubEnv('KIMI_FIXTURE_HISTORY', history);
-  const { ref } = await call('sessions.create', input(projectPath));
+  const { ref } = await call('sessions.create', { ...input(projectPath), task: 'archived before native clear' });
+  await expectReply(ref, 'Hello Parley');
+  await call('feed.subscribe', { ref });
+  const before = (await call('feed.snapshot', { ref })).items;
   await call('kimi.setControl', { ref, target: 'terminal' });
-  await exitNative(ref);
+  const native = await terminalReady(ref);
+  raw(ref, '/clear\rreplacement native prompt\r/exit\r', native);
+  await expect.poll(() => call('kimi.getControl', { ref })).toMatchObject({ owner: 'exited' });
   const marker = (await session(ref))?.kimiTerminal;
 
   r2Faults.trace = [];
   r2Faults.failActivation = true;
   expect((await request('kimi.setControl', { ref, target: 'chat' })).error).toBeDefined();
-  expect(r2Faults.trace).toEqual(['activate']);
+  expect(r2Faults.trace).toEqual(['prepare']);
   expect((await session(ref))?.kimiTerminal).toEqual(marker);
   expect((await request('sessions.resume', { ref })).error).toMatchObject({ code: 'conflict' });
 
   r2Faults.trace = [];
   r2Faults.failActivation = false;
   r2Faults.failRelease = true;
+  events = [];
   expect((await request('kimi.setControl', { ref, target: 'chat' })).error).toBeDefined();
-  expect(r2Faults.trace).toEqual(['activate', 'release']);
+  expect(r2Faults.trace).toEqual(['prepare', 'release']);
   expect((await session(ref))?.kimiTerminal).toEqual(marker);
   expect(await call('kimi.getControl', { ref })).toMatchObject({ owner: 'stopped' });
+  expect.soft((await call('feed.snapshot', { ref })).items).toEqual(before);
+  expect.soft(events.filter(({ event }) => event === 'feed.changed').map(({ data }) => data)).not.toEqual(expect.arrayContaining([
+    expect.objectContaining({ ref, removed: expect.arrayContaining(before.map(({ id }) => id)) }),
+  ]));
+
+  client!.close();
+  await running!.context.shutdown('test restart');
+  await running!.closed;
+  await connectIsolatedHost();
+  await call('feed.subscribe', { ref });
+  expect((await call('feed.snapshot', { ref })).items).toEqual(before);
+  events = [];
 
   r2Faults.trace = [];
   r2Faults.failRelease = false;
   expect(await call('kimi.setControl', { ref, target: 'chat' })).toMatchObject({ owner: 'chat' });
-  expect(r2Faults.trace).toEqual(['activate', 'release']);
+  expect(r2Faults.trace).toEqual(['prepare', 'release', 'project']);
   expect((await session(ref))?.kimiTerminal).toBeUndefined();
+  const after = (await call('feed.snapshot', { ref })).items;
+  expect(after).toMatchObject([{ kind: 'prompt', text: 'replacement native prompt' }, { kind: 'text', text: 'Native answer' }, { kind: 'turn' }]);
+  expect(events).toContainEqual(expect.objectContaining({ event: 'feed.changed', data: expect.objectContaining({ ref, upsert: after }) }));
+}, 15_000);
+
+it.each(['history', 'session'])('refuses to write archives through a linked %s directory', async (linked) => {
+  const projectPath = await setup();
+  const { ref } = await call('sessions.create', input(projectPath));
+  const history = path.join(workPaths(ref.projectPath, ref.workId).dir, 'kimi-history');
+  const link = linked === 'history' ? history : path.join(history, ref.sessionId);
+  const external = path.join(home!, 'outside-kimi');
+  const externalSession = linked === 'history' ? path.join(external, ref.sessionId) : external;
+  await mkdir(externalSession, { recursive: true });
+  await writeFile(path.join(externalSession, 'sentinel'), 'outside');
+  await mkdir(path.dirname(link), { recursive: true });
+  await symlink(external, link, 'dir');
+
+  const before = await session(ref);
+  const result = await request('kimi.setControl', { ref, target: 'terminal' });
+  expect.soft(result.error).toMatchObject({ code: 'conflict' });
+  expect.soft(await readdir(externalSession)).toEqual(['sentinel']);
+  expect(await session(ref)).toEqual(before);
+}, 15_000);
+
+it.each(['history', 'session'])('does not prune archives through a linked %s directory', async (linked) => {
+  const projectPath = await setup();
+  const { ref } = await call('sessions.create', input(projectPath));
+  const history = path.join(workPaths(ref.projectPath, ref.workId).dir, 'kimi-history');
+  const link = linked === 'history' ? history : path.join(history, ref.sessionId);
+  const external = path.join(home!, 'outside-kimi');
+  const externalSession = linked === 'history' ? path.join(external, ref.sessionId) : external;
+  await mkdir(externalSession, { recursive: true });
+  const sentinel = path.join(externalSession, '558e1985-f77e-4e69-a557-cc5f991ed679.json');
+  await writeFile(sentinel, 'outside');
+  r2Faults.beforePrune = async () => {
+    await rename(link, `${link}-original`);
+    await symlink(external, link, 'dir');
+  };
+
+  await call('kimi.setControl', { ref, target: 'terminal' });
+  expect(await readFile(sentinel, 'utf8')).toBe('outside');
+  await exitNative(ref);
 }, 15_000);
 
 it('keeps only the owned or latest archive and removes unpublished candidates and deleted-session archives', async () => {

@@ -24,7 +24,8 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { lstat, mkdir, open, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { lstat, open, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import {
@@ -53,6 +54,7 @@ import {
   forEachJsonlRecord,
   interruptedAt,
   isCodexThreadBinding,
+  kimiArchiveDirectory,
   byFamily,
   isClaudeCode,
   loadConfig,
@@ -62,9 +64,8 @@ import {
   settleCards,
   turnActive,
   withCodexAgentMeta,
-  workPaths,
 } from '@parley/core';
-import type { KimiOutput, KimiReplayChunk } from '../kimi/sessions.js';
+import type { KimiHistoryProjection, KimiOutput, KimiReplayChunk } from '../kimi/sessions.js';
 import type {
   CodexAgentMeta,
   CodexCursor,
@@ -246,7 +247,7 @@ export interface FeedService {
   kimiArchive(ref: SessionRef, archive: string): Promise<void>;
   kimiRemoveArchive(ref: SessionRef, archive: string): Promise<void>;
   kimiPruneArchives(ref: SessionRef, retain: string): Promise<void>;
-  kimiPrepareHistory(ref: SessionRef, archive: string, chunks: readonly KimiReplayChunk[]): Promise<() => void>;
+  kimiPrepareHistory(ref: SessionRef, archive: string, chunks: readonly KimiReplayChunk[]): Promise<KimiHistoryProjection>;
   kimiOutput(ref: SessionRef, event: KimiOutput): void;
   kimiRequests(ref: SessionRef, requests: readonly KimiRequest[]): void;
   /**
@@ -2524,16 +2525,25 @@ export function createFeedService(
     for (const feed of woken) void seedAside(feed.ref);
   });
 
-  function kimiArchiveFile(ref: SessionRef, archive: string): string {
-    return path.join(workPaths(ref.projectPath, ref.workId).dir, 'kimi-history', ref.sessionId, `${archive}.json`);
+  async function kimiArchiveFile(ref: SessionRef, archive: string, create = false): Promise<string | undefined> {
+    if (!/^[0-9a-f-]{36}$/i.test(archive)) return undefined;
+    const dir = await kimiArchiveDirectory(ref.projectPath, ref.workId, ref.sessionId, create);
+    return dir === undefined ? undefined : path.join(dir, `${archive}.json`);
   }
 
   async function readKimiArchiveItems(ref: SessionRef, archive: string): Promise<FeedItem[]> {
-    const file = kimiArchiveFile(ref, archive);
-    if ((await stat(file)).size > maxBytes + 1024) throw new Error('Kimi archive exceeds the feed limit');
-    const saved: unknown = JSON.parse(await readFile(file, 'utf8'));
-    if (!Array.isArray(saved) || saved.length > maxItems) throw new Error('Invalid Kimi archive');
-    return saved.map((item) => feedItem.parse(item));
+    const file = await kimiArchiveFile(ref, archive);
+    if (file === undefined) throw new Error('Kimi archive directory is missing or unsafe');
+    const handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    try {
+      const info = await handle.stat();
+      if (!info.isFile() || info.size > maxBytes + 1024) throw new Error('Invalid Kimi archive file');
+      const saved: unknown = JSON.parse(await handle.readFile('utf8'));
+      if (!Array.isArray(saved) || saved.length > maxItems) throw new Error('Invalid Kimi archive');
+      return saved.map((item) => feedItem.parse(item));
+    } finally {
+      await handle.close();
+    }
   }
 
   async function readKimiArchive(feed: SessionFeed, archive: string): Promise<void> {
@@ -2659,24 +2669,27 @@ export function createFeedService(
       return feeds.get(refKey(ref))?.state.items.some((item) => item.kind === 'prompt' || item.kind === 'text') ?? false;
     },
     async kimiArchive(ref, archive) {
-      const file = kimiArchiveFile(ref, archive);
       const items = feeds.get(refKey(ref))?.state.items ?? [];
       const text = JSON.stringify(items);
       if (Buffer.byteLength(text) > maxBytes + 1024) {
         throw new HostError('conflict', 'The prior Kimi Chat exceeds the archive limit. Chat remains in control.');
       }
-      await mkdir(path.dirname(file), { recursive: true });
+      const file = await kimiArchiveFile(ref, archive, true);
+      if (file === undefined) throw new HostError('conflict', 'Kimi Chat archive directory is missing or unsafe. Chat remains in control.');
       // The map only publishes this unique immutable archive after the complete write.
       await writeFile(file, text, { mode: 0o600, flag: 'wx' });
     },
-    kimiRemoveArchive(ref, archive) {
-      return rm(kimiArchiveFile(ref, archive), { force: true });
+    async kimiRemoveArchive(ref, archive) {
+      const file = await kimiArchiveFile(ref, archive);
+      if (file !== undefined) await rm(file, { force: true });
     },
     async kimiPruneArchives(ref, retain) {
-      const file = kimiArchiveFile(ref, retain);
+      const file = await kimiArchiveFile(ref, retain);
+      if (file === undefined) return;
       const dir = path.dirname(file);
       for (const entry of await readdir(dir, { withFileTypes: true })) {
         if (entry.isFile() && /^[0-9a-f-]{36}\.json$/i.test(entry.name) && entry.name !== path.basename(file)) {
+          if (await kimiArchiveFile(ref, retain) !== file) return;
           await rm(path.join(dir, entry.name), { force: true });
         }
       }
@@ -2698,10 +2711,14 @@ export function createFeedService(
       const newRows = state.items.map((item) => item.kind === 'turn' ? { ...item, durationMs: null } : item);
       const projected = [...retained, ...newRows];
       if (projected.length > maxItems || projected.reduce((sum, item) => sum + itemBytes(item), 0) > maxBytes) throw oversizedKimiReplay();
-      return () => {
-        if (stopped || feed.provider !== 'kimi' || !feedCurrent(feed)) {
+      const current = () => feed.provider === 'kimi' && feedCurrent(feed);
+      function check(): void {
+        if (!current()) {
           throw new HostError('conflict', 'The Kimi Chat source changed during handback');
         }
+      }
+      function publish(): void {
+        if (!current()) return;
         const before = feed.state.items;
         const priorTurns = before.filter((item) => item.kind !== 'mail');
         const keptIds = new Set(retained.map(({ id }) => id));
@@ -2728,7 +2745,8 @@ export function createFeedService(
           changes: items.slice(unchanged),
         });
         flush(feed);
-      };
+      }
+      return { check, publish };
     },
     kimiOutput(ref, event) {
       if (stopped) return;

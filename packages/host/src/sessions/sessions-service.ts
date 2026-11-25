@@ -1708,9 +1708,10 @@ export function createSessionsService(
         await timer.step('startWrite', () => started);
         if (handoff !== undefined && 'release' in handoff) {
           if (nativeKimi === undefined) throw new HostError('conflict', 'Managed Kimi Chat is unavailable');
-          // Until the projection is installed, a restart must still see the Terminal marker.
-          nativeKimi.activate();
+          // Hold the marker until replay is validated, and keep the old Chat visible until release commits.
+          const publish = nativeKimi.prepareActivation();
           await handoff.release(handle.pid);
+          publish();
         } else nativeKimi?.activate();
         failed = false;
       } catch (error) {
@@ -2115,7 +2116,7 @@ export function createSessionsService(
         if (outcome !== 'started') throw busyError('Kimi Chat could not start');
         kimiResult.delete(key);
         kimiClaims.delete(key);
-        return publishKimiControl(ref, { owner: 'chat', canTakeover: true });
+        return publishKimiControl(ref, { owner: 'chat', canTakeover: pty.get(ref)?.provider === 'kimi' });
       } catch (error) {
         if (unpublished !== undefined) {
           // A write can fail after persisting. Only unlink the exact candidate if the map
