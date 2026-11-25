@@ -307,7 +307,10 @@ describe('опыт с пакетом: плечо сессии (Э-1, крите�
     // Любая запись карты: состояние не стирается и не превращается в «плеча нет».
     await updateMap(project, workId, (map) => { map.work.goal = 'touched'; });
     expect((await ask()).body).toBe('{}');
-    expect((await journalOf('s-02')).map((record) => record['reason'])).toEqual(['invalid-assignment', 'invalid-assignment']);
+    // Ответ не ждёт фоновой записи в журнал.
+    await vi.waitFor(async () => {
+      expect((await journalOf('s-02')).map((record) => record['reason'])).toEqual(['invalid-assignment', 'invalid-assignment']);
+    });
   });
 
   it('запись сессии не прочиталась или её нет: пусто и причина assignment-unknown — при идущем опыте, при замороженном; при выключенном roomPacket — прежний пустой ответ без записи', async () => {
