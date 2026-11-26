@@ -879,6 +879,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     bind: (ref, binding, id, pid, bootstrap) => sessionsService.bindKimiNative(ref, binding, id, pid, bootstrap),
     bootstrap: (ref, binding, owner, id, action) => sessionsService.kimiBootstrap(ref, binding, owner, id, action),
     event: feedService.kimiNativeEvent,
+    turnEnd: (ref, binding, id, poison) => sessionsService.kimiUnloadTurnEnd(ref, binding, id, poison),
     reset: feedService.kimiNativeReset,
     requests: feedService.kimiNativeRequests,
     activity: activityService.kimiActivity,
