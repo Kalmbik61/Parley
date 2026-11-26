@@ -66,6 +66,27 @@ it('requires a complete empty startup wire and an exact enabled Parley catalog',
   expect(await prove()).toBe('unsafe');
 });
 
+it('allows unrelated MCP startup failures only alongside a verified Parley catalog', async () => {
+  const failure = { type: 'mcp.server_failed', agentId: 'main', serverName: 'other', transport: 'stdio', error: 'Connection closed' };
+  const recovered = { type: 'mcp.server_failure_resolved', agentId: 'main', serverName: 'other', transport: 'stdio', resolution: 'recovered' };
+  const discovery = { type: 'mcp.tools_discovered', agentId: 'main', serverName: 'parley',
+    tools: [{ name: 'get_map' }], enabledNames: ['get_map'] };
+  async function prove(...rows: object[]) {
+    await writeFile(file, header + rows.map(row => JSON.stringify(row) + '\n').join(''));
+    return proveKimiEmptyStartup({ home, cwd, sessionId }, ['get_map']);
+  }
+  expect(await prove(failure)).toBe('waiting');
+  expect(await prove(failure, discovery, { ...failure, serverName: 'another', transport: 'http' })).toBe('ready');
+  expect(await prove(failure, discovery, recovered)).toBe('ready');
+  expect(await prove({ ...failure, error: undefined }, discovery)).toBe('ready');
+  expect(await prove(discovery, { ...recovered, serverName: 'parley' })).toBe('unsafe');
+  expect(await prove(discovery, { ...failure, serverName: 'parley' })).toBe('unsafe');
+  expect(await prove(discovery, { ...failure, serverName: undefined })).toBe('unsafe');
+  expect(await prove(discovery, { ...failure, agentId: 'child' })).toBe('unsafe');
+  expect(await prove(failure, { ...discovery, enabledNames: [] })).toBe('unsafe');
+  expect(await prove(discovery, failure, { type: 'turn.prompt' })).toBe('unsafe');
+});
+
 it('projects only positively attributed human parts, closed blocks, and turn ends', () => {
   const row = { agentId: 'main', time: 12 };
   expect(projectKimiWire({ ...row, type: 'turn.prompt', input: [{ type: 'text', text: 'not projected twice' }] })).toBeUndefined();

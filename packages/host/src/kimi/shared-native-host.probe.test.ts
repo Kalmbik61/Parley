@@ -178,6 +178,11 @@ test.skipIf(!optIn)('shares real production host Chat and Terminal on one stock 
     stage = 'managed native launch';
     const preference = `default_permission_mode = "${fixtureManualDefault ? 'manual' : 'auto'}"`;
     await writeFile(join(kimi, 'config.toml'), `# keep original preference\n${preference}\n`);
+    if (probeAutomaticBootstrap) {
+      await writeFile(join(kimi, 'mcp.json'), JSON.stringify({ mcpServers: {
+        'fixture-unavailable': { command: '/usr/bin/false', args: [] },
+      } }));
+    }
     host = await startHost({ home: parley });
     const paths = hostPaths(parley);
     client = connectRaw(paths.socket);
@@ -325,6 +330,9 @@ test.skipIf(!optIn)('shares real production host Chat and Terminal on one stock 
       await expect.poll(screen, poll).toMatch(ready);
       const firstWire = await wireRows(abandoned);
       emptyWire(firstWire);
+      if (probeAutomaticBootstrap) expect(firstWire).toContainEqual(expect.objectContaining({
+        type: 'mcp.server_failed', serverName: 'fixture-unavailable',
+      }));
       const discovered = firstWire.find(row => row.type === 'mcp.tools_discovered' && row.serverName === 'parley')?.tools;
       expect(discovered).toHaveLength(50);
       expect(discovered?.map(({ name }) => name)).toContain('get_map');

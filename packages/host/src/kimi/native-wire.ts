@@ -19,7 +19,7 @@ export const record = (value: unknown): Record<string, unknown> | undefined =>
 
 const emptyStartupRows = new Set(['environment.set_binding', 'permission.set_mode', 'changeNotifier.snapshot', 'profile.bind', 'mcp.tools_discovered']);
 
-/** Positive, whole-file proof for stock 2.7.3 startup only. Unknown events are never an empty conversation. */
+/** Verify the entire wire before startup may rotate this empty conversation. */
 export async function proveKimiEmptyStartup({ home, cwd, sessionId }: Binding, expected: readonly string[]): Promise<'waiting' | 'unsafe' | 'ready'> {
   if (!path.isAbsolute(home) || !path.isAbsolute(cwd) || !KIMI_SESSION_ID.test(sessionId)) return 'unsafe';
   let fd;
@@ -49,6 +49,9 @@ export async function proveKimiEmptyStartup({ home, cwd, sessionId }: Binding, e
     let latest: Record<string, unknown> | undefined;
     for (const line of lines) {
       const row = record(JSON.parse(line));
+      // Other MCP servers can fail or recover while Kimi discovers Parley's tools.
+      if ((row?.type === 'mcp.server_failed' || row?.type === 'mcp.server_failure_resolved') &&
+          row.agentId === 'main' && typeof row.serverName === 'string' && row.serverName.trim() && row.serverName !== 'parley') continue;
       if (typeof row?.type !== 'string' || !emptyStartupRows.has(row.type)) return 'unsafe';
       if (row.type === 'mcp.tools_discovered' && row.agentId === 'main' && row.serverName === 'parley') latest = row;
     }
