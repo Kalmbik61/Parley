@@ -64,6 +64,7 @@ import {
   loadConfig,
   parleyHome,
   recogniseCodexPrompt,
+  recogniseCodexStartupPrompt,
   retryFromTranscript,
   settleCards,
   turnActive,
@@ -108,6 +109,7 @@ import type { PendingHooks } from '../hooks/pending.js';
 import type { PtyManager } from '../pty/pty-manager.js';
 import type { WorksService } from '../works/works-service.js';
 import { createRolloutTail } from './codex-source.js';
+import { confirmStartupChoice } from './folder-trust.js';
 import { answerQwenPrompt, recogniseQwenPrompt, type QwenPrompt, type QwenPromptKind } from './qwen-prompt.js';
 import { createQwenTail } from './qwen-source.js';
 import { fetchOpencodeMessages, readOpencodeCache, writeOpencodeCache, type OpencodeAddress } from './opencode-source.js';
@@ -443,6 +445,7 @@ interface SessionFeed {
     pid: number;
     watch: NodeJS.Timeout;
     prompt: QwenPrompt | null;
+    rawRevision?: number;
     answering: boolean;
   };
 
@@ -616,6 +619,8 @@ export function createFeedService(
   interface TerminalPrompt {
     cardId: string;
     fingerprint: string;
+    pid: number | undefined;
+    answering?: boolean;
     /** `feed.decisions` до карточки: вернуть при закрытии. */
     decisionsBefore: FeedDecisions | null;
     watch: NodeJS.Timeout;
@@ -624,8 +629,8 @@ export function createFeedService(
   /** Идущий поиск вопроса на экране (опрос раз в `terminalFindStepMs`) и проверка после решения. */
   const terminalFinders = new Map<string, NodeJS.Timeout>();
   const terminalConfirms = new Map<string, NodeJS.Timeout>();
-  /** Сессии, которые сейчас ждут одобрения или ответа (`blocked` с нуждой `approval`/`question`): только им ищется вопрос на экране. */
-  const terminalEligible = new Set<string>();
+  /** На старте и во время хода Codex показывает разные формы вопросов. */
+  const terminalEligible = new Map<string, 'startup' | 'turn'>();
   /** Сессии, в которые хост сейчас печатает свой ответ по шагам: поиск и новые карточки по экрану ждут. */
   const terminalBusy = new Set<string>();
   /** Идущая печать своего ответа по сессии: `cancel` снимает её ожидания и не даёт продолжиться после выхода процесса. */
@@ -990,7 +995,8 @@ export function createFeedService(
   /** Вопрос на экране сессии; `null` — экрана нет или вопрос не узнан. Строки экрана дальше этой функции не идут. */
   function readTerminalPrompt(ref: SessionRef): CodexPrompt | null {
     const lines = deps.pty.screenText(ref);
-    return lines === undefined ? null : recogniseCodexPrompt(lines);
+    if (lines === undefined) return null;
+    return terminalEligible.get(refKey(ref)) === 'startup' ? recogniseCodexStartupPrompt(lines) : recogniseCodexPrompt(lines);
   }
 
   function clearTerminalTimer(timers: Map<string, NodeJS.Timeout>, key: string, kind: 'interval' | 'timeout'): void {
@@ -1034,7 +1040,9 @@ export function createFeedService(
   function openTerminalPrompt(feed: SessionFeed, prompt: CodexPrompt): void {
     const key = refKey(feed.ref);
     if (!terminalEligible.has(key) || terminalBusy.has(key) || terminalPrompts.has(key) || feed.state.items.some(item => isPendingCard(item) && !isCodexFollowUp(item))) return;
-    const update = applyCodexTerminalPrompt(feed.state, prompt, at());
+    const pid = deps.pty.get(feed.ref)?.pid;
+    if (prompt.kind === 'startup-choice' && pid === undefined) return;
+    const update = applyCodexTerminalPrompt(feed.state, prompt, at(), prompt.kind === 'startup-choice' ? 'codex-startup:' + randomUUID() : undefined);
     const card = update.changes.find((item): item is FeedCard => isPendingCard(item));
     if (card === undefined) return;
     const decisionsBefore = feed.decisions;
@@ -1054,10 +1062,11 @@ export function createFeedService(
       // Ответили в терминале, вопрос сменился или ушёл, сессия перестала ждать: карточка отвечена в другом месте.
       if (!terminalEligible.has(key) || seen === null || seen.fingerprint !== record.fingerprint) {
         closeTerminalPrompt(feed.ref, 'elsewhere');
+        if (terminalEligible.get(key) === 'startup') findTerminalPrompt(feed.ref);
       }
     }, terminalWatchMs);
     watch.unref();
-    terminalPrompts.set(key, { cardId: card.cardId, fingerprint: prompt.fingerprint, decisionsBefore, watch });
+    terminalPrompts.set(key, { cardId: card.cardId, fingerprint: prompt.fingerprint, pid, decisionsBefore, watch });
   }
 
   /**
@@ -1069,6 +1078,7 @@ export function createFeedService(
     if (stopped || !terminalEligible.has(key) || terminalBusy.has(key) || terminalPrompts.has(key) || terminalFinders.has(key)) return;
     const feed = feedOf(ref);
     if (feed.state.items.some(item => isPendingCard(item) && !isCodexFollowUp(item))) return;
+    const startup = terminalEligible.get(key) === 'startup';
     const startedAt = now();
     const finish = (): void => clearTerminalTimer(terminalFinders, key, 'interval');
     const step = (): void => {
@@ -1080,9 +1090,10 @@ export function createFeedService(
         openTerminalPrompt(feed, found);
         return;
       }
-      if (now() - startedAt >= terminalFindMs) finish();
+      if (!startup && now() - startedAt >= terminalFindMs) finish();
     };
-    const timer = setInterval(step, terminalFindStepMs);
+    // После входа или выбора папки Codex может показать вопрос про хуки без нового события активности.
+    const timer = setInterval(step, startup ? terminalWatchMs : terminalFindStepMs);
     timer.unref();
     terminalFinders.set(key, timer);
     step();
@@ -1195,13 +1206,54 @@ export function createFeedService(
     terminalMessages.set(key, timer);
   }
 
+  /** Цифра в стартовом меню может как переместить курсор, так и подтвердить выбор.
+   * Перемещаем курсор стрелками и сверяем выделение в том же процессе перед подтверждением. */
+  async function decideStartupPrompt(feed: SessionFeed, record: TerminalPrompt, prompt: CodexPrompt & { kind: 'startup-choice' }, decision: FeedDecision): Promise<Result<'feed.decide'>> {
+    if (record.answering || decision.kind !== 'question') return { applied: false, state: 'pending' };
+    const answer = decision.values?.answer ?? decision.answers[prompt.question];
+    const target = prompt.options.findIndex(option => option.label === answer);
+    if (target < 0) return { applied: false, state: 'pending' };
+    const key = refKey(feed.ref);
+    const selected = (): number | undefined => {
+      if (stopped || terminalPrompts.get(key) !== record || deps.pty.get(feed.ref)?.pid !== record.pid) return undefined;
+      const seen = readTerminalPrompt(feed.ref);
+      return seen?.fingerprint === record.fingerprint ? seen.selected : undefined;
+    };
+    const changed = (): Result<'feed.decide'> => {
+      if (terminalPrompts.get(key) === record) {
+        closeTerminalPrompt(feed.ref, 'elsewhere');
+        findTerminalPrompt(feed.ref);
+      }
+      return { applied: false, state: 'elsewhere' };
+    };
+    record.answering = true;
+    try {
+      const outcome = await confirmStartupChoice(target, prompt.options.length, selected, data => deps.pty.write(feed.ref, data));
+      if (outcome === 'changed') return changed();
+      if (outcome === 'timeout') return { applied: false, state: 'pending' };
+      const result = applyDecision(feed.state, record.cardId, {
+        kind: 'question', answers: { [prompt.question]: prompt.options[target]!.label },
+      }, at());
+      commit(feed, result);
+      closeTerminalPrompt(feed.ref, null);
+      confirmTerminalAnswer(feed.ref, prompt);
+      return { applied: true, state: 'answered' };
+    } catch (error) {
+      if (terminalPrompts.get(key) === record) closeTerminalPrompt(feed.ref, 'stale');
+      throw error;
+    } finally {
+      record.answering = false;
+    }
+  }
+
   /** Решение по карточке терминала: клавиша уходит, только если экран прямо сейчас даёт тот же отпечаток. */
-  function decideTerminalPrompt(feed: SessionFeed, record: TerminalPrompt, decision: FeedDecision, current: FeedCardState): Result<'feed.decide'> {
+  function decideTerminalPrompt(feed: SessionFeed, record: TerminalPrompt, decision: FeedDecision, current: FeedCardState): Result<'feed.decide'> | Promise<Result<'feed.decide'>> {
     const seen = readTerminalPrompt(feed.ref);
     if (seen === null || seen.fingerprint !== record.fingerprint) {
       closeTerminalPrompt(feed.ref, 'elsewhere');
       return { applied: false, state: 'elsewhere' };
     }
+    if (seen.kind === 'startup-choice') return decideStartupPrompt(feed, record, seen, decision);
     const keyToPress = codexPromptKey(seen, decision);
     const own = keyToPress === null ? ownAnswerOf(seen, decision) : null;
     // Ни клавиши, ни своего ответа: решение этим вопросом не выражается.
@@ -1881,8 +1933,11 @@ export function createFeedService(
       if (!wait || wait.answering || !feedCurrent(feed) || deps.pty.get(ref)?.pid !== pid) return;
       const parsed = recogniseQwenPrompt(deps.pty.screenText(ref) ?? [], wait.kind, '', at());
       // When someone is typing a custom answer in the terminal, leave its editor in their hands.
-      const next = parsed?.card.kind === 'question' && !parsed.review && parsed.rows.at(-1)?.selected ? null : parsed;
-      if (next?.fingerprint === wait.prompt?.fingerprint) return;
+      const next = parsed?.card.kind === 'question' && !parsed.review && !parsed.folderTrust && parsed.rows.at(-1)?.selected ? null : parsed;
+      const revision = next?.folderTrust ? deps.pty.get(ref)?.rawInputRevision?.() : undefined;
+      if (next?.fingerprint === wait.prompt?.fingerprint && revision === wait.rawRevision) return;
+      if (revision === undefined) delete wait.rawRevision;
+      else wait.rawRevision = revision;
       if (wait.prompt) settle(ref, 'elsewhere', [wait.prompt.card.id]);
       wait.prompt = next;
       if (!next) {
@@ -1905,7 +1960,7 @@ export function createFeedService(
     const wait = feed.qwenWait!;
     if (wait.answering) return { applied: false, state: 'pending' };
     const current = () => feedCurrent(feed) && feed.qwenWait === wait && wait.prompt === prompt &&
-      deps.pty.get(feed.ref)?.pid === wait.pid;
+      deps.pty.get(feed.ref)?.pid === wait.pid && (!prompt.folderTrust || deps.pty.get(feed.ref)?.rawInputRevision?.() === wait.rawRevision);
     wait.answering = true;
     try {
       const applied = await answerQwenPrompt(prompt, decision, {
@@ -1915,7 +1970,7 @@ export function createFeedService(
       });
       if (!applied || !current()) return { applied: false, state: 'pending' };
       const reviewAnswer = decision.kind === 'question' ? decision.values?.answer : undefined;
-      const recorded = prompt.review && prompt.card.kind === 'question' && decision.kind === 'question' && typeof reviewAnswer === 'string'
+      const recorded = (prompt.review || prompt.folderTrust) && prompt.card.kind === 'question' && decision.kind === 'question' && typeof reviewAnswer === 'string'
         ? { ...decision, answers: { [prompt.card.questions[0]!.question]: reviewAnswer } } : decision;
       const result = applyDecision(feed.state, prompt.card.id, recorded, at());
       commit(feed, result);
@@ -2313,9 +2368,15 @@ export function createFeedService(
     lastActivity.set(key, activity);
     if (!stopped) {
       const need = value.activity.need?.kind;
-      if (activity === 'blocked' && (need === 'approval' || need === 'question')) {
-        terminalEligible.add(key);
-        if (isCodexSession(ref)) findTerminalPrompt(ref);
+      const waitingForPrompt = need === 'startup' || (activity === 'blocked' && (need === 'approval' || need === 'question'));
+      if (waitingForPrompt && isCodexSession(ref)) {
+        const scope = need === 'startup' ? 'startup' : 'turn';
+        if (terminalEligible.has(key) && terminalEligible.get(key) !== scope) {
+          clearTerminalTimer(terminalFinders, key, 'interval');
+          closeTerminalPrompt(ref, 'elsewhere');
+        }
+        terminalEligible.set(key, scope);
+        findTerminalPrompt(ref);
       } else {
         // Сессия перестала ждать (или ждёт не этого): идущий поиск снят, ждущая карточка — ответили в терминале.
         terminalEligible.delete(key);
@@ -3058,7 +3119,8 @@ export function createFeedService(
       const ids = new Set(requests.map(request => `kimi:${request.id}`));
       // A native screen can change before the wire commits its resolution. Keep the card
       // pending (Terminal-only while unrecognized) rather than losing the authoritative outcome.
-      const gone = unresolved ? [] : feed.state.items.filter(item => isPendingCard(item) && item.id.startsWith('kimi:') && !ids.has(item.id)).map(item => item.id);
+      const gone = feed.state.items.filter(item => isPendingCard(item) && item.id.startsWith('kimi:') && !ids.has(item.id) &&
+        (!unresolved || item.id.startsWith('kimi:folder-trust:'))).map(item => item.id);
       const settled = settleCards(feed.state, 'stale', at(), gone);
       const added = requests.flatMap(request => {
         if (settled.state.items.some(item => item.id === `kimi:${request.id}`)) return [];
@@ -3259,7 +3321,18 @@ export function createFeedService(
       const current: FeedCardState = card.state;
       if (current !== 'pending') return { applied: false, state: current };
       if (options.kimiNativeDecide !== undefined && feed.provider === 'kimi' && cardId.startsWith('kimi:')) {
-        return options.kimiNativeDecide(ref, cardId.slice(5), decision);
+        const result = options.kimiNativeDecide(ref, cardId.slice(5), decision);
+        // A startup decision precedes the wire session, so no wire event can settle this card.
+        if (card.kind !== 'question' || !cardId.startsWith('kimi:folder-trust:') || decision.kind !== 'question') return result;
+        return result.then(outcome => {
+          const question = card.questions[0]!.question;
+          const answer = decision.values?.answer ?? decision.answers[question];
+          if (outcome.applied && typeof answer === 'string' && feedCurrent(feed)) {
+            const update = applyDecision(feed.state, cardId, { kind: 'question', answers: { [question]: answer } }, at());
+            if (update.applied) commit(feed, update);
+          }
+          return outcome;
+        });
       }
       if (isCodexFollowUp(card)) return decideCodexFollowUp(feed, card, decision);
       const qwen = feed.qwenWait?.prompt;

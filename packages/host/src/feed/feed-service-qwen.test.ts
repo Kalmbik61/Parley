@@ -62,6 +62,26 @@ describe('feed of a Qwen Code session', () => {
     expect(fakes.writes).toEqual(['1']);
   });
 
+  it('requires an explicit matching scope for the startup trust card', async () => {
+    const screen = ['╭────', '│ Do you trust this folder?',
+      '│ Trusting a folder allows Qwen Code to execute commands it suggests. This is a security feature to prevent accidental execution in untrusted directories.',
+      '│ › 1. Trust folder (project)', '│   2. Trust parent folder (work)', "│   3. Don't trust (esc)", '╰────'];
+    fakes.setScreen(screen);
+    fakes.emitStatus(REF, blocked);
+    const card = (await service.snapshot(REF)).items.find(item => item.kind === 'question')!;
+    const decide = (answer: string) => service.decide(REF, card.id, { kind: 'question', answers: {}, values: { answer } });
+    expect(await decide('yes')).toMatchObject({ applied: false });
+    fakes.setScreen(screen.map(line => line.replace('(project)', '(another)')));
+    expect(await decide('Trust folder (project)')).toMatchObject({ applied: false });
+    expect(fakes.writes).toEqual([]);
+    fakes.setScreen(screen);
+    expect(await decide("Don't trust (esc)")).toEqual({ applied: true, state: 'answered' });
+    expect(fakes.writes).toEqual(['\x1b']);
+    expect((await service.snapshot(REF)).items.find(item => item.id === card.id)).toMatchObject({
+      answers: { [card.questions[0]!.question]: "Don't trust (esc)" },
+    });
+  });
+
   it('rejects a late click after a screen or process change and retires the card on exit', async () => {
     await service.snapshot(REF);
     fakes.setScreen(permission);

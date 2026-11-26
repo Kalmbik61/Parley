@@ -11,7 +11,7 @@
 import type { FeedDecision } from '../types.js';
 
 export interface CodexPromptOption {
-  /** Цифра варианта на экране: нажатие её одной клавишей выбирает вариант (замер: без Enter). */
+  /** Номер варианта на экране. В стартовом меню выбор подтверждается отдельным Enter. */
   digit: string;
   /** Подпись без номера и без подсказки клавиши в скобках `(y)`, `(p)`, `(a)`, `(esc)`; `(Recommended)` остаётся. */
   label: string;
@@ -27,7 +27,14 @@ interface CodexPromptBase {
   fingerprint: string;
 }
 
+interface CodexStartupPrompt extends CodexPromptBase {
+  kind: 'startup-choice';
+  header: string;
+  question: string;
+}
+
 export type CodexPrompt =
+  | CodexStartupPrompt
   | (CodexPromptBase & { kind: 'command-approval'; command: string; reason: string | null })
   | (CodexPromptBase & { kind: 'patch-approval'; path: string })
   | (CodexPromptBase & { kind: 'question'; index: number; total: number; question: string });
@@ -221,6 +228,42 @@ function questionPrompt(lines: readonly string[], headerAt: number): CodexPrompt
   };
 }
 
+const HOOK_CHOICES = ['Review hooks', 'Trust all and continue', "Continue without trusting (hooks won't run)"];
+const FOLDER_WARNING = 'Trust this folder? Codex can read, edit, and run files here, subject to your permission settings. Folder settings can run code automatically, even without a model request. Continue only if you trust these files. Your trust decision will be saved.';
+const RESTRICTED_WARNING = 'Config, hooks, and exec policies from untrusted folders stay disabled. Trusted project folders can still contribute settings. Skills still load, and tools follow your permission settings. Opening will not change saved trust.';
+
+/** Стартовое меню занимает весь экран. Ответ возможен, когда видны все варианты и ровно один курсор. */
+export function recogniseCodexStartupPrompt(lines: readonly string[]): CodexStartupPrompt | null {
+  const start = lines.findIndex(line => line.trim() !== '');
+  const end = lines.findLastIndex(line => line.trim() !== '');
+  const header = lines[start]?.trim();
+  if (header !== 'Hooks need review' && header !== 'Folder access') return null;
+  const hooks = header === 'Hooks need review';
+  if (lines[end]?.trim() !== (hooks ? 'enter confirm · esc skip' : 'enter continue · esc quit')) return null;
+  const optionsAt = firstOption(lines, start + 1, end);
+  if (optionsAt < 0) return null;
+  const menu = readOptions(lines, optionsAt, end);
+  if (menu === null || menu.filter(row => row.marked).length !== 1) return null;
+  const body = lines.slice(start + 1, optionsAt).map(line => line.trim()).filter(Boolean);
+  let question: string;
+  let labels: string[];
+  if (hooks) {
+    question = squash(body.join(' '));
+    if (!/^(?:1 hook is|[1-9]\d* hooks are) new or changed\. Hooks can run outside the sandbox after you trust them\.$/.test(question)) return null;
+    labels = HOOK_CHOICES;
+  } else {
+    const folder = body[0];
+    const warning = squash(body.slice(1).join(' '));
+    if (!folder || (warning !== FOLDER_WARNING && warning !== RESTRICTED_WARNING)) return null;
+    question = folder + '\n' + warning;
+    labels = [warning === FOLDER_WARNING ? 'Trust and continue' : 'Open restricted', 'Quit'];
+  }
+  const options = menu.map(row => finishOption(row, -1, false));
+  if (options.length !== labels.length || options.some((option, i) => option.label !== labels[i])) return null;
+  return { kind: 'startup-choice', header, question, options, selected: menu.findIndex(row => row.marked),
+    fingerprint: JSON.stringify([header, question, labels]) };
+}
+
 /** Вопрос на экране или `null`. Принимает весь видимый экран строками; берётся самый нижний заголовок. */
 export function recogniseCodexPrompt(lines: readonly string[]): CodexPrompt | null {
   const headerAt = lastLineIndex(lines, (line) => {
@@ -236,6 +279,7 @@ export function recogniseCodexPrompt(lines: readonly string[]): CodexPrompt | nu
 
 /** Клавиша одного нажатия для решения; `null` — решение этим вопросом не выражается одной клавишей. */
 export function codexPromptKey(prompt: CodexPrompt, decision: FeedDecision): string | null {
+  if (prompt.kind === 'startup-choice') return null;
   if (prompt.kind === 'question') {
     if (decision.kind !== 'question') return null;
     const entries = Object.entries(decision.answers);

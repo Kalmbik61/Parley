@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+import { confirmStartupChoice, recogniseKimiFolderTrust, type FolderTrustMenu } from '../feed/folder-trust.js';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { FeedDecision, KimiPermissionMode } from '@parley/core';
 import { refKey, type KimiRequest, type SessionRef } from '@parley/protocol';
@@ -57,6 +59,8 @@ type Live = {
   wasReady?: boolean;
   publishedActivity?: string;
   publishedRequests?: string;
+  pastStartup?: true;
+  trust?: { id: string; menu: FolderTrustMenu; revision: number; answering: boolean; answered?: true };
 };
 
 interface Options {
@@ -105,11 +109,29 @@ export function createKimiNativeSession(options: Options) {
     options.activity(live.ref, state);
   };
 
+  function trustMenu(live: Live, screen: readonly string[]) {
+    if (live.pastStartup || live.fenced || live.busy || live.pending.size || live.bootstrap?.task || live.bootstrap?.failed ||
+        live.manualTask || live.manualFailed) return;
+    return recogniseKimiFolderTrust(screen, live.binding.cwd);
+  }
+
   function publishRequests(live: Live): void {
     if (!matches(live) || live.pty?.generation === undefined) return;
     const screen = view(live);
     const rawRevision = pty.get(live.ref)?.inputRevision?.() ?? 0;
     const cards: KimiRequest[] = [];
+    if (live.busy || live.pending.size || kimiComposer(screen)) live.pastStartup = true;
+    const menu = trustMenu(live, screen);
+    if (!menu) delete live.trust;
+    else {
+      const revision = pty.get(live.ref)?.rawInputRevision?.() ?? 0;
+      if (live.trust?.menu.fingerprint !== menu.fingerprint || live.trust.revision !== revision) {
+        live.trust = { id: 'folder-trust:' + randomUUID(), menu, revision, answering: false };
+      }
+      cards.push({ kind: 'elicitation', id: live.trust.id, message: menu.detail, requestedSchema: {
+        type: 'object', required: ['answer'], properties: { answer: { type: 'string', title: menu.title, enum: menu.options } },
+      } });
+    }
     for (const pending of live.pending.values()) {
       if (pending.acted || pending.at < live.pty.startedAt) continue;
       const toolCallId = pending.request.toolCallId;
@@ -130,7 +152,7 @@ export function createKimiNativeSession(options: Options) {
         } });
       }
     }
-    const unresolved = live.pending.size > 0;
+    const unresolved = live.pending.size > 0 || menu !== undefined;
     const state = JSON.stringify([cards, unresolved]);
     if (live.publishedRequests !== state) {
       live.publishedRequests = state;
@@ -181,7 +203,7 @@ export function createKimiNativeSession(options: Options) {
     const handle = pty.get(live.ref);
     const owner = ownerOf(live, boot);
     const version = kimiLazyVersion(screen);
-    if (version !== undefined && version !== '2.7.3') return failBootstrap(live, 'unsupported Kimi version');
+    if (version !== undefined && version !== '2.7.3' && version !== '2.8.0') return failBootstrap(live, 'unsupported Kimi version');
     if (version === undefined || !handle || !owner || handle.bracketedPaste() !== true || handle.hasDraft() || kimiComposer(screen)?.empty !== true) {
       if (Date.now() >= (boot.deadline ??= Date.now() + STARTUP_WAIT_MS)) failBootstrap(live, 'no verified lazy composer');
       return;
@@ -247,7 +269,7 @@ export function createKimiNativeSession(options: Options) {
       requireCurrent();
       pty.write(live.ref, '\x1b');
       await idle();
-      if (kimiLazyVersion(view(live)) !== '2.7.3') throw new Error('The native lazy identity disappeared');
+      if (kimiLazyVersion(view(live)) !== version) throw new Error('The native lazy identity disappeared');
       await command('/new', async () => {
         requireCurrent();
         await options.bootstrap(live.ref, live.binding, owner, null, 'arm');
@@ -368,7 +390,7 @@ export function createKimiNativeSession(options: Options) {
       bootstrapFresh(live);
       bootstrapManual(live);
       const isReady = ready(live.ref);
-      if (isReady && live.publishedActivity === undefined) kActivity(live, 'ready');
+      if (isReady && (live.publishedActivity === undefined || live.publishedActivity === 'blocked')) kActivity(live, 'ready');
       if (isReady && live.wasReady !== true) options.readyChanged(live.ref);
       live.wasReady = isReady;
     }).catch(() => { options.log.warn('Kimi native screen state could not be projected', { ref: live.ref }); });
@@ -428,6 +450,28 @@ export function createKimiNativeSession(options: Options) {
 
   async function decide(ref: SessionRef, id: string, decision: FeedDecision) {
     const live = get(ref);
+    const trust = live?.trust;
+    if (live && trust && id === trust.id) {
+      if (decision.kind !== 'question' || trust.answering || trust.answered) return FALLBACK;
+      const answer = decision.values?.answer ?? decision.answers[trust.menu.title];
+      const target = trust.menu.options.findIndex(label => label === answer);
+      const selected = () => {
+        if (!matches(live) || live.trust !== trust || (pty.get(ref)?.rawInputRevision?.() ?? 0) !== trust.revision) return;
+        const seen = trustMenu(live, view(live));
+        return seen?.fingerprint === trust.menu.fingerprint ? seen.selected : undefined;
+      };
+      if (target < 0) return FALLBACK;
+      trust.answering = true;
+      try {
+        const result = await confirmStartupChoice(target, trust.menu.options.length, selected, key => pty.write(ref, key));
+        if (result === 'changed') return STALE;
+        if (result === 'timeout') return FALLBACK;
+        trust.answered = true;
+        return { applied: true, state: 'answered' as const };
+      } finally {
+        trust.answering = false;
+      }
+    }
     const pending = live?.pending.get(id);
     if (!live || !pending || !matches(live) || live.fenced) return STALE;
     const shown = pending.shown;

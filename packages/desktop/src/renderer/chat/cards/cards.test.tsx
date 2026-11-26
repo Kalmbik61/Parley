@@ -305,6 +305,15 @@ describe('PermissionCard', () => {
 });
 
 describe('QuestionCard', () => {
+  it('can open the native hook inspector after explicitly requesting review in Chat', () => {
+    useLayoutStore.getState().hydrate(WORK, openTab(emptyLayout(), { kind: 'terminal', id: TAB, sessionId: 's-01', view: 'chat' }));
+    render(<Card item={question({ toolName: 'codex_startup', via: 'terminal', state: 'answered', answers: { Hooks: 'Review hooks' } })} />);
+    fireEvent.click(screen.getByRole('button', { name: S.chat.openTerminal }));
+    const tab = groups(useLayoutStore.getState().layouts[WORK]!).flatMap(group => group.tabs).find(entry => entry.id === TAB);
+    expect(tab).toMatchObject({ view: 'terminal' });
+    expect(decideCalls()).toHaveLength(0);
+  });
+
   it('submits an async Codex option using the original card ID and full title', async () => {
     const cardId = JSON.stringify(['request_user_input_async', 'call-color', 0]);
     render(<Card item={question({ id: cardId, cardId, toolName: 'request_user_input_async', via: 'terminal',
