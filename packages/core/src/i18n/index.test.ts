@@ -1,7 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { createI18n, localeCatalog, resolveAppLocale } from './index.js';
+import { createI18n, isLocalePreference, LOCALE_PREFERENCES, localeCatalog, resolveAppLocale } from './index.js';
 
 describe('Parley locale', () => {
+  it('offers only explicit interface languages with their native labels', () => {
+    expect(LOCALE_PREFERENCES).toEqual(['en', 'ru']);
+    expect(isLocalePreference('system')).toBe(false);
+    expect(LOCALE_PREFERENCES.every(isLocalePreference)).toBe(true);
+    expect(localeCatalog.en['settings.language.en']).toBe('English');
+    expect(localeCatalog.en['settings.language.ru']).toBe('Русский');
+    expect(localeCatalog.en).not.toHaveProperty('settings.language.system');
+    expect(localeCatalog.ru).not.toHaveProperty('settings.language.system');
+  });
+
   it.each([
     ['system', 'ru-RU', 'ru'],
     ['system', 'en-GB', 'en'],
@@ -10,6 +20,7 @@ describe('Parley locale', () => {
     ['en', 'ru-RU', 'en'],
     [undefined, 'ru-RU', 'ru'],
     ['invalid', 'de-DE', 'en'],
+    ['invalid', 'ru-RU', 'en'],
   ])('resolves %s with system locale %s as %s', (preference, systemLocale, expected) => {
     expect(resolveAppLocale(preference, systemLocale)).toBe(expected);
   });

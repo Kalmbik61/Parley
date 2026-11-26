@@ -9,7 +9,6 @@ export type { AppLocale, LocalePreference } from './locale.js';
 export const localeCatalog = defineCatalog(
   {
     'settings.language': 'Interface language',
-    'settings.language.system': 'System',
     'settings.language.en': 'English',
     'settings.language.ru': 'Русский',
     'settings.language.restart': 'Restart Parley to apply language changes.',
@@ -18,7 +17,6 @@ export const localeCatalog = defineCatalog(
   },
   {
     'settings.language': 'Язык интерфейса',
-    'settings.language.system': 'Как в системе',
     'settings.language.en': 'English',
     'settings.language.ru': 'Русский',
     'settings.language.restart': 'Перезапустите Parley, чтобы изменить язык интерфейса.',

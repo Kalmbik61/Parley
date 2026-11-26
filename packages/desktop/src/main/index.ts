@@ -25,7 +25,6 @@ import type { WebContents } from 'electron';
 import { configPath, envValue, loadConfig, migrateHome, parleyHome, readSecret } from '@parley/core';
 import type { AssistantLanguage } from '@parley/core/assistant';
 import { SYSTEM_LOCALE_ENV } from '@parley/core/desktop-locale';
-import { resolveAppLocale } from '@parley/core/i18n';
 import { AGENT_LIMITS, type WorksSnapshot } from '@parley/protocol';
 import { appI18n, setAppLocale } from '../shared/app-locale.js';
 import { nativeWindowStrings } from '../shared/catalogs/system.js';
@@ -246,10 +245,10 @@ if (!gotLock) {
       });
     }
     // Читаем выбор после переноса дома и до запуска хоста, меню и обоих окон.
-    const uiStore = createUiStore(desktopUiPath());
-    const ui = await uiStore.load();
     const systemLocale = app.getPreferredSystemLanguages()[0] ?? app.getLocale();
-    const locale = resolveAppLocale(ui.locale, systemLocale);
+    const uiStore = createUiStore(desktopUiPath(), { systemLocale });
+    const ui = await uiStore.load();
+    const locale = ui.locale;
     setAppLocale(locale);
     ipcMain.on('app:locale', (event) => {
       event.returnValue = locale;

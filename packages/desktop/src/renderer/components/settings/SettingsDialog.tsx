@@ -332,7 +332,7 @@ export function SettingsDialog({ open, bridge, onOpenChange, onConfigChange }: S
                     }}
                   >
                     {LOCALE_PREFERENCES.map((locale) => (
-                      <option key={locale} value={locale} lang={locale === 'system' ? undefined : locale}>
+                      <option key={locale} value={locale} lang={locale}>
                         {appI18n.t(`settings.language.${locale}`)}
                       </option>
                     ))}

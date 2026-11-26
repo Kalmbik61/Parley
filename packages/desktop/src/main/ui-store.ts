@@ -9,7 +9,8 @@
 import { readFile, rename } from 'node:fs/promises';
 import { parleyHome } from '@parley/core';
 import { desktopUiPath as uiPathInHome } from '@parley/core/desktop-locale';
-import { DEFAULT_UI, mergeUiPatch, normalizeUi, type UiFile } from '../shared/ui-types.js';
+import { resolveAppLocale } from '@parley/core/i18n';
+import { mergeUiPatch, normalizeUi, type UiFile } from '../shared/ui-types.js';
 import { createFileQueue, writeAtomic } from './atomic-file.js';
 
 /** `~/.parley/desktop/ui.json` — рядом с `layouts.json` (`layout-store.ts`). */
@@ -24,20 +25,28 @@ export function desktopUiPath(home: string = parleyHome()): string {
  * лог main: `main/index.ts` зовёт `load()` без try/catch до создания окна, и
  * старт из-за состояния `ui.json` падать не должен.
  */
-async function readUiFile(file: string): Promise<UiFile> {
+async function readRawUiFile(file: string): Promise<unknown> {
   let raw: string;
   try {
     raw = await readFile(file, 'utf8');
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return DEFAULT_UI;
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
     console.warn(`[parley] ui.json unreadable (${file}): ${(error as Error).message}`);
-    return DEFAULT_UI;
+    return undefined;
   }
   try {
-    return normalizeUi(JSON.parse(raw));
+    return JSON.parse(raw);
   } catch {
-    return DEFAULT_UI;
+    return undefined;
   }
+}
+
+function migrateLegacyLocale(raw: unknown, systemLocale: string): unknown {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw;
+  const locale = 'locale' in raw ? raw.locale : undefined;
+  if (locale !== undefined && locale !== 'system') return raw;
+  // Меняем только язык, сохраняя остальные настройки в исходном виде.
+  return { ...raw, locale: resolveAppLocale(locale, systemLocale) };
 }
 
 export interface UiStore {
@@ -47,23 +56,37 @@ export interface UiStore {
 }
 
 export interface CreateUiStoreOptions {
+  systemLocale?: string;
   /** Подставной `rename` для теста атомарности — `vi.spyOn` не подменяет именованный экспорт `node:fs/promises`. */
   rename?: typeof rename;
 }
 
 export function createUiStore(file: string, options: CreateUiStoreOptions = {}): UiStore {
   const doRename = options.rename ?? rename;
+  const systemLocale = options.systemLocale ?? 'en';
   // Своя очередь на каждый стор: `save` целиком (чтение + слияние + запись) —
   // одна операция очереди, иначе второй `save` читает файл до того, как
   // первый дописал свой патч (тест 8).
   const enqueue = createFileQueue();
 
   return {
-    load: () => readUiFile(file),
+    load: () =>
+      enqueue(async () => {
+        const raw = await readRawUiFile(file);
+        const migrated = migrateLegacyLocale(raw, systemLocale);
+        if (migrated !== raw) {
+          try {
+            await writeAtomic(file, `${JSON.stringify(migrated, null, 2)}\n`, doRename);
+          } catch (error) {
+            console.warn('[parley] could not persist the interface language', error);
+          }
+        }
+        return normalizeUi(migrated);
+      }),
 
     save: (patch) =>
       enqueue(async () => {
-        const current = await readUiFile(file);
+        const current = normalizeUi(migrateLegacyLocale(await readRawUiFile(file), systemLocale));
         // `normalizeUi` после слияния — не только клапан для ключей из патча
         // (ширины сайдбаров и т.п.), но и гарантия, что на диске всегда лежит
         // валидный `UiFile`, даже если патч пришёл из IPC необработанным.
