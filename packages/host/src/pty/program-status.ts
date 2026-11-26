@@ -7,7 +7,9 @@ export type TerminalStatus =
 /** Only PTY launch families with confirmed OSC 7501 reports in Parley. */
 export function programStatusApp(provider: string | null): string | null {
   // Qwen Code 0.27.2: see the Qwen provider design amendment (2026-11-11).
-  return provider === 'qwen' ? 'qwen-code' : null;
+  if (provider === 'qwen') return 'qwen-code';
+  // OpenCode 2.3.0: local serve + --server/-s, without Herdr (parity capture 2026-11-27).
+  return provider === 'opencode' ? 'opencode' : null;
 }
 
 export interface ProgramStatusReport {

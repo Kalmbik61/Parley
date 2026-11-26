@@ -703,7 +703,7 @@ describe('PtyManager: display-only terminal status', () => {
     manager.on('terminal-status', (from, status) => display.push([from, status]));
     manager.on('program-status', (from, status) => canonical.push([from, status]));
     manager.start(a, { ...launch(), provider: 'qwen', process: qwen.process });
-    manager.start(b, { ...launch(), provider: 'opencode', process: other.process });
+    manager.start(b, { ...launch(), provider: 'kimi', process: other.process });
 
     other.data(osc('state=idle:app=qwen-code') + osc('state=clear'));
     qwen.data(osc('state=idle:app=opencode') + osc('state=clear:app=opencode'));
@@ -719,6 +719,37 @@ describe('PtyManager: display-only terminal status', () => {
     ]);
     qwen.exit();
     other.exit();
+  });
+
+  it('routes OpenCode root frames only to display, never to Qwen readiness or prompts', () => {
+    const manager = createPtyManager(fakeHost());
+    const qwen = controlled(1);
+    const opencode = controlled(2);
+    const a = ref();
+    const b = ref();
+    const display: unknown[] = [];
+    const canonical: unknown[] = [];
+    manager.on('terminal-status', (from, status) => display.push([from, status]));
+    manager.on('program-status', (from, status) => canonical.push([from, status]));
+    manager.start(a, { ...launch(), provider: 'qwen', process: qwen.process });
+    manager.start(b, { ...launch(), provider: 'opencode', process: opencode.process });
+
+    qwen.data(osc('state=blocked:app=qwen-code:kind=question'));
+    opencode.data(osc('state=idle:app=opencode'));
+    opencode.data(osc('state=working:app=opencode:id=ses_child'));
+    opencode.data(osc('state=blocked:app=opencode:kind=permission'));
+    opencode.data(osc('state=clear:id=ses_child'));
+    opencode.data(osc('state=idle:app=qwen-code'));
+    opencode.data(osc('state=clear'));
+    expect(canonical).toEqual([[a, { state: 'blocked', kind: 'question', msg: null }]]);
+    expect(display).toEqual([
+      [a, { state: 'blocked', kind: 'question' }],
+      [b, { state: 'idle' }],
+      [b, { state: 'blocked', kind: 'permission' }],
+      [b, null],
+    ]);
+    qwen.exit();
+    opencode.exit();
   });
 
   it('does not carry frames across replacements or exits, with two Qwen sessions in one directory', () => {

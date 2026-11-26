@@ -9,7 +9,8 @@ const reader = () => createOscReader(decode);
 describe('OSC 7501 program status', () => {
   it('only enables families confirmed in their Parley launch mode', () => {
     expect(programStatusApp('qwen')).toBe('qwen-code');
-    for (const provider of ['opencode', 'kimi', 'codex', 'claude', 'glm', 'qwen-code', null]) {
+    expect(programStatusApp('opencode')).toBe('opencode');
+    for (const provider of ['kimi', 'codex', 'claude', 'glm', 'qwen-code', null]) {
       expect(programStatusApp(provider)).toBeNull();
     }
   });
