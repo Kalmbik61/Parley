@@ -40,6 +40,17 @@ function mount(text = '', onSubmit = vi.fn()) {
 }
 
 describe('Composer чата — набор с любого места', () => {
+  it('восстановленный черновик открывается с кареткой в конце и отправляется по Send', () => {
+    const onSubmit = vi.fn();
+    mount('existing dictated text', onSubmit);
+    const field = screen.getByRole('textbox') as HTMLTextAreaElement;
+    field.focus();
+    expect(field.selectionStart).toBe(field.value.length);
+    expect(field.selectionEnd).toBe(field.value.length);
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    expect(onSubmit).toHaveBeenCalledWith('existing dictated text', []);
+  });
+
   it('смонтированное поле регистрируется и получает фокус, после размонтирования — нет', () => {
     setVisibilityCheck(() => true);
     const view = mount();
