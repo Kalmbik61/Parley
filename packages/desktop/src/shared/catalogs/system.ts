@@ -307,4 +307,6 @@ export const russianNoticeDetails: Readonly<Record<NoticeKind, string>> = {
   'snapshot-too-large': 'данных работ слишком много для отображения. Удалите старые работы или отправьте их в архив',
   'codex-auto-unsupported': 'эта версия Codex не поддерживает автопроверку разрешений. Пока запросы появятся в терминале. Обновите Codex',
   'git-connectivity-failed': 'проверка связности репозитория Git завершилась сбоем. Откройте журнал хоста',
+  'kimi-unload-repaired': 'история Kimi починена: ядовитые объявления инструментов удалены, сессия возобновляется',
+  'kimi-unload-blocked': 'починка unload_tools Kimi остановлена. Проверьте сессию и резервную копию wire',
 };

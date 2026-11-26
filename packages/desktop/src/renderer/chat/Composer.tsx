@@ -140,7 +140,7 @@ export function Composer({
     setCaretAt(value.length);
   });
   const caret = Math.min(caretAt, text.length);
-  const pendingCaret = useRef<number | null>(null);
+  const pendingCaret = useRef<number | null>(text.length);
   useLayoutEffect(() => {
     const target = pendingCaret.current;
     if (target === null) return;

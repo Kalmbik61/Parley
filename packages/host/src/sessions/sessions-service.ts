@@ -153,6 +153,7 @@ import type { OpencodeBridge } from '../opencode/events.js';
 import type { OpencodeSupervisor } from '../opencode/server.js';
 import { createOpencodeSession } from '../opencode/create-session.js';
 import { KIMI_BOOTSTRAP_INTERRUPTED, type KimiBootstrapOwner, type KimiNativeBinding, type KimiNativeSessions } from '../kimi/native-session.js';
+import { createKimiUnloadRecovery } from '../kimi/unload-recovery.js';
 import { prepareKimiRegistration } from '../kimi/registration.js';
 import { kimiHome, kimiTerminalEnv } from '../providers/kimi-env.js';
 import type { ProviderVersions } from '../providers/versions.js';
@@ -303,6 +304,8 @@ export interface SessionsService {
   kimiBlocksChat(ref: SessionRef): boolean;
   bindKimiNative(ref: SessionRef, binding: KimiNativeBinding, id: string, pid: number, bootstrap?: { owner: KimiBootstrapOwner; previous: string | null }): Promise<void>;
   kimiBootstrap(ref: SessionRef, binding: KimiNativeBinding, owner: KimiBootstrapOwner, id: string | null, action: 'arm' | 'verify' | 'complete'): Promise<void>;
+  /** Конец хода живой native-сессии Kimi: `poison` — инструмент ядовитого unload_tools (аудит 2026-11-26). */
+  kimiUnloadTurnEnd(ref: SessionRef, binding: KimiNativeBinding, id: string, poison?: { tool: string }): void;
   /** Проверка после удаления worktree, включая сессии без живого процесса. */
   checkWorktreeGit(ref: SessionRef): Promise<void>;
   create(input: CreateSessionInput): Promise<CreatedSession>;
@@ -609,6 +612,18 @@ export function createSessionsService(
   // Одна смена модели или effort на сессию за раз — общий замок `sessions.setEffort` и `sessions.setModel`.
   const exclusive = createSwitchLock();
   const kimiClaims = new Map<string, { home: string; id: string }>();
+
+  // Яд unload_tools Kimi Code 2.8.1 (аудит 2026-11-26): stop → repair → resume под тем же замком, что и смена
+  // модели; занятый замок пропускает попытку — следующий упавший ход повторит её.
+  const kimiUnloadRecovery = createKimiUnloadRecovery({
+    stop: (ref) => stop(ref),
+    resume: async (ref) => { await launch(ref, 'resume'); },
+    live: (ref) => pty.get(ref) !== undefined,
+    serialize: exclusive,
+    locale: () => host.locale?.(),
+    notice: (ref, kind, text) => host.broadcast('host.notice', { kind, ref, text, at: new Date().toISOString() }),
+    log: host.log,
+  });
 
   function kimiBlocksChat(): boolean { return false; }
 
@@ -2895,6 +2910,7 @@ export function createSessionsService(
   return {
     checkWorktreeGit,
     kimiControl, setKimiControl: kimiControl, kimiBlocksChat, bindKimiNative, kimiBootstrap,
+    kimiUnloadTurnEnd: kimiUnloadRecovery.turnEnd,
     create,
     launch,
     stop,

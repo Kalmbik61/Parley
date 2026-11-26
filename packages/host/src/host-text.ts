@@ -180,6 +180,16 @@ const catalog = defineCatalog(
     assistantFetch: 'Fetch {url}',
     assistantQuestion: 'Question: {text}',
     assistantPlan: 'Plan',
+    kimiUnloadRepaired:
+      'Kimi session {session}: the poisoned history is repaired — removed {count} tool-lifecycle announcement(s) naming {tool}. The session resumes. Wire backup: {backup}',
+    kimiUnloadBlocked: 'Kimi session {session}: automatic unload_tools repair stopped ({tool}): {reason}',
+    kimiUnloadReasonLive: 'the session process is live; the wire is never edited while it runs',
+    kimiUnloadReasonChanged: 'the wire changed between reading and writing',
+    kimiUnloadReasonInvalid: 'the wire could not be read safely',
+    kimiUnloadReasonMissing: 'no post-compaction tool-lifecycle announcement names this tool',
+    kimiUnloadReasonLimit: 'the attempt limit (the number of poisoned announcements) is reached',
+    kimiUnloadReasonRepeat: 'the same tool failed again after its announcement was removed',
+    kimiUnloadReasonFailed: '{detail}',
   },
   {
     trustBeforeRetry:
@@ -361,6 +371,16 @@ const catalog = defineCatalog(
     assistantFetch: 'Запросить {url}',
     assistantQuestion: 'Вопрос: {text}',
     assistantPlan: 'План',
+    kimiUnloadRepaired:
+      'Сессия Kimi {session}: ядовитая история починена — удалено объявлений tool_lifecycle: {count} (инструмент {tool}). Сессия возобновляется. Резервная копия wire: {backup}',
+    kimiUnloadBlocked: 'Сессия Kimi {session}: автоматическая починка unload_tools остановлена ({tool}): {reason}',
+    kimiUnloadReasonLive: 'процесс сессии жив; wire не редактируется при живом процессе',
+    kimiUnloadReasonChanged: 'wire изменился между чтением и записью',
+    kimiUnloadReasonInvalid: 'wire не удалось безопасно прочитать',
+    kimiUnloadReasonMissing: 'ни одно объявление tool_lifecycle после компакции не называет этот инструмент',
+    kimiUnloadReasonLimit: 'достигнут предел попыток (число ядовитых объявлений)',
+    kimiUnloadReasonRepeat: 'тот же инструмент снова упал после удаления его объявления',
+    kimiUnloadReasonFailed: '{detail}',
   },
 );
 
