@@ -38,7 +38,7 @@ const submitLabel = /^(?:Submit answers|Отправить ответы)$/u;
 const cancelLabel = /^(?:Cancel|Отмена|Отменить)$/u;
 const feedbackFooters = [
   ['How is Qwen doing this session? (optional)', '1: Good 2: Bad 3: Fine 0: Dismiss'],
-  ['Как дела у Qwen в этой сессии? (необязательно)', '1: Хорошо 2: Плохо 3: Нормально 0: Отклонить'],
+  ['Как дела у Qwen в этой сессии? (необязательно)', '1: Хорошо 2: Плохо 3: Нормально 0: Отклонить'], // cyrillic-ok: Exact incoming Qwen terminal feedback footer.
 ];
 
 function permissionKind(name: string): 'allow_once' | 'allow_always' | 'reject_once' | null {
