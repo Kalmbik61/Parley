@@ -24,7 +24,7 @@ import { Button } from '../../ui/button.js';
 import { AssistantMark } from '../../components/AssistantMark.js';
 import { AttachmentChip } from '../AttachmentChip.js';
 import { splitRoomAttachments } from '../../components/rooms/attachments.js';
-import { splitAttachments } from '../attachments.js';
+import { splitAttachments, splitKimiAttachments } from '../attachments.js';
 import { ChatEnvContext } from '../chat-env.js';
 import { pairContextAttachments } from '../context-attachments.js';
 import { useOpenAttachmentImage } from '../open-attachment.js';
@@ -35,7 +35,8 @@ export interface PromptItemProps {
   text: string;
   images?: number;
   /** Серый элемент: `queued` / `submitted` — передан в CLI, `waiting` — ждёт отправки окном, `failed` — не ушло. */
-  state?: 'queued' | 'submitted' | 'waiting' | 'failed';
+  nativeKimi?: boolean;
+  state?: 'queued' | 'submitted' | 'awaiting-kimi' | 'waiting' | 'failed';
   /** `failed`: Retry. */
   onRetry?: () => void;
   /** `waiting`: «Send now» — отдать в CLI, не дожидаясь конца хода. */
@@ -46,7 +47,7 @@ export interface PromptItemProps {
   via?: boolean;
 }
 
-export function PromptItem({ text, images = 0, state, onRetry, onSendNow, onRemove, via }: PromptItemProps): JSX.Element {
+export function PromptItem({ text, images = 0, nativeKimi, state, onRetry, onSendNow, onRemove, via }: PromptItemProps): JSX.Element {
   // Мост — только для миниатюр: `useChatEnv()` вне окружения бросает, а промпт без него рисуется (чипы без картинок).
   const env = useContext(ChatEnvContext);
   const bridge = env?.bridge ?? null;
@@ -54,7 +55,7 @@ export function PromptItem({ text, images = 0, state, onRetry, onSendNow, onRemo
   const openImage = useOpenAttachmentImage();
   // Вставка в CLI оставляет в промпте пустые строки по краям — в пузыре они только место.
   // Вложения Claude — хвостовые `@"путь"`; у Codex окно шлёт их списком «Attachments:» (`composeRoomMessage`).
-  const mentions = splitAttachments(text);
+  const mentions = nativeKimi ? splitKimiAttachments(text) : splitAttachments(text);
   const { text: rest, attachments } = mentions.attachments.length > 0 ? mentions : splitRoomAttachments(mentions.text);
   // Цитата Reply (`reply.ts`) — в начале текста блоком `> …`: в пузыре она свёрнута до трёх строк.
   const { quote, text: body } = splitQuote(rest);
@@ -108,6 +109,7 @@ export function PromptItem({ text, images = 0, state, onRetry, onSendNow, onRemo
           </span>
         ) : null}
         {state === 'queued' ? <span className="text-xs">{S.chat.queued}</span> : null}
+        {state === 'awaiting-kimi' ? <span className="text-xs">{S.chat.awaitingKimi}</span> : null}
         {state === 'submitted' ? <span className="text-xs">{S.chat.submitted}</span> : null}
         {state === 'waiting' && onSendNow === undefined && onRemove === undefined ? <span className="text-xs">{S.outbox.sending}</span> : null}
         {state === 'waiting' && (onSendNow !== undefined || onRemove !== undefined) ? (

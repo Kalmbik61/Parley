@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { addAttachments, attachmentMention, composePrompt, splitAttachments } from './attachments.js';
+import { addAttachments, attachmentMention, composePrompt, splitAttachments, splitKimiAttachments } from './attachments.js';
 import { rememberContextImage, resetContextImagesForTests } from './context-attachments.js';
 
 describe('attachmentMention', () => {
@@ -114,5 +114,20 @@ describe('addAttachments', () => {
     const current = ['/a', '/b'];
     expect(addAttachments(current, ['/b'])).toBe(current);
     expect(addAttachments(current, [])).toBe(current);
+  });
+});
+
+describe('native Kimi batched attachments', () => {
+  it('renders separate attachment sends and preserves the text and trailing attachment', () => {
+    const text = '@"/a.md" @"/a.png" \r\n\r\n@"/b.pdf"\r\n\r\nFirst paragraph\n\nSecond paragraph @"/c.txt"';
+    expect(splitKimiAttachments(text)).toEqual({
+      text: 'First paragraph\n\nSecond paragraph', attachments: ['/a.md', '/a.png', '/b.pdf', '/c.txt'],
+    });
+  });
+
+  it('leaves a mentioned path in prose or a quoted example as written', () => {
+    for (const text of ['See @"/a.md"\n\nMore feedback', '> @"/a.md"\n\nMore feedback', 'Example\n\n@"/a.md"\n\nMore feedback']) {
+      expect(splitKimiAttachments(text)).toEqual({ text, attachments: [] });
+    }
   });
 });

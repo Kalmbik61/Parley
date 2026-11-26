@@ -47,6 +47,20 @@ export function splitAttachments(text: string): { text: string; attachments: str
   return { text: rest.trim(), attachments };
 }
 
+// Kimi joins an attachment-only send and subsequent feedback with a blank line.
+export function splitKimiAttachments(text: string): ReturnType<typeof splitAttachments> {
+  const leading: string[] = [];
+  let offset = 0;
+  for (const separator of text.matchAll(/\r?\n[ \t]*\r?\n/g)) {
+    const block = splitAttachments(text.slice(offset, separator.index));
+    if (block.text || block.attachments.length === 0) break;
+    leading.push(...block.attachments);
+    offset = separator.index + separator[0].length;
+  }
+  const rest = splitAttachments(text.slice(offset));
+  return leading.length ? { text: rest.text, attachments: [...leading, ...rest.attachments] } : rest;
+}
+
 /** Новые пути к уже стоящим вложениям: без повторов, в порядке добавления; ничего нового — тот же массив. */
 export function addAttachments(current: readonly string[], paths: readonly string[]): readonly string[] {
   const fresh = [...new Set(paths)].filter((path) => !current.includes(path));

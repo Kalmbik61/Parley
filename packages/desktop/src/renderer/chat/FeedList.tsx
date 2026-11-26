@@ -40,7 +40,7 @@ import { cn } from '../lib/cn.js';
 import { formatDuration } from '../lib/metrics-line.js';
 import { useNow } from '../lib/use-now.js';
 import type { FindView } from './ChatFindBar.js';
-import { imagesExtraPx, mailExtraPx, type SwitchDivider } from './feed-model.js';
+import { imagesExtraPx, isNativeKimiPrompt, mailExtraPx, type SwitchDivider } from './feed-model.js';
 import { applyFindHighlights, clearFindHighlights } from './highlight.js';
 import { AgentItem, type Transcript, type TranscriptUpdate } from './items/AgentItem.js';
 import { CardItem } from './items/CardItem.js';
@@ -67,7 +67,7 @@ const INITIAL_RECT = { width: 800, height: 600 };
 export interface QueuedPrompt {
   id: string;
   text: string;
-  state?: 'queued' | 'submitted';
+  state?: 'queued' | 'submitted' | 'awaiting-kimi';
 }
 
 /** Сообщение в очереди окна (`chat-outbox.ts`): ждёт отправки или не ушло; `flying` — отправка уже идёт. */
@@ -465,7 +465,7 @@ export function FeedList({ items, queued, outbox = NO_OUTBOX, localPromptIds, on
                 <div className="mx-auto w-full max-w-[860px]">
                   {'item' in row ? (
                     row.item.kind === 'prompt' ? (
-                      <PromptItem text={row.item.text} images={row.item.images} via={viaIds?.has(row.item.id) === true} />
+                      <PromptItem text={row.item.text} nativeKimi={isNativeKimiPrompt(row.item.id)} images={row.item.images} via={viaIds?.has(row.item.id) === true} />
                     ) : (
                       <ItemView
                         item={row.item}
