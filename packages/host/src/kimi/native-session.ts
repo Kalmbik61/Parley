@@ -10,7 +10,7 @@ import type { PtyHandle, PtyManager } from '../pty/pty-manager.js';
 import { typeAndSubmit } from '../pty/type-and-submit.js';
 import { KIMI_ENTER_DELAY_MS, type KimiSendTarget } from '../pty/send.js';
 import { KIMI_STEER_KEY, kimiComposer, kimiSelectiveSteerKey, kimiLazyStartup, kimiScreenVersion, kimiModeMenu, kimiParleyCount, kimiPermissionMenu, kimiQuestionMenu, kimiQuestionReview, kimiStartedId, kimiStartupDialog } from './native-screen.js';
-import { createKimiWire, KIMI_SESSION_ID, projectKimiWire, proveKimiEmptyStartup, record, type KimiWireEvent } from './native-wire.js';
+import { createKimiWire, KIMI_SESSION_ID, parleyCatalogChange, projectKimiWire, proveKimiEmptyStartup, record, type KimiWireEvent } from './native-wire.js';
 
 export interface KimiNativeBinding {
   home: string;
@@ -43,8 +43,8 @@ type Live = {
   instructions: string;
   id: string | null;
   pty?: PtyHandle;
-  listed: boolean;
   toolNames?: readonly string[];
+  inboxEnabled?: boolean;
   busy: boolean;
   compacting?: boolean;
   endedByHookAt?: number;
@@ -83,6 +83,8 @@ interface Options {
 
 const POLL_MS = 120;
 const STARTUP_WAIT_MS = 15_000;
+// Give healthy discovery a chance to warm first-turn tools without holding Chat for a silent server.
+const MCP_WARMUP_MS = 1500;
 const FALLBACK = { applied: false, state: 'pending' as const };
 const SENT = { applied: true, state: 'pending' as const };
 const STALE = { applied: false, state: 'stale' as const };
@@ -180,7 +182,7 @@ export function createKimiNativeSession(options: Options) {
   function sendTarget(ref: SessionRef, draft: boolean, steer: boolean): KimiSendTarget | undefined {
     const live = get(ref);
     const handle = pty.get(ref);
-    if (live === undefined || !matches(live) || !handle?.bracketedPaste() || !live.listed ||
+    if (live === undefined || !matches(live) || !handle?.bracketedPaste() ||
         live.fenced || live.rebinding !== undefined || live.compacting || live.pending.size !== 0 ||
         live.bootstrap !== undefined || (live.permissionMode === 'manual' && live.manualConfirmed !== true)) return;
     // Close the gap between submit and the provider repaint/first turn hook.
@@ -195,7 +197,11 @@ export function createKimiNativeSession(options: Options) {
     if (followUp !== undefined) return { id: live.id, mode: 'steer', key: kimiSelectiveSteerKey(followUp) };
   }
 
-  function ready(ref: SessionRef, draft = false): boolean {
+  function ready(ref: SessionRef, draft = false, purpose?: 'inbox'): boolean {
+    if (purpose === 'inbox') {
+      const live = get(ref);
+      if (!live?.toolNames?.includes('check_inbox') || live.inboxEnabled === false) return false;
+    }
     return sendTarget(ref, draft, false) !== undefined;
   }
 
@@ -277,12 +283,22 @@ export function createKimiNativeSession(options: Options) {
       const id = live.id;
       return id !== null && id !== previous && boot.observedId === id && kimiStartedId(view(live)) === id ? id : undefined;
     }, 'The authenticated new provider identity did not match Terminal');
-    async function wireReady(id: string) {
+    const emptyWireTimeout = 'The bound conversation could not be verified as empty';
+    async function emptyWire(id: string) {
       const names = live.toolNames;
-      if (!names) return undefined;
       const proof = await proveKimiEmptyStartup({ ...live.binding, sessionId: id }, names);
-      if (proof === 'unsafe') throw new KimiStartupProofError('The full native wire did not prove an empty conversation and exact tool catalog');
-      return proof === 'ready' && live.toolNames === names ? names : undefined;
+      if (proof === 'unsafe') throw new KimiStartupProofError('The native wire could not verify an empty conversation');
+      if (proof === 'waiting') return undefined;
+      return proof === 'ready' && live.toolNames !== names ? 'empty' : proof;
+    }
+    function waitForTools(id: string, checkScreen: boolean) {
+      const until = Date.now() + MCP_WARMUP_MS;
+      return wait(async () => {
+        const proof = await emptyWire(id);
+        if (proof === undefined) return;
+        if (proof === 'ready' && (!checkScreen || kimiParleyCount(view(live)) === live.toolNames?.length)) return true;
+        if (proof === 'unavailable' || Date.now() >= until) return false;
+      }, emptyWireTimeout);
     }
 
     boot.task = (async () => {
@@ -312,25 +328,24 @@ export function createKimiNativeSession(options: Options) {
       });
       const first = await newIdentity(null);
       await command('/mcp');
-      const catalog = await wait(async () => {
-        const names = await wireReady(first);
-        return names && kimiParleyCount(view(live)) === names.length ? names : undefined;
-      }, 'The complete Parley tool catalog could not be confirmed');
-      await command('/new', async () => {
-        await options.bootstrap(live.ref, live.binding, owner, first, 'verify');
-        if (live.id !== first || await wireReady(first) !== catalog || kimiParleyCount(view(live)) !== catalog.length) {
-          throw new KimiStartupProofError('The empty bootstrap identity or discovery changed before rotation');
-        }
-        requireCurrent();
-        boot.expects = { previous: first };
-      });
-      const final = await newIdentity(first);
+      let final = first;
+      if (await waitForTools(first, true)) {
+        await command('/new', async () => {
+          await options.bootstrap(live.ref, live.binding, owner, first, 'verify');
+          await wait(() => emptyWire(first), emptyWireTimeout);
+          requireCurrent();
+          if (live.id !== first) throw new KimiStartupProofError('The empty bootstrap identity changed before rotation');
+          boot.expects = { previous: first };
+        });
+        final = await newIdentity(first);
+      }
       await command('/permission');
       if ((await modeMenu()).current !== intended) throw new KimiStartupProofError('The final native permission mode changed');
       requireCurrent();
       pty.write(live.ref, '\x1b');
       await idle();
-      await wait(() => wireReady(final), 'The final conversation did not confirm the full Parley tool catalog');
+      if (final === first) await wait(() => emptyWire(final), emptyWireTimeout);
+      else await waitForTools(final, false);
       requireCurrent();
       await options.bootstrap(live.ref, live.binding, owner, final, 'complete');
       requireCurrent();
@@ -341,7 +356,7 @@ export function createKimiNativeSession(options: Options) {
   }
 
   function bootstrapManual(live: Live): void {
-    if (live.bootstrap || live.permissionMode !== 'manual' || live.manualConfirmed || live.manualTask || live.manualFailed || !live.listed || live.busy || live.fenced) return;
+    if (live.bootstrap || live.permissionMode !== 'manual' || live.manualConfirmed || live.manualTask || live.manualFailed || live.busy || live.fenced) return;
     const handle = pty.get(live.ref);
     if (handle?.bracketedPaste() !== true || handle.hasDraft() || kimiComposer(view(live))?.empty !== true) return;
     const rawRevision = handle.inputRevision?.();
@@ -393,6 +408,14 @@ export function createKimiNativeSession(options: Options) {
       const ownsProcess = matches(live);
       if (result.limitation !== undefined) options.event(live.ref, live.id, { kind: 'unsupported', at: Date.now() });
       for (const row of result.rows) {
+        if (ownsProcess && live.pty && typeof row.time === 'number' && row.time >= live.pty.startedAt) {
+          const change = parleyCatalogChange(row);
+          if (change !== undefined) {
+            const enabled = Array.isArray(change?.enabledNames) && change.enabledNames.includes('check_inbox');
+            if (enabled !== live.inboxEnabled) delete live.wasReady;
+            live.inboxEnabled = enabled;
+          }
+        }
         const event = projectKimiWire(row);
         if (event === undefined) continue;
         const current = live.pty !== undefined && event.at >= live.pty.startedAt;
@@ -582,7 +605,7 @@ export function createKimiNativeSession(options: Options) {
       if (id !== null && !KIMI_SESSION_ID.test(id)) throw new HostError('conflict', 'The saved Kimi ID is not a stock native session ID.');
       const wire = id === null ? undefined : await createKimiWire({ ...binding, sessionId: id });
       const followUpAtLaunch = await captureKimiFollowUp(binding.home);
-      const live: Live = { ref, binding, id, instructions, listed: false, busy: false, fenced: false,
+      const live: Live = { ref, binding, id, instructions, busy: false, fenced: false,
         pending: new Map(), queue: Promise.resolve(), ...(wire === undefined ? {} : { wire }), ...(permissionMode === undefined ? {} : { permissionMode }),
         ...(bootstrapNonce === undefined ? {} : { bootstrap: { nonce: bootstrapNonce } }),
         ...(followUpAtLaunch === undefined ? {} : { followUpAtLaunch }) };
@@ -611,8 +634,10 @@ export function createKimiNativeSession(options: Options) {
       const live = get(ref);
       if (!live) return;
       const sorted = [...names].sort();
-      if (live.toolNames?.join('\0') !== sorted.join('\0')) live.toolNames = sorted;
-      live.listed = true;
+      if (live.toolNames?.join('\0') !== sorted.join('\0')) {
+        live.toolNames = sorted;
+        delete live.wasReady;
+      }
     },
     onHook,
     ready,

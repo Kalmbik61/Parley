@@ -61,12 +61,12 @@ it('requires a complete empty startup wire and an exact enabled Parley catalog',
   await appendFile(file, '{"type":"turn.prompt"}\n');
   expect(await prove()).toBe('unsafe');
   await writeFile(file, header + JSON.stringify({ ...discovery, enabledNames: ['get_map'] }) + '\n');
-  expect(await prove()).toBe('unsafe');
+  expect(await prove()).toBe('unavailable');
   await writeFile(file, header + row + '\n{"type":"unknown"}\n');
   expect(await prove()).toBe('unsafe');
 });
 
-it('allows unrelated MCP startup failures only alongside a verified Parley catalog', async () => {
+it('separates an empty conversation from Parley and third-party MCP availability', async () => {
   const failure = { type: 'mcp.server_failed', agentId: 'main', serverName: 'other', transport: 'stdio', error: 'Connection closed' };
   const recovered = { type: 'mcp.server_failure_resolved', agentId: 'main', serverName: 'other', transport: 'stdio', resolution: 'recovered' };
   const discovery = { type: 'mcp.tools_discovered', agentId: 'main', serverName: 'parley',
@@ -75,15 +75,19 @@ it('allows unrelated MCP startup failures only alongside a verified Parley catal
     await writeFile(file, header + rows.map(row => JSON.stringify(row) + '\n').join(''));
     return proveKimiEmptyStartup({ home, cwd, sessionId }, ['get_map']);
   }
-  expect(await prove(failure)).toBe('waiting');
+  expect(await prove(failure)).toBe('empty');
   expect(await prove(failure, discovery, { ...failure, serverName: 'another', transport: 'http' })).toBe('ready');
   expect(await prove(failure, discovery, recovered)).toBe('ready');
   expect(await prove({ ...failure, error: undefined }, discovery)).toBe('ready');
-  expect(await prove(discovery, { ...recovered, serverName: 'parley' })).toBe('unsafe');
-  expect(await prove(discovery, { ...failure, serverName: 'parley' })).toBe('unsafe');
-  expect(await prove(discovery, { ...failure, serverName: undefined })).toBe('unsafe');
-  expect(await prove(discovery, { ...failure, agentId: 'child' })).toBe('unsafe');
-  expect(await prove(failure, { ...discovery, enabledNames: [] })).toBe('unsafe');
+  const parleyDown = { ...failure, serverName: 'parley' };
+  const parleyUp = { ...recovered, serverName: 'parley' };
+  expect(await prove(discovery, parleyDown)).toBe('unavailable');
+  expect(await prove(parleyDown, parleyUp)).toBe('unavailable');
+  expect(await prove(parleyDown, discovery, parleyUp)).toBe('ready');
+  expect(await prove(parleyDown, { type: 'turn.prompt' })).toBe('unsafe');
+  expect(await prove(discovery, { ...failure, serverName: undefined })).toBe('ready');
+  expect(await prove(discovery, { ...parleyDown, agentId: 'child' })).toBe('ready');
+  expect(await prove(failure, { ...discovery, enabledNames: [] })).toBe('unavailable');
   expect(await prove(discovery, failure, { type: 'turn.prompt' })).toBe('unsafe');
 });
 
