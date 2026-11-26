@@ -14,9 +14,10 @@ import type { SessionRef } from '@parley/protocol';
 import type { HostContext } from '../context.js';
 import type { WindowCounters } from '../health/window-counters.js';
 import { isKimiSubmitKey } from '../kimi/native-screen.js';
-import { createCodexTerminalParser } from './codex-terminal.js';
+import { createCodexTerminalParser, createOscReader } from './codex-terminal.js';
 import type { CodexSignal, CodexTerminalParser } from './codex-terminal.js';
-import { createQwenTerminalParser, type QwenStatus, type QwenTerminalParser } from './qwen-terminal.js';
+import { programStatusApp, programStatusOf, type TerminalStatus } from './program-status.js';
+import { qwenStatusFromReport, type QwenStatus } from './qwen-terminal.js';
 import { DraftTracker } from './draft.js';
 import { OutputBatcher } from './output-batcher.js';
 import { spawnPty } from './pty-process.js';
@@ -80,7 +81,12 @@ export interface PtyManager {
    * Qwen Code program status (OSC 7501): only for `provider: 'qwen'` sessions and only from the session's current
    * process — output of a process the session has already replaced is not reported.
    */
-  on(event: 'program-status', listener: (ref: SessionRef, status: QwenStatus) => void): () => void;
+  on(event: 'program-status', listener: QwenStatusListener): () => void;
+  /**
+   * Display-only root OSC 7501 reports from the current process. Null is an explicit clear;
+   * consumers discard any previous generation's display data on start and exit.
+   */
+  on(event: 'terminal-status', listener: TerminalStatusListener): () => void;
 }
 
 const DEFAULT_SIZE = { cols: 120, rows: 40 };
@@ -105,8 +111,8 @@ interface Session {
   submittedAt: number;
   /** Разбор потока терминала — только у codex: у остальных состояние приходит хуками. */
   terminal: CodexTerminalParser | null;
-  /** OSC 7501 of Qwen Code; other providers — `null`. */
-  programStatus: QwenTerminalParser | null;
+  /** Root OSC 7501 reports, scoped to the registered process and app. */
+  programStatus: { feed(data: string): PtyStatusReport[] } | null;
   /** Ждущие завершения процесса вызовы `stop()` — резолвятся общим обработчиком `onExit`. */
   stopWaiters: Array<(exit: ExitInfo) => void>;
 }
@@ -135,7 +141,9 @@ type StartListener = (ref: SessionRef) => void;
 type DraftListener = (ref: SessionRef, hasDraft: boolean) => void;
 type HostDraftListener = (ref: SessionRef, hasHostDraft: boolean) => void;
 type SignalListener = (ref: SessionRef, signal: CodexSignal) => void;
-type StatusListener = (ref: SessionRef, status: QwenStatus) => void;
+type QwenStatusListener = (ref: SessionRef, status: QwenStatus) => void;
+type TerminalStatusListener = (ref: SessionRef, status: TerminalStatus | null) => void;
+type PtyStatusReport = { status: TerminalStatus | null; qwen: QwenStatus | null };
 type PtyListener =
   | OutputListener
   | ExitListener
@@ -143,7 +151,8 @@ type PtyListener =
   | DraftListener
   | HostDraftListener
   | SignalListener
-  | StatusListener;
+  | QwenStatusListener
+  | TerminalStatusListener;
 
 export function createPtyManager(host: HostContext, windowCounters?: WindowCounters): PtyManager {
   const sessions = new Map<string, Session>();
@@ -153,7 +162,8 @@ export function createPtyManager(host: HostContext, windowCounters?: WindowCount
   const draftListeners = new Set<DraftListener>();
   const hostDraftListeners = new Set<HostDraftListener>();
   const signalListeners = new Set<SignalListener>();
-  const statusListeners = new Set<StatusListener>();
+  const qwenStatusListeners = new Set<QwenStatusListener>();
+  const terminalStatusListeners = new Set<TerminalStatusListener>();
 
   function requireSession(ref: SessionRef): Session {
     const session = sessions.get(refKey(ref));
@@ -175,6 +185,8 @@ export function createPtyManager(host: HostContext, windowCounters?: WindowCount
       for (const listener of outputListeners) listener(ref, data);
     }, BATCH_INTERVAL_MS);
 
+    const provider = launch.provider ?? null;
+    const app = programStatusApp(provider);
     const session: Session = {
       ref,
       process: ptyProcess,
@@ -184,17 +196,34 @@ export function createPtyManager(host: HostContext, windowCounters?: WindowCount
       batcher,
       cols: size.cols,
       rows: size.rows,
-      provider: launch.provider ?? null,
+      provider,
       ...(launch.provider === 'kimi' ? { generation: randomUUID() } : {}),
       ...(launch.kimiNative === true ? { kimiNative: true } : {}),
       inputRevision: 0,
       rawInputRevision: 0,
       submittedAt: 0,
       terminal: launch.provider === 'codex' ? createCodexTerminalParser() : null,
-      programStatus: launch.provider === 'qwen' ? createQwenTerminalParser() : null,
+      programStatus: app === null ? null : createOscReader((body): PtyStatusReport | null => {
+        const report = programStatusOf(body, app);
+        return report === null ? null : {
+          status: report.status,
+          qwen: provider === 'qwen' ? qwenStatusFromReport(report) : null,
+        };
+      }),
       stopWaiters: [],
     };
+    const previous = sessions.get(key);
+    if (previous !== undefined) previous.programStatus = null;
     sessions.set(key, session);
+
+    // Subscribers can replace or stop the PTY synchronously during a notification.
+    function* currentListeners<T>(listeners: Set<T>): Iterable<T> {
+      for (const listener of Array.from(listeners)) {
+        if (sessions.get(key) !== session) return;
+        yield listener;
+      }
+    }
+
     // Живой PTY занимает таймер простоя хоста (сквозные ограничения плана).
     host.busy(key, true);
 
@@ -205,8 +234,12 @@ export function createPtyManager(host: HostContext, windowCounters?: WindowCount
       session.batcher.push(data);
       // Bound to the process generation: a replaced process's late output reports nothing.
       if (session.programStatus !== null && sessions.get(key) === session) {
-        for (const status of session.programStatus.feed(data)) {
-          notifyListeners(Array.from(statusListeners), 'program status listener failed', ref, status);
+        for (const report of session.programStatus.feed(data)) {
+          if (sessions.get(key) !== session) return;
+          if (report.qwen !== null) {
+            notifyListeners(currentListeners(qwenStatusListeners), 'Qwen status listener failed', ref, report.qwen);
+          }
+          notifyListeners(currentListeners(terminalStatusListeners), 'terminal status listener failed', ref, report.status);
         }
       }
       if (session.terminal === null) return;
@@ -224,6 +257,7 @@ export function createPtyManager(host: HostContext, windowCounters?: WindowCount
 
     ptyProcess.onExit((exit) => {
       const current = sessions.get(key) === session;
+      session.programStatus = null;
       session.batcher.dispose();
       session.screen.dispose();
       try {
@@ -293,9 +327,10 @@ export function createPtyManager(host: HostContext, windowCounters?: WindowCount
   function on(event: 'draft', listener: DraftListener): () => void;
   function on(event: 'host-draft', listener: HostDraftListener): () => void;
   function on(event: 'signal', listener: SignalListener): () => void;
-  function on(event: 'program-status', listener: StatusListener): () => void;
+  function on(event: 'program-status', listener: QwenStatusListener): () => void;
+  function on(event: 'terminal-status', listener: TerminalStatusListener): () => void;
   function on(
-    event: 'output' | 'exit' | 'start' | 'draft' | 'host-draft' | 'signal' | 'program-status',
+    event: 'output' | 'exit' | 'start' | 'draft' | 'host-draft' | 'signal' | 'program-status' | 'terminal-status',
     listener: PtyListener,
   ): () => void {
     if (event === 'output') {
@@ -324,9 +359,14 @@ export function createPtyManager(host: HostContext, windowCounters?: WindowCount
       return () => signalListeners.delete(typed);
     }
     if (event === 'program-status') {
-      const typed = listener as StatusListener;
-      statusListeners.add(typed);
-      return () => statusListeners.delete(typed);
+      const typed = listener as QwenStatusListener;
+      qwenStatusListeners.add(typed);
+      return () => qwenStatusListeners.delete(typed);
+    }
+    if (event === 'terminal-status') {
+      const typed = listener as TerminalStatusListener;
+      terminalStatusListeners.add(typed);
+      return () => terminalStatusListeners.delete(typed);
     }
     const typed = listener as DraftListener;
     draftListeners.add(typed);

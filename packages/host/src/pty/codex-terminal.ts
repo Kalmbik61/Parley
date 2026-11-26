@@ -172,8 +172,14 @@ export function createOscReader<T>(signalOf: (body: string) => T | null): { feed
         }
 
         // Терминатора в этом куске нет: хвост ждёт следующего, но без роста до бесконечности.
-        const tail = data.slice(start);
-        if (tail.length <= MAX_OSC_LENGTH) pending = tail;
+        // An ESC at the boundary may be the first half of ST, not part of the body.
+        const tailLength = data.length - start;
+        const size = tailLength - (data.endsWith(ESC) ? 1 : 0);
+        if (size <= MAX_OSC_LENGTH) {
+          const tail = data.slice(start);
+          // Do not retain a large input chunk through a substring view.
+          pending = data.length > MAX_OSC_LENGTH + 1 ? tail.split('').join('') : tail;
+        }
         break;
       }
 

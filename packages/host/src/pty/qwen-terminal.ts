@@ -9,8 +9,9 @@
  */
 
 import { createOscReader } from './codex-terminal.js';
+import { programStatusOf, type ProgramStatusReport } from './program-status.js';
 
-/** One OSC 7501 report. `state` and `kind` are kept as written: an unknown value changes nothing downstream. */
+/** One Qwen OSC 7501 report. Only recognized root states are forwarded. */
 export interface QwenStatus {
   state: string;
   /** Only with `state=blocked`: `auth`, `permission`, `question`… */
@@ -24,20 +25,14 @@ export interface QwenTerminalParser {
   feed(chunk: string): QwenStatus[];
 }
 
-const PROGRAM_STATUS = '7501;';
-
-/** OSC body → status; `null` — another OSC, another app or no state. */
 export function qwenStatusOf(body: string): QwenStatus | null {
-  if (!body.startsWith(PROGRAM_STATUS)) return null;
-  const fields = new Map<string, string>();
-  for (const pair of body.slice(PROGRAM_STATUS.length).split(':')) {
-    const at = pair.indexOf('=');
-    if (at > 0) fields.set(pair.slice(0, at), pair.slice(at + 1));
-  }
-  const state = fields.get('state');
-  if (state === undefined || state === '') return null;
-  // `state=clear` carries no app; every other report names it.
-  if (state !== 'clear' && fields.get('app') !== 'qwen-code') return null;
+  const report = programStatusOf(body, 'qwen-code');
+  return report === null ? null : qwenStatusFromReport(report);
+}
+
+/** Preserve Qwen's message and kind for its existing readiness and prompt consumers only. */
+export function qwenStatusFromReport({ status, fields }: ProgramStatusReport): QwenStatus {
+  const state = status?.state ?? 'clear';
   let msg: string | null = null;
   const encoded = fields.get('msg');
   if (encoded !== undefined) {
