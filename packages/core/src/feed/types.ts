@@ -82,6 +82,8 @@ interface FeedItemBase {
 export interface FeedPrompt extends FeedItemBase {
   kind: 'prompt';
   text: string;
+  /** This prompt was accepted as a steer during an existing turn. */
+  steered?: true;
   /** Сколько картинок было в промпте (журнал); хуки картинок не отдают — 0. */
   images: number;
 }

@@ -328,6 +328,8 @@ export interface SendResult {
   inserted: boolean;
   submitted: boolean;
   reason: SendReason | null;
+  /** The host wrote the provider's native steering key, not a confirmation from the provider. */
+  steered?: true;
 }
 
 /**

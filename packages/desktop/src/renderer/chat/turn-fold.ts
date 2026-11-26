@@ -115,7 +115,7 @@ function foldBody(body: readonly FeedItem[], mode: 'replies' | 'final', openKeys
   }
   const visible = (item: FeedItem, at: number): boolean => {
     if (item.kind === 'text') return mode === 'replies' || at === shownText;
-    return item.kind === 'permission' || item.kind === 'question' || item.kind === 'plan' || item.kind === 'notice' || item.kind === 'mail';
+    return item.kind === 'prompt' || item.kind === 'permission' || item.kind === 'question' || item.kind === 'plan' || item.kind === 'notice' || item.kind === 'mail';
   };
 
   const rows: FoldRow[] = [];
@@ -145,7 +145,7 @@ export function foldFeed(items: readonly FeedItem[], mode: FoldMode, openKeys: R
   let at = 0;
   while (at < items.length) {
     const prompt = items[at]!;
-    if (prompt.kind !== 'prompt') {
+    if (prompt.kind !== 'prompt' || prompt.steered === true) {
       rows.push(itemRow(prompt));
       at += 1;
       continue;
@@ -153,7 +153,7 @@ export function foldFeed(items: readonly FeedItem[], mode: FoldMode, openKeys: R
     let end = at + 1;
     while (end < items.length) {
       const item = items[end]!;
-      if (item.kind === 'prompt' || item.kind === 'turn' || (item.kind === 'error' && item.retry === undefined)) break;
+      if ((item.kind === 'prompt' && item.steered !== true) || item.kind === 'turn' || (item.kind === 'error' && item.retry === undefined)) break;
       end += 1;
     }
     const body = items.slice(at + 1, end);

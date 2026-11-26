@@ -135,7 +135,7 @@ describe('createSender', () => {
       pty: pty.manager,
       activity: { get: () => undefined, qwenBlocked: () => false } as unknown as ActivityService,
       wake: { inFlight: () => false, enterDelayMs: 500 },
-      kimiReady: () => ready,
+      kimiSendTarget: () => ready ? { id: null, mode: 'idle' } : undefined,
     });
     expect(await send({ ref, text: 'hello', submit: true })).toMatchObject({ inserted: false });
     ready = true;
@@ -145,6 +145,99 @@ describe('createSender', () => {
     expect(await pending).toMatchObject({ inserted: true, submitted: false, reason: 'blocked-before-enter' });
     expect(pty.writes).toEqual(['\x1b[200~hello\x1b[201~']);
     expect(pty.hostDraft).toBe(true);
+  });
+
+  describe('explicit Kimi send', () => {
+    let id: string;
+    let generation: string;
+    let revision: number;
+    let pendingDialog: boolean;
+    let steerKey: '\x13' | '\x1b[13;5u' | '\r';
+    let compaction: 'pending' | 'running' | null;
+
+    beforeEach(() => {
+      const get = pty.manager.get;
+      pty.manager.get = (target) => {
+        const handle = get(target);
+        return handle === undefined ? undefined : {
+          ...handle, kimiNative: true, generation, inputRevision: () => revision,
+        };
+      };
+      pty.paste = true;
+      id = 'session_a';
+      generation = 'generation_a';
+      revision = 0;
+      pendingDialog = false;
+      steerKey = '\x13';
+      compaction = null;
+      activityState = 'working';
+    });
+
+    function kimiSender() {
+      return createSender({
+        pty: pty.manager,
+        activity: {
+          get: () => ({ activity: { activity: activityState }, metrics: { compaction } }),
+          qwenBlocked: () => false,
+        } as unknown as ActivityService,
+        wake: { inFlight: () => wakeInFlight, enterDelayMs: 500 },
+        switching: () => switching,
+        kimiSendTarget: (_ref, _draft, steer) => {
+          if (pendingDialog) return;
+          if (activityState === 'working') return steer ? { id, mode: 'steer', key: steerKey } : undefined;
+          return { id, mode: 'idle' };
+        },
+      });
+    }
+
+    it('only the explicit action writes Ctrl+S while busy; idle sends Return', async () => {
+      const send = kimiSender();
+      const prompt = { ref, text: 'change direction', submit: true };
+      expect(await send(prompt)).toMatchObject({ inserted: false, reason: 'blocked' });
+      const explicit = send({ ...prompt, intent: 'steer' });
+      await vi.advanceTimersByTimeAsync(150);
+      expect(await explicit).toMatchObject({ submitted: true, steered: true });
+      expect(pty.writes).toEqual(['\x1b[200~change direction\x1b[201~', '\x13']);
+      expect(pty.hostDraft).toBe(false);
+      activityState = 'idle';
+      const idle = send({ ...prompt, intent: 'steer' });
+      await vi.advanceTimersByTimeAsync(150);
+      expect(await idle).toEqual({ inserted: true, submitted: true, reason: null });
+      expect(pty.writes.at(-1)).toBe('\r');
+    });
+
+    it.each(['\x1b[13;5u', '\r'] as const)('submits only the native selective key %j', async (key) => {
+      steerKey = key;
+      const result = kimiSender()({ ref, text: 'selected', submit: true, intent: 'steer' });
+      await vi.advanceTimersByTimeAsync(150);
+      expect(await result).toMatchObject({ submitted: true, steered: true });
+      expect(pty.writes).toEqual(['\x1b[200~selected\x1b[201~', key]);
+    });
+
+    it('does not add to a human draft or write during a pending compaction', async () => {
+      const send = kimiSender();
+      const prompt = { ref, text: 'change direction', submit: true, intent: 'steer' } as const;
+      pty.humanDraft = true;
+      expect(await send(prompt)).toMatchObject({ inserted: false, reason: 'blocked' });
+      pty.humanDraft = false;
+      compaction = 'pending';
+      expect(await send(prompt)).toMatchObject({ inserted: false, reason: 'blocked' });
+      expect(pty.writes).toEqual([]);
+    });
+
+    it.each([
+      ['a native dialog opens', () => { pendingDialog = true; }, 'blocked-before-enter'],
+      ['compaction starts', () => { compaction = 'running'; switching = true; }, 'blocked-before-enter'],
+      ['the provider switches session in the same PTY', () => { id = 'session_b'; }, 'blocked-before-enter'],
+      ['the human presses a key without changing draft presence', () => { revision++; }, 'input'],
+      ['the PTY generation changes with the same PID', () => { generation = 'generation_b'; }, 'restarted'],
+    ] as const)('does not send a second write when %s', async (_label, race, reason) => {
+      const attempt = kimiSender()({ ref, text: 'change direction', submit: true, intent: 'steer' });
+      race();
+      await vi.advanceTimersByTimeAsync(150);
+      expect(await attempt).toEqual({ inserted: true, submitted: false, reason });
+      expect(pty.writes).toEqual(['\x1b[200~change direction\x1b[201~']);
+    });
   });
 
   it('blocked — ни одной записи, текст не вставлен', async () => {
@@ -551,6 +644,19 @@ describe('createSender: codex (спека комнат Organic, 3.6, «Ввод�
     await expect(result).resolves.toEqual({ inserted: true, submitted: true, reason: null });
     expect(pty.writes).toEqual([PASTE('письмо занятому'), '\t']);
     expect(pty.hostDraft).toBe(false);
+  });
+
+  it('explicit Send now steers with Enter only while Codex is working', async () => {
+    const send = sender();
+    activityState = 'working';
+    const busy = send({ ref, text: 'first', submit: true, intent: 'steer' });
+    await vi.advanceTimersByTimeAsync(100);
+    expect(await busy).toEqual({ inserted: true, submitted: true, reason: null, steered: true });
+    activityState = 'idle';
+    const idle = send({ ref, text: 'second', submit: true, intent: 'steer' });
+    await vi.advanceTimersByTimeAsync(100);
+    expect(await idle).toEqual({ inserted: true, submitted: true, reason: null });
+    expect(pty.writes).toEqual([PASTE('first'), '\r', PASTE('second'), '\r']);
   });
 
   it('клавиша решается на отправке: ход кончился за паузу — Enter, начался — Tab', async () => {

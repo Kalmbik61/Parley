@@ -1,20 +1,54 @@
+import type { KimiFollowUpMode } from '@parley/core';
 import type { KimiRequest } from '@parley/protocol';
 
+export const KIMI_STEER_KEY = '\x13';
+export const KIMI_STEER_DRAFT_KEY = '\x1b[13;5u';
+export const KIMI_QUEUE_KEY = '\x11';
+
+export function isKimiSubmitKey(key: string): boolean {
+  return key === '\r' || key === KIMI_STEER_KEY || key === KIMI_STEER_DRAFT_KEY || key === KIMI_QUEUE_KEY;
+}
+
+export function kimiSelectiveSteerKey(mode: KimiFollowUpMode): typeof KIMI_STEER_DRAFT_KEY | '\r' {
+  return mode === 'queue' ? KIMI_STEER_DRAFT_KEY : '\r';
+}
+
+const activelyWorking = /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s+Working for \d/i;
 const working = /^\s*[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]?\s*(?:Working for \d|Starting a new session|Compacting (?:context|conversation))/i;
-const dialog = /Trust this folder\?|Ready to submit your answers\?|^Select permission mode$|▶\s*\d+\. (?:Approve|Reject)|^\s*\?\s+\S|(?:Sign in|Log in) to (?:Kimi|continue)/i;
+const liveQueueHint = /^↑ to edit · ctrl-s to steer immediately$/i;
+const divider = /^─{5,}$/;
+const queueBarrier = /^❯\s+(?:\/compact(?:\s|$)|Compact, then switch to )/i;
+const queueHint = /^.*↑.*(?:ctrl-s to steer immediately|will send after (?:compaction|current task))$/i;
+const dialog = /Trust this folder\?|Ready to submit your answers\?|^(?:Select permission mode|Follow-up behavior)$|▶\s*\d+\. (?:Approve|Reject)|^\s*\?\s+\S|(?:Sign in|Log in) to (?:Kimi|continue)/i;
 const top = /^╭─+(?: ↑ [1-9]\d* more ─+)?╮$/;
 const bottom = /^╰─+(?: ↓ [1-9]\d* more ─+)?╯$/;
 
-/** A stock 2.7.3 composer must be the active bottom-most framed editor, not an old prompt line. */
-export function kimiComposer(view: readonly string[]): { empty: boolean } | undefined {
+/** A stock Kimi composer must be the active bottom-most framed editor, not an old prompt line. */
+export function kimiComposer(view: readonly string[], mode: 'idle' | 'steer' | 'selective-steer' = 'idle'): { empty: boolean } | undefined {
   const lines = view.map(line => line.trim()).filter(Boolean);
   const end = lines.findLastIndex(line => bottom.test(line));
   if (end < 2 || lines.length - end > 3) return undefined;
   let start = end - 1;
   while (/^│.*│$/.test(lines[start] ?? '')) start--;
   if (!top.test(lines[start] ?? '') || !/^│ >.*│$/.test(lines[start + 1] ?? '')) return undefined;
-  const outside = [...lines.slice(Math.max(0, start - 4), start), ...lines.slice(end + 1)];
-  if (outside.some(line => working.test(line) || dialog.test(line))) return undefined;
+  const before = lines.slice(0, start);
+  let status = start - 1;
+  if (mode === 'selective-steer') {
+    const boundary = before.findLastIndex(line => divider.test(line));
+    // A divider, visible older prompt and current queue affordance separate the
+    // working line from the editor. An opaque or compacting pane is not proof.
+    if (boundary < 1 || start - boundary < 3 || !liveQueueHint.test(before.at(-1) ?? '') ||
+        before.slice(boundary + 1, -1).some(line => !/^❯\s+\S/.test(line) || queueBarrier.test(line))) return undefined;
+    status = boundary - 1;
+  }
+  const outside = [...before.slice(Math.max(0, status - 3)), ...lines.slice(end + 1)];
+  if (outside.some(line => dialog.test(line))) return undefined;
+  if (mode !== 'idle') {
+    // Bulk Ctrl+S is safe only when a current working status directly adjoins
+    // the editor. A separate positive shape is required for selective steer.
+    if (!activelyWorking.test(lines[status] ?? '') ||
+        outside.some(line => working.test(line) && !activelyWorking.test(line))) return undefined;
+  } else if (outside.some(line => working.test(line) || queueHint.test(line))) return undefined;
   // Stock Kimi shows `>` on the first visible row, not necessarily the first input line.
   return { empty: end === start + 2 && !lines[start]!.includes('↑') && !lines[end]!.includes('↓') && /^│ >\s*│$/.test(lines[start + 1]!) };
 }
@@ -36,9 +70,13 @@ export function kimiStartupDialog(view: readonly string[]): 'trust' | 'login' | 
   if (lines.some(line => /^(?:│\s*)?Sign in to Kimi Code(?:\s*│)?$/.test(line))) return 'login';
 }
 
-export function kimiLazyVersion(view: readonly string[]): string | undefined {
-  if (!view.some(line => line.trim() === 'No session yet — one will be created on your first message.')) return;
-  return view.map(line => line.match(/^\s*│\s*Version:\s+([\w.-]+)\s*│\s*$/)?.[1]).find(value => value !== undefined);
+export function kimiLazyStartup(view: readonly string[]): boolean {
+  return view.some(line => line.trim() === 'No session yet — one will be created on your first message.');
+}
+
+/** Optional startup diagnostic. The label is not an input capability. */
+export function kimiScreenVersion(view: readonly string[]): string | undefined {
+  return view.map(line => line.match(/^\s*│\s*Version:\s+([\w.+-]{1,64})\s*│\s*$/)?.[1]).find(value => value !== undefined);
 }
 
 export function kimiStartedId(view: readonly string[]): string | undefined {

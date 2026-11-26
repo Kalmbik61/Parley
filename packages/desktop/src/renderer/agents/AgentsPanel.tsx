@@ -155,7 +155,8 @@ function AgentRowButton({ row, testId, onOpen }: { row: AgentRow; testId: string
   const now = useNow(1000);
   const running = row.status === 'running';
   const elapsed = running ? now.getTime() - Date.parse(row.startedAt) : row.durationMs;
-  const step = row.agentId === null ? S.agentsPanel.starting : row.step === null ? S.agentsPanel.thinking : (row.step.summary ?? row.step.name);
+  const fallback = running ? (row.agentId === null ? S.agentsPanel.starting : S.agentsPanel.thinking) : null;
+  const step = row.step?.summary ?? row.step?.name ?? fallback;
   const meta = [row.type, row.model, S.chat.agent.toolCalls(row.toolCount), formatDuration(elapsed)].filter((part) => part !== null && part !== '');
   return (
     <button
@@ -168,7 +169,7 @@ function AgentRowButton({ row, testId, onOpen }: { row: AgentRow; testId: string
         {running ? <LoaderCircle className="size-3.5 shrink-0 animate-spin" aria-hidden="true" /> : <Bot className="size-3.5 shrink-0" aria-hidden="true" />}
         <span className="min-w-0 truncate font-medium">{row.title ?? S.chat.agent.fallbackTitle}</span>
       </span>
-      <span className="min-w-0 truncate text-xs text-muted-foreground">{step}</span>
+      {step === null ? null : <span className="min-w-0 truncate text-xs text-muted-foreground">{step}</span>}
       <span className="min-w-0 truncate text-[11px] text-muted-foreground">{meta.join(' · ')}</span>
     </button>
   );

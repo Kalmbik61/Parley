@@ -221,8 +221,8 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
   const items = feed?.items ?? NO_ITEMS;
   const sent = useAssistantSent(bridge, sessionRef, useHostSupports('assistant.sent'));
   const viaIds = useMemo(() => viaAssistantIds(items, sent), [items, sent]);
-  const active = live && turnActive(items);
-  const blocked = useActivityStore((state) => activityFor(state.byRef, sessionRef)?.activity.activity === 'blocked');
+  const activity = useActivityStore((state) => activityFor(state.byRef, sessionRef)?.activity);
+  const blocked = activity?.activity === 'blocked';
   const metrics = useActivityStore((state) => activityFor(state.byRef, sessionRef)?.metrics ?? null);
   const session = useWorksStore((state) =>
     state.entries
@@ -230,6 +230,11 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
       ?.map.sessions.find((item) => item.id === sessionRef.sessionId),
   );
   const { readOnly: kimiReadOnly, shared: kimiShared } = useKimiControl(bridge, sessionRef, kimi, session?.kimiTerminal !== undefined, live);
+  const feedActive = turnActive(items);
+  // Shared Kimi activity can arrive before the feed, including turns without a new prompt row.
+  const nativeWorking = kimiShared && activity?.activity === 'working' && !activity.heldByBackground;
+  const nativeEnded = kimiShared && (activity?.activity === 'idle' || activity?.activity === 'unseen') && activity.turnEndedAt !== null;
+  const active = live && (nativeWorking || (feedActive && !nativeEnded));
   const kimiGenerationHost = useHostFeature(KIMI_PTY_GENERATION_FEATURE);
   const kimiWaitsForCard = kimi && (kimiGenerationHost || kimiShared);
   const sessionName = session === undefined ? null : sessionRowLabel(session.id, session.label);
@@ -488,8 +493,10 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
 
   // Агент работает, а видимого признака в ленте нет: последний элемент не пишущийся текст и нет карточки.
   const lastItem = items.at(-1);
-  const showWorking = !kimiReadOnly && active && !(lastItem?.kind === 'text' && lastItem.streaming) && activeCards.length === 0;
-  const turnStart = items.findLast((item) => item.kind === 'prompt')?.at ?? null;
+  const showWorking = !kimiReadOnly && active && !(kimiShared && blocked) &&
+    !(lastItem?.kind === 'text' && lastItem.streaming) && activeCards.length === 0;
+  const turnStart = (feedActive ? items.findLast((item) => item.kind === 'prompt')?.at : undefined) ??
+    (nativeWorking ? activity?.lastEventAt ?? null : null);
 
   // Stop — метод хоста: он шлёт Esc и сам закрывает ход, который CLI бросил без записи (ответа ещё не было),
   // стирая возвращённый в поле терминала текст промпта. Хост без метода — прежний Esc в терминал.

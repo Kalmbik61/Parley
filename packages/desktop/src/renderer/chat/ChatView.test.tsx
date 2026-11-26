@@ -1272,6 +1272,26 @@ describe('ChatView — меню режима (кусок 4a, решения К �
 });
 
 describe('ChatView — индикатор работы и Resume (живая проверка 2026-10-02)', () => {
+  it('shows a shared Kimi turn before the Chat feed catches up and stops labeling it working on block or end', () => {
+    useHostStore.setState({ status: { state: 'connected', hostVersion: 'test',
+      methods: FEED_METHODS, features: ['kimi-shared-terminal'] } });
+    renderBody(makeSession('s-01', 'Kimi', { provider: 'kimi' }), 'chat');
+    setFeed([prompt('old', 'Previous turn'), turn('old-end')]);
+    const setActivity = (value: 'working' | 'blocked' | 'unseen', turnEndedAt?: string) =>
+      act(() => useActivityStore.setState({ byRef: activityMap([makeActivity(REF, value, { turnEndedAt })]) }));
+    setActivity('working');
+    expect(screen.getByTestId('chat-working').textContent).toContain(S.chat.working);
+
+    setFeed([prompt('new', 'Think')], 2);
+    setActivity('blocked');
+    expect(screen.queryByTestId('chat-working')).toBeNull();
+    setActivity('working');
+    expect(screen.getByTestId('chat-working')).toBeTruthy();
+    setActivity('unseen', AT);
+    expect(screen.queryByTestId('chat-working')).toBeNull();
+    expect(screen.queryByTestId('chat-stop')).toBeNull();
+  });
+
   it('shows retry attempts with Stop available, then clears the countdown on recovery or failure', () => {
     renderBody(makeSession('s-01', 'S01'));
     const retry: FeedItem = {
@@ -2370,8 +2390,8 @@ describe('ChatView — очередь отправки', () => {
     expect(screen.queryAllByTestId('chat-letter')).toEqual([]);
   });
 
-  it('«Send now» отдаёт ждущее сообщение в CLI во время хода; ход закрылся — второе уходит само', async () => {
-    bridge.setHandler('pty.send', () => ({ inserted: true, submitted: true, reason: null }));
+  it.each([false, true])('«Send now» отправляет только выбранное сообщение и подтверждает его в ленте (steered=%s)', async (steered) => {
+    bridge.setHandler('pty.send', () => ({ inserted: true, submitted: true, reason: null, ...(steered ? { steered: true } : {}) }));
     goLive();
     renderBody(makeSession('s-01', 'S01'));
     setFeed([prompt('p1', 'go')]);
@@ -2385,13 +2405,24 @@ describe('ChatView — очередь отправки', () => {
     fireEvent.click(within(second).getByRole('button', { name: S.outbox.sendNow }));
     await act(async () => {});
     expect(sentTexts()).toEqual(['second']);
-    // Ушедшее стало серым «Queued» CLI — без кнопок; первое всё ещё ждёт.
-    expect(states()).toEqual(['queued', 'waiting']);
+    expect(bridge.calls.filter(c => c.method === 'pty.send').map(c => c.params)).toEqual([
+      expect.objectContaining({ text: 'second', intent: 'steer' }),
+    ]);
+    expect(states()).toEqual([steered ? 'submitted' : 'queued', 'waiting']);
     expect(screen.getAllByTestId('chat-queued')[0]).toBe(second);
-    setFeed([prompt('p1', 'go'), turn('u1'), prompt('p2', 'second'), turn('u2')], 2);
+    if (steered) {
+      const echoed = { ...prompt('p2', 'second'), steered: true } as const;
+      setFeed([prompt('p1', 'go'), echoed], 2);
+      expect(screen.getAllByTestId('chat-prompt')[1]).toBe(second);
+      expect(sentTexts()).toEqual(['second']);
+      setFeed([prompt('p1', 'go'), echoed, turn('u1')], 3);
+    } else {
+      setFeed([prompt('p1', 'go'), turn('u1'), prompt('p2', 'second'), turn('u2')], 2);
+    }
     expect(screen.getAllByTestId('chat-prompt')[1]).toBe(second);
     await act(async () => {});
     expect(sentTexts()).toEqual(['second', 'first']);
+    expect(bridge.calls.filter(c => c.method === 'pty.send')[1]?.params).not.toHaveProperty('intent');
   });
 });
 

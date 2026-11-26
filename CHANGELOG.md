@@ -4,6 +4,18 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
+## 0.39.5
+
+### Fixed
+
+- **Fresh Kimi Code 2.8.0 sessions can start.** Parley previously rejected 2.8.0 as unsupported. It now recognizes the startup format and waits for the native session and Parley tools to be ready before sending the first prompt.
+- **Send now steers active Codex and Kimi turns.** The action previously followed the ordinary queue path. It now uses the provider's native steering. Regular queued messages keep their existing behavior.
+- **Kimi subagents appear in the Agents panel.** Parley used to skip lifecycle records that identified the subagent but did not specify a main-agent ID. Subagents now appear live, move to Finished individually, and remain visible when you reopen the conversation.
+- **Kimi stays marked Working during quiet thinking.** The generic silence timeout used to mistake missing updates for a finished turn. Parley now follows the main agent's live turn state, so completion and permission requests still update the status.
+- **Answer startup questions in Chat.** Codex hook review and folder trust, and folder trust for Kimi and Qwen, now appear above the message box. Pending questions stay there as the conversation scrolls. ([#259](https://github.com/Kalmbik61/Parley/pull/259))
+- **Codex clears delivery indicators for batched messages.** When Codex records several sends as one transcript entry, Chat clears the corresponding pending indicators and shows the confirmed entry once. ([#260](https://github.com/Kalmbik61/Parley/pull/260))
+- **Chat shows when Kimi accepts messages.** If Kimi accepts an attachment and follow-up text together, Chat clears both pending indicators and keeps the attachment with the confirmed message. ([#261](https://github.com/Kalmbik61/Parley/pull/261))
+
 ## 0.39.4
 
 ### Added

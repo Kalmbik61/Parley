@@ -205,12 +205,12 @@ export async function attemptChatSend(key: string, item: OutboxItem<ChatOutboxPa
     ...was, { id: item.id, state: 'sending', text, afterId: last?.id ?? null, since,
       ...(provider === 'codex' || nativeKimi ? { batchProvider: provider } : {}) },
   ]);
-  const outcome = await sendToAgent(deps.bridge, ref, text, true, requestedAt);
+  const outcome = await sendToAgent(deps.bridge, ref, text, true, requestedAt, item.payload.now === true ? 'steer' : undefined);
   deps.onOutcome?.(outcome);
   if (!('error' in outcome) && outcome.submitted) {
     if (!active && item.payload.now !== true) awaitPrompt(key, item.id);
     useChatUiStore.getState().updatePromptEchoes(key, (was) =>
-      was.map((entry) => entry.id === item.id && entry.state === 'sending' ? { ...entry, state: active ? 'queued' : 'submitted' } : entry),
+      was.map((entry) => entry.id === item.id && entry.state === 'sending' ? { ...entry, state: active && outcome.steered !== true ? 'queued' : 'submitted' } : entry),
     );
     // Локальные команды (например /clear) могут не оставить промпт вообще.
     if (/^\/[a-z][\w:-]*(?:\s|$)/i.test(text.trimStart())) {

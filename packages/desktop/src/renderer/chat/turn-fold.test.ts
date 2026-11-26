@@ -66,6 +66,13 @@ describe('foldFeed: границы хода', () => {
     expect(shape(rows)).toEqual(['prompt', 'tool', 'prompt', 'control:completed', 'tool']);
   });
 
+  it('keeps an in-turn steer visible without splitting the fold or resetting its duration', () => {
+    const steer = { ...prompt('change direction'), steered: true } as const;
+    const rows = foldFeed([prompt(), tool('Bash'), steer, tool('Read'), turn(2500)], 'final', none);
+    expect(shape(rows)).toEqual(['prompt', 'control:completed', 'group:Ran commands', 'prompt', 'group:Read files']);
+    expect(rows[1]).toMatchObject({ durationMs: 2500 });
+  });
+
   it('следующий закрытый ход после незакрытого сворачивается снова', () => {
     const rows = foldFeed([prompt(), tool('Bash'), prompt(), turn(), prompt(), tool('Read'), turn()], 'replies', none);
     expect(shape(rows).slice(-3)).toEqual(['prompt', 'control:completed', 'group:Read files']);

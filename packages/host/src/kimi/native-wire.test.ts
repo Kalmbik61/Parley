@@ -85,3 +85,81 @@ it('projects only positively attributed human parts, closed blocks, and turn end
   expect(projectKimiWire({ ...row, type: 'context.append_loop_event', event: { type: 'step.end' } })).toBeUndefined();
   expect(projectKimiWire({ ...row, type: 'turn.ended', reason: 'completed' })).toMatchObject({ kind: 'end', reason: 'completed' });
 });
+
+it('projects only human steering as a prompt with the durable message identity', () => {
+  const row = {
+    type: 'prompt.steered', agentId: 'main', time: 111, activePromptId: 'msg_initial',
+    promptIds: ['msg_followup'], messageId: 'msg_followup', content: [{ type: 'text', text: 'change direction' }],
+  };
+  expect(projectKimiWire(row)).toEqual({ kind: 'steer', id: 'msg_followup', text: 'change direction', at: 111 });
+  expect(projectKimiWire({ ...row, messageId: 'task:bash-fixture:completed' })).toBeUndefined();
+  expect(projectKimiWire({ ...row, agentId: 'child' })).toBeUndefined();
+});
+
+it('projects a main-agent model step as activity without exposing reasoning as Chat text', () => {
+  const row = { type: 'context.append_loop_event', agentId: 'main', time: 112 };
+  const step = { type: 'step.begin', uuid: '598524f9-81df-4631-875c-1120b035a121' };
+  expect(projectKimiWire({ ...row, event: step })).toEqual({ kind: 'working', at: 112 });
+  expect(projectKimiWire({ ...row, agentId: 'child', event: step })).toBeUndefined();
+  expect(projectKimiWire({ ...row, event: { type: 'content.part', uuid: 'part', part: { type: 'think', text: 'private' } } })).toBeUndefined();
+});
+
+it('recognizes the stock 2.8 bulk-steer UUID without accepting task IDs or mismatched evidence', () => {
+  const id = '84673fd7-c881-4344-a4c4-136b70d408ab';
+  const row = {
+    type: 'prompt.steered', agentId: 'main', time: 112, activePromptId: 'msg_first',
+    promptIds: [id], messageId: id, content: [{ type: 'text', text: 'change direction' }],
+  };
+  expect(projectKimiWire(row)).toEqual({ kind: 'steer', id, text: 'change direction', at: 112 });
+  expect(projectKimiWire({ ...row, promptIds: ['msg_other'] })).toBeUndefined();
+  const task = 'task:agent-fixture:completed';
+  expect(projectKimiWire({ ...row, promptIds: [task], messageId: task })).toBeUndefined();
+});
+
+it('projects stock lifecycle without agentId but never infers an agent from task rows', () => {
+  const spawned = { type: 'subagent.spawned', subagentId: 'agent-0', subagentName: 'explore',
+    description: 'Inspect fixture', model: 'fixture-model', runInBackground: true, parentToolCallId: 'call-1',
+    parentAgentId: 'main', callerAgentId: 'main', time: 31 };
+  expect(projectKimiWire(spawned)).toMatchObject({ kind: 'subagent', phase: 'spawned', id: 'agent-0',
+    name: 'explore', description: 'Inspect fixture', model: 'fixture-model', background: true, toolUseId: 'call-1', at: 31 });
+  for (const [phase, evidence, result] of [
+    ['started', {}, undefined], ['completed', { resultSummary: 'Done' }, 'Done'],
+    ['failed', { error: 'Failed' }, 'Failed'], ['cancelled', {}, undefined],
+  ] as const) {
+    expect(projectKimiWire({ type: 'subagent.' + phase, subagentId: 'agent-0', time: 32, ...evidence }))
+      .toMatchObject({ kind: 'subagent', phase, id: 'agent-0', at: 32, ...(result === undefined ? {} : { result }) });
+  }
+  for (const id of [null, '', 'main', '../agent-0']) expect(projectKimiWire({ ...spawned, subagentId: id })).toBeUndefined();
+  expect(projectKimiWire({ ...spawned, type: 'subagent.unknown' })).toBeUndefined();
+  expect(projectKimiWire({ ...spawned, type: 'task.started', info: { kind: 'bash' } })).toBeUndefined();
+});
+
+it('bounds cold catch-up at the opening file size and leaves concurrent appends to the live reader', async () => {
+  const padding = JSON.stringify({ type: 'fixture.padding', text: 'x'.repeat(256 * 1024) }) + '\n';
+  const terminal = '{"type":"subagent.completed","subagentId":"agent-0","resultSummary":"Done"}\n';
+  await writeFile(file, header + padding);
+  const cold = await createKimiWire({ home, cwd, sessionId }, { snapshot: true });
+  expect(await cold.read()).toMatchObject({ more: true });
+  await appendFile(file, terminal);
+  expect((await cold.read()).rows.map(row => row.type)).toEqual(['fixture.padding']);
+  expect(await cold.read()).toEqual({ rows: [] });
+  const live = await createKimiWire({ home, cwd, sessionId });
+  expect(await live.read()).toMatchObject({ more: true });
+  expect((await live.read()).rows.map(row => row.type)).toEqual(['fixture.padding', 'subagent.completed']);
+});
+
+it('tails lifecycle but not conversation rows from a discovered child created after its spawn', async () => {
+  await writeFile(file, header + '{"type":"subagent.spawned","subagentId":"agent-0","subagentName":"explore","runInBackground":true}\n');
+  const live = await createKimiWire({ home, cwd, sessionId });
+  expect((await live.read()).rows.map(row => row.type)).toEqual(['subagent.spawned']);
+  const child = path.join(path.dirname(path.dirname(file)), 'agent-0', 'wire.jsonl');
+  await mkdir(path.dirname(child));
+  await writeFile(child, header +
+    '{"type":"subagent.spawned","subagentId":"agent-1","subagentName":"explore","parentAgentId":"agent-0","runInBackground":true}\n' +
+    '{"type":"turn.ended","agentId":"agent-0","reason":"completed"}\n');
+  expect((await live.read()).rows).toMatchObject([{ type: 'subagent.spawned', subagentId: 'agent-1' }]);
+  await appendFile(child, '{"type":"subagent.cancelled","subagentId":"agent-1"}\n');
+  // A poll services one discovered child per turn.
+  const rows = [...(await live.read()).rows, ...(await live.read()).rows];
+  expect(rows).toMatchObject([{ type: 'subagent.cancelled', subagentId: 'agent-1' }]);
+});

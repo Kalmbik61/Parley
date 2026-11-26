@@ -50,6 +50,7 @@ describe('AgentsPanelView', () => {
   it('клик по строке выбирает агента по id карточки', () => {
     withFeed([agent({})]);
     render(<AgentsPanelView bridge={createFakeBridge()} sessionRef={REF} hasFeed tasks={[]} />);
+    expect(within(screen.getByTestId('agents-row-running')).getByText(S.agentsPanel.thinking)).toBeTruthy();
     fireEvent.click(screen.getByTestId('agents-row-running'));
     expect(useChatUiStore.getState().agentPanel[refKey(REF)]).toEqual({ by: 'item', id: 'agent:t1' });
   });
@@ -58,6 +59,23 @@ describe('AgentsPanelView', () => {
     withFeed([agent({ agentId: null })]);
     render(<AgentsPanelView bridge={createFakeBridge()} sessionRef={REF} hasFeed tasks={[]} />);
     expect(screen.getByText(S.agentsPanel.starting)).toBeTruthy();
+  });
+
+  it('omits live fallback labels in Finished but keeps actual steps and detail selection', () => {
+    withFeed([
+      agent({ status: 'done' }),
+      agent({ id: 'agent:t2', toolUseId: 't2', agentId: null, status: 'failed' }),
+      agent({ id: 'agent:t3', toolUseId: 't3', agentId: 'a3', status: 'done',
+        children: [{ ...bash, agentId: 'a3', status: 'done' }], toolCount: 1 }),
+    ]);
+    render(<AgentsPanelView bridge={createFakeBridge()} sessionRef={REF} hasFeed tasks={[]} />);
+    fireEvent.click(screen.getByRole('button', { name: S.agentsPanel.finished(3) }));
+    expect(screen.queryByText(S.agentsPanel.thinking)).toBeNull();
+    expect(screen.queryByText(S.agentsPanel.starting)).toBeNull();
+    const finished = screen.getAllByTestId('agents-row-finished');
+    expect(within(finished[2]!).getByText('rg FeedAgent packages')).toBeTruthy();
+    fireEvent.click(finished[0]!);
+    expect(useChatUiStore.getState().agentPanel[refKey(REF)]).toEqual({ by: 'item', id: 'agent:t1' });
   });
 
   it('нет агентов — пустое состояние', () => {
