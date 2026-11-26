@@ -139,9 +139,9 @@ const catalog = defineCatalog(
     codexStartupWaiting:
       '{session} has not shown a status since launch — it may be waiting for sign-in or folder trust in the Codex terminal',
     codexCallWaiting:
-      '{session} has not returned from a Codex tool call. Check pending approvals; if already answered, stop the stuck operation and verify its effects before retrying.',
+      '{session} has not returned from a Codex tool call.',
     codexCallUnfinished:
-      '{session} finished its turn with an unfinished tool operation. Check pending approvals; if already answered, stop the stuck operation and verify its effects before retrying.',
+      '{session} finished its turn with an unfinished tool operation.',
     compactSnapshotTooLarge:
       'the workspace snapshot does not fit into one frame even in compact form',
     mapCorrupt: 'workspace {id} in {path} cannot be loaded: {reason}',
@@ -321,9 +321,9 @@ const catalog = defineCatalog(
     codexStartupWaiting:
       'Сессия {session} не сообщила статус после запуска. Возможно, терминал Codex ждёт входа или подтверждения доверия к папке',
     codexCallWaiting:
-      'Сессия {session} ждёт завершения вызова инструмента Codex. Проверьте запросы разрешений. Если вы уже ответили, остановите зависшую операцию и проверьте её результат перед повтором.',
+      'Сессия {session} ждёт завершения вызова инструмента Codex.',
     codexCallUnfinished:
-      'Сессия {session} завершила ход, пока инструмент ещё работал. Проверьте запросы разрешений. Если вы уже ответили, остановите зависшую операцию и проверьте её результат перед повтором.',
+      'Сессия {session} завершила ход, пока инструмент ещё работал.',
     compactSnapshotTooLarge: 'Снимок работы не помещается в один кадр даже в компактном виде',
     mapCorrupt: 'Не удалось загрузить работу {id} из {path}: {reason}',
     resumeHourlyLimit: 'достигнут часовой лимит возобновлений',

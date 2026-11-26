@@ -449,7 +449,7 @@ const NOTICE_DETAIL: Record<NoticeKind, string> = {
   'trust-wait': 'not responding since launch — may be waiting for folder trust',
   'startup-wait': 'waiting at startup — Codex may need sign-in or folder trust in its terminal',
   'limit-return-blocked': 'the limit has reset, but Parley could not continue this session — check its terminal',
-  'codex-call-wait': 'unfinished Codex tool operation — check approvals and verify the result before retrying',
+  'codex-call-wait': 'unfinished Codex tool operation',
   'skill-foreign': "agent skill not installed — that path already exists and wasn't created by Parley",
   'parley-md-created': 'Parley added PARLEY.md — team rules for your agents',
   'parley-md-unreadable': "PARLEY.md couldn't be read — this session starts without its project rules",
