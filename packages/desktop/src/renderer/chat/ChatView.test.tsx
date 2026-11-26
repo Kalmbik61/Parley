@@ -581,6 +581,41 @@ describe('ChatView — поле ввода и тулбар', () => {
     expect(sends()).toHaveLength(2);
   });
 
+  it('confirms a delayed native Kimi attachment and feedback from one user-context message', async () => {
+    const session = makeSession('s-01', 'Kimi', { provider: 'kimi' });
+    sendDeps.session = () => session;
+    useHostStore.setState({ status: { state: 'connected', hostVersion: 'test', methods: FEED_METHODS,
+      features: [KIMI_PTY_GENERATION_FEATURE, 'kimi-shared-terminal'] } });
+    useProvidersStore.setState({ providers: [{ id: 'kimi', label: 'Kimi Code', available: true, version: '2.8.0', limits: null }], loaded: true });
+    bridge.setHandler('pty.send', () => ({ inserted: true, submitted: true, reason: null }));
+    renderBody(session, 'chat');
+    setFeed([]);
+    const composer = within(screen.getByTestId('chat-composer')).getByRole('textbox');
+    const send = async (value: string) => {
+      fireEvent.change(composer, { target: { value } });
+      fireEvent.keyDown(composer, { key: 'Enter' });
+      await act(async () => {});
+    };
+    const annotation = '/tmp/drops/context/annotations-example-c15f.md';
+    const attachment = `@"${annotation}" @"${annotation.replace('.md', '.png')}"`;
+    const feedback = 'The filters and the panel padding differ from the design.';
+    await send(attachment + ' ');
+    await send(feedback);
+    setFeed([text('background', 'Earlier work is still running')], 2);
+    const pending = screen.getAllByTestId('chat-queued');
+    expect(pending).toHaveLength(2);
+    const labels = pending.map(row => row.textContent);
+    setFeed([prompt('kimi-native:session_test:prompt:msg_42', attachment + '\n\n' + feedback), text('reply', 'Checking the annotations')], 3);
+    expect(screen.queryAllByTestId('chat-queued')).toHaveLength(0);
+    expect(labels.every(label => label?.includes('Waiting for Kimi to accept the message'))).toBe(true);
+    const recorded = screen.getByTestId('chat-prompt');
+    expect(recorded).toBe(pending[0]);
+    expect(within(recorded).getByTestId('chat-attachment').dataset.path).toBe(annotation);
+    expect(recorded.textContent).toContain(feedback);
+    expect(recorded.textContent).not.toContain('/tmp/');
+    expect(sends()).toHaveLength(2);
+  });
+
   it('busy — серый «Waiting» остаётся без тоста, через секунду повтор; после удачи ждёт промпт', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {

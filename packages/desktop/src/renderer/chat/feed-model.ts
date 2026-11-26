@@ -19,6 +19,11 @@ export function runningAgents(items: readonly FeedItem[]): FeedAgent[] {
   return items.filter((item): item is FeedAgent => item.kind === 'agent' && item.status === 'running');
 }
 
+// Native Kimi prompts come from the wire's committed user-context messages.
+export function isNativeKimiPrompt(id: string): boolean {
+  return id.startsWith('kimi-native:');
+}
+
 /** В ленте есть карточка, ждущая решения человека (состояние `pending`). */
 export function hasPendingCard(items: readonly FeedItem[]): boolean {
   return items.some((item) => 'cardId' in item && item.state === 'pending');

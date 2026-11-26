@@ -38,7 +38,7 @@ export const EMPTY_CARD_DRAFT: CardDraft = { message: '', step: 0, picked: {}, o
 
 /** Отправка из окна: до промпта — текст и граница истории, после — только связь локального id с id в ленте. */
 export type ChatPromptEcho =
-  | { id: string; state: 'sending' | 'submitted' | 'queued'; text: string; afterId: string | null; since: number; codex?: boolean }
+  | { id: string; state: 'sending' | 'submitted' | 'queued'; text: string; afterId: string | null; since: number; batchProvider?: 'codex' | 'kimi' }
   | { id: string; state: 'confirmed'; promptId: string };
 
 /**
