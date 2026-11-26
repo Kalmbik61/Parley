@@ -73,6 +73,8 @@ interface Options {
   bind(ref: SessionRef, binding: KimiNativeBinding, id: string, pid: number, bootstrap?: { owner: KimiBootstrapOwner; previous: string | null }): Promise<void>;
   bootstrap(ref: SessionRef, binding: KimiNativeBinding, owner: KimiBootstrapOwner, id: string | null, action: 'arm' | 'verify' | 'complete'): Promise<void>;
   event(ref: SessionRef, id: string, event: KimiWireEvent, historical?: boolean): void;
+  /** Every current turn end of the owned process; `poison` names the tool of an unload_tools failure. */
+  turnEnd?(ref: SessionRef, binding: KimiNativeBinding, id: string, poison?: { tool: string }): void;
   reset(ref: SessionRef, sameId: boolean): void;
   requests(ref: SessionRef, requests: KimiRequest[], unresolved: boolean): void;
   activity(ref: SessionRef, state: 'ready' | 'working' | 'blocked' | 'ended'): void;
@@ -429,6 +431,8 @@ export function createKimiNativeSession(options: Options) {
             if (event.kind === 'request' && live.pending.size < 32) live.pending.set(event.id, event);
             if (event.kind === 'resolved' && live.pending.delete(event.id) && live.pending.size === 0) beginWork(live);
           }
+          // Recovery listens even when a StopFailure hook already ended the work.
+          if (event.kind === 'end') options.turnEnd?.(live.ref, live.binding, live.id, event.poison);
         }
         options.event(live.ref, live.id, event, !current);
       }

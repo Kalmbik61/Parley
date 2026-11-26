@@ -222,10 +222,25 @@ export type KimiWireEvent =
   | { kind: 'result'; id: string; output: unknown; isError: boolean; at: number }
   | { kind: 'request'; id: string; interaction: 'approval' | 'question'; request: Record<string, unknown>; at: number }
   | { kind: 'resolved'; id: string; response: unknown; at: number }
-  | { kind: 'end'; reason: string; at: number }
+  | { kind: 'end'; reason: string; at: number; poison?: { tool: string } }
   | { kind: 'working' | 'compact-start' | 'compact' | 'compact-cancel' | 'undo' | 'clear' | 'unsupported'; at: number };
 
 const identifier = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && value.length <= 512;
+
+// Kimi Code 2.8.1 lowers a tool_lifecycle removal into unload_tools even when the tool was never
+// declared in the sent (post-compaction) history; the API rejects it with this exact 400 forever.
+const UNLOAD_POISON = /unload_tools at message position \d+: tool "([^"]+)" is not declared or has already been unloaded/;
+
+/** The named tool of an unload_tools poison failure, or undefined for any other turn end. */
+export function kimiUnloadPoison(row: WireRow): { tool: string } | undefined {
+  if (row.type !== 'turn.ended' || row.reason !== 'failed') return;
+  const error = record(row.error);
+  if (error?.code !== 'provider.api_error' || record(error.details)?.statusCode !== 400) return;
+  if (typeof error.message !== 'string') return;
+  const tool = UNLOAD_POISON.exec(error.message)?.[1];
+  return tool !== undefined && identifier(tool) ? { tool } : undefined;
+}
+
 const content = (value: unknown): string => typeof value === 'string' ? value.slice(0, TEXT_LIMIT) : '';
 
 const userPromptId = (value: unknown): value is string => identifier(value) &&
@@ -305,7 +320,11 @@ export function projectKimiWire(row: WireRow): KimiWireEvent | undefined {
     if (request !== undefined) return { kind: 'request', id: row.id, interaction: row.kind, request, at };
   }
   if (row.type === 'interaction.resolved' && identifier(row.id)) return { kind: 'resolved', id: row.id, response: row.response, at };
-  if (row.type === 'turn.ended') return { kind: 'end', reason: content(row.reason), at };
+  if (row.type === 'turn.ended') {
+    // Only the structured tool name travels onward; the free error text stays out of feed schemas.
+    const poison = kimiUnloadPoison(row);
+    return { kind: 'end', reason: content(row.reason), at, ...(poison === undefined ? {} : { poison }) };
+  }
   if (row.type === 'full_compaction.begin') return { kind: 'compact-start', at };
   if (row.type === 'full_compaction.complete') return { kind: 'compact', at };
   if (row.type === 'full_compaction.cancel') return { kind: 'compact-cancel', at };

@@ -111,6 +111,29 @@ it('projects only positively attributed human parts, closed blocks, and turn end
   expect(projectKimiWire({ ...row, type: 'turn.ended', reason: 'completed' })).toMatchObject({ kind: 'end', reason: 'completed' });
 });
 
+it('detects the 2.8.1 unload_tools poison and rejects lookalike failures', () => {
+  const tool = 'mcp__figma-dev-mode-mcp-server__add_code_connect_map';
+  const error = { code: 'provider.api_error', name: 'APIStatusError', retryable: false,
+    details: { requestId: null, statusCode: 400, traceId: 'f6188d4db48049d065441bbad337ca65' },
+    message: `unload_tools at message position 168: tool "${tool}" is not declared or has already been unloaded` };
+  const row = { type: 'turn.ended', agentId: 'main', time: 12, reason: 'failed', error };
+  expect(projectKimiWire(row)).toEqual({ kind: 'end', reason: 'failed', at: 12, poison: { tool } });
+  // The real wire also carries other 400 provider.api_error failures: they must not match.
+  const schemaError = { ...error, message: "tools.function.parameters is not a valid moonshot flavored json schema, details: <At path 'root': schema exceeds maximum allowed size>" };
+  expect(projectKimiWire({ ...row, error: schemaError })).toEqual({ kind: 'end', reason: 'failed', at: 12 });
+  expect(projectKimiWire({ ...row, reason: 'completed' })).toEqual({ kind: 'end', reason: 'completed', at: 12 });
+  expect(projectKimiWire({ ...row, reason: 'cancelled' })).toEqual({ kind: 'end', reason: 'cancelled', at: 12 });
+  expect(projectKimiWire({ ...row, error: { ...error, code: 'provider.other_error' } })).toEqual({ kind: 'end', reason: 'failed', at: 12 });
+  expect(projectKimiWire({ ...row, error: { ...error, details: { ...error.details, statusCode: 500 } } })).toEqual({ kind: 'end', reason: 'failed', at: 12 });
+  expect(projectKimiWire({ ...row, error: { ...error, details: { ...error.details, statusCode: '400' } } })).toEqual({ kind: 'end', reason: 'failed', at: 12 });
+  expect(projectKimiWire({ ...row, error: { ...error, message: `unload_tools at message position 168: tool "${tool}" is not declared` } })).toEqual({ kind: 'end', reason: 'failed', at: 12 });
+  expect(projectKimiWire({ ...row, error: { ...error, message: error.message.replace('position 168', 'position') } })).toEqual({ kind: 'end', reason: 'failed', at: 12 });
+  expect(projectKimiWire({ ...row, error: { ...error, message: error.message.replace(tool, 'x'.repeat(513)) } })).toEqual({ kind: 'end', reason: 'failed', at: 12 });
+  expect(projectKimiWire({ ...row, error: { ...error, message: undefined } })).toEqual({ kind: 'end', reason: 'failed', at: 12 });
+  expect(projectKimiWire({ ...row, error: undefined })).toEqual({ kind: 'end', reason: 'failed', at: 12 });
+  expect(projectKimiWire({ ...row, agentId: 'child' })).toBeUndefined();
+});
+
 it('projects only human steering as a prompt with the durable message identity', () => {
   const row = {
     type: 'prompt.steered', agentId: 'main', time: 111, activePromptId: 'msg_initial',

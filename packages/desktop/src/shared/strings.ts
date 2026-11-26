@@ -474,6 +474,8 @@ const NOTICE_DETAIL: Record<NoticeKind, string> = {
   'machine-over-limit': 'started over the machine limit',
   'deps-clone-unavailable': 'dependencies were not cloned into the new worktree',
   'deps-clone-mismatch': 'cloned dependencies do not match the lock file',
+  'kimi-unload-repaired': 'Kimi history repaired — poisoned tool announcements removed, the session resumes',
+  'kimi-unload-blocked': 'Kimi unload_tools repair stopped — check the session and its wire backup',
 };
 
 /**
