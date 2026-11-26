@@ -10,6 +10,7 @@ import { refKey, type CompactionPhase, type LiveMetrics, type SessionRef } from 
 import { S } from '../../shared/strings.js';
 import type { OutboxItem } from '../lib/outbox.js';
 import { useActivityStore } from '../store/activity.js';
+import { useHostStore } from '../store/host.js';
 import type { SendWithToastDeps } from '../terminal/send.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
 import { activityMap, makeActivity } from '../test-utils/work-fixtures.js';
@@ -60,6 +61,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   chatOutbox.resetForTests();
+  useHostStore.setState(useHostStore.getInitialState(), true);
   useWorksStore.setState(useWorksStore.getInitialState(), true);
   useActivityStore.setState({ byRef: {}, loaded: false });
 });
@@ -257,9 +259,11 @@ describe('chatOutbox — затвор на время хода', () => {
     expect(useChatUiStore.getState().promptEchoes[KEY]).toEqual([{ id, state: 'confirmed', promptId: 'p1' }]);
   });
 
-  it('a batched Codex receipt releases the next send immediately, even before the PTY reply', async () => {
+  it.each(['codex', 'kimi'] as const)('a batched %s receipt releases the next send immediately, even before the PTY reply', async provider => {
     live();
-    deps.session = () => makeSession('s-01', 'Codex', { provider: 'codex' });
+    deps.session = () => makeSession('s-01', provider, { provider });
+    useHostStore.setState({ status: { state: 'connected', methods: [], features: ['kimi-shared-terminal'], hostVersion: 'test' } });
+    const batchId = provider === 'kimi' ? 'kimi-native:session_test:prompt:receipt' : 'prompt:batch';
     const earlier = prompt('old', 'Earlier turn');
     setFeed([earlier]);
     const first = chatOutbox.enqueue(KEY, payload('first', true));
@@ -273,13 +277,13 @@ describe('chatOutbox — затвор на время хода', () => {
     chatOutbox.enqueue(KEY, payload('third'));
     await flush();
     expect(sentTexts()).toEqual(['first', 'second']);
-    setFeed([earlier, turn('end'), prompt('batch', 'second\nNew messages (1). Call check_inbox.\nfirst'), turn('done')]);
+    setFeed([earlier, turn('end'), prompt(batchId, 'second\nNew messages (1). Call check_inbox.\nfirst'), turn('done')]);
     acknowledge();
     await flush();
     expect(sentTexts()).toEqual(['first', 'second', 'third']);
     expect(useChatUiStore.getState().promptEchoes[KEY]?.slice(0, 2)).toEqual([
-      { id: first, state: 'confirmed', promptId: 'batch' },
-      { id: second, state: 'confirmed', promptId: 'batch' },
+      { id: first, state: 'confirmed', promptId: batchId },
+      { id: second, state: 'confirmed', promptId: batchId },
     ]);
   });
 
@@ -302,6 +306,25 @@ describe('chatOutbox — затвор на время хода', () => {
     setFeed([old, unrelated, batch, turn('done'), prompt('separate', 'again')]);
     expect(states()).toEqual(provider === 'codex' ? Array(4).fill('confirmed') : ['confirmed', 'queued', 'queued', 'queued']);
     expect(sentTexts()).toEqual(['again', 'again', 'again', 'last']);
+  });
+
+  it.each([true, false])('reserves native Kimi batch receipts for the shared terminal (shared=%s)', async shared => {
+    useHostStore.setState({ status: { state: 'connected', methods: [], features: shared ? ['kimi-shared-terminal'] : [], hostVersion: 'test' } });
+    deps.session = () => makeSession('s-01', 'Kimi', { provider: 'kimi' });
+    const batch = 'attachment\n\nfeedback';
+    const old = prompt('kimi-native:session_test:prompt:old', batch);
+    setFeed([old]);
+    await attemptChatSend(KEY, { ...item('attachment'), id: 'a' });
+    await attemptChatSend(KEY, { ...item('feedback'), id: 'b' });
+    const wrongSource = prompt('prompt:other-provider', batch);
+    setFeed([old, wrongSource]);
+    const states = () => useChatUiStore.getState().promptEchoes[KEY]?.map(entry => entry.state);
+    expect(states()).toEqual(['queued', 'queued']);
+    const accepted = prompt('kimi-native:session_test:prompt:accepted', batch);
+    setFeed([old, wrongSource, accepted]);
+    setFeed([old, wrongSource, accepted, turn('done')]);
+    expect(states()).toEqual(shared ? ['confirmed', 'confirmed'] : ['queued', 'queued']);
+    expect(sentTexts()).toEqual(['attachment', 'feedback']);
   });
 
   it('после отправки без открытой ленты повтор из старого снимка не считается новым промптом', async () => {

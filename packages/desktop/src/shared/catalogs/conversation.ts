@@ -165,6 +165,7 @@ const en = {
     /** Серый элемент ленты: сообщение ушло в очередь CLI во время хода. */
     queued: 'Queued — the agent reads it when the turn ends',
     submitted: 'Sent to terminal',
+    awaitingKimi: 'Waiting for Kimi to accept the message',
     /** Строка действий под сообщением (спека 2026-10-16, 3.1). */
     actions: { copy: 'Copy', copied: 'Copied', sendAgain: 'Send again' ,
       reply: 'Reply',
@@ -560,6 +561,7 @@ const ru = {
     showTranscript: 'Показать историю', hideTranscript: 'Скрыть историю',
     queued: 'В очереди. Агент прочитает после завершения хода.',
     submitted: 'Отправлено в терминал',
+    awaitingKimi: 'Ожидает приёма в Kimi',
     actions: { copy: 'Копировать', copied: 'Скопировано', sendAgain: 'Отправить снова' ,
       reply: "Ответить",
     },

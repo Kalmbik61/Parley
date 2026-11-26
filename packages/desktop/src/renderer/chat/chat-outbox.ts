@@ -33,7 +33,7 @@ import { activityFor, useActivityStore } from '../store/activity.js';
 import { useHostStore } from '../store/host.js';
 import { useWorksStore } from '../store/works.js';
 import { sendToAgent, showSendToast, type SendWithToastDeps } from '../terminal/send.js';
-import { turnActive } from './feed-model.js';
+import { isNativeKimiPrompt, turnActive } from './feed-model.js';
 import { useFeedStore } from './store.js';
 import { useChatUiStore, type ChatPromptEcho } from './ui-store.js';
 
@@ -70,9 +70,9 @@ export function promptMatches(receivedText: string, sentText: string): boolean {
 
 type PendingEcho = Exclude<ChatPromptEcho, { state: 'confirmed' }>;
 
-/** Codex may join distinct sends into one user message, including a prioritized send at the front. */
-function matchCodexBatch(received: string, eligible: PendingEcho[]): PendingEcho[] {
-  const local = eligible.filter(entry => entry.codex && entry.text.trim() !== '');
+/** Native Kimi and Codex may join distinct sends into one user message. */
+function matchBatchedPrompt(received: string, eligible: PendingEcho[], provider: 'codex' | 'kimi'): PendingEcho[] {
+  const local = eligible.filter(entry => entry.batchProvider === provider && entry.text.trim() !== '');
   if (local.length < 2) return [];
   const candidates = local.map(entry => {
     const text = entry.text.trim().replace(/\r\n/g, '\n');
@@ -165,12 +165,14 @@ function confirmPrompts(key: string, items: readonly FeedItem[]): void {
     for (const [index, item] of items.entries()) {
       if (receipts.size === pending.length) break;
       if (item.kind !== 'prompt' || used.has(item.id)) continue;
+      const batchProvider = isNativeKimiPrompt(item.id) ? 'kimi' : 'codex';
       const eligible = pending.filter(entry => {
+        if (entry.batchProvider !== undefined && entry.batchProvider !== batchProvider) return false;
         const after = entry.afterId === null ? undefined : indices.get(entry.afterId);
         return !receipts.has(entry.id) && (after === undefined ? Date.parse(item.at) >= entry.since : index > after);
       });
       const exact = eligible.find(entry => promptMatches(item.text, entry.text));
-      for (const entry of exact ? [exact] : matchCodexBatch(item.text, eligible)) receipts.set(entry.id, item.id);
+      for (const entry of exact ? [exact] : matchBatchedPrompt(item.text, eligible, batchProvider)) receipts.set(entry.id, item.id);
     }
     if (!receipts.size && !was.some(entry => entry.state === 'confirmed' && !indices.has(entry.promptId))) return was;
     return was.flatMap<ChatPromptEcho>(entry => {
@@ -194,12 +196,14 @@ export async function attemptChatSend(key: string, item: OutboxItem<ChatOutboxPa
   const before = feed?.items ?? NO_ITEMS;
   // Ход идёт — по тому же правилу, что в sessionBusy: замороженные элементы нечитаемой ленты не в счёт.
   const active = feed?.status === 'ready' ? turnActive(before) : workingNow(ref);
-  const codex = deps.session(ref)?.provider === 'codex';
+  const provider = deps.session(ref)?.provider;
+  const nativeKimi = provider === 'kimi' && hostFeatures(useHostStore.getState().status).has(KIMI_SHARED_TERMINAL_FEATURE);
   const last = before.at(-1);
   // Пока есть якорь, важен порядок строк. При переснимке без якоря сверяем время, не забирая старый промпт.
   const since = last !== undefined ? Date.parse(last.at) : feed?.status === 'ready' ? -Infinity : Date.now() - CHAT_AWAIT_PROMPT_MS;
   useChatUiStore.getState().updatePromptEchoes(key, (was) => [
-    ...was, { id: item.id, state: 'sending', text, afterId: last?.id ?? null, since, codex },
+    ...was, { id: item.id, state: 'sending', text, afterId: last?.id ?? null, since,
+      ...(provider === 'codex' || nativeKimi ? { batchProvider: provider } : {}) },
   ]);
   const outcome = await sendToAgent(deps.bridge, ref, text, true, requestedAt);
   deps.onOutcome?.(outcome);
