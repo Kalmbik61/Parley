@@ -1,4 +1,4 @@
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron, expect, test, type ElectronApplication } from '@playwright/test';
@@ -26,11 +26,15 @@ test('язык настроек применяется в главном окн�
   }
 
   try {
-    await mkdir(path.dirname(uiFile), { recursive: true });
-    await writeFile(uiFile, JSON.stringify({ version: 1, locale: 'en' }), 'utf8');
+    // Обычные E2E заранее записывают английский. Здесь проверяем первый запуск без файла настроек.
+    await rm(uiFile, { force: true });
     const en = await launch('en');
+    await expect(en.getByTestId('landing')).toBeVisible();
     await en.keyboard.press('Meta+,');
-    await en.getByRole('combobox', { name: 'Interface language' }).selectOption('ru');
+    const language = en.getByRole('combobox', { name: 'Interface language' });
+    await expect(language).toHaveValue('en');
+    await expect(language.locator('option')).toHaveText(['English', 'Русский']);
+    await language.selectOption('ru');
     await expect.poll(async () => JSON.parse(await readFile(uiFile, 'utf8')).locale).toBe('ru');
 
     await quitApp(app!);

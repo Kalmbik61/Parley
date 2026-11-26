@@ -9,15 +9,19 @@ export function desktopUiPath(home: string): string {
   return path.join(home, 'desktop', 'ui.json');
 }
 
+export function localeFromDesktopSettings(settings: unknown, systemLocale: string): AppLocale {
+  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) return 'en';
+  return resolveAppLocale('locale' in settings ? settings.locale : undefined, systemLocale);
+}
+
 /** Read at delivery time so a detached host can observe preferences without an open window. */
 export async function readDesktopAppLocale(
   home: string,
   systemLocale = process.env[SYSTEM_LOCALE_ENV] || new Intl.DateTimeFormat().resolvedOptions().locale,
 ): Promise<AppLocale> {
   try {
-    const settings = JSON.parse(await readFile(desktopUiPath(home), 'utf8')) as { locale?: unknown } | null;
-    return resolveAppLocale(settings?.locale, systemLocale);
+    return localeFromDesktopSettings(JSON.parse(await readFile(desktopUiPath(home), 'utf8')), systemLocale);
   } catch {
-    return resolveAppLocale(undefined, systemLocale);
+    return 'en';
   }
 }
