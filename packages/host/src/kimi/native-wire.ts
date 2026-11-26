@@ -17,10 +17,21 @@ type Binding = { home: string; cwd: string; sessionId: string };
 export const record = (value: unknown): Record<string, unknown> | undefined =>
   value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 
-const emptyStartupRows = new Set(['environment.set_binding', 'permission.set_mode', 'changeNotifier.snapshot', 'profile.bind', 'mcp.tools_discovered']);
+const emptyStartupRows = new Set([
+  'environment.set_binding', 'permission.set_mode', 'changeNotifier.snapshot', 'profile.bind',
+  'mcp.tools_discovered', 'mcp.server_failed', 'mcp.server_failure_resolved',
+]);
+type StartupProof = 'waiting' | 'unsafe' | 'empty' | 'unavailable' | 'ready';
 
-/** Positive, whole-file proof for stock 2.7.3 startup only. Unknown events are never an empty conversation. */
-export async function proveKimiEmptyStartup({ home, cwd, sessionId }: Binding, expected: readonly string[]): Promise<'waiting' | 'unsafe' | 'ready'> {
+/** A discovery supplies a catalog, a failure clears it, and other records leave it alone. */
+export function parleyCatalogChange(row: Record<string, unknown>): Record<string, unknown> | null | undefined {
+  if (row.agentId !== 'main' || row.serverName !== 'parley') return;
+  if (row.type === 'mcp.tools_discovered') return row;
+  if (row.type === 'mcp.server_failed' || (row.type === 'mcp.server_failure_resolved' && row.resolution !== 'recovered')) return null;
+}
+
+/** Verify the entire wire before startup may rotate this empty conversation. */
+export async function proveKimiEmptyStartup({ home, cwd, sessionId }: Binding, expected?: readonly string[]): Promise<StartupProof> {
   if (!path.isAbsolute(home) || !path.isAbsolute(cwd) || !KIMI_SESSION_ID.test(sessionId)) return 'unsafe';
   let fd;
   try {
@@ -46,17 +57,19 @@ export async function proveKimiEmptyStartup({ home, cwd, sessionId }: Binding, e
     const [head, ...lines] = new TextDecoder('utf-8', { fatal: true }).decode(bytes).slice(0, -1).split('\n');
     const header = record(JSON.parse(head!));
     if (header?.type !== 'metadata' || header.protocol_version !== '1.5' || header.min_protocol_version !== '1.5') return 'unsafe';
-    let latest: Record<string, unknown> | undefined;
+    let latest: Record<string, unknown> | null | undefined;
     for (const line of lines) {
       const row = record(JSON.parse(line));
       if (typeof row?.type !== 'string' || !emptyStartupRows.has(row.type)) return 'unsafe';
-      if (row.type === 'mcp.tools_discovered' && row.agentId === 'main' && row.serverName === 'parley') latest = row;
+      const change = parleyCatalogChange(row);
+      if (change !== undefined) latest = change;
     }
-    if (!latest || !expected.includes('get_map')) return 'waiting';
+    if (latest === null) return 'unavailable';
+    if (!latest || !expected) return 'empty';
     const same = (names: unknown) => Array.isArray(names) && names.length === expected.length &&
       new Set(names).size === expected.length && expected.every(tool => names.includes(tool));
     const names = Array.isArray(latest.tools) ? latest.tools.map(tool => record(tool)?.name) : null;
-    return same(names) && same(latest.enabledNames) && latest.collisions === undefined ? 'ready' : 'unsafe';
+    return expected.includes('get_map') && same(names) && same(latest.enabledNames) && latest.collisions === undefined ? 'ready' : 'unavailable';
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'waiting' : 'unsafe';
   } finally {

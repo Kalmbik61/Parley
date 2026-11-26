@@ -75,7 +75,7 @@ import { limitReturnDue, limitWindowFree, returnBlock, returnBlockReason } from 
 import { ResumeLimiter } from './resume-limiter.js';
 
 export interface WakeServiceOptions {
-  kimiReady?: (ref: SessionRef, draft?: boolean) => boolean;
+  kimiReady?: (ref: SessionRef, draft?: boolean, purpose?: 'inbox') => boolean;
   /** Счётчики окна строки состояния: каждый `recompute` сессии — одна запись. */
   windowCounters?: WindowCounters;
   /** Пауза перед Enter — если человек уже не печатает, указатель уходит как ход (спека 7.3). */
@@ -1039,7 +1039,7 @@ export function createWakeService(
         ...(action.multiline === true ? { multiline: true } : {}),
         // Смена модели или ползунок могли открыться за паузу: Enter в ползунке сохранил бы уровень умолчанием.
         beforeEnter: () => {
-          if (mode === 'kimi') return !choiceNow(ref) && options.kimiReady?.(ref, true) === true;
+          if (mode === 'kimi') return !choiceNow(ref) && options.kimiReady?.(ref, true, action.letterIds.length ? 'inbox' : undefined) === true;
           const live = activity.get(ref)?.activity;
           if (live?.activity === 'blocked' || choiceNow(ref)) return false;
           // Qwen's terminal reports a dialog (OSC 7501 `blocked`) before any hook: Enter would answer it.
@@ -1736,7 +1736,7 @@ export function createWakeService(
       pointed: state.pointed,
       inFlight: state.inFlight,
       resumeAllowed: false,
-      hooked: mode === 'kimi' ? options.kimiReady?.(ref) === true : hookedSince(live?.activity, handle.startedAt),
+      hooked: mode === 'kimi' ? options.kimiReady?.(ref, false, 'inbox') === true : hookedSince(live?.activity, handle.startedAt),
       now: Date.now(),
       ...settle,
     });

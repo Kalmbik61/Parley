@@ -21,6 +21,7 @@ const optIn = process.env['PARLEY_KIMI_SHARED_HOST_BIN'];
 const fixtureManualDefault = process.env['PARLEY_KIMI_SHARED_HOST_MANUAL_DEFAULT'] === '1';
 const probeStartupRecovery = process.env['PARLEY_KIMI_SHARED_HOST_STARTUP_RECOVERY'] === '1';
 const probeAutomaticBootstrap = process.env['PARLEY_KIMI_SHARED_HOST_AUTOMATIC_BOOTSTRAP'] === '1';
+const probeOfflineMcp = process.env['PARLEY_KIMI_SHARED_HOST_OFFLINE_MCP'] === '1';
 const probeReservedRetry = process.env['PARLEY_KIMI_SHARED_HOST_RESERVED_RETRY'] === '1';
 const probeThinking = process.env['PARLEY_KIMI_SHARED_HOST_THINKING'] === '1';
 const bootstrapMode = process.env['PARLEY_KIMI_SHARED_HOST_BOOTSTRAP_MODE'] ?? 'manual';
@@ -146,6 +147,7 @@ test.skipIf(!optIn)('shares real production host Chat and Terminal on one stock 
 (deny file-read-data (subpath "/Users/kalmbik61"))
 (deny file-write* (subpath "/Users/kalmbik61"))
 (allow file-read-data (literal ${JSON.stringify(executable)}) (literal ${JSON.stringify(node)}) (literal ${JSON.stringify(join(core, 'package.json'))}) (subpath ${JSON.stringify(join(core, 'dist'))}) (subpath ${JSON.stringify(join(workspace, 'packages/host/dist/kimi'))}) (literal ${JSON.stringify(join(workspace, 'packages/host/package.json'))}) (subpath ${JSON.stringify(join(workspace, 'node_modules/.pnpm'))}))
+${probeOfflineMcp ? `(deny file-read-data (literal ${JSON.stringify(join(core, 'dist/mcp/server.js'))}))` : ''}
 `);
     const launch = join(root, 'kimi-locked');
     const hookPort = String.raw`$(printf "%s" "$PARLEY_HOOK_URL" | /usr/bin/sed -nE 's@^http://127\.0\.0\.1:([0-9]+)/hooks$@\1@p')`;
@@ -178,6 +180,11 @@ test.skipIf(!optIn)('shares real production host Chat and Terminal on one stock 
     stage = 'managed native launch';
     const preference = `default_permission_mode = "${fixtureManualDefault ? 'manual' : 'auto'}"`;
     await writeFile(join(kimi, 'config.toml'), `# keep original preference\n${preference}\n`);
+    if (probeAutomaticBootstrap) {
+      await writeFile(join(kimi, 'mcp.json'), JSON.stringify({ mcpServers: {
+        'fixture-unavailable': { command: '/usr/bin/false', args: [] },
+      } }));
+    }
     host = await startHost({ home: parley });
     const paths = hostPaths(parley);
     client = connectRaw(paths.socket);
@@ -187,7 +194,7 @@ test.skipIf(!optIn)('shares real production host Chat and Terminal on one stock 
     expect((greeting.result as { features: string[] }).features).toContain('kimi-shared-terminal');
     if (bootstrapMode !== 'manual' && bootstrapMode !== 'auto' && bootstrapMode !== 'yolo' && bootstrapMode !== 'inherit') throw new Error('Invalid fixture permission mode');
     const { ref } = await call('sessions.create', {
-      projectPath, workId: null, provider: 'kimi', label: 'Offline native integration', task: probeReservedRetry ? recovered : '', parent: null,
+      projectPath, workId: null, provider: 'kimi', label: 'Offline native integration', task: probeReservedRetry ? recovered : probeOfflineMcp ? deferred : '', parent: null,
       ...(probeReservedRetry ? { kimiPermissionMode: 'auto' as const }
         : probeAutomaticBootstrap ? bootstrapMode === 'inherit' ? {} : { kimiPermissionMode: bootstrapMode }
           : fixtureManualDefault ? {} : { kimiPermissionMode: 'manual' as const }),
@@ -282,6 +289,31 @@ test.skipIf(!optIn)('shares real production host Chat and Terminal on one stock 
     }
     stage = 'first Chat prompt after explicit Manual on a saved automatic default';
     await expect.poll(screen, poll).toMatch(ready);
+    if (probeOfflineMcp) {
+      stage = 'deferred task and resumed Chat with the managed MCP server offline';
+      const reply = (turn: string) => expect.poll(async () => (await snap()).items, poll)
+        .toContainEqual(expect.objectContaining({ kind: 'text', text: `${turn}_REPLY` }));
+      await reply(deferred);
+      const bound = (await session()).providerSessionId!;
+      expect((await readdir(join(kimi, 'sessions', workspaceKey(projectPath)))).filter(name => name.startsWith('session_'))).toEqual([bound]);
+      const wire = await readFile(join(kimi, 'sessions', workspaceKey(projectPath), bound, 'agents/main/wire.jsonl'), 'utf8');
+      expect(wire.trim().split('\n').map(line => JSON.parse(line))).toContainEqual(expect.objectContaining({
+        type: 'mcp.server_failed', serverName: 'parley',
+      }));
+      await call('sessions.stop', { ref });
+      await call('sessions.resume', { ref });
+      await expect.poll(async () => {
+        const sent = await call('pty.send', { ref, text: original, submit: true });
+        if (sent.inserted && !sent.submitted) throw new Error('Resumed Chat left an unsubmitted draft');
+        return sent.submitted;
+      }, poll).toBe(true);
+      await reply(original);
+      expect(seen.map(row => row.turn)).toEqual([deferred, original]);
+      expect(seen.flatMap(row => row.tools).filter(name => name.startsWith('mcp__parley__'))).toEqual([]);
+      expect((await session()).providerSessionId).toBe(bound);
+      expect((await snap()).items.filter(item => item.kind === 'error' && item.error === 'kimi-native-startup')).toEqual([]);
+      return;
+    }
     if (probeAutomaticBootstrap || probeReservedRetry) {
       const firstPrompt = probeReservedRetry ? recovered : emptyNewFirst;
       const noModel = () => { expect(requests).toBe(0); };
@@ -325,6 +357,9 @@ test.skipIf(!optIn)('shares real production host Chat and Terminal on one stock 
       await expect.poll(screen, poll).toMatch(ready);
       const firstWire = await wireRows(abandoned);
       emptyWire(firstWire);
+      if (probeAutomaticBootstrap) expect(firstWire).toContainEqual(expect.objectContaining({
+        type: 'mcp.server_failed', serverName: 'fixture-unavailable',
+      }));
       const discovered = firstWire.find(row => row.type === 'mcp.tools_discovered' && row.serverName === 'parley')?.tools;
       expect(discovered).toHaveLength(50);
       expect(discovered?.map(({ name }) => name)).toContain('get_map');

@@ -20,8 +20,9 @@ async function lazy(
     failed: ReturnType<typeof vi.fn>;
     actions: [string, string | null][];
     ready: () => boolean;
+    inboxReady: () => boolean;
   }) => Promise<void>,
-  behavior: 'observe' | 'incompatible-permission' | 'compatible' = 'observe',
+  behavior: 'observe' | 'incompatible-permission' | 'compatible' | 'offline' | 'silent' = 'observe',
 ) {
   const home = await mkdtemp(join(tmpdir(), 'parley-kimi-lazy-startup-'));
   const pty = fakePty();
@@ -76,7 +77,7 @@ async function lazy(
         composer();
       } else if (data === '\r') {
         if (command === '/permission') {
-          pty.screen = behavior === 'compatible'
+          pty.screen = behavior !== 'incompatible-permission'
             ? ['Select permission mode', '❯ Always Ask ← current', 'Ask When Needed', 'Never Ask']
             : ['Permission settings (different native format)', 'Choose a different mode'];
         } else if (command === '/new') {
@@ -86,12 +87,14 @@ async function lazy(
           mkdirSync(dirname(file), { recursive: true });
           writeFileSync(file, [
             { type: 'metadata', protocol_version: '1.5', min_protocol_version: '1.5' },
-            { type: 'mcp.tools_discovered', agentId: 'main', serverName: 'parley', tools: [{ name: 'get_map' }], enabledNames: ['get_map'] },
+            ...(behavior === 'offline' ? [{ type: 'mcp.server_failed', agentId: 'main', serverName: 'parley', transport: 'stdio' }]
+              : behavior === 'silent' ? [] : [{ type: 'mcp.tools_discovered', agentId: 'main', serverName: 'parley',
+                tools: [{ name: 'get_map' }], enabledNames: ['get_map'] }]),
           ].map(row => JSON.stringify(row)).join('\n') + '\n');
           native.onHook(ref, { hook_event_name: 'SessionStart', client_type: 'kimi_code_cli', cwd: home, session_id: providerId });
           composer();
         } else if (command === '/mcp') {
-          catalog = true;
+          catalog = behavior !== 'silent' && behavior !== 'offline';
           composer();
         }
       }
@@ -99,9 +102,10 @@ async function lazy(
   }
   try {
     await native.prepare(ref, { cwd: home, home }, null, '', 'manual', 'fixture-bootstrap');
-    native.listed(ref, ['get_map']);
+    if (behavior !== 'offline' && behavior !== 'silent') native.listed(ref, ['get_map']);
     start(ref);
-    await check({ writes: pty.writes, failed, actions, ready: () => native.ready(ref) });
+    await check({ writes: pty.writes, failed, actions, ready: () => native.ready(ref),
+      inboxReady: () => native.ready(ref, false, 'inbox') });
   } finally {
     native.abort(ref);
     await rm(home, { recursive: true, force: true });
@@ -122,6 +126,16 @@ it('completes the same guarded bootstrap with a compatible future version label'
     expect(failed).not.toHaveBeenCalled();
   }, 'compatible');
 });
+
+it.each(['offline', 'silent'] as const)('opens the first bound composer while the Parley MCP is %s', async behavior => {
+  await lazy('2.8.0', async ({ writes, actions, failed, ready, inboxReady }) => {
+    await expect.poll(ready, { timeout: 5000 }).toBe(true);
+    expect(actions).toEqual([['arm', null], ['complete', first]]);
+    expect(writes.filter(input => input.includes('/new'))).toHaveLength(1);
+    expect(inboxReady()).toBe(false);
+    expect(failed).not.toHaveBeenCalled();
+  }, behavior);
+}, 7000);
 
 it('reports the failed native capability without arming rotation when the permission menu differs', async () => {
   const clock = Date.now;

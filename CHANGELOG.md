@@ -4,6 +4,16 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
+## 0.39.6
+
+### Fixed
+
+- **Kimi chats start and resume when an MCP server is offline.** This includes Parley's own MCP server. New sessions can deliver the first message, and available Parley tools still work on the first turn. ([#262](https://github.com/Kalmbik61/Parley/pull/262))
+
+### Changed
+
+- **Interface language is an explicit choice between English and Russian.** New profiles start in English. Existing profiles using the system language keep their current language when they update. ([#263](https://github.com/Kalmbik61/Parley/pull/263))
+
 ## 0.39.5
 
 ### Fixed
