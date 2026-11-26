@@ -50,6 +50,7 @@ import {
   finishTool,
   newText,
   newTool,
+  FEED_AGENT_TEXT_LIMIT,
   FEED_IMAGE_SWEEP_MS,
   FEED_TEXT_LIMIT,
   feedFromCodexRollout,
@@ -78,6 +79,7 @@ import type {
   CodexPrompt,
   OpencodeCursor,
   QwenCursor,
+  FeedAgent,
   FeedCard,
   FeedCardState,
   FeedDecision,
@@ -2274,9 +2276,10 @@ export function createFeedService(
     const notFound = (): HostError =>
       new HostError('not_found', hostText('noTranscript', { agentId }));
     if (!SAFE_AGENT_ID.test(agentId)) throw notFound();
-    // Qwen Code has no subagent transcripts in the feed: never fall through to the Claude layout.
-    if (byFamily(sessionOf(ref).provider, { claude: false, codex: false, qwen: true, opencode: true, neutral: false })) throw notFound();
-    if (sessionOf(ref).provider === 'codex') {
+    // Providers without a feed transcript reader must not fall through to the Claude layout.
+    const provider = sessionOf(ref).provider;
+    if (provider === 'kimi' || byFamily(provider, { claude: false, codex: false, qwen: true, opencode: true, neutral: false })) throw notFound();
+    if (provider === 'codex') {
       const file = deps.activity.childLogFile(ref, agentId);
       if (file === null) throw notFound();
       const records = await createRolloutTail(file).read();
@@ -2658,8 +2661,8 @@ export function createFeedService(
     if (feed.live || feed.seeded) return;
     try {
       if (binding.legacyArchive !== undefined && binding.legacyProviderId === id) await readKimiArchive(feed, binding.legacyArchive, false);
-      const wire = await createKimiWire({ ...binding, sessionId: id });
-      for (let chunk = 0; chunk < 32; chunk++) {
+      const wire = await createKimiWire({ ...binding, sessionId: id }, { snapshot: true });
+      for (;;) {
         const result = await wire.read();
         if (!feedCurrent(feed) || feed.live) return;
         if (result.limitation !== undefined) nativeKimiEvent(feed, id, { kind: 'unsupported', at: now() }, true);
@@ -2668,7 +2671,6 @@ export function createFeedService(
           if (event !== undefined) nativeKimiEvent(feed, id, event, true);
         }
         if (!result.more) break;
-        if (chunk === 31) nativeKimiEvent(feed, id, { kind: 'unsupported', at: now() }, true);
       }
       if (!feed.live) commit(feed, closeFeedTurn(feed.state, at(), { interrupted: true }));
     } catch {
@@ -2678,7 +2680,57 @@ export function createFeedService(
     }
   }
 
+  function nativeKimiAgent(
+    feed: SessionFeed,
+    id: (suffix: string) => string,
+    event: Extract<KimiWireEvent, { kind: 'subagent' }>,
+    time: string,
+    put: (item: FeedAgent) => void,
+  ): void {
+    const itemId = id('subagent:' + event.id);
+    const item = feed.state.items.find(row => row.id === itemId);
+    const old = item?.kind === 'agent' ? item : undefined;
+    const elapsed = (since: string) => Date.parse(time) - Date.parse(since);
+    const base: FeedAgent = {
+      id: itemId, at: time, kind: 'agent', agentId: event.id, toolUseId: itemId,
+      agentType: null, description: null, model: null, prompt: null, background: false,
+      status: 'running', children: [], toolCount: 0,
+    };
+    const limit = (text: string | null): string | null => text?.slice(0, FEED_AGENT_TEXT_LIMIT) ?? null;
+
+    if (event.phase === 'spawned') {
+      // A resumed native agent emits a fresh spawn for the same ID. Only a
+      // newer spawn can reopen a finished row, and old replay cannot rewind it.
+      if (old?.endedAt !== undefined && elapsed(old.endedAt) <= 0) return;
+      if (old?.status === 'running' && old.agentType !== null) return;
+      put({
+        ...base,
+        toolUseId: event.toolUseId === null ? itemId : id(event.toolUseId),
+        agentType: limit(event.name),
+        description: limit(event.description),
+        model: limit(event.model),
+        background: event.background,
+        ...([event.name, event.description, event.model].some(text => (text?.length ?? 0) > FEED_AGENT_TEXT_LIMIT) ? { truncated: true } : {}),
+      });
+    } else if (event.phase === 'started') {
+      if (old === undefined) put(base);
+    } else {
+      if (old?.endedAt !== undefined || (old !== undefined && elapsed(old.at) < 0)) return;
+      const result = event.result;
+      put({
+        ...(old ?? base),
+        status: event.phase === 'completed' ? 'done' : 'failed',
+        endedAt: time,
+        ...(old === undefined ? {} : { durationMs: elapsed(old.at) }),
+        ...(result === undefined ? {} : { result: result.slice(0, FEED_AGENT_TEXT_LIMIT) }),
+        ...((result?.length ?? 0) > FEED_AGENT_TEXT_LIMIT ? { truncated: true } : {}),
+      });
+    }
+  }
+
   function nativeKimiEvent(feed: SessionFeed, source: string, event: KimiWireEvent, historical: boolean): void {
+    // Live model steps drive host activity only, never Chat history or source reconciliation.
+    if (event.kind === 'working') return;
     const time = event.at > 0 ? new Date(event.at).toISOString() : at();
     let native = feed.kimiNative;
     if (native?.id !== source) {
@@ -2692,11 +2744,25 @@ export function createFeedService(
       feed.kimiNative = native;
     }
     const id = (suffix: string) => `kimi-native:${source}:${suffix}`;
-    const marker = event.kind === 'unsupported' ? 'limitation' : event.kind + ':' +
-      ('id' in event ? event.id : event.at);
+    const marker = event.kind === 'unsupported' ? 'limitation' : event.kind === 'subagent'
+      ? `${event.kind}:${event.id}:${event.phase}:${event.at}`
+      : event.kind + ':' + ('id' in event ? event.id : event.at);
     if (native.seen.has(marker)) return;
     if (native.seen.size >= 32768) native.seen.delete(native.seen.values().next().value!);
     native.seen.add(marker);
+
+    const put = (item: FeedItem, move = false): void => {
+      const items = feed.state.items;
+      const old = items.findIndex(candidate => candidate.id === item.id);
+      if (move) feed.batch.upsert.delete(item.id);
+      const next = old < 0 ? [...items, item] : move ? [...items.toSpliced(old, 1), item] : items.toSpliced(old, 1, item);
+      commit(feed, { state: { ...feed.state, items: next }, changes: [item] });
+    };
+    // Lifecycle does not depend on aligning old Chat text with the native wire.
+    if (event.kind === 'subagent') {
+      nativeKimiAgent(feed, id, event, time, put);
+      return;
+    }
 
     // An old archive is kept intact. Suppress only a positively matched wire prefix.
     // If it cannot be aligned, omit the ambiguous historical suffix and show the limitation.
@@ -2720,15 +2786,21 @@ export function createFeedService(
         if (legacy.failed || legacy.rows.length > 0) nativeKimiEvent(feed, source, { kind: 'unsupported', at: event.at }, false);
       }
     }
-    const put = (item: FeedItem): void => {
-      const items = feed.state.items;
-      const old = items.findIndex(candidate => candidate.id === item.id);
-      commit(feed, { state: { ...feed.state, items: old < 0 ? [...items, item] : items.toSpliced(old, 1, item) }, changes: [item] });
-    };
-    if (event.kind === 'prompt') {
+    if (event.kind === 'prompt' || event.kind === 'steer') {
+      const promptId = id('prompt:' + event.id);
+      const previous = feed.state.items.find(item => item.id === promptId);
+      const steered = previous?.kind === 'prompt' && previous.steered === true;
+      if (event.kind === 'steer') {
+        if (previous === undefined) put({ kind: 'prompt', id: promptId, at: time, text: event.text, images: 0, steered: true });
+        return;
+      }
+      // A matching append inside the active turn is only a second record for the
+      // same steer. If Kimi instead materializes it in a new turn, keep the id
+      // and move the one visible row to the actual turn boundary.
+      if (previous !== undefined && (!steered || feed.state.turnStartedAt !== null)) return;
       const began = settleCards(feed.state, 'stale', time);
       commit(feed, { ...began, state: { ...began.state, turnStartedAt: time } });
-      put({ kind: 'prompt', id: id('prompt:' + event.id), at: time, text: event.text, images: 0 });
+      put({ kind: 'prompt', id: promptId, at: time, text: event.text, images: 0 }, steered);
     } else if (event.kind === 'text') {
       put(newText(id('text:' + event.id), time, id(event.id), event.text, false));
     } else if (event.kind === 'tool') {
@@ -3029,7 +3101,7 @@ export function createFeedService(
       });
     },
     kimiNativeEvent(ref, source, event, historical = false) {
-      if (stopped) return;
+      if (stopped || event.kind === 'working') return;
       const feed = feedOf(ref, 'kimi');
       if (feed.provider !== 'kimi') return;
       feed.live = true;

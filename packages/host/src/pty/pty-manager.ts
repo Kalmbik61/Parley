@@ -13,6 +13,7 @@ import { refKey } from '@parley/protocol';
 import type { SessionRef } from '@parley/protocol';
 import type { HostContext } from '../context.js';
 import type { WindowCounters } from '../health/window-counters.js';
+import { isKimiSubmitKey } from '../kimi/native-screen.js';
 import { createCodexTerminalParser } from './codex-terminal.js';
 import type { CodexSignal, CodexTerminalParser } from './codex-terminal.js';
 import { createQwenTerminalParser, type QwenStatus, type QwenTerminalParser } from './qwen-terminal.js';
@@ -120,7 +121,8 @@ function toHandle(session: Session): PtyHandle {
     provider: session.provider,
     ...(session.generation === undefined ? {} : { generation: session.generation }),
     ...(session.kimiNative === true ? { kimiNative: true } : {}),
-    ...(session.kimiNative === true ? { inputRevision: () => session.inputRevision, rawInputRevision: () => session.rawInputRevision } : {}),
+    ...(session.kimiNative === true || session.provider === 'codex' ? { inputRevision: () => session.inputRevision } : {}),
+    ...(session.kimiNative === true ? { rawInputRevision: () => session.rawInputRevision } : {}),
     ...(session.kimiNative === true ? { submittedAt: () => session.submittedAt } : {}),
     hasDraft: () => session.draft.hasDraft || session.draft.hasHostDraft,
     bracketedPaste: () => session.screen.bracketedPaste(),
@@ -338,7 +340,7 @@ export function createPtyManager(host: HostContext, windowCounters?: WindowCount
 
     write(ref, data) {
       const session = requireSession(ref);
-      if (session.kimiNative === true && data === '\r') session.submittedAt = Date.now();
+      if (session.kimiNative === true && isKimiSubmitKey(data)) session.submittedAt = Date.now();
       session.process.write(data);
     },
 
@@ -346,10 +348,13 @@ export function createPtyManager(host: HostContext, windowCounters?: WindowCount
       const session = requireSession(ref);
       session.inputRevision++;
       session.rawInputRevision++;
-      if (session.kimiNative === true && data === '\r') session.submittedAt = Date.now();
+      const kimiSubmit = session.kimiNative === true && isKimiSubmitKey(data);
+      if (kimiSubmit) session.submittedAt = Date.now();
       const before = session.draft.hasDraft;
       const hostBefore = session.draft.hasHostDraft;
-      session.draft.input(data);
+      // Track native queue/steer like Return without changing any bytes sent.
+      // The Kimi screen gate still checks the actual editor before host input.
+      session.draft.input(kimiSubmit ? '\r' : data);
       session.process.write(data);
       forwardDraftChange(session, before, hostBefore);
     },

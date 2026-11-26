@@ -180,7 +180,7 @@ export interface ActivityService {
    * экран старта ловится по тому, что с запуска нынешнего процесса ничего не прибавилось.
    */
   processStarted(ref: SessionRef, spawnedAt?: number): void;
-  /** Lifecycle and turn boundaries delivered by the current Kimi ACP process. */
+  /** Lifecycle and turn boundaries delivered by the current native Kimi process. */
   kimiActivity(ref: SessionRef, state: 'ready' | 'working' | 'blocked' | 'ended', detail?: string): void;
   /** Qwen Code program status (OSC 7501) of the session's current process (spec 2026-11-11, 3.4 amendment). */
   qwenStatus(ref: SessionRef, status: QwenStatus): void;
@@ -1336,6 +1336,8 @@ export function createActivityService(
     // Общая свежесть лога не годится: token_count после ответа снова вернул бы working.
     // Процесс вышел — сессия снова читается по журналу и логу, как всякая спящая.
     const driven = terminals.has(key);
+    // Native Kimi has explicit turn and PTY boundaries even when thinking produces no records.
+    const kimiDriven = session.provider === 'kimi' && kimiEvents.has(key);
     const log = driven ? null : logIndex.log(session);
     // Экран старта Claude и GLM — событие свёртки, а не журнала: настоящих строк с запуска процесса ещё нет, а работы в
     // транскрипте — тоже.
@@ -1345,7 +1347,7 @@ export function createActivityService(
     // `tui.animations=false`, долгий инструмент), а ложный конец хода — это «finished» в macOS и Enter
     // вместо Tab в идущий ход. Выход процесса известен (`terminalStopped`), конец хода — сигнал терминала
     // (`Ready`, OSC 9) или `Stop` от notify.
-    const threshold = driven ? Number.POSITIVE_INFINITY : silenceThresholdMs;
+    const threshold = driven || kimiDriven ? Number.POSITIVE_INFINITY : silenceThresholdMs;
 
     // `seen` зависит от `turnEndedAt`, а он — результат самой свёртки: первый
     // проход узнаёт его, второй считает финальную `activity` (план, кусок 1.5).
@@ -1481,7 +1483,7 @@ export function createActivityService(
     const published: SessionActivity = need === waiting.need ? waiting : { ...waiting, need };
     const value: SessionLive = { activity: published, metrics };
 
-    if (driven) clearSilenceTimer(key);
+    if (driven || kimiDriven) clearSilenceTimer(key);
     else scheduleSilenceTimer(ref, key, activity, log, now);
 
     const previous = live.get(key);
@@ -2059,6 +2061,7 @@ export function createActivityService(
     processStarted(ref, spawnedAt) {
       if (stopped) return;
       const key = refKey(ref);
+      kimiEvents.delete(key);
       const generation = (generations.get(key) ?? 0) + 1;
       generations.set(key, generation);
       // A new process generation: nothing it has not shown yet counts (stale OSC or MCP of the previous process).

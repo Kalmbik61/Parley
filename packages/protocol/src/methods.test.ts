@@ -173,6 +173,8 @@ describe('pty.send', () => {
 
   it('текст 1+ символов и submit; пустой текст и без submit — отвергаются на схеме', () => {
     expect(METHODS['pty.send'].safeParse({ ref, text: 'hi', submit: true }).success).toBe(true);
+    expect(METHODS['pty.send'].parse({ ref, text: 'hi', submit: true, intent: 'steer' }).intent).toBe('steer');
+    expect(METHODS['pty.send'].safeParse({ ref, text: 'hi', submit: true, intent: 'queue' }).success).toBe(false);
     expect(METHODS['pty.send'].safeParse({ ref, text: '', submit: true }).success).toBe(false);
     expect(METHODS['pty.send'].safeParse({ ref, text: 'hi' }).success).toBe(false);
   });
@@ -181,6 +183,7 @@ describe('pty.send', () => {
     expectTypeOf<Result<'pty.send'>>().toEqualTypeOf<{
       inserted: boolean;
       submitted: boolean;
+      steered?: true;
       reason: 'blocked' | 'busy' | 'no-paste-mode' | 'draft' | 'input' | 'restarted' | 'blocked-before-enter' | null;
     }>();
   });

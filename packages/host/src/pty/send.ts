@@ -12,9 +12,10 @@ import { refKey } from '@parley/protocol';
 import type { SendResult, SessionRef } from '@parley/protocol';
 import type { ActivityService } from '../activity/activity-service.js';
 import { HostError } from '../errors.js';
+import type { KIMI_STEER_DRAFT_KEY, KIMI_STEER_KEY } from '../kimi/native-screen.js';
 import type { Log } from '../log.js';
 import type { WakeService } from '../wake/wake-service.js';
-import { CODEX_SUBMIT_DELAY_MS, codexSubmitKey } from './codex-input.js';
+import { CODEX_SUBMIT_DELAY_MS, KEY_ENTER, KEY_TAB, codexSubmitKey } from './codex-input.js';
 import { choiceInProgress } from './effort-switch.js';
 import type { PtyManager } from './pty-manager.js';
 import { typeAndSubmit } from './type-and-submit.js';
@@ -23,6 +24,10 @@ import type { AttemptOutcome } from './type-and-submit.js';
 /** Предел текста `pty.send` — 64 КиБ в байтах UTF-8 (сквозные ограничения плана). */
 const MAX_SEND_BYTES = 64 * 1024;
 export const KIMI_ENTER_DELAY_MS = 150;
+
+export type KimiSendTarget =
+  | { id: string | null; mode: 'idle' }
+  | { id: string; mode: 'steer'; key: typeof KIMI_STEER_KEY | typeof KIMI_STEER_DRAFT_KEY | '\r' };
 
 /** Очистка спеки 8.6, шаг 2; пусто или > 64 КиБ — HostError('bad_request'). */
 export function sanitizeForSend(text: string): string {
@@ -49,16 +54,16 @@ export function createSender(deps: {
   wake: Pick<WakeService, 'inFlight' | 'enterDelayMs'>;
   /** Замок смены модели и effort этой сессии занят: клавиши смены идут в PTY, текст среди них не нужен. */
   switching?: (ref: SessionRef) => boolean;
-  kimiReady?: (ref: SessionRef, draft?: boolean) => boolean;
+  kimiSendTarget?: (ref: SessionRef, draft: boolean, steer: boolean) => KimiSendTarget | undefined;
 }): (
-  params: { ref: SessionRef; text: string; submit: boolean; requestedAt?: number | undefined },
+  params: { ref: SessionRef; text: string; submit: boolean; requestedAt?: number | undefined; intent?: 'steer' | undefined },
   log?: Log,
 ) => Promise<SendResult> {
   // Сессии, у которых вставка с submit ждёт своего Enter: иначе Enter первого вызова
   // отправил бы и текст второго, а тост второго сказал бы «без Enter».
   const waiting = new Set<string>();
 
-  return async ({ ref, text, submit, requestedAt }, log) => {
+  return async ({ ref, text, submit, requestedAt, intent }, log) => {
     const startedAt = performance.now();
     // Метка окна — мс эпохи, а не performance.now(): окно и хост на одной машине, часы одни. Метка из будущего
     // (расхождение часов) даёт 0, а не отрицательное ожидание.
@@ -68,6 +73,7 @@ export function createSender(deps: {
     const codex = handle.provider === 'codex';
     const kimi = handle.kimiNative === true;
     const clean = sanitizeForSend(text);
+    const steer = submit && intent === 'steer' && (codex || kimi);
 
     // Журнал задержек (спека диагностики, A4): одна запись на вызов, длины и идентификаторы без текста.
     // typeMs — от входа в обработчик до возврата typeAndSubmit; enterMs — от него до исхода Enter (null, если Enter не ждали).
@@ -100,20 +106,24 @@ export function createSender(deps: {
     // Ползунок `/effort`: Enter в нём сохраняет уровень умолчанием в настройках CLI, а текст стал бы его вводом. Хост
     // закрывает ползунок сам (Esc), но поздний, открывшийся после паузы, мог остаться на экране; пока идёт смена,
     // ползунок открыт намеренно. В обоих случаях в PTY не уходит ни одного байта.
-    if (choiceInProgress(ref, deps)) return refuse('blocked');
+    const inputBlocked = () => {
+      const state = deps.activity.get(ref);
+      const compact = state?.metrics?.compaction;
+      return choiceInProgress(ref, deps) || state?.activity.activity === 'blocked' ||
+        deps.activity.qwenBlocked(ref) || (steer && (compact === 'pending' || compact === 'running'));
+    };
+    if (inputBlocked()) return refuse('blocked');
 
     // Отсюда и до pty.write — ни одного await: иначе будильник успел бы напечатать
     // указатель между проверками и вставкой.
     // Пока агент показывает диалог, вставленные символы может прочитать сам диалог —
     // это был бы автоответ, запрещённый рамкой.
     const live = deps.activity.get(ref)?.activity;
-    if (live?.activity === 'blocked') return refuse('blocked');
-    // Qwen Code says so in its terminal (OSC 7501 `blocked`: sign-in, a permission or a question) before any hook does.
-    if (deps.activity.qwenBlocked(ref)) return refuse('blocked');
     // Ни одного хука с запуска процесса — хост не знает, что у агента на экране: у свежей
     // сессии это может быть вопрос доверия к папке, где Enter выбрал бы «Yes, proceed»
     // (fix-final-b). Отвечаем как на blocked: человек смотрит в терминал сам.
-    if (kimi ? deps.kimiReady?.(ref) !== true : !hookedSince(live, handle.startedAt)) return refuse('blocked');
+    const target = kimi ? deps.kimiSendTarget?.(ref, false, steer) : undefined;
+    if (kimi ? target === undefined : !hookedSince(live, handle.startedAt)) return refuse('blocked');
     const key = refKey(ref);
     if (deps.wake.inFlight(ref) || waiting.has(key)) return refuse('busy');
     const paste = handle.bracketedPaste();
@@ -127,6 +137,9 @@ export function createSender(deps: {
 
     // Черновик считается до вставки: человека или хоста от прошлой вставки без Enter.
     const hadDraft = handle.hasDraft();
+    if (steer && hadDraft) return refuse('blocked');
+    let steered = false;
+    let kimiTarget = target;
     const attempt = typeAndSubmit(
       { pty: deps.pty, enterDelayMs: deps.wake.enterDelayMs },
       ref,
@@ -138,16 +151,31 @@ export function createSender(deps: {
         wrap: codex ? 'codex' : paste && !qwen ? 'paste' : 'plain',
         multiline: true,
         // blocked приходит хуком с задержкой: запрос разрешения мог появиться за паузу.
-        beforeEnter: () => kimi ? deps.kimiReady?.(ref, true) === true
-          : deps.activity.get(ref)?.activity.activity !== 'blocked' && !deps.activity.qwenBlocked(ref),
-        ...(kimi ? { delayMs: KIMI_ENTER_DELAY_MS } : {}),
-        // У Codex своя пауза и своя клавиша: занятому агенту — Tab (очередь), а не Enter (вмешательство в ход).
-        ...(codex
-          ? {
-              delayMs: CODEX_SUBMIT_DELAY_MS,
-              submitKey: () => codexSubmitKey(deps.activity.get(ref)?.activity.activity),
-            }
-          : {}),
+        beforeEnter: () => {
+          if (inputBlocked() || (steer && !deps.pty.get(ref)?.bracketedPaste())) return false;
+          if (!kimi) return true;
+          const current = deps.kimiSendTarget?.(ref, true, steer);
+          if (current === undefined || current.id !== target?.id) return false;
+          kimiTarget = current;
+          return true;
+        },
+        ...(kimi ? {
+          delayMs: KIMI_ENTER_DELAY_MS,
+          submitKey: () => {
+            if (kimiTarget?.mode !== 'steer') return KEY_ENTER;
+            steered = true;
+            return kimiTarget.key;
+          },
+        } : {}),
+        // Codex: Tab keeps ordinary sends queued, Enter is the explicit native steer.
+        ...(codex ? {
+          delayMs: CODEX_SUBMIT_DELAY_MS,
+          submitKey: () => {
+            const key = codexSubmitKey(deps.activity.get(ref)?.activity.activity);
+            steered = steer && key === KEY_TAB;
+            return steered ? KEY_ENTER : key;
+          },
+        } : {}),
       },
     );
 
@@ -166,7 +194,7 @@ export function createSender(deps: {
     try {
       const outcome = await attempt.done;
       note(outcome, typeMs, Math.round(performance.now() - enterFrom));
-      if (outcome === 'submitted') return { inserted: true, submitted: true, reason: null };
+      if (outcome === 'submitted') return { inserted: true, submitted: true, reason: null, ...(steered ? { steered: true } : {}) };
       if (outcome === 'input') return { inserted: true, submitted: false, reason: 'input' };
       if (outcome === 'blocked') return { inserted: true, submitted: false, reason: 'blocked-before-enter' };
       // Остаётся restarted: попытку отправителя никто не отменяет, а typed бывает только без submit.

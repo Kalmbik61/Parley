@@ -99,7 +99,7 @@ function hostHasFeed(): boolean {
   return hostMethods(useHostStore.getState().status).has('feed.snapshot');
 }
 
-/** Дельта r+1 поверх элементов: upsert по id (новые — в конец, известные — на месте), затем `removed`. */
+/** Дельта r+1 поверх элементов: upsert по id, затем `removed`. */
 export function applyDelta(items: readonly FeedItem[], upsert: readonly FeedItem[], removed: readonly string[]): FeedItem[] {
   const next = [...items];
   const index = new Map(next.map((item, at) => [item.id, at]));
@@ -108,6 +108,15 @@ export function applyDelta(items: readonly FeedItem[], upsert: readonly FeedItem
     if (at === undefined) {
       index.set(item.id, next.length);
       next.push(item);
+      continue;
+    }
+    const previous = next[at];
+    // Kimi acknowledged a steer in the old turn but materialized the same prompt
+    // in a new one. Preserve the React key while moving it to the new boundary.
+    if (previous?.kind === 'prompt' && previous.steered === true && item.kind === 'prompt' && item.steered !== true) {
+      next.splice(at, 1);
+      next.push(item);
+      for (let i = at; i < next.length; i++) index.set(next[i]!.id, i);
     } else {
       next[at] = item;
     }

@@ -10,7 +10,7 @@ import { REQUIRED_METHODS } from '../lib/capabilities.js';
 import { useHostStore } from '../store/host.js';
 import { useUiStore } from '../store/ui.js';
 import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js';
-import { resetFeedStoreForTests, useFeedStore } from './store.js';
+import { applyDelta, resetFeedStoreForTests, useFeedStore } from './store.js';
 import { cardKey, resetChatUiStoreForTests, useChatUiStore } from './ui-store.js';
 
 const REF: SessionRef = { projectPath: '/tmp/p', workId: 'w-01', sessionId: 's-01' };
@@ -580,4 +580,13 @@ describe('decisions ленты (Codex)', () => {
     bridge.emit('feed.changed', { mode: null, ref: REF, revision: 3, upsert: [], removed: [], decisions: 'window' });
     expect(feed()?.decisions).toBe('window');
   });
+});
+
+it('merges a Kimi steer handoff without duplicating the prompt or losing the new turn boundary', () => {
+  const initial = prompt('initial');
+  const steer = { ...prompt('steer'), steered: true } as const;
+  const materialized = prompt('steer');
+  const turn: FeedItem = { kind: 'turn', id: 'turn', at: initial.at, durationMs: 400 };
+  const answer: FeedItem = { kind: 'text', id: 'answer', at: initial.at, messageId: null, text: 'reply', streaming: false };
+  expect(applyDelta([initial, steer], [turn, materialized, answer], [])).toEqual([initial, turn, materialized, answer]);
 });

@@ -1008,7 +1008,7 @@ export async function startHost(options: HostOptions = {}): Promise<RunningHost>
     activity: activityService,
     wake: wakeService,
     switching: (ref: SessionRef) => sessionsService.exclusive.held(ref),
-    kimiReady: kimiNative.ready,
+    kimiSendTarget: kimiNative.sendTarget,
   });
   const secretOf = (entry: ProviderEntry): Promise<string | null> =>
     entry.runner.secret === undefined ? Promise.resolve(null) : readSecret(entry.runner.secret);

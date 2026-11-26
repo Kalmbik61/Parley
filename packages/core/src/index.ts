@@ -705,6 +705,7 @@ export {
   writeMcpConfig,
 } from './work/mcp-config.js';
 export type { AgentChannel, McpConfigFile, McpConfigParams, McpStdioServer } from './work/mcp-config.js';
+export { captureKimiFollowUp, type KimiFollowUpMode } from './work/kimi-follow-up.js';
 export {
   CHANNEL_MIN_VERSION,
   CHANNEL_VALUE,

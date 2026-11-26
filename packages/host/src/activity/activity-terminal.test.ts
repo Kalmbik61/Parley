@@ -146,6 +146,40 @@ function changes(ref: SessionRef): string[] {
     .map((entry) => entry.activity.activity);
 }
 
+it('publishes a silent native Kimi turn as working until the actual end, and preserves permissions', async () => {
+  const { ref } = await codexSession({ provider: 'kimi' });
+  const w = await works();
+  let now = Date.now();
+  const a = activity(w, { now: () => now, silenceThresholdMs: 30, quietTurnHoldMs: 60 });
+  await a.start();
+  a.processStarted(ref);
+  a.kimiActivity(ref, 'working');
+  expect(a.get(ref)?.activity.activity).toBe('working');
+  expect(changes(ref).at(-1)).toBe('working');
+
+  now += 1_000;
+  await settle(100);
+  expect(a.get(ref)?.activity).toMatchObject({ activity: 'working', turnEndedAt: null });
+  expect(a.current().find(({ ref: target }) => refKey(target) === refKey(ref))?.activity.activity).toBe('working');
+  expect(changes(ref)).not.toContain('unseen');
+
+  a.kimiActivity(ref, 'blocked');
+  expect(changes(ref).at(-1)).toBe('blocked');
+  a.kimiActivity(ref, 'working');
+  expect(changes(ref).at(-1)).toBe('working');
+  now += 1;
+  a.kimiActivity(ref, 'ended');
+  expect(a.get(ref)?.activity).toMatchObject({ activity: 'unseen', turnEndedAt: new Date(now).toISOString() });
+  expect(changes(ref).at(-1)).toBe('unseen');
+  a.markSeen(ref, new Date(now).toISOString());
+  expect(changes(ref).at(-1)).toBe('idle');
+
+  a.kimiActivity(ref, 'working');
+  expect(changes(ref).at(-1)).toBe('working');
+  a.terminalStopped(ref);
+  expect(changes(ref).at(-1)).toBe('idle');
+});
+
 const notices = (kind: string): Array<Record<string, unknown>> =>
   broadcasts
     .filter((entry) => entry.event === 'host.notice')

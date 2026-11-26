@@ -104,6 +104,7 @@ const prompt = z.strictObject({
   ...base,
   kind: z.literal('prompt'),
   text: z.string(),
+  steered: z.literal(true).exactOptional(),
   images: z.number().int().min(0),
 });
 

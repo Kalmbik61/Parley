@@ -165,6 +165,27 @@ describe('PtyManager', () => {
     await manager.stop(sessionRef, { graceMs: 200 });
   });
 
+  it('tracks a raw Kimi queue/steer key as a submit without letting keys inside a paste clear the draft', async () => {
+    const manager = createPtyManager(fakeHost());
+    const sessionRef = ref();
+    const handle = manager.start(sessionRef, { ...launch(), kimiNative: true });
+    try {
+      await waitFor(() => manager.snapshot(sessionRef).snapshot.includes('STUB READY'));
+      for (const key of ['\x11', '\x1b[13;5u', '\x13']) {
+        manager.input(sessionRef, 'prompt');
+        expect(handle.hasDraft()).toBe(true);
+        manager.input(sessionRef, key);
+        expect(handle.hasDraft()).toBe(false);
+      }
+      manager.input(sessionRef, '\x1b[200~prompt');
+      manager.input(sessionRef, '\x11');
+      manager.input(sessionRef, '\x1b[201~');
+      expect(handle.hasDraft()).toBe(true);
+    } finally {
+      await manager.stop(sessionRef, { graceMs: 200 });
+    }
+  });
+
   it('живой PTY занимает host.busy() и освобождает его на выходе процесса; pty.exit уходит broadcast', async () => {
     const host = fakeHost();
     const manager = createPtyManager(host);

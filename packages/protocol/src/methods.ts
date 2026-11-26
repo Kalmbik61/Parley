@@ -381,7 +381,7 @@ export const METHODS = {
   // Предел 64 КиБ хост считает в байтах UTF-8 после очистки (спека 8.6, шаг 2): схема
   // байтов не видит, поэтому здесь только «не пусто».
   // `requestedAt` — как у `rooms.send`: метка нажатия Send для `queueMs` в журнале хоста.
-  'pty.send': z.object({ ref: sessionRef, text: z.string().min(1), submit: z.boolean(), requestedAt: z.number().optional() }),
+  'pty.send': z.object({ ref: sessionRef, text: z.string().min(1), submit: z.boolean(), requestedAt: z.number().optional(), intent: z.literal('steer').optional() }),
   // Видимый экран терминала сессии (панель вопроса в Chat): без `rows` — весь экран, с `rows` — нижние строки; сессии нет — пустой список.
   'pty.screenText': z.strictObject({ ref: sessionRef, rows: z.number().int().min(1).max(200).optional() }),
   // Отдельная ограниченная проекция острова: никаких renderer path/agentId/limit.

@@ -27,9 +27,10 @@ export async function sendToAgent(
   text: string,
   submit: boolean,
   requestedAt?: number,
+  intent?: 'steer',
 ): Promise<SendOutcome> {
   try {
-    return await bridge.call('pty.send', { ref, text, submit, ...(requestedAt === undefined ? {} : { requestedAt }) });
+    return await bridge.call('pty.send', { ref, text, submit, ...(requestedAt === undefined ? {} : { requestedAt }), ...(intent === undefined ? {} : { intent }) });
   } catch (error) {
     const { code, message } = decodeIpcError(error);
     // Текст хоста — только в консоль, человеку — свой тост.
