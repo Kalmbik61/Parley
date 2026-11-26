@@ -85,6 +85,7 @@ export function feedAvailability(
     (input.provider === 'claude' ||
       input.provider === 'glm' ||
       input.provider === 'codex' ||
+      input.provider === 'qwen' ||
       isCustomProviderId(input.provider) ||
       input.family === 'claude' ||
       input.family === 'qwen' ||

@@ -35,6 +35,7 @@ import { activityMap, makeActivity, makeRoom, makeSession, makeWork } from '../t
 import type { SendWithToastDeps } from '../terminal/send.js';
 import { useDictationStore } from '../voice/dictation-store.js';
 import { resetCapabilitiesStoreForTests } from './capabilities-store.js';
+import { ChatView } from './ChatView.js';
 import { CHAT_RETRY_MS, chatOutbox } from './chat-outbox.js';
 import { replyQuote, withQuote } from './reply.js';
 import { resetFeedStoreForTests, useFeedStore } from './store.js';
@@ -971,6 +972,129 @@ describe('ChatView — панель вопроса терминала (план 
     disposeFeed?.();
     disposeFeed = undefined;
     vi.useRealTimers();
+  });
+
+  it.each(['qwen', 'custom-qwen-test'])('never mounts raw PTY or waiting banners across delayed %s questions and review', async provider => {
+    disposeFeed = useFeedStore.getState().init(bridge);
+    useHostStore.setState({ status: { state: 'connected', hostVersion: 'test',
+      methods: [...FEED_METHODS, 'pty.screenText', 'feed.decide'], features: ['feed-qwen'] } });
+    useProvidersStore.setState({ providers: [], loaded: false });
+    const mounted: string[] = [];
+    const observer = new MutationObserver(records => {
+      for (const record of records) for (const node of record.addedNodes) {
+        if (!(node instanceof HTMLElement)) continue;
+        for (const el of [node, ...node.querySelectorAll('[data-testid]')]) {
+          const id = el.getAttribute('data-testid');
+          if (id === 'chat-terminal-prompt' || id === 'terminal-body' || id === 'chat-waiting-banner') mounted.push(id);
+        }
+      }
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    try {
+      // Generic blocked activity can be published before Qwen's question classification.
+      wait('blocked', 'approval');
+      renderBody(makeSession('s-01', provider, { provider }), 'chat');
+      await settle(1500);
+      expect(screen.getByTestId('tab-view-pending')).toBeDefined();
+      expect(mounted).toEqual([]);
+      act(() => useProvidersStore.setState({ providers: [{ id: provider, label: provider, available: true,
+        family: 'qwen', version: '0.27.2', limits: null }], loaded: true }));
+      await settle(1500);
+      expect(mounted).toEqual([]);
+      expect(screen.queryByTestId('chat-waiting-banner')).toBeNull();
+      act(() => useActivityStore.setState({ byRef: activityMap([makeActivity(REF, 'blocked', {
+        need: { ...need('approval'), kind: 'question' },
+      })]) }));
+      await settle(1500);
+      const question: FeedQuestionCard = { id: 'q1', cardId: 'q1', at: AT, state: 'pending', kind: 'question',
+        toolName: 'AskUserQuestion', toolUseId: null, toolInput: {}, questions: [{ question: 'Which colour?', header: null,
+          options: [{ label: 'Blue', description: null }, { label: 'Green', description: null }], multiSelect: false }] };
+      setFeed([question]);
+      await settle(0);
+      expect(within(screen.getByTestId('chat-pending-cards')).getByTestId('chat-card').textContent).toContain('Which colour?');
+      expect(screen.queryByTestId('chat-waiting-banner')).toBeNull();
+      bridge.setHandler('feed.decide', () => {
+        setFeed([{ ...question, state: 'answered', answers: { 'Which colour?': 'Green' } }], 2);
+        return { applied: true, state: 'answered' };
+      });
+      fireEvent.click(screen.getByRole('radio', { name: 'Green' }));
+      fireEvent.click(screen.getByTestId('card-submit'));
+      await settle(1500);
+      expect(screen.queryByTestId('chat-pending-cards')).toBeNull();
+      expect(bridge.calls.find(call => call.method === 'feed.decide')?.params).toMatchObject({
+        cardId: 'q1', decision: { kind: 'question', answers: { 'Which colour?': 'Green' } },
+      });
+      const second = { ...question, id: 'q2', cardId: 'q2', questions: [{ ...question.questions[0]!, question: 'Which shape?' }] };
+      setFeed([{ ...question, state: 'answered' }, second], 3);
+      await settle(1500);
+      expect(within(screen.getByTestId('chat-pending-cards')).getByTestId('chat-card').textContent).toContain('Which shape?');
+      setFeed([{ ...question, state: 'answered' }, { ...second, state: 'answered' }], 4);
+      await settle(1500);
+      const review = { ...question, id: 'review', cardId: 'review', questions: [{ ...question.questions[0]!,
+        question: 'Ready to submit your answers?', options: [{ label: 'Submit answers', description: null }, { label: 'Cancel', description: null }] }] };
+      setFeed([{ ...question, state: 'answered' }, { ...second, state: 'answered' }, review], 5);
+      await settle(1500);
+      expect(within(screen.getByTestId('chat-pending-cards')).getByTestId('chat-card').textContent).toContain('Ready to submit your answers?');
+      expect(mounted).toEqual([]);
+      expect(bridge.calls.filter(call => call.method === 'pty.screenText')).toEqual([]);
+      expect(bridge.notified.filter(call => call.method === 'pty.input')).toEqual([]);
+    } finally {
+      observer.disconnect();
+    }
+  });
+
+  it.each(['qwen', 'custom-qwen-test'])('keeps %s question waits safe while provider family hydrates', async provider => {
+    hostWith([...FEED_METHODS, 'pty.screenText']);
+    useProvidersStore.setState({ providers: [], loaded: false });
+    wait('blocked');
+    // Exercise ChatView itself while metadata for an already open Chat is refreshed.
+    render(<ChatView workKey="/tmp/p w-01" tab={{ kind: 'terminal', id: 'terminal:s-01', sessionId: 's-01', view: 'chat' }}
+      sessionRef={REF} visible live bridge={bridge} sendDeps={sendDeps} provider={provider} storedModel={null} storedEffort={null} />);
+    await settle(1500);
+    act(() => useProvidersStore.setState({ providers: [{ id: provider, label: provider, available: true, version: '0.27.2', limits: null }], loaded: true }));
+    await settle(1500);
+    act(() => useProvidersStore.setState({ providers: [{ id: provider, label: provider, available: true, family: 'qwen', version: '0.27.2', limits: null }] }));
+    await settle(1500);
+    expect(bridge.calls.filter(call => call.method === 'pty.screenText')).toEqual([]);
+    expect(screen.queryByTestId('chat-terminal-prompt')).toBeNull();
+    expect(screen.queryByTestId('chat-waiting-banner')).toBeNull();
+  });
+
+  it('keeps manual Terminal navigation available for an unrecognised Qwen question', async () => {
+    useHostStore.setState({ status: { state: 'connected', hostVersion: 'test',
+      methods: [...FEED_METHODS, 'pty.screenText'], features: ['feed-qwen'] } });
+    useProvidersStore.setState({ providers: [{ id: 'qwen', label: 'Qwen', available: true, family: 'qwen', version: '0.27.2', limits: null }], loaded: true });
+    const key = '/tmp/p w-01';
+    const tab = { kind: 'terminal' as const, id: 'terminal:s-01', sessionId: 's-01', view: 'chat' as const };
+    const originalLayout = useLayoutStore.getState();
+    try {
+      originalLayout.drop(key);
+      originalLayout.hydrate(key, openTab(emptyLayout(), tab));
+      wait('blocked');
+      const session = makeSession('s-01', 'Qwen', { provider: 'qwen' });
+      const view = renderBody(session, 'chat');
+      await settle(1500);
+      expect(screen.queryByTestId('chat-waiting-banner')).toBeNull();
+      fireEvent.click(segment('Terminal'));
+      const result = findTab(useLayoutStore.getState().layouts[key]!, tab.id);
+      expect(result?.group.tabs[result.index]).toMatchObject({ view: 'terminal' });
+      view.rerender(body(session, 'terminal'));
+      expect(segment('Terminal').getAttribute('aria-checked')).toBe('true');
+      expect(screen.getByTestId('terminal-body')).toBeDefined();
+      expect(screen.queryByTestId('chat-view')).toBeNull();
+    } finally {
+      useLayoutStore.setState(originalLayout);
+    }
+  });
+
+  it.each(['startup', 'sign-in'] as const)('retains Qwen %s terminal fallback', async kind => {
+    useHostStore.setState({ status: { state: 'connected', hostVersion: 'test',
+      methods: [...FEED_METHODS, 'pty.screenText'], features: ['feed-qwen'] } });
+    useProvidersStore.setState({ providers: [{ id: 'qwen', label: 'Qwen', available: true, family: 'qwen', version: '0.27.2', limits: null }], loaded: true });
+    useActivityStore.setState({ byRef: activityMap([makeActivity(REF, 'blocked', { need: { ...need('startup'), kind } })]) });
+    renderBody(makeSession('s-01', 'Qwen', { provider: 'qwen' }), 'chat');
+    await settle(300);
+    expect(screen.getByTestId('chat-terminal-prompt')).toBeDefined();
   });
 
   it.each([false, true])('keeps the Kimi draft and uses provider options without raw answer controls (shared=%s)', async (shared) => {

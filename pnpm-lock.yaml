@@ -270,6 +270,9 @@ importers:
       ogg-opus-decoder:
         specifier: 1.7.5
         version: 1.7.5
+      string-width:
+        specifier: 5.1.2
+        version: 5.1.2
 
   packages/mobile:
     dependencies:

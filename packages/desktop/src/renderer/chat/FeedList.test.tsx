@@ -7,6 +7,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import * as ReactVirtual from '@tanstack/react-virtual';
 import type { FeedAgent, FeedItem } from '@parley/core';
 import type { SessionRef } from '@parley/protocol';
 import { S } from '../../shared/strings.js';
@@ -14,6 +15,11 @@ import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js'
 import { ChatEnvContext } from './chat-env.js';
 import { FeedList } from './FeedList.js';
 import { TRANSCRIPT_TAIL } from './items/AgentItem.js';
+
+// Копия экспортов позволяет поставить scoped spy на CJS-export, сохранив настоящий хук.
+vi.mock('@tanstack/react-virtual', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@tanstack/react-virtual')>(),
+}));
 
 /** Сколько раз рисовался текст каждого элемента — по `id`. */
 const textRenders = vi.hoisted(() => new Map<string, number>());
@@ -491,18 +497,35 @@ describe('FeedList — поиск ⌘F (план 2026-11-01, задача 9)', (
   });
 
   it('цель с тем же nonce исполняется один раз; новый nonce на ту же цель — снова', async () => {
-    const view = render(withFind(finished()));
-    const scroller = fakeScroller();
-    view.rerender(withFind(finished(), target('t1', 4)));
-    await settle();
-    const first = scroller.scrollTo.mock.calls.length;
-    expect(first).toBeGreaterThan(0);
-    view.rerender(withFind([...finished(), text('a2', 'later')], target('t1', 4)));
-    await settle();
-    expect(scroller.scrollTo.mock.calls.length).toBe(first);
-    view.rerender(withFind([...finished(), text('a2', 'later')], target('t1', 5)));
-    await settle();
-    expect(scroller.scrollTo.mock.calls.length).toBeGreaterThan(first);
+    vi.useFakeTimers();
+    const useVirtualizer = vi.spyOn(ReactVirtual, 'useVirtualizer');
+    try {
+      const view = render(withFind(finished()));
+      fakeScroller();
+      const virtualizer = useVirtualizer.mock.results[0]!.value;
+      const scrollToIndex = vi.spyOn(virtualizer, 'scrollToIndex');
+      try {
+        view.rerender(withFind(finished(), target('t1', 4)));
+        await settle();
+        expect(scrollToIndex.mock.calls).toEqual([[3, { align: 'center' }]]);
+        view.rerender(withFind([...finished(), text('a2', 'later')], target('t1', 4)));
+        await settle();
+        // virtual-core может поправить DOM-прокрутку на кадре без нового запроса от поиска.
+        act(() => vi.advanceTimersToNextFrame());
+        expect(scrollToIndex).toHaveBeenCalledTimes(1);
+        view.rerender(withFind([...finished(), text('a2', 'later')], target('t1', 5)));
+        await settle();
+        act(() => vi.advanceTimersToNextFrame());
+        expect(scrollToIndex).toHaveBeenCalledTimes(2);
+        expect(scrollToIndex).toHaveBeenLastCalledWith(3, { align: 'center' });
+      } finally {
+        view.unmount();
+        scrollToIndex.mockRestore();
+      }
+    } finally {
+      useVirtualizer.mockRestore();
+      vi.useRealTimers();
+    }
   });
 
   it('закрытая полоса забывает исполненную цель: тот же nonce в новой полосе снова работает', async () => {

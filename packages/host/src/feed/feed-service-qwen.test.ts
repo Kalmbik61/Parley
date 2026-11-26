@@ -13,6 +13,10 @@ import type { FeedService } from './feed-service.js';
 
 const FIXTURE = path.resolve(import.meta.dirname, '../../../core/src/feed/qwen/__fixtures__/session-main.jsonl');
 const ID = '66666666-6666-4666-8666-666666666666';
+const questionScreen = ['? AskUserQuestion Ask user 1 questions ←', ' ▸ Colour  Submit', '', ' Which colour?', '',
+  '   ❯ 1. Blue', '     2. Green', '     3. Type something...',
+  ' ↑/↓: Navigate | Enter: Select | Esc: Cancel', ' Waiting for user confirmation...'];
+const feedback = ['', '\u25cf\ufe0e How is Qwen doing this session? (optional)', '', '1: Good 2: Bad 3: Fine 0: Dismiss'];
 
 let fakes: FakeFeedDeps;
 let service: FeedService;
@@ -35,6 +39,154 @@ afterEach(async () => {
 const kinds = (items: readonly FeedItem[], kind: FeedItem['kind']): FeedItem[] => items.filter((item) => item.kind === kind);
 
 describe('feed of a Qwen Code session', () => {
+  it('recovers the first complete dialog on redraw before the next recovery poll', async () => {
+    vi.useFakeTimers();
+    try {
+      await service.snapshot(REF);
+      fakes.setScreen([]);
+      fakes.emitStatus(REF, { state: 'blocked', kind: 'question', msg: null });
+      await vi.advanceTimersByTimeAsync(100);
+      fakes.setScreen(questionScreen.slice(0, -1));
+      fakes.emitOutput(REF);
+      expect((await service.snapshot(REF)).items.some(item => item.kind === 'question')).toBe(false);
+      await vi.advanceTimersByTimeAsync(100);
+      fakes.setScreen([...questionScreen, ...feedback]);
+      fakes.emitOutput(REF);
+      const first = (await service.snapshot(REF)).items.find(item => item.kind === 'question')!;
+      expect(first).toMatchObject({ state: 'pending', questions: [{ question: 'Which colour?' }] });
+      // A second dialog can repaint without a new OSC status.
+      fakes.setScreen(questionScreen.map(line => line.replace('Which colour?', 'Which shape?')));
+      fakes.emitOutput(REF);
+      const snapshot = await service.snapshot(REF);
+      expect(snapshot.items.find(item => item.id === first.id)).toMatchObject({ state: 'elsewhere' });
+      expect(snapshot.items.find(item => item.kind === 'question' && item.state === 'pending')).toMatchObject({ questions: [{ question: 'Which shape?' }] });
+      expect(fakes.writes).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['idle', 'exit', 'start', 'pid', 'drop', 'stop'])('ignores late redraw after %s invalidates a native wait', async lifecycle => {
+    await service.snapshot(REF);
+    fakes.setScreen([]);
+    fakes.emitStatus(REF, { state: 'blocked', kind: 'question', msg: null });
+    if (lifecycle === 'idle') fakes.emitStatus(REF, { state: 'idle', kind: null, msg: null });
+    if (lifecycle === 'exit') fakes.emitExit(REF);
+    if (lifecycle === 'start') fakes.emitStart(REF);
+    if (lifecycle === 'pid') fakes.setProcess({ pid: 2 });
+    if (lifecycle === 'drop') fakes.setSessions([]);
+    if (lifecycle === 'stop') await service.stop();
+    const read = vi.spyOn(fakes.deps.pty, 'screenText');
+    fakes.setScreen(questionScreen);
+    fakes.emitOutput(REF);
+    expect(read).not.toHaveBeenCalled();
+    if (lifecycle !== 'drop' && lifecycle !== 'stop') {
+      expect((await service.snapshot(REF)).items.some(item => item.kind === 'question')).toBe(false);
+    }
+    expect(fakes.writes).toEqual([]);
+  });
+
+  it('keeps incomplete feedback, unknown overlays and rating-only screens in the terminal', async () => {
+    for (const lines of [[...questionScreen, ...feedback.slice(0, -1)], [...questionScreen, ...feedback, 'Unknown overlay'], feedback]) {
+      fakes.setScreen(lines);
+      fakes.emitStatus(REF, { state: 'blocked', kind: 'question', msg: null });
+      const snapshot = await service.snapshot(REF);
+      expect(snapshot.decisions).toBe('terminal');
+      expect(snapshot.items.some(item => item.kind === 'question')).toBe(false);
+    }
+    expect(fakes.writes).toEqual([]);
+  });
+
+  it('offers the live question above feedback and waits for dismissal before applying the answer', async () => {
+    fakes.setScreen([...questionScreen, ...feedback]);
+    fakes.emitStatus(REF, { state: 'blocked', kind: 'question', msg: null });
+    const snapshot = await service.snapshot(REF);
+    const card = snapshot.items.find(item => item.kind === 'question')!;
+    expect(snapshot.decisions).toBe('window');
+    expect(card.questions[0]).toMatchObject({ question: 'Which colour?', options: [{ label: 'Blue' }, { label: 'Green' }] });
+    const decision = { kind: 'question', answers: { 'Which colour?': 'Green' } } as const;
+    expect(await service.decide(REF, card.id, { kind: 'question', answers: {} })).toMatchObject({ applied: false });
+    expect(fakes.writes).toEqual([]);
+    const result = service.decide(REF, card.id, decision);
+    expect(fakes.writes).toEqual(['0']);
+    expect(await service.decide(REF, card.id, decision)).toMatchObject({ applied: false });
+    fakes.setScreen(questionScreen);
+    expect(await result).toEqual({ applied: true, state: 'answered' });
+    expect(fakes.writes).toEqual(['0', '2']);
+    expect((await service.snapshot(REF)).items.find(item => item.id === card.id)).toMatchObject({ state: 'answered', answers: decision.answers });
+  });
+
+  it('dismisses feedback before writing a custom answer through the feed', async () => {
+    fakes.setScreen([...questionScreen, ...feedback]);
+    fakes.emitStatus(REF, { state: 'blocked', kind: 'question', msg: null });
+    const card = (await service.snapshot(REF)).items.find(item => item.kind === 'question')!;
+    const editor = questionScreen.map(line => line.replace('❯ 1.', '  1.').replace('     3. Type something...', '   ❯ 3. > Type something...'));
+    const write = fakes.deps.pty.write;
+    vi.spyOn(fakes.deps.pty, 'write').mockImplementation((ref, keys) => {
+      write(ref, keys);
+      if (keys === '0') fakes.setScreen(questionScreen);
+      if (keys === '3') fakes.setScreen(editor);
+      if (keys === 'Orange') fakes.setScreen(editor.map(line => line.replace('> Type something...', '> Orange')));
+    });
+    expect(await service.decide(REF, card.id, { kind: 'question', answers: { 'Which colour?': 'Orange' } })).toEqual({ applied: true, state: 'answered' });
+    expect(fakes.writes).toEqual(['0', '3', 'Orange', '\r']);
+  });
+
+  it.each(['question', 'editor', 'pid', 'redraw', 'overlay'])('sends no answer if %s changes while dismissing feedback', async change => {
+    fakes.setScreen([...questionScreen, ...feedback]);
+    fakes.emitStatus(REF, { state: 'blocked', kind: 'question', msg: null });
+    const card = (await service.snapshot(REF)).items.find(item => item.kind === 'question')!;
+    const result = service.decide(REF, card.id, { kind: 'question', answers: { 'Which colour?': 'Green' } });
+    expect(fakes.writes).toEqual(['0']);
+    if (change === 'question') fakes.setScreen(questionScreen.map(line => line.replace('Which colour?', 'Which shape?')));
+    if (change === 'editor') fakes.setScreen(questionScreen.map(line => line.replace('❯ 1.', '  1.').replace('     3. Type something...', '   ❯ 3. > Type something...')));
+    if (change === 'pid') fakes.setProcess({ pid: 999 });
+    if (change === 'redraw') fakes.setScreen(questionScreen.slice(1));
+    if (change === 'overlay') fakes.setScreen([...questionScreen, 'Unknown overlay']);
+    expect(await result).toMatchObject({ applied: false });
+    expect(fakes.writes).toEqual(['0']);
+  });
+
+  it('yields to a terminal keystroke before its effect is visible on the question', async () => {
+    let inputRevision = 0;
+    const process = fakes.deps.pty.get(REF)!;
+    vi.spyOn(fakes.deps.pty, 'get').mockReturnValue({ ...process, rawInputRevision: () => inputRevision });
+    fakes.setScreen([...questionScreen, ...feedback]);
+    fakes.emitStatus(REF, { state: 'blocked', kind: 'question', msg: null });
+    const card = (await service.snapshot(REF)).items.find(item => item.kind === 'question')!;
+    const result = service.decide(REF, card.id, { kind: 'question', answers: { 'Which colour?': 'Green' } });
+    expect(fakes.writes).toEqual(['0']);
+    inputRevision++;
+    fakes.setScreen(questionScreen);
+    expect(await result).toMatchObject({ applied: false });
+    expect(fakes.writes).toEqual(['0']);
+  });
+
+  it('keeps the question unanswered when feedback does not redraw', async () => {
+    fakes.setScreen([...questionScreen, ...feedback]);
+    fakes.emitStatus(REF, { state: 'blocked', kind: 'question', msg: null });
+    const card = (await service.snapshot(REF)).items.find(item => item.kind === 'question')!;
+    expect(await service.decide(REF, card.id, { kind: 'question', answers: { 'Which colour?': 'Green' } })).toMatchObject({ applied: false });
+    expect(fakes.writes).toEqual(['0']);
+    expect((await service.snapshot(REF)).items.find(item => item.id === card.id)).toMatchObject({ state: 'pending' });
+  });
+
+  it('confirms the native review only after feedback has disappeared', async () => {
+    const review = [questionScreen[0]!, ' Colour ✓  ▸ Submit', '', ' Your answers:', '   Colour: Green', '',
+      ' Ready to submit your answers?', '', '   ❯ 1. Submit answers', '     2. Cancel', ...questionScreen.slice(-2)];
+    fakes.setScreen([...review, ...feedback]);
+    fakes.emitStatus(REF, { state: 'blocked', kind: 'question', msg: null });
+    const card = (await service.snapshot(REF)).items.find(item => item.kind === 'question')!;
+    expect(await service.decide(REF, card.id, { kind: 'question', answers: {}, values: { answer: 'Unknown' } })).toMatchObject({ applied: false });
+    expect(fakes.writes).toEqual([]);
+    const result = service.decide(REF, card.id, { kind: 'question', answers: {}, values: { answer: 'Submit answers' } });
+    expect(fakes.writes).toEqual(['0']);
+    fakes.setScreen(review);
+    expect(await result).toEqual({ applied: true, state: 'answered' });
+    expect(fakes.writes).toEqual(['0', '1', '\r']);
+    expect((await service.snapshot(REF)).items.find(item => item.id === card.id)).toMatchObject({ answers: { 'Ready to submit your answers?': 'Submit answers' } });
+  });
+
   it('the snapshot is built from the transcript: prompts, text, tools with the inner MCP name and a failed call', async () => {
     const snapshot = await service.snapshot(REF);
     expect(kinds(snapshot.items, 'prompt').map((i) => (i.kind === 'prompt' ? i.text : ''))).toEqual(['mcpflow', 'shellflow']);
