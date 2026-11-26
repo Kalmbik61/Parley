@@ -68,7 +68,7 @@ import { toast } from 'sonner';
 import type { FeedItem } from '@parley/core';
 import { pendingCards } from '@parley/core/card-gist';
 import { needReason } from '@parley/core/stuck';
-import { HOST_ERROR_REASONS, KIMI_PTY_GENERATION_FEATURE, refKey, type ModelOption, type PendingLetter, type SessionRef } from '@parley/protocol';
+import { HOST_ERROR_REASONS, KIMI_PTY_GENERATION_FEATURE, isCustomProviderId, refKey, type ModelOption, type PendingLetter, type SessionRef } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import { decodeIpcError } from '../../shared/ipc-error.js';
 import { errorText, providerName, S } from '../../shared/strings.js';
@@ -218,6 +218,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
   const chatFold = useUiStore((state) => state.ui.chatFold);
   const codex = provider === 'codex';
   const kimi = provider === 'kimi';
+  const providerInfo = useProvidersStore((state) => state.providers.find((item) => item.id === provider));
   const items = feed?.items ?? NO_ITEMS;
   const sent = useAssistantSent(bridge, sessionRef, useHostSupports('assistant.sent'));
   const viaIds = useMemo(() => viaAssistantIds(items, sent), [items, sent]);
@@ -249,8 +250,13 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
   // Панель вопроса терминала: когда хост умеет читать экран; вопрос старта (доверие папке, вход) её тоже показывает.
   const canReadScreen = useHostSupports('pty.screenText');
   const need = useActivityStore((state) => activityFor(state.byRef, sessionRef)?.activity.need ?? null);
+  // Общая нужда blocked приходит раньше классификации вопроса и метаданных провайдера. У Qwen
+  // экран автоматически открывается лишь для старта, входа и лимита; вопрос молча ждёт карточку, вкладка Terminal доступна.
+  const qwenWaitsForCard = canReadScreen && (provider === 'qwen' || providerInfo?.family === 'qwen' ||
+    (isCustomProviderId(provider) && providerInfo?.family == null)) &&
+    need?.kind !== 'startup' && need?.kind !== 'sign-in' && need?.kind !== 'limit';
   const startupWait = (kimiShared || (!kimiWaitsForCard && canReadScreen)) && need?.kind === 'startup' && activeCards.length === 0;
-  const showBanner = useHeldFor(waiting || startupWait, BANNER_DELAY_MS);
+  const showBanner = useHeldFor((waiting || startupWait) && !qwenWaitsForCard, BANNER_DELAY_MS);
   const canSwitch = useHostSupports('sessions.switchAgent');
   const providerMissing = useProviderMissing(provider);
   const providerList = useProvidersStore((state) => state.providers);
@@ -265,7 +271,6 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
   const canSetKimiConfig = useHostSupports('kimi.setConfig');
   const [modeBusy, setModeBusy] = useState(false);
   const [choiceBusy, setChoiceBusy] = useState(false);
-  const providerInfo = useProvidersStore((state) => state.providers.find((item) => item.id === provider));
   // Текст ожидания без известной нужды: у Qwen и OpenCode свой (одобрения идут в терминале), у прочих общий.
   const waitingText = providerInfo?.family === 'qwen' ? S.chat.waitingBanner.qwenApproval : providerInfo?.family === 'opencode' ? S.chat.waitingBanner.opencodeApproval : S.chat.waitingBanner.text;
   const models = providerInfo?.models ?? NO_MODELS;

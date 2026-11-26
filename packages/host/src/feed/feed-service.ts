@@ -444,6 +444,7 @@ interface SessionFeed {
   /** A native OSC wait belongs to this feed and process, including while the user is navigating between questions. */
   qwenWait?: {
     kind: QwenPromptKind;
+    refresh(): void;
     pid: number;
     watch: NodeJS.Timeout;
     prompt: QwenPrompt | null;
@@ -1954,15 +1955,25 @@ export function createFeedService(
     }
     const watch = setInterval(refresh, terminalWatchMs);
     watch.unref();
-    feed.qwenWait = { kind, pid, watch, prompt: null, answering: false };
+    feed.qwenWait = { kind, pid, watch, refresh, prompt: null, answering: false };
     refresh();
+  });
+
+  // Batched PTY output follows the screen redraw; OSC status can arrive before its dialog.
+  // Keep the recovery poll for redraws without output and the process/lifecycle guards in refresh.
+  const unsubscribeQwenOutput = deps.pty.on('output', (ref) => {
+    feeds.get(refKey(ref))?.qwenWait?.refresh();
   });
 
   async function decideQwen(feed: SessionFeed, prompt: QwenPrompt, decision: FeedDecision): Promise<Result<'feed.decide'>> {
     const wait = feed.qwenWait!;
     if (wait.answering) return { applied: false, state: 'pending' };
-    const current = () => feedCurrent(feed) && feed.qwenWait === wait && wait.prompt === prompt &&
-      deps.pty.get(feed.ref)?.pid === wait.pid && (!prompt.folderTrust || deps.pty.get(feed.ref)?.rawInputRevision?.() === wait.rawRevision);
+    const inputRevision = prompt.folderTrust ? wait.rawRevision : deps.pty.get(feed.ref)?.rawInputRevision?.();
+    const current = () => {
+      const pty = deps.pty.get(feed.ref);
+      return feedCurrent(feed) && feed.qwenWait === wait && wait.prompt === prompt &&
+        pty?.pid === wait.pid && pty.rawInputRevision?.() === inputRevision;
+    };
     wait.answering = true;
     try {
       const applied = await answerQwenPrompt(prompt, decision, {
@@ -3495,6 +3506,7 @@ export function createFeedService(
       for (const state of progressClients.values()) state.active?.cancel();
       progressClients.clear();
       unsubscribeQwenStatus();
+      unsubscribeQwenOutput();
       unsubscribeActivity();
       unsubscribeStart();
       unsubscribeExit();

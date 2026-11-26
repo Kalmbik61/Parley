@@ -44,6 +44,7 @@ export interface FakeFeedDeps {
   /** `need` — чего сессия ждёт от человека (`approval`, `question`…); без него — `null`. */
   emitActivity(ref: SessionRef, activity: string, need?: string | null): void;
   emitStatus: StatusListener;
+  emitOutput(ref: SessionRef, data?: string): void;
   emitExit(ref: SessionRef): void;
   /** Процесс сессии запущен (`pty.on('start')`): запуск или возобновление. */
   emitStart(ref: SessionRef): void;
@@ -90,6 +91,7 @@ export function fakeFeedDeps(initial: FakeSession[] = [{ ref: REF }]): FakeFeedD
   const activityListeners = new Set<ActivityListener>();
   const logListeners = new Set<(change?: FakeLogChange) => void>();
   const statusListeners = new Set<StatusListener>();
+  const outputListeners = new Set<(ref: SessionRef, data: string) => void>();
   const exitListeners = new Set<ExitListener>();
   const startListeners = new Set<ExitListener>();
   const worksListeners = new Set<WorksListener>();
@@ -145,6 +147,10 @@ export function fakeFeedDeps(initial: FakeSession[] = [{ ref: REF }]): FakeFeedD
       },
       screenText: () => (process === null ? undefined : screen),
       on: (event: string, listener: ExitListener) => {
+        if (event === 'output') {
+          outputListeners.add(listener);
+          return () => outputListeners.delete(listener);
+        }
         if (event === 'program-status') {
           statusListeners.add(listener);
           return () => statusListeners.delete(listener);
@@ -174,6 +180,9 @@ export function fakeFeedDeps(initial: FakeSession[] = [{ ref: REF }]): FakeFeedD
     emitActivity(ref, activity, need = null) {
       for (const listener of activityListeners)
         listener(ref, { activity: { activity, ...(need === null ? {} : { need: { kind: need } }) }, metrics: null });
+    },
+    emitOutput(ref, data = '') {
+      for (const listener of outputListeners) listener(ref, data);
     },
     emitStatus(ref, status) {
       for (const listener of statusListeners) listener(ref, status);
