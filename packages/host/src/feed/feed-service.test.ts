@@ -4116,6 +4116,78 @@ describe('вопрос терминала Codex становится карто�
     expect((await service.snapshot(REF)).decisions).toBe('window');
   });
 
+  const hookMenu = (selected = 1, count = '1 hook is new or changed.'): string[] =>
+    screenOf('hooks-trust-80x24').map(line => line.replace('2 hooks are new or changed.', count)
+      .replace(/^›/, ' ').replace(new RegExp('^  ' + selected + '[.]'), '› ' + selected + '.'));
+
+  it('shows hook review before the first turn and submits the explicit Chat selection once', async () => {
+    fakes.setScreen(hookMenu());
+    fakes.emitActivity(REF, 'idle', 'startup');
+    fakes.emitActivity(REF, 'blocked', 'startup');
+    const pending = await pendingOf();
+    expect(pending).toHaveLength(1);
+    const card = pending[0] as FeedQuestionCard;
+    const question = card.questions[0]!;
+    expect(question.question).toContain('1 hook is new or changed.');
+    expect(question.field).toMatchObject({ type: 'choice', required: true });
+    expect(question.options.map(row => row.label)).toEqual(['Review hooks', 'Trust all and continue', "Continue without trusting (hooks won't run)"]);
+    expect(fakes.writes).toEqual([]);
+    const decision = { kind: 'question', answers: {}, values: { answer: 'Trust all and continue' } } as const;
+    const response = service.decide(REF, card.id, decision);
+    expect(await service.decide(REF, card.id, decision)).toMatchObject({ applied: false });
+    expect(fakes.writes).toEqual(['\x1b[B']);
+    fakes.setScreen(hookMenu(2));
+    await advance(100);
+    expect(await response).toEqual({ applied: true, state: 'answered' });
+    expect(fakes.writes).toEqual(['\x1b[B', '\r']);
+    expect((await cardsOf())[0]).toMatchObject({ answers: { [question.question]: 'Trust all and continue' } });
+  });
+
+  it('takes the native skip shortcut even when Trust all is highlighted', async () => {
+    fakes.setScreen(hookMenu(2));
+    fakes.emitActivity(REF, 'blocked', 'startup');
+    const [card] = await pendingOf() as FeedQuestionCard[];
+    const question = card!.questions[0]!;
+    const answer = "Continue without trusting (hooks won't run)";
+    const result = await service.decide(REF, card!.id, { kind: 'question', answers: { [question.question]: answer } });
+    expect(result).toEqual({ applied: true, state: 'answered' });
+    expect(fakes.writes).toEqual(['\x1b']);
+  });
+
+  it('discovers hook review following folder consent in the terminal under the same startup wait', async () => {
+    blockedWith('trust-folder-80x24', 'startup');
+    const [folder] = await pendingOf();
+    fakes.setScreen(hookMenu());
+    await advance(TERMINAL_PROMPT_WATCH_MS);
+    const [hooks] = await pendingOf() as FeedQuestionCard[];
+    expect(hooks?.questions[0]?.header).toBe('Hooks need review');
+    expect(hooks?.id).not.toBe(folder?.id);
+    expect(fakes.writes).toEqual([]);
+  });
+
+  it('discovers hook review after a long startup screen without a second activity event', async () => {
+    blockedWith('idle-80x24', 'startup');
+    await advance(FIND_WINDOW * 2);
+    expect(await pendingOf()).toHaveLength(0);
+    fakes.setScreen(hookMenu());
+    await advance(TERMINAL_PROMPT_WATCH_MS);
+    expect((await pendingOf())[0]).toMatchObject({ kind: 'question', toolName: 'codex_startup' });
+  });
+
+  it.each(['screen', 'process'])('does not confirm trust after a change of %s during selection', async change => {
+    fakes.setScreen(hookMenu());
+    fakes.emitActivity(REF, 'blocked', 'startup');
+    const [card] = await pendingOf() as FeedQuestionCard[];
+    expect(card).toBeDefined();
+    expect(await service.decide(REF, card!.id, { kind: 'question', answers: {}, values: { answer: 'other' } })).toMatchObject({ applied: false });
+    const response = service.decide(REF, card!.id, { kind: 'question', answers: {}, values: { answer: 'Trust all and continue' } });
+    if (change === 'process') fakes.setProcess({ pid: 321 });
+    fakes.setScreen(hookMenu(2, change === 'screen' ? '3 hooks are new or changed.' : undefined));
+    await advance(2_000);
+    expect(await response).toMatchObject({ applied: false });
+    expect(fakes.writes).toEqual(['\x1b[B']);
+  });
+
   it('первый сев журнала сохраняет уже показанную карточку и возможность ответить по её id', async () => {
     const client = fakeClient();
     service.subscribe(REF, client);
@@ -4181,7 +4253,7 @@ describe('вопрос терминала Codex становится карто�
 
   it.each([
     ['перестала быть blocked', (): void => fakes.emitActivity(REF, 'working')],
-    ['ждёт не одобрения (startup)', (): void => fakes.emitActivity(REF, 'blocked', 'startup')],
+    ['ждёт входа', (): void => fakes.emitActivity(REF, 'blocked', 'sign-in')],
   ])('поиск идёт, вопрос ещё не узнан, сессия %s: поиск снят, экран с вопросом карточки не заводит', async (_name, stopWaiting) => {
     blockedWith('idle-80x24');
     expect(vi.getTimerCount()).toBeGreaterThan(baseTimers);

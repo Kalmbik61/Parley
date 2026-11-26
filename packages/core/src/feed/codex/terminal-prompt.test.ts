@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { codexPromptKey, recogniseCodexPrompt, type CodexPrompt } from './terminal-prompt.js';
+import { codexPromptKey, recogniseCodexStartupPrompt, recogniseCodexPrompt, type CodexPrompt } from './terminal-prompt.js';
 
 const DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '__fixtures__', 'prompts');
 const screen = (name: string): string[] => readFileSync(path.join(DIR, `${name}.txt`), 'utf8').split('\n');
@@ -246,5 +246,25 @@ describe('codexPromptKey', () => {
     expect(codexPromptKey(approval, { kind: 'question', answers: { x: 'y' } })).toBeNull();
     expect(codexPromptKey(approval, { kind: 'plan', choice: 'manual' })).toBeNull();
     expect(codexPromptKey(question, { kind: 'permission', behavior: 'allow' })).toBeNull();
+  });
+});
+
+describe('Codex startup choices', () => {
+  it.each(['hooks-trust-80x24', 'hooks-trust-120x40', 'trust-folder-80x24'])('reads the complete %s menu', name => {
+    const form = recogniseCodexStartupPrompt(screen(name));
+    expect(form?.kind).toBe('startup-choice');
+    expect(form?.selected).toBe(0);
+    expect(form?.question).toContain(name.startsWith('hooks') ? 'Hooks can run outside the sandbox' : '/work/project');
+    expect(form?.options.at(-1)?.label).toBe(name.startsWith('hooks') ? "Continue without trusting (hooks won't run)" : 'Quit');
+  });
+
+  it('requires the warning, footer, marked choice and known actions on the active screen', () => {
+    const lines = screen('hooks-trust-80x24');
+    for (const fragment of ['outside the sandbox', 'esc skip', 'Review hooks']) {
+      expect(recogniseCodexStartupPrompt(lines.filter(line => !line.includes(fragment)))).toBeNull();
+    }
+    expect(recogniseCodexStartupPrompt(lines.map(line => line.replace('›', ' ')))).toBeNull();
+    expect(recogniseCodexStartupPrompt(lines.map(line => line.replace('Trust all and continue', 'Ignore hooks')))).toBeNull();
+    expect(recogniseCodexStartupPrompt([...lines, '› Ask Codex to do anything'])).toBeNull();
   });
 });

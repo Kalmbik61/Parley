@@ -64,6 +64,7 @@ import {
   loadConfig,
   parleyHome,
   recogniseCodexPrompt,
+  recogniseCodexStartupPrompt,
   retryFromTranscript,
   settleCards,
   turnActive,
@@ -616,6 +617,8 @@ export function createFeedService(
   interface TerminalPrompt {
     cardId: string;
     fingerprint: string;
+    pid: number | undefined;
+    answering?: boolean;
     /** `feed.decisions` до карточки: вернуть при закрытии. */
     decisionsBefore: FeedDecisions | null;
     watch: NodeJS.Timeout;
@@ -624,8 +627,8 @@ export function createFeedService(
   /** Идущий поиск вопроса на экране (опрос раз в `terminalFindStepMs`) и проверка после решения. */
   const terminalFinders = new Map<string, NodeJS.Timeout>();
   const terminalConfirms = new Map<string, NodeJS.Timeout>();
-  /** Сессии, которые сейчас ждут одобрения или ответа (`blocked` с нуждой `approval`/`question`): только им ищется вопрос на экране. */
-  const terminalEligible = new Set<string>();
+  /** На старте и во время хода Codex показывает разные формы вопросов. */
+  const terminalEligible = new Map<string, 'startup' | 'turn'>();
   /** Сессии, в которые хост сейчас печатает свой ответ по шагам: поиск и новые карточки по экрану ждут. */
   const terminalBusy = new Set<string>();
   /** Идущая печать своего ответа по сессии: `cancel` снимает её ожидания и не даёт продолжиться после выхода процесса. */
@@ -990,7 +993,8 @@ export function createFeedService(
   /** Вопрос на экране сессии; `null` — экрана нет или вопрос не узнан. Строки экрана дальше этой функции не идут. */
   function readTerminalPrompt(ref: SessionRef): CodexPrompt | null {
     const lines = deps.pty.screenText(ref);
-    return lines === undefined ? null : recogniseCodexPrompt(lines);
+    if (lines === undefined) return null;
+    return terminalEligible.get(refKey(ref)) === 'startup' ? recogniseCodexStartupPrompt(lines) : recogniseCodexPrompt(lines);
   }
 
   function clearTerminalTimer(timers: Map<string, NodeJS.Timeout>, key: string, kind: 'interval' | 'timeout'): void {
@@ -1034,7 +1038,9 @@ export function createFeedService(
   function openTerminalPrompt(feed: SessionFeed, prompt: CodexPrompt): void {
     const key = refKey(feed.ref);
     if (!terminalEligible.has(key) || terminalBusy.has(key) || terminalPrompts.has(key) || feed.state.items.some(item => isPendingCard(item) && !isCodexFollowUp(item))) return;
-    const update = applyCodexTerminalPrompt(feed.state, prompt, at());
+    const pid = deps.pty.get(feed.ref)?.pid;
+    if (prompt.kind === 'startup-choice' && pid === undefined) return;
+    const update = applyCodexTerminalPrompt(feed.state, prompt, at(), prompt.kind === 'startup-choice' ? 'codex-startup:' + randomUUID() : undefined);
     const card = update.changes.find((item): item is FeedCard => isPendingCard(item));
     if (card === undefined) return;
     const decisionsBefore = feed.decisions;
@@ -1054,10 +1060,11 @@ export function createFeedService(
       // Ответили в терминале, вопрос сменился или ушёл, сессия перестала ждать: карточка отвечена в другом месте.
       if (!terminalEligible.has(key) || seen === null || seen.fingerprint !== record.fingerprint) {
         closeTerminalPrompt(feed.ref, 'elsewhere');
+        if (terminalEligible.get(key) === 'startup') findTerminalPrompt(feed.ref);
       }
     }, terminalWatchMs);
     watch.unref();
-    terminalPrompts.set(key, { cardId: card.cardId, fingerprint: prompt.fingerprint, decisionsBefore, watch });
+    terminalPrompts.set(key, { cardId: card.cardId, fingerprint: prompt.fingerprint, pid, decisionsBefore, watch });
   }
 
   /**
@@ -1069,6 +1076,7 @@ export function createFeedService(
     if (stopped || !terminalEligible.has(key) || terminalBusy.has(key) || terminalPrompts.has(key) || terminalFinders.has(key)) return;
     const feed = feedOf(ref);
     if (feed.state.items.some(item => isPendingCard(item) && !isCodexFollowUp(item))) return;
+    const startup = terminalEligible.get(key) === 'startup';
     const startedAt = now();
     const finish = (): void => clearTerminalTimer(terminalFinders, key, 'interval');
     const step = (): void => {
@@ -1080,9 +1088,10 @@ export function createFeedService(
         openTerminalPrompt(feed, found);
         return;
       }
-      if (now() - startedAt >= terminalFindMs) finish();
+      if (!startup && now() - startedAt >= terminalFindMs) finish();
     };
-    const timer = setInterval(step, terminalFindStepMs);
+    // После входа или выбора папки Codex может показать вопрос про хуки без нового события активности.
+    const timer = setInterval(step, startup ? terminalWatchMs : terminalFindStepMs);
     timer.unref();
     terminalFinders.set(key, timer);
     step();
@@ -1195,13 +1204,70 @@ export function createFeedService(
     terminalMessages.set(key, timer);
   }
 
+  /** Цифра в стартовом меню может как переместить курсор, так и подтвердить выбор.
+   * Перемещаем курсор стрелками и сверяем выделение в том же процессе перед подтверждением. */
+  async function decideStartupPrompt(feed: SessionFeed, record: TerminalPrompt, prompt: CodexPrompt & { kind: 'startup-choice' }, decision: FeedDecision): Promise<Result<'feed.decide'>> {
+    if (record.answering || decision.kind !== 'question') return { applied: false, state: 'pending' };
+    const answer = decision.values?.answer ?? decision.answers[prompt.question];
+    const target = prompt.options.findIndex(option => option.label === answer);
+    if (target < 0) return { applied: false, state: 'pending' };
+    const key = refKey(feed.ref);
+    const selected = (): number | undefined => {
+      if (stopped || terminalPrompts.get(key) !== record || deps.pty.get(feed.ref)?.pid !== record.pid) return undefined;
+      const seen = readTerminalPrompt(feed.ref);
+      return seen?.fingerprint === record.fingerprint ? seen.selected : undefined;
+    };
+    const changed = (): Result<'feed.decide'> => {
+      if (terminalPrompts.get(key) === record) {
+        closeTerminalPrompt(feed.ref, 'elsewhere');
+        findTerminalPrompt(feed.ref);
+      }
+      return { applied: false, state: 'elsewhere' };
+    };
+    record.answering = true;
+    try {
+      const initial = selected();
+      if (initial === undefined) return changed();
+      // Подсказка меню привязывает Esc к последнему варианту (пропустить или выйти) при любом выделении.
+      const skip = target === prompt.options.length - 1;
+      let cursor = initial;
+      while (!skip && cursor !== target) {
+        const next = cursor + (target > cursor ? 1 : -1);
+        deps.pty.write(feed.ref, next > cursor ? '\x1b[B' : '\x1b[A');
+        for (let elapsed = 0; ; elapsed += ANSWER_POLL_MS) {
+          const highlighted = selected();
+          if (highlighted === next) break;
+          if (highlighted !== cursor) return changed();
+          if (elapsed >= ANSWER_STEP_MAX_MS) return { applied: false, state: 'pending' };
+          await new Promise(resolve => setTimeout(resolve, ANSWER_POLL_MS));
+        }
+        cursor = next;
+      }
+      // Между проверкой экрана и подтверждением нет await.
+      deps.pty.write(feed.ref, skip ? '\x1b' : '\r');
+      const result = applyDecision(feed.state, record.cardId, {
+        kind: 'question', answers: { [prompt.question]: prompt.options[target]!.label },
+      }, at());
+      commit(feed, result);
+      closeTerminalPrompt(feed.ref, null);
+      confirmTerminalAnswer(feed.ref, prompt);
+      return { applied: true, state: 'answered' };
+    } catch (error) {
+      if (terminalPrompts.get(key) === record) closeTerminalPrompt(feed.ref, 'stale');
+      throw error;
+    } finally {
+      record.answering = false;
+    }
+  }
+
   /** Решение по карточке терминала: клавиша уходит, только если экран прямо сейчас даёт тот же отпечаток. */
-  function decideTerminalPrompt(feed: SessionFeed, record: TerminalPrompt, decision: FeedDecision, current: FeedCardState): Result<'feed.decide'> {
+  function decideTerminalPrompt(feed: SessionFeed, record: TerminalPrompt, decision: FeedDecision, current: FeedCardState): Result<'feed.decide'> | Promise<Result<'feed.decide'>> {
     const seen = readTerminalPrompt(feed.ref);
     if (seen === null || seen.fingerprint !== record.fingerprint) {
       closeTerminalPrompt(feed.ref, 'elsewhere');
       return { applied: false, state: 'elsewhere' };
     }
+    if (seen.kind === 'startup-choice') return decideStartupPrompt(feed, record, seen, decision);
     const keyToPress = codexPromptKey(seen, decision);
     const own = keyToPress === null ? ownAnswerOf(seen, decision) : null;
     // Ни клавиши, ни своего ответа: решение этим вопросом не выражается.
@@ -2313,9 +2379,15 @@ export function createFeedService(
     lastActivity.set(key, activity);
     if (!stopped) {
       const need = value.activity.need?.kind;
-      if (activity === 'blocked' && (need === 'approval' || need === 'question')) {
-        terminalEligible.add(key);
-        if (isCodexSession(ref)) findTerminalPrompt(ref);
+      const waitingForPrompt = need === 'startup' || (activity === 'blocked' && (need === 'approval' || need === 'question'));
+      if (waitingForPrompt && isCodexSession(ref)) {
+        const scope = need === 'startup' ? 'startup' : 'turn';
+        if (terminalEligible.has(key) && terminalEligible.get(key) !== scope) {
+          clearTerminalTimer(terminalFinders, key, 'interval');
+          closeTerminalPrompt(ref, 'elsewhere');
+        }
+        terminalEligible.set(key, scope);
+        findTerminalPrompt(ref);
       } else {
         // Сессия перестала ждать (или ждёт не этого): идущий поиск снят, ждущая карточка — ответили в терминале.
         terminalEligible.delete(key);

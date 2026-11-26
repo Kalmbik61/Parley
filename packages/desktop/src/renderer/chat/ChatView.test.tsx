@@ -9,7 +9,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { toast } from 'sonner';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import type { FeedItem, ParleyConfig, WorkSession } from '@parley/core';
+import type { FeedItem, FeedQuestionCard, ParleyConfig, WorkSession } from '@parley/core';
 import { KIMI_NATIVE_TERMINAL_FEATURE, KIMI_PTY_GENERATION_FEATURE, refKey, type Capabilities, type ConsentCard, type KimiConfigOption, type PendingLetter, type SendResult, type SessionRef } from '@parley/protocol';
 import type { DirEntry } from '../../shared/files-types.js';
 import { S } from '../../shared/strings.js';
@@ -1024,6 +1024,39 @@ describe('ChatView — панель вопроса терминала (план 
     await settle(1000);
     expect(screen.queryByTestId('chat-terminal-prompt')).toBeNull();
     expect(screen.queryByTestId('chat-waiting-banner')).toBeNull();
+  });
+
+  it('renders the Codex hook warning and three explicit choices in Chat before the first turn', async () => {
+    useHostStore.setState({ status: { state: 'connected', hostVersion: 'test', methods: [...FEED_METHODS, 'pty.screenText', 'feed.decide'], features: ['feed-codex'] } });
+    useProvidersStore.setState({ providers: [{ id: 'codex', label: 'Codex', available: true, version: '0.166.0', limits: null }], loaded: true });
+    wait('blocked', 'startup');
+    const answer = "Continue without trusting (hooks won't run)";
+    const card: FeedQuestionCard = {
+      id: 'codex-startup:test', cardId: 'codex-startup:test', kind: 'question', at: AT, state: 'pending',
+      via: 'terminal', toolName: 'codex_startup', toolUseId: null, toolInput: {},
+      questions: [{ header: 'Hooks need review', question: '1 hook is new or changed. Hooks can run outside the sandbox after you trust them.',
+        multiSelect: false, field: { id: 'answer', type: 'choice', required: true },
+        options: ['Review hooks', 'Trust all and continue', answer].map(label => ({ label, description: null })) }],
+    };
+    bridge.setHandler('feed.subscribe', () => ({ ok: true }));
+    bridge.setHandler('feed.unsubscribe', () => ({ ok: true }));
+    bridge.setHandler('feed.snapshot', () => ({ schemaVersion: 1, mode: null, revision: 1, decisions: 'window', items: [card] }));
+    bridge.setHandler('feed.decide', () => ({ applied: true, state: 'answered' }));
+    disposeFeed = useFeedStore.getState().init(bridge);
+    useFeedStore.getState().open(REF);
+    renderBody(makeSession('s-01', 'Codex', { provider: 'codex' }), 'chat');
+    await settle();
+    expect(screen.getByText('Hooks need review')).toBeTruthy();
+    expect(screen.getByTestId('chat-card').textContent).toContain('Hooks can run outside the sandbox');
+    expect(screen.getAllByTestId('card-option')).toHaveLength(3);
+    expect(screen.queryByTestId('card-other')).toBeNull();
+    expect(screen.queryByTestId('chat-terminal-prompt')).toBeNull();
+    expect((screen.getByTestId('card-submit') as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole('radio', { name: answer }));
+    fireEvent.click(screen.getByTestId('card-submit'));
+    expect(bridge.calls.find(call => call.method === 'feed.decide')?.params).toMatchObject({
+      cardId: card.id, decision: { kind: 'question', answers: {}, values: { answer } },
+    });
   });
 
   it('нужда вида startup показывает панель, даже если активность не blocked', async () => {
