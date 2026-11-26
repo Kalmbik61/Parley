@@ -76,7 +76,8 @@ describe('SettingsDialog — тест 1 куска 1.4: секции спеки 
     openSettings(bridge);
 
     const select = await screen.findByRole('combobox', { name: 'Interface language' });
-    expect((select as HTMLSelectElement).value).toBe('system');
+    expect((select as HTMLSelectElement).value).toBe('en');
+    expect(within(select).getAllByRole('option')).toHaveLength(2);
     expect(within(select).getByRole('option', { name: 'English' })).toBeTruthy();
     expect(within(select).getByRole('option', { name: 'Русский' })).toBeTruthy();
     fireEvent.change(select, { target: { value: 'ru' } });

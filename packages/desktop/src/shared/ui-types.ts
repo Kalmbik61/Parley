@@ -138,7 +138,7 @@ export interface UiFile {
 export const DEFAULT_UI: UiFile = {
   version: 1,
   appearance: 'system',
-  locale: 'system',
+  locale: 'en',
   leftSidebar: { open: true, width: 288 },
   rightSidebar: { open: true, width: 320, tab: 'files' },
   activeWorkKey: null,

@@ -35,13 +35,88 @@ describe('createUiStore', () => {
     const voice = { ...DEFAULT_UI.voice, language: 'de' };
     const assistant = { ...DEFAULT_UI.assistant, language: 'en' };
     await writeFile(file, JSON.stringify({ version: 1, appearance: 'dark', voice, assistant }), 'utf8');
-    const store = createUiStore(file);
-    expect(await store.load()).toMatchObject({ locale: 'system', appearance: 'dark', assistant, voice });
+    const store = createUiStore(file, { systemLocale: 'ru-RU' });
+    expect(await store.load()).toMatchObject({ locale: 'ru', appearance: 'dark', assistant, voice });
 
-    for (const locale of ['ru', 'en', 'system'] as const) {
+    for (const locale of ['ru', 'en'] as const) {
       await store.save({ locale });
       expect(await createUiStore(file).load()).toMatchObject({ locale, appearance: 'dark', assistant, voice });
     }
+  });
+
+  it('defaults a fresh profile to English even on a Russian system without creating a file', async () => {
+    expect((await createUiStore(file, { systemLocale: 'ru-RU' }).load()).locale).toBe('en');
+    await expect(readFile(file, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it.each([
+    [undefined, 'ru-RU', 'ru'],
+    [undefined, 'de-DE', 'en'],
+    ['system', 'ru-RU', 'ru'],
+    ['system', 'de-DE', 'en'],
+  ])('migrates legacy %s once using %s, preserving the original preferences', async (locale, system, expected) => {
+    await mkdir(path.dirname(file), { recursive: true });
+    const original = {
+      version: 1, locale, appearance: 'dark',
+      voice: { language: 'de', futureOption: true },
+      assistant: { language: 'ru' },
+      leftSidebar: { width: 1 }, futurePreference: { enabled: true },
+    };
+    await writeFile(file, JSON.stringify(original), 'utf8');
+    expect((await createUiStore(file, { systemLocale: system }).load()).locale).toBe(expected);
+    expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({ ...original, locale: expected });
+    const migrated = await readFile(file, 'utf8');
+    expect((await createUiStore(file, { systemLocale: expected === 'ru' ? 'en-US' : 'ru-RU' }).load()).locale).toBe(expected);
+    expect(await readFile(file, 'utf8')).toBe(migrated);
+  });
+
+  it.each(['en', 'ru'])('leaves an explicit %s choice and the original file untouched', async (locale) => {
+    await mkdir(path.dirname(file), { recursive: true });
+    const original = JSON.stringify({ version: 1, locale, futurePreference: true });
+    await writeFile(file, original, 'utf8');
+    expect((await createUiStore(file, { systemLocale: locale === 'ru' ? 'en-US' : 'ru-RU' }).load()).locale).toBe(locale);
+    expect(await readFile(file, 'utf8')).toBe(original);
+  });
+
+  it('serializes migration with saves and rechecks the current explicit choice', async () => {
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, '{"version":1,"locale":"system","appearance":"dark"}', 'utf8');
+    let releaseRename: (() => void) | undefined;
+    const store = createUiStore(file, {
+      systemLocale: 'ru-RU',
+      rename: (...args) => new Promise<void>((resolve, reject) => {
+        releaseRename = () => { void rename(...args).then(resolve, reject); };
+      }),
+    });
+    const migration = store.load();
+    await vi.waitFor(() => expect(releaseRename).toBeTypeOf('function'));
+    // Until the atomic rename, read-only readers still see the complete legacy file.
+    expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({ version: 1, locale: 'system', appearance: 'dark' });
+    const save = store.save({ appearance: 'light' });
+    const releaseMigration = releaseRename!;
+    releaseRename = undefined;
+    releaseMigration();
+    await migration;
+    await vi.waitFor(() => expect(releaseRename).toBeTypeOf('function'));
+    releaseRename!();
+    await save;
+    expect(await store.load()).toMatchObject({ locale: 'ru', appearance: 'light' });
+
+    const reopened = createUiStore(file, { systemLocale: 'ru-RU' });
+    await Promise.all([reopened.save({ locale: 'en' }), reopened.load()]);
+    expect((await reopened.load()).locale).toBe('en');
+  });
+
+  it('opens a read-only legacy profile and persists its resolved language when a write succeeds', async () => {
+    await mkdir(path.dirname(file), { recursive: true });
+    const original = '{"locale":"system","appearance":"dark"}';
+    await writeFile(file, original, 'utf8');
+    const renameOnceWritable = vi.fn(rename).mockRejectedValueOnce(new Error('read-only'));
+    const store = createUiStore(file, { systemLocale: 'ru-RU', rename: renameOnceWritable });
+    await expect(store.load()).resolves.toMatchObject({ locale: 'ru', appearance: 'dark' });
+    expect(await readFile(file, 'utf8')).toBe(original);
+    await store.save({ appearance: 'light' });
+    expect(JSON.parse(await readFile(file, 'utf8'))).toMatchObject({ locale: 'ru', appearance: 'light' });
   });
 
   it('битый JSON → DEFAULT_UI, следующий save пишет валидный файл (тест 2)', async () => {
