@@ -6,7 +6,9 @@ export function programStatusApp(provider: string | null): string | null {
   // Qwen Code 0.27.2: see the Qwen provider design amendment (2026-11-11).
   if (provider === 'qwen') return 'qwen-code';
   // OpenCode 2.3.0: local serve + --server/-s, without Herdr (parity capture 2026-11-27).
-  return provider === 'opencode' ? 'opencode' : null;
+  if (provider === 'opencode') return 'opencode';
+  // Codex 0.166.0: --no-daemon and resume, including a real permission wait (same parity capture).
+  return provider === 'codex' ? 'codex' : null;
 }
 
 export interface ProgramStatusReport {

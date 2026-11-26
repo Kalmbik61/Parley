@@ -752,6 +752,34 @@ describe('PtyManager: display-only terminal status', () => {
     opencode.exit();
   });
 
+  it('delivers mixed Codex OSC 0/2/9 and 7501 frames in stream order without Qwen signals', () => {
+    const manager = createPtyManager(fakeHost());
+    const codex = controlled(1);
+    const target = ref();
+    const reports: unknown[] = [];
+    const qwen: unknown[] = [];
+    manager.on('signal', (_ref, signal) => reports.push(['legacy', signal]));
+    manager.on('terminal-status', (_ref, status) => reports.push(['display', status]));
+    manager.on('program-status', (_ref, status) => qwen.push(status));
+    manager.start(target, { ...launch(), provider: 'codex', process: codex.process });
+
+    codex.data('\x1b]0;Ready\x07' + osc('?') + '\x1b]7501;state=blocked:kind=permission:app=codex\x1b');
+    expect(reports).toEqual([['legacy', { kind: 'ready' }]]);
+    codex.data('\\\x1b]9;Approval requested: ls -la\x07' +
+      osc('state=working:app=codex:id=child') + osc('state=done:app=codex') +
+      '\x1b]2;Working\x07' + osc('state=clear'));
+    expect(reports).toEqual([
+      ['legacy', { kind: 'ready' }],
+      ['display', { state: 'blocked', kind: 'permission' }],
+      ['legacy', { kind: 'needs-you', reason: 'approval-requested', detail: 'ls -la' }],
+      ['display', { state: 'done' }],
+      ['legacy', { kind: 'working' }],
+      ['display', null],
+    ]);
+    expect(qwen).toEqual([]);
+    codex.exit();
+  });
+
   it('does not carry frames across replacements or exits, with two Qwen sessions in one directory', () => {
     const manager = createPtyManager(fakeHost());
     const old = controlled(1);

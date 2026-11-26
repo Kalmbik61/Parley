@@ -242,8 +242,7 @@ describe('linkTerminalActivity', () => {
   }, 30_000);
 });
 
-it('publishes and replays OpenCode status without triggering canonical activity, and clears it on exit', async () => {
-  const { ref, pty, activity, launch } = await rig('opencode');
+function controlledTerminal() {
   let emit: (data: string) => void = () => {};
   let finish = () => {};
   const write = vi.fn();
@@ -255,6 +254,12 @@ it('publishes and replays OpenCode status without triggering canonical activity,
       return () => {};
     },
   };
+  return { emit: (data: string) => emit(data), native, write };
+}
+
+it('publishes and replays OpenCode status without triggering canonical activity, and clears it on exit', async () => {
+  const { ref, pty, activity, launch } = await rig('opencode');
+  const { emit, native, write } = controlledTerminal();
   pty.start(ref, launch({ process: native }));
   await waitFor(() => activity.get(ref) !== undefined);
   const canonical = activity.get(ref);
@@ -283,4 +288,37 @@ it('publishes and replays OpenCode status without triggering canonical activity,
   expect((messages.at(-1)?.data as EventData<'activity.changed'>).terminalStatus ?? null).toBeNull();
   expect(activity.current()).toContainEqual(messages.at(-1)?.data);
   off();
+});
+
+it('keeps Codex generic permission status out of authoritative actions and approval evidence', async () => {
+  const { ref, pty, activity, launch } = await rig('codex');
+  const { emit, native, write } = controlledTerminal();
+  pty.start(ref, launch({ process: native }));
+  emit('\x1b]0;Ready\x07');
+  await waitFor(() => known(activity, ref));
+  const canonical = activity.get(ref);
+  const changed = vi.fn();
+  const off = activity.onChange(changed);
+
+  const generic = '\x1b]7501;state=blocked:kind=permission:app=codex:msg=bHMgLWxh\x07';
+  emit(generic);
+  expect(activity.current()[0]?.terminalStatus).toEqual({ state: 'blocked', kind: 'permission' });
+  expect(activity.get(ref)).toBe(canonical);
+  expect(changed).not.toHaveBeenCalled();
+  expect(write).not.toHaveBeenCalled();
+
+  emit('\x1b]2;Action Required\x07');
+  expect(activity.get(ref)?.activity.need).toMatchObject({ kind: 'question', detail: null });
+  emit('\x1b]9;Approval requested: ls -la\x07');
+  expect(activity.get(ref)?.activity.need).toMatchObject({ kind: 'approval', detail: 'ls -la' });
+
+  const held = activity.get(ref);
+  changed.mockClear();
+  emit('\x1b]7501;state=idle:app=codex\x07\x1b]7501;state=clear\x07');
+  expect(activity.current()[0]?.terminalStatus ?? null).toBeNull();
+  expect(activity.get(ref)).toBe(held);
+  expect(changed).not.toHaveBeenCalled();
+  expect(write).not.toHaveBeenCalled();
+  off();
+  await pty.stop(ref);
 });

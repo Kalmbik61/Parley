@@ -14,8 +14,7 @@ import type { SessionRef, TerminalStatus } from '@parley/protocol';
 import type { HostContext } from '../context.js';
 import type { WindowCounters } from '../health/window-counters.js';
 import { isKimiSubmitKey } from '../kimi/native-screen.js';
-import { createCodexTerminalParser, createOscReader } from './codex-terminal.js';
-import type { CodexSignal, CodexTerminalParser } from './codex-terminal.js';
+import { codexSignalOfOsc, createOscReader, type CodexSignal } from './codex-terminal.js';
 import { programStatusApp, programStatusOf } from './program-status.js';
 import { qwenStatusFromReport, type QwenStatus } from './qwen-terminal.js';
 import { DraftTracker } from './draft.js';
@@ -109,10 +108,8 @@ interface Session {
   inputRevision: number;
   rawInputRevision: number;
   submittedAt: number;
-  /** Разбор потока терминала — только у codex: у остальных состояние приходит хуками. */
-  terminal: CodexTerminalParser | null;
-  /** Root OSC 7501 reports, scoped to the registered process and app. */
-  programStatus: { feed(data: string): PtyStatusReport[] } | null;
+  /** Current PTY's OSC reports, decoded in stream order. */
+  terminal: { feed(data: string): PtyTerminalReport[] } | null;
   /** Ждущие завершения процесса вызовы `stop()` — резолвятся общим обработчиком `onExit`. */
   stopWaiters: Array<(exit: ExitInfo) => void>;
 }
@@ -143,7 +140,9 @@ type HostDraftListener = (ref: SessionRef, hasHostDraft: boolean) => void;
 type SignalListener = (ref: SessionRef, signal: CodexSignal) => void;
 type QwenStatusListener = (ref: SessionRef, status: QwenStatus) => void;
 type TerminalStatusListener = (ref: SessionRef, status: TerminalStatus | null) => void;
-type PtyStatusReport = { status: TerminalStatus | null; qwen: QwenStatus | null };
+type PtyTerminalReport =
+  | { kind: 'codex'; signal: CodexSignal }
+  | { kind: 'program'; status: TerminalStatus | null; qwen: QwenStatus | null };
 type PtyListener =
   | OutputListener
   | ExitListener
@@ -202,10 +201,15 @@ export function createPtyManager(host: HostContext, windowCounters?: WindowCount
       inputRevision: 0,
       rawInputRevision: 0,
       submittedAt: 0,
-      terminal: launch.provider === 'codex' ? createCodexTerminalParser() : null,
-      programStatus: app === null ? null : createOscReader((body): PtyStatusReport | null => {
-        const report = programStatusOf(body, app);
+      terminal: provider !== 'codex' && app === null ? null : createOscReader((body): PtyTerminalReport | null => {
+        // Keep legacy Codex titles and notifications separate from advisory status, in the same stream order.
+        if (provider === 'codex') {
+          const signal = codexSignalOfOsc(body);
+          if (signal !== null) return { kind: 'codex', signal };
+        }
+        const report = app === null ? null : programStatusOf(body, app);
         return report === null ? null : {
+          kind: 'program',
           status: report.status,
           qwen: provider === 'qwen' ? qwenStatusFromReport(report) : null,
         };
@@ -213,7 +217,7 @@ export function createPtyManager(host: HostContext, windowCounters?: WindowCount
       stopWaiters: [],
     };
     const previous = sessions.get(key);
-    if (previous !== undefined) previous.programStatus = null;
+    if (previous !== undefined) previous.terminal = null;
     sessions.set(key, session);
 
     // Subscribers can replace or stop the PTY synchronously during a notification.
@@ -233,31 +237,23 @@ export function createPtyManager(host: HostContext, windowCounters?: WindowCount
       session.screen.write(data);
       session.batcher.push(data);
       // Bound to the process generation: a replaced process's late output reports nothing.
-      if (session.programStatus !== null && sessions.get(key) === session) {
-        for (const report of session.programStatus.feed(data)) {
-          if (sessions.get(key) !== session) return;
+      if (session.terminal === null || sessions.get(key) !== session) return;
+      for (const report of session.terminal.feed(data)) {
+        if (sessions.get(key) !== session) return;
+        if (report.kind === 'codex') {
+          notifyListeners(currentListeners(signalListeners), 'слушатель сигнала терминала упал', ref, report.signal);
+        } else {
           if (report.qwen !== null) {
             notifyListeners(currentListeners(qwenStatusListeners), 'Qwen status listener failed', ref, report.qwen);
           }
           notifyListeners(currentListeners(terminalStatusListeners), 'terminal status listener failed', ref, report.status);
         }
       }
-      if (session.terminal === null) return;
-      for (const signal of session.terminal.feed(data)) {
-        for (const listener of Array.from(signalListeners)) {
-          // Слушатель бросил — поток терминала не должен упасть вместе с ним: это событие node-pty.
-          try {
-            listener(ref, signal);
-          } catch (error) {
-            host.log.error('слушатель сигнала терминала упал', { ref, error: String(error) });
-          }
-        }
-      }
     });
 
     ptyProcess.onExit((exit) => {
       const current = sessions.get(key) === session;
-      session.programStatus = null;
+      session.terminal = null;
       session.batcher.dispose();
       session.screen.dispose();
       try {

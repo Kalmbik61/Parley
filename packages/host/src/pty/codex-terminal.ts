@@ -101,7 +101,7 @@ export function classifyNotification(text: string): CodexSignal {
 }
 
 /** Тело OSC (`Ps;Pt`) → сигнал; `null` — не заголовок и не уведомление (гиперссылки, метки, буфер). */
-function signalOfOsc(body: string): CodexSignal | null {
+export function codexSignalOfOsc(body: string): CodexSignal | null {
   const semicolon = body.indexOf(';');
   if (semicolon === -1) return null;
   const command = body.slice(0, semicolon);
@@ -118,7 +118,7 @@ export interface CodexTerminalParser {
 }
 
 export function createCodexTerminalParser(): CodexTerminalParser {
-  return createOscReader(signalOfOsc);
+  return createOscReader(codexSignalOfOsc);
 }
 
 /**
