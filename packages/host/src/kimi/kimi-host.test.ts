@@ -27,7 +27,7 @@ async function call<M extends MethodName>(method: M, params: Params<M>): Promise
   return response.result as Result<M>;
 }
 
-async function setup(unsupported = false) {
+async function setup(withoutBracketedPaste = false) {
   home = await tempHome();
   const binary = path.join(home, 'kimi');
   const projectPath = path.join(home, 'project');
@@ -40,8 +40,8 @@ async function setup(unsupported = false) {
 if (process.argv[2] === 'acp') process.exit(21);
 process.getBuiltinModule('node:fs').appendFileSync(process.env.KIMI_FIXTURE_NATIVE_LAUNCH_LOG,
   JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd(), home: process.env.KIMI_CODE_HOME }) + '\\n');
-${unsupported ? `if (process.stdout.isTTY) {
-  process.stdout.write(${JSON.stringify('\x1b[?2004h│ Version: 2.7.2 │\r\nNo session yet — one will be created on your first message.\r\n╭──────────╮\r\n│ >        │\r\n╰──────────╯\r\n')});
+${withoutBracketedPaste ? `if (process.stdout.isTTY) {
+  process.stdout.write(${JSON.stringify('│ Version: 2.7.2 │\r\nNo session yet — one will be created on your first message.\r\n╭──────────╮\r\n│ >        │\r\n╰──────────╯\r\n')});
   process.stdin.setRawMode(true);
   process.stdin.on('data', (data) => process.getBuiltinModule('node:fs').appendFileSync(${JSON.stringify(keys)}, data));
 }` : ''}
@@ -102,20 +102,32 @@ it('rejects non-Kimi and invalid wire preferences', async () => {
   expect((await request('sessions.create', { ...input(projectPath), kimiPermissionMode: 'plan' as 'manual' })).error).toBeDefined();
 });
 
-it('keeps input blocked with an actionable error on an unsupported startup screen', async () => {
-  const { projectPath, keys } = await setup(true);
+it('keeps input blocked with an actionable error when the startup editor lacks bracketed paste', async () => {
+  const { projectPath, data, trace, keys } = await setup(true);
   const { ref } = await call('sessions.create', { ...input(projectPath), kimiPermissionMode: 'manual' });
   const { generation } = await call('pty.attach', { ref });
-  await expect.poll(async () => (await call('feed.snapshot', { ref })).items, { timeout: 4000 }).toContainEqual(expect.objectContaining({
-    kind: 'error', error: 'kimi-native-startup', message: expect.stringMatching(/stop and resume/i),
+  expect(generation).toBeDefined();
+  const screen = async () => (await call('pty.screenText', { ref })).lines.join('\n');
+  await expect.poll(screen, { timeout: 5_000 }).toContain('Version: 2.7.2');
+  expect(await screen()).toContain('No session yet');
+  expect(await screen()).toMatch(/│ >\s+│/);
+  expect(JSON.parse((await readFile(trace, 'utf8')).trim())).toEqual({
+    args: [], cwd: await realpath(projectPath), home: await realpath(data),
+  });
+  const send = () => call('pty.send', { ref, text: 'irrelevant', submit: true });
+  expect(await send()).toMatchObject({ inserted: false, submitted: false });
+  // The normal startup proof window is 15 seconds. Do not treat a version
+  // label as an immediate rejection or change the real host deadline.
+  await expect.poll(async () => (await call('feed.snapshot', { ref })).items, { timeout: 20_000 }).toContainEqual(expect.objectContaining({
+    kind: 'error', error: 'kimi-native-startup', message: expect.stringMatching(/2\.7\.2.*bracketed paste.*stop and resume/i),
   }));
-  expect(await call('pty.send', { ref, text: 'irrelevant', submit: true })).toMatchObject({ inserted: false, submitted: false });
+  expect(await send()).toMatchObject({ inserted: false, submitted: false });
   client!.send({ method: 'pty.input', params: { ref, data: 'irrelevant\r', generation } });
-  expect((await call('pty.screenText', { ref })).lines.join('\n')).toContain('Version: 2.7.2');
+  expect(await screen()).toContain('Version: 2.7.2');
   await expect(readFile(keys, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   const session = (await readMap(ref.projectPath, ref.workId)).sessions.find(item => item.id === ref.sessionId);
-  expect(session).toMatchObject({ providerSessionId: null, kimiNativeBootstrap: { phase: 'reserved' } });
-});
+  expect(session).toMatchObject({ providerSessionId: null, kimiPermissionMode: 'manual', kimiNativeBootstrap: { phase: 'reserved' } });
+}, 27_000);
 
 it('reports a foreign same-name MCP entry before launching and preserves its bytes', async () => {
   const { projectPath, data, trace } = await setup();
