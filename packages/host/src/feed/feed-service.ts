@@ -109,6 +109,7 @@ import type { PendingHooks } from '../hooks/pending.js';
 import type { PtyManager } from '../pty/pty-manager.js';
 import type { WorksService } from '../works/works-service.js';
 import { createRolloutTail } from './codex-source.js';
+import { confirmStartupChoice } from './folder-trust.js';
 import { answerQwenPrompt, recogniseQwenPrompt, type QwenPrompt, type QwenPromptKind } from './qwen-prompt.js';
 import { createQwenTail } from './qwen-source.js';
 import { fetchOpencodeMessages, readOpencodeCache, writeOpencodeCache, type OpencodeAddress } from './opencode-source.js';
@@ -444,6 +445,7 @@ interface SessionFeed {
     pid: number;
     watch: NodeJS.Timeout;
     prompt: QwenPrompt | null;
+    rawRevision?: number;
     answering: boolean;
   };
 
@@ -1226,25 +1228,9 @@ export function createFeedService(
     };
     record.answering = true;
     try {
-      const initial = selected();
-      if (initial === undefined) return changed();
-      // Подсказка меню привязывает Esc к последнему варианту (пропустить или выйти) при любом выделении.
-      const skip = target === prompt.options.length - 1;
-      let cursor = initial;
-      while (!skip && cursor !== target) {
-        const next = cursor + (target > cursor ? 1 : -1);
-        deps.pty.write(feed.ref, next > cursor ? '\x1b[B' : '\x1b[A');
-        for (let elapsed = 0; ; elapsed += ANSWER_POLL_MS) {
-          const highlighted = selected();
-          if (highlighted === next) break;
-          if (highlighted !== cursor) return changed();
-          if (elapsed >= ANSWER_STEP_MAX_MS) return { applied: false, state: 'pending' };
-          await new Promise(resolve => setTimeout(resolve, ANSWER_POLL_MS));
-        }
-        cursor = next;
-      }
-      // Между проверкой экрана и подтверждением нет await.
-      deps.pty.write(feed.ref, skip ? '\x1b' : '\r');
+      const outcome = await confirmStartupChoice(target, prompt.options.length, selected, data => deps.pty.write(feed.ref, data));
+      if (outcome === 'changed') return changed();
+      if (outcome === 'timeout') return { applied: false, state: 'pending' };
       const result = applyDecision(feed.state, record.cardId, {
         kind: 'question', answers: { [prompt.question]: prompt.options[target]!.label },
       }, at());
@@ -1947,8 +1933,11 @@ export function createFeedService(
       if (!wait || wait.answering || !feedCurrent(feed) || deps.pty.get(ref)?.pid !== pid) return;
       const parsed = recogniseQwenPrompt(deps.pty.screenText(ref) ?? [], wait.kind, '', at());
       // When someone is typing a custom answer in the terminal, leave its editor in their hands.
-      const next = parsed?.card.kind === 'question' && !parsed.review && parsed.rows.at(-1)?.selected ? null : parsed;
-      if (next?.fingerprint === wait.prompt?.fingerprint) return;
+      const next = parsed?.card.kind === 'question' && !parsed.review && !parsed.folderTrust && parsed.rows.at(-1)?.selected ? null : parsed;
+      const revision = next?.folderTrust ? deps.pty.get(ref)?.rawInputRevision?.() : undefined;
+      if (next?.fingerprint === wait.prompt?.fingerprint && revision === wait.rawRevision) return;
+      if (revision === undefined) delete wait.rawRevision;
+      else wait.rawRevision = revision;
       if (wait.prompt) settle(ref, 'elsewhere', [wait.prompt.card.id]);
       wait.prompt = next;
       if (!next) {
@@ -1971,7 +1960,7 @@ export function createFeedService(
     const wait = feed.qwenWait!;
     if (wait.answering) return { applied: false, state: 'pending' };
     const current = () => feedCurrent(feed) && feed.qwenWait === wait && wait.prompt === prompt &&
-      deps.pty.get(feed.ref)?.pid === wait.pid;
+      deps.pty.get(feed.ref)?.pid === wait.pid && (!prompt.folderTrust || deps.pty.get(feed.ref)?.rawInputRevision?.() === wait.rawRevision);
     wait.answering = true;
     try {
       const applied = await answerQwenPrompt(prompt, decision, {
@@ -1981,7 +1970,7 @@ export function createFeedService(
       });
       if (!applied || !current()) return { applied: false, state: 'pending' };
       const reviewAnswer = decision.kind === 'question' ? decision.values?.answer : undefined;
-      const recorded = prompt.review && prompt.card.kind === 'question' && decision.kind === 'question' && typeof reviewAnswer === 'string'
+      const recorded = (prompt.review || prompt.folderTrust) && prompt.card.kind === 'question' && decision.kind === 'question' && typeof reviewAnswer === 'string'
         ? { ...decision, answers: { [prompt.card.questions[0]!.question]: reviewAnswer } } : decision;
       const result = applyDecision(feed.state, prompt.card.id, recorded, at());
       commit(feed, result);
@@ -3130,7 +3119,8 @@ export function createFeedService(
       const ids = new Set(requests.map(request => `kimi:${request.id}`));
       // A native screen can change before the wire commits its resolution. Keep the card
       // pending (Terminal-only while unrecognized) rather than losing the authoritative outcome.
-      const gone = unresolved ? [] : feed.state.items.filter(item => isPendingCard(item) && item.id.startsWith('kimi:') && !ids.has(item.id)).map(item => item.id);
+      const gone = feed.state.items.filter(item => isPendingCard(item) && item.id.startsWith('kimi:') && !ids.has(item.id) &&
+        (!unresolved || item.id.startsWith('kimi:folder-trust:'))).map(item => item.id);
       const settled = settleCards(feed.state, 'stale', at(), gone);
       const added = requests.flatMap(request => {
         if (settled.state.items.some(item => item.id === `kimi:${request.id}`)) return [];
@@ -3331,7 +3321,18 @@ export function createFeedService(
       const current: FeedCardState = card.state;
       if (current !== 'pending') return { applied: false, state: current };
       if (options.kimiNativeDecide !== undefined && feed.provider === 'kimi' && cardId.startsWith('kimi:')) {
-        return options.kimiNativeDecide(ref, cardId.slice(5), decision);
+        const result = options.kimiNativeDecide(ref, cardId.slice(5), decision);
+        // A startup decision precedes the wire session, so no wire event can settle this card.
+        if (card.kind !== 'question' || !cardId.startsWith('kimi:folder-trust:') || decision.kind !== 'question') return result;
+        return result.then(outcome => {
+          const question = card.questions[0]!.question;
+          const answer = decision.values?.answer ?? decision.answers[question];
+          if (outcome.applied && typeof answer === 'string' && feedCurrent(feed)) {
+            const update = applyDecision(feed.state, cardId, { kind: 'question', answers: { [question]: answer } }, at());
+            if (update.applied) commit(feed, update);
+          }
+          return outcome;
+        });
       }
       if (isCodexFollowUp(card)) return decideCodexFollowUp(feed, card, decision);
       const qwen = feed.qwenWait?.prompt;

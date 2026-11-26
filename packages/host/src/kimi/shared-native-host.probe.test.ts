@@ -160,7 +160,8 @@ test.skipIf(!optIn)('shares real production host Chat and Terminal on one stock 
       KIMI_MODEL_BASE_URL: `http://127.0.0.1:${address.port}/v1`,
     };
     for (const [key, value] of Object.entries({ ...env, PARLEY_AGENT_SKILLS: 'off' })) vi.stubEnv(key, value);
-    expect(execFileSync(launch, ['--version'], { cwd: projectPath, env, encoding: 'utf8', timeout: 8000 }).trim()).toBe('2.7.3');
+    const version = execFileSync(launch, ['--version'], { cwd: projectPath, env, encoding: 'utf8', timeout: 8000 }).trim();
+    expect(['2.7.3', '2.8.0']).toContain(version);
 
     stage = 'managed native launch';
     const preference = `default_permission_mode = "${fixtureManualDefault ? 'manual' : 'auto'}"`;
@@ -195,16 +196,28 @@ test.skipIf(!optIn)('shares real production host Chat and Terminal on one stock 
       raw('\r');
     };
 
-    await expect.poll(screen, poll).toMatch(/Trust this folder\?|No session yet/);
-    if ((await screen()).includes('Trust this folder?')) {
-      expect((await screen())).toContain(projectPath);
-      expect((await screen())).toContain('No project integrations or instructions to activate.');
-      expect(await call('pty.send', { ref, text: original, submit: true })).toMatchObject({ submitted: false });
-      raw(`\r${original}\r`);
-      expect(await screen()).toContain('Trust this folder?');
-      expect(requests).toBe(0);
-      raw('\r');
-    }
+    await expect.poll(screen, poll).toContain('Trust this folder?');
+    expect((await screen())).toContain(projectPath);
+    expect((await screen())).toContain('No project integrations or instructions to activate.');
+    expect(await call('pty.send', { ref, text: original, submit: true })).toMatchObject({ submitted: false });
+    raw(`\r${original}\r`);
+    expect(await screen()).toContain('Trust this folder?');
+    expect(requests).toBe(0);
+    const pendingTrust = async () => (await snap()).items.find(item =>
+      item.kind === 'question' && item.state === 'pending' && item.id.startsWith('kimi:folder-trust:'));
+    await expect.poll(pendingTrust, poll).toMatchObject({
+      formPrompt: expect.stringContaining(projectPath),
+      questions: [{ question: 'Trust this folder?', options: [
+        { label: 'Trust and continue' }, { label: 'Exit' },
+      ] }],
+    });
+    const decision = await pendingTrust();
+    expect(await call('feed.decide', { ref, cardId: decision!.id,
+      decision: { kind: 'question', answers: {}, values: { answer: 'Trust and continue' } },
+    })).toMatchObject({ applied: true, state: 'answered' });
+    expect((await snap()).items.find(item => item.id === decision!.id)).toMatchObject({
+      state: 'answered', answers: { 'Trust this folder?': 'Trust and continue' },
+    });
     stage = 'first Chat prompt after explicit Manual on a saved automatic default';
     await expect.poll(screen, poll).toMatch(ready);
     if (probeAutomaticBootstrap) {

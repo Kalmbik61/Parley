@@ -1,3 +1,4 @@
+import { confirmStartupChoice, recogniseQwenFolderTrust, type FolderTrustMenu } from './folder-trust.js';
 import { createHash } from 'node:crypto';
 import type { FeedDecision, FeedPermissionCard, FeedQuestionCard } from '@parley/core';
 import { FEED_DECISION_ANSWER_LIMIT } from '@parley/protocol';
@@ -19,6 +20,7 @@ export interface QwenPrompt {
   rows: Row[];
   review: boolean;
   previous: string | null;
+  folderTrust?: FolderTrustMenu;
 }
 
 interface IO {
@@ -42,6 +44,15 @@ function permissionKind(name: string): 'allow_once' | 'allow_always' | 'reject_o
 
 /** Read only the active bottom dialog. A clipped header, menu or footer falls back to the live terminal panel. */
 export function recogniseQwenPrompt(lines: readonly string[], kind: QwenPromptKind, cardId: string, at: string): QwenPrompt | null {
+  const trust = kind === 'permission' ? recogniseQwenFolderTrust(lines) : undefined;
+  if (trust) {
+    const card: FeedQuestionCard = { kind: 'question', id: cardId, cardId, at, state: 'pending', via: 'terminal',
+      toolName: 'qwen_folder_trust', toolUseId: null, toolInput: {}, questions: [{
+        header: trust.title, question: trust.detail, options: trust.options.map(label => ({ label, description: null })),
+        multiSelect: false, field: { id: 'answer', type: 'choice', required: true },
+      }] };
+    return { fingerprint: trust.fingerprint, card, folderTrust: trust, rows: [], previous: null, review: false };
+  }
   const end = lines.findLastIndex(line => line.trim() !== '');
   if (end < 0 || !waiting.test(lines[end]!.trim())) return null;
   const start = lines.slice(0, end).findLastIndex(line => /^\s*\?\s+\S.*\s←\s*$/u.test(line));
@@ -119,6 +130,17 @@ export function recogniseQwenPrompt(lines: readonly string[], kind: QwenPromptKi
 
 export async function answerQwenPrompt(prompt: QwenPrompt, decision: FeedDecision, io: IO): Promise<boolean> {
   const { card } = prompt;
+  if (prompt.folderTrust) {
+    if (decision.kind !== 'question') return false;
+    const trust = prompt.folderTrust;
+    const answer = decision.values?.answer ?? decision.answers[trust.detail];
+    const target = trust.options.findIndex(option => option === answer);
+    const selected = () => {
+      const seen = io.current() ? recogniseQwenFolderTrust(io.screen() ?? []) : undefined;
+      return seen?.fingerprint === trust.fingerprint ? seen.selected : undefined;
+    };
+    return await confirmStartupChoice(target, trust.options.length, selected, io.write) === 'done';
+  }
   function read(): QwenPrompt | null {
     const lines = io.current() ? io.screen() : undefined;
     const seen = lines && recogniseQwenPrompt(lines, card.kind, card.id, card.at);

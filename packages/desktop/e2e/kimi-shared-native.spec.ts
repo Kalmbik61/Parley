@@ -8,6 +8,7 @@ import { _electron as electron, expect, test, type ElectronApplication, type Pag
 import type { MethodName, Params, Result, SessionRef } from '@parley/protocol';
 import { stopApp } from './stop-app.js';
 import { stopHost } from './stop-host.js';
+import { seedTestLocale } from './tmp.js';
 
 const runtime = process.env.PARLEY_KIMI_ELECTRON_RUNTIME;
 const bin = '/Users/kalmbik61/.kimi-code/bin/kimi';
@@ -31,7 +32,7 @@ async function sessions(window: Page, work: Pick<SessionRef, 'projectPath' | 'wo
 
 // eslint-disable-next-line no-empty-pattern -- Playwright requires a destructured first parameter to pass TestInfo.
 test('stock Kimi first-turn tools, launch modes, shared renderer and native island', async ({}, info) => {
-  test.skip(!runtime || process.platform !== 'darwin', 'requires a local Electron runtime and stock Kimi 2.7.3');
+  test.skip(!runtime || process.platform !== 'darwin', 'requires a local Electron runtime and a supported stock Kimi');
   test.setTimeout(110_000);
   const root = await realpath(await mkdtemp('/tmp/pke-'));
   const [home, kimi, parley, tmp, projectPath, appData] = ['home', 'kimi', 'parley', 'tmp', 'project', 'app'].map(name => join(root, name)) as [string, string, string, string, string, string];
@@ -76,6 +77,7 @@ test('stock Kimi first-turn tools, launch modes, shared renderer and native isla
   let inspect: (() => Promise<string>) | undefined;
   try {
     await Promise.all([home, kimi, parley, tmp, projectPath, appData].map(dir => mkdir(dir)));
+    await seedTestLocale(parley);
     const listening = once(modelServer, 'listening');
     modelServer.listen(0, '127.0.0.1');
     await listening;
@@ -108,7 +110,7 @@ test('stock Kimi first-turn tools, launch modes, shared renderer and native isla
       KIMI_MODEL_PROVIDER_TYPE: 'openai', KIMI_MODEL_NAME: model, KIMI_MODEL_API_KEY: 'test-not-a-secret',
       KIMI_MODEL_CAPABILITIES: 'tool_use', KIMI_MODEL_BASE_URL: `http://127.0.0.1:${address.port}/v1`,
     };
-    expect(execFileSync(launch, ['--version'], { cwd: projectPath, env, encoding: 'utf8', timeout: 8000 }).trim()).toBe('2.7.3');
+    expect(['2.7.3', '2.8.0']).toContain(execFileSync(launch, ['--version'], { cwd: projectPath, env, encoding: 'utf8', timeout: 8000 }).trim());
     app = await electron.launch({ executablePath: runtime!, args: [fileURLToPath(new URL('../out/main/index.js', import.meta.url)), '--lang=en-US'], env });
     const main = () => app!.windows().find(page => /\/index\.html(?:\?|$)/.test(page.url()));
     const island = () => app!.windows().find(page => /\/island\.html(?:\?|$)/.test(page.url()));
@@ -144,10 +146,18 @@ test('stock Kimi first-turn tools, launch modes, shared renderer and native isla
       const existingChat = window.getByTestId('chat-view');
       const rendererKeys = () => window.locator('.xterm-helper-textarea:visible');
       if (mode === 'manual') {
-        await terminal().click();
-        await expect.poll(() => nativeScreen(window, ref)).toContain('Trust this folder?');
-        expect(await nativeScreen(window, ref)).toContain(projectPath);
-        await rendererKeys().press('Enter');
+        await chatSwitch().click();
+        const pending = existingChat.getByTestId('chat-pending-cards');
+        await expect(pending).toContainText(projectPath);
+        await expect(pending.getByRole('radio')).toHaveCount(2);
+        const dock = await pending.boundingBox();
+        const composer = await existingChat.getByTestId('chat-composer').boundingBox();
+        const gap = composer!.y - dock!.y - dock!.height;
+        expect(gap).toBeGreaterThanOrEqual(0);
+        expect(gap).toBeLessThanOrEqual(12);
+        await pending.getByRole('radio', { name: 'Trust and continue' }).click();
+        await pending.getByTestId('card-submit').click();
+        await expect(existingChat.getByTestId('chat-feed').getByTestId('chat-card').first()).toHaveAttribute('data-card-state', 'answered');
       }
       await expect.poll(async () => {
         const item = await current();
