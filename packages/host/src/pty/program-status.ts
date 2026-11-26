@@ -1,8 +1,5 @@
+import type { TerminalStatus } from '@parley/protocol';
 import { MAX_OSC_LENGTH } from './codex-terminal.js';
-
-export type TerminalStatus =
-  | { state: 'idle' | 'working' | 'done' | 'error' }
-  | { state: 'blocked'; kind?: 'auth' | 'permission' | 'question' };
 
 /** Only PTY launch families with confirmed OSC 7501 reports in Parley. */
 export function programStatusApp(provider: string | null): string | null {

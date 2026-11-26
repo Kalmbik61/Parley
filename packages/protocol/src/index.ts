@@ -85,7 +85,7 @@ export type {
   Results,
 } from './methods.js';
 export type { SessionProcess, SessionProcessesSnapshot } from './processes.js';
-export type { EventData, EventName, Events } from './events.js';
+export type { EventData, EventName, Events, TerminalStatus } from './events.js';
 export {
   BadFrameError,
   LineDecoder,

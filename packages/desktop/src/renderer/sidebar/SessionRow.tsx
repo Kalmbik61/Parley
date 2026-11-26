@@ -77,6 +77,7 @@ import { sessionRowLabel, sessionTag } from '../lib/participant.js';
 import { sessionWord } from '../lib/session-word.js';
 import { workKey as workKeyOf } from '../lib/tree-order.js';
 import { relativeTime } from '../lib/relative-time.js';
+import { terminalStatusLabel } from '../lib/terminal-status-label.js';
 import type { ActivityEntry } from '../store/activity.js';
 import { useNoticesStore } from '../store/notices.js';
 import { useProviderMissing } from '../store/provider-missing.js';
@@ -241,6 +242,7 @@ export const SessionRow = memo(function SessionRow({
   const queued = session.lifecycle === 'pending' || session.lifecycle === 'sleeping' ? (session.queued ?? null) : null;
   // Слово выбирает `sessionWord` (`lib/session-word.ts`): тот же выбор у карточки доски.
   const word = sessionWord(session, live, now);
+  const cliStatus = terminalStatusLabel(session, activity);
   const attention = sessionAttention(session, live);
   const closed = session.lifecycle === 'closed';
   const label = sessionRowLabel(session.id, session.label);
@@ -393,12 +395,14 @@ export const SessionRow = memo(function SessionRow({
             />
           ) : null}
           <span
+            title={cliStatus ?? undefined}
             className={cn(
               'shrink-0 truncate text-[11px]',
+              cliStatus !== null && 'max-w-[48%]',
               blocked ? 'text-accent-800' : unseen ? 'text-accent-2-800' : secondary,
             )}
           >
-            {word}
+            {cliStatus ?? word}
           </span>
           {session.worktree !== null ? (
             <span

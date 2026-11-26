@@ -19,28 +19,45 @@ export interface ActivityState {
    */
   loaded: boolean;
   /** Подписывается на `activity.changed`; возвращает отписку. */
-  init: (bridge: Pick<ParleyBridge, 'on' | 'activitySnapshot'>) => () => void;
+  init: (bridge: Pick<ParleyBridge, 'on' | 'onStatus' | 'activitySnapshot'>) => () => void;
 }
 
 export const useActivityStore = create<ActivityState>((set) => ({
   byRef: {},
   loaded: false,
   init: (bridge) => {
-    // Сессии, чьё живое событие уже пришло после подписки: снимок main для них
-    // не новее, и перетирать им живое значение нельзя.
     const live = new Set<string>();
-    let disposed = false;
-    const off = bridge.on('activity.changed', (entry) => {
-      live.add(refKey(entry.ref));
-      set((state) => ({ byRef: { ...state.byRef, [refKey(entry.ref)]: entry } }));
+    let connected = false;
+    let connection = 0;
+    const clearTerminalStatuses = (): void => set((state) => {
+      let byRef = state.byRef;
+      for (const [key, entry] of Object.entries(state.byRef)) {
+        if (entry.terminalStatus == null) continue;
+        if (byRef === state.byRef) byRef = { ...state.byRef };
+        byRef[key] = { ...entry, terminalStatus: null };
+      }
+      return byRef === state.byRef ? state : { byRef };
     });
-    // Снимок — после подписки: повтор хоста после `hello` приходит раньше, чем
-    // рендерер подписывается, и без снимка ждущая сессия была бы idle до
-    // следующего события (раунд исправлений 1 куска 3.1).
-    bridge
-      .activitySnapshot()
-      .then((entries) => {
-        if (disposed) return;
+    clearTerminalStatuses();
+    const off = bridge.on('activity.changed', (entry) => {
+      // Events replayed during hello are available through the main snapshot once connected.
+      if (!connected) return;
+      const key = refKey(entry.ref);
+      live.add(key);
+      set((state) => ({ byRef: { ...state.byRef, [key]: entry } }));
+    });
+    const offStatus = bridge.onStatus(({ state }) => {
+      const online = state === 'connected';
+      if (online === connected) return;
+      connected = online;
+      const request = ++connection;
+      live.clear();
+      if (!online) {
+        clearTerminalStatuses();
+        return;
+      }
+      bridge.activitySnapshot().then((entries) => {
+        if (request !== connection) return;
         const fresh = entries.filter((entry) => !live.has(refKey(entry.ref)));
         set((state) => ({
           loaded: true,
@@ -49,14 +66,15 @@ export const useActivityStore = create<ActivityState>((set) => ({
             ...Object.fromEntries(fresh.map((entry) => [refKey(entry.ref), entry])),
           },
         }));
-      })
-      .catch(() => {
-        // Без снимка остаются живые события — как до повтора активности.
-        if (!disposed) set({ loaded: true });
+      }).catch(() => {
+        if (request === connection) set({ loaded: true });
       });
+    });
     return () => {
-      disposed = true;
+      ++connection;
+      offStatus();
       off();
+      clearTerminalStatuses();
     };
   },
 }));

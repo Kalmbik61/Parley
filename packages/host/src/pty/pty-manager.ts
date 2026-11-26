@@ -10,13 +10,13 @@
 
 import { randomUUID } from 'node:crypto';
 import { refKey } from '@parley/protocol';
-import type { SessionRef } from '@parley/protocol';
+import type { SessionRef, TerminalStatus } from '@parley/protocol';
 import type { HostContext } from '../context.js';
 import type { WindowCounters } from '../health/window-counters.js';
 import { isKimiSubmitKey } from '../kimi/native-screen.js';
 import { createCodexTerminalParser, createOscReader } from './codex-terminal.js';
 import type { CodexSignal, CodexTerminalParser } from './codex-terminal.js';
-import { programStatusApp, programStatusOf, type TerminalStatus } from './program-status.js';
+import { programStatusApp, programStatusOf } from './program-status.js';
 import { qwenStatusFromReport, type QwenStatus } from './qwen-terminal.js';
 import { DraftTracker } from './draft.js';
 import { OutputBatcher } from './output-batcher.js';

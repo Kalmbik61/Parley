@@ -79,6 +79,7 @@ import {
 import {
   refKey,
   type EventData,
+  type TerminalStatus,
   type LiveMetrics,
   type UsageSegment,
   type MailWait,
@@ -162,6 +163,8 @@ export interface ActivityService {
   onChange(listener: (ref: SessionRef, value: SessionLive) => void): () => void;
   /** Текущая активность всех сессий, которые держит сервис, — повтор для нового клиента. */
   current(): Array<EventData<'activity.changed'>>;
+  /** Display-only native terminal evidence, kept out of SessionLive and onChange. */
+  setTerminalStatus(ref: SessionRef, status: TerminalStatus | null): void;
   /**
    * Состояние сессии codex по его терминалу, а не по хукам (спека комнат, 3.6): хуков Codex харнесс не
    * включает. Запущен процесс — прежние сигналы забыты и идёт срок экранов старта.
@@ -574,6 +577,7 @@ export function createActivityService(
 
   const logIndex: LogIndex = createLogIndex(roots, options.timelineReader === undefined ? {} : { reader: options.timelineReader });
   const live = new Map<string, SessionLive>();
+  const terminalStatuses = new Map<string, TerminalStatus>();
   /** Выведенная активность до подмены на `blocked` удержанным вопросом: с ней сверяются сигналы терминала. */
   const derivedActivity = new Map<string, Activity>();
   /**
@@ -1322,6 +1326,16 @@ export function createActivityService(
     }
   }
 
+  function activityEvent(ref: SessionRef, value: SessionLive): EventData<'activity.changed'> {
+    const terminalStatus = terminalStatuses.get(refKey(ref));
+    return {
+      ref,
+      activity: presentedActivity(value.activity),
+      metrics: value.metrics,
+      ...(terminalStatus === undefined ? {} : { terminalStatus }),
+    };
+  }
+
   function recompute(ref: SessionRef): void {
     if (stopped) return;
     const entry = works.entry(ref.projectPath, ref.workId);
@@ -1465,9 +1479,9 @@ export function createActivityService(
     if (previous === undefined || !sameLive(previous, value)) {
       // Клиентам уходит показанное значение: тишина открытого хода выглядит как `working`. Рассылка — только когда
       // изменилось оно; слушатели хоста (письма, сон, сжатие) читают сырое.
-      const shown = presentedActivity(published);
-      if (previous === undefined || !sameLive({ ...previous, activity: presentedActivity(previous.activity) }, { ...value, activity: shown })) {
-        host.broadcast('activity.changed', { ref, activity: shown, metrics });
+      const event = activityEvent(ref, value);
+      if (previous === undefined || !sameLive({ ...previous, activity: presentedActivity(previous.activity) }, event)) {
+        host.broadcast('activity.changed', event);
       }
       for (const listener of listeners) listener(ref, value);
     }
@@ -1699,6 +1713,7 @@ export function createActivityService(
 
     for (const [key] of Array.from(journals)) if (!validSessions.has(key)) journals.delete(key);
     for (const [key] of Array.from(live)) if (!validSessions.has(key)) live.delete(key);
+    for (const key of terminalStatuses.keys()) if (!validSessions.has(key)) terminalStatuses.delete(key);
     for (const key of Array.from(derivedActivity.keys())) if (!validSessions.has(key)) derivedActivity.delete(key);
     for (const key of Array.from(turnBoundaries.keys())) if (!validSessions.has(key)) turnBoundaries.delete(key);
     for (const [key] of Array.from(subagentCaches)) {
@@ -2102,6 +2117,20 @@ export function createActivityService(
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
+    setTerminalStatus(ref, status) {
+      if (stopped) return;
+      const key = refKey(ref);
+      const previous = terminalStatuses.get(key);
+      if (status === null) {
+        if (!terminalStatuses.delete(key)) return;
+      } else {
+        if (previous?.state === status.state &&
+          (status.state !== 'blocked' || (previous.state === 'blocked' && previous.kind === status.kind))) return;
+        terminalStatuses.set(key, status);
+      }
+      const value = live.get(key);
+      if (value !== undefined) host.broadcast('activity.changed', activityEvent(ref, value));
+    },
     current() {
       // Идём по снимку работ, а не по ключам `live`: из ключа ref не собрать, а
       // снимок и так единственный источник того, какие сессии существуют.
@@ -2114,7 +2143,7 @@ export function createActivityService(
             sessionId: session.id,
           };
           const value = live.get(refKey(ref));
-          if (value !== undefined) result.push({ ref, activity: presentedActivity(value.activity), metrics: value.metrics });
+          if (value !== undefined) result.push(activityEvent(ref, value));
         }
       }
       return result;
@@ -2136,6 +2165,7 @@ export function createActivityService(
       for (const timer of codexCallTimers.values()) clearTimeout(timer);
       codexCallTimers.clear();
       derivedActivity.clear();
+      terminalStatuses.clear();
       for (const timer of startupTimers.values()) clearTimeout(timer);
       startupTimers.clear();
       for (const key of Array.from(terminals.keys())) clearTerminal(key);

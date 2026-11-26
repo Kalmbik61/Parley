@@ -8,7 +8,7 @@ import { appendFile, mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { addSession, createWork, transitionSession, updateMap, workPaths } from '@parley/core';
 import type { EventData, EventName, SessionRef } from '@parley/protocol';
 import type { HostContext } from '../context.js';
@@ -240,4 +240,47 @@ describe('linkTerminalActivity', () => {
     await waitFor(() => known(activity, ref));
     expect(state(activity, ref)).toBe('idle');
   }, 30_000);
+});
+
+it('publishes and replays OpenCode status without triggering canonical activity, and clears it on exit', async () => {
+  const { ref, pty, activity, launch } = await rig('opencode');
+  let emit: (data: string) => void = () => {};
+  let finish = () => {};
+  const write = vi.fn();
+  const native = {
+    pid: 42, write, resize() {}, kill: () => finish(),
+    onData(listener: typeof emit) { emit = listener; return () => {}; },
+    onExit(listener: (exit: { exitCode: number; signal: null }) => void) {
+      finish = () => listener({ exitCode: 0, signal: null });
+      return () => {};
+    },
+  };
+  pty.start(ref, launch({ process: native }));
+  await waitFor(() => activity.get(ref) !== undefined);
+  const canonical = activity.get(ref);
+  const legacy = activity.current()[0];
+  const changed = vi.fn();
+  const off = activity.onChange(changed);
+  broadcasts.length = 0;
+  const blocked = '\x1b]7501;state=blocked:kind=permission:app=opencode:msg=YWJj\x1b\\';
+  emit(blocked + blocked);
+  emit('\x1b]7501;state=clear:id=ses_child\x07');
+  let messages = broadcasts.filter((item) => item.event === 'activity.changed');
+  expect(messages).toHaveLength(1);
+  expect(messages[0]?.data).toEqual({ ...legacy, ref, terminalStatus: { state: 'blocked', kind: 'permission' } });
+  expect(activity.current()).toContainEqual(messages[0]?.data);
+  expect(activity.current()[0]?.terminalStatus).toEqual({ state: 'blocked', kind: 'permission' });
+  expect(activity.get(ref)).toBe(canonical);
+  expect(changed).not.toHaveBeenCalled();
+
+  emit('\x1b]7501;state=idle:app=opencode\x07');
+  expect(activity.get(ref)?.activity.need).toBe(canonical?.activity.need);
+  expect(changed).not.toHaveBeenCalled();
+  expect(write).not.toHaveBeenCalled();
+  await pty.stop(ref);
+  messages = broadcasts.filter((item) => item.event === 'activity.changed');
+  expect(messages).toHaveLength(3);
+  expect((messages.at(-1)?.data as EventData<'activity.changed'>).terminalStatus ?? null).toBeNull();
+  expect(activity.current()).toContainEqual(messages.at(-1)?.data);
+  off();
 });

@@ -1,5 +1,7 @@
 import { useHostStore } from '../store/host.js';
 import { useProvidersStore } from '../store/providers.js';
+import { refKey } from '@parley/protocol';
+import { setAppLocale } from '../../shared/app-locale.js';
 import { S } from '../../shared/strings.js';
 // packages/desktop/src/renderer/chat/ChatToolbar.test.tsx
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
@@ -7,9 +9,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EMPTY_HISTORY } from '../layout/history.js';
 import { useLayoutStore } from '../layout/store.js';
 import { emptyLayout, openTab } from '../layout/tree.js';
+import { useActivityStore } from '../store/activity.js';
 import { useWorksStore } from '../store/works.js';
 import { BRANCH_COLOR_CLASS, branchColors } from '../lib/branch-colors.js';
-import { makeSession, makeSwarm, makeSwarmMember, makeWork } from '../test-utils/work-fixtures.js';
+import { makeActivity, makeSession, makeSwarm, makeSwarmMember, makeWork } from '../test-utils/work-fixtures.js';
 import { ChatToolbar } from './ChatToolbar.js';
 
 const applyFocusTarget = vi.hoisted(() => vi.fn());
@@ -256,5 +259,39 @@ describe('ChatToolbar — чип роя (спека роя, 7.2)', () => {
     setUp('s-x');
     render(<ChatToolbar workKey={KEY} tabId="terminal:s-x" view="chat" available provider="claude" />);
     expect(screen.queryByTestId('chat-swarm-chip')).toBeNull();
+  });
+});
+
+describe('ChatToolbar — CLI status in Chat and Terminal', () => {
+  const ref = { projectPath: '/tmp/proj', workId: 'w-01', sessionId: 's-01' };
+  const KEY = '/tmp/proj w-01';
+  const tabId = 'terminal:s-01';
+
+  afterEach(() => {
+    setAppLocale('en');
+    useActivityStore.setState({ byRef: {} });
+  });
+
+  it.each([
+    ['en', 'CLI needs input'],
+    ['ru', 'CLI ждёт ввода'],
+  ] as const)('shows the same advisory in both views in %s and no approval action', (locale, label) => {
+    setAppLocale(locale);
+    const session = makeSession(ref.sessionId, 'OpenCode', { provider: 'opencode' });
+    const entry = makeActivity(ref, 'idle');
+    useWorksStore.setState({ entries: [makeWork(ref.workId, { projectPath: ref.projectPath, sessions: [session] })] });
+    const layout = openTab(emptyLayout(), { kind: 'terminal', id: tabId, sessionId: ref.sessionId }, 'active');
+    useLayoutStore.setState({ layouts: { [KEY]: layout } });
+    useActivityStore.setState({ byRef: { [refKey(ref)]: { ...entry, terminalStatus: { state: 'blocked', kind: 'permission' } } } });
+    const props = { workKey: KEY, tabId, available: true, provider: 'opencode' };
+    const { rerender } = render(<ChatToolbar {...props} view="chat" />);
+    expect(screen.getAllByText(label)).toHaveLength(1);
+    expect(screen.getByText(S.chat.segment.terminal).closest('button')?.disabled).toBe(false);
+    expect(screen.queryByRole('button', { name: /approve|разрешить/i })).toBeNull();
+    rerender(<ChatToolbar {...props} view="terminal" />);
+    expect(screen.getAllByText(label)).toHaveLength(1);
+
+    act(() => useActivityStore.setState({ byRef: { [refKey(ref)]: entry } }));
+    expect(screen.queryByText(label)).toBeNull();
   });
 });

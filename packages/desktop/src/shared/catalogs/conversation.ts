@@ -26,6 +26,14 @@ const en = {
     imageImportFailed: "Couldn't copy the image — attachment not added",
   },
 
+  cliStatus: {
+    idle: 'CLI is ready',
+    working: 'CLI is working',
+    blocked: 'CLI needs input',
+    done: 'CLI finished its turn',
+    error: 'CLI reported an error',
+  },
+
   /** Вид «Chat» вкладки сессии (план 2026-10-01, Task 3) — `renderer/chat/`. */
   chat: {
     /** Подпись сообщения, которое человеку передал помощник (письмо с `via: 'assistant'`). */
@@ -484,6 +492,14 @@ const ru = {
     disconnected: 'Соединение потеряно. Переподключаемся…', lastEvent: (when) => `Последнее событие · ${when}`,
     imageImportFailed: "Не удалось скопировать изображение. Вложение не добавлено",
   },
+  cliStatus: {
+    idle: 'CLI готов',
+    working: 'CLI работает',
+    blocked: 'CLI ждёт ввода',
+    done: 'CLI завершил ход',
+    error: 'CLI сообщил об ошибке',
+  },
+
   chat: {
     viaAssistant: 'через помощника', segment: { chat: 'Чат', terminal: 'Терминал' }, viewLabel: 'Вид сессии',
     versionUnknown: 'Чат недоступен: не удалось определить версию CLI. Обновите сведения о провайдерах и повторите попытку.',

@@ -21,6 +21,11 @@ import type { CardsEvents } from './remote/cards.js';
 import type { VoiceEvents } from './remote/voice.js';
 import type { KimiConfigOption, KimiControl, KimiRequest } from './kimi.js';
 
+/** Advisory CLI status only. Never evidence for readiness, permissions, or delivery. */
+export type TerminalStatus =
+  | { state: 'idle' | 'working' | 'done' | 'error' }
+  | { state: 'blocked'; kind?: 'auth' | 'permission' | 'question' };
+
 /** Однонаправленные события хоста → клиенту, без ответа. */
 export interface Events {
   'backlog.changed': BacklogChanged;
@@ -34,7 +39,13 @@ export interface Events {
   'works.invalidated': WorksSyncInvalidated;
   /** Письма одной работы за пачку, только окнам с признаком `rooms-mail` (спека rooms.mail 6.3). */
   'rooms.mail': RoomsMailEvent;
-  'activity.changed': { ref: SessionRef; activity: SessionActivity; metrics: LiveMetrics | null };
+  'activity.changed': {
+    ref: SessionRef;
+    activity: SessionActivity;
+    metrics: LiveMetrics | null;
+    /** Absent or null means the current PTY has no report. */
+    terminalStatus?: TerminalStatus | null;
+  };
   'pty.output': { ref: SessionRef; data: string };
   'pty.resync': { ref: SessionRef };
   /** Заменяющий снимок процессов сессии — только подписчикам `processes.subscribe`. */
