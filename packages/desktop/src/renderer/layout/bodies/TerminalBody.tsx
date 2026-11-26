@@ -11,17 +11,22 @@
  * монтирует ни терминал, ни подписку на ленту.
  */
 
-import { useMemo } from 'react';
+import { useEffect, useMemo } from 'react';
 import type { WorkSession } from '@parley/core';
 import { refKey, type SessionRef } from '@parley/protocol';
 import type { ParleyBridge } from '../../../shared/bridge.js';
 import { PanelHost } from '../../browser/panel/PanelHost.js';
 import { ChatToolbar } from '../../chat/ChatToolbar.js';
 import { ChatView } from '../../chat/ChatView.js';
+import { useChatUiStore } from '../../chat/ui-store.js';
 import { FilePathLinksContext, type FilePathLinks } from '../../components/rooms/FilePathText.js';
 import { effectiveView, useFeedAvailability, useHostHasFeed, useSessionStarted, type TerminalTab } from '../../lib/feed-view.js';
 import { sessionCwd } from '../../terminal/links.js';
 import type { SendWithToastDeps } from '../../terminal/send.js';
+import { useDictationStore } from '../../voice/dictation-store.js';
+import { joinTranscript } from '../../voice/insert.js';
+import { useLayoutStore } from '../store.js';
+import { updateTab } from '../tree.js';
 
 export interface TerminalBodyProps {
   workKey: string;
@@ -39,6 +44,22 @@ export function TerminalBody({ workKey, tab, session, sessionRef, active, bridge
   const available = useFeedAvailability()(session.provider);
   const started = useSessionStarted(sessionRef);
   const view = effectiveView(tab, available, started);
+  const key = refKey(sessionRef);
+  const chatDraft = available === true && session.provider !== 'kimi';
+  useEffect(() => {
+    if (!chatDraft) return;
+    return useDictationStore.getState().register({
+      id: `chat-draft:${key}`,
+      // Цель тулбара живёт и без Composer; горячая клавиша по-прежнему выбирает цель по фокусу.
+      element: () => null,
+      insert(text) {
+        const ui = useChatUiStore.getState();
+        const draft = ui.drafts[key] ?? '';
+        ui.setDraft(key, draft + joinTranscript(draft, text));
+        useLayoutStore.getState().apply(workKey, (layout) => updateTab(layout, tab.id, { view: 'chat' }));
+      },
+    });
+  }, [chatDraft, key, workKey, tab.id]);
   // Пути в тексте ленты «Chat» (⌘/Ctrl-ссылки, `FilePathText`): относительные — от папки сессии, как в терминале.
   const cwd = sessionCwd(session, sessionRef.projectPath);
   const pathLinks = useMemo<FilePathLinks>(() => ({ bridge, workKey, cwd }), [bridge, workKey, cwd]);
@@ -64,7 +85,7 @@ export function TerminalBody({ workKey, tab, session, sessionRef, active, bridge
         </FilePathLinksContext.Provider>
       ) : (
         <div data-testid="terminal-body" className="flex h-full w-full flex-col">
-          {hasFeed ? <ChatToolbar workKey={workKey} tabId={tab.id} view="terminal" available={available === true} provider={session.provider} processes={{ bridge, sessionRef, active: active && session.lifecycle === 'active' }} micTargetId={`terminal:${refKey(sessionRef)}`} /> : null}
+          {hasFeed ? <ChatToolbar workKey={workKey} tabId={tab.id} view="terminal" available={available === true} provider={session.provider} processes={{ bridge, sessionRef, active: active && session.lifecycle === 'active' }} micTargetId={`${chatDraft ? 'chat-draft' : 'terminal'}:${key}`} /> : null}
         </div>
       )}
     </PanelHost>
