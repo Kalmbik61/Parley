@@ -9,6 +9,9 @@
 import type { FeedQuestion, FeedQuestionCard, FeedQuestionValue } from '@parley/core';
 import { FEED_DECISION_ANSWER_LIMIT, FEED_DECISION_ANSWERS } from '@parley/protocol';
 import { S } from '../../../shared/strings.js';
+import { useLayoutStore } from '../../layout/store.js';
+import { updateTab } from '../../layout/tree.js';
+import { useChatEnv } from '../chat-env.js';
 import { Button } from '../../ui/button.js';
 import { Input } from '../../ui/input.js';
 import { answerOf } from '../../lib/question-answer.js';
@@ -44,10 +47,13 @@ function readField(question: FeedQuestion, at: number, draft: CardDraft): { vali
 }
 
 export function QuestionCard({ item }: { item: FeedQuestionCard }): JSX.Element {
+  const { workKey, tabId } = useChatEnv();
   const { key, deciding, note, decide } = useCardDecision(item.cardId);
   const draft = useChatUiStore((state) => state.cardDrafts[key] ?? EMPTY_CARD_DRAFT);
   if (item.state !== 'pending') {
     const answers = item.answers === undefined ? [] : Object.entries(item.answers);
+    const openedHookInspector = item.state === 'answered' && item.via === 'terminal' &&
+      item.toolName === 'codex_startup' && answers.some(([, answer]) => answer === 'Review hooks');
     return (
       <CardFrame item={item} status={settledStatus(item)}>
         {answers.length === 0 ? undefined : (
@@ -57,6 +63,12 @@ export function QuestionCard({ item }: { item: FeedQuestionCard }): JSX.Element 
             ))}
           </ul>
         )}
+        {openedHookInspector && workKey !== undefined && tabId !== undefined ? (
+          <Button type="button" size="xs" variant="outline" className="self-start"
+            onClick={() => useLayoutStore.getState().apply(workKey, layout => updateTab(layout, tabId, { view: 'terminal' }))}>
+            {S.chat.openTerminal}
+          </Button>
+        ) : null}
       </CardFrame>
     );
   }

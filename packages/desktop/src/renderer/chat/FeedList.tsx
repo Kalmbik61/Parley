@@ -199,6 +199,13 @@ const ItemView = memo(function ItemView({ item, expanded, transcript, onToggle, 
   }
 });
 
+function revealPendingCard(scroller: HTMLElement | null, id: string): boolean {
+  const card = Array.from(scroller?.closest('[data-chat-feed-root]')?.querySelectorAll<HTMLElement>('[data-pending-card]') ?? [])
+    .find(element => element.dataset.feedId === id);
+  card?.scrollIntoView?.({ block: 'nearest' });
+  return card !== undefined;
+}
+
 export function FeedList({ items, queued, outbox = NO_OUTBOX, localPromptIds, onRetryOutbox, onSendNowOutbox, onRemoveOutbox, letters = NO_LETTERS, note, onRetry, working, reveal, onRevealed, viaIds, dividers = NO_DIVIDERS, fold = 'replies', find, children }: FeedListProps): JSX.Element {
   const latest = items.at(-1);
   const activeRetry = latest?.kind === 'error' && latest.retry !== undefined && latest.retry.resolved !== true ? latest : null;
@@ -346,6 +353,10 @@ export function FeedList({ items, queued, outbox = NO_OUTBOX, localPromptIds, on
   // ленту обратно к низу; доехала лента до дна сама — `scroll` вернёт его. Просьба гаснет, когда карточка найдена.
   useLayoutEffect(() => {
     if (reveal === undefined) return;
+    if ('itemId' in reveal && revealPendingCard(scroller, reveal.itemId)) {
+      onRevealed?.(reveal.nonce);
+      return;
+    }
     const matches = (item: FeedItem): boolean =>
       'agentId' in reveal ? item.kind === 'agent' && item.agentId === reveal.agentId : item.id === reveal.itemId;
     const at = allRows.findIndex((row) => 'item' in row && matches(row.item));
@@ -359,7 +370,7 @@ export function FeedList({ items, queued, outbox = NO_OUTBOX, localPromptIds, on
     setAtBottom(false);
     virtualizer.scrollToIndex(at, { align: 'start' });
     onRevealed?.(reveal.nonce);
-  }, [reveal, items, foldRows, onRevealed]);
+  }, [reveal, items, foldRows, onRevealed, scroller]);
 
   // Поиск: цель исполняется один раз на `nonce` (шаг человека), а закрытая полоса забывает исполненный.
   const handledFind = useRef(0);
@@ -370,6 +381,10 @@ export function FeedList({ items, queued, outbox = NO_OUTBOX, localPromptIds, on
       return;
     }
     if (findTarget.nonce === handledFind.current) return;
+    if (revealPendingCard(scroller, findTarget.itemId)) {
+      handledFind.current = findTarget.nonce;
+      return;
+    }
     const at = allRows.findIndex((row) => 'item' in row && row.item.id === findTarget.itemId);
     if (at === -1) {
       // Совпадение в свёрнутой группе: раскрываем её, цель сработает на следующей отрисовке.
@@ -387,7 +402,7 @@ export function FeedList({ items, queued, outbox = NO_OUTBOX, localPromptIds, on
     atBottomRef.current = false;
     setAtBottom(false);
     virtualizer.scrollToIndex(at, { align: 'center' });
-  }, [find, findTarget, items, foldRows]);
+  }, [find, findTarget, items, foldRows, scroller]);
 
   // Подсветка идёт за DOM: после каждой отрисовки, пока поиск открыт (строки приходят и уходят с прокруткой).
   const lit = useRef(false);
@@ -400,7 +415,7 @@ export function FeedList({ items, queued, outbox = NO_OUTBOX, localPromptIds, on
     }
     if (scroller === null) return;
     lit.current = true;
-    applyFindHighlights(scroller, find.query, findTarget === null ? null : { itemId: findTarget.itemId, nth: findTarget.itemNth });
+    applyFindHighlights(scroller.closest<HTMLElement>('[data-chat-feed-root]') ?? scroller, find.query, findTarget === null ? null : { itemId: findTarget.itemId, nth: findTarget.itemNth });
   });
   useEffect(
     () => () => {

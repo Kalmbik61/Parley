@@ -209,11 +209,31 @@ test.skipIf(!optIn)('shares real production host Chat and Terminal on one stock 
       raw('\r');
     };
 
+    const pendingFolderTrust = async (target: typeof ref) => (await call('feed.snapshot', { ref: target })).items.find(item =>
+      item.kind === 'question' && item.state === 'pending' && item.id.startsWith('kimi:folder-trust:'));
+    async function answerFolderTrust(target: typeof ref) {
+      await expect.poll(() => pendingFolderTrust(target), poll).toMatchObject({
+        formPrompt: expect.stringContaining(target.projectPath),
+        questions: [{ question: 'Trust this folder?', options: [
+          { label: 'Trust and continue' }, { label: 'Exit' },
+        ] }],
+      });
+      const card = await pendingFolderTrust(target);
+      if (card?.kind !== 'question') throw new Error('Expected an active Kimi folder trust card');
+      expect(await call('feed.decide', { ref: target, cardId: card.id,
+        decision: { kind: 'question', answers: {}, values: { answer: 'Trust and continue' } },
+      })).toMatchObject({ applied: true, state: 'answered' });
+      expect((await call('feed.snapshot', { ref: target })).items.find(item => item.id === card.id)).toMatchObject({
+        state: 'answered', answers: { 'Trust this folder?': 'Trust and continue' },
+      });
+    }
+
     if (probeReservedRetry) {
       stage = 'persist the legacy pre-bind failure state with its original task';
       // Stop with trust still unresolved to create the same durable state as
       // the old version rejection, without keeping an obsolete host binary.
       await expect.poll(screen, poll).toContain('Trust this folder?');
+      await expect.poll(() => pendingFolderTrust(ref), poll).toBeDefined();
       await call('sessions.stop', { ref });
       await expect.poll(session, poll).toMatchObject({
         lifecycle: 'sleeping', providerSessionId: null, task: recovered, kimiPermissionMode: 'auto',
@@ -250,14 +270,15 @@ test.skipIf(!optIn)('shares real production host Chat and Terminal on one stock 
     }
 
     await expect.poll(screen, poll).toMatch(/Trust this folder\?|No session yet/);
-    if ((await screen()).includes('Trust this folder?')) {
+    const neededTrust = (await screen()).includes('Trust this folder?');
+    if (neededTrust) {
       expect((await screen())).toContain(projectPath);
       expect((await screen())).toContain('No project integrations or instructions to activate.');
       expect(await call('pty.send', { ref, text: original, submit: true })).toMatchObject({ submitted: false });
       raw(`\r${original}\r`);
       expect(await screen()).toContain('Trust this folder?');
       expect(requests).toBe(0);
-      raw('\r');
+      await answerFolderTrust(ref);
     }
     stage = 'first Chat prompt after explicit Manual on a saved automatic default';
     await expect.poll(screen, poll).toMatch(ready);
@@ -354,7 +375,7 @@ test.skipIf(!optIn)('shares real production host Chat and Terminal on one stock 
       console.info('Empty /new cold evidence:', JSON.stringify({
         version, mode: probeReservedRetry ? 'reserved-auto-retry' : bootstrapMode, abandonedWire: (await wireRows(abandoned)).map(row => row.type),
         abandonedDiscovery: discovered?.length,
-        samePidAndGeneration: true, requestsBeforePrompt: 0, requests, tools: tools.length,
+        samePidAndGeneration: true, folderTrustAnswered: neededTrust, requestsBeforePrompt: 0, requests, tools: tools.length,
         parleyTools: parleyTools.length, getMapAdvertised, getMapCalled: seen.some(row => row.result !== undefined),
       }));
       return;
@@ -595,7 +616,7 @@ test.skipIf(!optIn)('shares real production host Chat and Terminal on one stock 
       const failedAttach = await call('pty.attach', { ref: failed });
       const failedPid = (await failedSession()).pid;
       await expect.poll(failedScreen, poll).toContain('Trust this folder?');
-      client.send({ method: 'pty.input', params: { ref: failed, data: '\r', generation: failedAttach.generation } });
+      await answerFolderTrust(failed);
       await expect.poll(failedScreen, { ...poll, interval: 10 }).toMatch(/│ >\s*\/permission\s*│/);
       expect(await call('pty.send', { ref: failed, text: recovered, submit: true })).toMatchObject({ inserted: false, submitted: false });
       client.send({ method: 'pty.input', params: { ref: failed, data: `${recovered}\r`, generation: failedAttach.generation } });

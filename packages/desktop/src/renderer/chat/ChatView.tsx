@@ -66,6 +66,7 @@
 import { useCallback, useEffect, useMemo, useState, type DragEvent } from 'react';
 import { toast } from 'sonner';
 import type { FeedItem } from '@parley/core';
+import { pendingCards } from '@parley/core/card-gist';
 import { needReason } from '@parley/core/stuck';
 import { HOST_ERROR_REASONS, KIMI_PTY_GENERATION_FEATURE, refKey, type ModelOption, type PendingLetter, type SessionRef } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
@@ -110,8 +111,9 @@ import { ChatToolbar, modeLabel, type ModeChoice } from './ChatToolbar.js';
 import { openAgentsPanel } from '../agents/open-agents.js';
 import { focusComposer } from '../keys/type-to-focus.js';
 import { useCapabilitiesStore } from './capabilities-store.js';
+import { CardItem } from './items/CardItem.js';
 import { Composer } from './Composer.js';
-import { currentModel, hasPendingCard, runningAgents, switchDividers, turnActive, type SwitchDivider } from './feed-model.js';
+import { currentModel, runningAgents, switchDividers, turnActive, type SwitchDivider } from './feed-model.js';
 import { FeedList, type PendingLetterRow, type QueuedPrompt } from './FeedList.js';
 import { ImagePreviewHost } from './ImagePreview.js';
 import { useKimiControl } from './kimi-control.js';
@@ -236,11 +238,18 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
   const kimiGenerationHost = useHostFeature(KIMI_PTY_GENERATION_FEATURE);
   const kimiWaitsForCard = kimi && (kimiGenerationHost || kimiShared);
   const sessionName = session === undefined ? null : sessionRowLabel(session.id, session.label);
-  const waiting = blocked && !hasPendingCard(items);
+  const activeCards = useMemo(() => pendingCards(items), [items]);
+  const showPendingCards = live && !kimiReadOnly && activeCards.length > 0;
+  const transcript = useMemo(() => {
+    if (!showPendingCards) return items;
+    const pinned = new Set(activeCards.map(card => card.id));
+    return items.filter(item => !pinned.has(item.id));
+  }, [items, activeCards, showPendingCards]);
+  const waiting = blocked && activeCards.length === 0;
   // Панель вопроса терминала: когда хост умеет читать экран; вопрос старта (доверие папке, вход) её тоже показывает.
   const canReadScreen = useHostSupports('pty.screenText');
   const need = useActivityStore((state) => activityFor(state.byRef, sessionRef)?.activity.need ?? null);
-  const startupWait = (kimiShared || (!kimiWaitsForCard && canReadScreen)) && need?.kind === 'startup' && !hasPendingCard(items);
+  const startupWait = (kimiShared || (!kimiWaitsForCard && canReadScreen)) && need?.kind === 'startup' && activeCards.length === 0;
   const showBanner = useHeldFor(waiting || startupWait, BANNER_DELAY_MS);
   const canSwitch = useHostSupports('sessions.switchAgent');
   const providerMissing = useProviderMissing(provider);
@@ -483,7 +492,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
   // Агент работает, а видимого признака в ленте нет: последний элемент не пишущийся текст и нет карточки.
   const lastItem = items.at(-1);
   const showWorking = !kimiReadOnly && active && !(kimiShared && blocked) &&
-    !(lastItem?.kind === 'text' && lastItem.streaming) && !hasPendingCard(items);
+    !(lastItem?.kind === 'text' && lastItem.streaming) && activeCards.length === 0;
   const turnStart = (feedActive ? items.findLast((item) => item.kind === 'prompt')?.at : undefined) ??
     (nativeWorking ? activity?.lastEventAt ?? null : null);
 
@@ -532,7 +541,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
     <ChatEnvContext.Provider value={env}>
       <div
         ref={setFeedRef}
-        data-testid="chat-view"
+        data-testid="chat-view" data-chat-feed-root=""
         {...(dropping ? { 'data-dropping': '' } : {})}
         onDragOver={onDragOver}
         onDragLeave={onDragLeave}
@@ -589,7 +598,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
         />
         <ImagePreviewHost bridge={bridge} sessionKey={sessionKey} visible={visible}>
           <FeedList
-            items={items}
+            items={transcript}
             dividers={dividers}
             viaIds={viaIds}
             queued={queued}
@@ -601,7 +610,7 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
             })}
             onRemoveOutbox={(id) => chatOutbox.remove(sessionKey, id)}
             letters={letters}
-            note={noteOf(feed)}
+            note={showPendingCards && feed?.status === 'ready' ? null : noteOf(feed)}
             {...(feed?.status === 'error' ? { onRetry: () => useFeedStore.getState().retry(sessionRef) } : {})}
             {...(showWorking ? { working: { since: turnStart } } : {})}
             {...(reveal === null ? {} : { reveal, onRevealed: clearReveal })}
@@ -640,6 +649,15 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
           </div>
         ) : null}
         {quote === null || kimiReadOnly ? null : <ReplyPlate quote={quote} onRemove={() => setReplyTo(null)} />}
+        {showPendingCards ? (
+          <div data-testid="chat-pending-cards" className="mx-3 mb-2 flex max-h-[45%] min-h-0 shrink-0 flex-col gap-2 overflow-y-auto overscroll-contain">
+            {activeCards.map(card => (
+              <div key={card.id} data-pending-card="" data-feed-id={card.id}>
+                <CardItem item={card} />
+              </div>
+            ))}
+          </div>
+        ) : null}
         {kimiReadOnly ? (
           <div className="mx-3 mb-3 flex items-center justify-between gap-2 rounded-lg bg-foreground/5 px-3 py-2 text-sm">
             <span role="status">{S.chat.kimiNative.readOnly}</span>

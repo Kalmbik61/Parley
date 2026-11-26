@@ -11,10 +11,11 @@ import type { CodexPrompt } from './terminal-prompt.js';
 /** Инструмент вопроса Codex (`request_user_input`) — как его называет журнал Codex. */
 const QUESTION_TOOL = 'request_user_input';
 
-export function applyCodexTerminalPrompt(state: FeedState, prompt: CodexPrompt, at: string): FeedUpdate {
+export function applyCodexTerminalPrompt(state: FeedState, prompt: CodexPrompt, at: string, startupCardId?: string): FeedUpdate {
   const draft = new FeedDraft(state);
-  if (prompt.kind === 'question') {
-    const id = draft.nextId('question');
+  if (prompt.kind === 'question' || prompt.kind === 'startup-choice') {
+    const startup = prompt.kind === 'startup-choice';
+    const id = startupCardId ?? draft.nextId('question');
     const limited = limitInput({ question: prompt.question });
     const card: FeedQuestionCard = {
       id,
@@ -23,14 +24,15 @@ export function applyCodexTerminalPrompt(state: FeedState, prompt: CodexPrompt, 
       cardId: id,
       state: 'pending',
       toolUseId: null,
-      toolName: QUESTION_TOOL,
+      toolName: startup ? 'codex_startup' : QUESTION_TOOL,
       toolInput: limited.input,
-      // Последний вариант Codex — «None of the above»: цифрой он отправляет ответ без текста, в карточку не входит.
+      // У обычного вопроса последний пункт открывает свой ответ; стартовое меню содержит только явные варианты.
       questions: [
         {
           question: prompt.question,
-          header: null,
-          options: prompt.options.slice(0, -1).map((option) => ({ label: option.label, description: option.description })),
+          header: startup ? prompt.header : null,
+          ...(startup ? { field: { id: 'answer', type: 'choice', required: true } as const } : {}),
+          options: (startup ? prompt.options : prompt.options.slice(0, -1)).map((option) => ({ label: option.label, description: option.description })),
           multiSelect: false,
         },
       ],
