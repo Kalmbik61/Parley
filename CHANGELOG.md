@@ -4,6 +4,17 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
+## 0.39.8
+
+### Fixed
+
+- **Kimi sessions stuck on the "unload_tools … is not declared" API error recover automatically.** Parley detects the exact failed turn, backs up the conversation wire, removes only the poisoned tool-removal announcements left by Kimi Code 2.8.1, and resumes the same conversation. Chat shows what was repaired and the backup file name; an unsafe repair is refused with a reason instead of retrying. ([#267](https://github.com/Kalmbik61/Parley/pull/267))
+- **Voice dictation from the Terminal view now lands in the chat.** The toolbar microphone in a Qwen, Claude, Codex, or OpenCode terminal appends the transcript to the session chat draft and opens Chat for review and Send. Kimi keeps terminal input. Restored chat drafts place the caret at the end. ([#267](https://github.com/Kalmbik61/Parley/pull/267))
+
+### Changed
+
+- **The Kimi CLI no longer self-updates from Parley terminal launches**, matching the login policy, so a CLI update can no longer swap the binary mid-session. ([#267](https://github.com/Kalmbik61/Parley/pull/267))
+
 ## 0.39.7
 
 ### Fixed
