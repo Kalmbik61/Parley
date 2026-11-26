@@ -551,6 +551,36 @@ describe('ChatView — поле ввода и тулбар', () => {
     expect(screen.getAllByTestId('chat-prompt').at(-1)).toBe(bubble);
   });
 
+  it('clears both Codex delivery indicators when a single recorded prompt contains both sends', async () => {
+    const session = makeSession('s-01', 'Codex', { provider: 'codex' });
+    sendDeps.session = () => session;
+    useHostStore.setState({ status: { state: 'connected', hostVersion: 'test', methods: FEED_METHODS, features: ['feed-codex'] } });
+    useProvidersStore.setState({ providers: [{ id: 'codex', label: 'Codex', available: true, version: '0.166.0', limits: null }], loaded: true });
+    bridge.setHandler('pty.send', () => ({ inserted: true, submitted: true, reason: null }));
+    renderBody(session, 'chat');
+    const composer = within(screen.getByTestId('chat-composer')).getByRole('textbox');
+    const send = async (value: string) => {
+      fireEvent.change(composer, { target: { value } });
+      fireEvent.keyDown(composer, { key: 'Enter' });
+      await act(async () => {});
+    };
+    const first = 'Check this screenshot\n\nAttachments:\n- `/tmp/example.png`';
+    const second = 'Why does the agent show idle?';
+    const initial = prompt('old', 'Earlier turn');
+    setFeed([initial]);
+    await send(first);
+    setFeed([initial, turn('end')], 2);
+    await send(second);
+    const pending = screen.getAllByTestId('chat-queued');
+    expect(pending.map(el => el.dataset.state)).toEqual(['queued', 'submitted']);
+    setFeed([initial, turn('end'), prompt('batch', second + '\n' + first), text('reply', 'Answered both'), turn('complete')], 3);
+    expect(screen.queryAllByTestId('chat-queued')).toHaveLength(0);
+    expect(screen.getAllByTestId('chat-prompt')).toHaveLength(2);
+    expect(screen.getAllByTestId('chat-prompt')[1]).toBe(pending[0]);
+    expect(screen.getByText('Answered both')).toBeTruthy();
+    expect(sends()).toHaveLength(2);
+  });
+
   it('busy — серый «Waiting» остаётся без тоста, через секунду повтор; после удачи ждёт промпт', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {

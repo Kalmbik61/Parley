@@ -15,7 +15,7 @@ import { createFakeBridge, type FakeBridge } from '../test-utils/fake-bridge.js'
 import { activityMap, makeActivity } from '../test-utils/work-fixtures.js';
 import { useWorksStore } from '../store/works.js';
 import { makeSession, makeWork } from '../test-utils/work-fixtures.js';
-import { attemptChatSend, CHAT_AWAIT_PROMPT_MS, CHAT_RETRY_MS, chatOutbox, promptCount, type ChatOutboxPayload } from './chat-outbox.js';
+import { attemptChatSend, CHAT_AWAIT_PROMPT_MS, CHAT_RETRY_MS, chatOutbox, promptMatches, type ChatOutboxPayload } from './chat-outbox.js';
 import { resetFeedStoreForTests, useFeedStore } from './store.js';
 import { resetChatUiStoreForTests, useChatUiStore } from './ui-store.js';
 
@@ -64,21 +64,22 @@ afterEach(() => {
   useActivityStore.setState({ byRef: {}, loaded: false });
 });
 
-describe('promptCount — подтверждение принятого CLI сообщения', () => {
+describe('promptMatches — подтверждение принятого CLI сообщения', () => {
   const pointer = 'New messages (1). Call check_inbox.';
 
   it('Codex объединяет старые указатели и сообщение человека в один промпт', () => {
     const text = 'Замеры:\n\n| CPU | Time |\n| --- | --- |\n| 12 | 30 |\n\nвот что еще нашли';
-    expect(promptCount([prompt('p1', `${pointer}\n${pointer}\n${text}\n${pointer}`)], text)).toBe(1);
-    expect(promptCount([prompt('p1', `${pointer}\n${text}`), prompt('p2', text)], text)).toBe(2);
-    expect(promptCount([prompt('p1', `New messages (2) in r-01 "Review". Call check_inbox.\n\n${text}\n\n${pointer}`)], text)).toBe(1);
+    expect(promptMatches(`${pointer}\n${pointer}\n${text}\n${pointer}`, text)).toBe(true);
+    expect(promptMatches(`${pointer}\n${text}`, text)).toBe(true);
+    expect(promptMatches(text, text)).toBe(true);
+    expect(promptMatches(`New messages (2) in r-01 "Review". Call check_inbox.\n\n${text}\n\n${pointer}`, text)).toBe(true);
   });
 
   it('не считает принятым совпадение только с частью другого сообщения', () => {
-    expect(promptCount([prompt('p1', `${pointer}\nquoted: next\n${pointer}`)], 'next')).toBe(0);
-    expect(promptCount([prompt('p1', `${pointer}\nnext\nsomething else\n${pointer}`)], 'next')).toBe(0);
-    expect(promptCount([prompt('p1', pointer)], 'next')).toBe(0);
-    expect(promptCount([prompt('p1', pointer)], pointer)).toBe(1);
+    expect(promptMatches(`${pointer}\nquoted: next\n${pointer}`, 'next')).toBe(false);
+    expect(promptMatches(`${pointer}\nnext\nsomething else\n${pointer}`, 'next')).toBe(false);
+    expect(promptMatches(pointer, 'next')).toBe(false);
+    expect(promptMatches(pointer, pointer)).toBe(true);
   });
 });
 
@@ -254,6 +255,53 @@ describe('chatOutbox — затвор на время хода', () => {
     expect(useChatUiStore.getState().promptEchoes[KEY]).toMatchObject([{ id, state: 'submitted', text: 'slow' }]);
     setFeed([prompt('p1', 'slow')]);
     expect(useChatUiStore.getState().promptEchoes[KEY]).toEqual([{ id, state: 'confirmed', promptId: 'p1' }]);
+  });
+
+  it('a batched Codex receipt releases the next send immediately, even before the PTY reply', async () => {
+    live();
+    deps.session = () => makeSession('s-01', 'Codex', { provider: 'codex' });
+    const earlier = prompt('old', 'Earlier turn');
+    setFeed([earlier]);
+    const first = chatOutbox.enqueue(KEY, payload('first', true));
+    await flush();
+    setFeed([earlier, turn('end')]);
+    let acknowledge!: () => void;
+    bridge.setHandler('pty.send', params => params.text === 'second'
+      ? new Promise(resolve => { acknowledge = () => resolve({ inserted: true, submitted: true, reason: null }); })
+      : { inserted: true, submitted: true, reason: null });
+    const second = chatOutbox.enqueue(KEY, payload('second'));
+    chatOutbox.enqueue(KEY, payload('third'));
+    await flush();
+    expect(sentTexts()).toEqual(['first', 'second']);
+    setFeed([earlier, turn('end'), prompt('batch', 'second\nNew messages (1). Call check_inbox.\nfirst'), turn('done')]);
+    acknowledge();
+    await flush();
+    expect(sentTexts()).toEqual(['first', 'second', 'third']);
+    expect(useChatUiStore.getState().promptEchoes[KEY]?.slice(0, 2)).toEqual([
+      { id: first, state: 'confirmed', promptId: 'batch' },
+      { id: second, state: 'confirmed', promptId: 'batch' },
+    ]);
+  });
+
+  it.each(['codex', 'claude'] as const)('only complete, fresh Codex batches consume one local send per occurrence (%s)', async provider => {
+    deps.session = () => makeSession('s-01', provider, { provider });
+    const old = prompt('old', 'again\nagain\nlast');
+    setFeed([old]);
+    for (const [id, value] of ['again', 'again', 'again', 'last'].entries()) {
+      await attemptChatSend(KEY, { ...item(value), id: String(id) });
+    }
+    const states = () => useChatUiStore.getState().promptEchoes[KEY]?.map(entry => entry.state);
+    const pending = ['queued', 'queued', 'queued', 'queued'];
+    const unrelated = prompt('other', 'again\nlast\nadditional user text');
+    setFeed([old, unrelated]);
+    expect(states()).toEqual(pending);
+    const batch = prompt('new', 'again\r\nagain\r\nlast');
+    setFeed([old, unrelated, batch]);
+    setFeed([old, unrelated, batch, turn('done')]);
+    expect(states()).toEqual(provider === 'codex' ? ['confirmed', 'confirmed', 'queued', 'confirmed'] : pending);
+    setFeed([old, unrelated, batch, turn('done'), prompt('separate', 'again')]);
+    expect(states()).toEqual(provider === 'codex' ? Array(4).fill('confirmed') : ['confirmed', 'queued', 'queued', 'queued']);
+    expect(sentTexts()).toEqual(['again', 'again', 'again', 'last']);
   });
 
   it('после отправки без открытой ленты повтор из старого снимка не считается новым промптом', async () => {
