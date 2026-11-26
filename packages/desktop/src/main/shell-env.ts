@@ -102,9 +102,14 @@ const isDirectory = (dir: string): Promise<boolean> =>
  * `close` тогда не приходит, а окружение уже напечатано. Оболочка после этого выходит сама (хуки
  * выхода отрабатывают), таймер остаётся сторожем: не вышла за срок — убита.
  */
-async function runShell(shell: string, args: string[], timeoutMs: number): Promise<string> {
+async function runShell(
+  shell: string,
+  args: string[],
+  timeoutMs: number,
+  env: NodeJS.ProcessEnv,
+): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn(shell, args, { stdio: ['ignore', 'pipe', 'ignore'] });
+    const child = spawn(shell, args, { env, stdio: ['ignore', 'pipe', 'ignore'] });
     // Декодер с состоянием: символ не из ASCII (путь) не рвётся на границе чанков.
     child.stdout.setEncoding('utf8');
     let out = '';
@@ -202,6 +207,8 @@ async function withFallbackDirs(
  * унаследовала окружение окна, и всё, что она отдала, включая её `PATH`, главнее; снятое rc-файлом
  * назад не возвращается. Хост, поиск `node`, git и конфиг окна получают его как окружение запуска
  * (`spawnHost`), агенты — от хоста.
+ * Унаследованный от неинтерактивного запуска Codex `NO_COLOR=1` при `CODEX_CI=1` снимается до
+ * оболочки, в том числе для skip и запасного пути. Явный `NO_COLOR` из rc остаётся в ответе.
  *
  * Срок оболочки — 15 с: обычно она отвечает быстрее секунды, а долго — медленный rc (oh-my-zsh, nvm, первый
  * запуск под Rosetta). В 0.1.0 срок был 5 с, и сборка для Intel на Apple Silicon в него не уложилась: хост
@@ -212,30 +219,36 @@ async function withFallbackDirs(
  * `/opt/homebrew/bin`, `/usr/local/bin`, каталог версии Node по умолчанию у nvm и shims volta, asdf и mise;
  * причина — в `warning`.
  *
- * `skip` (E2E, `PARLEY_LOGIN_SHELL=skip`) оболочку не зовёт вовсе: окружение окна отдаётся как есть.
+ * `skip` (E2E, `PARLEY_LOGIN_SHELL=skip`) оболочку не зовёт вовсе: отдаётся очищенная копия окружения окна.
  */
 export async function captureShellEnv(options?: {
   shell?: string;
   timeoutMs?: number;
-  run?: (shell: string, args: string[], timeoutMs: number) => Promise<string>;
+  run?: (
+    shell: string,
+    args: string[],
+    timeoutMs: number,
+    env: NodeJS.ProcessEnv,
+  ) => Promise<string>;
   /** Окружение процесса окна: из него берутся `SHELL` и запасной результат. У окна — `process.env`, тест подставляет своё. */
   env?: NodeJS.ProcessEnv;
-  /** Не звать оболочку человека: окружение окна как есть, без запасных каталогов и предупреждения. */
+  /** Не звать оболочку человека: очищенная копия окружения окна, без запасных каталогов и предупреждения. */
   skip?: boolean;
   /** Домашний каталог для запасных каталогов: `~/.local/bin`, `~/.nvm`, `~/.volta`… */
   home?: string;
   /** Существует ли каталог: запасные каталоги дописываются, только если он есть. */
   isDir?: (dir: string) => Promise<boolean>;
 }): Promise<ShellEnvResult> {
-  const base = options?.env ?? process.env;
-  if (options?.skip === true) return { env: { ...base }, fromShell: false, warning: null };
+  const base = { ...(options?.env ?? process.env) };
+  if (base.CODEX_CI === '1' && base.NO_COLOR === '1') delete base.NO_COLOR;
+  if (options?.skip === true) return { env: base, fromShell: false, warning: null };
   const shell = options?.shell ?? base.SHELL ?? '/bin/zsh';
   const timeoutMs = options?.timeoutMs ?? 15_000;
   const run = options?.run ?? runShell;
 
   let warning: string;
   try {
-    const output = await withTimeout(run(shell, ['-ilc', PRINT_ENV], timeoutMs), timeoutMs);
+    const output = await withTimeout(run(shell, ['-ilc', PRINT_ENV], timeoutMs, base), timeoutMs);
     const block = betweenMarkers(output);
     if (block === null) {
       warning = 'environment markers not found in shell output';

@@ -19,6 +19,7 @@ import {
 import type { EventData, EventName, SessionRef } from '@parley/protocol';
 import { refKey } from '@parley/protocol';
 import type { HostContext } from '../context.js';
+import { hostText } from '../host-text.js';
 import type { CodexSignal } from '../pty/codex-terminal.js';
 import { createWorksService } from '../works/works-service.js';
 import type { WorksService } from '../works/works-service.js';
@@ -976,13 +977,10 @@ describe('startupWaitFromEnv — рычаг E2E', () => {
 });
 
 /**
- * Сторож Codex (разбор 2026-10-16): в code mode все инструменты, и чтение карты Parley тоже, идут через `exec`/`wait`.
- * Обычно такой вызов отвечает в пределах своего ожидания (`yield_time_ms`, по умолчанию около 30 с). Если в сессии
- * висит неотвеченный запрос к человеку (одобрение команды или MCP-инструмента), Codex держит вывод без срока, а
- * заголовок терминала показывает спиннер — сессия часами «работает». Вызов без вывода дольше ожидания и запаса —
- * «нужен ты» с причиной.
+ * Сторож Codex сообщает о долгом вызове или незавершённой ячейке. Срок сам по себе не доказывает,
+ * что ход ждёт человека: состояние и `need` определяются событиями провайдера.
  */
-describe('сторож Codex: вызов code mode без вывода — «нужен ты»', () => {
+describe('сторож Codex: нейтральная диагностика code mode без вывода', () => {
   const row = (record: unknown) => `${JSON.stringify(record)}\n`;
   const exec = (at: string, input: string, callId = 'call_exec') =>
     row({ timestamp: at, type: 'response_item', payload: { type: 'custom_tool_call', name: 'exec', call_id: callId, input } });
@@ -992,7 +990,7 @@ describe('сторож Codex: вызов code mode без вывода — «н�
     row({ timestamp: at, type: 'response_item', payload: { type: 'function_call', name, call_id: callId, arguments: args } });
   const now = () => new Date().toISOString();
 
-  async function rollout(id: string, body: string, at = now()): Promise<string> {
+  async function rollout(a: ActivityService, id: string, body: string, at = now()): Promise<string> {
     const dir = path.join(codexRoot, '2026', '10', '16');
     await mkdir(dir, { recursive: true });
     const file = path.join(dir, `rollout-2026-10-16T10-00-00-${id}.jsonl`);
@@ -1002,49 +1000,68 @@ describe('сторож Codex: вызов code mode без вывода — «н�
         row({ timestamp: at, type: 'event_msg', payload: { type: 'task_started' } }) +
         body,
     );
+    // На macOS fs.watch может пропустить создание или дозапись rollout: используем путь поллера хоста.
+    await a.reindexLog(file);
     return file;
   }
 
-  const STUCK_TEXT =
-    /^S\d+ has not returned from a Codex tool call\. Check pending approvals; if already answered, stop the stuck operation and verify its effects before retrying\.$/;
+  async function appendRollout(a: ActivityService, file: string, body: string): Promise<void> {
+    await appendFile(file, body);
+    await a.reindexLog(file);
+  }
 
-  it('s21: a completed turn with a yielded cell needs attention until the cell finishes', async () => {
+  const STUCK_TEXT = /^S\d+ has not returned from a Codex tool call\.$/;
+
+  it('русская диагностика называет незавершённую операцию без инструкции одобрить её', () => {
+    expect(hostText('codexCallWaiting', { session: 'S01' }).in('ru')).toBe(
+      'Сессия S01 ждёт завершения вызова инструмента Codex.',
+    );
+    expect(hostText('codexCallUnfinished', { session: 'S01' }).in('ru')).toBe(
+      'Сессия S01 завершила ход, пока инструмент ещё работал.',
+    );
+  });
+
+  it('s21: a completed turn with a yielded cell keeps its provider state and emits one diagnostic', async () => {
     const { a, ref } = await started({ codexCallGraceMs: 150 }, { providerSessionId: 'yielded-cell' });
     a.terminalSignal(ref, WORKING);
     const stamp = now();
-    const file = await rollout('yielded-cell', exec(stamp, 'text(await tools.exec_command({cmd:"git fetch"}));') +
+    const file = await rollout(a, 'yielded-cell', exec(stamp, 'text(await tools.exec_command({cmd:"git fetch"}));') +
       row({ timestamp: stamp, type: 'response_item', payload: { type: 'custom_tool_call_output', call_id: 'call_exec', output: 'Script running with cell ID 58\nOutput:\n' } }) +
       row({ timestamp: stamp, type: 'event_msg', payload: { type: 'task_complete' } }));
-    await waitFor(() => a.get(ref)?.activity.activity === 'blocked');
+    await waitFor(() => notices('codex-call-wait').length === 1);
+    expect(a.get(ref)?.activity).toMatchObject({ activity: 'unseen', need: null });
     expect(notices('codex-call-wait')).toHaveLength(1);
     expect(String(notices('codex-call-wait')[0]?.['text'])).toContain('finished its turn with an unfinished tool operation');
     await settle(400);
     expect(notices('codex-call-wait')).toHaveLength(1);
-    await appendFile(file, fn(now(), 'wait', '{"cell_id":"58"}', 'finish') +
+    await appendRollout(a, file, fn(now(), 'wait', '{"cell_id":"58"}', 'finish') +
       row({ timestamp: now(), type: 'response_item', payload: { type: 'function_call_output', call_id: 'finish', output: 'Script completed\nOutput:\n' } }));
-    await waitFor(() => a.get(ref)?.activity.activity !== 'blocked');
+    expect(a.get(ref)?.activity.activity).toBe('unseen');
+    expect(a.get(ref)?.activity.need).toBeNull();
+    expect(changes(ref)).not.toContain('blocked');
   }, 15_000);
 
   it('a yielded cell in an active turn does not trigger the finished-turn alert', async () => {
     const { a, ref } = await started({ codexCallGraceMs: 150 }, { providerSessionId: 'active-cell' });
     a.terminalSignal(ref, WORKING);
     const stamp = now();
-    await rollout('active-cell', exec(stamp, 'text(await tools.exec_command({cmd:"pnpm test"}));') +
+    await rollout(a, 'active-cell', exec(stamp, 'text(await tools.exec_command({cmd:"pnpm test"}));') +
       row({ timestamp: stamp, type: 'response_item', payload: { type: 'custom_tool_call_output', call_id: 'call_exec', output: 'Script running with cell ID 58\nOutput:\n' } }));
     await settle(700);
     expect(a.get(ref)?.activity.activity).toBe('working');
     expect(notices('codex-call-wait')).toHaveLength(0);
   }, 15_000);
 
-  it('exec без вывода дольше ожидания и запаса — blocked и одно уведомление codex-call-wait; вывод возвращает working', async () => {
+  it('exec без вывода дольше ожидания и запаса — working и одно уведомление codex-call-wait', async () => {
     const { a, ref } = await started({ codexCallGraceMs: 150 }, { providerSessionId: 'stuck-exec' });
     a.terminalSignal(ref, WORKING);
     const file = await rollout(
+      a,
       'stuck-exec',
       exec(now(), '// @exec: {"yield_time_ms": 1}\ntext(await tools.mcp__parley__check_inbox({}));'),
     );
 
-    await waitFor(() => a.get(ref)?.activity.activity === 'blocked');
+    await waitFor(() => notices('codex-call-wait').length === 1);
     expect(notices('codex-call-wait')).toHaveLength(1);
     expect(notices('codex-call-wait')[0]).toMatchObject({ kind: 'codex-call-wait', ref });
     expect(String(notices('codex-call-wait')[0]?.['text'])).toMatch(STUCK_TEXT);
@@ -1052,10 +1069,10 @@ describe('сторож Codex: вызов code mode без вывода — «н�
     // Повторных уведомлений о том же вызове нет.
     await settle(400);
     expect(notices('codex-call-wait')).toHaveLength(1);
-    expect(a.get(ref)?.activity.activity).toBe('blocked');
+    expect(a.get(ref)?.activity).toMatchObject({ activity: 'working', need: null });
 
-    // Человек ответил в терминале — вывод пришёл, ход снова идёт.
-    await appendFile(file, execOutput(now()));
+    // Вывод пришёл — ход по-прежнему идёт.
+    await appendRollout(a, file, execOutput(now()));
     await waitFor(() => a.get(ref)?.activity.activity === 'working');
     expect(notices('codex-call-wait')).toHaveLength(1);
   }, 15_000);
@@ -1063,7 +1080,7 @@ describe('сторож Codex: вызов code mode без вывода — «н�
   it('до срока — working без уведомления; явное ожидание ячейки срок продлевает', async () => {
     const { a, ref } = await started({ codexCallGraceMs: 150 }, { providerSessionId: 'long-yield' });
     a.terminalSignal(ref, WORKING);
-    await rollout('long-yield', exec(now(), '// @exec: {"yield_time_ms": 60000}\ntext(await tools.exec_command({cmd:"pnpm test"}));'));
+    await rollout(a, 'long-yield', exec(now(), '// @exec: {"yield_time_ms": 60000}\ntext(await tools.exec_command({cmd:"pnpm test"}));'));
     await settle(700);
     expect(a.get(ref)?.activity.activity).toBe('working');
     expect(notices('codex-call-wait')).toHaveLength(0);
@@ -1072,7 +1089,7 @@ describe('сторож Codex: вызов code mode без вывода — «н�
   it('без прагмы ожидание по умолчанию — 30 с: за полсекунды сторож не срабатывает', async () => {
     const { a, ref } = await started({ codexCallGraceMs: 150 }, { providerSessionId: 'default-yield' });
     a.terminalSignal(ref, WORKING);
-    await rollout('default-yield', exec(now(), 'text(await tools.mcp__parley__get_map({}));'));
+    await rollout(a, 'default-yield', exec(now(), 'text(await tools.mcp__parley__get_map({}));'));
     await settle(700);
     expect(a.get(ref)?.activity.activity).toBe('working');
     expect(notices('codex-call-wait')).toHaveLength(0);
@@ -1081,15 +1098,17 @@ describe('сторож Codex: вызов code mode без вывода — «н�
   it('wait (function_call) без вывода сторожится так же', async () => {
     const { a, ref } = await started({ codexCallGraceMs: 150 }, { providerSessionId: 'stuck-wait' });
     a.terminalSignal(ref, WORKING);
-    await rollout('stuck-wait', fn(now(), 'wait', '{"cell_id":"41","yield_time_ms":1}', 'call_wait'));
-    await waitFor(() => a.get(ref)?.activity.activity === 'blocked');
+    await rollout(a, 'stuck-wait', fn(now(), 'wait', '{"cell_id":"41","yield_time_ms":1}', 'call_wait'));
+    await waitFor(() => notices('codex-call-wait').length === 1);
     expect(notices('codex-call-wait')).toHaveLength(1);
+    expect(a.get(ref)?.activity).toMatchObject({ activity: 'working', need: null });
   }, 15_000);
 
   it('прочие вызовы без вывода не сторожатся: MCP напрямую (wait_for ждёт до получаса), shell', async () => {
     const { a, ref } = await started({ codexCallGraceMs: 150 }, { providerSessionId: 'not-code-mode' });
     a.terminalSignal(ref, WORKING);
     await rollout(
+      a,
       'not-code-mode',
       fn(now(), 'mcp__parley__wait_for', '{"target":"inbox"}', 'c1') + fn(now(), 'shell_command', '{}', 'c2'),
     );
@@ -1104,6 +1123,7 @@ describe('сторож Codex: вызов code mode без вывода — «н�
     // миллисекунду тоже) `eventsFor` считает новым ходом и вернул бы working.
     const before = new Date(Date.now() - 1000).toISOString();
     await rollout(
+      a,
       'action-required',
       exec(before, '// @exec: {"yield_time_ms": 1}\ntext(await tools.mcp__parley__check_inbox({}));'),
       before,
@@ -1117,69 +1137,88 @@ describe('сторож Codex: вызов code mode без вывода — «н�
   // Служебная запись в rollout после конца хода: пересчёт сессии без новых событий хода.
   const tokenCount = () => row({ timestamp: now(), type: 'event_msg', payload: { type: 'token_count' } });
 
-  it('a stuck call yields an approval need: since is the call time and does not move on recompute, detail is neutral', async () => {
-    const { a, ref } = await started({ codexCallGraceMs: 150 }, { providerSessionId: 'stuck-need' });
+  it('an inner command exit does not turn a delayed outer result into an approval', async () => {
+    const { a, ref } = await started({ codexCallGraceMs: 150 }, { providerSessionId: 'delayed-outer' });
     a.terminalSignal(ref, WORKING);
     const callAt = now();
     const file = await rollout(
-      'stuck-need',
-      exec(callAt, '// @exec: {"yield_time_ms": 1}\ntext(await tools.mcp__parley__check_inbox({}));'),
+      a,
+      'delayed-outer',
+      exec(callAt, '// @exec: {"yield_time_ms": 1}\ntext(await tools.exec_command({cmd:"git fetch"}));') +
+        fn(callAt, 'exec_command', '{"cmd":"git fetch"}', 'inner') +
+        row({ timestamp: callAt, type: 'response_item', payload: { type: 'function_call_output', call_id: 'inner', output: 'Process exited with code 128' } }),
       callAt,
     );
 
-    await waitFor(() => a.get(ref)?.activity.activity === 'blocked');
-    // Инструкция («Check pending approvals…») — только в уведомлении хоста; в `detail` она попала бы в строку комнаты и
-    // письмо ведущему, и агент мог бы принять её за свою (итоговое ревью, находка 6).
+    await waitFor(() => notices('codex-call-wait').length === 1);
     expect(String(notices('codex-call-wait')[0]?.['text'])).toMatch(STUCK_TEXT);
-    expect(a.get(ref)?.activity.need).toEqual({
-      kind: 'approval',
-      since: callAt,
-      detail: 'a Codex tool call has not returned',
-      resetsAt: null,
-      window: null,
-      account: null,
-    });
+    expect(a.get(ref)?.activity).toMatchObject({ activity: 'working', need: null });
+    expect(changes(ref)).not.toContain('blocked');
 
-    // Пересчёт позже: начало эпизода остаётся временем вызова.
-    await appendFile(file, tokenCount());
+    // Пересчёт не создаёт ожидание и не дублирует диагностику.
+    await appendRollout(a, file, tokenCount());
     await settle(400);
-    expect(a.get(ref)?.activity.need?.since).toBe(callAt);
+    expect(a.get(ref)?.activity).toMatchObject({ activity: 'working', need: null });
+    expect(notices('codex-call-wait')).toHaveLength(1);
 
-    // Вывод пришёл — ход идёт, ожидания нет.
-    await appendFile(file, execOutput(now()));
-    await waitFor(() => a.get(ref)?.activity.activity === 'working');
+    await appendRollout(a, file, execOutput(now()) +
+      row({ timestamp: now(), type: 'event_msg', payload: { type: 'task_complete' } }));
+    await waitFor(() => a.get(ref)?.activity.activity === 'unseen');
     expect(a.get(ref)?.activity.need).toBeNull();
+    expect(notices('codex-call-wait')).toHaveLength(1);
   }, 15_000);
 
-  it('a finished turn with an unfinished cell yields an approval need with the cell time, not the time of each recompute', async () => {
-    const { a, ref } = await started({ codexCallGraceMs: 150 }, { providerSessionId: 'cell-need' });
+  it('a real terminal approval after an overdue diagnostic clears when work resumes', async () => {
+    const { a, ref } = await started({ codexCallGraceMs: 150 }, { providerSessionId: 'overdue-approval' });
+    a.terminalSignal(ref, WORKING);
+    const stamp = new Date(Date.now() - 1000).toISOString();
+    const file = await rollout(
+      a,
+      'overdue-approval',
+      exec(stamp, '// @exec: {"yield_time_ms": 1}\ntext(await tools.exec_command({cmd:"ls -la"}));'),
+      stamp,
+    );
+    await waitFor(() => notices('codex-call-wait').length === 1);
+    expect(a.get(ref)?.activity).toMatchObject({ activity: 'working', need: null });
+
+    a.terminalSignal(ref, APPROVAL);
+    a.terminalSignal(ref, ACTION);
+    expect(a.get(ref)?.activity).toMatchObject({ activity: 'blocked', need: { kind: 'approval', detail: 'ls -la' } });
+    const need = a.get(ref)?.activity.need;
+    await appendRollout(a, file, tokenCount());
+    await settle(300);
+    expect(a.get(ref)?.activity.need).toEqual(need);
+
+    a.terminalSignal(ref, WORKING);
+    expect(a.get(ref)?.activity).toMatchObject({ activity: 'working', need: null });
+    await appendRollout(a, file, execOutput(now()));
+    await settle(300);
+    expect(a.get(ref)?.activity).toMatchObject({ activity: 'working', need: null });
+    expect(notices('codex-call-wait')).toHaveLength(1);
+  }, 15_000);
+
+  it('a finished turn with an unfinished cell stays finished across recomputes', async () => {
+    const { a, ref } = await started({ codexCallGraceMs: 150 }, { providerSessionId: 'cell-diagnostic' });
     a.terminalSignal(ref, WORKING);
     const stamp = now();
     const file = await rollout(
-      'cell-need',
+      a,
+      'cell-diagnostic',
       exec(stamp, 'text(await tools.exec_command({cmd:"git fetch"}));') +
         row({ timestamp: stamp, type: 'response_item', payload: { type: 'custom_tool_call_output', call_id: 'call_exec', output: 'Script running with cell ID 58\nOutput:\n' } }) +
         row({ timestamp: stamp, type: 'event_msg', payload: { type: 'task_complete' } }),
       stamp,
     );
 
-    await waitFor(() => a.get(ref)?.activity.activity === 'blocked');
-    expect(String(notices('codex-call-wait')[0]?.['text'])).toContain('Check pending approvals; if already answered');
-    expect(a.get(ref)?.activity.need).toEqual({
-      kind: 'approval',
-      since: stamp,
-      detail: 'its turn finished with an unfinished tool operation',
-      resetsAt: null,
-      window: null,
-      account: null,
-    });
+    await waitFor(() => notices('codex-call-wait').length === 1);
+    expect(String(notices('codex-call-wait')[0]?.['text'])).toMatch(/^S\d+ finished its turn with an unfinished tool operation\.$/);
+    expect(a.get(ref)?.activity).toMatchObject({ activity: 'unseen', need: null });
 
-    // В этой ветке срок сторожа — «сейчас»: каждый пересчёт видит его заново, а начало эпизода не уезжает.
+    await appendRollout(a, file, tokenCount());
     await settle(300);
-    await appendFile(file, tokenCount());
-    await settle(300);
-    expect(a.get(ref)?.activity.activity).toBe('blocked');
-    expect(a.get(ref)?.activity.need?.since).toBe(stamp);
+    expect(a.get(ref)?.activity).toMatchObject({ activity: 'unseen', need: null });
+    expect(notices('codex-call-wait')).toHaveLength(1);
+    expect(changes(ref)).not.toContain('blocked');
   }, 15_000);
 
   it('a stuck cell while the fold holds a limit need: the limit need stays, the watcher adds no approval', async () => {
@@ -1189,6 +1228,7 @@ describe('сторож Codex: вызов code mode без вывода — «н�
     a.terminalSignal(ref, WORKING);
     const stamp = now();
     await rollout(
+      a,
       'cell-limit',
       exec(stamp, 'text(await tools.exec_command({cmd:"git fetch"}));') +
         row({ timestamp: stamp, type: 'response_item', payload: { type: 'custom_tool_call_output', call_id: 'call_exec', output: 'Script running with cell ID 58\nOutput:\n' } }) +

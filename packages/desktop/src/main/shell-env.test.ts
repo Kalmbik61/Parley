@@ -45,6 +45,33 @@ const dirsExisting =
 
 /** Урезанное окружение, какое launchd отдаёт приложению из Finder. */
 const FINDER_ENV = { PATH: '/usr/bin:/bin:/usr/sbin:/sbin', SHELL: '/bin/zsh', FOO: 'bar' };
+const CODEX_ENV = { ...FINDER_ENV, CODEX_CI: '1', NO_COLOR: '1', TERM: 'dumb' };
+
+describe('captureShellEnv: цвета после запуска из Codex', () => {
+  it.each(['skip', 'fallback'])(
+    '%s: унаследованный NO_COLOR не попадает в запасное окружение',
+    async (mode) => {
+      const base = { ...CODEX_ENV };
+      const result = await captureShellEnv({
+        env: base,
+        skip: mode === 'skip',
+        home: '/home/u',
+        isDir: dirsExisting('/home/u/.local/bin'),
+        run: () => Promise.resolve(''),
+      });
+
+      expect(result.fromShell).toBe(false);
+      expect(result.env).toEqual({
+        ...FINDER_ENV,
+        CODEX_CI: '1',
+        TERM: 'dumb',
+        PATH: mode === 'skip' ? FINDER_ENV.PATH : `${FINDER_ENV.PATH}:/home/u/.local/bin`,
+      });
+      expect(result.warning === null).toBe(mode === 'skip');
+      expect(base).toEqual(CODEX_ENV);
+    },
+  );
+});
 
 describe('captureShellEnv: подставной run', () => {
   it('окружение оболочки доходит целиком: переменные из rc, значение с переводом строки и «=» внутри', async () => {
@@ -323,6 +350,34 @@ describe('captureShellEnv: заглушка оболочки в файле', () 
     await chmod(file, 0o755);
     return file;
   }
+
+  it('настоящий spawn получает очищенное окружение, сохраняя остальные переменные', async () => {
+    const shell = await stubShell('[ "${NO_COLOR+x}" != x ] || exit 3\neval "$2"');
+    const base = { ...CODEX_ENV };
+    const result = await captureShellEnv({ shell, env: base });
+
+    expect(result.fromShell).toBe(true);
+    expect(result.env.NO_COLOR).toBeUndefined();
+    expect(result.env.FOO).toBe('bar');
+    expect(result.env.CODEX_CI).toBe('1');
+    expect(base).toEqual(CODEX_ENV);
+  });
+
+  it('NO_COLOR, намеренно заданный login-оболочкой, сохраняется и после Codex', async () => {
+    const shell = await stubShell('NO_COLOR=1; export NO_COLOR\neval "$2"');
+    const result = await captureShellEnv({ shell, env: CODEX_ENV });
+
+    expect(result.fromShell).toBe(true);
+    expect(result.env.NO_COLOR).toBe('1');
+  });
+
+  it('настоящий spawn сохраняет NO_COLOR обычного запуска', async () => {
+    const shell = await stubShell('eval "$2"');
+    const result = await captureShellEnv({ shell, env: { ...FINDER_ENV, NO_COLOR: '1' } });
+
+    expect(result.fromShell).toBe(true);
+    expect(result.env.NO_COLOR).toBe('1');
+  });
 
   it('переменные rc доходят все — со значением с переводом строки и «=», шум вокруг маркеров отброшен', async () => {
     const shell = await stubShell(

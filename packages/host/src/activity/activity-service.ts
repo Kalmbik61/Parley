@@ -131,7 +131,7 @@ export interface ActivityServiceOptions extends MetricsRoots {
    * входа или доверия к папке, и сессии «нужен ты» (спека комнат, 3.6, «Экраны старта»).
    */
   startupWaitMs?: number;
-  /** Запас сверх ожидания вызова code mode Codex, после которого сессия «нужен ты» (`CODEX_CALL_GRACE_MS`). */
+  /** Запас сверх ожидания вызова code mode Codex до диагностического уведомления (`CODEX_CALL_GRACE_MS`). */
   codexCallGraceMs?: number;
   /**
    * Служба лимитов хоста: время сброса лимита берётся у неё раньше, чем из текста ошибки (спека «Застрявшие сессии»,
@@ -298,7 +298,7 @@ const DEFAULT_TRUST_WAIT_MS = 20_000;
 const DEFAULT_STARTUP_WAIT_MS = 20_000;
 /**
  * Запас сверх заявленного ожидания вызова code mode Codex (`exec`/`wait`): вызов без вывода дольше
- * `yield_time_ms` плюс этот запас считается застрявшим на запросе одобрения (разбор 2026-10-16).
+ * `yield_time_ms` плюс этот запас вызывает диагностическое уведомление, не меняя состояние сессии.
  */
 export const CODEX_CALL_GRACE_MS = 120_000;
 /** Ожидание вызова code mode, когда оно не указано (`yieldMs === null`): по умолчанию у Codex около 30 с. */
@@ -574,7 +574,7 @@ export function createActivityService(
 
   const logIndex: LogIndex = createLogIndex(roots, options.timelineReader === undefined ? {} : { reader: options.timelineReader });
   const live = new Map<string, SessionLive>();
-  /** Выведенная активность до подмены на `blocked` (вопрос, сторож): с ней сверяются сигналы терминала. */
+  /** Выведенная активность до подмены на `blocked` удержанным вопросом: с ней сверяются сигналы терминала. */
   const derivedActivity = new Map<string, Activity>();
   /**
    * Наибольшая граница хода (`SessionActivity.turnBoundaryAt`), виденная у сессии, по ключу сессии. У Codex `eventsFor`
@@ -592,7 +592,7 @@ export function createActivityService(
   const pointerLabelReset = new Set<string>();
   /** Сессии, чей вопрос агента удержан окном (`questionHeld`): им публикуется `blocked` с `need` вопроса. */
   const questionHeldKeys = new Map<string, HeldQuestion>();
-  /** Таймеры сторожа вызова code mode Codex по ключу сессии: срабатывают в момент, когда вызов считается застрявшим. */
+  /** Таймеры диагностического уведомления о долгом вызове code mode Codex по ключу сессии. */
   const codexCallTimers = new Map<string, NodeJS.Timeout>();
   /** Время вызова (`openCodeCall.at`), о котором сторож уже сообщил, по ключу сессии: одно уведомление на вызов. */
   const codexCallNotified = new Map<string, string>();
@@ -1401,8 +1401,8 @@ export function createActivityService(
     const index = logIndex.index(session);
     const metrics = metricsFor(ref, key, entry, session, activity, index);
 
-    // Сторож Codex: долгий вызов без вывода или конец хода с ещё незавершённой ячейкой (s21).
-    let codexStuck: { since: string; detail: string | null } | null = null;
+    // Сторож Codex сообщает о долгом вызове или незавершённой ячейке, но не доказывает ожидание человека.
+    // Активность и `need` остаются по событиям провайдера.
     const pendingCell = driven && index?.lastTurnEvent?.type === 'task_complete' ? index.pendingCodeCell : undefined;
     const call = pendingCell === undefined
       ? driven && activity.activity === 'working' ? index?.openCodeCall : undefined
@@ -1418,14 +1418,6 @@ export function createActivityService(
       } else if (now >= stuckAt) {
         clearCodexCallTimer(key);
         const text = hostText(pendingCell === undefined ? 'codexCallWaiting' : 'codexCallUnfinished', { session: sessionTag(ref.sessionId) }).in(host.locale?.());
-        // Начало эпизода — время вызова (у незавершённой ячейки — её время), а не `now`: срок сторожа в ветке ячейки
-        // равен «сейчас», и `since` уезжал бы на каждом пересчёте.
-        // `detail` попадает в строку комнаты и письмо ведущему: он нейтральный, без указания «проверь и остановись» —
-        // агент мог бы принять его за своё. Полный текст с инструкцией остаётся только в уведомлении хоста (`codex-call-wait`).
-        codexStuck = {
-          since: call.at,
-          detail: pendingCell === undefined ? 'a Codex tool call has not returned' : 'its turn finished with an unfinished tool operation',
-        };
         const noticeKey = pendingCell === undefined ? call.at : `cell:${pendingCell.id}:${pendingCell.at}`;
         if (codexCallNotified.get(key) !== noticeKey) {
           codexCallNotified.set(key, noticeKey);
@@ -1449,32 +1441,14 @@ export function createActivityService(
     }
 
     derivedActivity.set(key, activity.activity);
-    // Удержанный вопрос агента или застрявший вызов: публикуется 'blocked', а таймер тишины и метрики — по настоящему
-    // значению. Если свёртка и так 'blocked', её `need` (одобрение, экран старта) точнее и остаётся. Вопросу в окне
-    // соответствует `need` вопроса; застрявшему вызову Codex — одобрение: сторож не знает, чего ждёт ход, но самая
-    // частая причина — неотвеченный запрос к человеку, и текст его уведомления становится `detail`. `need` из
-    // событий самого CLI (лимит, вход: ход ими оборван, а не стоит) главнее — они остаются, сторож к ним ничего не
-    // добавляет: `blocked` с таким `need` несогласован (`reportedNeed`).
+    // Удержанный окном вопрос публикуется как `blocked`; уже выведенное ожидание провайдера точнее и остаётся.
     const held = questionHeldKeys.get(key);
     let waiting: SessionActivity =
       activity.activity === 'blocked'
         ? activity
         : held !== undefined
           ? { ...activity, activity: 'blocked', need: questionNeedOf(held) }
-          : codexStuck !== null && activity.need === null
-            ? {
-                ...activity,
-                activity: 'blocked',
-                need: {
-                  kind: 'approval',
-                  since: codexStuck.since,
-                  detail: codexStuck.detail,
-                  resetsAt: null,
-                  window: null,
-                  account: null,
-                },
-              }
-            : activity;
+          : activity;
     const nativeNeed = isQwen(session) ? qwenProcesses.get(key)?.promptNeed : undefined;
     if (nativeNeed) {
       waiting = { ...waiting, activity: 'blocked', need: nativeNeed };
