@@ -26,5 +26,6 @@ export function kimiTerminalEnv(inherited: NodeJS.ProcessEnv): NodeJS.ProcessEnv
     if (/^(?:PARLEY|HARNAS)_/i.test(name)) delete env[name];
   }
   delete env.KIMI_CODE_EXPERIMENTAL_TOOL_SELECT;
+  env.KIMI_CODE_NO_AUTO_UPDATE = '1';
   return env;
 }
