@@ -4,6 +4,12 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
+## 0.39.7
+
+### Fixed
+
+- **Answer Qwen Code questions directly in Chat.** The question card appears above the message box as soon as Qwen shows the choices, even when its optional session rating is visible. Selecting a choice or typing a custom answer in the card dismisses the rating without casting a vote. ([#264](https://github.com/Kalmbik61/Parley/pull/264))
+
 ## 0.39.6
 
 ### Fixed
