@@ -317,8 +317,10 @@ export function ChatView({ workKey, tab, sessionRef, visible, live, bridge, send
     for (const echo of echoes) {
       if (echo.state === 'sending') continue;
       sentIds.add(echo.id);
-      if (echo.state === 'confirmed') localPromptIds.set(echo.promptId, echo.id);
-      else queued.push({ id: echo.id, text: echo.text, state: echo.state });
+      if (echo.state === 'confirmed') {
+        // A batched Codex prompt keeps the first local bubble's React key.
+        if (!localPromptIds.has(echo.promptId)) localPromptIds.set(echo.promptId, echo.id);
+      } else queued.push({ id: echo.id, text: echo.text, state: echo.state });
     }
     // Лента может подтвердить промпт раньше ответа на pty.send. Не показываем вторую строку из очереди.
     const outbox = outboxItems.filter((item) => !sentIds.has(item.id)).map((item) => ({

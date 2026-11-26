@@ -54,8 +54,9 @@ export const CHAT_RETRY_MS = 1000;
 /** Сколько после отправки без хода затвор ждёт промпт отправленного, прежде чем пустить следующее сообщение. */
 export const CHAT_AWAIT_PROMPT_MS = 5000;
 
-function promptMatches(receivedText: string, wanted: string): boolean {
-  const received = receivedText.trim();
+export function promptMatches(receivedText: string, sentText: string): boolean {
+  const received = receivedText.trim().replace(/\r\n/g, '\n');
+  const wanted = sentText.trim().replace(/\r\n/g, '\n');
   if (received === wanted) return true;
   // Codex склеивает очередь Tab в один промпт. Убираем только служебные строки по краям:
   // совпадения с цитатой или частью другого сообщения недостаточно для подтверждения.
@@ -67,10 +68,34 @@ function promptMatches(receivedText: string, wanted: string): boolean {
   return wanted !== '' && lines.slice(start, end).join('\n').trim() === wanted;
 }
 
-/** Сколько промптов с этим текстом уже в ленте — по нему затвор узнаёт новый промпт. */
-export function promptCount(items: readonly FeedItem[], text: string): number {
-  const wanted = text.trim();
-  return items.filter((item) => item.kind === 'prompt' && promptMatches(item.text, wanted)).length;
+type PendingEcho = Exclude<ChatPromptEcho, { state: 'confirmed' }>;
+
+/** Codex may join distinct sends into one user message, including a prioritized send at the front. */
+function matchCodexBatch(received: string, eligible: PendingEcho[]): PendingEcho[] {
+  const local = eligible.filter(entry => entry.codex && entry.text.trim() !== '');
+  if (local.length < 2) return [];
+  const candidates = local.map(entry => {
+    const text = entry.text.trim().replace(/\r\n/g, '\n');
+    return { entry, text, lines: text.split('\n').length };
+  });
+  // Prefer a whole multiline send over one of its prefix lines. Equal sends are used oldest first.
+  candidates.sort((a, b) => b.lines - a.lines);
+  const lines = received.split(/\r?\n/);
+  const matches: PendingEcho[] = [];
+  for (let start = 0; start < lines.length;) {
+    const index = candidates.findIndex(candidate => lines.slice(start, start + candidate.lines).join('\n').trim() === candidate.text);
+    if (index >= 0) {
+      const match = candidates[index]!;
+      candidates.splice(index, 1);
+      matches.push(match.entry);
+      start += match.lines;
+    } else if (!lines[start]!.trim() || isCompletePointerText(lines[start]!)) {
+      start++;
+    } else {
+      return [];
+    }
+  }
+  return matches.length >= 2 ? matches : [];
 }
 
 const NO_ITEMS: readonly FeedItem[] = [];
@@ -91,10 +116,10 @@ function untilNotBlocked(ref: SessionRef): Promise<void> {
 }
 
 /** Отправленное без хода, чей промпт ещё не пришёл в ленту: пока ждём, ключ считается занятым. */
-const awaiting = new Map<string, { text: string; seen: number; until: number }>();
+const awaiting = new Map<string, { id: string; until: number }>();
 
-function awaitPrompt(key: string, text: string, seen: number): void {
-  awaiting.set(key, { text, seen, until: Date.now() + CHAT_AWAIT_PROMPT_MS });
+function awaitPrompt(key: string, id: string): void {
+  awaiting.set(key, { id, until: Date.now() + CHAT_AWAIT_PROMPT_MS });
   setTimeout(() => baseOutbox.kick(key), CHAT_AWAIT_PROMPT_MS);
 }
 
@@ -122,38 +147,37 @@ function sessionBusy(key: string, ref: SessionRef): boolean {
   if (running) return true;
   const wait = awaiting.get(key);
   if (wait === undefined) return false;
-  if (promptCount(feedItems, wait.text) > wait.seen || Date.now() >= wait.until) {
+  const confirmed = useChatUiStore.getState().promptEchoes[key]?.some(entry => entry.id === wait.id && entry.state === 'confirmed');
+  if (confirmed || Date.now() >= wait.until) {
     awaiting.delete(key);
     return false;
   }
   return true;
 }
 
-/** Привязать каждую новую запись только к одной попытке, начиная со старейшей. */
 function confirmPrompts(key: string, items: readonly FeedItem[]): void {
-  useChatUiStore.getState().updatePromptEchoes(key, (was) => {
+  useChatUiStore.getState().updatePromptEchoes(key, was => {
     if (was.length === 0) return was;
     const indices = new Map(items.map((item, index) => [item.id, index]));
-    const used = new Set(was.flatMap((entry) => entry.state === 'confirmed' ? [entry.promptId] : []));
-    let changed = false;
-    const next = was.flatMap<ChatPromptEcho>((entry) => {
-      if (entry.state === 'confirmed') {
-        if (indices.has(entry.promptId)) return [entry];
-        changed = true;
-        return [];
-      }
-      const after = entry.afterId === null ? undefined : indices.get(entry.afterId);
-      const text = entry.text.trim();
-      const prompt = items.find((item, index) =>
-        item.kind === 'prompt' && !used.has(item.id) && promptMatches(item.text, text) &&
-        (after === undefined ? Date.parse(item.at) >= entry.since : index > after),
-      );
-      if (prompt === undefined) return [entry];
-      used.add(prompt.id);
-      changed = true;
-      return [{ id: entry.id, state: 'confirmed', promptId: prompt.id }];
+    const used = new Set(was.flatMap(entry => entry.state === 'confirmed' ? [entry.promptId] : []));
+    const pending = was.filter((entry): entry is PendingEcho => entry.state !== 'confirmed');
+    const receipts = new Map<string, string>();
+    for (const [index, item] of items.entries()) {
+      if (receipts.size === pending.length) break;
+      if (item.kind !== 'prompt' || used.has(item.id)) continue;
+      const eligible = pending.filter(entry => {
+        const after = entry.afterId === null ? undefined : indices.get(entry.afterId);
+        return !receipts.has(entry.id) && (after === undefined ? Date.parse(item.at) >= entry.since : index > after);
+      });
+      const exact = eligible.find(entry => promptMatches(item.text, entry.text));
+      for (const entry of exact ? [exact] : matchCodexBatch(item.text, eligible)) receipts.set(entry.id, item.id);
+    }
+    if (!receipts.size && !was.some(entry => entry.state === 'confirmed' && !indices.has(entry.promptId))) return was;
+    return was.flatMap<ChatPromptEcho>(entry => {
+      if (entry.state === 'confirmed') return indices.has(entry.promptId) ? [entry] : [];
+      const promptId = receipts.get(entry.id);
+      return promptId === undefined ? [entry] : [{ id: entry.id, state: 'confirmed', promptId }];
     });
-    return changed ? next : was;
   });
 }
 
@@ -170,17 +194,17 @@ export async function attemptChatSend(key: string, item: OutboxItem<ChatOutboxPa
   const before = feed?.items ?? NO_ITEMS;
   // Ход идёт — по тому же правилу, что в sessionBusy: замороженные элементы нечитаемой ленты не в счёт.
   const active = feed?.status === 'ready' ? turnActive(before) : workingNow(ref);
-  const seen = promptCount(before, text);
+  const codex = deps.session(ref)?.provider === 'codex';
   const last = before.at(-1);
   // Пока есть якорь, важен порядок строк. При переснимке без якоря сверяем время, не забирая старый промпт.
   const since = last !== undefined ? Date.parse(last.at) : feed?.status === 'ready' ? -Infinity : Date.now() - CHAT_AWAIT_PROMPT_MS;
   useChatUiStore.getState().updatePromptEchoes(key, (was) => [
-    ...was, { id: item.id, state: 'sending', text, afterId: last?.id ?? null, since },
+    ...was, { id: item.id, state: 'sending', text, afterId: last?.id ?? null, since, codex },
   ]);
   const outcome = await sendToAgent(deps.bridge, ref, text, true, requestedAt, item.payload.now === true ? 'steer' : undefined);
   deps.onOutcome?.(outcome);
   if (!('error' in outcome) && outcome.submitted) {
-    if (!active && item.payload.now !== true) awaitPrompt(key, text, seen);
+    if (!active && item.payload.now !== true) awaitPrompt(key, item.id);
     useChatUiStore.getState().updatePromptEchoes(key, (was) =>
       was.map((entry) => entry.id === item.id && entry.state === 'sending' ? { ...entry, state: active && outcome.steered !== true ? 'queued' : 'submitted' } : entry),
     );

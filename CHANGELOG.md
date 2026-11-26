@@ -12,6 +12,8 @@ All notable changes to Parley are documented in this file.
 - **Send now steers active Codex and Kimi turns.** The action previously followed the ordinary queue path. It now uses the provider's native steering. Regular queued messages keep their existing behavior.
 - **Kimi subagents appear in the Agents panel.** Parley used to skip lifecycle records that identified the subagent but did not specify a main-agent ID. Subagents now appear live, move to Finished individually, and remain visible when you reopen the conversation.
 - **Kimi stays marked Working during quiet thinking.** The generic silence timeout used to mistake missing updates for a finished turn. Parley now follows the main agent's live turn state, so completion and permission requests still update the status.
+- **Answer startup questions in Chat.** Codex hook review and folder trust, and folder trust for Kimi and Qwen, now appear above the message box. Pending questions stay there as the conversation scrolls. ([#259](https://github.com/Kalmbik61/Parley/pull/259))
+- **Codex clears delivery indicators for batched messages.** When Codex records several sends as one transcript entry, Chat clears the corresponding pending indicators and shows the confirmed entry once. ([#260](https://github.com/Kalmbik61/Parley/pull/260))
 
 ## 0.39.4
 
