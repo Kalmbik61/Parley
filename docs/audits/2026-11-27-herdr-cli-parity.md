@@ -50,13 +50,26 @@ The temporary host launched two real Qwen sessions in the same cwd under a singl
 | Terminal plus Chat send path with a clean editor | **PASS at the host boundary.** `pty.input` submitted `parity-terminal-one` in A. After the draft check and a human-style Ctrl+U, `pty.send` with `submit:true` sent `blue-widget` in A and returned `submitted:true`. A's actual Qwen JSONL had both user texts in order, two assistant replies, and no extras. Both pairs were present exactly once at `feed.snapshot` on A. **NOT VERIFIED** in the desktop GUI with real Qwen. |
 | Known `z` draft during Chat send of `blue-widget` | **PASS.** `{inserted:true, submitted:false, reason:"draft"}`. The draft was left in the terminal, and the host inserted text but withheld Enter. Mock request count stayed 1→1, JSONL still contained just the first prompt, and no merged prompt was submitted. There was no clear-and-submit fallback. |
 | Banner, placeholder, redraw, view switch | **PASS at the host boundary** for no extra prompt in A's feed and in the two provider logs after startup, redraws and the held draft. **NOT VERIFIED** for a real Qwen Chat ↔ Terminal GUI switch. |
-| Two Qwen processes in the same cwd | **PASS** for the input target and log isolation: A had two user records and replies, B had one. A's last root status was `done` while B's mock request was held and its last root status was `working`. **FAIL for feed completeness.** Even with the canonical cwd and Chat's `feed.subscribe → feed.snapshot` sequence on both refs, B's snapshot stayed empty through a 12-second wait. A rendered its two pairs exactly once and did not inherit B's records. **NOT VERIFIED** for desktop sidebar/permission targeting. |
+| Two Qwen processes in the same cwd | **PASS** for the input target and log isolation: A had two user records and replies, B had one. A's last root status was `done` while B's mock request was held and its last root status was `working`. **PASS for eventual feed completeness, FAIL for live discovery on a cold history root.** The original 12-second wait left B empty. A longer repeat gave each feed its own rows exactly once, but B took 26.565 s after the JSONL was observed. With the empty Qwen history directory already present at host startup, B took 1.868 s in the matching control. **NOT VERIFIED** for desktop sidebar/permission targeting. |
 | Changed permission menu or process | **PASS** for OpenCode's current TUI cancellation on the attached session. **NOT VERIFIED** for stale decisions during replacement on real clients. The existing Qwen dialog tests used fixtures. |
 | Silent, idle-only or disconnected status source | **PASS** for the existing Qwen readiness tests on v0.39.8, including idle without MCP, no OSC, and old-generation evidence. **NOT VERIFIED** for the proposed generic reader and per-provider renderer wiring, which were not in this baseline. |
 
 The three recorded requests carried `[parity-terminal-one]`, then `[parity-terminal-one, blue-widget]` as A's history, then `[parity-b-three]` for B. This is three requests, not four user messages. Both real provider JSONL files were checked.
 
-The final run also saw hook-driven host activity `unseen` for completed A and `working` for B while its response was held. B's hook journal included `SessionStart`, `UserPromptSubmit`, and `Stop` for its own UUID. The corresponding native file existed, and `indexQwenSession`, `qwenBindingCandidate`, and `qwenBindingHolds` agreed on its UUID, cwd, and file after the run. The B feed failure also occurred before applying canonical-path and subscription controls. The distinction matters: a displayed activity status, valid binding inputs, and a complete provider transcript did not guarantee that Chat's feed contained the turn. This evidence does not isolate the faulty layer.
+The final run also saw hook-driven host activity `unseen` for completed A and `working` for B while its response was held. B's hook journal included `SessionStart`, `UserPromptSubmit`, and `Stop` for its own UUID. The corresponding native file existed, and `indexQwenSession`, `qwenBindingCandidate`, and `qwenBindingHolds` agreed on its UUID, cwd, and file after the run. The initial blank B snapshot also occurred before applying canonical-path and subscription controls. The distinction matters: a displayed activity status, valid binding inputs, and a complete provider transcript did not guarantee timely discovery by Chat.
+
+### Follow-up — cold Qwen history root
+
+The original 12-second check caught a delay, not data loss. A two-run control on the same build kept two Qwen processes, cwd shape, the three mock turns, subscription sequence, and draft probe unchanged. The only changed setup was creating the empty `$QWEN_HOME/projects` before starting the host.
+
+| Qwen history root at host start | Host start to B's full snapshot | B's native JSONL observed to full snapshot | Final outcome |
+| --- | ---: | ---: | --- |
+| Absent | 30.369 s | 26.565 s | A's two pairs and B's one pair, no duplicates or cross-feed rows. |
+| Pre-created and empty | 5.578 s | 1.868 s | A's two pairs and B's one pair, no duplicates or cross-feed rows. |
+
+These are single-run timings measured by the RPC driver, not performance percentiles or an asserted latency contract. Both cases reattached the requested refs and observed the same draft guard and the same three mock calls.
+
+The source-level mechanism is in `packages/core/src/watch.ts`. `watchSessions` attaches to the history root once. Its initial `fs.watch` failure with `ENOENT` does not schedule reattachment, unlike an error from an existing watcher. The host can recover without the watcher because `rescanLive` supplies bound Qwen transcript paths to the index every 30 seconds (`packages/host/src/activity/activity-service.ts`). The cold timing matches this timer. A separate direct watcher probe placed the same two synthetic UUID logs into a directory created after watcher startup. The absent-root case recorded one `ENOENT`, zero live callbacks, and two discoveries after explicit rescan. The pre-created root had no errors and two distinct live discoveries before rescan. A narrow regression should start with the Qwen history directory absent, then create it and write two transcript UUIDs in one cwd. Both must reach the correct feeds without a manual rescan or the 30-second fallback. The regularly present-root control checks the same UUID isolation without claiming the cold-path defect is fixed.
 
 ## Reproduction and checks
 
@@ -72,21 +85,22 @@ pnpm --filter '@parley/host...' build
 pnpm --filter '@parley/desktop...' build
 pnpm --filter @parley/core exec vitest run src/feed/qwen/apply-qwen.test.ts
 # From packages/host, under the loopback/private Unix-socket profile
+node ../../node_modules/vitest/vitest.mjs run src/activity/log-index-qwen.test.ts src/activity/log-index.rescan.test.ts src/activity/qwen-binding.test.ts
 node ../../node_modules/vitest/vitest.mjs run src/pty/qwen-terminal.test.ts src/pty/codex-terminal.test.ts src/pty/pty-manager.test.ts src/activity/activity-qwen.test.ts src/pty/send.test.ts src/feed/qwen-prompt.test.ts src/feed/feed-service-opencode.test.ts src/kimi/native-session-steer.test.ts
 pnpm --filter @parley/desktop exec vitest run src/renderer/store/activity.test.ts src/renderer/sidebar/SessionRow.test.tsx src/renderer/chat/ChatToolbar.test.tsx
 # From packages/desktop, with an isolated HOME and local cached Electron
 node node_modules/@playwright/test/cli.js test e2e/chat-view.spec.ts
 ```
 
-Both builds **PASS**; 203 host, 17 core and 119 renderer tests **PASS**. The Playwright invocation exited 1 before its first assertion because the sandboxed Electron could not initialize its own macOS sandbox/SingletonSocket. Desktop E2E is **NOT VERIFIED**, not a renderer failure. The baseline does not contain `src/pty/program-status.test.ts`; no verdict on that implementation is implied.
+Both builds **PASS**; 203 host, 17 core and 119 renderer tests **PASS**. The follow-up direct watcher probe and 12 focused host tests also **PASS**; the focused suite did not cover a missing root at startup. The Playwright invocation exited 1 before its first assertion because the sandboxed Electron could not initialize its own macOS sandbox/SingletonSocket. Desktop E2E is **NOT VERIFIED**, not a renderer failure. The baseline does not contain `src/pty/program-status.test.ts`; no verdict on that implementation is implied.
 
 ## Impact card
 
 - **Goal** — Distinguish real provider state from a capability probe and verify where input and history remain authoritative.
 - **Behaviour** — OpenCode's attached TUI reports actionable display signals without capability negotiation. Qwen's real host preserves the known-draft Enter guard and the two native session identities. This audit changes no runtime behaviour.
-- **Numbers** — Five exact installed versions, three controlled Qwen turns, two Qwen JSONLs, and a 12-second empty-feed observation on B. OpenCode and Codex each had a real permission wait dismissed from the TUI. No latency, CPU or memory impact measured.
+- **Numbers** — Five exact installed versions, three controlled Qwen turns, two Qwen JSONLs, and a measured cold-root feed delay of 26.565 s after the B JSONL was observed, versus 1.868 s with a pre-created empty root. OpenCode and Codex each had a real permission wait dismissed from the TUI. No latency, CPU or memory impact measured.
 - **Screens** — Not measured for desktop UI because Electron failed before the E2E assertions. The evidence is raw terminal frames and provider/host records.
 - **For the human** — The OpenCode status is display evidence. It is not proof of input delivery or approval authority. The Qwen guard inserts into a known draft without submitting it.
 - **Risk** — Mistaking a capability query or a scoped report for a root state can mislabel a session. A negotiated Kimi/Claude result cannot be extrapolated to ordinary PTYs.
 - **Cost** — No paid requests or dependency downloads. Runtime overhead of the proposed change was not measured because it was not part of this baseline.
-- **Verdict** — OpenCode passes the real attached-mode check. Qwen's three native turns and draft guard pass at the input/log boundary. The same-cwd second-feed criterion fails on this baseline. Full desktop task 6 and generic reader integration are not verified.
+- **Verdict** — OpenCode passes the real attached-mode check. Qwen's three native turns and draft guard pass at the input/log boundary. Both same-cwd feeds eventually contain the right turns; live discovery fails on the cold-root path until a fallback rescan. Full desktop task 6 and generic reader integration are not verified.
