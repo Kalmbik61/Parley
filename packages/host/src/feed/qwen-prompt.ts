@@ -51,7 +51,11 @@ function permissionKind(name: string): 'allow_once' | 'allow_always' | 'reject_o
   return null;
 }
 
-/** Read only the active bottom dialog. A clipped header, menu or footer falls back to the live terminal panel. */
+/**
+ * Read only the active bottom dialog. A clipped menu or footer falls back to the live terminal panel.
+ * A question whose `? AskUserQuestion …` header scrolled out of a short panel is still recognised:
+ * OSC 7501 already named `kind=question`, and the full menu plus help and waiting rows identify the dialog.
+ */
 export function recogniseQwenPrompt(lines: readonly string[], kind: QwenPromptKind, cardId: string, at: string): QwenPrompt | null {
   const trust = kind === 'permission' ? recogniseQwenFolderTrust(lines) : undefined;
   if (trust) {
@@ -68,8 +72,19 @@ export function recogniseQwenPrompt(lines: readonly string[], kind: QwenPromptKi
       ['●\ufe0e ' + title, '● ' + title].includes(lines[end - 2]!.trim()));
   if (feedback) end = lines.slice(0, end - 2).findLastIndex(line => line.trim() !== '');
   if (end < 0 || !waiting.test(lines[end]!.trim())) return null;
-  const start = lines.slice(0, end).findLastIndex(line => /^\s*\?\s+\S.*\s←\s*$/u.test(line) ||
+  let start = lines.slice(0, end).findLastIndex(line => /^\s*\?\s+\S.*\s←\s*$/u.test(line) ||
     (kind === 'question' && /^\s*\?\s+AskUserQuestion\b.*\s← +[│█]\s*$/u.test(line)));
+  let clipped = false;
+  if (start < 0 && kind === 'question') {
+    const navAt = lines.slice(0, end).findLastIndex(line => /^↑\/↓:.*Enter:/u.test(line.trim()));
+    const firstAt = navAt < 0 ? -1 : lines.slice(0, navAt).findLastIndex(line => option.exec(line)?.[3] === '1');
+    let top = 0;
+    while (firstAt >= 0 && top < firstAt && !lines[top]!.trim()) top++;
+    if (firstAt >= 0 && top < firstAt) {
+      start = top;
+      clipped = true;
+    }
+  }
   if (start < 0) return null;
   let dialog = lines.slice(start, end);
   if (/[│█]\s*$/u.test(dialog[0]!)) {
@@ -79,9 +94,9 @@ export function recogniseQwenPrompt(lines: readonly string[], kind: QwenPromptKi
         dialog.some(line => !/ +[│█]\s*$/u.test(line) || stringWidth(line.trimEnd()) !== column)) return null;
     dialog = dialog.map(line => line.trimEnd().slice(0, -1).trimEnd());
   }
-  const header = dialog[0]!.trim().slice(2, -1).trim();
-  const body = dialog.slice(1).map(line => line.trimEnd());
-  const question = /^AskUserQuestion\b/.test(header);
+  const header = clipped ? dialog[0]!.trim() : dialog[0]!.trim().slice(2, -1).trim();
+  const body = dialog.slice(clipped ? 0 : 1).map(line => line.trimEnd());
+  const question = clipped || /^AskUserQuestion\b/.test(header);
   if (question !== (kind === 'question')) return null;
   if (question) {
     const help = body.findLastIndex(line => line.trim() !== '');
@@ -106,7 +121,7 @@ export function recogniseQwenPrompt(lines: readonly string[], kind: QwenPromptKi
   if (rows.length < 2 || rows.filter(row => row.selected).length !== 1) return null;
   const prefix = body.slice(0, first).filter(line => line.trim() !== '').map(line => line.trim());
   if (!prefix.length) return null;
-  const base = { id: cardId, cardId, at, state: 'pending' as const, via: 'terminal' as const, toolUseId: null, toolInput: {}, toolName: header.split(/\s+/)[0]! };
+  const base = { id: cardId, cardId, at, state: 'pending' as const, via: 'terminal' as const, toolUseId: null, toolInput: {}, toolName: clipped ? 'AskUserQuestion' : header.split(/\s+/)[0]! };
   let card: Card;
   let review = false;
   let previous: string | null = null;

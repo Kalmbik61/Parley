@@ -54,7 +54,7 @@ describe('native Qwen dialogs', () => {
 
   it('rejects misaligned or incomplete scrollbars and malformed menus', () => {
     const initial = withScrollbar(nativeQuestion);
-    for (const lines of [initial.slice(1), initial.slice(0, -1),
+    for (const lines of [initial.slice(0, -1),
       initial.map((line, i) => i === 5 ? line.slice(0, -2) + line.at(-1) : line),
       initial.map((line, i) => i === 6 ? line.slice(0, -1) : line),
       initial.map(line => line.replace('2. Green', '4. Green')),
@@ -62,6 +62,8 @@ describe('native Qwen dialogs', () => {
       initial.map(line => line.replace(/[│█]$/u, '┃'))]) {
       expect(recogniseQwenPrompt(lines, 'question', '', '')).toBeNull();
     }
+    // A header scrolled out of a short panel is the clipped-question case, not a malformed menu.
+    expect(recogniseQwenPrompt(initial.slice(1), 'question', '', '')).not.toBeNull();
   });
 
   it('recognises emoji labels without changing their content or question identity', () => {
@@ -96,7 +98,8 @@ describe('native Qwen dialogs', () => {
       expect(recogniseQwenPrompt([...nativeQuestion, ...suffix], 'question', '', '')).toBeNull();
     }
     expect(recogniseQwenPrompt(feedback, 'question', '', '')).toBeNull();
-    expect(recogniseQwenPrompt([...nativeQuestion.slice(1), ...feedback], 'question', '', '')).toBeNull();
+    // Clipped header plus a complete feedback suffix is still the same question.
+    expect(recogniseQwenPrompt([...nativeQuestion.slice(1), ...feedback], 'question', '', '')?.feedback).toBe(true);
     expect(recogniseQwenPrompt([...nativeQuestion.slice(0, -1), ...feedback], 'question', '', '')).toBeNull();
   });
 
@@ -219,10 +222,13 @@ describe('native Qwen dialogs', () => {
 
   it('refuses incomplete, unrelated and ambiguous layouts', () => {
     expect(recogniseQwenPrompt(nativeQuestion, 'permission', '', '')).toBeNull();
-    for (const lines of [nativeQuestion.slice(1), nativeQuestion.slice(0, -1),
+    for (const lines of [nativeQuestion.slice(0, -1),
       nativeQuestion.map(line => line.replace('2. Green', '2. Blue')), [...nativeQuestion, 'Type your message']]) {
       expect(recogniseQwenPrompt(lines, 'question', '', '')).toBeNull();
     }
+    // The plain clipped-header form is recognised for the question kind only.
+    expect(recogniseQwenPrompt(nativeQuestion.slice(1), 'question', '', '')).not.toBeNull();
+    expect(recogniseQwenPrompt(nativeQuestion.slice(1), 'permission', '', '')).toBeNull();
   });
 
   it('returns to an unanswered question from the native review without confirming', async () => {
@@ -375,5 +381,62 @@ describe('native Qwen dialogs', () => {
       const lines = shellPermission.map(line => line.replace("Always allow run 'touch *' commands in this project", 'Always allow everything everywhere'));
       expect(parse(lines)).toBeNull();
     });
+  });
+});
+
+// Live capture of qwen 0.27.2 at 150x20 (tools/qwen-mock-lab/ask-probe.mjs): the dialog header
+// scrolled out of the short panel; OSC 7501 reported blocked:kind=question.
+const clipped150x20 = [
+  '   Провайдер',
+  '',
+  '   В сессии какого провайдера терминал показал этот выбор (Trust/Approve Once…, Auto/Single Mode, отмена), а чат — нет?',
+  '',
+  '   ❯ 1. Qwen Code',
+  '        Диалоги Qwen 0.27.2: «Yes, allow once / Always allow … in this project / for this user / No, suggest changes». Фикс s-696 сегодня есть, но',
+  '        не смержен в вашу сборку.',
+  '     2. Kimi Code',
+  '        Меню Kimi 2.8.1: «Approve once / Approve for this session / Reject …» и trust-экран. Распознаватель закреплён за формой 2.7.3.',
+  '     3. Codex',
+  '        Экраны Codex 0.166: одобрения команд/патчей, hooks/folder trust.',
+  '     4. Claude Code',
+  '        Промпты Claude Code (trust folder, permissions).',
+  '     5. Type something...',
+  '',
+  '',
+  '   ↑/↓: Navigate | Enter: Select | Esc: Cancel',
+  '',
+  '',
+  '  ⠏ Waiting for user confirmation...',
+];
+
+describe('question header clipped by a short panel', () => {
+  it('recognises the question from the full menu and footer when OSC named kind=question', () => {
+    const parsed = recogniseQwenPrompt(clipped150x20, 'question', 'card', '2026-11-27T00:00:00Z');
+    expect(parsed).not.toBeNull();
+    expect(parsed!.rows).toHaveLength(5);
+    expect(parsed!.card.kind).toBe('question');
+    expect(parsed!.card.toolName).toBe('AskUserQuestion');
+    expect(parsed!.card.questions[0]!.question).toContain('В сессии какого провайдера');
+    expect(parsed!.card.questions[0]!.options.map(option => option.label)).toEqual(['Qwen Code', 'Kimi Code', 'Codex', 'Claude Code']);
+  });
+
+  it('answers the clipped card with the option number', async () => {
+    const prompt = recogniseQwenPrompt(clipped150x20, 'question', 'card', '2026-11-27T00:00:00Z')!;
+    const write = vi.fn();
+    expect(await answerQwenPrompt(prompt, { kind: 'question', answers: { [prompt.card.questions[0]!.question]: 'Kimi Code' } },
+      { current: () => true, screen: () => clipped150x20, write })).toBe(true);
+    expect(write.mock.calls).toEqual([['2']]);
+  });
+
+  it('still refuses the same screen for the permission kind', () => {
+    expect(recogniseQwenPrompt(clipped150x20, 'permission', '', '')).toBeNull();
+  });
+
+  it('refuses a clipped menu: option 1 scrolled out with the header', () => {
+    expect(recogniseQwenPrompt(clipped150x20.slice(4), 'question', '', '')).toBeNull();
+  });
+
+  it('refuses the clipped shape without the waiting row', () => {
+    expect(recogniseQwenPrompt(clipped150x20.slice(0, -1), 'question', '', '')).toBeNull();
   });
 });

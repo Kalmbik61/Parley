@@ -6,7 +6,8 @@ pty driver. Everything binds to `127.0.0.1`.
 
 | File | Role |
 | --- | --- |
-| `mock.mjs` | OpenAI-compatible mock: `/v1/chat/completions` (stream and non-stream), `/v1/models`. Modes by trigger word in the prompt: `mcpflow` (tool search on: `tool_search` → `tool_call`), `mcpdirect` (tool search off, as in Parley sessions: calls `mcp__parley__echo` directly), `shellflow`, `thinkflow`, `autherr` (401), `quotaerr` (429 quota); default: thinking + text. `MOCK_MODE` sets the default. |
+| `mock.mjs` | OpenAI-compatible mock: `/v1/chat/completions` (stream and non-stream), `/v1/models`. Modes by trigger word in the prompt: `mcpflow` (tool search on: `tool_search` → `tool_call`), `mcpdirect` (tool search off, as in Parley sessions: calls `mcp__parley__echo` directly), `shellflow`, `thinkflow`, `askflow` (native `ask_user_question` dialog), `autherr` (401), `quotaerr` (429 quota); default: thinking + text. `MOCK_MODE` sets the default. |
+| `ask-probe.mjs` | runs the installed qwen with `askflow` in a throwaway home, renders the PTY through the host's `@xterm/headless` screen at a given size (`node ask-probe.mjs [cols] [rows]`) and feeds the visible lines to `recogniseQwenPrompt`; prints the OSC 7501 reports and the verdict. |
 | `mcp.mjs` | stdio MCP server, one tool `echo` (`text: "fail"` returns `isError`). |
 | `hook.mjs`, `hook-server.mjs` | command-hook and http-hook targets that log the payloads. |
 | `gen-settings.mjs` | writes the `QWEN_CODE_SYSTEM_SETTINGS_PATH` file: MCP server `parley` + hooks. |
