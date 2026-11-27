@@ -425,7 +425,7 @@ export function createLogIndex(roots: LogIndexRoots = {}, options: LogIndexOptio
           claudeSource(roots.claudeRoot, undefined, indexer),
           ...[...claudeRoots].filter((root) => root !== mainRoot).map((root) => claudeSource(root, undefined, indexer)),
           codexSource(roots.codexRoot, indexer),
-          qwenSource(qwenRoot, indexer),
+          qwenSource(qwenRoot, indexer, (file) => byFile.has(file)),
         ],
         // Сбой ре-парса одного файла не должен ронять хост — следующее событие
         // попробует снова, как и у остальных наблюдателей хоста.
