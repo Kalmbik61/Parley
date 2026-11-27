@@ -4,6 +4,16 @@ All notable changes to Parley are documented in this file.
 
 <!-- The notes of a release are the body of its `## X.Y.Z` section: the Release workflow publishes them as the release description (scripts/release/prepare-release.mjs). Keep one such heading per version. -->
 
+## 0.39.9
+
+### Changed
+
+- **Qwen Code, OpenCode, and Codex show consistent CLI status hints in Chat and Terminal.** When the CLI reports its state, both views use the same labels, such as "CLI is working" or "CLI needs input". Parley's session status and approval prompts still take precedence. ([#269](https://github.com/Kalmbik61/Parley/pull/269))
+
+### Fixed
+
+- **Chat picks up the first Qwen Code conversation even when Qwen creates its history directory after Parley starts.** ([#269](https://github.com/Kalmbik61/Parley/pull/269))
+
 ## 0.39.8
 
 ### Fixed
