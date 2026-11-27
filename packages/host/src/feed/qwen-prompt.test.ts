@@ -248,4 +248,132 @@ describe('native Qwen dialogs', () => {
       { current: () => true, screen: () => nativeQuestion, write })).toBe(false);
     expect(write).not.toHaveBeenCalled();
   });
+
+  // The chat/island wire format (`answerOf`) joins picked labels and the «Other» text with ', '
+  // and sends no `values`; the host must restore the picks from the joined string.
+  describe('joined multiselect answers', () => {
+    const multiHeader = '? AskUserQuestion Ask user 1 question ←';
+    const multiNav = ' ↑/↓: Navigate | Space: Toggle | Enter: Confirm | Esc: Cancel';
+    function multiFixture(labels: readonly string[]) {
+      let selected = 1;
+      const checked = new Set<number>();
+      let editor: string | null = null;
+      const customNumber = labels.length + 1;
+      const screen = (): string[] => [
+        multiHeader, ' Toppings', '', ' Which toppings?', '',
+        ...labels.map((label, i) => `${selected === i + 1 ? '   ❯ ' : '     '}${checked.has(i + 1) ? '[✓]' : '[ ]'} ${i + 1}. ${label}`),
+        selected === customNumber ? `   ❯ [ ] ${customNumber}. > ${editor || 'Type something...'}` : `     [ ] ${customNumber}. Type something...`,
+        multiNav, wait,
+      ];
+      const write = vi.fn((keys: string) => {
+        if (selected === customNumber && keys !== '\r') { editor = (editor ?? '') + keys; return; }
+        if (/^[1-9]$/.test(keys)) {
+          const n = Number(keys);
+          selected = n;
+          editor = n === customNumber ? '' : null;
+        } else if (keys === ' ' && selected <= labels.length) {
+          if (checked.has(selected)) checked.delete(selected);
+          else checked.add(selected);
+        }
+      });
+      return { screen, write };
+    }
+    const decide = (answer: string) => ({ kind: 'question' as const, answers: { 'Which toppings?': answer } });
+
+    it('toggles every picked label and confirms with Enter', async () => {
+      const { screen, write } = multiFixture(['Nuts', 'Cream', 'Honey']);
+      const parsed = recogniseQwenPrompt(screen(), 'question', 'card', '');
+      expect(parsed?.card.questions[0]).toMatchObject({ multiSelect: true, options: [{ label: 'Nuts' }, { label: 'Cream' }, { label: 'Honey' }] });
+      expect(await answerQwenPrompt(parsed!, decide('Nuts, Honey'), { current: () => true, screen, write })).toBe(true);
+      expect(write.mock.calls).toEqual([['1'], [' '], ['3'], [' '], ['\r']]);
+    });
+
+    it('keeps a single picked label working', async () => {
+      const { screen, write } = multiFixture(['Nuts', 'Cream', 'Honey']);
+      expect(await answerQwenPrompt(recogniseQwenPrompt(screen(), 'question', 'card', '')!, decide('Cream'),
+        { current: () => true, screen, write })).toBe(true);
+      expect(write.mock.calls).toEqual([['2'], [' '], ['\r']]);
+    });
+
+    it('types the unmatched remainder as the Other text', async () => {
+      const { screen, write } = multiFixture(['Nuts', 'Cream', 'Honey']);
+      expect(await answerQwenPrompt(recogniseQwenPrompt(screen(), 'question', 'card', '')!, decide('Nuts, sweet crunch'),
+        { current: () => true, screen, write })).toBe(true);
+      expect(write.mock.calls).toEqual([['1'], [' '], ['4'], ['sweet crunch'], ['\r']]);
+    });
+
+    it('types an answer that matches no label as the Other text', async () => {
+      const { screen, write } = multiFixture(['Nuts', 'Cream', 'Honey']);
+      expect(await answerQwenPrompt(recogniseQwenPrompt(screen(), 'question', 'card', '')!, decide('just text'),
+        { current: () => true, screen, write })).toBe(true);
+      expect(write.mock.calls).toEqual([['4'], ['just text'], ['\r']]);
+    });
+
+    it('does not split a label that contains the join separator', async () => {
+      const { screen, write } = multiFixture(['Salt, pepper', 'Nuts']);
+      expect(await answerQwenPrompt(recogniseQwenPrompt(screen(), 'question', 'card', '')!, decide('Salt, pepper, Nuts'),
+        { current: () => true, screen, write })).toBe(true);
+      expect(write.mock.calls).toEqual([['1'], [' '], ['2'], [' '], ['\r']]);
+    });
+
+    it('prefers explicit values over the joined answer', async () => {
+      const { screen, write } = multiFixture(['Nuts', 'Cream', 'Honey']);
+      const decision = { kind: 'question' as const, answers: { 'Which toppings?': 'Nuts, Honey' }, values: { choices: ['Cream'] } };
+      expect(await answerQwenPrompt(recogniseQwenPrompt(screen(), 'question', 'card', '')!, decision,
+        { current: () => true, screen, write })).toBe(true);
+      expect(write.mock.calls).toEqual([['2'], [' '], ['\r']]);
+    });
+  });
+
+  describe('scoped always-allow permission rows', () => {
+    // Live qwen 0.27.2 shell confirmation (auto mode asks the same dialog when the classifier blocks).
+    const shellPermission = [
+      '? Shell touch /tmp/probe/file (Create an empty file as requested.) ←',
+      '   touch /tmp/probe/file',
+      " Allow execution of: 'touch'?",
+      ' › 1. Yes, allow once',
+      "   2. Always allow run 'touch *' commands in this project",
+      "   3. Always allow run 'touch *' commands for this user",
+      '   4. No, suggest changes (esc)',
+      wait,
+    ];
+    const parse = (lines: readonly string[]) => recogniseQwenPrompt(lines, 'permission', 'card', '');
+
+    it('recognises the project and user scoped rows as allow_always', () => {
+      expect(parse(shellPermission)?.card).toMatchObject({
+        kind: 'permission',
+        permissionOptions: [
+          { optionId: '1', kind: 'allow_once' },
+          { optionId: '2', kind: 'allow_always', name: "Always allow run 'touch *' commands in this project" },
+          { optionId: '3', kind: 'allow_always', name: "Always allow run 'touch *' commands for this user" },
+          { optionId: '4', kind: 'reject_once' },
+        ],
+      });
+    });
+
+    it.each([
+      ['project', "Always allow run 'touch *' commands in this project"],
+      ['user', "Always allow run 'touch *' commands for this user"],
+      ['plain project', 'Always allow in this project'],
+      ['plain user', 'Always allow for this user'],
+      ['russian project', "Всегда разрешать run 'touch *' commands в этом проекте"],
+      ['russian user', "Всегда разрешать run 'touch *' commands для этого пользователя"],
+      ['russian plain project', 'Всегда разрешать в этом проекте'],
+      ['russian plain user', 'Всегда разрешать для этого пользователя'],
+    ])('answers the %s scoped row with its number', async (_name, label) => {
+      const lines = shellPermission.map((line, i) => (i === 4 ? `   2. ${label}` : line));
+      const prompt = parse(lines)!;
+      const option = prompt.card.kind === 'permission' ? prompt.card.permissionOptions?.find(entry => entry.name === label) : undefined;
+      expect(option?.kind).toBe('allow_always');
+      const write = vi.fn();
+      expect(await answerQwenPrompt(prompt, { kind: 'permission', behavior: 'allow', optionId: option!.optionId },
+        { current: () => true, screen: () => lines, write })).toBe(true);
+      expect(write.mock.calls).toEqual([[option!.optionId]]);
+    });
+
+    it('still rejects an unknown always-allow wording', () => {
+      const lines = shellPermission.map(line => line.replace("Always allow run 'touch *' commands in this project", 'Always allow everything everywhere'));
+      expect(parse(lines)).toBeNull();
+    });
+  });
 });
