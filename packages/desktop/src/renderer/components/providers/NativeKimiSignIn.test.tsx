@@ -34,8 +34,10 @@ it('starts Kimi login, shares running state, cancels and allows retry after exit
   const stop = useProvidersStore.getState().init(bridge);
   const { container } = render(<NativeKimiSignIn running={false} onReload={async () => {}} />);
   await useProvidersStore.getState().reload();
-  fireEvent.click(screen.getByText(S.accounts.signIn));
-  await waitFor(() => expect(bridge.calls.some((c) => c.method === 'providers.signIn')).toBe(true));
+  fireEvent.click(screen.getByText('kimi.com'));
+  await waitFor(() =>
+    expect(bridge.calls.some((c) => c.method === 'providers.signIn' && c.params.region === 'mainland-cn')).toBe(true),
+  );
   await waitFor(() => expect(container.querySelector('[data-running="true"]')).toBeTruthy());
   fireEvent.click(screen.getByText(S.accounts.cancel));
   await waitFor(() =>
@@ -43,7 +45,10 @@ it('starts Kimi login, shares running state, cancels and allows retry after exit
   );
   bridge.emit('providers.signInExit', { provider: 'kimi', exitCode: 129, signedIn: false });
   await waitFor(() => expect(screen.getByText(S.accounts.signInFailed)).toBeTruthy());
-  expect(screen.getByText(S.accounts.signIn)).toBeTruthy();
+  fireEvent.click(screen.getByText('kimi.ai'));
+  await waitFor(() =>
+    expect(bridge.calls.some((c) => c.method === 'providers.signIn' && c.params.region === 'global')).toBe(true),
+  );
   stop();
 });
 
@@ -69,9 +74,9 @@ it('allows retry after the login process fails to start', async () => {
     signInResult: {},
   });
   render(<NativeKimiSignIn running={false} onReload={async () => {}} />);
-  fireEvent.click(screen.getByText(S.accounts.signIn));
+  fireEvent.click(screen.getByText('kimi.ai'));
   await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy());
-  fireEvent.click(screen.getByText(S.accounts.signIn));
+  fireEvent.click(screen.getByText('kimi.ai'));
   await waitFor(() =>
     expect(bridge.calls.filter((c) => c.method === 'providers.signIn')).toHaveLength(2),
   );

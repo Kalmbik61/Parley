@@ -15,6 +15,7 @@ import { hostText } from '../host-text.js';
 import { execFile } from 'node:child_process';
 import { commandBinary, findRunnerBinary, isManagedProviderId, loadProviders } from '@parley/core';
 import type { ProviderEntry } from '@parley/core';
+import type { KimiLoginRegion } from '@parley/protocol';
 import type { HostContext } from '../context.js';
 import { HostError } from '../errors.js';
 import { spawnPty } from '../pty/pty-process.js';
@@ -63,8 +64,11 @@ export interface AuthService {
   refresh(id: string, force?: boolean): Promise<boolean>;
   /** `refresh` для каждого аккаунта реестра: старт хоста и ручное обновление. Не отказывает. */
   refreshAll(): Promise<void>;
-  /** Поднимает PTY входа; `conflict`, если вход (любого аккаунта) уже идёт. Возвращается сразу после старта процесса. */
-  signIn(id: string, size?: { cols: number; rows: number }): Promise<void>;
+  /**
+   * Поднимает PTY входа; `conflict`, если вход (любого аккаунта) уже идёт. Возвращается сразу после старта процесса.
+   * `region` — только для Kimi: `kimi login --region` выбирает kimi.com или kimi.ai; без него — выбор самого CLI.
+   */
+  signIn(id: string, size?: { cols: number; rows: number }, region?: KimiLoginRegion): Promise<void>;
   /** Вставка кода из браузера в терминал входа; нет входа этого аккаунта — ничего. */
   input(id: string, data: string): void;
   resize(id: string, cols: number, rows: number): void;
@@ -342,7 +346,7 @@ export function createAuthService(host: HostContext, options: AuthServiceOptions
       }
     },
 
-    async signIn(id, size = DEFAULT_SIZE) {
+    async signIn(id, size = DEFAULT_SIZE, region) {
       if (stopped) throw new HostError('conflict', hostText('hostShuttingDown'));
       // Замок занимается до первого await: два вызова подряд не пройдут оба.
       if (lock !== null) throw new HostError('conflict', hostText('anotherSignIn'));
@@ -356,7 +360,10 @@ export function createAuthService(host: HostContext, options: AuthServiceOptions
           ? { binary: await findRunnerBinary(entry.runner.command), cwd: homedir(), env: kimiLoginEnv(process.env) }
           : launchOf(entry);
         if (lock !== started || stopped) throw new HostError('conflict', hostText('signInCancelled'));
-        child = spawn({ command: binary, args: id === 'kimi' ? ['login'] : authCommands(entry).login, cwd, env }, size);
+        const loginArgs = id === 'kimi'
+          ? ['login', ...(region === undefined ? [] : ['--region', region])]
+          : authCommands(entry).login;
+        child = spawn({ command: binary, args: loginArgs, cwd, env }, size);
       } catch (error) {
         if (lock === started) lock = null;
         if (error instanceof HostError) throw error;

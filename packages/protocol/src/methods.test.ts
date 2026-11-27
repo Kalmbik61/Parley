@@ -901,6 +901,15 @@ describe('вход в аккаунт подписки (спека подписо
     }
   });
 
+  it('signIn: регион входа Kimi необязателен, только mainland-cn или global', () => {
+    const parse = (region: unknown) => METHODS['providers.signIn'].safeParse({ provider: 'kimi', region });
+    expect(parse(undefined).success).toBe(true);
+    expect(parse('mainland-cn').success).toBe(true);
+    expect(parse('global').success).toBe(true);
+    expect(parse('kimi.com').success).toBe(false);
+    expect(parse(42).success).toBe(false);
+  });
+
   it('signInInput: данные не длиннее 4096', () => {
     const parse = (data: unknown) => METHODS['providers.signInInput'].safeParse({ provider: 'custom-claude-2', data });
     expect(parse('code-from-browser\r').success).toBe(true);
