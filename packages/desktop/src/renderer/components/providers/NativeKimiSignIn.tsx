@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import type { KimiLoginRegion } from '@parley/protocol';
 import { S } from '../../../shared/strings.js';
 import { useProvidersStore } from '../../store/providers.js';
 import { Button } from '../../ui/button.js';
@@ -20,13 +21,13 @@ export function NativeKimiSignIn({
   const [pending, setPending] = useState(false);
   const [failed, setFailed] = useState(false);
   const active = sharedRunning ?? running;
-  const signIn = async (): Promise<void> => {
+  const signIn = async (region: KimiLoginRegion): Promise<void> => {
     setPending(true);
     setFailed(false);
     setRuns((value) => value + 1);
     useProvidersStore.getState().beginSignIn('kimi');
     try {
-      await window.parley.call('providers.signIn', { provider: 'kimi' });
+      await window.parley.call('providers.signIn', { provider: 'kimi', region });
     } catch {
       setFailed(true);
       useProvidersStore.setState((state) => ({
@@ -60,15 +61,32 @@ export function NativeKimiSignIn({
           {S.accounts.cancel}
         </Button>
       ) : (
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          disabled={pending}
-          onClick={() => void signIn()}
-        >
-          {S.accounts.signIn}
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={pending}
+            onClick={() => void signIn('mainland-cn')}
+          >
+            <span className="flex flex-col items-start leading-tight">
+              <span>kimi.com</span>
+              <span className="text-[10px] font-normal text-muted-foreground">{S.providerCard.kimi.regionCn}</span>
+            </span>
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={pending}
+            onClick={() => void signIn('global')}
+          >
+            <span className="flex flex-col items-start leading-tight">
+              <span>kimi.ai</span>
+              <span className="text-[10px] font-normal text-muted-foreground">{S.providerCard.kimi.regionGlobal}</span>
+            </span>
+          </Button>
+        </div>
       )}
       {active || runs > 0 || result !== undefined ? (
         <SignInTerminal key={runs} provider="kimi" running={active && !pending} />

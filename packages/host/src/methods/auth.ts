@@ -31,9 +31,9 @@ export function createAuthHandlers(auth: AuthService): {
       const signedIn = await auth.refresh(provider);
       return { signedIn, detail: signedIn ? auth.detail(provider) : null };
     },
-    'providers.signIn': async ({ provider }) => {
+    'providers.signIn': async ({ provider, region }) => {
       await signInEntry(provider);
-      await auth.signIn(provider);
+      await auth.signIn(provider, undefined, region);
       return { ok: true };
     },
     // Ввод, размер и отмена не читают реестр: замок службы входа держит только аккаунт (`signingIn`), а await перед

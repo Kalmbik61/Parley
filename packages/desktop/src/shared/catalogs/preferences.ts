@@ -143,6 +143,9 @@ const en = {
       missingCli: 'Install the official Kimi Code CLI on the host, then check again.',
       signIn: 'Run kimi login in a terminal on the host, then check again.',
       chooseInChat: 'Choose the model, thinking level, and mode in the active Kimi Code chat.',
+      /** Подписи кнопок выбора входа: kimi.com — китайская учётная запись, kimi.ai — все остальные. */
+      regionCn: 'Chinese account',
+      regionGlobal: 'Everyone else',
     },
     qwen: {
       hint: {
@@ -851,6 +854,8 @@ const ru = {
       missingCli: "Установите официальный CLI Kimi Code на хосте и повторите проверку.",
       signIn: "Выполните kimi login в терминале хоста и повторите проверку.",
       chooseInChat: "Модель, уровень размышлений и режим выбираются в активном чате Kimi Code.",
+      regionCn: "Китайская учётная запись",
+      regionGlobal: "Все остальные",
     },
     qwen: {
       hint: {

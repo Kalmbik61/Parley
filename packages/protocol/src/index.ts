@@ -260,7 +260,7 @@ export { consentMethodSchemas } from './consents.js';
 export type { AgentSwitchCard, ConsentCard, ConsentMethodResults, FolderTrustCard, ProjectMcpCard, ProjectMcpServer, RoleChange, RoleChangeAck, TrustRecord } from './consents.js';
 export { CODEX_ACCOUNT_PREFIX, CUSTOM_PROVIDER_PREFIX, customProviderMethodSchemas, isCodexAccountId, isCustomProviderId, isManagedProviderId } from './custom-providers.js';
 export type { QwenAuthHints } from './qwen-auth.js';
-export type { CustomAccountInfo, CustomEndpointInfo, CustomProviderAuth, CustomProviderInfo, CustomProviderKind, CustomProviderMethodResults, CustomProviderSaveParams, CustomProviderModels } from './custom-providers.js';
+export type { CustomAccountInfo, CustomEndpointInfo, CustomProviderAuth, CustomProviderInfo, CustomProviderKind, CustomProviderMethodResults, CustomProviderSaveParams, CustomProviderModels, KimiLoginRegion } from './custom-providers.js';
 export type * from './human-overview.js';
 
 export { KIMI_NATIVE_TERMINAL_FEATURE, KIMI_SHARED_TERMINAL_FEATURE, KIMI_PTY_GENERATION_FEATURE, KIMI_LAUNCH_MODES_FEATURE, kimiConfigOption, kimiElicitationSchema, kimiPermissionOption, kimiResponse } from './kimi.js';

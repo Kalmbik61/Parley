@@ -761,6 +761,20 @@ describe('native Kimi sign-in', () => {
     await exited(events, 2);
     expect(eventsOf(events, 'providers.signInExit')[1]).toEqual({ provider: 'kimi', exitCode: 0, signedIn: true });
   });
+
+  it('выбранный регион входа уходит в kimi login --region', async () => {
+    const { spawn, processes } = fakeSpawn();
+    process.env.PARLEY_KIMI_BIN = process.execPath;
+    const { auth, events } = boot({ spawn, refreshKimi: async () => false });
+    await auth.signIn('kimi', undefined, 'mainland-cn');
+    expect(processes[0]!.launch.args).toEqual(['login', '--region', 'mainland-cn']);
+    processes[0]!.exit();
+    await exited(events);
+    await auth.signIn('kimi', undefined, 'global');
+    expect(processes[1]!.launch.args).toEqual(['login', '--region', 'global']);
+    processes[1]!.exit();
+    await exited(events, 2);
+  });
 });
 
 
