@@ -241,7 +241,7 @@ export function createPtyManager(host: HostContext, windowCounters?: WindowCount
       for (const report of session.terminal.feed(data)) {
         if (sessions.get(key) !== session) return;
         if (report.kind === 'codex') {
-          notifyListeners(currentListeners(signalListeners), 'слушатель сигнала терминала упал', ref, report.signal);
+          notifyListeners(currentListeners(signalListeners), 'terminal signal listener failed', ref, report.signal);
         } else {
           if (report.qwen !== null) {
             notifyListeners(currentListeners(qwenStatusListeners), 'Qwen status listener failed', ref, report.qwen);
