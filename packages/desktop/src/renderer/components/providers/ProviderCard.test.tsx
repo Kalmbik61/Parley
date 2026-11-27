@@ -927,11 +927,11 @@ it('offers native Kimi sign-in only for an installed CLI on a host advertising t
   useProvidersStore.setState({ providers: [], signInOutput: {}, signInResult: {} });
   bridge.setHandler('providers.signIn', () => ({ ok: true }));
   const { rerender } = render(<ProviderCard provider={provider} onReload={async () => {}} onRestartHost={() => {}} />);
-  expect(screen.queryByText(S.accounts.signIn)).toBeNull();
+  expect(screen.queryByText('kimi.ai')).toBeNull();
   rerender(<ProviderCard provider={{ ...provider, kimiAuth: { signingIn: false } }} onReload={async () => {}} onRestartHost={() => {}} />);
   expect(screen.queryByText(S.providerCard.kimi.signIn)).toBeNull();
-  fireEvent.click(screen.getByText(S.accounts.signIn));
-  await waitFor(() => expect(bridge.calls.some(call => call.method === 'providers.signIn' && call.params.provider === 'kimi')).toBe(true));
+  fireEvent.click(screen.getByText('kimi.ai'));
+  await waitFor(() => expect(bridge.calls.some(call => call.method === 'providers.signIn' && call.params.provider === 'kimi' && call.params.region === 'global')).toBe(true));
   rerender(<ProviderCard provider={{ ...provider, needs: 'cli', kimiAuth: { signingIn: false } }} onReload={async () => {}} onRestartHost={() => {}} />);
-  expect(screen.queryByText(S.accounts.signIn)).toBeNull();
+  expect(screen.queryByText('kimi.ai')).toBeNull();
 });

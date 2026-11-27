@@ -105,6 +105,10 @@ const accountRecord = z.object({
 
 const signInProvider = z.object({ provider: z.string() });
 
+/** Регион входа Kimi: `mainland-cn` — kimi.com (китайская учётная запись), `global` — kimi.ai (все остальные). */
+const kimiLoginRegion = z.enum(['mainland-cn', 'global']);
+export type KimiLoginRegion = z.infer<typeof kimiLoginRegion>;
+
 const saveCustomRecord = z.discriminatedUnion('kind', [endpointRecord, accountRecord]);
 
 /** Честный тип параметров `providers.saveCustom`: запись с адресом или аккаунт подписки (спека подписок 5.1). */
@@ -117,7 +121,7 @@ export const customProviderMethodSchemas = {
   'providers.deleteCustom': z.object({ id: customId, removeFolder: z.boolean() }),
   // Состояние входа и вход в аккаунт (спека подписок 5.5): отдельный путь PTY, не `pty-manager` сессий.
   'providers.authStatus': signInProvider,
-  'providers.signIn': signInProvider,
+  'providers.signIn': z.object({ provider: z.string(), region: kimiLoginRegion.optional() }),
   /** Вставка кода из браузера в терминал входа. */
   'providers.signInInput': z.object({ provider: z.string(), data: z.string().max(4096) }),
   'providers.signInResize': z.object({
