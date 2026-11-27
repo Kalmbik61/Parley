@@ -265,6 +265,63 @@ describe('feed of a Qwen Code session', () => {
     expect(fakes.writes).toEqual([]);
   });
 
+  it('offers the native shell confirmation with scoped always-allow rows and applies the chosen row', async () => {
+    // Live qwen 0.27.2 exec dialog; auto mode asks the same when the classifier blocks a command.
+    const shell = [
+      '? Shell touch /tmp/probe/file (Create an empty file as requested.) ←',
+      '   touch /tmp/probe/file',
+      " Allow execution of: 'touch'?",
+      ' › 1. Yes, allow once',
+      "   2. Always allow run 'touch *' commands in this project",
+      "   3. Always allow run 'touch *' commands for this user",
+      '   4. No, suggest changes (esc)',
+      ' Waiting for user confirmation...',
+    ];
+    fakes.setScreen(shell);
+    fakes.emitStatus(REF, blocked);
+    const card = (await service.snapshot(REF)).items.find(item => item.kind === 'permission')!;
+    expect(card).toMatchObject({ state: 'pending', permissionOptions: [
+      { kind: 'allow_once' }, { kind: 'allow_always' }, { kind: 'allow_always' }, { kind: 'reject_once' },
+    ] });
+    expect(await service.decide(REF, card.id, { kind: 'permission', behavior: 'allow', optionId: '2' }))
+      .toEqual({ applied: true, state: 'allowed' });
+    expect(fakes.writes).toEqual(['2']);
+  });
+
+  it('applies a joined multiselect answer sent by the chat without values', async () => {
+    const labels = ['Nuts', 'Cream', 'Honey'];
+    let selected = 1;
+    const checked = new Set<number>();
+    const render = (): string[] => [
+      '? AskUserQuestion Ask user 1 question ←', ' Toppings', '', ' Which toppings?', '',
+      ...labels.map((label, i) => `${selected === i + 1 ? '   ❯ ' : '     '}${checked.has(i + 1) ? '[✓]' : '[ ]'} ${i + 1}. ${label}`),
+      '     [ ] 4. Type something...',
+      ' ↑/↓: Navigate | Space: Toggle | Enter: Confirm | Esc: Cancel',
+      ' Waiting for user confirmation...',
+    ];
+    fakes.setScreen(render());
+    fakes.emitStatus(REF, { state: 'blocked', kind: 'question', msg: null });
+    const card = (await service.snapshot(REF)).items.find(item => item.kind === 'question')!;
+    expect(card.questions[0]).toMatchObject({ question: 'Which toppings?', multiSelect: true });
+    const write = fakes.deps.pty.write.bind(fakes.deps.pty);
+    const spy = vi.spyOn(fakes.deps.pty, 'write').mockImplementation((ref, data) => {
+      write(ref, data);
+      if (/^[1-9]$/.test(data)) selected = Number(data);
+      else if (data === ' ' && selected <= labels.length) {
+        if (checked.has(selected)) checked.delete(selected);
+        else checked.add(selected);
+      }
+      fakes.setScreen(render());
+    });
+    try {
+      expect(await service.decide(REF, card.id, { kind: 'question', answers: { 'Which toppings?': 'Nuts, Honey' } }))
+        .toEqual({ applied: true, state: 'answered' });
+      expect(fakes.writes).toEqual(['1', ' ', '3', ' ', '\r']);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('an appended transcript record reaches subscribers after a hook prompts the read', async () => {
     const client = fakeClient();
     service.subscribe(REF, client);

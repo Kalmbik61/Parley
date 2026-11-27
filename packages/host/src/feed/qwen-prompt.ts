@@ -44,6 +44,9 @@ const feedbackFooters = [
 function permissionKind(name: string): 'allow_once' | 'allow_always' | 'reject_once' | null {
   if (/^(Yes, allow once|Да, разрешить один раз)$/u.test(name)) return 'allow_once';
   if (/^(Yes, allow always|Да, всегда разрешать)$/u.test(name)) return 'allow_always';
+  // Scoped rows carry the rule text between the prefix and the scope suffix (0.27.2 exec and MCP dialogs).
+  if (/^(Always allow(?: .*)? in this project|Всегда разрешать(?: .*)? в этом проекте)$/u.test(name)) return 'allow_always';
+  if (/^(Always allow(?: .*)? for this user|Всегда разрешать(?: .*)? для этого пользователя)$/u.test(name)) return 'allow_always';
   if (/^(No|Нет)(?:, [^\n]+)? \(esc\)$/iu.test(name)) return 'reject_once';
   return null;
 }
@@ -147,6 +150,24 @@ export function recogniseQwenPrompt(lines: readonly string[], kind: QwenPromptKi
   return { fingerprint: createHash('sha256').update(JSON.stringify(identity)).digest('hex'), card, rows, review, previous, feedback };
 }
 
+/**
+ * The window joins picked multiSelect labels and the «Other» text with ', ' (`answerOf`, the shared
+ * chat/island wire format) and sends no `values`. Restore the labels by longest match so a label
+ * containing ', ' is not split; whatever no label matches is the free «Other» text.
+ */
+function splitJoinedAnswer(answer: string, labels: readonly string[]): { values: string[]; other: string } {
+  const longestFirst = [...labels].sort((a, b) => b.length - a.length);
+  const values: string[] = [];
+  let rest = answer;
+  for (;;) {
+    const label = longestFirst.find(entry => rest === entry || rest.startsWith(entry + ', '));
+    if (label === undefined) break;
+    values.push(label);
+    rest = rest === label ? '' : rest.slice(label.length + 2);
+  }
+  return { values, other: rest };
+}
+
 export async function answerQwenPrompt(prompt: QwenPrompt, decision: FeedDecision, io: IO): Promise<boolean> {
   const { card } = prompt;
   if (prompt.folderTrust) {
@@ -219,9 +240,12 @@ export async function answerQwenPrompt(prompt: QwenPrompt, decision: FeedDecisio
   }
   if (question.multiSelect) {
     const choices = prompt.rows.slice(0, -1);
-    const values = decision.values?.choices ?? (choices.some(row => row.label === answer) ? [answer!] : []);
+    const joined = decision.values?.choices === undefined && typeof answer === 'string'
+      ? splitJoinedAnswer(answer, choices.map(row => row.label))
+      : null;
+    const values = decision.values?.choices ?? joined?.values ?? [];
     if (!Array.isArray(values)) return false;
-    const other = decision.values?.other ?? '';
+    const other = decision.values?.other ?? joined?.other ?? '';
     if (typeof other !== 'string' || (!values.length && !other) ||
         (other !== '' && !validText(other)) || values.some(value => !choices.some(row => row.label === value))) return false;
     if (!await prepare()) return false;
