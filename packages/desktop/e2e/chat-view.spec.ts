@@ -93,10 +93,10 @@ test.describe('вид Chat вкладки сессии (план 2026-10-01, Tas
   test.beforeEach(async () => {
     home = await makeTempHome('chat');
     project = await makeTempProject('chat-view');
-    // Этот сценарий проверяет раскрытый журнал (в том числе строки вызовов).
-    const desktop = path.join(home, 'desktop');
-    await mkdir(desktop, { recursive: true });
-    await writeFile(path.join(desktop, 'ui.json'), JSON.stringify({ chatFold: 'off' }));
+    // Раскрываем журнал, не стирая версию и язык, записанные makeTempHome.
+    const ui = path.join(home, 'desktop', 'ui.json');
+    const seeded = JSON.parse(await readFile(ui, 'utf8')) as Record<string, unknown>;
+    await writeFile(ui, JSON.stringify({ ...seeded, chatFold: 'off' }));
   });
 
   test.afterEach(async () => {
