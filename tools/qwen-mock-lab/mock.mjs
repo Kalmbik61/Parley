@@ -22,7 +22,7 @@ if (!log) {
 let seq = 0;
 
 const modeOf = (text) => {
-  for (const m of ['autherr', 'quotaerr', 'mcpflow', 'mcpdirect', 'shellflow', 'thinkflow']) if (text.includes(m)) return m;
+  for (const m of ['autherr', 'quotaerr', 'mcpflow', 'mcpdirect', 'shellflow', 'thinkflow', 'askflow']) if (text.includes(m)) return m;
   return process.env.MOCK_MODE || 'text';
 };
 
@@ -56,6 +56,17 @@ http
       else if (mode === 'mcpflow' && nTool === 1) call = ['tool_call', { name: 'mcp__parley__echo', arguments: { text: 'hi' } }];
       else if (mode === 'mcpdirect' && nTool === 0) call = ['mcp__parley__echo', { text: 'hi' }];
       else if (mode === 'shellflow' && nTool === 0) call = ['run_shell_command', { command: 'echo hi', is_background: false, description: 'x' }];
+      else if (mode === 'askflow' && nTool === 0) call = ['ask_user_question', { questions: [{
+        header: 'Провайдер',
+        question: 'В сессии какого провайдера терминал показал этот выбор (Trust/Approve Once…, Auto/Single Mode, отмена), а чат — нет?',
+        options: [
+          { label: 'Qwen Code', description: 'Диалоги Qwen 0.27.2: «Yes, allow once / Always allow … in this project / for this user / No, suggest changes». Фикс s-696 сегодня есть, но не смержен в вашу сборку.' },
+          { label: 'Kimi Code', description: 'Меню Kimi 2.8.1: «Approve once / Approve for this session / Reject …» и trust-экран. Распознаватель закреплён за формой 2.7.3.' },
+          { label: 'Codex', description: 'Экраны Codex 0.166: одобрения команд/патчей, hooks/folder trust.' },
+          { label: 'Claude Code', description: 'Промпты Claude Code (trust folder, permissions).' },
+        ],
+        multiSelect: false,
+      }] }];
       const toolCalls = call ? [{ index: 0, id: `call_${nTool}`, type: 'function', function: { name: call[0], arguments: JSON.stringify(call[1]) } }] : undefined;
       const text = call ? 'step' : 'Hello from mock';
       const reasoning = call ? undefined : 'thinking about it';
