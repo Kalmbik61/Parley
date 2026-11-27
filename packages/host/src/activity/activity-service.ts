@@ -1187,7 +1187,8 @@ export function createActivityService(
   }
 
   const sameLive = (a: SessionLive, b: SessionLive): boolean =>
-    JSON.stringify(a) === JSON.stringify(b);
+    JSON.stringify(a.activity) === JSON.stringify(b.activity) &&
+    JSON.stringify(a.metrics) === JSON.stringify(b.metrics);
 
   /**
    * Заголовок Claude Code доехал до индекса логов — переименование один раз (5.1). Ярлык сессии меняется, только пока он
