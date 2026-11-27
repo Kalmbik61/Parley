@@ -649,21 +649,22 @@ describe('PtyManager: Qwen Code program status (OSC 7501)', () => {
   });
 });
 
+function controlled(pid: number) {
+  let emit: (value: string) => void = () => {};
+  let finish: (value: ExitInfo) => void = () => {};
+  return {
+    process: { pid, write() {}, resize() {}, kill() {},
+      onData(listener: typeof emit) { emit = listener; return () => {}; },
+      onExit(listener: typeof finish) { finish = listener; return () => {}; },
+    },
+    data: (value: string) => emit(value),
+    exit: () => finish({ exitCode: 0, signal: null }),
+  };
+}
+
 it('fences late PTY data and exit callbacks after another generation owns the ref', async () => {
   const manager = createPtyManager(fakeHost());
   const sessionRef = ref();
-  function controlled(pid: number) {
-    let emit: (value: string) => void = () => {};
-    let finish: (value: ExitInfo) => void = () => {};
-    return {
-      process: { pid, write() {}, resize() {}, kill() {},
-        onData(listener: typeof emit) { emit = listener; return () => {}; },
-        onExit(listener: typeof finish) { finish = listener; return () => {}; },
-      },
-      data: (value: string) => emit(value),
-      exit: () => finish({ exitCode: 0, signal: null }),
-    };
-  }
   const old = controlled(1);
   const current = controlled(2);
   let stream = '';
@@ -686,4 +687,150 @@ it('fences late PTY data and exit callbacks after another generation owns the re
   await waitFor(() => stream === 'current bytes');
   current.exit();
   expect(manager.get(sessionRef)).toBeUndefined();
+});
+
+describe('PtyManager: display-only terminal status', () => {
+  const osc = (fields: string) => '\x1b]7501;' + fields + '\x07';
+
+  it('isolates the display event from Qwen readiness and from unconfirmed families', () => {
+    const manager = createPtyManager(fakeHost());
+    const qwen = controlled(1);
+    const other = controlled(2);
+    const a = ref();
+    const b = ref();
+    const display: unknown[] = [];
+    const canonical: unknown[] = [];
+    manager.on('terminal-status', (from, status) => display.push([from, status]));
+    manager.on('program-status', (from, status) => canonical.push([from, status]));
+    manager.start(a, { ...launch(), provider: 'qwen', process: qwen.process });
+    manager.start(b, { ...launch(), provider: 'kimi', process: other.process });
+
+    other.data(osc('state=idle:app=qwen-code') + osc('state=clear'));
+    qwen.data(osc('state=idle:app=opencode') + osc('state=clear:app=opencode'));
+    qwen.data(osc('state=idle:app=qwen-code:id=child') + osc('state=clear:id=child'));
+    qwen.data(osc('state=blocked:kind=permission:app=qwen-code:msg=YWJj'));
+    qwen.data(osc('state=unrecognized:app=qwen-code'));
+    qwen.data(osc('state=clear'));
+
+    expect(display).toEqual([[a, { state: 'blocked', kind: 'permission' }], [a, null]]);
+    expect(canonical).toEqual([
+      [a, { state: 'blocked', kind: 'permission', msg: 'abc' }],
+      [a, { state: 'clear', kind: null, msg: null }],
+    ]);
+    qwen.exit();
+    other.exit();
+  });
+
+  it('routes OpenCode root frames only to display, never to Qwen readiness or prompts', () => {
+    const manager = createPtyManager(fakeHost());
+    const qwen = controlled(1);
+    const opencode = controlled(2);
+    const a = ref();
+    const b = ref();
+    const display: unknown[] = [];
+    const canonical: unknown[] = [];
+    manager.on('terminal-status', (from, status) => display.push([from, status]));
+    manager.on('program-status', (from, status) => canonical.push([from, status]));
+    manager.start(a, { ...launch(), provider: 'qwen', process: qwen.process });
+    manager.start(b, { ...launch(), provider: 'opencode', process: opencode.process });
+
+    qwen.data(osc('state=blocked:app=qwen-code:kind=question'));
+    opencode.data(osc('state=idle:app=opencode'));
+    opencode.data(osc('state=working:app=opencode:id=ses_child'));
+    opencode.data(osc('state=blocked:app=opencode:kind=permission'));
+    opencode.data(osc('state=clear:id=ses_child'));
+    opencode.data(osc('state=idle:app=qwen-code'));
+    opencode.data(osc('state=clear'));
+    expect(canonical).toEqual([[a, { state: 'blocked', kind: 'question', msg: null }]]);
+    expect(display).toEqual([
+      [a, { state: 'blocked', kind: 'question' }],
+      [b, { state: 'idle' }],
+      [b, { state: 'blocked', kind: 'permission' }],
+      [b, null],
+    ]);
+    qwen.exit();
+    opencode.exit();
+  });
+
+  it('delivers mixed Codex OSC 0/2/9 and 7501 frames in stream order without Qwen signals', () => {
+    const manager = createPtyManager(fakeHost());
+    const codex = controlled(1);
+    const target = ref();
+    const reports: unknown[] = [];
+    const qwen: unknown[] = [];
+    manager.on('signal', (_ref, signal) => reports.push(['legacy', signal]));
+    manager.on('terminal-status', (_ref, status) => reports.push(['display', status]));
+    manager.on('program-status', (_ref, status) => qwen.push(status));
+    manager.start(target, { ...launch(), provider: 'codex', process: codex.process });
+
+    codex.data('\x1b]0;Ready\x07' + osc('?') + '\x1b]7501;state=blocked:kind=permission:app=codex\x1b');
+    expect(reports).toEqual([['legacy', { kind: 'ready' }]]);
+    codex.data('\\\x1b]9;Approval requested: ls -la\x07' +
+      osc('state=working:app=codex:id=child') + osc('state=done:app=codex') +
+      '\x1b]2;Working\x07' + osc('state=clear'));
+    expect(reports).toEqual([
+      ['legacy', { kind: 'ready' }],
+      ['display', { state: 'blocked', kind: 'permission' }],
+      ['legacy', { kind: 'needs-you', reason: 'approval-requested', detail: 'ls -la' }],
+      ['display', { state: 'done' }],
+      ['legacy', { kind: 'working' }],
+      ['display', null],
+    ]);
+    expect(qwen).toEqual([]);
+    codex.exit();
+  });
+
+  it('does not carry frames across replacements or exits, with two Qwen sessions in one directory', () => {
+    const manager = createPtyManager(fakeHost());
+    const old = controlled(1);
+    const current = controlled(2);
+    const parallel = controlled(3);
+    const a = ref();
+    const b = ref();
+    const lifecycle: unknown[] = [];
+    manager.on('start', (from) => lifecycle.push(['start', from]));
+    manager.on('exit', (from) => lifecycle.push(['exit', from]));
+    manager.on('terminal-status', (from, status) => lifecycle.push(['status', from, status]));
+    manager.start(a, { ...launch(), provider: 'qwen', process: old.process });
+    manager.start(b, { ...launch(), provider: 'qwen', process: parallel.process });
+
+    const idle = osc('state=idle:app=qwen-code');
+    old.data(osc('state=working:app=qwen-code') + idle.slice(0, -1));
+    manager.start(a, { ...launch(), provider: 'qwen', process: current.process });
+    old.data(idle.slice(-1) + osc('state=clear'));
+    old.exit();
+    current.data(idle.slice(-1));
+    parallel.data(idle);
+    current.data(osc('state=blocked:kind=auth:app=qwen-code'));
+    current.exit();
+    current.data(osc('state=clear'));
+    parallel.data(osc('state=clear'));
+    parallel.exit();
+
+    expect(lifecycle).toEqual([
+      ['start', a], ['start', b], ['status', a, { state: 'working' }],
+      ['start', a], ['status', b, { state: 'idle' }], ['status', a, { state: 'blocked', kind: 'auth' }],
+      ['exit', a], ['status', b, null], ['exit', b],
+    ]);
+  });
+
+  it('stops delivering the old chunk if a status listener replaces the PTY', () => {
+    const manager = createPtyManager(fakeHost());
+    const old = controlled(1);
+    const current = controlled(2);
+    const a = ref();
+    const display: unknown[] = [];
+    const canonical: unknown[] = [];
+    manager.on('terminal-status', () => {
+      manager.start(a, { ...launch(), provider: 'qwen', process: current.process });
+    });
+    manager.on('terminal-status', (_from, status) => display.push(status));
+    manager.on('program-status', (_from, status) => canonical.push(status));
+    manager.start(a, { ...launch(), provider: 'qwen', process: old.process });
+    old.data(osc('state=working:app=qwen-code') + osc('state=idle:app=qwen-code'));
+    expect(display).toEqual([]);
+    expect(canonical).toEqual([{ state: 'working', kind: null, msg: null }]);
+    old.exit();
+    current.exit();
+  });
 });

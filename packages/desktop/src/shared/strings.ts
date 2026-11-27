@@ -37,6 +37,7 @@ const CONTEXT_NAMES: Record<ContextKind, string> = {
 
 export const S = {
   get kimiPermission() { return preferencesStrings[appI18n.locale].kimiPermission; },
+  get cliStatus() { return conversationStrings[appI18n.locale].cliStatus; },
   get board() { return collaborationStrings[appI18n.locale].board; },
   get plans() { return collaborationStrings[appI18n.locale].plans; },
   get capabilities() { return projectStrings[appI18n.locale].capabilities; },

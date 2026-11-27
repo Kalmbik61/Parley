@@ -13,7 +13,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { DndContext, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
 import type { Activity, AutoSleepReason, QueuedLaunch, SessionNeed, WorkSession } from '@parley/core';
-import type { HostNotice, LiveMetrics, LiveTask } from '@parley/protocol';
+import type { HostNotice, LiveMetrics, LiveTask, TerminalStatus } from '@parley/protocol';
+import { setAppLocale } from '../../shared/app-locale.js';
 import { S } from '../../shared/strings.js';
 import { formatMetricsLine } from '../lib/metrics-line.js';
 import { workKey } from '../lib/tree-order.js';
@@ -54,6 +55,7 @@ function renderRow(
     branchColor?: number | null;
     /** Чего ждёт сессия от человека (в записи активности); нужна и `activity`. */
     need?: SessionNeed;
+    terminalStatus?: TerminalStatus | null;
   } = {},
 ) {
   const built =
@@ -63,10 +65,12 @@ function renderRow(
           lastEventAt: options.lastEventAt ?? '2026-09-27T09:57:00.000Z',
           need: options.need ?? null,
         });
-  const activity =
+  const stamped =
     built !== null && options.lastEventAt === null
       ? { ...built, activity: { ...built.activity, lastEventAt: null } }
       : built;
+  const activity = stamped === null || options.terminalStatus === undefined
+    ? stamped : { ...stamped, terminalStatus: options.terminalStatus };
   return render(
     <SessionRow
       workKey={KEY}
@@ -1264,5 +1268,39 @@ describe('SessionRow — очередь машины', () => {
     renderRow(makeSession('s-01', 'a', { lifecycle: 'pending' }));
     expect(screen.getByText(S.states.pending)).toBeTruthy();
     expect((await openTooltip()).textContent).not.toContain('Waiting for a free agent slot');
+  });
+});
+
+describe('SessionRow — CLI status', () => {
+  afterEach(() => setAppLocale('en'));
+
+  it.each([
+    ['en', 'CLI needs input'],
+    ['ru', 'CLI ждёт ввода'],
+  ] as const)('shows a localized advisory in %s without changing the state dot', (locale, label) => {
+    setAppLocale(locale);
+    renderRow(makeSession('s-01', 'agent', { provider: 'opencode' }), {
+      activity: 'idle', terminalStatus: { state: 'blocked', kind: 'permission' },
+    });
+    expect(screen.getByText(label)).toBeTruthy();
+    expect(row().querySelector('[data-testid="agent-state-dot"]')?.getAttribute('data-state')).toBe('idle');
+  });
+
+  it.each([
+    ['closed', { lifecycle: 'closed' }],
+    ['sleeping', { lifecycle: 'sleeping' }],
+    ['queued', { lifecycle: 'pending' }],
+    ['explicit result', { result: 'done' }],
+  ] as Array<[string, Partial<WorkSession>]>)('does not override %s', (_name, patch) => {
+    renderRow(makeSession('s-01', 'agent', patch), {
+      activity: 'idle', terminalStatus: { state: 'blocked' },
+    });
+    expect(screen.queryByText('CLI needs input')).toBeNull();
+  });
+
+  it('does not repeat canonical working or override an authoritative wait', () => {
+    renderRow(makeSession('s-01', 'working'), { activity: 'working', terminalStatus: { state: 'working' } });
+    renderRow(makeSession('s-02', 'waiting'), { activity: 'blocked', terminalStatus: { state: 'blocked' } });
+    expect(screen.queryByText(/CLI (is working|needs input)/)).toBeNull();
   });
 });

@@ -101,7 +101,7 @@ export function classifyNotification(text: string): CodexSignal {
 }
 
 /** Тело OSC (`Ps;Pt`) → сигнал; `null` — не заголовок и не уведомление (гиперссылки, метки, буфер). */
-function signalOfOsc(body: string): CodexSignal | null {
+export function codexSignalOfOsc(body: string): CodexSignal | null {
   const semicolon = body.indexOf(';');
   if (semicolon === -1) return null;
   const command = body.slice(0, semicolon);
@@ -118,7 +118,7 @@ export interface CodexTerminalParser {
 }
 
 export function createCodexTerminalParser(): CodexTerminalParser {
-  return createOscReader(signalOfOsc);
+  return createOscReader(codexSignalOfOsc);
 }
 
 /**
@@ -172,8 +172,14 @@ export function createOscReader<T>(signalOf: (body: string) => T | null): { feed
         }
 
         // Терминатора в этом куске нет: хвост ждёт следующего, но без роста до бесконечности.
-        const tail = data.slice(start);
-        if (tail.length <= MAX_OSC_LENGTH) pending = tail;
+        // An ESC at the boundary may be the first half of ST, not part of the body.
+        const tailLength = data.length - start;
+        const size = tailLength - (data.endsWith(ESC) ? 1 : 0);
+        if (size <= MAX_OSC_LENGTH) {
+          const tail = data.slice(start);
+          // Do not retain a large input chunk through a substring view.
+          pending = data.length > MAX_OSC_LENGTH + 1 ? tail.split('').join('') : tail;
+        }
         break;
       }
 

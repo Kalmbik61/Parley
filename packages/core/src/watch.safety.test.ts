@@ -18,6 +18,9 @@ const state = vi.hoisted(() => ({
   attempts: [] as number[],
   watchers: [] as { listener: unknown; emitter: unknown }[],
   failing: false,
+  missingRoot: null as string | null,
+  lateRoots: [] as Array<{ file: string; listener: (info: { isDirectory(): boolean }) => void }>,
+  removedLateRoots: [] as string[],
   /** Подписи файлов для подменённого stat: путь → размер и mtime. */
   files: new Map<string, { size: number; mtimeMs: number }>(),
 }));
@@ -27,8 +30,13 @@ vi.mock('node:fs', async (importOriginal) => {
   const { EventEmitter: Emitter } = await import('node:events');
   return {
     ...actual,
+    watchFile: (file: string, _options: unknown, listener: (info: { isDirectory(): boolean }) => void) => {
+      state.lateRoots.push({ file, listener });
+    },
+    unwatchFile: (file: string) => { state.removedLateRoots.push(file); },
     watch: (_root: string, _options: unknown, listener: unknown) => {
       state.attempts.push(Date.now());
+      if (_root === state.missingRoot) throw Object.assign(new Error('missing root'), { code: 'ENOENT' });
       if (state.failing) throw new Error('watch недоступен');
       const emitter = Object.assign(new Emitter(), { close: vi.fn() });
       state.watchers.push({ listener, emitter });
@@ -42,7 +50,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   return {
     ...actual,
     stat: (file: string, ...rest: unknown[]) => {
-      if (typeof file === 'string' && file.startsWith('/fake-root/')) {
+      if (typeof file === 'string' && (file === '/fake-root' || file.startsWith('/fake-root/'))) {
         const info = state.files.get(file);
         if (info === undefined) return Promise.reject(Object.assign(new Error('нет файла'), { code: 'ENOENT' }));
         return Promise.resolve(info);
@@ -67,6 +75,9 @@ describe('watchSessions: потолок ожидания, пересоздани
     state.attempts = [];
     state.watchers = [];
     state.failing = false;
+    state.missingRoot = null;
+    state.lateRoots = [];
+    state.removedLateRoots = [];
     state.files = new Map([[FILE, { size: 10, mtimeMs: 1 }]]);
     indexTimes = [];
     changes = [];
@@ -147,6 +158,50 @@ describe('watchSessions: потолок ожидания, пересоздани
     watcher.close();
     await vi.advanceTimersByTimeAsync(WATCH_RECREATE_MAX_MS);
     expect(state.watchers).toHaveLength(2);
+  });
+
+  it('watches only the missing root until it exists, then catches up and stops checking it', async () => {
+    state.missingRoot = ROOT;
+    const discover = vi.fn(async () => [FILE]);
+    const watcher = watchSessions((change) => changes.push(change), [{ ...source, discoverOnAttach: discover }]);
+    expect(state.watchers).toHaveLength(0);
+    expect(state.lateRoots.map(({ file }) => file)).toEqual([ROOT]);
+    expect(discover).not.toHaveBeenCalled();
+
+    state.missingRoot = null;
+    state.lateRoots[0]?.listener({ isDirectory: () => true });
+    await vi.advanceTimersByTimeAsync(300);
+    expect(state.removedLateRoots).toEqual([ROOT]);
+    expect(discover).toHaveBeenCalledOnce();
+    expect(changes).toEqual([{ kind: 'updated', file: FILE, session: {} }]);
+    watcher.close();
+  });
+
+  it('closing a late-root watcher releases its stat subscription', async () => {
+    state.missingRoot = ROOT;
+    const discover = vi.fn(async () => [FILE]);
+    const watcher = watchSessions((change) => changes.push(change), [{ ...source, discoverOnAttach: discover }]);
+    expect(state.lateRoots.map(({ file }) => file)).toEqual([ROOT]);
+    watcher.close();
+    expect(state.removedLateRoots).toEqual([ROOT]);
+
+    state.missingRoot = null;
+    state.lateRoots[0]?.listener({ isDirectory: () => true });
+    await vi.advanceTimersByTimeAsync(WATCH_RECREATE_MAX_MS);
+    expect(state.attempts).toHaveLength(1);
+    expect(discover).not.toHaveBeenCalled();
+    expect(changes).toHaveLength(0);
+  });
+
+  it('does not schedule files discovered after the watcher has closed', async () => {
+    let finish!: (files: string[]) => void;
+    const discoverOnAttach = () => new Promise<string[]>((resolve) => { finish = resolve; });
+    const watcher = watchSessions((change) => changes.push(change), [{ ...source, discoverOnAttach }]);
+    watcher.close();
+    finish([FILE]);
+    await vi.advanceTimersByTimeAsync(WATCH_RECREATE_MAX_MS);
+    expect(index).not.toHaveBeenCalled();
+    expect(changes).toHaveLength(0);
   });
 
   it('пока пересоздание не удаётся, паузы удваиваются и не превышают WATCH_RECREATE_MAX_MS', async () => {

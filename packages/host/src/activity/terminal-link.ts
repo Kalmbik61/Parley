@@ -12,7 +12,7 @@ export function linkTerminalActivity(
   pty: Pick<PtyManager, 'on' | 'get'>,
   activity: Pick<
     ActivityService,
-    'terminalStarted' | 'terminalSignal' | 'terminalStopped' | 'processStarted' | 'qwenStatus'
+    'terminalStarted' | 'terminalSignal' | 'terminalStopped' | 'processStarted' | 'qwenStatus' | 'setTerminalStatus'
   >,
 ): () => void {
   const off = [
@@ -21,6 +21,7 @@ export function linkTerminalActivity(
     // от него считаются срок экрана старта и «новые» строки журнала (`processStarted`).
     // The spawn time is taken before the spawn: a Qwen journal line stamped earlier is a past process's (spec 3.4).
     pty.on('start', (ref) => {
+      activity.setTerminalStatus(ref, null);
       const handle = pty.get(ref);
       if (handle?.provider === 'codex') activity.terminalStarted(ref);
       else activity.processStarted(ref, handle?.startedAt);
@@ -28,8 +29,12 @@ export function linkTerminalActivity(
     pty.on('signal', (ref, signal) => activity.terminalSignal(ref, signal)),
     // Qwen Code readiness and startup screens (OSC 7501); the pty manager reports only the current process.
     pty.on('program-status', (ref, status) => activity.qwenStatus(ref, status)),
+    pty.on('terminal-status', (ref, status) => activity.setTerminalStatus(ref, status)),
     // Без состояния (не codex) `terminalStopped` ничего не делает.
-    pty.on('exit', (ref) => activity.terminalStopped(ref)),
+    pty.on('exit', (ref) => {
+      activity.setTerminalStatus(ref, null);
+      activity.terminalStopped(ref);
+    }),
   ];
   return () => {
     for (const unsubscribe of off) unsubscribe();

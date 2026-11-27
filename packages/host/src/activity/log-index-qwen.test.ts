@@ -1,4 +1,4 @@
-import { appendFile, copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { appendFile, copyFile, mkdir, mkdtemp, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -25,8 +25,8 @@ afterEach(async () => {
   await Promise.all([claudeRoot, codexRoot, qwenRoot].map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
-const index = (): LogIndex => {
-  const created = createLogIndex({ claudeRoot, codexRoot, qwenRoot }, { cache: null });
+const index = (root = qwenRoot): LogIndex => {
+  const created = createLogIndex({ claudeRoot, codexRoot, qwenRoot: root }, { cache: null });
   indexes.push(created);
   return created;
 };
@@ -97,6 +97,54 @@ describe('log index: Qwen Code', () => {
     await appendFile(file, line);
     await waitFor(() => (idx.index(session())?.records ?? 0) > before, () => Promise.resolve());
   }, 40_000);
+
+  it('finds two bound UUIDs in one cwd when a populated history root appears after start', async () => {
+    const idB = '77777777-7777-4777-8777-777777777777';
+    const home = path.join(qwenRoot, 'cold-home');
+    const root = path.join(home, 'projects');
+    const stagedHome = path.join(qwenRoot, 'staged-home');
+    const relativeChats = path.join('projects', '-work-project', 'chats');
+    const chats = path.join(stagedHome, relativeChats);
+    const entry = (id: string, title: string): string => JSON.stringify({
+      uuid: title, sessionId: id, timestamp: '2026-11-11T14:00:00.000Z', type: 'user',
+      provenance: 'real_user', cwd: CWD, message: { parts: [{ text: title }] },
+    }) + '\n';
+    await mkdir(chats, { recursive: true });
+    await writeFile(path.join(chats, ID + '.jsonl'), entry(ID, 'prompt A'));
+    await writeFile(path.join(chats, idB + '.jsonl'), entry(idB, 'prompt B'));
+    await writeFile(path.join(chats, 'notes.jsonl'), entry(ID, 'unrelated file'));
+
+    const idx = index(root);
+    await idx.start();
+    await expect(stat(home)).rejects.toMatchObject({ code: 'ENOENT' });
+    const bound = (id: string) => session({
+      providerSessionId: id,
+      qwenTranscript: { path: path.join(home, relativeChats, id + '.jsonl'), cwd: CWD },
+    });
+    const a = bound(ID);
+    const b = bound(idB);
+    expect(idx.index(a)).toBeUndefined();
+    expect(idx.index(b)).toBeUndefined();
+    const changes: string[] = [];
+    const off = idx.onChange((change) => {
+      if (change?.affects(a)) changes.push('A');
+      if (change?.affects(b)) changes.push('B');
+    });
+
+    // The files are already there when the profile appears. No append, hook or periodic rescan helps discovery.
+    await rename(stagedHome, home);
+    await waitFor(() => idx.index(a) !== undefined && idx.index(b) !== undefined, undefined, 3500);
+    expect(idx.index(a)).toMatchObject({ file: a.qwenTranscript?.path, id: ID, cwd: CWD, title: 'prompt A' });
+    expect(idx.index(b)).toMatchObject({ file: b.qwenTranscript?.path, id: idB, cwd: CWD, title: 'prompt B' });
+    expect(new Set(changes)).toEqual(new Set(['A', 'B']));
+    expect(idx.index(session({ providerSessionId: idB, qwenTranscript: a.qwenTranscript }))).toBeUndefined();
+    expect(idx.index(session({ qwenTranscript: { path: a.qwenTranscript!.path, cwd: '/different' } }))).toBeUndefined();
+
+    await appendFile(b.qwenTranscript!.path, entry(idB, 'another prompt B'));
+    await waitFor(() => idx.index(b)?.records === 2, undefined, 3500);
+    expect(idx.index(a)?.records).toBe(1);
+    off();
+  }, 10_000);
 
   it('reindex reads a qwen transcript as qwen, never as a Codex rollout', async () => {
     const file = await place();

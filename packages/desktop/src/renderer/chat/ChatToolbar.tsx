@@ -24,7 +24,7 @@ import type { ReactNode } from 'react';
 import { ChevronDown, GitBranch, LoaderCircle } from 'lucide-react';
 
 import type { WorkSession } from '@parley/core';
-import type { EffortOption, LiveMetrics, ModelOption, SessionRef } from '@parley/protocol';
+import { refKey, type EffortOption, type LiveMetrics, type ModelOption, type SessionRef } from '@parley/protocol';
 import type { ParleyBridge } from '../../shared/bridge.js';
 import type { TerminalView } from '../../shared/layout-types.js';
 import { S } from '../../shared/strings.js';
@@ -33,6 +33,8 @@ import { BRANCH_COLOR_CLASS, branchColors, sessionBranchColor } from '../lib/bra
 import { sessionRowLabel } from '../lib/participant.js';
 import { RoleChip } from '../lib/role-summary.js';
 import { swarmOfSession } from '@parley/core/swarms';
+import { useActivityStore } from '../store/activity.js';
+import { terminalStatusLabel } from '../lib/terminal-status-label.js';
 import { useWorksStore } from '../store/works.js';
 import { SwarmChip } from './SwarmChip.js';
 import { workKey as keyOf } from '../lib/tree-order.js';
@@ -282,6 +284,11 @@ export function ChatToolbar({ workKey, tabId, view, available, provider, modeLab
   const tab = found?.group.tabs[found.index];
   const entry = entries.find(item => keyOf(item.projectPath, item.map.work.id) === workKey);
   const session = tab?.kind === 'terminal' ? entry?.map.sessions.find(item => item.id === tab.sessionId) : undefined;
+  const sessionKey = entry && session
+    ? refKey({ projectPath: entry.projectPath, workId: entry.map.work.id, sessionId: session.id })
+    : null;
+  const activity = useActivityStore(state => sessionKey === null ? null : state.byRef[sessionKey] ?? null);
+  const cliStatus = session === undefined ? null : terminalStatusLabel(session, activity);
   const title = session === undefined ? null : sessionRowLabel(session.id, session.label);
   const projectBranch = useWorksStore(state => (entry === undefined ? null : state.branches[entry.projectPath] ?? null));
   const inSwarm = session === undefined || entry === undefined ? null : swarmOfSession(entry.map, session.id);
@@ -330,6 +337,9 @@ export function ChatToolbar({ workKey, tabId, view, available, provider, modeLab
         </div>
       </div>
       {inSwarm === null || entry === undefined ? null : <SwarmChip swarm={inSwarm.swarm} member={inSwarm.member} projectPath={entry.projectPath} workId={entry.map.work.id} />}
+      {cliStatus === null ? null : (
+        <span title={cliStatus} className="max-w-[24ch] truncate text-xs text-muted-foreground">{cliStatus}</span>
+      )}
       {metrics === null ? null : <SessionUsageChip metrics={metrics} />}
       {contextChip}
       {agents === undefined ? null : (

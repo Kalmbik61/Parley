@@ -1,11 +1,11 @@
-import { watch, type FSWatcher } from 'node:fs';
+import { watch, watchFile, unwatchFile, type FSWatcher, type Stats } from 'node:fs';
 import path from 'node:path';
 import { stat } from 'node:fs/promises';
 import { adapterV1, type SchemaAdapter } from './adapter-v1.js';
 import { assistantCwd, defaultRoot, discoverSession, sessionFileForPath } from './discover.js';
 import { defaultCodexRoot } from './codex/discover.js';
 import { indexCodexSession } from './codex/index-session.js';
-import { defaultQwenRoot, isQwenTranscriptPath } from './qwen/discover.js';
+import { defaultQwenRoot, discoverQwenSessions, isQwenTranscriptPath } from './qwen/discover.js';
 import { indexQwenSession } from './qwen/index-session.js';
 import { indexSessionFile, type SessionIndex } from './session-index.js';
 import type { SessionIndexer } from './session-indexer.js';
@@ -20,6 +20,8 @@ export interface WatchSource {
   resolve(changedPath: string, root: string): string | null;
   /** `null` — файл не сессия Parley, изменение пропускается. */
   index(file: string, root: string): Promise<SessionIndex | null>;
+  /** Optional catch-up of files that appeared before this root could be watched. */
+  discoverOnAttach?(root: string, recovering: boolean): Promise<readonly string[]>;
 }
 
 export interface WatchOptions {
@@ -88,10 +90,17 @@ export function codexSource(root: string = defaultCodexRoot(), indexer?: Session
 }
 
 /** Qwen Code source: `<qwenHome>/projects/*\/chats/<uuid>.jsonl`, one file per session. */
-export function qwenSource(root: string = defaultQwenRoot(), indexer?: SessionIndexer): WatchSource {
+export function qwenSource(
+  root: string = defaultQwenRoot(),
+  indexer?: SessionIndexer,
+  alreadyIndexed: (file: string) => boolean = () => false,
+): WatchSource {
   return {
     root,
     resolve: (changedPath, sourceRoot) => (isQwenTranscriptPath(changedPath, sourceRoot) ? changedPath : null),
+    discoverOnAttach: async (sourceRoot, recovering) => (await discoverQwenSessions(sourceRoot))
+      .map(({ file }) => file)
+      .filter((file) => recovering || !alreadyIndexed(file)),
     index: async (file) => {
       const session = await (indexer === undefined ? indexQwenSession(file) : indexer.qwen(file));
       return session.cwd === assistantCwd() ? null : session;
@@ -118,6 +127,7 @@ export function watchSessions(
   const seen = new Map<string, string>();
   const watchers = new Set<FSWatcher>();
   const recreateTimers = new Set<NodeJS.Timeout>();
+  const lateRoots = new Set<() => boolean>();
   let closed = false;
 
   const reparse = async (source: WatchSource, file: string): Promise<void> => {
@@ -132,6 +142,7 @@ export function watchSessions(
         const info = await stat(file);
         signature = `${info.size}:${info.mtimeMs}`;
       } catch {
+        if (closed) return;
         seen.delete(file);
         onChange({ kind: 'removed', file });
         return;
@@ -159,47 +170,97 @@ export function watchSessions(
     );
   };
 
-  const attach = (source: WatchSource, failures: number, recreating: boolean): void => {
+  const rescanFile = (source: WatchSource, file: string): void => {
+    if (closed || timers.has(file)) return;
+    void stat(file).then(
+      (info) => {
+        if (closed || timers.has(file)) return;
+        if (seen.get(file) !== `${info.size}:${info.mtimeMs}`) schedule(source, file);
+      },
+      () => {
+        if (closed || timers.has(file)) return;
+        if (seen.has(file)) schedule(source, file);
+      },
+    );
+  };
+
+  const retry = (source: WatchSource, failures: number, delay: number): void => {
+    if (closed) return;
+    const timer = setTimeout(() => {
+      recreateTimers.delete(timer);
+      if (!closed) attach(source, failures, true);
+    }, delay);
+    timer.unref();
+    recreateTimers.add(timer);
+  };
+
+  const retire = (watcher: FSWatcher): boolean => {
+    if (!watchers.delete(watcher)) return false;
+    try {
+      watcher.close();
+    } catch {
+      // уже закрыт
+    }
+    return !closed;
+  };
+
+  const missing = (error: unknown): boolean =>
+    error instanceof Error && (error as NodeJS.ErrnoException).code === 'ENOENT';
+
+  // Qwen may create even its home after host start. Watch just the missing path with an unref'ed
+  // stat watcher until it is a directory. Do not create it, poll transcripts, or keep the host alive.
+  const waitForRoot = (source: WatchSource): boolean => {
+    function stop(): boolean {
+      if (!lateRoots.delete(stop)) return false;
+      unwatchFile(source.root, ready);
+      return true;
+    }
+
+    function ready(info: Stats): void {
+      if (!closed && info.isDirectory() && stop()) attach(source, 0, true);
+    }
+
+    try {
+      watchFile(source.root, { persistent: false, interval: WATCH_RECREATE_MS }, ready);
+      lateRoots.add(stop);
+      // Also catch creation between the failed recursive watch and the first stat-watch sample.
+      void stat(source.root).then(ready, () => {});
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  function attach(source: WatchSource, failures: number, recreating: boolean): void {
     try {
       const watcher = watch(source.root, { recursive: true }, (_event, name) => {
-        if (name === null) return;
+        if (closed || name === null) return;
         const file = source.resolve(path.join(source.root, name.toString()), source.root);
         if (file !== null) schedule(source, file);
       });
       watchers.add(watcher);
       watcher.on('error', (error) => {
+        if (!retire(watcher)) return;
         onError?.(error, source.root);
-        try {
-          watcher.close();
-        } catch {
-          // уже закрыт
-        }
-        watchers.delete(watcher);
+        retry(source, 0, WATCH_RECREATE_MS);
+      });
+      void source.discoverOnAttach?.(source.root, recreating).then((files) => {
         if (closed) return;
-        const timer = setTimeout(
-          () => {
-            recreateTimers.delete(timer);
-            if (!closed) attach(source, 0, true);
-          },
-          WATCH_RECREATE_MS,
-        );
-        timer.unref();
-        recreateTimers.add(timer);
+        for (const file of files) {
+          if (source.resolve(file, source.root) === file) rescanFile(source, file);
+        }
+      }, (error) => {
+        if (!closed) onError?.(error, source.root);
       });
     } catch (error) {
+      if (source.discoverOnAttach !== undefined && missing(error) && waitForRoot(source)) return;
       // Каталога может не быть: Codex просто не установлен — это не повод падать.
       onError?.(error, source.root);
       if (!recreating || closed) return;
-      // Пересоздание не удалось: пауза удваивается до потолка.
-      const pause = Math.min(WATCH_RECREATE_MS * 2 ** (failures + 1), WATCH_RECREATE_MAX_MS);
-      const timer = setTimeout(() => {
-        recreateTimers.delete(timer);
-        if (!closed) attach(source, failures + 1, true);
-      }, pause);
-      timer.unref();
-      recreateTimers.add(timer);
+      // Пересоздание не удалось: паузы удваиваются до потолка.
+      retry(source, failures + 1, Math.min(WATCH_RECREATE_MS * 2 ** (failures + 1), WATCH_RECREATE_MAX_MS));
     }
-  };
+  }
 
   for (const source of sources) attach(source, 0, false);
 
@@ -210,6 +271,7 @@ export function watchSessions(
       timers.clear();
       for (const timer of recreateTimers) clearTimeout(timer);
       recreateTimers.clear();
+      for (const stop of lateRoots) stop();
       for (const watcher of watchers) watcher.close();
       watchers.clear();
     },
@@ -217,17 +279,7 @@ export function watchSessions(
       if (closed) return;
       for (const file of files) {
         const source = sources.find((candidate) => candidate.resolve(file, candidate.root) === file);
-        if (source === undefined || timers.has(file)) continue;
-        void stat(file).then(
-          (info) => {
-            if (closed || timers.has(file)) return;
-            if (seen.get(file) !== `${info.size}:${info.mtimeMs}`) schedule(source, file);
-          },
-          () => {
-            if (closed || timers.has(file)) return;
-            if (seen.has(file)) schedule(source, file);
-          },
-        );
+        if (source !== undefined) rescanFile(source, file);
       }
     },
   };

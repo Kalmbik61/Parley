@@ -1,3 +1,4 @@
+import { EventEmitter } from 'node:events';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createServer, type Server, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -268,20 +269,21 @@ describe('HostConnection', () => {
   });
 
   it('activity.changed до подписки окна копится по сессии; новое подключение начинает снимок заново', async () => {
-    const activity = (sessionId: string, state: string): unknown => ({
+    const activity = (sessionId: string, state: string, terminalStatus?: { state: 'blocked' }): unknown => ({
       event: 'activity.changed',
       data: {
         ref: { projectPath: '/p', workId: 'w-0001', sessionId },
         activity: { activity: state },
         metrics: null,
+        ...(terminalStatus === undefined ? {} : { terminalStatus }),
       },
     });
     await writeToken(paths);
     let server = await startFakeServer(paths, {
-      afterHello: [activity('s-1', 'idle'), activity('s-2', 'working'), activity('s-1', 'blocked')],
+      afterHello: [activity('s-1', 'idle'), activity('s-2', 'working'), activity('s-1', 'blocked', { state: 'blocked' })],
     });
     const spawn = vi.fn(() => {
-      void startFakeServer(paths, { afterHello: [activity('s-2', 'idle')] }).then((s) => {
+      void startFakeServer(paths, { hostVersion: '0.39.8-old', afterHello: [activity('s-2', 'idle')] }).then((s) => {
         server = s;
       });
     });
@@ -297,12 +299,57 @@ describe('HostConnection', () => {
       );
     expect(states()).toEqual({ 's-1': 'blocked', 's-2': 'working' });
 
+    expect(connection.activitySnapshot().find(({ ref }) => ref.sessionId === 's-1')?.terminalStatus)
+      .toEqual({ state: 'blocked' });
+    const disconnectedSnapshots: unknown[][] = [];
+    const off = connection.onStatus((status) => {
+      if (status.state !== 'connected') disconnectedSnapshots.push(connection.activitySnapshot());
+    });
     await connection.restartHost();
+    off();
+    expect(disconnectedSnapshots.length).toBeGreaterThan(0);
+    expect(disconnectedSnapshots.every((entries) => entries.length === 0)).toBe(true);
     await vi.waitFor(() => expect(states()).toEqual({ 's-2': 'idle' }));
 
+    expect(connection.activitySnapshot()[0]?.terminalStatus).toBeUndefined();
     connection.close();
     server.close();
   }, 10000);
+
+  it('never exposes disconnected activity, and accepts replay from a legacy host', async () => {
+    const ref = { projectPath: '/p', workId: 'w-0001', sessionId: 's-1' };
+    const legacy = { ref, activity: { activity: 'idle' }, metrics: null };
+    function socket(hostVersion: string, data: unknown) {
+      const emitter = new EventEmitter();
+      return Object.assign(emitter, {
+        destroy: () => emitter.emit('close'),
+        write: (request: Buffer) => {
+          const { id } = JSON.parse(request.toString()) as { id: number };
+          const hello = { id, result: { hostVersion, protocol: PROTOCOL_VERSION, pid: process.pid } };
+          const replay = { event: 'activity.changed', data };
+          emitter.emit('data', Buffer.from(encodeLine(hello) + encodeLine(replay)));
+          return true;
+        },
+      });
+    }
+    await writeToken(paths);
+    const current = socket('new', { ...legacy, terminalStatus: { state: 'blocked', kind: 'question' } });
+    const older = socket('old', legacy);
+    const connection = new HostConnection({ paths, env: process.env, spawn: () => null });
+    // Model only the two ends of the socket. The real hello, framing, cache and connection lifecycle still run.
+    vi.spyOn(connection as unknown as { tryConnectSocket(): Promise<unknown> }, 'tryConnectSocket')
+      .mockResolvedValueOnce(current).mockResolvedValueOnce(older);
+    try {
+      await connection.connect();
+      expect(connection.activitySnapshot()[0]?.terminalStatus).toEqual({ state: 'blocked', kind: 'question' });
+      current.emit('close');
+      expect(connection.activitySnapshot()).toEqual([]);
+      await connection.connect();
+      expect(connection.activitySnapshot()).toEqual([legacy]);
+    } finally {
+      connection.close();
+    }
+  });
 
   it('host.notice до подписки окна копится на подключении; новое подключение начинает снимок заново', async () => {
     const notice = (text: string): unknown => ({

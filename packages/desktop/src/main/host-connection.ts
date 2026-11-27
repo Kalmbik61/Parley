@@ -271,7 +271,8 @@ export class HostConnection {
 
   /** Снимок кеша активности — окно берёт его, подписавшись на события (`host:activity-snapshot`). */
   activitySnapshot(): Array<EventData<'activity.changed'>> {
-    return [...this.activityCache.values()];
+    // Replay may already be cached during hello, but only a connected window can use it.
+    return this.status.state === 'connected' ? [...this.activityCache.values()] : [];
   }
 
   /** Снимок кеша уведомлений хоста — окно берёт его, подписавшись на события (`host:notices-snapshot`). */

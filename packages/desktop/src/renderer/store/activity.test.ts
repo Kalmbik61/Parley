@@ -140,3 +140,58 @@ describe('activityFor', () => {
     expect(activityFor({ [refKey(ref)]: entry }, ref)).toBe(entry);
   });
 });
+
+describe('advisory terminal status across connections', () => {
+  const entry: ActivityEntry = {
+    ref,
+    activity: { activity: 'idle', subagents: 0, turnEndedAt: null, lastEventAt: null, source: 'hooks', hooksMissing: false },
+    metrics: null,
+  };
+  const other = { ...entry, ref: { ...ref, sessionId: 's-02' } };
+  const status = (target = ref) => activityFor(useActivityStore.getState().byRef, target)?.terminalStatus ?? null;
+
+  it('hides the old status on disconnect and does not restore it from a late snapshot', async () => {
+    const bridge = createFakeBridge();
+    let answer: (entries: ActivityEntry[]) => void = () => {};
+    bridge.activitySnapshot = () => new Promise((resolve) => { answer = resolve; });
+    const dispose = useActivityStore.getState().init(bridge);
+    const blocked: ActivityEntry = { ...entry, terminalStatus: { state: 'blocked' } };
+    bridge.emit('activity.changed', blocked);
+    expect(status()).toEqual({ state: 'blocked' });
+    bridge.emitStatus({ state: 'disconnected', reason: 'test' });
+    expect(status()).toBeNull();
+    answer([blocked]);
+    await Promise.resolve();
+    expect(status()).toBeNull();
+    dispose();
+  });
+
+  it('accepts new live reports over a late replay, clears missing rows, and supports an old host', async () => {
+    const bridge = createFakeBridge();
+    bridge.setActivitySnapshot([
+      { ...entry, terminalStatus: { state: 'blocked' } },
+      { ...other, terminalStatus: { state: 'working' } },
+    ]);
+    const dispose = useActivityStore.getState().init(bridge);
+    await vi.waitFor(() => expect(status(other.ref)).toEqual({ state: 'working' }));
+    bridge.emitStatus({ state: 'disconnected', reason: 'test' });
+    let answer: (entries: ActivityEntry[]) => void = () => {};
+    bridge.activitySnapshot = () => new Promise((resolve) => { answer = resolve; });
+    bridge.emitStatus({ state: 'connected', hostVersion: 'new', methods: null });
+    bridge.emit('activity.changed', { ...entry, terminalStatus: { state: 'done' } });
+    answer([{ ...entry, terminalStatus: { state: 'idle' } }]);
+    await Promise.resolve();
+    expect(status()).toEqual({ state: 'done' });
+    expect(status(other.ref)).toBeNull();
+    bridge.emit('activity.changed', { ...entry, terminalStatus: null });
+    expect(status()).toBeNull();
+
+    bridge.emitStatus({ state: 'disconnected', reason: 'test' });
+    bridge.activitySnapshot = async () => [entry];
+    bridge.emitStatus({ state: 'connected', hostVersion: 'old', methods: null });
+    await Promise.resolve();
+    expect(status()).toBeNull();
+    expect(activityFor(useActivityStore.getState().byRef, ref)?.activity.activity).toBe('idle');
+    dispose();
+  });
+});

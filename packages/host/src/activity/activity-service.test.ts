@@ -2730,3 +2730,27 @@ it('publishes personal plans from map changes without a native log or Chat suppo
   await waitFor(() => a.get(ref)?.metrics?.plan?.summary.done === 1);
   expect((readStoredMap(project, workId)).messages).toEqual(messages);
 });
+
+it('clears advisory terminal status explicitly, without notifying onChange', async () => {
+  const { ref } = await activeSession();
+  const w = await works();
+  const a = activity(w);
+  await a.start();
+  await waitFor(() => a.get(ref) !== undefined);
+  const original = a.get(ref);
+  const onChange = vi.fn();
+  const off = a.onChange(onChange);
+  broadcasts.length = 0;
+
+  a.setTerminalStatus(ref, { state: 'working' });
+  a.setTerminalStatus(ref, null);
+  a.setTerminalStatus(ref, null);
+  const updates = broadcasts.filter(({ event }) => event === 'activity.changed').map(({ data }) => data);
+  expect(updates).toHaveLength(2);
+  expect(updates[0]).toMatchObject({ terminalStatus: { state: 'working' } });
+  expect((updates[1] as EventData<'activity.changed'>).terminalStatus ?? null).toBeNull();
+  expect(a.current()).toContainEqual(updates[1]);
+  expect(a.get(ref)).toBe(original);
+  expect(onChange).not.toHaveBeenCalled();
+  off();
+});
