@@ -71,6 +71,27 @@ These are single-run timings measured by the RPC driver, not performance percent
 
 The source-level mechanism is in `packages/core/src/watch.ts`. `watchSessions` attaches to the history root once. Its initial `fs.watch` failure with `ENOENT` does not schedule reattachment, unlike an error from an existing watcher. The host can recover without the watcher because `rescanLive` supplies bound Qwen transcript paths to the index every 30 seconds (`packages/host/src/activity/activity-service.ts`). The cold timing matches this timer. A separate direct watcher probe placed the same two synthetic UUID logs into a directory created after watcher startup. The absent-root case recorded one `ENOENT`, zero live callbacks, and two discoveries after explicit rescan. The pre-created root had no errors and two distinct live discoveries before rescan. A narrow regression should start with the Qwen history directory absent, then create it and write two transcript UUIDs in one cwd. Both must reach the correct feeds without a manual rescan or the 30-second fallback. The regularly present-root control checks the same UUID isolation without claiming the cold-path defect is fixed.
 
+### Independent verification of the cold-root fix
+
+**PASS** at the real host boundary. A separate v0.39.8 copy used only `packages/core/src/watch.ts` and `packages/host/src/activity/log-index.ts` from candidate `b5adebe1a4998732dfbe6fde9e98355d9ea7d621`. The `git diff --no-ext-diff --binary --full-index` for those two paths against the baseline had SHA-256 `41562050b6616afce7a5028174a659c1a9805559a225cb3ec8be90a069554461`. The same two paths from the submitter's working copy and the test copy matched that patch byte for byte. Their file object IDs also matched the named commit.
+
+Two runs used fresh Qwen **0.27.2** profiles, two processes in one canonical cwd per run, one temporary host, and the same loopback fixture. The harness asserted that `$QWEN_HOME/projects` did not exist before host startup. Each run explicitly required the B prompt in its snapshot within 12 seconds of observing the B JSONL reply.
+
+| Cold run | Host start to B snapshot | B JSONL observed to B snapshot | A and B feed contents |
+| --- | ---: | ---: | --- |
+| 1 | 5.643 s | 1.889 s | A had two pairs, B had one. |
+| 2 | 3.669 s | 0.362 s | A had two pairs, B had one. |
+
+Both runs compared each snapshot to the actual provider JSONL and local mock requests. A had `parity-terminal-one` and `blue-widget`; B had `parity-b-three`. Each prompt and reply appeared exactly once in its own feed, with no cross-feed prompt. Both runs returned `{inserted:true, submitted:false, reason:"draft"}` for `blue-widget` over the typed `z`. The mock request count remained 1→1 during that check and the combined text did not become a transcript entry. After Ctrl+U the same host send submitted `blue-widget` normally. The mock hold on B again showed separate hook-driven activity for A and B.
+
+The host and its dependencies built successfully with `pnpm --filter '@parley/host...' build`. From `packages/host`, the following existing tests passed on the two-file snapshot (76 total):
+
+```sh
+node ../../node_modules/vitest/vitest.mjs run src/activity/log-index-qwen.test.ts src/activity/log-index.rescan.test.ts src/activity/qwen-binding.test.ts src/pty/send.test.ts
+```
+
+This is verification of the two production files and the live host scenario, not of the rest of the candidate branch, its newly edited tests, or the Electron E2E suite. The verifier made no changes to the submitted implementation or tests.
+
 ## Reproduction and checks
 
 1. Start with a clean checkout of v0.39.8. Use an empty process environment plus a temporary HOME, XDG directories, `PARLEY_HOME`, and provider profile paths. Restrict network to loopback plus the test root's Unix sockets. Use local synthetic keys only. Resolve the real CLI paths before clearing the environment.
@@ -98,9 +119,9 @@ Both builds **PASS**; 203 host, 17 core and 119 renderer tests **PASS**. The fol
 
 - **Goal** — Distinguish real provider state from a capability probe and verify where input and history remain authoritative.
 - **Behaviour** — OpenCode's attached TUI reports actionable display signals without capability negotiation. Qwen's real host preserves the known-draft Enter guard and the two native session identities. This audit changes no runtime behaviour.
-- **Numbers** — Five exact installed versions, three controlled Qwen turns, two Qwen JSONLs, and a measured cold-root feed delay of 26.565 s after the B JSONL was observed, versus 1.868 s with a pre-created empty root. OpenCode and Codex each had a real permission wait dismissed from the TUI. No latency, CPU or memory impact measured.
+- **Numbers** — Five exact installed versions, three controlled Qwen turns, two Qwen JSONLs, and a measured baseline cold-root delay of 26.565 s after the B JSONL was observed. Two candidate cold runs took 1.889 s and 0.362 s. OpenCode and Codex each had a real permission wait dismissed from the TUI. No latency, CPU or memory impact measured.
 - **Screens** — Not measured for desktop UI because Electron failed before the E2E assertions. The evidence is raw terminal frames and provider/host records.
 - **For the human** — The OpenCode status is display evidence. It is not proof of input delivery or approval authority. The Qwen guard inserts into a known draft without submitting it.
 - **Risk** — Mistaking a capability query or a scoped report for a root state can mislabel a session. A negotiated Kimi/Claude result cannot be extrapolated to ordinary PTYs.
 - **Cost** — No paid requests or dependency downloads. Runtime overhead of the proposed change was not measured because it was not part of this baseline.
-- **Verdict** — OpenCode passes the real attached-mode check. Qwen's three native turns and draft guard pass at the input/log boundary. Both same-cwd feeds eventually contain the right turns; live discovery fails on the cold-root path until a fallback rescan. Full desktop task 6 and generic reader integration are not verified.
+- **Verdict** — OpenCode passes the real attached-mode check. Qwen's three native turns and draft guard pass at the input/log boundary. The baseline cold path waited for a fallback rescan. The two-file fix passed the under-12-second check in both cold runs and both same-cwd feeds matched the native turns. Full desktop task 6 and generic reader integration are not verified.
